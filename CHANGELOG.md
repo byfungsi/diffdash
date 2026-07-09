@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.1.1
+
+### Patch Changes
+
+- Add Debian package maintainer metadata so Linux release builds can produce `.deb` artifacts.
+
 ## 0.1.0
 
 Initial unsigned beta release.
