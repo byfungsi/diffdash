@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Surface } from "@/components/ui/surface"
+import { DEFAULT_APP_STATE, type AppState } from "../../shared/app-state"
 import {
   AI_PROVIDER_OPTIONS,
   AIProviderModels,
@@ -51,6 +52,7 @@ import {
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
 import { Repo } from "../../shared/domain"
+import { EMPTY_APP_PREREQUISITES, type AppPrerequisites } from "../../shared/prerequisites"
 import type {
   LocalReviewDetail,
   ParsedDiff,
@@ -77,12 +79,7 @@ type Screen = "home" | "repo" | "review"
 
 type ReviewSidebarTab = "tree" | "walkthrough"
 
-type AppDiagnostics = {
-  readonly git: boolean
-  readonly gitProvider: boolean
-  readonly aiAgent: boolean
-  readonly errors: readonly unknown[]
-}
+type AppDiagnostics = AppPrerequisites
 
 type WalkthroughState =
   | { readonly status: "idle" }
@@ -126,6 +123,10 @@ type AppNavigationRoute = {
 
 const MOUSE_BUTTON_BACK = 3
 const MOUSE_BUTTON_FORWARD = 4
+const GH_CLI_DOCS_URL = "https://cli.github.com/"
+const GH_AUTH_DOCS_URL = "https://cli.github.com/manual/gh_auth_login"
+const CODING_AGENT_SETUP_MESSAGE =
+  "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
 
 const sameNavigationRoute = (left: AppNavigationRoute, right: AppNavigationRoute) =>
   left.screen === right.screen &&
@@ -299,7 +300,7 @@ const searchScopesAtom = Atom.make(
 const diagnosticsAtom = Atom.make(
   fetchEffect(() => window.diffDash.diagnostics()),
   {
-    initialValue: { aiAgent: false, errors: [], git: false, gitProvider: false } as AppDiagnostics,
+    initialValue: EMPTY_APP_PREREQUISITES as AppDiagnostics,
   },
 ).pipe(Atom.keepAlive)
 
@@ -449,6 +450,8 @@ export function App() {
   const [query, setQuery] = useState("")
   const [selectedSearchScope, setSelectedSearchScope] = useState<string | null>(null)
   const [actionStatus, setActionStatus] = useState("Search a repo or open a bookmark.")
+  const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
+  const [appState, setAppState] = useState<AppState | null>(null)
   const [aiSettings, setAISettings] = useState<AISettings>(DEFAULT_AI_SETTINGS)
   const deferredSearchQuery = useDeferredValue(query.trim())
   const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
@@ -488,6 +491,9 @@ export function App() {
   const refreshRepositories = useAtomRefresh(repositoriesAtom)
   const refreshLocalSearch = useAtomRefresh(localSearchAtom)
   const refreshRemoteSearch = useAtomRefresh(remoteSearchAtom)
+  const refreshDiagnostics = useAtomRefresh(diagnosticsAtom)
+  const refreshSearchScopes = useAtomRefresh(searchScopesAtom)
+  const refreshReviewRequests = useAtomRefresh(reviewRequestsAtom)
   const refreshRepoPrCounts = useAtomRefresh(repoPrCountsAtom)
   const refreshSelectedPullRequests = useAtomRefresh(selectedRepoPullRequestsAtom)
 
@@ -501,12 +507,7 @@ export function App() {
     : []
   const reviewRequests = resultValue(reviewRequestsResult, [] as readonly PullRequestSummary[])
   const repoPrCounts = resultValue(repoPrCountsResult, {} as Record<string, number>)
-  const diagnostics = resultValue(diagnosticsResult, {
-    aiAgent: false,
-    errors: [],
-    git: false,
-    gitProvider: false,
-  } as AppDiagnostics)
+  const diagnostics = resultValue(diagnosticsResult, EMPTY_APP_PREREQUISITES as AppDiagnostics)
   const isLoadingDiagnostics = Result.isWaiting(diagnosticsResult)
   const pullRequests = resultValue(pullRequestsResult, [] as readonly PullRequestSummary[])
   const selectedPullRequest = resultValue(selectedPullRequestResult, null)
@@ -636,6 +637,37 @@ export function App() {
   }
 
   useEffect(() => {
+    refreshRepositories()
+    refreshDiagnostics()
+    refreshSearchScopes()
+    refreshReviewRequests()
+    refreshRepoPrCounts()
+  }, [
+    refreshDiagnostics,
+    refreshRepoPrCounts,
+    refreshRepositories,
+    refreshReviewRequests,
+    refreshSearchScopes,
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+    window.diffDash.appState
+      .get()
+      .then((state) => {
+        if (!cancelled) setAppState(state)
+        return undefined
+      })
+      .catch(() => {
+        if (!cancelled) setAppState(DEFAULT_APP_STATE)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     window.diffDash.settings
       .get()
@@ -649,6 +681,16 @@ export function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (
+      setupActionStatus === "Rechecking setup..." &&
+      !isLoadingDiagnostics &&
+      diagnostics.checkedAt.length > 0
+    ) {
+      setSetupActionStatus("Setup status refreshed.")
+    }
+  }, [diagnostics.checkedAt, isLoadingDiagnostics, setupActionStatus])
 
   useEffect(() => {
     const navigateFromMouseButton = (event: MouseEvent) => {
@@ -915,14 +957,63 @@ export function App() {
       })
   }
 
+  const recheckPrerequisites = () => {
+    setSetupActionStatus("Rechecking setup...")
+    refreshDiagnostics()
+  }
+
+  const openSetupDocs = (url: string) => {
+    void window.diffDash.openExternalUrl(url).catch((error) => {
+      setSetupActionStatus(formatError(error, "Could not open setup documentation"))
+    })
+  }
+
+  const installDiffDashCli = async () => {
+    setSetupActionStatus("Installing diffdash in PATH...")
+    try {
+      const result = await window.diffDash.installDiffDashCli()
+      setSetupActionStatus(`Installed diffdash at ${result.path}`)
+      refreshDiagnostics()
+    } catch (error) {
+      setSetupActionStatus(formatError(error, "Could not install diffdash in PATH"))
+    }
+  }
+
+  const completeOnboarding = async () => {
+    const nextState: AppState = { onboardingCompleted: true }
+    setAppState(nextState)
+    try {
+      const savedState = await window.diffDash.appState.update(nextState)
+      setAppState(savedState)
+    } catch (error) {
+      setSetupActionStatus(formatError(error, "Could not save onboarding state"))
+    }
+  }
+
+  const showReviewShell = appState?.onboardingCompleted === true && screen === "review"
+
   return (
     <main
-      className={`bg-background text-foreground h-full ${screen === "review" ? "overflow-hidden" : "overflow-auto"}`}
+      className={`bg-background text-foreground h-full ${showReviewShell ? "overflow-hidden" : "overflow-auto"}`}
     >
-      {screen === "review" ? (
+      {appState === null ? (
+        <section className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-8 py-10">
+          <EmptyState>Loading DiffDash...</EmptyState>
+        </section>
+      ) : !appState.onboardingCompleted ? (
+        <OnboardingScreen
+          diagnostics={diagnostics}
+          isLoadingDiagnostics={isLoadingDiagnostics}
+          status={setupActionStatus}
+          onComplete={() => void completeOnboarding()}
+          onInstallDiffDashCli={() => void installDiffDashCli()}
+          onOpenDocs={openSetupDocs}
+          onRecheck={recheckPrerequisites}
+        />
+      ) : screen === "review" ? (
         selectedReviewSubject ? (
           <ReviewScreen
-            aiAgentAvailable={diagnostics.aiAgent || isLoadingDiagnostics}
+            aiAgentAvailable={diagnostics.codingAgentInstalled || isLoadingDiagnostics}
             aiSettings={aiSettings}
             parsedDiff={selectedDiff}
             reviewSubject={selectedReviewSubject}
@@ -975,6 +1066,16 @@ export function App() {
               </p>
             </div>
           </header>
+
+          {!isLoadingDiagnostics && missingPrerequisiteRows(diagnostics).length > 0 ? (
+            <SetupBanner
+              diagnostics={diagnostics}
+              status={setupActionStatus}
+              onInstallDiffDashCli={() => void installDiffDashCli()}
+              onOpenDocs={openSetupDocs}
+              onRecheck={recheckPrerequisites}
+            />
+          ) : null}
 
           <div className="relative z-20">
             <div className="relative h-10">
@@ -1518,6 +1619,284 @@ const EmptyState = ({
   </div>
 )
 
+type SetupRequirementKey = "gh-cli" | "gh-auth" | "coding-agent" | "diffdash-cli"
+
+type SetupRequirement = {
+  readonly key: SetupRequirementKey
+  readonly title: string
+  readonly description: string
+  readonly detail: string
+  readonly done: boolean
+}
+
+const OnboardingScreen = ({
+  diagnostics,
+  isLoadingDiagnostics,
+  status,
+  onComplete,
+  onInstallDiffDashCli,
+  onOpenDocs,
+  onRecheck,
+}: {
+  readonly diagnostics: AppDiagnostics
+  readonly isLoadingDiagnostics: boolean
+  readonly status: string | null
+  readonly onComplete: () => void
+  readonly onInstallDiffDashCli: () => void
+  readonly onOpenDocs: (url: string) => void
+  readonly onRecheck: () => void
+}) => {
+  const rows = prerequisiteRows(diagnostics)
+  const completedCount = rows.filter((row) => row.done).length
+
+  return (
+    <section className="mx-auto flex min-h-screen max-w-5xl flex-col justify-center px-6 py-10 text-sm">
+      <div className="mb-6 space-y-3">
+        <Badge variant="secondary" className="text-caption w-fit gap-1.5">
+          <Sparkles className="size-3" />
+          First-run setup
+        </Badge>
+        <div className="space-y-2">
+          <h1 className="max-w-3xl text-4xl font-semibold tracking-tight">Set up DiffDash</h1>
+          <p className="text-muted-foreground max-w-3xl text-sm leading-6">
+            DiffDash needs GitHub CLI auth for repositories, one coding agent for walkthroughs, and
+            the diffdash terminal command for local review shortcuts.
+          </p>
+        </div>
+      </div>
+
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b">
+          <CardTitle>Setup checklist</CardTitle>
+          <CardDescription>
+            {isLoadingDiagnostics
+              ? "Checking your local setup..."
+              : `${completedCount} of ${rows.length} requirements ready.`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 pt-0">
+          {rows.map((row) => (
+            <PrerequisiteRow
+              key={row.key}
+              requirement={row}
+              isChecking={isLoadingDiagnostics}
+              onInstallDiffDashCli={onInstallDiffDashCli}
+              onOpenDocs={onOpenDocs}
+            />
+          ))}
+        </CardContent>
+      </Card>
+
+      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-muted-foreground text-xs">
+          {status ?? "You can continue now and finish setup later from Home."}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={onRecheck} disabled={isLoadingDiagnostics}>
+            {isLoadingDiagnostics ? <Loader2 className="size-3 animate-spin" /> : null}
+            Recheck
+          </Button>
+          <Button onClick={onComplete}>Continue to DiffDash</Button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+const SetupBanner = ({
+  diagnostics,
+  status,
+  onInstallDiffDashCli,
+  onOpenDocs,
+  onRecheck,
+}: {
+  readonly diagnostics: AppDiagnostics
+  readonly status: string | null
+  readonly onInstallDiffDashCli: () => void
+  readonly onOpenDocs: (url: string) => void
+  readonly onRecheck: () => void
+}) => {
+  const missingRows = missingPrerequisiteRows(diagnostics)
+
+  return (
+    <Card className="border-primary/20 bg-primary/5 py-4 shadow-xs">
+      <CardContent className="grid gap-4 px-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
+        <div className="space-y-3">
+          <div>
+            <div className="font-semibold">Finish setup</div>
+            <p className="text-muted-foreground mt-1 text-xs leading-5">
+              Complete these items to unlock the full DiffDash workflow.
+            </p>
+          </div>
+          <div className="grid gap-2 lg:grid-cols-2">
+            {missingRows.map((row) => (
+              <PrerequisiteRow
+                key={row.key}
+                requirement={row}
+                compact
+                onInstallDiffDashCli={onInstallDiffDashCli}
+                onOpenDocs={onOpenDocs}
+              />
+            ))}
+          </div>
+          {status !== null ? <div className="text-muted-foreground text-xs">{status}</div> : null}
+        </div>
+        <Button variant="outline" onClick={onRecheck}>
+          Recheck
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
+const PrerequisiteRow = ({
+  compact = false,
+  isChecking = false,
+  requirement,
+  onInstallDiffDashCli,
+  onOpenDocs,
+}: {
+  readonly compact?: boolean
+  readonly isChecking?: boolean
+  readonly requirement: SetupRequirement
+  readonly onInstallDiffDashCli: () => void
+  readonly onOpenDocs: (url: string) => void
+}) => (
+  <div
+    className={`bg-background grid gap-3 rounded-2xl border p-3 ${compact ? "md:grid-cols-[1fr_auto]" : "md:grid-cols-[1fr_auto] md:items-center"}`}
+  >
+    <div className="flex min-w-0 gap-3">
+      <span
+        className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+          requirement.done
+            ? "border-review-success bg-review-success/10 text-review-success"
+            : "border-primary/30 bg-primary/10 text-primary"
+        }`}
+      >
+        {isChecking ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : requirement.done ? (
+          <Check className="size-3" />
+        ) : (
+          "!"
+        )}
+      </span>
+      <div className="min-w-0">
+        <div className="font-medium">{requirement.title}</div>
+        <p className="text-muted-foreground mt-1 text-xs leading-5">{requirement.description}</p>
+        <div className="text-caption text-muted-foreground mt-1">{requirement.detail}</div>
+      </div>
+    </div>
+    <PrerequisiteAction
+      requirement={requirement}
+      onInstallDiffDashCli={onInstallDiffDashCli}
+      onOpenDocs={onOpenDocs}
+    />
+  </div>
+)
+
+const PrerequisiteAction = ({
+  requirement,
+  onInstallDiffDashCli,
+  onOpenDocs,
+}: {
+  readonly requirement: SetupRequirement
+  readonly onInstallDiffDashCli: () => void
+  readonly onOpenDocs: (url: string) => void
+}) => {
+  if (requirement.done) {
+    return (
+      <Badge variant="secondary" className="self-start">
+        Ready
+      </Badge>
+    )
+  }
+
+  if (requirement.key === "gh-cli") {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="self-start"
+        onClick={() => onOpenDocs(GH_CLI_DOCS_URL)}
+      >
+        GitHub CLI docs
+      </Button>
+    )
+  }
+
+  if (requirement.key === "gh-auth") {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="self-start"
+        onClick={() => onOpenDocs(GH_AUTH_DOCS_URL)}
+      >
+        Auth docs
+      </Button>
+    )
+  }
+
+  if (requirement.key === "diffdash-cli") {
+    return (
+      <Button size="sm" className="self-start" onClick={onInstallDiffDashCli}>
+        Install in PATH
+      </Button>
+    )
+  }
+
+  return null
+}
+
+const prerequisiteRows = (diagnostics: AppDiagnostics): readonly SetupRequirement[] => [
+  {
+    key: "gh-cli",
+    title: "GitHub CLI installed",
+    description: "DiffDash uses gh to search repositories, load PRs, and submit reviews.",
+    detail: diagnostics.ghInstalled ? "gh is available in PATH." : "gh was not found in PATH.",
+    done: diagnostics.ghInstalled,
+  },
+  {
+    key: "gh-auth",
+    title: "GitHub CLI authenticated",
+    description: "Sign in with gh so DiffDash can access repositories and review requests.",
+    detail: diagnostics.ghAuthenticated
+      ? "GitHub CLI auth is ready."
+      : "Run gh auth login or follow the auth docs.",
+    done: diagnostics.ghAuthenticated,
+  },
+  {
+    key: "coding-agent",
+    title: "Coding agent installed",
+    description: CODING_AGENT_SETUP_MESSAGE,
+    detail: installedCodingAgentDetail(diagnostics.installedCodingAgents),
+    done: diagnostics.codingAgentInstalled,
+  },
+  {
+    key: "diffdash-cli",
+    title: "DiffDash CLI installed in PATH",
+    description: "Install the diffdash command so you can open local reviews from any terminal.",
+    detail: diagnostics.diffDashCliPath ?? "diffdash was not found in PATH.",
+    done: diagnostics.diffDashCliInstalled,
+  },
+]
+
+const missingPrerequisiteRows = (diagnostics: AppDiagnostics) =>
+  prerequisiteRows(diagnostics).filter((row) => !row.done)
+
+const installedCodingAgentDetail = (agents: readonly string[]) => {
+  if (agents.length === 0) return "No supported coding agent was found in PATH."
+  return `Detected ${agents.map(codingAgentLabel).join(", ")}.`
+}
+
+const codingAgentLabel = (agent: string) => {
+  if (agent === "codex") return "Codex"
+  if (agent === "claude") return "Claude"
+  if (agent === "opencode") return "OpenCode"
+  return agent
+}
+
 const PullRequestDetailView = ({
   aiAgentAvailable,
   aiSettings,
@@ -1746,6 +2125,7 @@ const PullRequestDetailView = ({
   }
 
   const selectSidebarTab = (tab: ReviewSidebarTab) => {
+    if (tab === "walkthrough" && !aiAgentAvailable) return
     setSidebarTab(tab)
     if (tab === "walkthrough" && walkthroughState.status === "idle") {
       void loadWalkthrough(false)
@@ -1891,12 +2271,19 @@ const PullRequestDetailView = ({
             </button>
             <button
               type="button"
-              className={`rounded-lg py-1.5 font-medium ${sidebarTab === "walkthrough" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
+              disabled={!aiAgentAvailable}
+              title={aiAgentAvailable ? undefined : CODING_AGENT_SETUP_MESSAGE}
+              className={`rounded-lg py-1.5 font-medium disabled:cursor-not-allowed disabled:opacity-45 ${sidebarTab === "walkthrough" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
               onClick={() => selectSidebarTab("walkthrough")}
             >
               Walkthrough
             </button>
           </div>
+          {!aiAgentAvailable ? (
+            <p className="text-caption text-review-sidebar-muted leading-4">
+              {CODING_AGENT_SETUP_MESSAGE}
+            </p>
+          ) : null}
           {sidebarTab === "walkthrough" ? (
             <div className="flex items-center justify-between gap-2 pt-1">
               <div className="text-caption text-review-sidebar-muted min-w-0 truncate">

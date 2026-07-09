@@ -39,9 +39,9 @@ git push origin main --follow-tags
 The workflow:
 
 - runs `pnpm release:check`
-- builds macOS arm64 DMG on a macOS arm64 runner
-- builds macOS x64 DMG on an Intel macOS runner
-- builds Linux x64 deb on Ubuntu
+- builds macOS arm64 DMG on a Blacksmith macOS arm64 runner
+- builds macOS x64 DMG on a GitHub-hosted Intel macOS runner because native modules should not be cross-built
+- builds Linux x64 deb on a Blacksmith Ubuntu x64 runner
 - creates or updates a draft GitHub Release
 - uploads release assets, `latest.json`, and `SHA256SUMS` to the draft release
 - uses the matching `CHANGELOG.md` section as draft release notes
@@ -50,6 +50,8 @@ The workflow:
 - prunes R2 release folders to keep only the latest 3 semver versions
 
 Review the draft GitHub Release before publishing it manually.
+
+The release workflow uses Blacksmith runners for Linux checks, Linux packaging, publish steps, and macOS arm64 packaging. Install the Blacksmith GitHub App for this repository before running releases. The macOS x64 build intentionally stays on GitHub's Intel macOS runner until Blacksmith offers Intel macOS runners or DiffDash has a tested cross-build path for native modules.
 
 ## Required GitHub Configuration
 

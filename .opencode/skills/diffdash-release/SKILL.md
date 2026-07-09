@@ -15,6 +15,8 @@ Use this skill for DiffDash desktop releases only.
 - GitHub Releases are created as drafts first.
 - Release notes come from the matching `CHANGELOG.md` section.
 - Cloudflare R2 mirrors release assets and keeps only the latest 3 semver folders.
+- Blacksmith runners are used for Linux checks, Linux packaging, publish steps, and macOS arm64 packaging.
+- macOS x64 packaging stays on GitHub-hosted Intel macOS because native modules should not be cross-built.
 - Homebrew and Apple signing are intentionally deferred.
 
 ## Required Checks

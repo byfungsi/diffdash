@@ -26,7 +26,7 @@ env:
 jobs:
   checks:
     name: Release checks
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -70,7 +70,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-latest
+            runner: blacksmith-6vcpu-macos-15
           - arch: x64
             runner: macos-15-intel
     env:
@@ -112,7 +112,7 @@ jobs:
   build-linux:
     name: Build Linux x64 DEB
     needs: checks
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -157,7 +157,7 @@ jobs:
     needs:
       - build-macos
       - build-linux
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     env:
       GH_TOKEN: ${{ github.token }}
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

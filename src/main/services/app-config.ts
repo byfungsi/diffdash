@@ -5,13 +5,22 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
   AppConfig,
   {
     readonly databasePath: string
+    readonly diffDashCliPath: string
     readonly settingsPath: string
     readonly tempDir: string
   }
 >() {
   static readonly layer = (config: {
     readonly databasePath: string
+    readonly diffDashCliPath?: string
     readonly settingsPath: string
     readonly tempDir: string
-  }) => Layer.succeed(AppConfig, AppConfig.of(config))
+  }) =>
+    Layer.succeed(
+      AppConfig,
+      AppConfig.of({
+        ...config,
+        diffDashCliPath: config.diffDashCliPath ?? "",
+      }),
+    )
 }

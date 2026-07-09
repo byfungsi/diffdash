@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
 
 import { App } from "./app"
+import type { AppState } from "../../shared/app-state"
 import {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -16,6 +17,7 @@ import {
 } from "../../shared/domain"
 import type { DiffDashApi } from "../../../electron/preload"
 import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
+import { AppPrerequisites } from "../../shared/prerequisites"
 import {
   Walkthrough,
   WalkthroughChapter,
@@ -226,6 +228,32 @@ const remoteSearchResult = RepositorySearchResult.make({
   url: "https://github.com/fungsi/remote-review",
 })
 
+const readyPrerequisites = AppPrerequisites.make({
+  checkedAt: "2026-07-08T00:00:00Z",
+  codingAgentInstalled: true,
+  diffDashCliInstalled: true,
+  diffDashCliPath: "/usr/local/bin/diffdash",
+  ghAuthenticated: true,
+  ghInstalled: true,
+  installedCodingAgents: ["codex"],
+})
+
+const missingPrerequisites = AppPrerequisites.make({
+  checkedAt: "2026-07-08T00:00:00Z",
+  codingAgentInstalled: false,
+  diffDashCliInstalled: false,
+  diffDashCliPath: null,
+  ghAuthenticated: false,
+  ghInstalled: false,
+  installedCodingAgents: [],
+})
+
+const noAgentPrerequisites = AppPrerequisites.make({
+  ...readyPrerequisites,
+  codingAgentInstalled: false,
+  installedCodingAgents: [],
+})
+
 let root: Root | null = null
 
 afterEach(() => {
@@ -235,6 +263,92 @@ afterEach(() => {
 })
 
 describe("App browser interactions", () => {
+  it("shows first-run onboarding and lets the user continue", async () => {
+    const calls = installDiffDashApi({
+      appState: { onboardingCompleted: false },
+      diagnostics: missingPrerequisites,
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Set up DiffDash")
+      expect(document.body.textContent).toContain("GitHub CLI installed")
+      expect(document.body.textContent).toContain("Coding agent installed")
+      expect(document.body.textContent).not.toContain("Bookmarked Repos")
+    })
+
+    const docsButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "GitHub CLI docs",
+    )
+    docsButton?.click()
+    expect(calls.openExternalUrl).toHaveBeenCalledWith("https://cli.github.com/")
+
+    const installButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Install in PATH",
+    )
+    installButton?.click()
+    await vi.waitFor(() => {
+      expect(calls.installDiffDashCli).toHaveBeenCalled()
+      expect(document.body.textContent).toContain("Installed diffdash at /usr/local/bin/diffdash")
+    })
+
+    const continueButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Continue to DiffDash",
+    )
+    continueButton?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.updateAppState).toHaveBeenCalledWith({ onboardingCompleted: true })
+      expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+  })
+
+  it("shows a Home banner while setup requirements are missing", async () => {
+    const calls = installDiffDashApi({ diagnostics: missingPrerequisites })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Finish setup")
+      expect(document.body.textContent).toContain("gh was not found in PATH")
+      expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
+    })
+
+    const authDocsButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Auth docs",
+    )
+    authDocsButton?.click()
+    expect(calls.openExternalUrl).toHaveBeenCalledWith(
+      "https://cli.github.com/manual/gh_auth_login",
+    )
+  })
+
+  it("disables the walkthrough tab when no coding agent is installed", async () => {
+    const calls = installDiffDashApi({ diagnostics: noAgentPrerequisites })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Opened PR #51")
+      expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
+    })
+
+    const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Walkthrough",
+    )
+    expect(walkthroughTab).toBeDefined()
+    expect(walkthroughTab?.disabled).toBe(true)
+    walkthroughTab?.click()
+    expect(calls.getWalkthrough).not.toHaveBeenCalled()
+  })
+
   it("does not render or query stale local-provider favorites", async () => {
     const calls = installDiffDashApi({ repositories: [repo, staleLocalFavoriteRepo] })
     renderApp()
@@ -244,6 +358,13 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).toContain("fungsi/diffdash")
       expect(document.body.textContent).not.toContain("local/diffdash-fe11f30a1061")
     })
+
+    calls.listPullRequests.mockClear()
+    const repoButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("fungsi/diffdash") ?? false,
+    )
+    expect(repoButton).toBeDefined()
+    repoButton?.click()
 
     await vi.waitFor(() => {
       expect(calls.listPullRequests).toHaveBeenCalledWith("fungsi", "diffdash")
@@ -556,9 +677,17 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
   setter?.call(input, value)
 }
 
-const installDiffDashApi = (options: { readonly repositories?: readonly Repo[] } = {}) => {
+const installDiffDashApi = (
+  options: {
+    readonly appState?: AppState
+    readonly diagnostics?: AppPrerequisites
+    readonly repositories?: readonly Repo[]
+  } = {},
+) => {
   const viewedFileKeys = new Set<string>()
   const localViewedFileKeys = new Set<string>()
+  const appState = options.appState ?? { onboardingCompleted: true }
+  const diagnostics = options.diagnostics ?? readyPrerequisites
   const repositories = options.repositories ?? [repo]
   let localReviewListener: ((rootPath: string) => void) | null = null
   let approved = false
@@ -593,6 +722,11 @@ const installDiffDashApi = (options: { readonly repositories?: readonly Repo[] }
     regenerateLocalWalkthrough: vi.fn<(rootPath: string) => Promise<StoredWalkthrough>>(
       async () => localWalkthrough,
     ),
+    installDiffDashCli: vi.fn<() => Promise<{ readonly path: string }>>(async () => ({
+      path: "/usr/local/bin/diffdash",
+    })),
+    openExternalUrl: vi.fn<(url: string) => Promise<void>>(async () => undefined),
+    updateAppState: vi.fn<(state: AppState) => Promise<AppState>>(async (state) => state),
     getLocalReviewDetail: vi.fn<(rootPath: string) => Promise<LocalReviewDetail>>(
       async () => localReview,
     ),
@@ -627,7 +761,9 @@ const installDiffDashApi = (options: { readonly repositories?: readonly Repo[] }
         }
       },
     },
-    diagnostics: async () => ({ aiAgent: true, errors: [], git: true, gitProvider: true }),
+    diagnostics: async () => diagnostics,
+    installDiffDashCli: calls.installDiffDashCli,
+    openExternalUrl: calls.openExternalUrl,
     openLocalRepositoryFile: calls.openLocalRepositoryFile,
     openRepositoryFile: calls.openRepositoryFile,
     gitProvider: {
@@ -665,6 +801,10 @@ const installDiffDashApi = (options: { readonly repositories?: readonly Repo[] }
     settings: {
       get: async () => plainAISettings(DEFAULT_AI_SETTINGS),
       update: calls.updateSettings,
+    },
+    appState: {
+      get: async () => appState,
+      update: calls.updateAppState,
     },
     viewedFiles: {
       list: async () => [...viewedFileKeys],

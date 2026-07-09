@@ -1,4 +1,4 @@
-import { _electron as electron, expect, test } from "@playwright/test"
+import { _electron as electron, expect, test, type Page } from "@playwright/test"
 import { chmod, mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -24,6 +24,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
 
   try {
     const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
     await expect(window.getByText("DiffDash")).toBeVisible()
     await expect(window.getByText("Recent Review Requests")).toBeVisible()
     await expect(window.getByText("Request review flow")).toBeVisible()
@@ -79,6 +80,7 @@ test("opens local working tree review from CLI argument", async ({
 
   try {
     const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
     await expect(window.getByRole("heading", { name: "Local changes" })).toBeVisible()
     await expect(window.getByText("src/local.ts").first()).toBeVisible()
     await expect(window.getByText("notes.txt").first()).toBeVisible()
@@ -94,16 +96,31 @@ test("opens local working tree review from CLI argument", async ({
 
 const installFakeCli = async (directory: string) => {
   await Promise.all([
+    writeExecutable(join(directory, "diffdash"), fakeDiffDashScript),
     writeExecutable(join(directory, "gh"), fakeGhScript),
     writeExecutable(join(directory, "git"), fakeGitScript),
     writeExecutable(join(directory, "codex"), fakeCodexScript),
   ])
 }
 
+const dismissOnboardingIfPresent = async (window: Page) => {
+  const continueButton = window.getByRole("button", { name: "Continue to DiffDash" })
+  try {
+    await continueButton.waitFor({ state: "visible", timeout: 2_000 })
+    await continueButton.click()
+  } catch {
+    // Onboarding is only shown for fresh app state.
+  }
+}
+
 const writeExecutable = async (path: string, content: string) => {
   await writeFile(path, content, "utf8")
   await chmod(path, 0o755)
 }
+
+const fakeDiffDashScript = `#!/usr/bin/env node
+process.exit(0)
+`
 
 const fakeGitScript = `#!/usr/bin/env node
 const args = process.argv.slice(2)
@@ -219,6 +236,11 @@ const pullRequest = {
 
 if (args[0] === "--version") {
   console.log("gh version 2.0.0")
+  process.exit(0)
+}
+
+if (args[0] === "auth" && args[1] === "status") {
+  console.log("Logged in to github.com")
   process.exit(0)
 }
 

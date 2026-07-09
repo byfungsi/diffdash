@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { AppState as SharedAppState, DEFAULT_APP_STATE } from "../../src/shared/app-state"
 import { AISettings } from "../../src/shared/ai-settings"
 import { parseUnifiedDiff } from "../../src/shared/diff-parser"
 import type {
@@ -17,6 +18,7 @@ import type {
   RepositorySearchScope,
   Repo,
 } from "../../src/shared/domain"
+import { AppPrerequisites, type DiffDashCliInstallResult } from "../../src/shared/prerequisites"
 import {
   WALKTHROUGH_PROMPT_VERSION,
   prepareWalkthroughPromptInput,
@@ -25,6 +27,7 @@ import {
   type StoredWalkthrough,
 } from "../../src/shared/walkthrough"
 import { AppConfig } from "../../src/main/services/app-config"
+import { AppState } from "../../src/main/services/app-state"
 import { AppSettings } from "../../src/main/services/app-settings"
 import { AIAgent } from "../../src/main/services/ai-agent"
 import { CliService } from "../../src/main/services/cli"
@@ -33,6 +36,7 @@ import { DatabaseService } from "../../src/main/services/database"
 import { GitService } from "../../src/main/services/git"
 import { GitProvider } from "../../src/main/services/git-provider"
 import { GitHubProvider } from "../../src/main/services/github"
+import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryStore } from "../../src/main/services/repository-store"
 import { ViewedFileStore } from "../../src/main/services/viewed-file-store"
 import { WalkthroughService } from "../../src/main/services/walkthrough"
@@ -46,10 +50,29 @@ let pendingLocalReviewPath: string | null = null
 const getDevelopmentIconPath = () =>
   app.isPackaged ? null : resolve(__dirname, "../../resources/icons/icon.png")
 
+const getDiffDashCliPath = () =>
+  app.isPackaged
+    ? join(process.resourcesPath, "bin", "diffdash")
+    : resolve(__dirname, "../../bin/diffdash.mjs")
+
+const isDebugOnboardingEnabled = () => !app.isPackaged && process.env.DEBUG_ONBOARD === "1"
+
+const debugMissingPrerequisites = () =>
+  AppPrerequisites.make({
+    checkedAt: new Date().toISOString(),
+    codingAgentInstalled: false,
+    diffDashCliInstalled: false,
+    diffDashCliPath: null,
+    ghAuthenticated: false,
+    ghInstalled: false,
+    installedCodingAgents: [],
+  })
+
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
   const configLayer = AppConfig.layer({
     databasePath: join(app.getPath("userData"), "diffdash.sqlite"),
+    diffDashCliPath: getDiffDashCliPath(),
     settingsPath: join(xdgConfigHome, "diffdash", "settings.json"),
     tempDir: join(app.getPath("temp"), "diffdash"),
   })
@@ -61,7 +84,9 @@ const createAppLayer = () => {
     RepositoryStore.layer,
     GitService.layer,
     GitHubProvider.layer,
+    AppState.layer,
     settingsLayer,
+    Prerequisites.layer,
     walkthroughLayer,
     ViewedFileStore.layer,
     WalkthroughStore.layer,
@@ -85,8 +110,10 @@ const installIpcHandlers = (
     | GitService
     | CliService
     | GitProvider
+    | AppState
     | AppSettings
     | AIAgent
+    | Prerequisites
     | ViewedFileStore
     | WalkthroughStore
     | WalkthroughService,
@@ -102,8 +129,10 @@ const installIpcHandlers = (
       | GitService
       | CliService
       | GitProvider
+      | AppState
       | AppSettings
       | AIAgent
+      | Prerequisites
       | ViewedFileStore
       | WalkthroughStore
       | WalkthroughService
@@ -128,6 +157,21 @@ const installIpcHandlers = (
     const parsed = await run(Schema.decodeUnknown(AISettings)(input))
     const settings = await run(AppSettings)
     return run(settings.save(parsed))
+  })
+
+  ipcMain.handle("appState:get", async (): Promise<SharedAppState> => {
+    if (isDebugOnboardingEnabled()) return DEFAULT_APP_STATE
+
+    const appState = await run(AppState)
+    return run(appState.get)
+  })
+
+  ipcMain.handle("appState:update", async (_event, input: unknown): Promise<SharedAppState> => {
+    const parsed = await run(Schema.decodeUnknown(SharedAppState)(input))
+    if (isDebugOnboardingEnabled()) return parsed
+
+    const appState = await run(AppState)
+    return run(appState.save(parsed))
   })
 
   ipcMain.handle(
@@ -569,24 +613,20 @@ const installIpcHandlers = (
     },
   )
 
-  ipcMain.handle("app:diagnostics", async () => {
-    const cli = await run(CliService)
-    const gitProvider = await run(GitProvider)
-    const aiAgent = await run(AIAgent)
-    const checks = await Promise.allSettled([
-      run(cli.run("git", ["--version"])),
-      run(gitProvider.isAvailable),
-      run(aiAgent.isAvailable),
-    ])
+  ipcMain.handle("app:diagnostics", async (): Promise<AppPrerequisites> => {
+    if (isDebugOnboardingEnabled()) return debugMissingPrerequisites()
 
-    return {
-      git: checks[0]?.status === "fulfilled",
-      gitProvider: checks[1]?.status === "fulfilled" && checks[1].value,
-      aiAgent: checks[2]?.status === "fulfilled" && checks[2].value,
-      errors: checks.map((check) =>
-        check.status === "rejected" ? serializeError(check.reason) : null,
-      ),
-    }
+    const prerequisites = await run(Prerequisites)
+    return run(prerequisites.get)
+  })
+
+  ipcMain.handle("app:installDiffDashCli", async (): Promise<DiffDashCliInstallResult> => {
+    const prerequisites = await run(Prerequisites)
+    return run(prerequisites.installDiffDashCli)
+  })
+
+  ipcMain.handle("app:openExternalUrl", async (_event, url: string): Promise<void> => {
+    await openExternalUrl(url)
   })
 
   ipcMain.handle(

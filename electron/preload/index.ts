@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { IpcRendererEvent } from "electron"
 
+import type { AppState } from "../../src/shared/app-state"
 import type {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -12,6 +13,7 @@ import type {
   Repo,
 } from "../../src/shared/domain"
 import type { AISettings } from "../../src/shared/ai-settings"
+import type { AppPrerequisites, DiffDashCliInstallResult } from "../../src/shared/prerequisites"
 import type { StoredWalkthrough } from "../../src/shared/walkthrough"
 
 const invoke = <A>(channel: string, ...args: readonly unknown[]): Promise<A> => {
@@ -30,13 +32,9 @@ const api = {
       }
     },
   },
-  diagnostics: () =>
-    invoke<{
-      readonly git: boolean
-      readonly gitProvider: boolean
-      readonly aiAgent: boolean
-      readonly errors: readonly unknown[]
-    }>("app:diagnostics"),
+  diagnostics: () => invoke<AppPrerequisites>("app:diagnostics"),
+  installDiffDashCli: () => invoke<DiffDashCliInstallResult>("app:installDiffDashCli"),
+  openExternalUrl: (url: string) => invoke<void>("app:openExternalUrl", url),
   openRepositoryFile: (
     owner: string,
     name: string,
@@ -58,6 +56,10 @@ const api = {
   settings: {
     get: () => invoke<AISettings>("settings:get"),
     update: (settings: AISettings) => invoke<AISettings>("settings:update", settings),
+  },
+  appState: {
+    get: () => invoke<AppState>("appState:get"),
+    update: (state: AppState) => invoke<AppState>("appState:update", state),
   },
   gitProvider: {
     searchRepositories: (query: string) =>
