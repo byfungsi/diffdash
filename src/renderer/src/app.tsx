@@ -1568,7 +1568,6 @@ const PullRequestDetailView = ({
   const [fileOpenStatus, setFileOpenStatus] = useState<string | null>(null)
   const [approvalState, setApprovalState] = useState<PullRequestApprovalState>("checking")
   const reviewFiles = reviewSubjectFiles(reviewSubject)
-  const reviewScope = reviewSubjectWalkthroughScope(reviewSubject)
   const reviewBaseSha = reviewSubjectBaseSha(reviewSubject)
   const reviewHeadSha = reviewSubjectHeadSha(reviewSubject)
   const reviewIdentity = reviewSubjectIdentity(reviewSubject)
@@ -1600,13 +1599,19 @@ const PullRequestDetailView = ({
       : null
   const totalAdditions = changedFiles.reduce((total, file) => total + file.additions, 0)
   const totalDeletions = changedFiles.reduce((total, file) => total + file.deletions, 0)
+  const activeStoredWalkthrough =
+    walkthroughState.status === "ready" ? walkthroughState.stored : null
   const activeWalkthrough =
-    walkthroughState.status === "ready" ? walkthroughState.stored.walkthrough : null
-  const walkthroughScope = reviewScope
+    activeStoredWalkthrough === null ? null : activeStoredWalkthrough.walkthrough
+  const walkthroughScope = reviewSubjectWalkthroughScope(reviewSubject, activeStoredWalkthrough)
   const walkthroughHunkDigest = buildWalkthroughHunkDigest(changedFiles, walkthroughScope)
   const activeWalkthroughSteps =
     activeWalkthrough === null ? [] : walkthroughReviewSteps(activeWalkthrough)
   const activeWalkthroughStep = activeWalkthroughSteps[activeWalkthroughStepIndex] ?? null
+  const activeStepFiles =
+    activeWalkthroughStep === null
+      ? []
+      : focusFilesForWalkthroughHunks(changedFiles, activeWalkthroughStep.hunkIds, walkthroughScope)
   const activeWalkthroughFiles =
     activeWalkthroughStep === null
       ? []
@@ -1621,11 +1626,8 @@ const PullRequestDetailView = ({
       : filteredChangedFiles
   const activeStepComplete =
     activeWalkthroughStep !== null &&
-    focusFilesForWalkthroughHunks(
-      changedFiles,
-      activeWalkthroughStep.hunkIds,
-      walkthroughScope,
-    ).every((file) => viewedFileKeys.has(file.reviewKey))
+    activeStepFiles.length > 0 &&
+    activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
   useEffect(() => {
     setSidebarTab("tree")
     setWalkthroughState({ status: "idle" })
@@ -1724,9 +1726,10 @@ const PullRequestDetailView = ({
             ? await window.diffDash.localWalkthroughs.regenerate(reviewSubject.localReview.rootPath)
             : await window.diffDash.localWalkthroughs.generate(reviewSubject.localReview.rootPath)
       if (regenerate) {
+        const storedWalkthroughScope = reviewSubjectWalkthroughScope(reviewSubject, stored)
         changedFiles.forEach((file) => onSetViewed(file.reviewKey, false))
         walkthroughReviewSteps(stored.walkthrough).forEach((step) => {
-          focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, walkthroughScope).forEach(
+          focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, storedWalkthroughScope).forEach(
             (file) => {
               onSetViewed(file.reviewKey, false)
             },
@@ -2994,10 +2997,13 @@ const reviewSubjectFiles = (reviewSubject: ReviewSubject) =>
     ? reviewSubject.pullRequest.files
     : reviewSubject.localReview.files
 
-const reviewSubjectWalkthroughScope = (reviewSubject: ReviewSubject) =>
+const reviewSubjectWalkthroughScope = (
+  reviewSubject: ReviewSubject,
+  storedWalkthrough: StoredWalkthrough | null = null,
+) =>
   reviewSubject.kind === "pullRequest"
     ? walkthroughPullRequestScope(reviewSubject.pullRequest.number)
-    : walkthroughLocalDiffScope(reviewSubject.localReview.headSha)
+    : walkthroughLocalDiffScope(storedWalkthrough?.headSha ?? reviewSubject.localReview.headSha)
 
 const reviewSubjectBaseSha = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"

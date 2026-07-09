@@ -10,7 +10,7 @@
   },
   "scripts": {
     "assets:icons": "node scripts/generate-icons.mjs",
-    "dev": "pnpm native:electron && electron-vite dev",
+    "dev": "pnpm assets:icons && pnpm native:electron && electron-vite dev",
     "build": "electron-vite build",
     "pack": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --dir --publish=never",
     "dist": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --publish=never",

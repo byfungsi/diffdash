@@ -145,6 +145,8 @@ index 1111111..2222222 100644
   rootPath: localReview.rootPath,
 })
 
+const generatedLocalHeadSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
 const walkthrough = StoredWalkthrough.make({
   baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   createdAt: "2026-07-08T00:00:00Z",
@@ -186,7 +188,7 @@ const walkthrough = StoredWalkthrough.make({
 const localWalkthrough = StoredWalkthrough.make({
   baseSha: localReview.baseSha,
   createdAt: "2026-07-08T01:00:00Z",
-  headSha: localReview.headSha,
+  headSha: generatedLocalHeadSha,
   prNumber: null,
   promptVersion: "walkthrough-v2",
   repoId: "local-repo-1",
@@ -201,7 +203,7 @@ const localWalkthrough = StoredWalkthrough.make({
         summary: "Local code changes.",
         stops: [
           WalkthroughStop.make({
-            hunkIds: [`src/local.ts:local-diff:${localReview.headSha}:h1`],
+            hunkIds: [`src/local.ts:local-diff:${generatedLocalHeadSha}:h1`],
             id: "s1",
             risk: "review",
             summary: "Local file change.",
@@ -499,6 +501,7 @@ describe("App browser interactions", () => {
       expect(calls.getWalkthrough).not.toHaveBeenCalled()
       expect(document.body.textContent).toContain("Local file")
       expect(document.body.textContent).toContain("REVIEW")
+      expect(getDiffCardPaths()).toEqual(["src/local.ts"])
     })
 
     const treeTab = [...document.querySelectorAll("button")].find(

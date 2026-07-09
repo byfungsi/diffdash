@@ -1,15 +1,53 @@
-const fileItems = [
-  "src/review-workspace.ts",
-  "src/services/github.ts",
-  "src/ui/diff-viewer.tsx",
-  "tests/review.test.ts",
+const walkthroughItems = [
+  {
+    title: "Snapshot restore waits for branch metadata before rendering",
+    file: "restoreSnapshot.ts",
+    changes: "+4 -1",
+    active: true,
+  },
+  {
+    title: "Approval toolbar keeps reviewer intent after refresh",
+    file: "approvalToolbar.tsx",
+    changes: "+6 -2",
+    active: false,
+  },
+  {
+    title: "Walkthrough queue folds completed notes by default",
+    file: "walkthroughQueue.ts",
+    changes: "+5 -1",
+    active: false,
+  },
 ]
 
-const diffRows = [
-  { tone: "added", code: "+ persist viewed files by branch" },
-  { tone: "neutral", code: "  const request = parseReview(input)" },
-  { tone: "removed", code: "- clear state when changing files" },
-  { tone: "added", code: "+ restore walkthrough checkpoints" },
+const splitDiffRows = [
+  {
+    leftLine: "3",
+    left: 'import { ReviewSnapshot } from "@aurora/review";',
+    rightLine: "3",
+    right: 'import { ReviewSnapshot } from "@aurora/review";',
+    tone: "code",
+  },
+  {
+    leftLine: "4",
+    left: 'import { AuditTrail } from "@aurora/logging";',
+    rightLine: "4",
+    right: 'import { AuditTrail } from "@aurora/logging";',
+    tone: "code",
+  },
+  {
+    leftLine: "6",
+    left: "",
+    rightLine: "6",
+    right: "// Keep restore idempotent while branch metadata loads.",
+    tone: "added",
+  },
+  {
+    leftLine: "7",
+    left: "export async function restoreReviewSnapshot(",
+    rightLine: "7",
+    right: "export async function restoreReviewSnapshot(",
+    tone: "code",
+  },
 ]
 
 const stats = [
@@ -83,7 +121,7 @@ export function App() {
       <section className="hero" id="top">
         <div className="hero-copy">
           <p className="launch-pill">
-            <span /> Private beta for macOS review teams
+            <span /> Public Beta
           </p>
           <h1>Code review that keeps context attached.</h1>
           <p className="hero-text">
@@ -198,42 +236,111 @@ function ProductPreview() {
   return (
     <div className="product-preview" aria-label="DiffDash product preview">
       <div className="preview-glow" />
-      <div className="app-window">
-        <div className="window-topbar">
-          <div className="window-controls">
+      <div className="real-app-window">
+        <aside className="real-sidebar" aria-label="Walkthrough sidebar preview">
+          <div className="sidebar-chrome">
             <span />
             <span />
             <span />
+            <strong>northstar-labs/aurora-console</strong>
           </div>
-          <div className="branch-pill">github.com/acme/platform · PR #482</div>
-        </div>
-        <div className="workspace-grid">
-          <aside className="file-list" aria-label="Changed files preview">
-            <p>Changed files</p>
-            {fileItems.map((file, index) => (
-              <span className={index === 0 ? "active" : undefined} key={file}>
-                {file}
-              </span>
-            ))}
-          </aside>
-          <section className="diff-card" aria-label="Diff preview">
-            <div className="diff-card-header">
-              <span>review-workspace.ts</span>
-              <strong>4 hunks</strong>
-            </div>
-            {diffRows.map((row) => (
-              <code className={`diff-line ${row.tone}`} key={row.code}>
-                {row.code}
-              </code>
-            ))}
-          </section>
-          <aside className="assistant-note" aria-label="AI walkthrough preview">
-            <span>Walkthrough</span>
+          <div className="sidebar-search">Filter files</div>
+          <div className="model-row">Claude / Sonnet 5.0</div>
+          <section className="sidebar-focus">
+            <h3>Review focus</h3>
             <p>
-              The persistence change is safe if branch IDs stay stable between refreshes. Check the
-              fallback for detached HEAD reviews.
+              Focus review on snapshot restore behavior, queued walkthrough state, and reviewer
+              approval controls.
             </p>
-          </aside>
+          </section>
+          <div className="scope-row">
+            <strong>Scope</strong>
+            <span>Regenerate</span>
+          </div>
+          <div className="walkthrough-list">
+            {walkthroughItems.map((item, index) => (
+              <article
+                className={item.active ? "walkthrough-item active" : "walkthrough-item"}
+                key={item.title}
+              >
+                <span className="item-dot">{item.active ? "✓" : index + 1}</span>
+                <div>
+                  <strong>{item.title}</strong>
+                  <em>{item.file}</em>
+                </div>
+                <span className="item-change">{item.changes}</span>
+              </article>
+            ))}
+          </div>
+          <div className="sidebar-total">
+            <span>Total</span>
+            <strong>+11 -0</strong>
+          </div>
+        </aside>
+
+        <div className="real-content">
+          <header className="real-topbar">
+            <span>
+              Opened PR #1847: feat: [AUR-4182] guided review queue for workspace snapshots
+            </span>
+          </header>
+
+          <div className="real-canvas">
+            <section className="real-focus-card">
+              <div className="focus-card-top">
+                <span className="critical-pill">Critical</span>
+              </div>
+              <h3>Snapshot restore now waits for branch metadata</h3>
+              <p>
+                Verify the workspace restores viewed files only after the branch identity has been
+                resolved.
+              </p>
+            </section>
+
+            <section className="real-pr-card">
+              <div className="pr-badges">
+                <span>#1847</span>
+                <span className="open-badge">Open</span>
+                <span>@riley-review</span>
+              </div>
+              <h3>feat: [AUR-4182] guided review queue for workspace snapshots</h3>
+              <div className="pr-meta-grid">
+                <span>
+                  Files <strong>7</strong>
+                </span>
+                <span>
+                  Commits <strong>3</strong>
+                </span>
+                <span>
+                  Head <strong>7f4c1d2</strong>
+                </span>
+                <span>
+                  Base <strong>2a91be8</strong>
+                </span>
+              </div>
+            </section>
+
+            <section className="real-diff-panel" aria-label="Split diff preview">
+              <div className="diff-filebar">
+                <span>apps/console/src/review/restoreSnapshot.ts</span>
+                <div>
+                  <span>+4 -1</span>
+                  <span>Modified</span>
+                  <span>Viewed</span>
+                </div>
+              </div>
+              <div className="split-diff">
+                {splitDiffRows.map((row) => (
+                  <div className={`split-row ${row.tone}`} key={`${row.leftLine}-${row.rightLine}`}>
+                    <span>{row.leftLine}</span>
+                    <code>{row.left}</code>
+                    <span>{row.rightLine}</span>
+                    <code>{row.right}</code>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
         </div>
       </div>
     </div>

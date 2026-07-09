@@ -1,9 +1,18 @@
 import { Effect, Schema } from "effect"
 
+import { getHiddenDiffFileReason } from "./diff-file-filters"
 import { ParsedDiffFile } from "./domain"
 
-/** Prompt/cache version for the Codiff-style hunk-backed walkthrough contract. */
-export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v2"
+/** Prompt/cache version for the bounded hunk-backed walkthrough contract. */
+export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v3"
+
+/** Default safety budget for AI walkthrough prompt preparation. */
+export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
+  maxDiffChars: 120_000,
+  maxFiles: 80,
+  maxHunks: 160,
+  maxLinesPerHunk: 80,
+} as const
 
 /** Risk level assigned to a walkthrough stop. */
 export const WalkthroughRisk = Schema.Literal("critical", "review", "support")
@@ -83,6 +92,35 @@ export interface WalkthroughHunkDigest {
   readonly synthetic: boolean
 }
 
+/** Prompt input prepared from a parsed diff after filtering and size bounding. */
+export interface WalkthroughPromptInput {
+  readonly diff: string
+  readonly hunkDigest: readonly WalkthroughHunkDigest[]
+  readonly stats: WalkthroughPromptStats
+}
+
+/** Safety budget for preparing walkthrough prompt input. */
+export interface WalkthroughPromptBudget {
+  readonly maxDiffChars: number
+  readonly maxFiles: number
+  readonly maxHunks: number
+  readonly maxLinesPerHunk: number
+}
+
+/** Summary of prompt filtering and truncation applied before generation. */
+export interface WalkthroughPromptStats {
+  readonly totalFiles: number
+  readonly selectedFiles: number
+  readonly hiddenFiles: number
+  readonly omittedFiles: number
+  readonly totalHunks: number
+  readonly selectedHunks: number
+  readonly omittedHunks: number
+  readonly truncatedHunks: number
+  readonly truncatedByCharBudget: boolean
+  readonly usedHiddenFallback: boolean
+}
+
 /** Review scope segment used in deterministic hunk IDs for GitHub pull requests. */
 export const walkthroughPullRequestScope = (number: number) => `pull-request:${number}`
 
@@ -94,6 +132,15 @@ export class WalkthroughValidationError extends Schema.TaggedError<WalkthroughVa
   "WalkthroughValidationError",
   {
     reason: Schema.String,
+    details: Schema.Array(Schema.String),
+  },
+) {}
+
+/** Recoverable failure when a diff cannot produce a useful walkthrough prompt. */
+export class WalkthroughPromptPreparationError extends Schema.TaggedError<WalkthroughPromptPreparationError>()(
+  "WalkthroughPromptPreparationError",
+  {
+    message: Schema.String,
     details: Schema.Array(Schema.String),
   },
 ) {}
@@ -131,6 +178,88 @@ export const buildWalkthroughHunkDigest = (
       }
     })
   })
+
+/** Builds bounded, noise-filtered prompt input for walkthrough generation. */
+export const prepareWalkthroughPromptInput = (
+  files: readonly ParsedDiffFile[],
+  scope: string,
+  budget: WalkthroughPromptBudget = DEFAULT_WALKTHROUGH_PROMPT_BUDGET,
+): Effect.Effect<WalkthroughPromptInput, WalkthroughPromptPreparationError> => {
+  const validBudget = normalizePromptBudget(budget)
+  const hiddenFiles = files.filter((file) => getHiddenDiffFileReason(file) !== null)
+  const visibleFiles = files.filter((file) => getHiddenDiffFileReason(file) === null)
+  const usedHiddenFallback = visibleFiles.length === 0 && files.length > 0
+  const candidateFiles = usedHiddenFallback ? files : visibleFiles
+  const totalHunks = files.reduce((total, file) => total + fileReviewUnitCount(file), 0)
+  const chunks: string[] = []
+  const hunkDigest: WalkthroughHunkDigest[] = []
+  const selectedFilePaths = new Set<string>()
+  let selectedHunks = 0
+  let truncatedHunks = 0
+  let truncatedByCharBudget = false
+
+  for (const file of candidateFiles) {
+    if (selectedFilePaths.size >= validBudget.maxFiles) break
+    const entries = filePromptEntries(file, scope)
+    let selectedFile = false
+
+    for (const entry of entries) {
+      if (selectedHunks >= validBudget.maxHunks) break
+
+      const alias = hunkAlias(hunkDigest.length)
+      const excerpt = promptExcerptForEntry(file, entry, alias, validBudget.maxLinesPerHunk)
+      const nextDiff = appendPromptChunk(chunks, excerpt)
+      if (nextDiff.length > validBudget.maxDiffChars) {
+        truncatedByCharBudget = true
+        if (hunkDigest.length === 0) {
+          const truncatedExcerpt = truncateText(excerpt, validBudget.maxDiffChars)
+          chunks.push(truncatedExcerpt.text)
+          truncatedHunks += truncatedExcerpt.truncated ? 1 : 0
+          hunkDigest.push(entry.digest)
+          selectedHunks += 1
+          selectedFile = true
+        }
+        break
+      }
+
+      chunks.push(excerpt.text)
+      hunkDigest.push(entry.digest)
+      selectedHunks += 1
+      selectedFile = true
+      if (excerpt.truncated) truncatedHunks += 1
+    }
+
+    if (selectedFile) selectedFilePaths.add(file.path)
+    if (selectedHunks >= validBudget.maxHunks || truncatedByCharBudget) break
+  }
+
+  if (hunkDigest.length === 0) {
+    return WalkthroughPromptPreparationError.make({
+      message: "Cannot generate a walkthrough because the diff has no reviewable changes.",
+      details: [
+        `Parsed ${files.length} changed file${files.length === 1 ? "" : "s"}.`,
+        `Parsed ${totalHunks} review unit${totalHunks === 1 ? "" : "s"}.`,
+      ],
+    })
+  }
+
+  return Effect.succeed({
+    diff: chunks.join("\n\n"),
+    hunkDigest,
+    stats: {
+      hiddenFiles: hiddenFiles.length,
+      omittedFiles: Math.max(0, files.length - selectedFilePaths.size),
+      omittedHunks: Math.max(0, totalHunks - selectedHunks),
+      selectedFiles: selectedFilePaths.size,
+      selectedHunks,
+      totalFiles: files.length,
+      totalHunks,
+      truncatedByCharBudget,
+      truncatedHunks,
+      usedHiddenFallback,
+    },
+  })
+}
 
 /**
  * Decodes generated walkthrough output, validates hunk references, and adds omitted hunks to Support.
@@ -226,6 +355,109 @@ export const flattenWalkthroughStops = (walkthrough: Walkthrough) =>
       stop,
     })),
   )
+
+interface WalkthroughPromptEntry {
+  readonly digest: WalkthroughHunkDigest
+  readonly lines: readonly string[]
+}
+
+const normalizePromptBudget = (budget: WalkthroughPromptBudget): WalkthroughPromptBudget => ({
+  maxDiffChars: positiveIntegerOrDefault(
+    budget.maxDiffChars,
+    DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxDiffChars,
+  ),
+  maxFiles: positiveIntegerOrDefault(budget.maxFiles, DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxFiles),
+  maxHunks: positiveIntegerOrDefault(budget.maxHunks, DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxHunks),
+  maxLinesPerHunk: positiveIntegerOrDefault(
+    budget.maxLinesPerHunk,
+    DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxLinesPerHunk,
+  ),
+})
+
+const positiveIntegerOrDefault = (value: number, fallback: number) =>
+  Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback
+
+const fileReviewUnitCount = (file: ParsedDiffFile) => Math.max(1, file.hunks.length)
+
+const filePromptEntries = (
+  file: ParsedDiffFile,
+  scope: string,
+): readonly WalkthroughPromptEntry[] => {
+  if (file.hunks.length === 0) {
+    return [
+      {
+        digest: {
+          id: walkthroughHunkId(file.path, scope, 1),
+          path: file.path,
+          header: "Synthetic review unit",
+          additions: file.additions,
+          deletions: file.deletions,
+          synthetic: true,
+        },
+        lines: file.patch.split("\n"),
+      },
+    ]
+  }
+
+  return file.hunks.map((hunk, index) => {
+    const { additions, deletions } = countHunkLines(hunk.lines)
+    return {
+      digest: {
+        id: walkthroughHunkId(file.path, scope, index + 1),
+        path: file.path,
+        header: hunk.header,
+        additions,
+        deletions,
+        synthetic: false,
+      },
+      lines: hunk.lines,
+    }
+  })
+}
+
+const promptExcerptForEntry = (
+  file: ParsedDiffFile,
+  entry: WalkthroughPromptEntry,
+  alias: string,
+  maxLinesPerHunk: number,
+) => {
+  const clipped = truncateLines(entry.lines, maxLinesPerHunk)
+  const header = [
+    `### ${alias} ${entry.digest.path}`,
+    `status=${file.status} additions=${entry.digest.additions} deletions=${entry.digest.deletions} synthetic=${entry.digest.synthetic ? 1 : 0}`,
+  ]
+  const lines = entry.digest.synthetic
+    ? [...header, ...clipped.lines]
+    : [...header, ...fileHeader(file), entry.digest.header, ...clipped.lines]
+
+  return {
+    text: lines.join("\n"),
+    truncated: clipped.truncated,
+  }
+}
+
+const truncateLines = (lines: readonly string[], maxLines: number) => {
+  if (lines.length <= maxLines) return { lines: [...lines], truncated: false }
+  return {
+    lines: [...lines.slice(0, maxLines), `[... ${lines.length - maxLines} lines omitted ...]`],
+    truncated: true,
+  }
+}
+
+const appendPromptChunk = (chunks: readonly string[], chunk: { readonly text: string }) =>
+  chunks.length === 0 ? chunk.text : `${chunks.join("\n\n")}\n\n${chunk.text}`
+
+const truncateText = (chunk: { readonly text: string }, maxChars: number) => {
+  if (chunk.text.length <= maxChars) return { text: chunk.text, truncated: false }
+
+  const marker = "\n[... prompt excerpt truncated to fit budget ...]"
+  if (maxChars <= marker.length) return { text: chunk.text.slice(0, maxChars), truncated: true }
+
+  return {
+    text: `${chunk.text.slice(0, maxChars - marker.length)}${marker}`,
+    truncated: true,
+  }
+}
 
 const validateWalkthroughHunkCoverage = (
   walkthrough: Walkthrough,
@@ -328,6 +560,8 @@ const validateHunkIdList = (
 
 const walkthroughHunkId = (path: string, scope: string, ordinal: number) =>
   `${path}:${scope}:h${ordinal}`
+
+const hunkAlias = (index: number) => `h${index + 1}`
 
 const countHunkLines = (lines: readonly string[]) =>
   lines.reduce(

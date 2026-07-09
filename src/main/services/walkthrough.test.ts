@@ -215,4 +215,52 @@ describe("WalkthroughService", () => {
       expect(calls[0]?.timeoutMs).toBe(90_000)
     }),
   )
+
+  it.effect("uses bounded diff excerpts and prompt preparation stats", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = makeLayer([validOutput])
+      const firstHunk = generationInput.hunkDigest[0]
+      if (firstHunk === undefined) throw new Error("Expected hunk fixture")
+      const noisyPullRequest = PullRequestDetail.make({
+        ...pullRequest,
+        files: [
+          ...pullRequest.files,
+          PullRequestFile.make({
+            additions: 1_000,
+            changeType: "modified",
+            deletions: 1_000,
+            path: "pnpm-lock.yaml",
+          }),
+        ],
+      })
+
+      yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate({
+          ...generationInput,
+          diff: "### h1 src/app.tsx\n+new bounded excerpt",
+          hunkDigest: [firstHunk],
+          review: { kind: "pullRequest", pullRequest: noisyPullRequest },
+          promptStats: {
+            hiddenFiles: 1,
+            omittedFiles: 2,
+            omittedHunks: 3,
+            selectedFiles: 4,
+            selectedHunks: 5,
+            totalFiles: 6,
+            totalHunks: 8,
+            truncatedByCharBudget: true,
+            truncatedHunks: 1,
+            usedHiddenFallback: false,
+          },
+        })
+      }).pipe(Effect.provide(layer))
+
+      expect(calls[0]?.prompt).toContain("Bounded diff excerpts")
+      expect(calls[0]?.prompt).not.toContain("Unified diff:")
+      expect(calls[0]?.prompt).toContain('"omittedFiles":2')
+      expect(calls[0]?.prompt).toContain("new bounded excerpt")
+      expect(calls[0]?.prompt).not.toContain("pnpm-lock.yaml")
+    }),
+  )
 })

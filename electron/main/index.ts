@@ -19,7 +19,7 @@ import type {
 } from "../../src/shared/domain"
 import {
   WALKTHROUGH_PROMPT_VERSION,
-  buildWalkthroughHunkDigest,
+  prepareWalkthroughPromptInput,
   walkthroughLocalDiffScope,
   walkthroughPullRequestScope,
   type StoredWalkthrough,
@@ -42,6 +42,9 @@ const LOCAL_REVIEW_ARG = "--diffdash-local-path"
 
 let mainWindow: BrowserWindow | null = null
 let pendingLocalReviewPath: string | null = null
+
+const getDevelopmentIconPath = () =>
+  app.isPackaged ? null : resolve(__dirname, "../../resources/icons/icon.png")
 
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
@@ -497,15 +500,15 @@ const installIpcHandlers = (
 
       diff ??= await run(gitProvider.getPullRequestDiff(owner, name, number))
       const parsedDiff = parseUnifiedDiff(diff.diff)
-      const hunkDigest = buildWalkthroughHunkDigest(
-        parsedDiff.files,
-        walkthroughPullRequestScope(number),
+      const promptInput = await run(
+        prepareWalkthroughPromptInput(parsedDiff.files, walkthroughPullRequestScope(number)),
       )
       const walkthrough = await run(
         walkthroughService.generate({
           review: { kind: "pullRequest", pullRequest },
-          diff: diff.diff,
-          hunkDigest,
+          diff: promptInput.diff,
+          hunkDigest: promptInput.hunkDigest,
+          promptStats: promptInput.stats,
         }),
       )
 
@@ -544,15 +547,15 @@ const installIpcHandlers = (
       }
 
       const parsedDiff = parseUnifiedDiff(diff.diff)
-      const hunkDigest = buildWalkthroughHunkDigest(
-        parsedDiff.files,
-        walkthroughLocalDiffScope(diff.headSha),
+      const promptInput = await run(
+        prepareWalkthroughPromptInput(parsedDiff.files, walkthroughLocalDiffScope(diff.headSha)),
       )
       const walkthrough = await run(
         walkthroughService.generate({
           review: { kind: "localDiff", localReview },
-          diff: diff.diff,
-          hunkDigest,
+          diff: promptInput.diff,
+          hunkDigest: promptInput.hunkDigest,
+          promptStats: promptInput.stats,
         }),
       )
 
@@ -779,6 +782,7 @@ const openExternalUrl = async (url: string) => {
 }
 
 const createWindow = () => {
+  const developmentIconPath = getDevelopmentIconPath()
   const window = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -790,6 +794,7 @@ const createWindow = () => {
     show: false,
     backgroundColor: "#ffffff",
     autoHideMenuBar: true,
+    ...(developmentIconPath === null ? {} : { icon: developmentIconPath }),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       sandbox: false,
@@ -881,6 +886,10 @@ const start = async () => {
 
   await app.whenReady()
   if (process.platform === "darwin") {
+    const developmentIconPath = getDevelopmentIconPath()
+    if (developmentIconPath !== null) {
+      app.dock?.setIcon(developmentIconPath)
+    }
     app.dock?.show()
   }
 

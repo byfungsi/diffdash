@@ -6,7 +6,9 @@ import {
   buildWalkthroughHunkDigest,
   flattenWalkthroughStops,
   focusFilesForWalkthroughHunks,
+  prepareWalkthroughPromptInput,
   validateWalkthrough,
+  walkthroughLocalDiffScope,
   walkthroughPullRequestScope,
 } from "./walkthrough"
 
@@ -214,4 +216,104 @@ describe("focusFilesForWalkthroughHunks", () => {
     expect(second[0]?.patch).toContain("new footer")
     expect(second[0]?.patch).not.toContain("new entry")
   })
+})
+
+describe("prepareWalkthroughPromptInput", () => {
+  it.effect("excludes hidden noisy files when visible files are available", () =>
+    Effect.gen(function* () {
+      const diff = parseUnifiedDiff(`diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 1111111..2222222 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -1,1 +1,1 @@
+-lock old
++lock new
+diff --git a/src/app.tsx b/src/app.tsx
+index 3333333..4444444 100644
+--- a/src/app.tsx
++++ b/src/app.tsx
+@@ -1,1 +1,1 @@
+-old app
++new app`)
+
+      const prepared = yield* prepareWalkthroughPromptInput(diff.files, scope)
+
+      expect(prepared.hunkDigest.map((hunk) => hunk.path)).toEqual(["src/app.tsx"])
+      expect(prepared.diff).toContain("### h1 src/app.tsx")
+      expect(prepared.diff).toContain("new app")
+      expect(prepared.diff).not.toContain("pnpm-lock.yaml")
+      expect(prepared.stats.hiddenFiles).toBe(1)
+      expect(prepared.stats.omittedFiles).toBe(1)
+    }),
+  )
+
+  it.effect("falls back to hidden files when every changed file is hidden", () =>
+    Effect.gen(function* () {
+      const diff = parseUnifiedDiff(`diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 1111111..2222222 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -1,1 +1,1 @@
+-lock old
++lock new`)
+
+      const prepared = yield* prepareWalkthroughPromptInput(diff.files, scope)
+
+      expect(prepared.hunkDigest.map((hunk) => hunk.path)).toEqual(["pnpm-lock.yaml"])
+      expect(prepared.diff).toContain("pnpm-lock.yaml")
+      expect(prepared.stats.usedHiddenFallback).toBe(true)
+    }),
+  )
+
+  it.effect("caps large hunk excerpts before they reach the AI prompt", () =>
+    Effect.gen(function* () {
+      const largeLines = Array.from({ length: 8 }, (_, index) => `+line ${index + 1}`).join("\n")
+      const diff = parseUnifiedDiff(`diff --git a/src/large.ts b/src/large.ts
+index 1111111..2222222 100644
+--- a/src/large.ts
++++ b/src/large.ts
+@@ -0,0 +1,8 @@
+${largeLines}`)
+
+      const prepared = yield* prepareWalkthroughPromptInput(
+        diff.files,
+        walkthroughLocalDiffScope("local-head"),
+        { maxDiffChars: 10_000, maxFiles: 10, maxHunks: 10, maxLinesPerHunk: 3 },
+      )
+
+      expect(prepared.diff).toContain("+line 1")
+      expect(prepared.diff).toContain("[... 5 lines omitted ...]")
+      expect(prepared.diff).not.toContain("+line 8")
+      expect(prepared.stats.truncatedHunks).toBe(1)
+    }),
+  )
+
+  it.effect("caps the prepared diff by character budget", () =>
+    Effect.gen(function* () {
+      const largeLines = Array.from({ length: 20 }, (_, index) => `+line ${index + 1}`).join("\n")
+      const diff = parseUnifiedDiff(`diff --git a/src/large.ts b/src/large.ts
+index 1111111..2222222 100644
+--- a/src/large.ts
++++ b/src/large.ts
+@@ -0,0 +1,20 @@
+${largeLines}`)
+
+      const prepared = yield* prepareWalkthroughPromptInput(
+        diff.files,
+        walkthroughLocalDiffScope("local-head"),
+        { maxDiffChars: 120, maxFiles: 10, maxHunks: 10, maxLinesPerHunk: 20 },
+      )
+
+      expect(prepared.diff.length).toBeLessThanOrEqual(120)
+      expect(prepared.stats.truncatedByCharBudget).toBe(true)
+    }),
+  )
+
+  it.effect("returns a clear error when there are no reviewable changes", () =>
+    Effect.gen(function* () {
+      const error = yield* prepareWalkthroughPromptInput([], scope).pipe(Effect.flip)
+
+      expect(error.message).toContain("no reviewable changes")
+    }),
+  )
 })

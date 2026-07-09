@@ -4,6 +4,7 @@ import type { LocalReviewDetail, PullRequestDetail } from "../../shared/domain"
 import {
   Walkthrough,
   type WalkthroughHunkDigest,
+  type WalkthroughPromptStats,
   validateWalkthrough,
   type WalkthroughValidationError,
 } from "../../shared/walkthrough"
@@ -17,6 +18,7 @@ export interface WalkthroughGenerationInput {
   readonly review: WalkthroughReviewContext
   readonly diff: string
   readonly hunkDigest: readonly WalkthroughHunkDigest[]
+  readonly promptStats?: WalkthroughPromptStats
 }
 
 /** Review metadata variants supported by walkthrough generation. */
@@ -105,6 +107,7 @@ const buildWalkthroughPromptContext = ({
   review,
   diff,
   hunkDigest,
+  promptStats,
 }: WalkthroughGenerationInput) => {
   const promptHunks = hunkDigest.map((hunk, index) => ({
     h: hunkAlias(index),
@@ -118,8 +121,9 @@ const buildWalkthroughPromptContext = ({
     hunkDigest.map((hunk, index) => [hunkAlias(index), hunk.id] as const),
   )
   const payload = {
-    review: walkthroughReviewPayload(review),
+    review: walkthroughReviewPayload(review, hunkDigest),
     hunks: promptHunks,
+    prompt: promptStatsPayload(promptStats),
   }
 
   return {
@@ -152,13 +156,32 @@ Rules:
 Data compact JSON. h=alias, p=path, r=hunk header, a=additions, d=deletions, s=synthetic file unit:
 ${JSON.stringify(payload)}
 
-Unified diff:
+Bounded diff excerpts. These may omit noisy files and truncate oversized hunks; data.hunks is the source of truth for aliases:
 ${diff}
 `,
   }
 }
 
-const walkthroughReviewPayload = (review: WalkthroughReviewContext) => {
+const promptStatsPayload = (stats: WalkthroughPromptStats | undefined) =>
+  stats === undefined
+    ? null
+    : {
+        hiddenFiles: stats.hiddenFiles,
+        omittedFiles: stats.omittedFiles,
+        omittedHunks: stats.omittedHunks,
+        selectedFiles: stats.selectedFiles,
+        selectedHunks: stats.selectedHunks,
+        totalFiles: stats.totalFiles,
+        totalHunks: stats.totalHunks,
+        truncatedByCharBudget: stats.truncatedByCharBudget,
+        truncatedHunks: stats.truncatedHunks,
+        usedHiddenFallback: stats.usedHiddenFallback,
+      }
+
+const walkthroughReviewPayload = (
+  review: WalkthroughReviewContext,
+  hunkDigest: readonly WalkthroughHunkDigest[],
+) => {
   if (review.kind === "localDiff") {
     const localReview = review.localReview
     return {
@@ -169,12 +192,7 @@ const walkthroughReviewPayload = (review: WalkthroughReviewContext) => {
       branch: localReview.branchName,
       base: localReview.baseSha,
       head: localReview.headSha,
-      files: localReview.files.map((file) => ({
-        p: file.path,
-        a: file.additions,
-        d: file.deletions,
-        t: file.changeType,
-      })),
+      files: compactReviewFiles(localReview.files, hunkDigest),
     }
   }
 
@@ -192,13 +210,47 @@ const walkthroughReviewPayload = (review: WalkthroughReviewContext) => {
       msg: commit.messageHeadline,
       date: commit.authoredDate,
     })),
-    files: pullRequest.files.map((file) => ({
-      p: file.path,
-      a: file.additions,
-      d: file.deletions,
-      t: file.changeType,
-    })),
+    files: compactReviewFiles(pullRequest.files, hunkDigest),
   }
+}
+
+const compactReviewFiles = (
+  files: readonly {
+    readonly path: string
+    readonly additions: number
+    readonly deletions: number
+    readonly changeType: string
+  }[],
+  hunkDigest: readonly WalkthroughHunkDigest[],
+) => {
+  const paths: string[] = []
+  const totalsByPath = new Map<string, { additions: number; deletions: number }>()
+  const fileByPath = new Map(files.map((file) => [file.path, file]))
+
+  for (const hunk of hunkDigest) {
+    if (!totalsByPath.has(hunk.path)) {
+      paths.push(hunk.path)
+      totalsByPath.set(hunk.path, { additions: 0, deletions: 0 })
+    }
+    const total = totalsByPath.get(hunk.path)
+    if (total !== undefined) {
+      totalsByPath.set(hunk.path, {
+        additions: total.additions + hunk.additions,
+        deletions: total.deletions + hunk.deletions,
+      })
+    }
+  }
+
+  return paths.map((path) => {
+    const file = fileByPath.get(path)
+    const totals = totalsByPath.get(path)
+    return {
+      a: totals?.additions ?? file?.additions ?? 0,
+      d: totals?.deletions ?? file?.deletions ?? 0,
+      p: path,
+      t: file?.changeType ?? "modified",
+    }
+  })
 }
 
 const expandWalkthroughHunkAliases = (

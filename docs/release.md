@@ -1,5 +1,80 @@
 # DiffDash Release Guide
 
+## Current Release Channel
+
+DiffDash currently ships unsigned beta builds for:
+
+- macOS arm64 DMG
+- macOS x64 DMG
+- Linux x64 deb
+
+GitHub Releases are the long-term artifact archive. Cloudflare R2 is the public download mirror and keeps only the latest 3 versions.
+
+Homebrew and Apple Developer ID signing are intentionally deferred.
+
+## GitHub Actions Release Flow
+
+The release workflow runs from tags that match `v*` and creates a draft GitHub Release first.
+
+```bash
+pnpm version patch --no-git-tag-version
+git add package.json pnpm-lock.yaml
+git commit -m "chore: release v1.0.1"
+git tag v1.0.1
+git push origin main v1.0.1
+```
+
+The tag must match the `package.json` version exactly. For example, `package.json` version `1.0.1` must use tag `v1.0.1`.
+
+The workflow:
+
+- runs `pnpm release:check`
+- builds macOS arm64 DMG on a macOS arm64 runner
+- builds macOS x64 DMG on an Intel macOS runner
+- builds Linux x64 deb on Ubuntu
+- creates or updates a draft GitHub Release
+- uploads release assets and `SHA256SUMS` to the draft release
+- mirrors the same assets to R2 at `releases/<tag>/`
+- writes `latest.json` at the R2 bucket root
+- prunes R2 release folders to keep only the latest 3 semver versions
+
+Review the draft GitHub Release before publishing it manually.
+
+## Required GitHub Configuration
+
+Configure these in GitHub under `Settings` -> `Secrets and variables` -> `Actions`.
+
+Secrets:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+
+Variables:
+
+- `R2_BUCKET`, for example `diffdash-releases`
+- `R2_PUBLIC_BASE_URL`, for example `https://downloads.diffdash.dev`
+
+The R2 access key must be able to list, upload, and delete objects in the release bucket.
+
+The workflow uses GitHub's built-in `GITHUB_TOKEN` for draft release creation, so no separate GitHub token is needed.
+
+## R2 Layout
+
+Versioned assets are uploaded under:
+
+```text
+releases/v1.0.1/
+```
+
+The public latest metadata file is uploaded to:
+
+```text
+latest.json
+```
+
+R2 retention keeps only the latest 3 version folders by semver. GitHub Releases keep every uploaded release artifact unless manually deleted.
+
 ## Release Checks
 
 Run the release gate before packaging:
@@ -25,7 +100,21 @@ Artifacts are written to `dist/`.
 
 ## macOS
 
-`pnpm dist:mac` builds a DMG and ZIP. For public distribution, sign and notarize on macOS with Apple Developer credentials available to `electron-builder`.
+`pnpm dist:mac` builds a DMG and ZIP. The automated release workflow currently publishes DMG only for arm64 and x64.
+
+The current beta builds are unsigned and not notarized. Users may need to open the app through:
+
+```text
+Right-click DiffDash.app -> Open -> Open
+```
+
+or:
+
+```text
+System Settings -> Privacy & Security -> Open Anyway
+```
+
+For public distribution, sign and notarize on macOS with Apple Developer credentials available to `electron-builder`.
 
 Common environment variables:
 
@@ -63,7 +152,9 @@ as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git re
 
 ## GitHub Publishing
 
-The `electron-builder` config is set to publish to GitHub when invoked with publishing enabled. Use `GH_TOKEN` in CI:
+The automated workflow creates a draft GitHub Release and uploads artifacts with the built-in `GITHUB_TOKEN`.
+
+The `electron-builder` config can still publish directly to GitHub when invoked with publishing enabled. Use `GH_TOKEN` in CI:
 
 ```bash
 GH_TOKEN=... pnpm dist -- --publish=always

@@ -1,0 +1,294 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.1"
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  checks:
+    name: Release checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release tag matches package version
+        run: |
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
+          expected_tag="v${package_version}"
+          if [ "${RELEASE_TAG}" != "${expected_tag}" ]; then
+            printf '%s\n' "Release tag ${RELEASE_TAG} does not match package version ${package_version}. Expected ${expected_tag}." >&2
+            exit 1
+          fi
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run release checks
+        run: xvfb-run -a pnpm release:check
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }} DMG
+    needs: checks
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-latest
+          - arch: x64
+            runner: macos-15-intel
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build DMG
+        run: |
+          pnpm assets:icons
+          pnpm native:electron
+          pnpm build
+          pnpm exec electron-builder --mac dmg --${{ matrix.arch }} --publish=never
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
+  build-linux:
+    name: Build Linux x64 DEB
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build DEB
+        run: |
+          pnpm assets:icons
+          pnpm native:electron
+          pnpm build
+          pnpm exec electron-builder --linux deb --x64 --publish=never
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-x64
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish draft release and R2 mirror
+    needs:
+      - build-macos
+      - build-linux
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate checksums and release metadata
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          cd ..
+          node <<'NODE'
+          const { createHash } = require("node:crypto")
+          const { readdirSync, readFileSync, statSync, writeFileSync } = require("node:fs")
+          const { join } = require("node:path")
+
+          const directory = "release-assets"
+          const tag = process.env.RELEASE_TAG
+          const version = tag.startsWith("v") ? tag.slice(1) : tag
+          const baseUrl = (process.env.R2_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "")
+          const files = readdirSync(directory)
+            .filter((file) => file !== "latest.json")
+            .sort((left, right) => left.localeCompare(right))
+          const assets = files.map((file) => {
+            const path = join(directory, file)
+            const bytes = readFileSync(path)
+            return {
+              name: file,
+              url: `${baseUrl}/releases/${tag}/${encodeURIComponent(file)}`,
+              size: statSync(path).size,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+            }
+          })
+
+          writeFileSync(
+            join(directory, "latest.json"),
+            `${JSON.stringify({ version, tag, generatedAt: new Date().toISOString(), assets }, null, 2)}\n`,
+          )
+          NODE
+
+      - name: Create or update draft GitHub Release
+        run: |
+          printf 'Unsigned beta build for %s.\n\nArtifacts are also mirrored to Cloudflare R2 after this job completes.\n' "${RELEASE_TAG}" > release-notes.md
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" release-assets/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" release-assets/* --draft --verify-tag --title "${RELEASE_TAG}" --notes-file release-notes.md
+          fi
+
+      - name: Validate R2 configuration
+        run: |
+          missing=0
+          for name in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE_URL; do
+            if [ -z "$(printenv "$name")" ]; then
+              printf '%s\n' "Missing required R2 configuration: ${name}" >&2
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: Upload release assets to R2
+        env:
+          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 cp release-assets "s3://${R2_BUCKET}/releases/${RELEASE_TAG}/" \
+            --recursive \
+            --exclude "latest.json" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --endpoint-url "${R2_ENDPOINT}"
+
+          aws s3 cp release-assets/latest.json "s3://${R2_BUCKET}/latest.json" \
+            --cache-control "public, max-age=60" \
+            --content-type "application/json" \
+            --endpoint-url "${R2_ENDPOINT}"
+
+      - name: Prune R2 to latest 3 versions
+        env:
+          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3api list-objects-v2 \
+            --bucket "${R2_BUCKET}" \
+            --prefix "releases/" \
+            --delimiter "/" \
+            --query 'CommonPrefixes[].Prefix' \
+            --output json \
+            --endpoint-url "${R2_ENDPOINT}" > r2-prefixes.json
+
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs")
+
+          const prefixes = JSON.parse(readFileSync("r2-prefixes.json", "utf8"))
+          const parsed = prefixes
+            .map((prefix) => {
+              const match = /^releases\/v?(\d+)\.(\d+)\.(\d+)(?:[-+][^/]*)?\/$/.exec(prefix)
+              if (match === null) return null
+              return {
+                prefix,
+                major: Number(match[1]),
+                minor: Number(match[2]),
+                patch: Number(match[3]),
+              }
+            })
+            .filter(Boolean)
+            .sort((left, right) =>
+              right.major - left.major || right.minor - left.minor || right.patch - left.patch,
+            )
+
+          const keep = new Set(parsed.slice(0, 3).map((entry) => entry.prefix))
+          const remove = parsed.filter((entry) => !keep.has(entry.prefix)).map((entry) => entry.prefix)
+          writeFileSync("r2-delete-prefixes.txt", `${remove.join("\n")}${remove.length === 0 ? "" : "\n"}`)
+          NODE
+
+          while IFS= read -r prefix; do
+            if [ -z "${prefix}" ]; then
+              continue
+            fi
+            aws s3 rm "s3://${R2_BUCKET}/${prefix}" --recursive --endpoint-url "${R2_ENDPOINT}"
+          done < r2-delete-prefixes.txt
