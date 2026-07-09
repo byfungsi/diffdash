@@ -1,3 +1,8 @@
+type DownloadPlatform = "macos" | "linux"
+
+const releaseMetadataUrl = "https://downloads.diffdash.dev/latest.json"
+const downloadFallbackUrl = "https://github.com/byfungsi/diffdash/releases/latest"
+
 const walkthroughItems = [
   {
     title: "Snapshot restore waits for branch metadata before rendering",
@@ -99,6 +104,64 @@ const terminalLines = [
   "Restored 9 viewed files",
 ]
 
+function openLatestDownload(event: { preventDefault: () => void }, platform: DownloadPlatform) {
+  event.preventDefault()
+
+  void (async () => {
+    try {
+      const response = await fetch(releaseMetadataUrl, { headers: { accept: "application/json" } })
+
+      if (!response.ok) {
+        window.location.href = downloadFallbackUrl
+        return
+      }
+
+      const metadata: unknown = await response.json()
+      const asset = getReleaseAssetUrl(metadata, platform)
+      window.location.href = asset ?? downloadFallbackUrl
+    } catch {
+      window.location.href = downloadFallbackUrl
+    }
+  })()
+}
+
+function getReleaseAssetUrl(metadata: unknown, platform: DownloadPlatform) {
+  if (!isReleaseMetadata(metadata)) {
+    return undefined
+  }
+
+  const matchesPlatform = (name: string) => {
+    const normalizedName = name.toLowerCase()
+    return platform === "macos"
+      ? normalizedName.endsWith(".dmg") || normalizedName.includes("mac")
+      : normalizedName.endsWith(".deb") || normalizedName.includes("linux")
+  }
+
+  return metadata.assets.find((asset) => matchesPlatform(asset.name))?.url
+}
+
+function isReleaseMetadata(
+  value: unknown,
+): value is { assets: Array<{ name: string; url: string }> } {
+  if (!value || typeof value !== "object" || !("assets" in value)) {
+    return false
+  }
+
+  const assets = value.assets
+  return (
+    Array.isArray(assets) &&
+    assets.every(
+      (asset) =>
+        Boolean(asset) &&
+        typeof asset === "object" &&
+        "name" in asset &&
+        "url" in asset &&
+        typeof asset.name === "string" &&
+        typeof asset.url === "string",
+    )
+  )
+}
+
 /** Promotional landing page for DiffDash. */
 export function App() {
   return (
@@ -113,15 +176,15 @@ export function App() {
           <a href="#privacy">Privacy</a>
           <a href="#download">Download</a>
         </nav>
-        <a className="nav-cta" href="mailto:hello@diffdash.dev?subject=DiffDash%20early%20access">
-          Early access
+        <a className="nav-cta" href="#download">
+          Download
         </a>
       </header>
 
       <section className="hero" id="top">
         <div className="hero-copy">
           <p className="launch-pill">
-            <span /> Public Beta
+            <span /> Free while Public Beta
           </p>
           <h1>Code review that keeps context attached.</h1>
           <p className="hero-text">
@@ -130,11 +193,19 @@ export function App() {
             browser tabs.
           </p>
           <div className="hero-actions">
-            <a className="button button-primary" href="#download">
-              Request early access
+            <a
+              className="button button-primary"
+              href={downloadFallbackUrl}
+              onClick={(event) => openLatestDownload(event, "macos")}
+            >
+              Download for macOS
             </a>
-            <a className="button button-secondary" href="#workflow">
-              See the workflow
+            <a
+              className="button button-secondary"
+              href={downloadFallbackUrl}
+              onClick={(event) => openLatestDownload(event, "linux")}
+            >
+              Download for Linux
             </a>
           </div>
           <p className="hero-footnote">
@@ -210,21 +281,23 @@ export function App() {
       </section>
 
       <section className="section final-cta" id="download">
-        <p className="eyebrow">Coming Soon</p>
-        <h2>Make code review feel like a focused tool again.</h2>
-        <p>
-          Join early access for the DiffDash macOS desktop app and help shape the next review
-          workflow for serious engineering teams.
-        </p>
+        <p className="eyebrow">Public Beta</p>
+        <h2>Download DiffDash for your review workflow.</h2>
+        <p>DiffDash is available now for macOS and Linux. It is free while in public beta.</p>
         <div className="hero-actions centered">
           <a
             className="button button-primary"
-            href="mailto:hello@diffdash.dev?subject=DiffDash%20early%20access"
+            href={downloadFallbackUrl}
+            onClick={(event) => openLatestDownload(event, "macos")}
           >
-            Request early access
+            Download for macOS
           </a>
-          <a className="button button-secondary" href="#top">
-            Back to top
+          <a
+            className="button button-secondary"
+            href={downloadFallbackUrl}
+            onClick={(event) => openLatestDownload(event, "linux")}
+          >
+            Download for Linux
           </a>
         </div>
       </section>
