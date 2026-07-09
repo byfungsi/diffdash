@@ -149,6 +149,7 @@
       ]
     },
     "deb": {
+      "maintainer": "Muhammad Hanif <pocisite@gmail.com>",
       "afterInstall": "resources/linux/deb/after-install.sh",
       "afterRemove": "resources/linux/deb/after-remove.sh"
     },
