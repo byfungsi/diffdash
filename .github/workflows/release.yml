@@ -55,6 +55,23 @@ jobs:
             exit 1
           fi
 
+      - name: Install Electron test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2t64 \
+            libatk-bridge2.0-0 \
+            libatspi2.0-0 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnotify4 \
+            libnss3 \
+            libsecret-1-0 \
+            libxss1 \
+            libxtst6 \
+            xdg-utils \
+            xvfb
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
