@@ -1,5 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { spawn } from "node:child_process"
+import { delimiter, join, resolve } from "node:path"
 
 /** A typed failure from spawning or running a local CLI dependency. */
 export class CliError extends Schema.TaggedError<CliError>()("CliError", {
@@ -46,9 +47,11 @@ export class CliService extends Context.Tag("@diffdash/CliService")<CliService, 
     CliService.of({
       run: Effect.fn("CliService.run")(function (command, args, options = {}) {
         return Effect.async<CliResult, CliError>((resume) => {
+          const env = { ...process.env, ...options.env }
+          env.PATH = defaultExecutablePath(env.PATH, env.HOME)
           const child = spawn(command, [...args], {
             cwd: options.cwd,
-            env: { ...process.env, ...options.env },
+            env,
             shell: false,
           })
 
@@ -142,4 +145,31 @@ export class CliService extends Context.Tag("@diffdash/CliService")<CliService, 
       }),
     }),
   )
+}
+
+/** Returns a PATH value that includes common CLI install locations for GUI-launched apps. */
+export const defaultExecutablePath = (envPath = "", home = process.env.HOME ?? "") => {
+  const pathDirectories = envPath.split(delimiter).filter((entry) => entry.length > 0)
+  const supplementalDirectories = [
+    home.length > 0 ? join(home, ".local", "bin") : "",
+    home.length > 0 ? join(home, "bin") : "",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ].filter((entry) => entry.length > 0)
+
+  const seen = new Set<string>()
+  return [...pathDirectories, ...supplementalDirectories]
+    .filter((entry) => {
+      const resolved = resolve(entry)
+      if (seen.has(resolved)) return false
+      seen.add(resolved)
+      return true
+    })
+    .join(delimiter)
 }

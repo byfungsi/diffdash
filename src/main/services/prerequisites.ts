@@ -17,7 +17,7 @@ import {
   DiffDashCliInstallResult,
 } from "../../shared/prerequisites"
 import { AppConfig } from "./app-config"
-import { CliService, type CliRunner } from "./cli"
+import { CliService, defaultExecutablePath, type CliRunner } from "./cli"
 
 /** A typed failure from installing the DiffDash CLI into PATH. */
 export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
@@ -108,7 +108,7 @@ const installDiffDashCli = (sourcePath: string) =>
       if (targetDirectory === null) {
         throw PrerequisiteInstallError.make({
           cause: null,
-          message: "Could not find a writable directory in PATH.",
+          message: "Could not find or create a writable directory for the DiffDash CLI.",
           operation: "installDiffDashCli.targetDirectory",
         })
       }
@@ -153,7 +153,7 @@ export const resolveExecutableInPath = (
     readonly platform?: NodeJS.Platform
   } = {},
 ) => {
-  const envPath = options.envPath ?? process.env.PATH ?? ""
+  const envPath = options.envPath ?? defaultExecutablePath(process.env.PATH ?? "")
   const platform = options.platform ?? process.platform
   const extensions = executableExtensions(command, platform, options.pathExt ?? process.env.PATHEXT)
 
@@ -171,18 +171,14 @@ const firstWritablePathDirectory = () => {
   const pathDirectories = (process.env.PATH ?? "")
     .split(delimiter)
     .filter((entry) => entry.length > 0)
-  const pathDirectorySet = new Set(pathDirectories.map((entry) => resolve(entry)))
+  const home = process.env.HOME ?? ""
   const preferredDirectories = [
-    join(process.env.HOME ?? "", ".local", "bin"),
+    home.length > 0 ? join(home, ".local", "bin") : "",
+    home.length > 0 ? join(home, "bin") : "",
     "/opt/homebrew/bin",
     "/usr/local/bin",
   ]
-  const candidates = [
-    ...preferredDirectories.filter(
-      (entry) => entry.length > 0 && pathDirectorySet.has(resolve(entry)),
-    ),
-    ...pathDirectories,
-  ]
+  const candidates = uniqueDirectories([...pathDirectories, ...preferredDirectories])
 
   for (const candidate of candidates) {
     const resolvedCandidate = resolve(candidate)
@@ -190,6 +186,17 @@ const firstWritablePathDirectory = () => {
   }
 
   return null
+}
+
+const uniqueDirectories = (directories: readonly string[]) => {
+  const seen = new Set<string>()
+  return directories.filter((directory) => {
+    if (directory.length === 0) return false
+    const resolved = resolve(directory)
+    if (seen.has(resolved)) return false
+    seen.add(resolved)
+    return true
+  })
 }
 
 const executableExtensions = (

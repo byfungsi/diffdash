@@ -30,6 +30,23 @@ const withPath = (path: string) =>
       }),
   )
 
+const withHome = (path: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const previous = process.env.HOME
+      process.env.HOME = path
+      return previous
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        if (previous === undefined) {
+          delete process.env.HOME
+        } else {
+          process.env.HOME = previous
+        }
+      }),
+  )
+
 const makeLayer = (
   directory: string,
   options: {
@@ -109,6 +126,36 @@ describe("Prerequisites", () => {
       )
 
       expect(result.path).toBe(join(fakeBin, "diffdash"))
+      expect(readlinkSync(result.path)).toBe(sourcePath)
+    }),
+  )
+
+  it.scoped("falls back to a user-local bin directory when PATH has no writable directory", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const home = join(directory, "home")
+      const sourcePath = join(directory, "source-diffdash")
+      yield* Effect.sync(() => {
+        mkdirSync(home, { recursive: true })
+        writeFileSync(sourcePath, "#!/bin/sh\n", "utf8")
+        chmodSync(sourcePath, 0o755)
+      })
+      yield* withPath("")
+      yield* withHome(home)
+
+      const result = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.installDiffDashCli
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            availableCommands: new Set(),
+            diffDashCliPath: sourcePath,
+          }),
+        ),
+      )
+
+      expect(result.path).toBe(join(home, ".local", "bin", "diffdash"))
       expect(readlinkSync(result.path)).toBe(sourcePath)
     }),
   )

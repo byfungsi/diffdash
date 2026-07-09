@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.1.2
+
+### Patch Changes
+
+- Fix macOS and Linux CLI discovery from packaged desktop builds and install the bundled `diffdash` command into a user-local bin directory when no writable PATH directory exists.
+
 ## 0.1.1
 
 ### Patch Changes
