@@ -1,0 +1,81 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+
+  <defs>
+
+    <filter id="softShadow" x="120" y="120" width="784" height="784" filterUnits="userSpaceOnUse">
+
+      <feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#0F172A" flood-opacity="0.10"/>
+
+    </filter>
+
+  </defs>
+
+  <rect width="1024" height="1024" fill="white"/>
+
+  <g filter="url(#softShadow)">
+
+    <!-- Thinner dark app base -->
+
+    <rect x="184" y="184" width="656" height="656" rx="148" fill="#0B172A"/>
+
+    <!-- Larger panels with thinner outer frame and negative-space center gap -->
+
+    <path d="M244 316
+
+             C244 276 276 244 316 244
+
+             H486
+
+             V780
+
+             H316
+
+             C276 780 244 748 244 708
+
+             V316Z"
+
+          fill="#10B981"/>
+
+    <path d="M538 244
+
+             H708
+
+             C748 244 780 276 780 316
+
+             V708
+
+             C780 748 748 780 708 780
+
+             H538
+
+             V244Z"
+
+          fill="#EF4444"/>
+
+    <!-- Addition symbol -->
+
+    <rect x="324" y="366" width="92" height="30" rx="15" fill="white"/>
+
+    <rect x="355" y="335" width="30" height="92" rx="15" fill="white"/>
+
+    <!-- Deletion symbol -->
+
+    <rect x="596" y="366" width="92" height="30" rx="15" fill="white"/>
+
+    <!-- Mirrored diff rows -->
+
+    <rect x="324" y="508" width="126" height="30" rx="15" fill="white" opacity="0.92"/>
+
+    <rect x="574" y="508" width="160" height="30" rx="15" fill="white" opacity="0.92"/>
+
+    <rect x="304" y="612" width="154" height="30" rx="15" fill="white" opacity="0.70"/>
+
+    <rect x="550" y="612" width="154" height="30" rx="15" fill="white" opacity="0.70"/>
+
+    <rect x="324" y="716" width="126" height="30" rx="15" fill="white" opacity="0.50"/>
+
+    <rect x="574" y="716" width="126" height="30" rx="15" fill="white" opacity="0.50"/>
+
+  </g>
+
+</svg>

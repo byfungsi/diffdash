@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  -h|--help)
+    printf '%s\n' 'Usage: diffdash [path]'
+    exit 0
+    ;;
+esac
+
+self_path="$0"
+if command -v readlink >/dev/null 2>&1; then
+  resolved_path="$(readlink "$0" 2>/dev/null || true)"
+  if [ -n "$resolved_path" ]; then
+    case "$resolved_path" in
+      /*) self_path="$resolved_path" ;;
+      *) self_path="$(dirname "$0")/$resolved_path" ;;
+    esac
+  fi
+fi
+
+contents_dir="$(dirname "$(dirname "$(dirname "$self_path")")")"
+app_binary="$contents_dir/MacOS/DiffDash"
+
+if [ ! -x "$app_binary" ]; then
+  app_binary='/Applications/DiffDash.app/Contents/MacOS/DiffDash'
+fi
+
+if [ ! -x "$app_binary" ]; then
+  printf '%s\n' 'Could not find the installed DiffDash app binary.' >&2
+  exit 1
+fi
+
+target_path="${1:-$PWD}"
+"$app_binary" "--diffdash-local-path=$target_path" >/dev/null 2>&1 &

@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+  -h|--help)
+    printf '%s\n' 'Usage: diffdash [path]'
+    exit 0
+    ;;
+esac
+
+if command -v readlink >/dev/null 2>&1; then
+  self_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+else
+  self_path="$0"
+fi
+
+app_root="$(dirname "$(dirname "$(dirname "$self_path")")")"
+app_binary="$app_root/diffdash-desktop"
+
+if [ ! -x "$app_binary" ]; then
+  for candidate in \
+    '/opt/DiffDash/diffdash-desktop' \
+    '/opt/diffdash/diffdash-desktop' \
+    '/usr/lib/diffdash/diffdash-desktop'
+  do
+    if [ -x "$candidate" ]; then
+      app_binary="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ ! -x "$app_binary" ]; then
+  printf '%s\n' 'Could not find the installed DiffDash app binary.' >&2
+  exit 1
+fi
+
+target_path="${1:-$PWD}"
+"$app_binary" "--diffdash-local-path=$target_path" >/dev/null 2>&1 &
