@@ -25,7 +25,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
-    await expect(window.getByText("DiffDash")).toBeVisible()
+    await expect(window.getByRole("heading", { name: "DiffDash" })).toBeVisible()
     await expect(window.getByText("Recent Review Requests")).toBeVisible()
     await expect(window.getByText("Request review flow")).toBeVisible()
 
