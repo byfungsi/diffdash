@@ -1,7 +1,7 @@
 {
   "name": "diffdash",
   "productName": "DiffDash",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Desktop code review app with Effect-powered TypeScript services.",
   "type": "module",
   "main": "out/main/index.js",
@@ -18,7 +18,11 @@
     "dist:linux": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux AppImage deb --publish=never",
     "dist:linux:deb": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux deb --publish=never",
     "dist:win": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --win nsis --publish=never",
+    "changeset": "changeset",
     "release:check": "pnpm assets:icons && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:browser && pnpm test:e2e",
+    "release:notes": "node scripts/extract-release-notes.mjs",
+    "release:tag": "node scripts/create-release-tag.mjs",
+    "release:version": "changeset version",
     "preview": "electron-vite preview",
     "prepare": "effect-language-service patch && node scripts/install-husky.mjs",
     "typecheck": "tsc --noEmit",
@@ -57,6 +61,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@changesets/cli": "^2.31.0",
     "@effect/language-service": "^0.86.4",
     "@effect/vitest": "^0.29.0",
     "@playwright/test": "^1.61.1",

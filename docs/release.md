@@ -17,14 +17,24 @@ Homebrew and Apple Developer ID signing are intentionally deferred.
 The release workflow runs from tags that match `v*` and creates a draft GitHub Release first.
 
 ```bash
-pnpm version patch --no-git-tag-version
-git add package.json pnpm-lock.yaml
-git commit -m "chore: release v1.0.1"
-git tag v1.0.1
-git push origin main v1.0.1
+pnpm changeset
+pnpm release:version
+git add package.json pnpm-lock.yaml CHANGELOG.md .changeset
+git commit -m "chore: release v0.1.1"
+pnpm release:tag
+git push origin main --follow-tags
 ```
 
-The tag must match the `package.json` version exactly. For example, `package.json` version `1.0.1` must use tag `v1.0.1`.
+The tag must match the `package.json` version exactly. For example, `package.json` version `0.1.1` must use tag `v0.1.1`.
+
+`pnpm release:version` applies pending Changesets and updates `CHANGELOG.md`. The GitHub draft release notes are extracted from the matching `CHANGELOG.md` section.
+
+For the initial beta release, commit `package.json` version `0.1.0` and `CHANGELOG.md`, then run:
+
+```bash
+pnpm release:tag
+git push origin main --follow-tags
+```
 
 The workflow:
 
@@ -33,7 +43,8 @@ The workflow:
 - builds macOS x64 DMG on an Intel macOS runner
 - builds Linux x64 deb on Ubuntu
 - creates or updates a draft GitHub Release
-- uploads release assets and `SHA256SUMS` to the draft release
+- uploads release assets, `latest.json`, and `SHA256SUMS` to the draft release
+- uses the matching `CHANGELOG.md` section as draft release notes
 - mirrors the same assets to R2 at `releases/<tag>/`
 - writes `latest.json` at the R2 bucket root
 - prunes R2 release folders to keep only the latest 3 semver versions
@@ -64,7 +75,7 @@ The workflow uses GitHub's built-in `GITHUB_TOKEN` for draft release creation, s
 Versioned assets are uploaded under:
 
 ```text
-releases/v1.0.1/
+releases/v0.1.0/
 ```
 
 The public latest metadata file is uploaded to:

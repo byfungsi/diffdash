@@ -216,8 +216,9 @@ jobs:
 
       - name: Create or update draft GitHub Release
         run: |
-          printf 'Unsigned beta build for %s.\n\nArtifacts are also mirrored to Cloudflare R2 after this job completes.\n' "${RELEASE_TAG}" > release-notes.md
+          node scripts/extract-release-notes.mjs "${RELEASE_TAG}" > release-notes.md
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes-file release-notes.md
             gh release upload "${RELEASE_TAG}" release-assets/* --clobber
           else
             gh release create "${RELEASE_TAG}" release-assets/* --draft --verify-tag --title "${RELEASE_TAG}" --notes-file release-notes.md

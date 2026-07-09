@@ -1,6 +1,7 @@
 node_modules/
 out/
 dist/
+web/landing/dist/
 *.tsbuildinfo
 .DS_Store
 *.sqlite
