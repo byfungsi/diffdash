@@ -2,15 +2,15 @@
 
 ## Current Release Channel
 
-DiffDash currently ships unsigned beta builds for:
+DiffDash currently ships beta builds for:
 
-- macOS arm64 DMG
-- macOS x64 DMG
+- macOS arm64 DMG, signed and notarized with Apple Developer ID in CI
+- macOS x64 DMG, signed and notarized with Apple Developer ID in CI
 - Linux x64 deb
 
 GitHub Releases are the long-term artifact archive. Cloudflare R2 is the public download mirror and keeps only the latest 3 versions.
 
-Homebrew and Apple Developer ID signing are intentionally deferred.
+Homebrew distribution is intentionally deferred.
 
 ## GitHub Actions Release Flow
 
@@ -39,9 +39,10 @@ git push origin main --follow-tags
 The workflow:
 
 - runs `pnpm release:check`
-- builds macOS arm64 DMG on a Blacksmith macOS arm64 runner
-- builds macOS x64 DMG on a GitHub-hosted Intel macOS runner because native modules should not be cross-built
+- builds signed and notarized macOS arm64 DMG on a Blacksmith macOS arm64 runner
+- builds signed and notarized macOS x64 DMG on a GitHub-hosted Intel macOS runner because native modules should not be cross-built
 - builds Linux x64 deb on a Blacksmith Ubuntu x64 runner
+- validates macOS code signing, Gatekeeper assessment, and notarization stapling before uploading artifacts
 - creates or updates a draft GitHub Release
 - uploads release assets, `latest.json`, and `SHA256SUMS` to the draft release
 - uses the matching `CHANGELOG.md` section as draft release notes
@@ -62,6 +63,11 @@ Secrets:
 - `CLOUDFLARE_ACCOUNT_ID`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
+- `CSC_LINK`: base64-encoded Developer ID Application `.p12` certificate export
+- `CSC_KEY_PASSWORD`: password for the `.p12` certificate export
+- `APPLE_API_KEY_BASE64`: base64-encoded App Store Connect Team API key `.p8` file
+- `APPLE_API_KEY_ID`: App Store Connect API key ID
+- `APPLE_API_ISSUER`: App Store Connect issuer ID
 
 Variables:
 
@@ -71,6 +77,20 @@ Variables:
 The R2 access key must be able to list, upload, and delete objects in the release bucket.
 
 The workflow uses GitHub's built-in `GITHUB_TOKEN` for draft release creation, so no separate GitHub token is needed.
+
+Create `CSC_LINK` from the exported Developer ID Application certificate:
+
+```bash
+base64 < DeveloperIDApplication.p12 | tr -d '\n'
+```
+
+Create `APPLE_API_KEY_BASE64` from the downloaded App Store Connect API key:
+
+```bash
+base64 < AuthKey_XXXXXXXXXX.p8 | tr -d '\n'
+```
+
+Use an App Store Connect Team API key, not an Individual API key. The key should have App Manager access.
 
 ## R2 Layout
 
@@ -115,25 +135,35 @@ Artifacts are written to `dist/`.
 
 `pnpm dist:mac` builds a DMG and ZIP. The automated release workflow currently publishes DMG only for arm64 and x64.
 
-The current beta builds are unsigned and not notarized. Users may need to open the app through:
+Release macOS builds are signed with a Developer ID Application certificate, notarized through App Store Connect API key credentials, and stapled by Electron Builder before packaging.
 
-```text
-Right-click DiffDash.app -> Open -> Open
-```
-
-or:
-
-```text
-System Settings -> Privacy & Security -> Open Anyway
-```
-
-For public distribution, sign and notarize on macOS with Apple Developer credentials available to `electron-builder`.
-
-Common environment variables:
+For local signed builds, install the Developer ID Application certificate in Keychain or point Electron Builder at a `.p12` export:
 
 ```bash
-CSC_LINK=/path/to/developer-id-application.p12
-CSC_KEY_PASSWORD=...
+security find-identity -v -p codesigning
+export CSC_LINK=/absolute/path/to/DeveloperIDApplication.p12
+export CSC_KEY_PASSWORD=...
+export APPLE_API_KEY=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
+export APPLE_API_KEY_ID=XXXXXXXXXX
+export APPLE_API_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+pnpm dist:mac
+```
+
+`APPLE_API_KEY` must be an absolute path to the `.p8` file when running locally. In GitHub Actions, the workflow writes `APPLE_API_KEY_BASE64` to a temporary `.p8` file and sets `APPLE_API_KEY` automatically.
+
+Verify a local signed build with:
+
+```bash
+codesign --verify --deep --strict --verbose=2 dist/mac-arm64/DiffDash.app
+spctl -a -vv --type exec dist/mac-arm64/DiffDash.app
+xcrun stapler validate dist/mac-arm64/DiffDash.app
+```
+
+For x64 local builds, use `dist/mac/DiffDash.app`.
+
+Alternative Apple ID notarization credentials are also supported by Electron Builder:
+
+```bash
 APPLE_ID=...
 APPLE_APP_SPECIFIC_PASSWORD=...
 APPLE_TEAM_ID=...
