@@ -45,6 +45,7 @@ describe("AppSettings", () => {
       const customSettings = AISettings.make({
         provider: "claude",
         models: AIProviderModels.make({
+          auto: "best",
           claude: "claude-opus-4-8",
           codex: "gpt-5.5",
           opencode: "anthropic/claude-sonnet-5",
@@ -60,8 +61,37 @@ describe("AppSettings", () => {
       expect(loaded).toEqual(customSettings)
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
         provider: "claude",
-        models: { claude: "claude-opus-4-8" },
+        models: { auto: "best", claude: "claude-opus-4-8" },
       })
+    }),
+  )
+
+  it.scoped("defaults the auto model tier for existing settings files", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsPath = join(directory, "diffdash", "settings.json")
+      mkdirSync(join(directory, "diffdash"), { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          provider: "auto",
+          models: {
+            claude: "claude-opus-4-8",
+            codex: "gpt-5.5",
+            opencode: "openai/gpt-5.5",
+          },
+        }),
+        "utf8",
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.models.auto).toBe("balance")
+      expect(settings.models.claude).toBe("claude-opus-4-8")
+      expect(settings.models.codex).toBe("gpt-5.5")
     }),
   )
 

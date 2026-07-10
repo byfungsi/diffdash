@@ -38,6 +38,7 @@ import {
   AI_PROVIDER_OPTIONS,
   AIProviderModels,
   AISettings,
+  AUTO_MODEL_OPTIONS,
   CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   DEFAULT_AI_SETTINGS,
@@ -45,6 +46,7 @@ import {
   modelOptionsForProvider,
   selectedModelForProvider,
   type AIProvider,
+  type AutoModel,
   type ClaudeModel,
   type CodexModel,
   type OpenCodeModel,
@@ -2764,12 +2766,25 @@ const aiSettingsWithProvider = (settings: AISettings, provider: AIProvider) =>
 
 const aiSettingsWithModel = (
   settings: AISettings,
-  model: CodexModel | ClaudeModel | OpenCodeModel,
+  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
 ) => {
+  if (settings.provider === "auto" && isAutoModel(model)) {
+    return AISettings.make({
+      provider: settings.provider,
+      models: AIProviderModels.make({
+        auto: model,
+        codex: settings.models.codex,
+        claude: settings.models.claude,
+        opencode: settings.models.opencode,
+      }),
+    })
+  }
+
   if (settings.provider === "claude" && isClaudeModel(model)) {
     return AISettings.make({
       provider: settings.provider,
       models: AIProviderModels.make({
+        auto: settings.models.auto,
         codex: settings.models.codex,
         claude: model,
         opencode: settings.models.opencode,
@@ -2781,6 +2796,7 @@ const aiSettingsWithModel = (
     return AISettings.make({
       provider: settings.provider,
       models: AIProviderModels.make({
+        auto: settings.models.auto,
         codex: settings.models.codex,
         claude: settings.models.claude,
         opencode: model,
@@ -2792,6 +2808,7 @@ const aiSettingsWithModel = (
     return AISettings.make({
       provider: settings.provider,
       models: AIProviderModels.make({
+        auto: settings.models.auto,
         codex: model,
         claude: settings.models.claude,
         opencode: settings.models.opencode,
@@ -2807,6 +2824,7 @@ const aiProviderLabel = (provider: AIProvider) =>
 
 const aiProviderModelsFromSettings = (settings: AISettings) =>
   AIProviderModels.make({
+    auto: settings.models.auto,
     codex: settings.models.codex,
     claude: settings.models.claude,
     opencode: settings.models.opencode,
@@ -2820,14 +2838,21 @@ const selectedAIModelLabel = (settings: AISettings) => {
   )
 }
 
-const isCodexModel = (model: CodexModel | ClaudeModel | OpenCodeModel): model is CodexModel =>
-  CODEX_MODEL_OPTIONS.some((option) => option.model === model)
+const isAutoModel = (
+  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
+): model is AutoModel => AUTO_MODEL_OPTIONS.some((option) => option.model === model)
 
-const isClaudeModel = (model: CodexModel | ClaudeModel | OpenCodeModel): model is ClaudeModel =>
-  CLAUDE_MODEL_OPTIONS.some((option) => option.model === model)
+const isCodexModel = (
+  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
+): model is CodexModel => CODEX_MODEL_OPTIONS.some((option) => option.model === model)
 
-const isOpenCodeModel = (model: CodexModel | ClaudeModel | OpenCodeModel): model is OpenCodeModel =>
-  OPENCODE_MODEL_OPTIONS.some((option) => option.model === model)
+const isClaudeModel = (
+  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
+): model is ClaudeModel => CLAUDE_MODEL_OPTIONS.some((option) => option.model === model)
+
+const isOpenCodeModel = (
+  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
+): model is OpenCodeModel => OPENCODE_MODEL_OPTIONS.some((option) => option.model === model)
 
 const SidebarMessage = ({
   action,

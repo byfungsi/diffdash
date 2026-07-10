@@ -864,6 +864,7 @@ const installDiffDashApi = (
 const plainAISettings = (settings: AISettings): AISettings => ({
   provider: settings.provider,
   models: {
+    auto: settings.models.auto,
     claude: settings.models.claude,
     codex: settings.models.codex,
     opencode: settings.models.opencode,

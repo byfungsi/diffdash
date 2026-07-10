@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.1.3
+
+### Patch Changes
+
+- Fix Codex walkthrough generation from packaged apps and add Auto model tiers for Best, Balance, and Fast routing.
+
 ## 0.1.2
 
 ### Patch Changes

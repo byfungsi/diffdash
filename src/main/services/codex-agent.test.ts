@@ -47,7 +47,7 @@ const makeCliLayer = () => {
 }
 
 describe("CodexAgent", () => {
-  it.effect("passes reasoning effort and timeout options to codex exec", () =>
+  it.effect("passes trust bypass, reasoning effort, and timeout options to codex exec", () =>
     Effect.gen(function* () {
       const { calls, layer: cliLayer } = makeCliLayer()
       const layer = CodexAgent.layer.pipe(
@@ -71,6 +71,7 @@ describe("CodexAgent", () => {
       expect(calls[0]?.command).toBe("codex")
       expect(calls[0]?.args).toEqual([
         "exec",
+        "--skip-git-repo-check",
         "--model",
         "gpt-5.3-codex-spark",
         "-c",

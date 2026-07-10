@@ -2,6 +2,7 @@ import { Effect, Layer } from "effect"
 
 import {
   AUTO_AI_PROVIDER_ORDER,
+  autoModelProviderModels,
   DEFAULT_AI_SETTINGS,
   type AISettings,
   type ConcreteAIProvider,
@@ -50,21 +51,31 @@ export const ConfigurableAIAgent = {
         settings: AISettings,
         prompt: string,
         options: AIAgentGenerateOptions | undefined,
-        providerIndex = 0,
+        agentIndex = 0,
       ): Effect.Effect<string, CliError> => {
-        const provider = AUTO_AI_PROVIDER_ORDER[providerIndex]
-        if (provider === undefined)
+        const agent = autoProviderAgents(settings)[agentIndex]
+        if (agent === undefined)
           return makeCodexAgent(cli, settings.models.codex, appConfig.tempDir).generateText(
             prompt,
             options,
           )
 
-        return generateWithProvider(provider, settings, prompt, options).pipe(
+        return agent.generateText(prompt, options).pipe(
           Effect.catchAll((error) => {
-            if (providerIndex >= AUTO_AI_PROVIDER_ORDER.length - 1) return Effect.fail(error)
-            return generateWithFallback(settings, prompt, options, providerIndex + 1)
+            if (agentIndex >= autoProviderAgents(settings).length - 1) return Effect.fail(error)
+            return generateWithFallback(settings, prompt, options, agentIndex + 1)
           }),
         )
+      }
+
+      const autoProviderAgents = (settings: AISettings): readonly AIProviderAgent[] => {
+        const models = autoModelProviderModels(settings.models.auto)
+        return [
+          makeClaudeAgent(cli, models.claude),
+          makeCodexAgent(cli, models.codex, appConfig.tempDir),
+          makeOpenCodeAgent(cli, models.opencodeClaude, appConfig.tempDir),
+          makeOpenCodeAgent(cli, models.opencodeCodex, appConfig.tempDir),
+        ]
       }
 
       const isProviderAvailable = (

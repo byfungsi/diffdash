@@ -31,7 +31,16 @@ export const makeCodexAgent = (
           cli
             .run(
               "codex",
-              ["exec", "--model", model, ...configArgs, "--output-last-message", outputPath, "-"],
+              [
+                "exec",
+                "--skip-git-repo-check",
+                "--model",
+                model,
+                ...configArgs,
+                "--output-last-message",
+                outputPath,
+                "-",
+              ],
               cliOptions,
             )
             .pipe(

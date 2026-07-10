@@ -7,7 +7,7 @@ export const AIProvider = Schema.Literal("auto", "codex", "claude", "opencode")
 export type AIProvider = typeof AIProvider.Type
 
 /** Concrete AI agent providers tried by automatic fallback. */
-export const CONCRETE_AI_PROVIDERS = ["codex", "claude", "opencode"] as const
+export const CONCRETE_AI_PROVIDERS = ["claude", "codex", "opencode"] as const
 
 /** Ordered provider fallback used when the selected provider is `auto`. */
 export const AUTO_AI_PROVIDER_ORDER: readonly ConcreteAIProvider[] = CONCRETE_AI_PROVIDERS
@@ -40,8 +40,15 @@ export const OpenCodeModel = Schema.Literal(
 /** OpenCode provider/model ID selected for generation. */
 export type OpenCodeModel = typeof OpenCodeModel.Type
 
+/** Model quality tier used by automatic AI provider selection. */
+export const AutoModel = Schema.Literal("best", "balance", "fast")
+
+/** Automatic model quality tier selected for generation. */
+export type AutoModel = typeof AutoModel.Type
+
 /** Per-provider model selection persisted in user settings. */
 export class AIProviderModels extends Schema.Class<AIProviderModels>("AIProviderModels")({
+  auto: Schema.optionalWith(AutoModel, { default: () => "balance" as const }),
   codex: CodexModel,
   claude: ClaudeModel,
   opencode: OpenCodeModel,
@@ -57,6 +64,7 @@ export class AISettings extends Schema.Class<AISettings>("AISettings")({
 export const DEFAULT_AI_SETTINGS = AISettings.make({
   provider: "auto",
   models: AIProviderModels.make({
+    auto: "balance",
     claude: "claude-sonnet-5",
     codex: "gpt-5.3-codex-spark",
     opencode: "openai/gpt-5.3-codex-spark",
@@ -75,6 +83,14 @@ export interface AIModelOption<Model extends string> {
   readonly model: Model
 }
 
+/** Concrete provider models used for an automatic model quality tier. */
+export interface AutoModelProviderModels {
+  readonly claude: ClaudeModel
+  readonly codex: CodexModel
+  readonly opencodeClaude: OpenCodeModel
+  readonly opencodeCodex: OpenCodeModel
+}
+
 /** Provider options shown in the walkthrough settings menu. */
 export const AI_PROVIDER_OPTIONS: readonly AIProviderOption[] = [
   { provider: "auto", label: "Auto" },
@@ -88,6 +104,13 @@ export const CODEX_MODEL_OPTIONS: readonly AIModelOption<CodexModel>[] = [
   { model: "gpt-5.5", label: "GPT 5.5" },
   { model: "gpt-5.3-codex-spark", label: "GPT 5.3 Codex Spark" },
   { model: "gpt-5.4-mini", label: "GPT 5.4 Mini" },
+]
+
+/** Automatic model quality tiers shown in settings. */
+export const AUTO_MODEL_OPTIONS: readonly AIModelOption<AutoModel>[] = [
+  { model: "best", label: "Best" },
+  { model: "balance", label: "Balance" },
+  { model: "fast", label: "Fast" },
 ]
 
 /** Claude model options shown in settings. */
@@ -107,10 +130,39 @@ export const OPENCODE_MODEL_OPTIONS: readonly AIModelOption<OpenCodeModel>[] = [
   { model: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5" },
 ]
 
+/** Returns provider-specific model IDs for an automatic model quality tier. */
+export const autoModelProviderModels = (model: AutoModel): AutoModelProviderModels => {
+  if (model === "best") {
+    return {
+      claude: "claude-opus-4-8",
+      codex: "gpt-5.5",
+      opencodeClaude: "anthropic/claude-opus-4-8",
+      opencodeCodex: "openai/gpt-5.5",
+    }
+  }
+
+  if (model === "fast") {
+    return {
+      claude: "claude-haiku-4-5",
+      codex: "gpt-5.4-mini",
+      opencodeClaude: "anthropic/claude-haiku-4-5",
+      opencodeCodex: "openai/gpt-5.4-mini",
+    }
+  }
+
+  return {
+    claude: "claude-sonnet-5",
+    codex: "gpt-5.3-codex-spark",
+    opencodeClaude: "anthropic/claude-sonnet-5",
+    opencodeCodex: "openai/gpt-5.3-codex-spark",
+  }
+}
+
 /** Returns the model options relevant to the selected provider. */
 export const modelOptionsForProvider = (
   provider: AIProvider,
-): readonly AIModelOption<CodexModel | ClaudeModel | OpenCodeModel>[] => {
+): readonly AIModelOption<AutoModel | CodexModel | ClaudeModel | OpenCodeModel>[] => {
+  if (provider === "auto") return AUTO_MODEL_OPTIONS
   if (provider === "claude") return CLAUDE_MODEL_OPTIONS
   if (provider === "opencode") return OPENCODE_MODEL_OPTIONS
   return CODEX_MODEL_OPTIONS
@@ -118,6 +170,7 @@ export const modelOptionsForProvider = (
 
 /** Returns the currently selected model ID for a provider. */
 export const selectedModelForProvider = (settings: AISettings, provider: AIProvider) => {
+  if (provider === "auto") return settings.models.auto
   if (provider === "claude") return settings.models.claude
   if (provider === "opencode") return settings.models.opencode
   return settings.models.codex

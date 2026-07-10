@@ -100,6 +100,7 @@ const installFakeCli = async (directory: string) => {
     writeExecutable(join(directory, "gh"), fakeGhScript),
     writeExecutable(join(directory, "git"), fakeGitScript),
     writeExecutable(join(directory, "codex"), fakeCodexScript),
+    writeExecutable(join(directory, "claude"), fakeClaudeScript),
   ])
 }
 
@@ -211,6 +212,38 @@ if (args[0] === "exec") {
 }
 
 console.error("Unhandled fake codex call: " + args.join(" "))
+process.exit(1)
+`
+
+const fakeClaudeScript = `#!/usr/bin/env node
+const args = process.argv.slice(2)
+
+if (args[0] === "--version") {
+  console.log("claude 0.1.0")
+  process.exit(0)
+}
+
+if (args[0] === "--print") {
+  console.log(JSON.stringify({
+    title: "Review path",
+    summary: "Review the app entry point first.",
+    chapters: [{
+      id: "c1",
+      title: "Runtime",
+      summary: "Runtime behavior changes.",
+      stops: [{
+        id: "s1",
+        title: "Entry point",
+        summary: "The changed app file owns the visible review behavior.",
+        risk: "critical",
+        hunkIds: ["h1"]
+      }]
+    }]
+  }))
+  process.exit(0)
+}
+
+console.error("Unhandled fake claude call: " + args.join(" "))
 process.exit(1)
 `
 
