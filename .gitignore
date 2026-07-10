@@ -1,6 +1,7 @@
 node_modules/
 out/
 dist/
+release-assets/
 web/landing/dist/
 *.tsbuildinfo
 .DS_Store
@@ -8,3 +9,8 @@ web/landing/dist/
 *.sqlite-shm
 *.sqlite-wal
 test-results/
+.env
+.env.local
+.env.*.local
+*.p12
+*.p8

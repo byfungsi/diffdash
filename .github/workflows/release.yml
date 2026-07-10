@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -15,13 +12,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.event.inputs.tag }}
   cancel-in-progress: false
 
 env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10.26.1"
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ github.event.inputs.tag }}
 
 jobs:
   checks:

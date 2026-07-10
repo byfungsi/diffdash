@@ -1,0 +1,15 @@
+{
+  "name": "diffdash-download-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "check": "node --check src/index.js",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.52.0"
+  }
+}

@@ -4,17 +4,19 @@
 
 DiffDash currently ships beta builds for:
 
-- macOS arm64 DMG, signed and notarized with Apple Developer ID in CI
-- macOS x64 DMG, signed and notarized with Apple Developer ID in CI
+- macOS arm64 DMG, signed and notarized with Apple Developer ID locally
+- macOS x64 DMG, signed and notarized with Apple Developer ID locally when built on/for Intel macOS
 - Linux x64 deb
 
 GitHub Releases are the long-term artifact archive. Cloudflare R2 is the public download mirror and keeps only the latest 3 versions.
 
 Homebrew distribution is intentionally deferred.
 
-## GitHub Actions Release Flow
+## Local Release Flow
 
-The release workflow runs from tags that match `v*` and creates a draft GitHub Release first.
+The primary release flow runs locally to avoid paying CI runner time while Apple notarization is queued.
+
+Prepare the release version and tag:
 
 ```bash
 pnpm changeset
@@ -22,41 +24,176 @@ pnpm release:version
 git add package.json pnpm-lock.yaml CHANGELOG.md .changeset
 git commit -m "chore: release v0.1.1"
 pnpm release:tag
-git push origin main --follow-tags
+git push origin main --tags
 ```
 
 The tag must match the `package.json` version exactly. For example, `package.json` version `0.1.1` must use tag `v0.1.1`.
 
 `pnpm release:version` applies pending Changesets and updates `CHANGELOG.md`. The GitHub draft release notes are extracted from the matching `CHANGELOG.md` section.
 
-For the initial beta release, commit `package.json` version `0.1.0` and `CHANGELOG.md`, then run:
+Run the complete local release flow:
 
 ```bash
-pnpm release:tag
-git push origin main --follow-tags
+pnpm release:local
 ```
 
-The workflow:
+The single command:
 
+- verifies release notes exist in `CHANGELOG.md` for `v<package.version>`
 - runs `pnpm release:check`
-- builds signed and notarized macOS arm64 DMG on a Blacksmith macOS arm64 runner
-- builds signed and notarized macOS x64 DMG on a GitHub-hosted Intel macOS runner because native modules should not be cross-built
-- builds Linux x64 deb on a Blacksmith Ubuntu x64 runner
-- validates macOS code signing, Gatekeeper assessment, and notarization stapling before uploading artifacts
-- creates or updates a draft GitHub Release
-- uploads release assets, `latest.json`, and `SHA256SUMS` to the draft release
-- uses the matching `CHANGELOG.md` section as draft release notes
+- builds signed, notarized, stapled macOS DMG assets into `release-assets/`
+- builds the Linux x64 `.deb` in Docker into `release-assets/`
+- generates `SHA256SUMS` and `latest.json`
+- creates or updates a draft GitHub Release for the version tag
+- uploads all `release-assets/` files to the draft GitHub Release
 - mirrors the same assets to R2 at `releases/<tag>/`
 - writes `latest.json` at the R2 bucket root
 - prunes R2 release folders to keep only the latest 3 semver versions
 
+The command requires a clean working tree. The tag must match the `package.json` version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
+
+Useful options:
+
+```bash
+pnpm release:local -- --mac-arch arm64
+pnpm release:local -- --mac-arch x64
+pnpm release:local -- --mac-arch all
+pnpm release:local -- --skip-checks
+pnpm release:local -- --skip-mac
+pnpm release:local -- --skip-linux
+pnpm release:local -- --skip-publish
+pnpm release:local -- --assets-dir release-assets/test-run
+```
+
+Use skip options for recovery/debugging only. The normal release command should run without skip flags.
+
 Review the draft GitHub Release before publishing it manually.
 
-The release workflow uses Blacksmith runners for Linux checks, Linux packaging, publish steps, and macOS arm64 packaging. Install the Blacksmith GitHub App for this repository before running releases. The macOS x64 build intentionally stays on GitHub's Intel macOS runner until Blacksmith offers Intel macOS runners or DiffDash has a tested cross-build path for native modules.
+Partial commands are available when debugging a single stage.
 
-## Required GitHub Configuration
+Build signed, notarized, stapled macOS assets locally:
 
-Configure these in GitHub under `Settings` -> `Secrets and variables` -> `Actions`.
+```bash
+pnpm release:local:mac
+```
+
+This builds the native host architecture by default. To force an architecture:
+
+```bash
+pnpm release:local:mac -- --arch arm64
+pnpm release:local:mac -- --arch x64
+```
+
+The local macOS build script:
+
+- builds a signed `.app`
+- submits it to Apple notarization with visible status polling
+- staples the accepted notarization ticket
+- packages the stapled app into a DMG
+- verifies `codesign`, Gatekeeper assessment, and stapling
+- copies release DMGs to `release-assets/`
+
+Build the Linux x64 `.deb` locally through Docker:
+
+```bash
+pnpm release:local:linux
+```
+
+The local Linux build script:
+
+- archives `HEAD` into a temporary build directory
+- runs `node:22-bookworm` through Docker with `--platform linux/amd64`
+- installs dependencies with the pinned `pnpm` version from `package.json`
+- rebuilds native modules for Electron on Linux
+- builds the Linux `.deb`
+- copies release `.deb` files to `release-assets/`
+
+Override Docker defaults when needed:
+
+```bash
+RELEASE_LINUX_IMAGE=node:22-bookworm pnpm release:local:linux
+RELEASE_LINUX_PLATFORM=linux/amd64 pnpm release:local:linux
+```
+
+Publish the assets in `release-assets/` to the draft GitHub Release and R2:
+
+```bash
+pnpm release:local:publish
+```
+
+The local publish script:
+
+- generates `SHA256SUMS`
+- generates `latest.json`
+- creates or updates a draft GitHub Release for the package version tag
+- uploads all `release-assets/` files to the draft GitHub Release
+- mirrors the same assets to R2 at `releases/<tag>/`
+- writes `latest.json` at the R2 bucket root
+- prunes R2 release folders to keep only the latest 3 semver versions
+
+## Required Local Configuration
+
+Local release scripts load `.env` from the repository root automatically. Existing shell environment variables take precedence over values in `.env`. To use another file, set `DIFFDASH_ENV_FILE=/path/to/file`.
+
+Apple signing and notarization:
+
+```dotenv
+APPLE_API_KEY=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
+APPLE_API_KEY_ID=XXXXXXXXXX
+APPLE_API_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+If the Developer ID Application certificate is installed in Keychain, no `CSC_LINK` is needed. Verify the identity exists:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+Optionally pin the signing identity:
+
+```dotenv
+CSC_NAME="Developer ID Application: Muhammad Hanif (9M558GH62J)"
+```
+
+If using a `.p12` certificate export instead of Keychain, also set:
+
+```dotenv
+CSC_LINK=/absolute/path/to/DeveloperIDApplication.p12
+CSC_KEY_PASSWORD=your_p12_export_password
+```
+
+GitHub draft release publishing:
+
+```dotenv
+GH_TOKEN=github_pat_or_classic_token_with_repo_access
+```
+
+`GH_TOKEN` is optional if `gh auth status` already shows an authenticated account with access to `byfungsi/diffdash`.
+
+Cloudflare R2 publishing:
+
+```dotenv
+CLOUDFLARE_ACCOUNT_ID=...
+R2_ACCESS_KEY_ID=...
+R2_SECRET_ACCESS_KEY=...
+R2_BUCKET=diffdash-releases
+R2_PUBLIC_BASE_URL=https://downloads.diffdash.dev
+```
+
+Do not commit `.env`, `.p12`, or `.p8` files. They are ignored by `.gitignore`.
+
+Required local CLIs:
+
+- `gh`, authenticated for GitHub Release creation/upload
+- `aws`, configured by the release script from the R2 env vars
+- `docker`, for building the Linux `.deb` locally through a Linux container
+- Xcode command line tools, including `xcrun notarytool` and `stapler`
+
+The R2 access key must be able to list, upload, and delete objects in the release bucket.
+
+## Required GitHub Actions Configuration
+
+GitHub Actions release builds are manual-only fallback jobs. Configure these only if using the manual `Release` workflow.
 
 Secrets:
 
@@ -133,7 +270,7 @@ Artifacts are written to `dist/`.
 
 ## macOS
 
-`pnpm dist:mac` builds a DMG and ZIP. The automated release workflow currently publishes DMG only for arm64 and x64.
+`pnpm dist:mac` builds a DMG and ZIP. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:mac` when debugging macOS packaging only. The local macOS release stage signs the app, notarizes with visible status polling, staples the ticket, verifies the app, and copies the DMG into `release-assets/`.
 
 Release macOS builds are signed with a Developer ID Application certificate, notarized through App Store Connect API key credentials, and stapled by Electron Builder before packaging.
 
@@ -146,10 +283,10 @@ export CSC_KEY_PASSWORD=...
 export APPLE_API_KEY=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 export APPLE_API_KEY_ID=XXXXXXXXXX
 export APPLE_API_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-pnpm dist:mac
+pnpm release:local:mac
 ```
 
-`APPLE_API_KEY` must be an absolute path to the `.p8` file when running locally. In GitHub Actions, the workflow writes `APPLE_API_KEY_BASE64` to a temporary `.p8` file and sets `APPLE_API_KEY` automatically.
+`APPLE_API_KEY` must be an absolute path to the `.p8` file when running locally.
 
 Verify a local signed build with:
 
@@ -179,7 +316,7 @@ Use an in-app install action or Homebrew cask to symlink that helper into a PATH
 
 ## Linux
 
-`pnpm dist:linux` builds AppImage and deb packages. Build on Linux.
+`pnpm dist:linux` builds AppImage and deb packages on Linux. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:linux` when debugging Linux packaging only. The local Linux release stage uses Docker to build the x64 `.deb` from a Linux container.
 
 The deb package installs:
 
@@ -195,12 +332,12 @@ as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git re
 
 ## GitHub Publishing
 
-The automated workflow creates a draft GitHub Release and uploads artifacts with the built-in `GITHUB_TOKEN`.
+`pnpm release:local` runs publishing after packaging succeeds. `pnpm release:local:publish` creates or updates the draft GitHub Release and uploads the files from `release-assets/` when debugging publishing only.
 
-The `electron-builder` config can still publish directly to GitHub when invoked with publishing enabled. Use `GH_TOKEN` in CI:
+The `electron-builder` config can still publish directly to GitHub when invoked with publishing enabled, but DiffDash release publishing should use the local publish script so GitHub Release and R2 metadata stay in sync:
 
 ```bash
-GH_TOKEN=... pnpm dist -- --publish=always
+GH_TOKEN=... pnpm release:local:publish
 ```
 
-Prefer OS-specific CI jobs so each platform builds its own native modules.
+Prefer OS-specific packaging because native modules such as `better-sqlite3` should not be cross-built.

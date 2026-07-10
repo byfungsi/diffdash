@@ -1,7 +1,16 @@
-type DownloadPlatform = "macos" | "linux"
+import type { MouseEvent } from "react"
+import {
+  captureDownloadClick,
+  captureNavClick,
+  type DownloadPlacement,
+  type DownloadPlatform,
+  isAnalyticsEnabled,
+} from "./analytics"
 
-const releaseMetadataUrl = "https://downloads.diffdash.dev/latest.json"
-const downloadFallbackUrl = "https://github.com/byfungsi/diffdash/releases/latest"
+const downloadUrls = {
+  macos: "https://download.usediffdash.com/macos",
+  linux: "https://download.usediffdash.com/linux",
+}
 
 const walkthroughItems = [
   {
@@ -104,62 +113,22 @@ const terminalLines = [
   "Restored 9 viewed files",
 ]
 
-function openLatestDownload(event: { preventDefault: () => void }, platform: DownloadPlatform) {
+function trackDownloadClick(
+  event: MouseEvent<HTMLAnchorElement>,
+  platform: DownloadPlatform,
+  placement: DownloadPlacement,
+) {
+  const href = event.currentTarget.href
+  captureDownloadClick(platform, placement, href)
+
+  if (!isAnalyticsEnabled() || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    return
+  }
+
   event.preventDefault()
-
-  void (async () => {
-    try {
-      const response = await fetch(releaseMetadataUrl, { headers: { accept: "application/json" } })
-
-      if (!response.ok) {
-        window.location.href = downloadFallbackUrl
-        return
-      }
-
-      const metadata: unknown = await response.json()
-      const asset = getReleaseAssetUrl(metadata, platform)
-      window.location.href = asset ?? downloadFallbackUrl
-    } catch {
-      window.location.href = downloadFallbackUrl
-    }
-  })()
-}
-
-function getReleaseAssetUrl(metadata: unknown, platform: DownloadPlatform) {
-  if (!isReleaseMetadata(metadata)) {
-    return undefined
-  }
-
-  const matchesPlatform = (name: string) => {
-    const normalizedName = name.toLowerCase()
-    return platform === "macos"
-      ? normalizedName.endsWith(".dmg") || normalizedName.includes("mac")
-      : normalizedName.endsWith(".deb") || normalizedName.includes("linux")
-  }
-
-  return metadata.assets.find((asset) => matchesPlatform(asset.name))?.url
-}
-
-function isReleaseMetadata(
-  value: unknown,
-): value is { assets: Array<{ name: string; url: string }> } {
-  if (!value || typeof value !== "object" || !("assets" in value)) {
-    return false
-  }
-
-  const assets = value.assets
-  return (
-    Array.isArray(assets) &&
-    assets.every(
-      (asset) =>
-        Boolean(asset) &&
-        typeof asset === "object" &&
-        "name" in asset &&
-        "url" in asset &&
-        typeof asset.name === "string" &&
-        typeof asset.url === "string",
-    )
-  )
+  window.setTimeout(() => {
+    window.location.href = href
+  }, 150)
 }
 
 /** Promotional landing page for DiffDash. */
@@ -172,9 +141,15 @@ export function App() {
           <span>DiffDash</span>
         </a>
         <nav className="nav-links" aria-label="Primary navigation">
-          <a href="#workflow">Workflow</a>
-          <a href="#privacy">Privacy</a>
-          <a href="#download">Download</a>
+          <a href="#workflow" onClick={() => captureNavClick("workflow")}>
+            Workflow
+          </a>
+          <a href="#privacy" onClick={() => captureNavClick("privacy")}>
+            Privacy
+          </a>
+          <a href="#download" onClick={() => captureNavClick("download")}>
+            Download
+          </a>
         </nav>
         <a className="nav-cta" href="#download">
           Download
@@ -195,15 +170,15 @@ export function App() {
           <div className="hero-actions">
             <a
               className="button button-primary"
-              href={downloadFallbackUrl}
-              onClick={(event) => openLatestDownload(event, "macos")}
+              href={downloadUrls.macos}
+              onClick={(event) => trackDownloadClick(event, "macos", "hero")}
             >
               Download for macOS
             </a>
             <a
               className="button button-secondary"
-              href={downloadFallbackUrl}
-              onClick={(event) => openLatestDownload(event, "linux")}
+              href={downloadUrls.linux}
+              onClick={(event) => trackDownloadClick(event, "linux", "hero")}
             >
               Download for Linux
             </a>
@@ -287,15 +262,15 @@ export function App() {
         <div className="hero-actions centered">
           <a
             className="button button-primary"
-            href={downloadFallbackUrl}
-            onClick={(event) => openLatestDownload(event, "macos")}
+            href={downloadUrls.macos}
+            onClick={(event) => trackDownloadClick(event, "macos", "footer")}
           >
             Download for macOS
           </a>
           <a
             className="button button-secondary"
-            href={downloadFallbackUrl}
-            onClick={(event) => openLatestDownload(event, "linux")}
+            href={downloadUrls.linux}
+            onClick={(event) => trackDownloadClick(event, "linux", "footer")}
           >
             Download for Linux
           </a>

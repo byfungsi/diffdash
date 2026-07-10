@@ -1,0 +1,26 @@
+{
+  "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+  "name": "diffdash-downloads",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-09",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "download.usediffdash.com/macos*",
+      "zone_name": "usediffdash.com"
+    },
+    {
+      "pattern": "download.usediffdash.com/linux*",
+      "zone_name": "usediffdash.com"
+    }
+  ],
+  "vars": {
+    "PUBLIC_RELEASE_BASE_URL": "https://download.usediffdash.com"
+  },
+  "r2_buckets": [
+    {
+      "binding": "RELEASES_BUCKET",
+      "bucket_name": "diffdash"
+    }
+  ]
+}
