@@ -26,7 +26,7 @@ env:
 jobs:
   checks:
     name: Release checks
-    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -55,6 +55,12 @@ jobs:
             exit 1
           fi
 
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Electron test dependencies
         run: |
           sudo apt-get update
@@ -73,7 +79,7 @@ jobs:
             xvfb
 
       - name: Install Playwright browser
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm exec playwright install chromium
 
       - name: Run release checks
         run: xvfb-run -a pnpm release:check
@@ -137,12 +143,199 @@ jobs:
           chmod 600 "${key_path}"
           printf 'APPLE_API_KEY=%s\n' "${key_path}" >> "${GITHUB_ENV}"
 
-      - name: Build DMG
+      - name: Configure Electron Builder CI config
+        run: |
+          config_path="${RUNNER_TEMP}/electron-builder-ci.json"
+          export ELECTRON_BUILDER_CONFIG_PATH="${config_path}"
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs")
+
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+          const build = {
+            ...packageJson.build,
+            mac: {
+              ...packageJson.build.mac,
+              forceCodeSigning: true,
+              notarize: false,
+            },
+          }
+
+          writeFileSync(process.env.ELECTRON_BUILDER_CONFIG_PATH, `${JSON.stringify(build, null, 2)}\n`)
+          NODE
+          printf 'ELECTRON_BUILDER_CONFIG=%s\n' "${config_path}" >> "${GITHUB_ENV}"
+
+      - name: Build signed app
         run: |
           pnpm assets:icons
           pnpm native:electron
           pnpm build
-          pnpm exec electron-builder --mac dmg --${{ matrix.arch }} --publish=never --config.mac.forceCodeSigning
+          pnpm exec electron-builder --config "${ELECTRON_BUILDER_CONFIG}" --mac dir --${{ matrix.arch }} --publish=never
+
+      - name: Notarize and staple app
+        env:
+          APP_PATH: ${{ matrix.appPath }}
+          NOTARIZATION_TIMEOUT_MINUTES: "45"
+          NOTARIZATION_POLL_SECONDS: "60"
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawn } from "node:child_process"
+          import { mkdtempSync } from "node:fs"
+          import { tmpdir } from "node:os"
+          import path from "node:path"
+
+          const requiredEnv = (name) => {
+            const value = process.env[name]
+            if (!value) {
+              throw new Error(`Missing required environment variable: ${name}`)
+            }
+            return value
+          }
+
+          const run = (command, args, options = {}) =>
+            new Promise((resolve) => {
+              const timeoutMs = options.timeoutMs ?? 120_000
+              const child = spawn(command, args, {
+                cwd: options.cwd,
+                stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+              })
+
+              let stdout = ""
+              let stderr = ""
+              let timedOut = false
+
+              if (!options.inherit) {
+                child.stdout.on("data", (chunk) => {
+                  stdout += chunk.toString()
+                })
+                child.stderr.on("data", (chunk) => {
+                  stderr += chunk.toString()
+                })
+              }
+
+              const timeout = setTimeout(() => {
+                timedOut = true
+                child.kill("SIGTERM")
+                setTimeout(() => child.kill("SIGKILL"), 5_000).unref()
+              }, timeoutMs)
+
+              child.on("close", (code) => {
+                clearTimeout(timeout)
+                resolve({ code, stdout, stderr, timedOut })
+              })
+
+              child.on("error", (error) => {
+                clearTimeout(timeout)
+                resolve({ code: 1, stdout, stderr: `${stderr}${error.message}`, timedOut })
+              })
+            })
+
+          const failWithOutput = (message, result) => {
+            console.error(message)
+            if (result?.timedOut) console.error("Command timed out.")
+            if (result?.stdout) console.error(result.stdout)
+            if (result?.stderr) console.error(result.stderr)
+            process.exit(1)
+          }
+
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+          const parseJson = (text, context) => {
+            try {
+              return JSON.parse(text)
+            } catch (error) {
+              console.error(`Failed to parse JSON from ${context}:`)
+              console.error(text)
+              throw error
+            }
+          }
+
+          const appPath = path.resolve(requiredEnv("APP_PATH"))
+          const authArgs = [
+            "--key",
+            requiredEnv("APPLE_API_KEY"),
+            "--key-id",
+            requiredEnv("APPLE_API_KEY_ID"),
+            "--issuer",
+            requiredEnv("APPLE_API_ISSUER"),
+          ]
+          const timeoutMinutes = Number(process.env.NOTARIZATION_TIMEOUT_MINUTES ?? "45")
+          const pollSeconds = Number(process.env.NOTARIZATION_POLL_SECONDS ?? "60")
+          const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-notarize-"))
+          const zipPath = path.join(tempDir, "DiffDash.zip")
+
+          console.log(`Creating notarization archive for ${appPath}`)
+          const zipResult = await run(
+            "ditto",
+            ["-c", "-k", "--sequesterRsrc", "--keepParent", path.basename(appPath), zipPath],
+            { cwd: path.dirname(appPath), inherit: true, timeoutMs: 10 * 60_000 },
+          )
+          if (zipResult.code !== 0) failWithOutput("Failed to create notarization archive.", zipResult)
+
+          console.log("Submitting app to Apple notarization service")
+          const submitResult = await run(
+            "xcrun",
+            ["notarytool", "submit", zipPath, ...authArgs, "--output-format", "json"],
+            { timeoutMs: 20 * 60_000 },
+          )
+          if (submitResult.code !== 0) failWithOutput("Failed to submit app for notarization.", submitResult)
+
+          const submission = parseJson(submitResult.stdout, "notarytool submit")
+          const submissionId = submission.id
+          if (typeof submissionId !== "string" || submissionId.length === 0) {
+            failWithOutput("Notarization submission did not return an id.", submitResult)
+          }
+          console.log(`Notarization submitted: ${submissionId}`)
+
+          const deadline = Date.now() + timeoutMinutes * 60_000
+          while (Date.now() < deadline) {
+            const infoResult = await run(
+              "xcrun",
+              ["notarytool", "info", submissionId, ...authArgs, "--output-format", "json"],
+              { timeoutMs: 60_000 },
+            )
+
+            if (infoResult.code !== 0) {
+              console.warn("Unable to read notarization status; retrying.")
+              if (infoResult.timedOut) console.warn("notarytool info timed out.")
+              if (infoResult.stderr) console.warn(infoResult.stderr)
+              await sleep(pollSeconds * 1_000)
+              continue
+            }
+
+            const info = parseJson(infoResult.stdout, "notarytool info")
+            console.log(`Notarization status: ${info.status}`)
+
+            if (info.status === "Accepted") {
+              for (let attempt = 1; attempt <= 5; attempt += 1) {
+                console.log(`Stapling app, attempt ${attempt}`)
+                const stapleResult = await run("xcrun", ["stapler", "staple", "-v", appPath], {
+                  inherit: true,
+                  timeoutMs: 5 * 60_000,
+                })
+                if (stapleResult.code === 0) process.exit(0)
+                await sleep(30_000)
+              }
+              console.error("Failed to staple accepted notarization ticket.")
+              process.exit(1)
+            }
+
+            if (info.status === "Invalid" || info.status === "Rejected") {
+              const logResult = await run("xcrun", ["notarytool", "log", submissionId, ...authArgs], {
+                timeoutMs: 2 * 60_000,
+              })
+              failWithOutput(`Notarization ${info.status}.`, logResult)
+            }
+
+            await sleep(pollSeconds * 1_000)
+          }
+
+          console.error(`Timed out waiting ${timeoutMinutes} minutes for notarization: ${submissionId}`)
+          process.exit(1)
+          NODE
+
+      - name: Build DMG
+        env:
+          APP_PATH: ${{ matrix.appPath }}
+        run: pnpm exec electron-builder --config "${ELECTRON_BUILDER_CONFIG}" --prepackaged "${APP_PATH}" --mac dmg --${{ matrix.arch }} --publish=never
 
       - name: Verify macOS signing and notarization
         env:
