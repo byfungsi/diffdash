@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.1.4
+
+### Patch Changes
+
+- Sign and notarize macOS release builds with Apple Developer ID credentials.
+
 ## 0.1.3
 
 ### Patch Changes
