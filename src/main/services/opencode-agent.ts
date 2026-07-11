@@ -38,7 +38,7 @@ export const makeOpenCodeAgent = (
                 ...variantArgs(options),
                 OPENCODE_PROMPT_MESSAGE,
               ],
-              options.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs },
+              cliOptions(options),
             )
             .pipe(
               Effect.flatMap((result) => requireGeneratedText(result, "OpenCode", result.stdout)),
@@ -70,6 +70,11 @@ const variantArgs = (options: AIAgentGenerateOptions): readonly string[] => {
   const variant = options.reasoningEffort === "low" ? "minimal" : options.reasoningEffort
   return ["--variant", variant]
 }
+
+const cliOptions = (options: AIAgentGenerateOptions) => ({
+  ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+  ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+})
 
 const writePromptFile = (tempDir: string, prompt: string): Effect.Effect<string, CliError> =>
   Effect.try({

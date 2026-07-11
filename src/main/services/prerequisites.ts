@@ -43,10 +43,16 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
       const cli = yield* CliService
       const config = yield* AppConfig
       const get = Effect.fn("Prerequisites.get")(function* () {
-        const [ghInstalled, ghAuthenticated, installedCodingAgents] = yield* Effect.all(
-          [commandAvailable(cli, "gh"), ghAuthenticatedCheck(cli), installedCodingAgentNames(cli)],
-          { concurrency: "unbounded" },
-        )
+        const [gitInstalled, ghInstalled, ghAuthenticated, installedCodingAgents] =
+          yield* Effect.all(
+            [
+              commandAvailable(cli, "git"),
+              commandAvailable(cli, "gh"),
+              ghAuthenticatedCheck(cli),
+              installedCodingAgentNames(cli),
+            ],
+            { concurrency: "unbounded" },
+          )
         const diffDashCliPath = resolveExecutableInPath("diffdash")
 
         return AppPrerequisites.make({
@@ -54,6 +60,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
           codingAgentInstalled: installedCodingAgents.length > 0,
           diffDashCliInstalled: diffDashCliPath !== null,
           diffDashCliPath,
+          gitInstalled,
           ghAuthenticated,
           ghInstalled,
           installedCodingAgents,

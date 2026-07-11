@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 
 import {
+  LocalReviewDetail,
   PullRequestCommit,
   PullRequestDetail,
   PullRequestFile,
@@ -78,6 +79,23 @@ const generationInput = {
   review: { kind: "pullRequest" as const, pullRequest },
 }
 
+const localReview = LocalReviewDetail.make({
+  baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  branchName: "feature/walkthrough",
+  diffHash: "local-diff-hash",
+  fetchedAt: "2026-07-08T01:00:00Z",
+  files: pullRequest.files,
+  headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  repoName: "diffdash",
+  rootPath: "/workspace/repo",
+  title: "Local changes in diffdash",
+})
+
+const localGenerationInput = {
+  ...generationInput,
+  review: { kind: "localDiff" as const, localReview },
+}
+
 const validOutput = JSON.stringify({
   title: "Review path",
   summary: "Review app entry first, then the service support change.",
@@ -123,6 +141,7 @@ const invalidCoverageOutput = JSON.stringify({
 
 const makeLayer = (outputs: readonly string[]) => {
   const calls: Array<{
+    readonly cwd: string | undefined
     readonly prompt: string
     readonly reasoningEffort: AIAgentReasoningEffort | undefined
     readonly timeoutMs: number | undefined
@@ -136,6 +155,7 @@ const makeLayer = (outputs: readonly string[]) => {
           generateText: (prompt, options) =>
             Effect.sync(() => {
               calls.push({
+                cwd: options?.cwd,
                 prompt,
                 reasoningEffort: options?.reasoningEffort,
                 timeoutMs: options?.timeoutMs,
@@ -168,8 +188,12 @@ describe("WalkthroughService", () => {
       expect(walkthrough.support.map((item) => item.title)).toEqual(["Other changes"])
       expect(walkthrough.support[0]?.hunkIds).toEqual(["src/service.ts:pull-request:51:h1"])
       expect(calls).toHaveLength(1)
+      expect(calls[0]?.cwd).toBeUndefined()
       expect(calls[0]?.prompt).toContain("Return JSON only")
       expect(calls[0]?.prompt).toContain('"h":"h1"')
+      expect(calls[0]?.prompt).toContain('"context":"diff-only"')
+      expect(calls[0]?.prompt).toContain('"baseSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"')
+      expect(calls[0]?.prompt).toContain('"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"')
       expect(calls[0]?.prompt).not.toContain("src/app.tsx:pull-request:51:h1")
     }),
   )
@@ -213,6 +237,20 @@ describe("WalkthroughService", () => {
 
       expect(calls[0]?.reasoningEffort).toBe("low")
       expect(calls[0]?.timeoutMs).toBe(90_000)
+    }),
+  )
+
+  it.effect("passes local repository cwd for local walkthrough generation", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = makeLayer([validOutput])
+
+      yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(localGenerationInput)
+      }).pipe(Effect.provide(layer))
+
+      expect(calls[0]?.cwd).toBe("/workspace/repo")
+      expect(calls[0]?.prompt).toContain('"type":"local-diff"')
     }),
   )
 

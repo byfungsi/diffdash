@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Cloud,
+  Command,
   Copy,
   FolderGit2,
   GitBranch,
@@ -20,11 +21,16 @@ import {
   GitPullRequestDraft,
   Laptop,
   Loader2,
+  Monitor,
+  Moon,
+  RefreshCw,
   Search,
   Sparkles,
   Star,
   Settings2,
+  Sun,
   UserRound,
+  X,
 } from "lucide-react"
 import { useDeferredValue, useEffect, useRef, useState } from "react"
 
@@ -51,6 +57,7 @@ import {
   type CodexModel,
   type OpenCodeModel,
 } from "../../shared/ai-settings"
+import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "../../shared/diff-file-filters"
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
 import { Repo } from "../../shared/domain"
@@ -117,6 +124,29 @@ type PullRequestReviewTarget = Extract<SelectedReviewTarget, { readonly kind: "p
 
 type LocalDiffReviewTarget = Extract<SelectedReviewTarget, { readonly kind: "localDiff" }>
 
+type ResolvedTheme = "light" | "dark"
+
+type ThemePreference = ResolvedTheme | "system"
+
+type RecentReviewEntry = {
+  readonly key: string
+  readonly lastReviewedAt: string
+  readonly repoName: string
+  readonly repoOwner: string
+  readonly sourceRepoId: string | null
+  readonly target: PullRequestReviewTarget
+  readonly title: string
+}
+
+type CommandPaletteItem = {
+  readonly id: string
+  readonly title: string
+  readonly subtitle: string
+  readonly keywords: string
+  readonly disabled?: boolean
+  readonly onSelect: () => void
+}
+
 type AppNavigationRoute = {
   readonly screen: Screen
   readonly selectedRepo: Repo | null
@@ -127,8 +157,10 @@ const MOUSE_BUTTON_BACK = 3
 const MOUSE_BUTTON_FORWARD = 4
 const GH_CLI_DOCS_URL = "https://cli.github.com/"
 const GH_AUTH_DOCS_URL = "https://cli.github.com/manual/gh_auth_login"
+const GIT_DOCS_URL = "https://git-scm.com/downloads"
 const CODING_AGENT_SETUP_MESSAGE =
   "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
+const THEME_STORAGE_KEY = "diffdash.theme"
 
 const sameNavigationRoute = (left: AppNavigationRoute, right: AppNavigationRoute) =>
   left.screen === right.screen &&
@@ -455,6 +487,13 @@ export function App() {
   const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [aiSettings, setAISettings] = useState<AISettings>(DEFAULT_AI_SETTINGS)
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => readStoredTheme())
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    resolveThemePreference(themePreference),
+  )
+  const [recentReviews, setRecentReviews] = useState<readonly RecentReviewEntry[]>([])
+  const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
+  const [isReloadingReview, setIsReloadingReview] = useState(false)
   const deferredSearchQuery = useDeferredValue(query.trim())
   const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
   const remoteSearchKey = remoteSearchAtomKey(deferredSearchQuery, selectedSearchScope)
@@ -498,6 +537,10 @@ export function App() {
   const refreshReviewRequests = useAtomRefresh(reviewRequestsAtom)
   const refreshRepoPrCounts = useAtomRefresh(repoPrCountsAtom)
   const refreshSelectedPullRequests = useAtomRefresh(selectedRepoPullRequestsAtom)
+  const refreshSelectedPullRequestDetail = useAtomRefresh(selectedPullRequestDetailAtom)
+  const refreshSelectedPullRequestDiff = useAtomRefresh(selectedPullRequestDiffAtom)
+  const refreshSelectedLocalReviewDetail = useAtomRefresh(selectedLocalReviewDetailAtom)
+  const refreshSelectedLocalReviewDiff = useAtomRefresh(selectedLocalReviewDiffAtom)
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
   const searchScopes = resultValue(searchScopesResult, [] as readonly RepositorySearchScope[])
@@ -685,6 +728,23 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    const applyTheme = () => {
+      const nextResolvedTheme = resolveThemePreference(themePreference)
+      setResolvedTheme(nextResolvedTheme)
+      document.documentElement.classList.toggle("dark", nextResolvedTheme === "dark")
+      document.documentElement.style.colorScheme = nextResolvedTheme
+      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference)
+    }
+
+    applyTheme()
+    if (themePreference !== "system") return undefined
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)")
+    media.addEventListener("change", applyTheme)
+    return () => media.removeEventListener("change", applyTheme)
+  }, [themePreference])
+
+  useEffect(() => {
     if (
       setupActionStatus === "Rechecking setup..." &&
       !isLoadingDiagnostics &&
@@ -720,6 +780,19 @@ export function App() {
       window.removeEventListener("auxclick", suppressHandledAuxClick, true)
     }
   })
+
+  useEffect(() => {
+    const openGoToPalette = (event: KeyboardEvent) => {
+      if (!isModKey(event) || event.shiftKey || event.key.toLowerCase() !== "k") return
+      if (screen === "review") return
+
+      event.preventDefault()
+      setGoToPaletteOpen(true)
+    }
+
+    window.addEventListener("keydown", openGoToPalette)
+    return () => window.removeEventListener("keydown", openGoToPalette)
+  }, [screen])
 
   useEffect(() => {
     if (screen !== "review" || selectedDiff === null) return
@@ -778,6 +851,73 @@ export function App() {
     }
   }, [screen, selectedReviewKind, selectedPullRequest, selectedLocalReview, selectedDiff])
 
+  useEffect(() => {
+    if (!isReloadingReview) return
+    if (isLoadingReview) return
+
+    if (selectedReview === null) {
+      setIsReloadingReview(false)
+      return
+    }
+
+    if (selectedReview.kind === "localDiff") {
+      if (
+        Result.isFailure(selectedLocalReviewResult) ||
+        Result.isFailure(selectedLocalDiffResult)
+      ) {
+        setActionStatus(
+          resultErrorMessage(
+            Result.isFailure(selectedLocalReviewResult)
+              ? selectedLocalReviewResult
+              : selectedLocalDiffResult,
+            "Reload diff failed",
+          ),
+        )
+        setIsReloadingReview(false)
+        return
+      }
+
+      if (selectedLocalReview !== null && selectedLocalDiff !== null) {
+        setActionStatus(`Reloaded local diff for ${selectedLocalReview.repoName}.`)
+        setIsReloadingReview(false)
+      }
+      return
+    }
+
+    if (
+      Result.isFailure(selectedPullRequestResult) ||
+      Result.isFailure(selectedPullRequestDiffResult)
+    ) {
+      setActionStatus(
+        resultErrorMessage(
+          Result.isFailure(selectedPullRequestResult)
+            ? selectedPullRequestResult
+            : selectedPullRequestDiffResult,
+          "Reload diff failed",
+        ),
+      )
+      setIsReloadingReview(false)
+      return
+    }
+
+    if (selectedPullRequest !== null && selectedPullRequestDiff !== null) {
+      setActionStatus(`Reloaded PR #${selectedPullRequest.number}.`)
+      setIsReloadingReview(false)
+    }
+  }, [
+    isLoadingReview,
+    isReloadingReview,
+    selectedLocalDiff,
+    selectedLocalDiffResult,
+    selectedLocalReview,
+    selectedLocalReviewResult,
+    selectedPullRequest,
+    selectedPullRequestDiff,
+    selectedPullRequestDiffResult,
+    selectedPullRequestResult,
+    selectedReview,
+  ])
+
   const setFileViewed = (reviewKey: string, viewed: boolean) => {
     setViewedFileKeys((keys) => {
       const nextKeys = new Set(keys)
@@ -823,6 +963,26 @@ export function App() {
         viewed,
       )
     }
+  }
+
+  const reloadSelectedReview = () => {
+    if (selectedReview === null || isLoadingReview || isReloadingReview) return
+
+    setIsReloadingReview(true)
+    setActionStatus(
+      selectedReview.kind === "localDiff" ? "Reloading local diff..." : "Reloading PR diff...",
+    )
+
+    if (selectedReview.kind === "localDiff") {
+      refreshSelectedLocalReviewDetail()
+      refreshSelectedLocalReviewDiff()
+      return
+    }
+
+    refreshSelectedPullRequestDetail()
+    refreshSelectedPullRequestDiff()
+    refreshPullRequestsForRepo(repoKey(selectedReview.repoOwner, selectedReview.repoName))
+    refreshReviewRequests()
   }
 
   const toggleExpandedFile = (reviewKey: string) => {
@@ -896,6 +1056,16 @@ export function App() {
     refreshPullRequestsForRepo(repoKey(repo.owner, repo.name))
   }
 
+  const rememberRecentReview = (entry: Omit<RecentReviewEntry, "lastReviewedAt">) => {
+    const lastReviewedAt = new Date().toISOString()
+    setRecentReviews((reviews) =>
+      [{ ...entry, lastReviewedAt }, ...reviews.filter((review) => review.key !== entry.key)].slice(
+        0,
+        6,
+      ),
+    )
+  }
+
   const openReview = (pullRequest: PullRequestSummary, sourceRepo: Repo | null = selectedRepo) => {
     const review: PullRequestReviewTarget = {
       kind: "pullRequest",
@@ -908,10 +1078,35 @@ export function App() {
     setViewedFileKeys(new Set())
     navigateTo({ screen: "review", selectedRepo: sourceRepo, selectedReview: review })
     setActionStatus(`Opening PR #${pullRequest.number}...`)
+    rememberRecentReview({
+      key: pullRequestReviewKey(review),
+      repoName: pullRequest.repoName,
+      repoOwner: pullRequest.repoOwner,
+      sourceRepoId: sourceRepo?.id ?? null,
+      target: review,
+      title: pullRequest.title,
+    })
   }
 
   const openReviewRequest = (pullRequest: PullRequestSummary) => {
     openReview(pullRequest, null)
+  }
+
+  const openRecentReview = (entry: RecentReviewEntry) => {
+    const sourceRepo = repos.find((repo) => repo.id === entry.sourceRepoId) ?? null
+    setSelectedReviewPath(null)
+    setExpandedFileKeys(new Set())
+    setViewedFileKeys(new Set())
+    navigateTo({ screen: "review", selectedRepo: sourceRepo, selectedReview: entry.target })
+    setActionStatus(`Opening PR #${entry.target.number}...`)
+    rememberRecentReview({
+      key: entry.key,
+      repoName: entry.repoName,
+      repoOwner: entry.repoOwner,
+      sourceRepoId: entry.sourceRepoId,
+      target: entry.target,
+      title: entry.title,
+    })
   }
 
   const openLocalReview = (rootPath: string) => {
@@ -1021,11 +1216,14 @@ export function App() {
             reviewSubject={selectedReviewSubject}
             diffRenderPass={diffRenderPass}
             expandedFileKeys={expandedFileKeys}
+            isReloading={isReloadingReview || isLoadingReview}
             selectedPath={selectedReviewPath}
             status={reviewStatus}
+            theme={resolvedTheme}
             viewedFileKeys={viewedFileKeys}
             onBack={navigateBack}
             onAISettingsChange={updateAISettings}
+            onReload={reloadSelectedReview}
             onSelectPath={setSelectedReviewPath}
             onSetViewed={setFileViewed}
             onToggleExpanded={toggleExpandedFile}
@@ -1170,17 +1368,25 @@ export function App() {
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
-                  <CardTitle>Recently Reviewed</CardTitle>
-                  <CardDescription>Your latest review sessions will appear here.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <EmptyState>
-                    Review history appears once viewed-file state is wired into Review.
-                  </EmptyState>
-                </CardContent>
-              </Card>
+              {recentReviews.length > 0 ? (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Recently Reviewed</CardTitle>
+                    <CardDescription>
+                      Reopen the review sessions touched most recently.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {recentReviews.map((review) => (
+                      <RecentReviewRow
+                        key={review.key}
+                        review={review}
+                        onOpen={() => openRecentReview(review)}
+                      />
+                    ))}
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
 
             <Card className="h-fit">
@@ -1229,6 +1435,26 @@ export function App() {
           </div>
         </section>
       )}
+      {appState?.onboardingCompleted === true ? (
+        <ThemeSelector preference={themePreference} onChange={setThemePreference} />
+      ) : null}
+      <CommandPaletteDialog
+        items={goToPaletteItems({
+          bookmarkedRepos,
+          onOpenRecentReview: openRecentReview,
+          onOpenPullRequest: openReview,
+          onOpenRepo: (repo) => selectRepository(repo, "home"),
+          onOpenReviewRequest: openReviewRequest,
+          pullRequests,
+          recentReviews,
+          reviewRequests,
+          selectedRepo,
+        })}
+        open={goToPaletteOpen}
+        placeholder="Search repos and PRs"
+        title="Go anywhere"
+        onOpenChange={setGoToPaletteOpen}
+      />
     </main>
   )
 }
@@ -1445,11 +1671,14 @@ const ReviewScreen = ({
   reviewSubject,
   diffRenderPass,
   expandedFileKeys,
+  isReloading,
   selectedPath,
   status,
+  theme,
   viewedFileKeys,
   onBack,
   onAISettingsChange,
+  onReload,
   onSelectPath,
   onSetViewed,
   onToggleExpanded,
@@ -1460,11 +1689,14 @@ const ReviewScreen = ({
   readonly reviewSubject: ReviewSubject
   readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
+  readonly isReloading: boolean
   readonly selectedPath: string | null
   readonly status: string
+  readonly theme: ResolvedTheme
   readonly viewedFileKeys: ReadonlySet<string>
   readonly onBack: () => void
   readonly onAISettingsChange: (settings: AISettings) => void
+  readonly onReload: () => void
   readonly onSelectPath: (path: string) => void
   readonly onSetViewed: (reviewKey: string, viewed: boolean) => void
   readonly onToggleExpanded: (reviewKey: string) => void
@@ -1476,11 +1708,14 @@ const ReviewScreen = ({
     reviewSubject={reviewSubject}
     diffRenderPass={diffRenderPass}
     expandedFileKeys={expandedFileKeys}
+    isReloading={isReloading}
     selectedPath={selectedPath}
     status={status}
+    theme={theme}
     viewedFileKeys={viewedFileKeys}
     onBack={onBack}
     onAISettingsChange={onAISettingsChange}
+    onReload={onReload}
     onSelectPath={onSelectPath}
     onSetViewed={onSetViewed}
     onToggleExpanded={onToggleExpanded}
@@ -1607,6 +1842,196 @@ const ReviewRequestRow = ({
   </button>
 )
 
+const RecentReviewRow = ({
+  review,
+  onOpen,
+}: {
+  readonly review: RecentReviewEntry
+  readonly onOpen: () => void
+}) => (
+  <button
+    type="button"
+    aria-label={`Reopen PR #${review.target.number}: ${review.title}`}
+    className="bg-background hover:border-foreground/30 w-full space-y-3 rounded-2xl border p-4 text-left transition"
+    onClick={onOpen}
+  >
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0 space-y-1">
+        <div className="text-muted-foreground truncate text-xs font-medium">
+          {review.repoOwner}/{review.repoName} #{review.target.number}
+        </div>
+        <div className="line-clamp-2 font-medium">{review.title}</div>
+      </div>
+      <Badge variant="secondary" className="text-caption shrink-0">
+        Recent
+      </Badge>
+    </div>
+    <div className="text-muted-foreground text-xs">
+      Last reviewed {formatReviewTimestamp(review.lastReviewedAt)}
+    </div>
+  </button>
+)
+
+const ThemeSelector = ({
+  preference,
+  onChange,
+}: {
+  readonly preference: ThemePreference
+  readonly onChange: (preference: ThemePreference) => void
+}) => (
+  <div className="fixed right-4 bottom-4 z-30 rounded-full border bg-background/90 p-1 shadow-lg backdrop-blur">
+    <div className="flex items-center gap-1" aria-label="Theme preference">
+      {THEME_OPTIONS.map((option) => {
+        const Icon = option.icon
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-label={`Use ${option.label} theme`}
+            aria-pressed={preference === option.value}
+            className={`rounded-full p-2 transition ${
+              preference === option.value
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            }`}
+            onClick={() => onChange(option.value)}
+          >
+            <Icon className="size-3.5" />
+          </button>
+        )
+      })}
+    </div>
+  </div>
+)
+
+const CommandPaletteDialog = ({
+  items,
+  open,
+  placeholder,
+  title,
+  onOpenChange,
+}: {
+  readonly items: readonly CommandPaletteItem[]
+  readonly open: boolean
+  readonly placeholder: string
+  readonly title: string
+  readonly onOpenChange: (open: boolean) => void
+}) => {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [query, setQuery] = useState("")
+  const [activeIndex, setActiveIndex] = useState(0)
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredItems =
+    normalizedQuery.length === 0
+      ? items
+      : items.filter((item) =>
+          `${item.title} ${item.subtitle} ${item.keywords}`.toLowerCase().includes(normalizedQuery),
+        )
+  const activeItemIndex = Math.min(activeIndex, Math.max(0, filteredItems.length - 1))
+
+  useEffect(() => {
+    if (!open) {
+      setQuery("")
+      setActiveIndex(0)
+      return
+    }
+
+    window.requestAnimationFrame(() => inputRef.current?.focus())
+  }, [open])
+
+  if (!open) return null
+
+  const runItem = (item: CommandPaletteItem) => {
+    if (item.disabled) return
+    item.onSelect()
+    onOpenChange(false)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-foreground/20 px-4 pt-[12vh] backdrop-blur-sm">
+      <dialog
+        open
+        aria-modal="true"
+        aria-label={title}
+        className="relative m-0 w-full max-w-2xl overflow-hidden rounded-2xl border bg-popover p-0 text-popover-foreground shadow-2xl"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault()
+            onOpenChange(false)
+            return
+          }
+          if (event.key === "ArrowDown") {
+            event.preventDefault()
+            setActiveIndex((index) => Math.min(index + 1, Math.max(0, filteredItems.length - 1)))
+            return
+          }
+          if (event.key === "ArrowUp") {
+            event.preventDefault()
+            setActiveIndex((index) => Math.max(0, index - 1))
+            return
+          }
+          if (event.key === "Enter") {
+            event.preventDefault()
+            const item = filteredItems[activeItemIndex]
+            if (item !== undefined) runItem(item)
+          }
+        }}
+      >
+        <div className="flex items-center gap-3 border-b px-4 py-3">
+          <Command className="text-muted-foreground size-4" />
+          <Input
+            ref={inputRef}
+            value={query}
+            className="h-9 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+            placeholder={placeholder}
+            onChange={(event) => {
+              setQuery(event.currentTarget.value)
+              setActiveIndex(0)
+            }}
+          />
+          <button
+            type="button"
+            aria-label="Close command palette"
+            className="text-muted-foreground hover:text-foreground rounded-full p-1"
+            onClick={() => onOpenChange(false)}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="max-h-[min(28rem,60vh)] overflow-y-auto p-2">
+          {filteredItems.length === 0 ? (
+            <EmptyState className="m-2 p-5 text-xs">No matching commands found.</EmptyState>
+          ) : null}
+          {filteredItems.map((item, index) => (
+            <button
+              key={item.id}
+              type="button"
+              disabled={item.disabled}
+              className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                activeItemIndex === index
+                  ? "bg-accent text-accent-foreground"
+                  : "hover:bg-accent/70"
+              }`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => runItem(item)}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">{item.title}</span>
+                <span className="text-muted-foreground block truncate text-xs">
+                  {item.subtitle}
+                </span>
+              </span>
+              {item.disabled ? (
+                <span className="text-caption text-muted-foreground">Unavailable</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </dialog>
+    </div>
+  )
+}
+
 const EmptyState = ({
   children,
   className = "",
@@ -1621,7 +2046,7 @@ const EmptyState = ({
   </div>
 )
 
-type SetupRequirementKey = "gh-cli" | "gh-auth" | "coding-agent" | "diffdash-cli"
+type SetupRequirementKey = "git-cli" | "gh-cli" | "gh-auth" | "coding-agent" | "diffdash-cli"
 
 type SetupRequirement = {
   readonly key: SetupRequirementKey
@@ -1827,6 +2252,19 @@ const PrerequisiteAction = ({
     )
   }
 
+  if (requirement.key === "git-cli") {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="self-start"
+        onClick={() => onOpenDocs(GIT_DOCS_URL)}
+      >
+        Git docs
+      </Button>
+    )
+  }
+
   if (requirement.key === "gh-auth") {
     return (
       <Button
@@ -1852,6 +2290,13 @@ const PrerequisiteAction = ({
 }
 
 const prerequisiteRows = (diagnostics: AppDiagnostics): readonly SetupRequirement[] => [
+  {
+    key: "git-cli",
+    title: "Git installed",
+    description: "DiffDash uses git for local repository detection and local diff reviews.",
+    detail: diagnostics.gitInstalled ? "git is available in PATH." : "git was not found in PATH.",
+    done: diagnostics.gitInstalled,
+  },
   {
     key: "gh-cli",
     title: "GitHub CLI installed",
@@ -1906,11 +2351,14 @@ const PullRequestDetailView = ({
   reviewSubject,
   diffRenderPass,
   expandedFileKeys,
+  isReloading,
   selectedPath,
   status,
+  theme,
   viewedFileKeys,
   onBack,
   onAISettingsChange,
+  onReload,
   onSelectPath,
   onSetViewed,
   onToggleExpanded,
@@ -1921,16 +2369,20 @@ const PullRequestDetailView = ({
   readonly reviewSubject: ReviewSubject
   readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
+  readonly isReloading: boolean
   readonly selectedPath: string | null
   readonly status: string
+  readonly theme: ResolvedTheme
   readonly viewedFileKeys: ReadonlySet<string>
   readonly onBack: () => void
   readonly onAISettingsChange: (settings: AISettings) => void
+  readonly onReload: () => void
   readonly onSelectPath: (path: string) => void
   readonly onSetViewed: (reviewKey: string, viewed: boolean) => void
   readonly onToggleExpanded: (reviewKey: string) => void
 }) => {
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
+  const lastAutoScrolledPathRef = useRef<string | null>(null)
   const lastPointerPositionRef = useRef<{
     readonly clientX: number
     readonly clientY: number
@@ -1946,6 +2398,9 @@ const PullRequestDetailView = ({
     ReadonlySet<string>
   >(() => new Set())
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
+  const [showHiddenFiles, setShowHiddenFiles] = useState(false)
+  const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
+  const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
   const [fileOpenStatus, setFileOpenStatus] = useState<string | null>(null)
   const [approvalState, setApprovalState] = useState<PullRequestApprovalState>("checking")
   const reviewFiles = reviewSubjectFiles(reviewSubject)
@@ -1955,17 +2410,21 @@ const PullRequestDetailView = ({
   const approvalPullRequest =
     reviewSubject.kind === "pullRequest" ? reviewSubject.pullRequest : null
   const changedFiles = parsedDiff?.files ?? []
+  const hiddenFileCount = changedFiles.filter(
+    (file) => getHiddenDiffFileReason(file) !== null,
+  ).length
+  const visibleBaseFiles = filterVisibleDiffFiles(changedFiles, showHiddenFiles)
   const normalizedFileFilter = fileFilter.trim().toLowerCase()
   const filteredChangedFiles =
     normalizedFileFilter.length === 0
-      ? changedFiles
-      : changedFiles.filter((file) => matchesReviewFileFilter(file, normalizedFileFilter))
+      ? visibleBaseFiles
+      : visibleBaseFiles.filter((file) => matchesReviewFileFilter(file, normalizedFileFilter))
   const selectedVisiblePath =
-    selectedPath !== null && changedFiles.some((file) => file.path === selectedPath)
+    selectedPath !== null && visibleBaseFiles.some((file) => file.path === selectedPath)
       ? selectedPath
-      : (changedFiles[0]?.path ?? null)
+      : (visibleBaseFiles[0]?.path ?? null)
   const activeVisiblePath =
-    activeFilePath !== null && changedFiles.some((file) => file.path === activeFilePath)
+    activeFilePath !== null && visibleBaseFiles.some((file) => file.path === activeFilePath)
       ? activeFilePath
       : selectedVisiblePath
   const fallbackFiles = reviewFiles
@@ -2009,12 +2468,16 @@ const PullRequestDetailView = ({
     activeWalkthroughStep !== null &&
     activeStepFiles.length > 0 &&
     activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
+  const reviewDiffOptions = reviewDiffOptionsForTheme(theme)
   useEffect(() => {
     setSidebarTab("tree")
     setWalkthroughState({ status: "idle" })
     setActiveWalkthroughStepIndex(0)
     setVisitedWalkthroughStepIndexes(new Set())
     setCollapsedWalkthroughFileKeys(new Set())
+    setShowHiddenFiles(false)
+    setGoToPaletteOpen(false)
+    setActionPaletteOpen(false)
     setApprovalState("checking")
   }, [reviewIdentity, reviewBaseSha, reviewHeadSha])
 
@@ -2044,6 +2507,69 @@ const PullRequestDetailView = ({
       cancelled = true
     }
   }, [approvalPullRequest])
+
+  useEffect(() => {
+    const handleReviewShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase()
+      if (isModKey(event) && key === "k") {
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.shiftKey) {
+          setActionPaletteOpen(true)
+        } else {
+          setGoToPaletteOpen(true)
+        }
+        return
+      }
+
+      if (
+        key !== "v" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        goToPaletteOpen ||
+        actionPaletteOpen ||
+        isEditableTarget(event.target)
+      ) {
+        return
+      }
+
+      const file =
+        visibleChangedFiles.find((changedFile) => changedFile.path === activeVisiblePath) ?? null
+      if (file === null) return
+
+      event.preventDefault()
+      const nextViewed = !viewedFileKeys.has(file.reviewKey)
+      onSetViewed(file.reviewKey, nextViewed)
+      setFileOpenStatus(
+        `${nextViewed ? "Marked" : "Unmarked"} ${file.path} as viewed with shortcut v.`,
+      )
+    }
+
+    window.addEventListener("keydown", handleReviewShortcut, true)
+    return () => window.removeEventListener("keydown", handleReviewShortcut, true)
+  }, [
+    actionPaletteOpen,
+    activeVisiblePath,
+    goToPaletteOpen,
+    onSetViewed,
+    viewedFileKeys,
+    visibleChangedFiles,
+  ])
+
+  useEffect(() => {
+    if (selectedPath === null || lastAutoScrolledPathRef.current === selectedPath) return
+    const file = visibleChangedFiles.find((changedFile) => changedFile.path === selectedPath)
+    if (file === undefined) return
+
+    lastAutoScrolledPathRef.current = selectedPath
+    window.requestAnimationFrame(() => {
+      const container = diffScrollContainerRef.current
+      const card = document.getElementById(diffCardDomId(file.reviewKey))
+      if (container !== null && card !== null) scrollIntoDiffPane(container, card)
+    })
+  }, [selectedPath, visibleChangedFiles])
 
   const loadWalkthrough = async (regenerate: boolean) => {
     if (!regenerate && reviewBaseSha !== null && reviewHeadSha !== null) {
@@ -2145,6 +2671,49 @@ const PullRequestDetailView = ({
       onSetViewed(file.reviewKey, true)
     })
   }
+  const markAllFilesViewed = () => {
+    changedFiles.forEach((file) => onSetViewed(file.reviewKey, true))
+    setFileOpenStatus(
+      `Marked ${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"} as viewed.`,
+    )
+  }
+  const revealHiddenFiles = () => {
+    setShowHiddenFiles(true)
+    setFileOpenStatus(`Revealed ${hiddenFileCount} hidden file${hiddenFileCount === 1 ? "" : "s"}.`)
+  }
+  const selectReviewFile = (file: ParsedDiffFile) => {
+    setFileFilter("")
+    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
+    selectPathAndScroll(file.path, file.reviewKey)
+  }
+  const selectWalkthroughStepAndFocus = (index: number) => {
+    selectSidebarTab("walkthrough")
+    selectWalkthroughStep(index)
+    const step = activeWalkthroughSteps[index]
+    const file =
+      step === undefined
+        ? null
+        : focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, walkthroughScope)[0]
+    if (file !== undefined && file !== null) selectWalkthroughFile(index, file)
+  }
+  const reviewGoToItems = reviewGoToPaletteItems({
+    files: changedFiles,
+    onSelectFile: selectReviewFile,
+    onSelectWalkthroughStep: selectWalkthroughStepAndFocus,
+    steps: activeWalkthroughSteps,
+  })
+  const reviewActionItems = reviewActionPaletteItems({
+    aiAgentAvailable,
+    changedFiles,
+    hiddenFileCount,
+    isReloading,
+    onMarkAllViewed: markAllFilesViewed,
+    onRegenerateWalkthrough: () => void loadWalkthrough(true),
+    onReload,
+    onRevealHidden: revealHiddenFiles,
+    showHiddenFiles,
+    walkthroughLoading: walkthroughState.status === "loading",
+  })
   const toggleVisibleDiffCard = (reviewKey: string) => {
     if (sidebarTab !== "walkthrough" || activeWalkthroughStep === null) {
       onToggleExpanded(reviewKey)
@@ -2166,6 +2735,12 @@ const PullRequestDetailView = ({
       new Set(indexes).add(activeWalkthroughStepIndex).add(index),
     )
     setActiveWalkthroughStepIndex(index)
+  }
+  const selectWalkthroughFile = (stepIndex: number, file: ParsedDiffFile) => {
+    selectWalkthroughStep(stepIndex)
+    setFileFilter("")
+    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
+    selectPathAndScroll(file.path, file.reviewKey)
   }
   const selectPathAndScroll = (path: string, reviewKey?: string) => {
     setActiveFilePath(path)
@@ -2236,257 +2811,299 @@ const PullRequestDetailView = ({
   }
 
   return (
-    <section className="bg-background flex h-full min-h-0 overflow-hidden text-sm">
-      <aside className="bg-review-sidebar text-review-sidebar-fg border-review-sidebar-border flex h-full min-h-0 w-review-sidebar shrink-0 flex-col border-r">
-        <div className="border-review-sidebar-divider flex h-12 items-center gap-2 border-b pt-review-title-top-offset pr-3 pl-review-title-inset">
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="shrink-0"
-            aria-label="Back"
-            onClick={onBack}
-          >
-            <ArrowLeft className="size-3" />
-          </Button>
-          <div
-            className="text-review-sidebar-fg min-w-0 flex-1 truncate font-mono text-xs"
-            title={reviewSubjectRepositoryLabel(reviewSubject)}
-          >
-            {reviewSubjectRepositoryLabel(reviewSubject)}
-          </div>
-        </div>
-
-        <div className="border-review-sidebar-divider space-y-2 border-b p-3">
-          <Input
-            value={fileFilter}
-            onChange={(event) => setFileFilter(event.currentTarget.value)}
-            className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-fg placeholder:text-review-sidebar-muted h-8 text-xs"
-            placeholder="Filter files"
-          />
-          <div className="bg-review-sidebar-control grid grid-cols-2 rounded-xl p-0.5 text-xs">
-            <button
-              type="button"
-              className={`rounded-lg py-1.5 font-medium ${sidebarTab === "tree" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
-              onClick={() => selectSidebarTab("tree")}
+    <>
+      <section className="bg-background flex h-full min-h-0 overflow-hidden text-sm">
+        <aside className="bg-review-sidebar text-review-sidebar-fg border-review-sidebar-border flex h-full min-h-0 w-review-sidebar shrink-0 flex-col border-r">
+          <div className="border-review-sidebar-divider flex h-12 items-center gap-2 border-b pt-review-title-top-offset pr-3 pl-review-title-inset">
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="shrink-0"
+              aria-label="Back"
+              onClick={onBack}
             >
-              Tree
-            </button>
-            <button
-              type="button"
-              disabled={!aiAgentAvailable}
-              title={aiAgentAvailable ? undefined : CODING_AGENT_SETUP_MESSAGE}
-              className={`rounded-lg py-1.5 font-medium disabled:cursor-not-allowed disabled:opacity-45 ${sidebarTab === "walkthrough" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
-              onClick={() => selectSidebarTab("walkthrough")}
+              <ArrowLeft className="size-3" />
+            </Button>
+            <div
+              className="text-review-sidebar-fg min-w-0 flex-1 truncate font-mono text-xs"
+              title={reviewSubjectRepositoryLabel(reviewSubject)}
             >
-              Walkthrough
-            </button>
-          </div>
-          {!aiAgentAvailable ? (
-            <p className="text-caption text-review-sidebar-muted leading-4">
-              {CODING_AGENT_SETUP_MESSAGE}
-            </p>
-          ) : null}
-          {sidebarTab === "walkthrough" ? (
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
-                {aiProviderLabel(aiSettings.provider)} / {selectedAIModelLabel(aiSettings)}
-              </div>
-              <WalkthroughSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
+              {reviewSubjectRepositoryLabel(reviewSubject)}
             </div>
-          ) : null}
-        </div>
+          </div>
+
+          <div className="border-review-sidebar-divider space-y-2 border-b p-3">
+            <Input
+              value={fileFilter}
+              onChange={(event) => setFileFilter(event.currentTarget.value)}
+              className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-fg placeholder:text-review-sidebar-muted h-8 text-xs"
+              placeholder="Filter files"
+            />
+            <div className="bg-review-sidebar-control grid grid-cols-2 rounded-xl p-0.5 text-xs">
+              <button
+                type="button"
+                className={`rounded-lg py-1.5 font-medium ${sidebarTab === "tree" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
+                onClick={() => selectSidebarTab("tree")}
+              >
+                Tree
+              </button>
+              <button
+                type="button"
+                disabled={!aiAgentAvailable}
+                title={aiAgentAvailable ? undefined : CODING_AGENT_SETUP_MESSAGE}
+                className={`rounded-lg py-1.5 font-medium disabled:cursor-not-allowed disabled:opacity-45 ${sidebarTab === "walkthrough" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
+                onClick={() => selectSidebarTab("walkthrough")}
+              >
+                Walkthrough
+              </button>
+            </div>
+            {!aiAgentAvailable ? (
+              <p className="text-caption text-review-sidebar-muted leading-4">
+                {CODING_AGENT_SETUP_MESSAGE}
+              </p>
+            ) : null}
+            {sidebarTab === "walkthrough" ? (
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
+                  {aiProviderLabel(aiSettings.provider)} / {selectedAIModelLabel(aiSettings)}
+                </div>
+                <WalkthroughSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
+              </div>
+            ) : null}
+          </div>
+
+          <div
+            className={`min-h-0 flex-1 overscroll-contain py-2 pr-1 ${
+              sidebarTab === "walkthrough" ? "overflow-y-auto" : "overflow-hidden"
+            }`}
+          >
+            {sidebarTab === "walkthrough" ? (
+              <WalkthroughSidebar
+                activeStepIndex={activeWalkthroughStepIndex}
+                changedFiles={changedFiles}
+                hunkDigest={walkthroughHunkDigest}
+                scope={walkthroughScope}
+                state={walkthroughState}
+                visitedStepIndexes={visitedWalkthroughStepIndexes}
+                viewedFileKeys={viewedFileKeys}
+                onRegenerate={() => void loadWalkthrough(true)}
+                onRetry={() => void loadWalkthrough(false)}
+                onSelectFile={selectWalkthroughFile}
+                onSelectStep={selectWalkthroughStep}
+              />
+            ) : parsedDiff === null ? (
+              <FallbackFileTree
+                files={filteredFallbackFiles}
+                selectedPath={selectedPath}
+                onSelectPath={selectPathAndScroll}
+              />
+            ) : (
+              <ReviewFileTree
+                files={filteredChangedFiles}
+                selectedPath={selectedTreePath}
+                onSelectPath={selectPathAndScroll}
+              />
+            )}
+          </div>
+
+          <div className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-muted flex items-center justify-between gap-2 border-t px-3 py-2 text-xs">
+            <span>
+              {hiddenFileCount > 0 && !showHiddenFiles ? `${hiddenFileCount} hidden` : "Total"}
+            </span>
+            <span>
+              <span className="text-review-success">+{totalAdditions}</span>{" "}
+              <span className="text-review-danger">-{totalDeletions}</span>
+            </span>
+          </div>
+        </aside>
 
         <div
-          className={`min-h-0 flex-1 overscroll-contain py-2 pr-1 ${
-            sidebarTab === "walkthrough" ? "overflow-y-auto" : "overflow-hidden"
-          }`}
+          ref={diffScrollContainerRef}
+          className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+          onPointerMove={(event) => {
+            lastPointerPositionRef.current = {
+              clientX: event.clientX,
+              clientY: event.clientY,
+            }
+            setActiveFileFromPoint(event.clientX, event.clientY)
+          }}
+          onScroll={syncActiveFileFromPointer}
         >
-          {sidebarTab === "walkthrough" ? (
-            <WalkthroughSidebar
-              activeStepIndex={activeWalkthroughStepIndex}
-              changedFiles={changedFiles}
-              hunkDigest={walkthroughHunkDigest}
-              scope={walkthroughScope}
-              state={walkthroughState}
-              visitedStepIndexes={visitedWalkthroughStepIndexes}
-              viewedFileKeys={viewedFileKeys}
-              onRegenerate={() => void loadWalkthrough(true)}
-              onRetry={() => void loadWalkthrough(false)}
-              onSelectStep={selectWalkthroughStep}
-            />
-          ) : parsedDiff === null ? (
-            <FallbackFileTree
-              files={filteredFallbackFiles}
-              selectedPath={selectedPath}
-              onSelectPath={selectPathAndScroll}
-            />
-          ) : (
-            <ReviewFileTree
-              files={filteredChangedFiles}
-              selectedPath={selectedTreePath}
-              onSelectPath={selectPathAndScroll}
-            />
-          )}
-        </div>
-
-        <div className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-muted flex items-center justify-between border-t px-3 py-2 text-xs">
-          <span>Total</span>
-          <span>
-            <span className="text-review-success">+{totalAdditions}</span>{" "}
-            <span className="text-review-danger">-{totalDeletions}</span>
-          </span>
-        </div>
-      </aside>
-
-      <div
-        ref={diffScrollContainerRef}
-        className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
-        onPointerMove={(event) => {
-          lastPointerPositionRef.current = {
-            clientX: event.clientX,
-            clientY: event.clientY,
-          }
-          setActiveFileFromPoint(event.clientX, event.clientY)
-        }}
-        onScroll={syncActiveFileFromPointer}
-      >
-        <div className="bg-background/95 sticky top-0 z-10 border-b px-5 py-2 backdrop-blur">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-muted-foreground min-w-0 truncate text-xs">
-              {fileOpenStatus ?? status}
-            </div>
-            <div className="flex items-center gap-2">
-              {sidebarTab === "walkthrough" && walkthroughState.status === "ready" ? (
-                <Button size="sm" variant="outline" onClick={() => void loadWalkthrough(true)}>
-                  Regenerate
+          <div className="bg-background/95 sticky top-0 z-10 border-b px-5 py-2 backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-muted-foreground min-w-0 truncate text-xs">
+                {fileOpenStatus ?? status}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" disabled={isReloading} onClick={onReload}>
+                  {isReloading ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="size-3" />
+                  )}
+                  Reload diff
                 </Button>
-              ) : null}
-              {reviewSubject.kind === "pullRequest" ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={approvalState !== "unapproved"}
-                  className={
-                    approvalState === "approved"
-                      ? "border-review-success bg-review-success/10 text-review-success hover:bg-review-success/15 hover:text-review-success disabled:opacity-100"
-                      : undefined
-                  }
-                  onClick={() => void approvePullRequest()}
-                >
-                  <Check className="size-3" />
-                  {approvalButtonLabel(approvalState)}
+                <Button size="sm" variant="outline" onClick={() => setActionPaletteOpen(true)}>
+                  <Command className="size-3" />
+                  Actions
                 </Button>
-              ) : null}
+                {sidebarTab === "walkthrough" && walkthroughState.status === "ready" ? (
+                  <Button size="sm" variant="outline" onClick={() => void loadWalkthrough(true)}>
+                    Regenerate
+                  </Button>
+                ) : null}
+                {reviewSubject.kind === "pullRequest" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={approvalState !== "unapproved"}
+                    className={
+                      approvalState === "approved"
+                        ? "border-review-success bg-review-success/10 text-review-success hover:bg-review-success/15 hover:text-review-success disabled:opacity-100"
+                        : undefined
+                    }
+                    onClick={() => void approvePullRequest()}
+                  >
+                    <Check className="size-3" />
+                    {approvalButtonLabel(approvalState)}
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
-        </div>
 
-        <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
-          {sidebarTab === "walkthrough" ? (
-            <WalkthroughMainHeader
-              activeStepComplete={activeStepComplete}
-              step={activeWalkthroughStep}
-              state={walkthroughState}
-              onMarkComplete={markActiveWalkthroughStepComplete}
-              onNextStep={() =>
-                selectWalkthroughStep(
-                  activeWalkthrough === null
-                    ? activeWalkthroughStepIndex
-                    : Math.min(activeWalkthroughStepIndex + 1, activeWalkthroughSteps.length - 1),
-                )
-              }
-              onRetry={() => void loadWalkthrough(false)}
-            />
-          ) : null}
-          <section className="bg-card rounded-2xl border p-4 shadow-xs">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {reviewSubject.kind === "pullRequest" ? (
-                <>
-                  <Badge variant="outline" className="text-caption">
-                    #{reviewSubject.pullRequest.number}
-                  </Badge>
-                  <PullRequestStateBadge
-                    className="text-caption"
-                    isDraft={reviewSubject.pullRequest.isDraft}
-                    state={reviewSubject.pullRequest.state}
-                  />
-                  <Badge variant="secondary" className="text-caption">
-                    @{reviewSubject.pullRequest.author.login}
-                  </Badge>
-                </>
-              ) : (
-                <>
-                  <Badge variant="outline" className="text-caption">
-                    Local
-                  </Badge>
-                  {reviewSubject.localReview.branchName === null ? null : (
-                    <Badge variant="secondary" className="text-caption">
-                      <GitBranch className="size-3" />
-                      {reviewSubject.localReview.branchName}
-                    </Badge>
-                  )}
-                </>
-              )}
-            </div>
-            <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-              {reviewSubjectTitle(reviewSubject)}
-            </h1>
-            <div className="text-muted-foreground mt-2 grid gap-2 text-xs md:grid-cols-4">
-              <Metric
-                label="Files"
-                value={String(parsedDiff?.files.length ?? fallbackFiles.length)}
+          <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
+            {sidebarTab === "walkthrough" ? (
+              <WalkthroughMainHeader
+                activeStepComplete={activeStepComplete}
+                step={activeWalkthroughStep}
+                state={walkthroughState}
+                onMarkComplete={markActiveWalkthroughStepComplete}
+                onNextStep={() =>
+                  selectWalkthroughStep(
+                    activeWalkthrough === null
+                      ? activeWalkthroughStepIndex
+                      : Math.min(activeWalkthroughStepIndex + 1, activeWalkthroughSteps.length - 1),
+                  )
+                }
+                onRetry={() => void loadWalkthrough(false)}
               />
-              {reviewSubject.kind === "pullRequest" ? (
-                <>
-                  <Metric
-                    label="Commits"
-                    value={String(reviewSubject.pullRequest.commits.length)}
-                  />
-                  <Metric label="Head" value={shortSha(reviewSubject.pullRequest.headRefOid)} />
-                  <Metric label="Base" value={shortSha(reviewSubject.pullRequest.baseRefOid)} />
-                </>
-              ) : (
-                <>
-                  <Metric label="Repo" value={reviewSubject.localReview.repoName} />
-                  <Metric label="Diff" value={shortSha(reviewSubject.localReview.headSha)} />
-                  <Metric label="Base" value={shortSha(reviewSubject.localReview.baseSha)} />
-                </>
-              )}
-            </div>
-          </section>
+            ) : null}
+            <section className="bg-card rounded-2xl border p-4 shadow-xs">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {reviewSubject.kind === "pullRequest" ? (
+                  <>
+                    <Badge variant="outline" className="text-caption">
+                      #{reviewSubject.pullRequest.number}
+                    </Badge>
+                    <PullRequestStateBadge
+                      className="text-caption"
+                      isDraft={reviewSubject.pullRequest.isDraft}
+                      state={reviewSubject.pullRequest.state}
+                    />
+                    <Badge variant="secondary" className="text-caption">
+                      @{reviewSubject.pullRequest.author.login}
+                    </Badge>
+                    {sidebarTab === "walkthrough" ? (
+                      <Badge
+                        variant="outline"
+                        className="text-caption"
+                        title="Walkthrough generated from PR metadata and diff only."
+                      >
+                        <Cloud className="size-3" />
+                        Diff-only
+                      </Badge>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <Badge variant="outline" className="text-caption">
+                      Local
+                    </Badge>
+                    {reviewSubject.localReview.branchName === null ? null : (
+                      <Badge variant="secondary" className="text-caption">
+                        <GitBranch className="size-3" />
+                        {reviewSubject.localReview.branchName}
+                      </Badge>
+                    )}
+                  </>
+                )}
+              </div>
+              <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+                {reviewSubjectTitle(reviewSubject)}
+              </h1>
+              <div className="text-muted-foreground mt-2 grid gap-2 text-xs md:grid-cols-4">
+                <Metric
+                  label="Files"
+                  value={String(parsedDiff?.files.length ?? fallbackFiles.length)}
+                />
+                {reviewSubject.kind === "pullRequest" ? (
+                  <>
+                    <Metric
+                      label="Commits"
+                      value={String(reviewSubject.pullRequest.commits.length)}
+                    />
+                    <Metric label="Head" value={shortSha(reviewSubject.pullRequest.headRefOid)} />
+                    <Metric label="Base" value={shortSha(reviewSubject.pullRequest.baseRefOid)} />
+                  </>
+                ) : (
+                  <>
+                    <Metric label="Repo" value={reviewSubject.localReview.repoName} />
+                    <Metric label="Diff" value={shortSha(reviewSubject.localReview.headSha)} />
+                    <Metric label="Base" value={shortSha(reviewSubject.localReview.baseSha)} />
+                  </>
+                )}
+              </div>
+            </section>
 
-          {parsedDiff === null ? <EmptyState>Loading diff...</EmptyState> : null}
-          {parsedDiff !== null &&
-          normalizedFileFilter.length === 0 &&
-          visibleChangedFiles.length === 0 ? (
-            <EmptyState>No changed files found.</EmptyState>
-          ) : null}
-          {parsedDiff !== null &&
-          normalizedFileFilter.length > 0 &&
-          visibleChangedFiles.length === 0 ? (
-            <EmptyState>No files match this filter.</EmptyState>
-          ) : null}
-          {visibleChangedFiles.map((file) => (
-            <OpenDiffCard
-              key={file.reviewKey}
-              diffRenderPass={diffRenderPass}
-              expanded={
-                sidebarTab === "walkthrough" && activeWalkthroughStep !== null
-                  ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
-                  : expandedFileKeys.has(file.reviewKey)
-              }
-              file={file}
-              selected={selectedVisiblePath === file.path || activeFilePath === file.path}
-              viewed={viewedFileKeys.has(file.reviewKey)}
-              onOpenFile={() => void openRepositoryFile(file.path)}
-              onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
-              onSetViewed={(viewed) => onSetViewed(file.reviewKey, viewed)}
-              onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
-            />
-          ))}
-        </main>
-      </div>
-    </section>
+            {parsedDiff === null ? <EmptyState>Loading diff...</EmptyState> : null}
+            {parsedDiff !== null &&
+            normalizedFileFilter.length === 0 &&
+            visibleChangedFiles.length === 0 ? (
+              <EmptyState>No changed files found.</EmptyState>
+            ) : null}
+            {parsedDiff !== null &&
+            normalizedFileFilter.length > 0 &&
+            visibleChangedFiles.length === 0 ? (
+              <EmptyState>No files match this filter.</EmptyState>
+            ) : null}
+            {visibleChangedFiles.map((file) => (
+              <OpenDiffCard
+                key={file.reviewKey}
+                diffOptions={reviewDiffOptions}
+                diffRenderPass={diffRenderPass}
+                expanded={
+                  sidebarTab === "walkthrough" && activeWalkthroughStep !== null
+                    ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
+                    : expandedFileKeys.has(file.reviewKey)
+                }
+                file={file}
+                selected={selectedVisiblePath === file.path || activeFilePath === file.path}
+                viewed={viewedFileKeys.has(file.reviewKey)}
+                onOpenFile={() => void openRepositoryFile(file.path)}
+                onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
+                onSetViewed={(viewed) => onSetViewed(file.reviewKey, viewed)}
+                onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
+              />
+            ))}
+          </main>
+        </div>
+      </section>
+      <CommandPaletteDialog
+        items={reviewGoToItems}
+        open={goToPaletteOpen}
+        placeholder="Search files and walkthrough sections"
+        title="Go anywhere"
+        onOpenChange={setGoToPaletteOpen}
+      />
+      <CommandPaletteDialog
+        items={reviewActionItems}
+        open={actionPaletteOpen}
+        placeholder="Search review actions"
+        title="Review actions"
+        onOpenChange={setActionPaletteOpen}
+      />
+    </>
   )
 }
 
@@ -2500,6 +3117,7 @@ const WalkthroughSidebar = ({
   viewedFileKeys,
   onRegenerate,
   onRetry,
+  onSelectFile,
   onSelectStep,
 }: {
   readonly activeStepIndex: number
@@ -2511,6 +3129,7 @@ const WalkthroughSidebar = ({
   readonly viewedFileKeys: ReadonlySet<string>
   readonly onRegenerate: () => void
   readonly onRetry: () => void
+  readonly onSelectFile: (stepIndex: number, file: ParsedDiffFile) => void
   readonly onSelectStep: (index: number) => void
 }) => {
   if (state.status === "loading") {
@@ -2592,47 +3211,76 @@ const WalkthroughSidebar = ({
                         >
                           {visited ? <Check className="size-2.5" /> : null}
                         </span>
-                        <button
-                          type="button"
+                        <div
                           className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${
                             selected
                               ? "border-primary bg-review-tree-selected text-review-sidebar-emphasis"
                               : "border-transparent text-review-sidebar-fg hover:bg-review-sidebar-control-hover"
                           }`}
-                          onClick={() => onSelectStep(index)}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-semibold">
-                              {index + 1} {step.title}
-                            </span>
-                            <span className="text-caption text-review-sidebar-muted">
-                              {complete ? "Done" : `${files.length} files`}
-                            </span>
-                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Select walkthrough step ${index + 1}: ${step.title}`}
+                            className="w-full text-left"
+                            onClick={() => onSelectStep(index)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold">
+                                {index + 1} {step.title}
+                              </span>
+                              <span className="text-caption text-review-sidebar-muted">
+                                {complete
+                                  ? "Done"
+                                  : `${fileSummaries.length} file${fileSummaries.length === 1 ? "" : "s"}`}
+                              </span>
+                            </div>
+                          </button>
                           <div className="text-review-sidebar-muted mt-1 space-y-0.5">
-                            {fileSummaries.slice(0, 4).map((file) => (
-                              <div
-                                key={file.path}
-                                className="flex items-center justify-between gap-2"
-                              >
-                                <span className="truncate font-mono" title={file.path}>
-                                  {fileNameFromPath(file.path)}
-                                </span>
-                                <span className="shrink-0">
-                                  <span className="text-review-success">+{file.additions}</span>{" "}
-                                  <span className="text-review-danger">-{file.deletions}</span>
-                                </span>
+                            {fileSummaries.length === 0 ? (
+                              <div className="text-caption border-review-sidebar-divider rounded-lg border px-2 py-1.5">
+                                Referenced files are unavailable in this diff.
                               </div>
-                            ))}
-                            {fileSummaries.length > 4 ? (
-                              <div>{fileSummaries.length - 4} more files</div>
-                            ) : null}
+                            ) : (
+                              fileSummaries.map((file) => {
+                                const targetFile = files.find(
+                                  (candidate) => candidate.path === file.path,
+                                )
+
+                                return (
+                                  <button
+                                    key={file.path}
+                                    type="button"
+                                    aria-label={`Open walkthrough file ${file.path}`}
+                                    className="hover:bg-review-sidebar-control-hover disabled:text-review-sidebar-muted/70 flex w-full items-center justify-between gap-2 rounded-md px-1 py-0.5 text-left transition disabled:cursor-not-allowed"
+                                    data-walkthrough-file-path={file.path}
+                                    data-walkthrough-step-index={index}
+                                    disabled={targetFile === undefined}
+                                    title={
+                                      targetFile === undefined
+                                        ? `${file.path} is not available in this diff.`
+                                        : file.path
+                                    }
+                                    onClick={() => {
+                                      if (targetFile !== undefined) onSelectFile(index, targetFile)
+                                    }}
+                                  >
+                                    <span className="truncate font-mono" title={file.path}>
+                                      {fileNameFromPath(file.path)}
+                                    </span>
+                                    <span className="shrink-0">
+                                      <span className="text-review-success">+{file.additions}</span>{" "}
+                                      <span className="text-review-danger">-{file.deletions}</span>
+                                    </span>
+                                  </button>
+                                )
+                              })
+                            )}
                           </div>
                           <div className="text-caption mt-1 text-right">
                             <span className="text-review-success">+{additions}</span>{" "}
                             <span className="text-review-danger">-{deletions}</span>
                           </div>
-                        </button>
+                        </div>
                       </li>
                     )
                   })}
@@ -3098,6 +3746,7 @@ const fileNameFromPath = (path: string) => {
 }
 
 const OpenDiffCard = ({
+  diffOptions,
   diffRenderPass,
   expanded,
   file,
@@ -3108,6 +3757,7 @@ const OpenDiffCard = ({
   onSetViewed,
   onToggleExpanded,
 }: {
+  readonly diffOptions: FileDiffOptions<undefined>
   readonly diffRenderPass: number
   readonly expanded: boolean
   readonly file: ParsedDiffFile
@@ -3176,7 +3826,7 @@ const OpenDiffCard = ({
             className="block overflow-auto text-xs"
             disableWorkerPool
             metrics={REVIEW_DIFF_METRICS}
-            options={REVIEW_DIFF_OPTIONS}
+            options={diffOptions}
             patch={file.patch}
           />
         </div>
@@ -3338,7 +3988,10 @@ const ReviewFileTree = ({
   }, [model, selectedPath, treeInput.paths])
 
   return (
-    <div className="h-full overflow-hidden bg-transparent">
+    <div
+      className="h-full overflow-hidden bg-transparent"
+      data-selected-review-path={selectedPath ?? undefined}
+    >
       <PierreFileTree
         aria-label="Changed files"
         className="text-review-sidebar-fg block h-full bg-transparent text-xs [&_*]:border-review-tree-indent"
@@ -3447,6 +4100,191 @@ const repoKey = (owner: string, name: string) => `${owner.toLowerCase()}/${name.
 const matchesReviewFileFilter = (file: ParsedDiffFile, normalizedFilter: string) =>
   file.path.toLowerCase().includes(normalizedFilter) ||
   (file.oldPath?.toLowerCase().includes(normalizedFilter) ?? false)
+
+const THEME_OPTIONS: readonly {
+  readonly icon: typeof Sun
+  readonly label: string
+  readonly value: ThemePreference
+}[] = [
+  { icon: Sun, label: "light", value: "light" },
+  { icon: Moon, label: "dark", value: "dark" },
+  { icon: Monitor, label: "system", value: "system" },
+]
+
+const readStoredTheme = (): ThemePreference => {
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+}
+
+const resolveThemePreference = (preference: ThemePreference): ResolvedTheme => {
+  if (preference !== "system") return preference
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+}
+
+const reviewDiffOptionsForTheme = (theme: ResolvedTheme): FileDiffOptions<undefined> => ({
+  ...REVIEW_DIFF_OPTIONS,
+  themeType: theme,
+})
+
+const isModKey = (event: KeyboardEvent) => event.metaKey || event.ctrlKey
+
+const isEditableTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tagName = target.tagName.toLowerCase()
+  return tagName === "input" || tagName === "textarea" || tagName === "select"
+}
+
+const pullRequestReviewKey = (target: PullRequestReviewTarget) =>
+  `${repoKey(target.repoOwner, target.repoName)}#${target.number}`
+
+const goToPaletteItems = ({
+  bookmarkedRepos,
+  onOpenPullRequest,
+  onOpenRecentReview,
+  onOpenRepo,
+  onOpenReviewRequest,
+  pullRequests,
+  recentReviews,
+  reviewRequests,
+  selectedRepo,
+}: {
+  readonly bookmarkedRepos: readonly Repo[]
+  readonly onOpenPullRequest: (pullRequest: PullRequestSummary, sourceRepo?: Repo | null) => void
+  readonly onOpenRecentReview: (review: RecentReviewEntry) => void
+  readonly onOpenRepo: (repo: Repo) => void
+  readonly onOpenReviewRequest: (pullRequest: PullRequestSummary) => void
+  readonly pullRequests: readonly PullRequestSummary[]
+  readonly recentReviews: readonly RecentReviewEntry[]
+  readonly reviewRequests: readonly PullRequestSummary[]
+  readonly selectedRepo: Repo | null
+}): readonly CommandPaletteItem[] => [
+  ...bookmarkedRepos.map((repo) => ({
+    id: `repo:${repo.id}`,
+    keywords: `${repo.owner} ${repo.name} repository bookmark`,
+    subtitle:
+      repo.localPath === null ? "Remote bookmarked repository" : "Local bookmarked repository",
+    title: `${repo.owner}/${repo.name}`,
+    onSelect: () => onOpenRepo(repo),
+  })),
+  ...reviewRequests.map((pullRequest) => ({
+    id: `review-request:${pullRequest.repoOwner}/${pullRequest.repoName}#${pullRequest.number}`,
+    keywords: `${pullRequest.repoOwner} ${pullRequest.repoName} ${pullRequest.title} review request`,
+    subtitle: `Review request · ${pullRequest.repoOwner}/${pullRequest.repoName}`,
+    title: `#${pullRequest.number} ${pullRequest.title}`,
+    onSelect: () => onOpenReviewRequest(pullRequest),
+  })),
+  ...pullRequests.map((pullRequest) => ({
+    id: `pull-request:${pullRequest.repoOwner}/${pullRequest.repoName}#${pullRequest.number}`,
+    keywords: `${pullRequest.repoOwner} ${pullRequest.repoName} ${pullRequest.title} pull request`,
+    subtitle: `Open PR · ${pullRequest.repoOwner}/${pullRequest.repoName}`,
+    title: `#${pullRequest.number} ${pullRequest.title}`,
+    onSelect: () => onOpenPullRequest(pullRequest, selectedRepo),
+  })),
+  ...recentReviews.map((review) => ({
+    id: `recent:${review.key}`,
+    keywords: `${review.repoOwner} ${review.repoName} ${review.title} recently reviewed`,
+    subtitle: `Recently reviewed · ${formatReviewTimestamp(review.lastReviewedAt)}`,
+    title: `#${review.target.number} ${review.title}`,
+    onSelect: () => onOpenRecentReview(review),
+  })),
+]
+
+const reviewGoToPaletteItems = ({
+  files,
+  onSelectFile,
+  onSelectWalkthroughStep,
+  steps,
+}: {
+  readonly files: readonly ParsedDiffFile[]
+  readonly onSelectFile: (file: ParsedDiffFile) => void
+  readonly onSelectWalkthroughStep: (index: number) => void
+  readonly steps: readonly WalkthroughReviewStep[]
+}): readonly CommandPaletteItem[] => [
+  ...files.map((file) => ({
+    id: `file:${file.reviewKey}`,
+    keywords: `${file.path} ${file.oldPath ?? ""} file diff`,
+    subtitle: `File · +${file.additions} -${file.deletions}`,
+    title: file.path,
+    onSelect: () => onSelectFile(file),
+  })),
+  ...steps.map((step, index) => ({
+    id: `walkthrough:${step.id}`,
+    keywords: `${step.title} ${step.summary} ${step.chapterTitle ?? ""} walkthrough section`,
+    subtitle: `${step.chapterTitle ?? "Walkthrough"} · ${step.risk}`,
+    title: step.title,
+    onSelect: () => onSelectWalkthroughStep(index),
+  })),
+]
+
+const reviewActionPaletteItems = ({
+  aiAgentAvailable,
+  changedFiles,
+  hiddenFileCount,
+  isReloading,
+  onMarkAllViewed,
+  onRegenerateWalkthrough,
+  onReload,
+  onRevealHidden,
+  showHiddenFiles,
+  walkthroughLoading,
+}: {
+  readonly aiAgentAvailable: boolean
+  readonly changedFiles: readonly ParsedDiffFile[]
+  readonly hiddenFileCount: number
+  readonly isReloading: boolean
+  readonly onMarkAllViewed: () => void
+  readonly onRegenerateWalkthrough: () => void
+  readonly onReload: () => void
+  readonly onRevealHidden: () => void
+  readonly showHiddenFiles: boolean
+  readonly walkthroughLoading: boolean
+}): readonly CommandPaletteItem[] => [
+  {
+    disabled: isReloading,
+    id: "action:reload-diff",
+    keywords: "reload refresh pr local diff",
+    subtitle: isReloading ? "Reload already running" : "Refetch review detail and diff",
+    title: "Reload diff",
+    onSelect: onReload,
+  },
+  {
+    disabled: !aiAgentAvailable || walkthroughLoading,
+    id: "action:regenerate-walkthrough",
+    keywords: "regenerate walkthrough ai",
+    subtitle: aiAgentAvailable ? "Generate a fresh walkthrough" : CODING_AGENT_SETUP_MESSAGE,
+    title: "Regenerate walkthrough",
+    onSelect: onRegenerateWalkthrough,
+  },
+  {
+    disabled: changedFiles.length === 0,
+    id: "action:mark-all-viewed",
+    keywords: "mark all viewed complete",
+    subtitle: `Mark ${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"} as viewed`,
+    title: "Mark all viewed",
+    onSelect: onMarkAllViewed,
+  },
+  ...(hiddenFileCount > 0
+    ? [
+        {
+          disabled: showHiddenFiles,
+          id: "action:reveal-hidden",
+          keywords: "reveal hidden noisy generated lockfile vendored binary files",
+          subtitle: showHiddenFiles
+            ? "Hidden files are already visible"
+            : `Show ${hiddenFileCount} hidden file${hiddenFileCount === 1 ? "" : "s"}`,
+          title: "Reveal hidden files",
+          onSelect: onRevealHidden,
+        },
+      ]
+    : []),
+]
+
+const formatReviewTimestamp = (value: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value))
 
 const diffCardDomId = (reviewKey: string) => {
   let hash = 0

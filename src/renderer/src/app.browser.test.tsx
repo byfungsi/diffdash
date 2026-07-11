@@ -88,6 +88,12 @@ const detail = PullRequestDetail.make({
       deletions: 0,
       path: "docs/readme.md",
     }),
+    PullRequestFile.make({
+      additions: 1,
+      changeType: "modified",
+      deletions: 1,
+      path: "pnpm-lock.yaml",
+    }),
   ],
 })
 
@@ -105,7 +111,14 @@ index 3333333..4444444 100644
 +++ b/docs/readme.md
 @@ -1,1 +1,1 @@
 -docs
-+docs update`,
++docs update
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5555555..6666666 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -1,1 +1,1 @@
+-lock old
++lock new`,
   fetchedAt: "2026-07-07T02:00:00Z",
   headRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   number: 51,
@@ -233,6 +246,7 @@ const readyPrerequisites = AppPrerequisites.make({
   codingAgentInstalled: true,
   diffDashCliInstalled: true,
   diffDashCliPath: "/usr/local/bin/diffdash",
+  gitInstalled: true,
   ghAuthenticated: true,
   ghInstalled: true,
   installedCodingAgents: ["codex"],
@@ -243,6 +257,7 @@ const missingPrerequisites = AppPrerequisites.make({
   codingAgentInstalled: false,
   diffDashCliInstalled: false,
   diffDashCliPath: null,
+  gitInstalled: false,
   ghAuthenticated: false,
   ghInstalled: false,
   installedCodingAgents: [],
@@ -259,6 +274,9 @@ let root: Root | null = null
 afterEach(() => {
   root?.unmount()
   root = null
+  window.localStorage.clear()
+  document.documentElement.classList.remove("dark")
+  document.documentElement.style.colorScheme = ""
   document.body.replaceChildren()
 })
 
@@ -309,6 +327,7 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Finish setup")
+      expect(document.body.textContent).toContain("git was not found in PATH")
       expect(document.body.textContent).toContain("gh was not found in PATH")
       expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
     })
@@ -379,9 +398,18 @@ describe("App browser interactions", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Bookmarked Repos")
       expect(document.body.textContent).toContain("Recent Review Requests")
-      expect(document.body.textContent).toContain("Recently Reviewed")
+      expect(document.body.textContent).not.toContain("Recently Reviewed")
       expect(document.body.textContent).toContain("Request review flow")
       expect(document.body.textContent).toContain("fungsi/diffdash #51")
+    })
+
+    const darkThemeButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Use dark theme"]',
+    )
+    expect(darkThemeButton).not.toBeNull()
+    darkThemeButton?.click()
+    await vi.waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(true)
     })
 
     const searchInput = document.querySelector<HTMLInputElement>(
@@ -400,22 +428,40 @@ describe("App browser interactions", () => {
     })
 
     calls.listPullRequests.mockClear()
-    const repoButton = [...document.querySelectorAll("button")].find(
-      (button) => button.textContent?.includes("fungsi/diffdash") ?? false,
-    )
-    expect(repoButton).toBeDefined()
-    repoButton?.click()
+    dispatchKeyboardShortcut("k", { metaKey: true })
+    await vi.waitFor(() => {
+      expect(document.querySelector('dialog[aria-label="Go anywhere"]')).not.toBeNull()
+    })
+    const repoPaletteButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("Remote bookmarked repository") ?? false)
+    expect(repoPaletteButton).toBeDefined()
+    repoPaletteButton?.click()
 
     await vi.waitFor(() => {
       expect(calls.listPullRequests).toHaveBeenCalledWith("fungsi", "diffdash")
       expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
     })
 
-    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-      button.getAttribute("aria-label")?.includes("Open requested review #51"),
-    )
-    expect(reviewButton).toBeDefined()
-    reviewButton?.click()
+    dispatchKeyboardShortcut("k", { metaKey: true })
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLInputElement>(
+          'dialog input[placeholder="Search repos and PRs"]',
+        ),
+      ).not.toBeNull()
+    })
+    const commandInput = document.querySelector<HTMLInputElement>("dialog input")
+    expect(commandInput).not.toBeNull()
+    if (commandInput !== null) {
+      setInputValue(commandInput, "Request")
+      commandInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+    const reviewPaletteButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("#51 Request review flow") ?? false)
+    expect(reviewPaletteButton).toBeDefined()
+    reviewPaletteButton?.click()
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Opened PR #51")
@@ -423,6 +469,83 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).toContain("Viewed")
       expect(document.body.textContent).toContain("+1")
       expect(document.body.textContent).toContain("-1")
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+      expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
+    })
+
+    calls.getPullRequestDetail.mockClear()
+    calls.getPullRequestDiff.mockClear()
+    dispatchKeyboardShortcut("k", { metaKey: true, shiftKey: true })
+    await vi.waitFor(() => {
+      expect(document.querySelector('dialog[aria-label="Review actions"]')).not.toBeNull()
+    })
+    const reloadAction = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(
+      (button) => button.textContent?.includes("Reload diff") ?? false,
+    )
+    expect(reloadAction).toBeDefined()
+    reloadAction?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.getPullRequestDetail).toHaveBeenCalledWith("fungsi", "diffdash", 51)
+      expect(calls.getPullRequestDiff).toHaveBeenCalledWith("fungsi", "diffdash", 51)
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    })
+
+    dispatchKeyboardShortcut("v")
+    await vi.waitFor(() => {
+      expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+      expect(document.body.textContent).toContain("Marked src/app.tsx as viewed")
+    })
+
+    const reviewFilterInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Filter files"]',
+    )
+    expect(reviewFilterInput).not.toBeNull()
+    reviewFilterInput?.focus()
+    if (reviewFilterInput !== null) {
+      reviewFilterInput.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "v" }),
+      )
+    }
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+
+    dispatchKeyboardShortcut("k", { metaKey: true, shiftKey: true })
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Mark all viewed")
+    })
+    const revealHiddenAction = [
+      ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("Reveal hidden files") ?? false)
+    expect(revealHiddenAction).toBeDefined()
+    revealHiddenAction?.click()
+
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toContain("pnpm-lock.yaml")
+      expect(document.body.textContent).toContain("Revealed 1 hidden file")
+    })
+
+    dispatchKeyboardShortcut("k", { metaKey: true })
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLInputElement>(
+          'dialog input[placeholder="Search files and walkthrough sections"]',
+        ),
+      ).not.toBeNull()
+    })
+    const reviewCommandInput = document.querySelector<HTMLInputElement>("dialog input")
+    expect(reviewCommandInput).not.toBeNull()
+    if (reviewCommandInput !== null) {
+      setInputValue(reviewCommandInput, "docs/readme")
+      reviewCommandInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+    const docsPaletteButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("docs/readme.md") ?? false)
+    expect(docsPaletteButton).toBeDefined()
+    docsPaletteButton?.click()
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
     })
 
     await vi.waitFor(() => {
@@ -464,6 +587,7 @@ describe("App browser interactions", () => {
       )
       expect(calls.generateWalkthrough).not.toHaveBeenCalled()
       expect(document.body.textContent).toContain("Review focus")
+      expect(document.body.textContent).toContain("Diff-only")
       expect(document.body.textContent).toContain("Entry point")
       expect(document.body.textContent).toContain("CRITICAL")
       expect(
@@ -471,6 +595,41 @@ describe("App browser interactions", () => {
           '[data-diff-card-path="src/app.tsx"] button[aria-label="Collapse diff"]',
         ),
       ).not.toBeNull()
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
+    })
+
+    dispatchKeyboardShortcut("k", { metaKey: true })
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector<HTMLInputElement>(
+          'dialog input[placeholder="Search files and walkthrough sections"]',
+        ),
+      ).not.toBeNull()
+    })
+    const walkthroughCommandInput = document.querySelector<HTMLInputElement>("dialog input")
+    expect(walkthroughCommandInput).not.toBeNull()
+    if (walkthroughCommandInput !== null) {
+      setInputValue(walkthroughCommandInput, "Documentation")
+      walkthroughCommandInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+    const docsStepPaletteButton = [
+      ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+    ].find((button) => button.textContent?.includes("Documentation") ?? false)
+    expect(docsStepPaletteButton).toBeDefined()
+    docsStepPaletteButton?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("SUPPORT")
+      expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
+    })
+
+    const entryStepButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Entry point") ?? false,
+    )
+    expect(entryStepButton).toBeDefined()
+    entryStepButton?.click()
+
+    await vi.waitFor(() => {
       expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
     })
 
@@ -498,14 +657,28 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).toContain("Sonnet 5.0")
     })
 
-    const docsStep = [...document.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Documentation"),
+    const fileFilterInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Filter files"]',
     )
-    expect(docsStep).toBeDefined()
-    docsStep?.click()
+    expect(fileFilterInput).not.toBeNull()
+    if (fileFilterInput !== null) {
+      setInputValue(fileFilterInput, "app")
+      fileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
+    })
+
+    const docsFileButton = document.querySelector<HTMLButtonElement>(
+      '[data-walkthrough-file-path="docs/readme.md"]',
+    )
+    expect(docsFileButton).not.toBeNull()
+    docsFileButton?.click()
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("SUPPORT")
+      expect(fileFilterInput?.value).toBe("")
       expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
     })
 
@@ -539,7 +712,9 @@ describe("App browser interactions", () => {
     await vi.waitFor(() => {
       expect(getChangedFilesTreeItemPaths()).toContain("src/app.tsx")
       expect(getChangedFilesTreeItemPaths()).toContain("docs/readme.md")
-      expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+      expect(getChangedFilesTreeItemPaths()).toContain("pnpm-lock.yaml")
+      expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md", "pnpm-lock.yaml"])
     })
 
     const firstDiffOpenButton = [
@@ -558,13 +733,13 @@ describe("App browser interactions", () => {
       )
     })
 
-    const fileFilterInput = document.querySelector<HTMLInputElement>(
+    const treeFileFilterInput = document.querySelector<HTMLInputElement>(
       'input[placeholder="Filter files"]',
     )
-    expect(fileFilterInput).not.toBeNull()
-    if (fileFilterInput !== null) {
-      setInputValue(fileFilterInput, "docs")
-      fileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+    expect(treeFileFilterInput).not.toBeNull()
+    if (treeFileFilterInput !== null) {
+      setInputValue(treeFileFilterInput, "docs")
+      treeFileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
     }
 
     await vi.waitFor(() => {
@@ -577,6 +752,7 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Bookmarked Repos")
+      expect(document.body.textContent).toContain("Recently Reviewed")
       expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
       expect(document.body.textContent).not.toContain("Opened PR #51")
     })
@@ -661,6 +837,24 @@ const getDiffCardPaths = () =>
     .map((element) => element.getAttribute("data-diff-card-path"))
     .filter((path) => path !== null)
 
+const getViewedCheckbox = (path: string) =>
+  document.querySelector<HTMLInputElement>(`[data-diff-card-path="${path}"] input[type="checkbox"]`)
+
+const dispatchKeyboardShortcut = (
+  key: string,
+  options: { readonly metaKey?: boolean; readonly shiftKey?: boolean } = {},
+) => {
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key,
+      metaKey: options.metaKey ?? false,
+      shiftKey: options.shiftKey ?? false,
+    }),
+  )
+}
+
 const dispatchSideMouseButton = (button: number) => {
   window.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button, cancelable: true }))
 }
@@ -733,6 +927,12 @@ const installDiffDashApi = (
     getLocalReviewDiff: vi.fn<(rootPath: string) => Promise<LocalReviewDiff>>(
       async () => localDiff,
     ),
+    getPullRequestDetail: vi.fn<
+      (owner: string, name: string, number: number) => Promise<PullRequestDetail>
+    >(async () => detail),
+    getPullRequestDiff: vi.fn<
+      (owner: string, name: string, number: number) => Promise<PullRequestDiff>
+    >(async () => diff),
     openLocalRepositoryFile: vi.fn<(rootPath: string, filePath: string) => Promise<void>>(
       async () => undefined,
     ),
@@ -768,8 +968,8 @@ const installDiffDashApi = (
     openRepositoryFile: calls.openRepositoryFile,
     gitProvider: {
       approvePullRequest: calls.approvePullRequest,
-      getPullRequestDetail: async () => detail,
-      getPullRequestDiff: async () => diff,
+      getPullRequestDetail: calls.getPullRequestDetail,
+      getPullRequestDiff: calls.getPullRequestDiff,
       hasApprovedPullRequest: async () => approved,
       listPullRequests: calls.listPullRequests,
       listReviewRequests: async () => [pullRequest],
@@ -777,7 +977,7 @@ const installDiffDashApi = (
         RepositorySearchScope.make({ kind: "user", login: "hanipcode" }),
         RepositorySearchScope.make({ kind: "organization", login: "fungsi" }),
       ],
-      refreshPullRequestDetail: async () => detail,
+      refreshPullRequestDetail: calls.getPullRequestDetail,
       searchRepositories: async () => [remoteSearchResult],
     },
     localReviews: {

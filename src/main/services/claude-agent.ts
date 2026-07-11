@@ -15,6 +15,7 @@ export const makeClaudeAgent = (cli: CliRunner, model: ClaudeModel): AIProviderA
     generateText: Effect.fn("ClaudeAgent.generateText")(function (prompt, options = {}) {
       const effortArgs = reasoningEffortArgs(options)
       const cliOptions = {
+        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         stdin: prompt,
       }

@@ -9,6 +9,7 @@ const makeCliLayer = () => {
   const calls: Array<{
     readonly args: readonly string[]
     readonly command: string
+    readonly cwd: string | null
     readonly stdin: string | undefined
     readonly timeoutMs: number | undefined
   }> = []
@@ -21,6 +22,7 @@ const makeCliLayer = () => {
           calls.push({
             args: [...args],
             command,
+            cwd: options?.cwd ?? null,
             stdin: options?.stdin,
             timeoutMs: options?.timeoutMs,
           })
@@ -40,14 +42,18 @@ const makeCliLayer = () => {
 }
 
 describe("ClaudeAgent", () => {
-  it.effect("passes model, effort, timeout, and prompt to claude print mode", () =>
+  it.effect("passes model, effort, cwd, timeout, and prompt to claude print mode", () =>
     Effect.gen(function* () {
       const { calls, layer: cliLayer } = makeCliLayer()
       const layer = ClaudeAgent.layer.pipe(Layer.provide(cliLayer))
 
       const output = yield* Effect.gen(function* () {
         const agent = yield* AIAgent
-        return yield* agent.generateText("prompt", { reasoningEffort: "low", timeoutMs: 123 })
+        return yield* agent.generateText("prompt", {
+          cwd: "/workspace/repo",
+          reasoningEffort: "low",
+          timeoutMs: 123,
+        })
       }).pipe(Effect.provide(layer))
 
       expect(output).toBe("generated")
@@ -65,6 +71,7 @@ describe("ClaudeAgent", () => {
         "--effort",
         "low",
       ])
+      expect(calls[0]?.cwd).toBe("/workspace/repo")
       expect(calls[0]?.stdin).toBe("prompt")
       expect(calls[0]?.timeoutMs).toBe(123)
     }),

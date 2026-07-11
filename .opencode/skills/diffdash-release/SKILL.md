@@ -66,8 +66,10 @@ Required for macOS signing/notarization:
 APPLE_API_KEY=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 APPLE_API_KEY_ID=XXXXXXXXXX
 APPLE_API_ISSUER=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-CSC_NAME="Developer ID Application: Muhammad Hanif (9M558GH62J)"
+CSC_NAME="Muhammad Hanif (9M558GH62J)"
 ```
+
+Electron Builder expects `CSC_NAME` without the `Developer ID Application:` prefix. The local macOS release script strips that prefix for compatibility with older `.env` files.
 
 If using a `.p12` export instead of a Keychain-installed certificate, also require:
 
@@ -113,12 +115,14 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Packages the stapled app into a DMG.
 - Verifies `codesign`, Gatekeeper assessment, and stapling.
 - Copies the DMG into `release-assets/`.
+- Supports `-- --package-existing --skip-notarize --arch <arch>` only for recovery after an existing app has already been stapled and validated.
+- `scripts/notarize-app.mjs` supports `--submission-id <id>` to resume polling/stapling an existing Apple notarization submission without rebuilding or resubmitting.
 
 `pnpm release:local:linux`:
 
 - Requires Docker.
 - Archives `HEAD` into a temporary build directory.
-- Runs `node:22-bookworm` through Docker with `--platform linux/amd64` by default.
+- Runs `node:22-trixie` through Docker with `--platform linux/amd64` by default.
 - Installs dependencies with the pinned `pnpm` version from `package.json`.
 - Rebuilds native modules for Electron on Linux.
 - Builds the Linux x64 `.deb`.
@@ -129,10 +133,11 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Reads assets from `release-assets/`.
 - Generates `SHA256SUMS` and `latest.json`.
 - Creates or updates the draft GitHub Release for `v<package.version>`.
-- Uploads all `release-assets/` files to the draft GitHub Release.
+- Uploads all `release-assets/` files to the draft GitHub Release with per-file retries.
 - Mirrors the same files to R2 at `releases/<tag>/`.
 - Updates root `latest.json` in R2.
 - Prunes R2 release folders to keep only the latest 3 semver versions.
+- Supports `--metadata-only` to regenerate `SHA256SUMS` and `latest.json` without publishing.
 
 ## First Release Flow
 

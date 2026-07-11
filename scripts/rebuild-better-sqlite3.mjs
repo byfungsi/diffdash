@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
@@ -13,8 +13,9 @@ const betterSqliteBinaryPath = join(
   "better_sqlite3.node",
 )
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
+const rebuildEnv = nativeRebuildEnvironment()
 const rebuild = spawn(pnpm, ["rebuild", "better-sqlite3"], {
-  env: process.env,
+  env: rebuildEnv,
   stdio: ["ignore", "pipe", "pipe"],
 })
 const output = []
@@ -60,3 +61,40 @@ rebuild.on("close", (code, signal) => {
 
   process.exit(code ?? 1)
 })
+
+function nativeRebuildEnvironment() {
+  const configuredPython = process.env.npm_config_python ?? process.env.PYTHON ?? null
+  const python = firstWorkingPython([
+    configuredPython,
+    process.platform === "darwin" ? "/usr/bin/python3" : null,
+    "python3",
+    "python",
+  ])
+
+  if (python === null) return process.env
+
+  return {
+    ...process.env,
+    PYTHON: python,
+    npm_config_python: python,
+  }
+}
+
+function firstWorkingPython(candidates) {
+  const seen = new Set()
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined || candidate.length === 0) continue
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+    if (isWorkingPython(candidate)) return candidate
+  }
+
+  return null
+}
+
+function isWorkingPython(command) {
+  const result = spawnSync(command, ["-c", "import plistlib; import xml.parsers.expat"], {
+    stdio: "ignore",
+  })
+  return result.status === 0
+}

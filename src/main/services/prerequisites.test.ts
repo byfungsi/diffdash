@@ -70,7 +70,7 @@ const makeLayer = (
   )
 
 describe("Prerequisites", () => {
-  it.scoped("detects GitHub auth, coding agents, and diffdash in PATH", () =>
+  it.scoped("detects Git, GitHub auth, coding agents, and diffdash in PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -88,11 +88,12 @@ describe("Prerequisites", () => {
       }).pipe(
         Effect.provide(
           makeLayer(directory, {
-            availableCommands: new Set(["gh", "claude"]),
+            availableCommands: new Set(["git", "gh", "claude"]),
           }),
         ),
       )
 
+      expect(status.gitInstalled).toBe(true)
       expect(status.ghInstalled).toBe(true)
       expect(status.ghAuthenticated).toBe(true)
       expect(status.codingAgentInstalled).toBe(true)

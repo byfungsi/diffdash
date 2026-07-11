@@ -10,7 +10,7 @@ const appPathArg = args.find((arg) => !arg.startsWith("--"))
 
 if (appPathArg === undefined) {
   throw new Error(
-    "Usage: node scripts/notarize-app.mjs <path-to-app> [--timeout-minutes N] [--poll-seconds N]",
+    "Usage: node scripts/notarize-app.mjs <path-to-app> [--submission-id ID] [--timeout-minutes N] [--poll-seconds N]",
   )
 }
 
@@ -40,29 +40,35 @@ const authArgs = [
 ]
 const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-notarize-"))
 const zipPath = path.join(tempDir, "DiffDash.zip")
+let submissionId = readOption("--submission-id")
 
-console.log(`Creating notarization archive for ${appPath}`)
-const zipResult = await run(
-  "ditto",
-  ["-c", "-k", "--sequesterRsrc", "--keepParent", path.basename(appPath), zipPath],
-  { cwd: path.dirname(appPath), inherit: true, timeoutMs: 10 * 60_000 },
-)
-if (zipResult.code !== 0) failWithOutput("Failed to create notarization archive.", zipResult)
-
-console.log("Submitting app to Apple notarization service")
-const submitResult = await run(
-  "xcrun",
-  ["notarytool", "submit", zipPath, ...authArgs, "--output-format", "json"],
-  { timeoutMs: 20 * 60_000 },
-)
-if (submitResult.code !== 0) failWithOutput("Failed to submit app for notarization.", submitResult)
-
-const submission = parseJson(submitResult.stdout, "notarytool submit")
-const submissionId = submission.id
 if (typeof submissionId !== "string" || submissionId.length === 0) {
-  failWithOutput("Notarization submission did not return an id.", submitResult)
+  console.log(`Creating notarization archive for ${appPath}`)
+  const zipResult = await run(
+    "ditto",
+    ["-c", "-k", "--sequesterRsrc", "--keepParent", path.basename(appPath), zipPath],
+    { cwd: path.dirname(appPath), inherit: true, timeoutMs: 10 * 60_000 },
+  )
+  if (zipResult.code !== 0) failWithOutput("Failed to create notarization archive.", zipResult)
+
+  console.log("Submitting app to Apple notarization service")
+  const submitResult = await run(
+    "xcrun",
+    ["notarytool", "submit", zipPath, ...authArgs, "--output-format", "json"],
+    { timeoutMs: 20 * 60_000 },
+  )
+  if (submitResult.code !== 0)
+    failWithOutput("Failed to submit app for notarization.", submitResult)
+
+  const submission = parseJson(submitResult.stdout, "notarytool submit")
+  submissionId = submission.id
+  if (typeof submissionId !== "string" || submissionId.length === 0) {
+    failWithOutput("Notarization submission did not return an id.", submitResult)
+  }
+  console.log(`Notarization submitted: ${submissionId}`)
+} else {
+  console.log(`Resuming notarization submission: ${submissionId}`)
 }
-console.log(`Notarization submitted: ${submissionId}`)
 
 const deadline = Date.now() + timeoutMinutes * 60_000
 const completed = await waitForNotarization(deadline)

@@ -7,6 +7,7 @@ export type AIAgentReasoningEffort = "minimal" | "low" | "medium" | "high"
 
 /** Options for a single AI agent text generation request. */
 export interface AIAgentGenerateOptions {
+  readonly cwd?: string
   readonly timeoutMs?: number
   readonly reasoningEffort?: AIAgentReasoningEffort
 }

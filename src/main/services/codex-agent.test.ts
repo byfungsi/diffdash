@@ -13,6 +13,7 @@ const makeCliLayer = () => {
   const calls: Array<{
     readonly args: readonly string[]
     readonly command: string
+    readonly cwd: string | null
     readonly stdin: string | undefined
     readonly timeoutMs: number | undefined
   }> = []
@@ -28,6 +29,7 @@ const makeCliLayer = () => {
           calls.push({
             args: [...args],
             command,
+            cwd: options?.cwd ?? null,
             stdin: options?.stdin,
             timeoutMs: options?.timeoutMs,
           })
@@ -69,8 +71,10 @@ describe("CodexAgent", () => {
       expect(output).toBe("generated")
       expect(calls).toHaveLength(1)
       expect(calls[0]?.command).toBe("codex")
+      expect(calls[0]?.cwd).toBe(tmpdir())
       expect(calls[0]?.args).toEqual([
         "exec",
+        "--ephemeral",
         "--skip-git-repo-check",
         "--model",
         "gpt-5.3-codex-spark",
@@ -82,6 +86,31 @@ describe("CodexAgent", () => {
       ])
       expect(calls[0]?.stdin).toBe("prompt")
       expect(calls[0]?.timeoutMs).toBe(123)
+    }),
+  )
+
+  it.effect("uses a provided repository cwd without skipping the git repo check", () =>
+    Effect.gen(function* () {
+      const { calls, layer: cliLayer } = makeCliLayer()
+      const layer = CodexAgent.layer.pipe(
+        Layer.provide(cliLayer),
+        Layer.provide(
+          AppConfig.layer({
+            databasePath: join(tmpdir(), "diffdash-test.sqlite"),
+            settingsPath: join(tmpdir(), "diffdash-settings.json"),
+            tempDir: tmpdir(),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const agent = yield* AIAgent
+        return yield* agent.generateText("prompt", { cwd: "/workspace/repo" })
+      }).pipe(Effect.provide(layer))
+
+      expect(calls[0]?.cwd).toBe("/workspace/repo")
+      expect(calls[0]?.args).toContain("--ephemeral")
+      expect(calls[0]?.args).not.toContain("--skip-git-repo-check")
     }),
   )
 })

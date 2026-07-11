@@ -8,6 +8,7 @@ export type CodingAgentName = typeof CodingAgentName.Type
 
 /** Runtime checks for external tools DiffDash depends on. */
 export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequisites")({
+  gitInstalled: Schema.Boolean,
   ghInstalled: Schema.Boolean,
   ghAuthenticated: Schema.Boolean,
   codingAgentInstalled: Schema.Boolean,
@@ -30,6 +31,7 @@ export const EMPTY_APP_PREREQUISITES = AppPrerequisites.make({
   codingAgentInstalled: false,
   diffDashCliInstalled: false,
   diffDashCliPath: null,
+  gitInstalled: false,
   ghAuthenticated: false,
   ghInstalled: false,
   installedCodingAgents: [],

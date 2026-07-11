@@ -22,7 +22,9 @@ export const makeCodexAgent = (
   AIAgent.of({
     generateText: Effect.fn("CodexAgent.generateText")(function (prompt, options = {}) {
       const configArgs = reasoningConfigArgs(options)
+      const skipGitRepoCheckArgs = options.cwd === undefined ? ["--skip-git-repo-check"] : []
       const cliOptions = {
+        cwd: options.cwd ?? tempDir,
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         stdin: prompt,
       }
@@ -33,7 +35,8 @@ export const makeCodexAgent = (
               "codex",
               [
                 "exec",
-                "--skip-git-repo-check",
+                "--ephemeral",
+                ...skipGitRepoCheckArgs,
                 "--model",
                 model,
                 ...configArgs,

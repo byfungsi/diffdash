@@ -63,6 +63,7 @@ const debugMissingPrerequisites = () =>
     codingAgentInstalled: false,
     diffDashCliInstalled: false,
     diffDashCliPath: null,
+    gitInstalled: false,
     ghAuthenticated: false,
     ghInstalled: false,
     installedCodingAgents: [],

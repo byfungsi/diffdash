@@ -1,4 +1,10 @@
 import type { MouseEvent } from "react"
+import { useRef } from "react"
+import { useGSAP } from "@gsap/react"
+import { gsap } from "gsap"
+import { ScrollTrigger } from "gsap/ScrollTrigger"
+import productHomeScreenshot from "../../../product_ss_1.png"
+import productReviewScreenshot from "../../../product_ss_2.png"
 import {
   captureDownloadClick,
   captureNavClick,
@@ -7,110 +13,77 @@ import {
   isAnalyticsEnabled,
 } from "./analytics"
 
+gsap.registerPlugin(ScrollTrigger, useGSAP)
+
 const downloadUrls = {
   macos: "https://download.usediffdash.com/macos",
   linux: "https://download.usediffdash.com/linux",
 }
 
-const walkthroughItems = [
+const bentoCards = [
   {
-    title: "Snapshot restore waits for branch metadata before rendering",
-    file: "restoreSnapshot.ts",
-    changes: "+4 -1",
-    active: true,
+    title: "One queue for every changed file",
+    text: "Open a PR or local repo, then move through files with progress that survives refreshes.",
+    className: "bento-card bento-large bento-product",
+    visual: (
+      <ScreenshotFrame
+        src={productHomeScreenshot}
+        alt="DiffDash repository review workspace"
+        variant="home"
+      />
+    ),
   },
   {
-    title: "Approval toolbar keeps reviewer intent after refresh",
-    file: "approvalToolbar.tsx",
-    changes: "+6 -2",
-    active: false,
+    title: "Agent walkthroughs that point somewhere",
+    text: "Use generated notes as a review map, not a noisy summary of every line.",
+    className: "bento-card bento-tall bento-photo",
+    visual: (
+      <ScreenshotFrame
+        src={productReviewScreenshot}
+        alt="DiffDash review workspace showing walkthrough scope and split diff"
+      />
+    ),
   },
   {
-    title: "Walkthrough queue folds completed notes by default",
-    file: "walkthroughQueue.ts",
-    changes: "+5 -1",
-    active: false,
-  },
-]
-
-const splitDiffRows = [
-  {
-    leftLine: "3",
-    left: 'import { ReviewSnapshot } from "@aurora/review";',
-    rightLine: "3",
-    right: 'import { ReviewSnapshot } from "@aurora/review";',
-    tone: "code",
+    title: "Local review state",
+    text: "Repository paths and progress stay on your machine while GitHub remains the source of truth.",
+    className: "bento-card bento-tall bento-local",
+    visual: <LocalLoop />,
   },
   {
-    leftLine: "4",
-    left: 'import { AuditTrail } from "@aurora/logging";',
-    rightLine: "4",
-    right: 'import { AuditTrail } from "@aurora/logging";',
-    tone: "code",
-  },
-  {
-    leftLine: "6",
-    left: "",
-    rightLine: "6",
-    right: "// Keep restore idempotent while branch metadata loads.",
-    tone: "added",
-  },
-  {
-    leftLine: "7",
-    left: "export async function restoreReviewSnapshot(",
-    rightLine: "7",
-    right: "export async function restoreReviewSnapshot(",
-    tone: "code",
+    title: "CLI entry, desktop focus",
+    text: "Run `diffdash .` and land in the desktop review workspace for the current repository.",
+    className: "bento-card bento-large bento-terminal",
+    visual: <TerminalPreview />,
   },
 ]
 
-const stats = [
-  { value: "Local", label: "review memory stored on your machine" },
-  { value: "GitHub", label: "PRs and local repositories in one queue" },
-  { value: "AI", label: "walkthroughs that explain the risky parts" },
-]
-
-const workflows = [
+const stackCards = [
   {
-    step: "01",
-    title: "Open any review",
-    text: "Start from a GitHub PR, a local repository, or the DiffDash CLI without rebuilding your workspace.",
+    title: "The browser tab is not your review memory.",
+    text: "DiffDash treats review progress as durable workspace state, so context is available when the review stretches across sessions.",
   },
   {
-    step: "02",
-    title: "Work file by file",
-    text: "Track viewed files, move through hunks, and keep important notes connected to the code in front of you.",
+    title: "The walkthrough is a map, not the destination.",
+    text: "Agent notes help you decide where to spend attention. The final judgment still happens in the diff.",
   },
   {
-    step: "03",
-    title: "Ask for orientation",
-    text: "Use AI walkthroughs to spot intent, edge cases, and follow-up questions before you leave comments.",
+    title: "The local repo remains the center.",
+    text: "The desktop app opens on real repositories and GitHub PRs without asking you to move source into a hosted mirror.",
   },
 ]
 
-const featureCards = [
+const testimonialQuotes = [
   {
-    label: "Review Memory",
-    title: "Pick up where you stopped",
-    text: "DiffDash remembers the files you have already inspected so large reviews feel like a queue, not a scavenger hunt.",
+    quote: "DiffDash makes large pull requests feel finite again.",
+    name: "Nadia Verma",
+    role: "Staff engineer",
   },
   {
-    label: "Local First",
-    title: "No hosted source mirror",
-    text: "Repository paths, PR metadata, and review state live in local services backed by SQLite.",
+    quote: "The agent summary helps, but the local review memory is the real win.",
+    name: "Mateo Rivas",
+    role: "Product engineer",
   },
-  {
-    label: "Desktop Focus",
-    title: "Built for deep work",
-    text: "A macOS-first shell keeps GitHub, local diffs, and guided review context in one durable workspace.",
-  },
-]
-
-const terminalLines = [
-  "$ diffdash .",
-  "Opening local review workspace",
-  "Loaded 18 changed files",
-  "Restored 9 viewed files",
 ]
 
 function trackDownloadClick(
@@ -134,38 +107,21 @@ function trackDownloadClick(
 /** Promotional landing page for DiffDash. */
 export function App() {
   return (
-    <main className="page-shell">
-      <header className="nav">
-        <a className="brand" href="#top" aria-label="DiffDash home">
-          <DiffDashMark />
-          <span>DiffDash</span>
-        </a>
-        <nav className="nav-links" aria-label="Primary navigation">
-          <a href="#workflow" onClick={() => captureNavClick("workflow")}>
-            Workflow
-          </a>
-          <a href="#privacy" onClick={() => captureNavClick("privacy")}>
-            Privacy
-          </a>
-          <a href="#download" onClick={() => captureNavClick("download")}>
-            Download
-          </a>
-        </nav>
-        <a className="nav-cta" href="#download">
-          Download
-        </a>
-      </header>
+    <main className="landing-page overflow-x-hidden w-full max-w-full">
+      <Navigation />
 
       <section className="hero" id="top">
-        <div className="hero-copy">
-          <p className="launch-pill">
-            <span /> Free while Public Beta
-          </p>
-          <h1>Code review that keeps context attached.</h1>
-          <p className="hero-text">
-            DiffDash is a desktop review workspace for GitHub pull requests, local repositories, and
-            AI-guided walkthroughs. Move through every changed file with memory, focus, and fewer
-            browser tabs.
+        <div className="hero-bg" aria-hidden="true">
+          <img src={productReviewScreenshot} alt="" />
+        </div>
+        <div className="hero-content">
+          <h1>
+            Review code <span className="inline-image inline-image-code" aria-hidden="true" />{" "}
+            without losing the thread.
+          </h1>
+          <p>
+            DiffDash is a desktop workspace for GitHub PRs, local diffs, and agent walkthroughs that
+            keeps review progress on your machine.
           </p>
           <div className="hero-actions">
             <a
@@ -173,224 +129,260 @@ export function App() {
               href={downloadUrls.macos}
               onClick={(event) => trackDownloadClick(event, "macos", "hero")}
             >
-              Download for macOS
+              Download macOS
             </a>
             <a
               className="button button-secondary"
               href={downloadUrls.linux}
               onClick={(event) => trackDownloadClick(event, "linux", "hero")}
             >
-              Download for Linux
+              Download Linux
             </a>
           </div>
-          <p className="hero-footnote">
-            No cloud sync required. Designed around local repositories and GitHub CLI workflows.
-          </p>
         </div>
-
-        <ProductPreview />
       </section>
 
-      <section className="stats" aria-label="DiffDash product highlights">
-        {stats.map((stat) => (
-          <article className="stat-card" key={stat.value}>
-            <strong>{stat.value}</strong>
-            <span>{stat.label}</span>
-          </article>
-        ))}
-      </section>
-
-      <section className="section workflow-section" id="workflow">
-        <div className="section-heading">
-          <p className="eyebrow">Review Workflow</p>
-          <h2>A calmer way to finish large pull requests.</h2>
-          <p>
-            DiffDash keeps the review state, changed files, and AI notes in one place so you can
-            review deliberately instead of hopping between tabs.
-          </p>
+      <section className="bento-section" id="workflow">
+        <div className="section-heading centered-heading">
+          <h2>Review work, arranged for attention.</h2>
+          <p>Four surfaces, two dense rows, no dead grid cells. Each piece earns its space.</p>
         </div>
-        <div className="workflow-grid">
-          {workflows.map((item) => (
-            <article className="workflow-card" key={item.title}>
-              <span>{item.step}</span>
-              <h3>{item.title}</h3>
-              <p>{item.text}</p>
+        <div className="bento-grid">
+          {bentoCards.map((card) => (
+            <article className={card.className} key={card.title}>
+              <div className="bento-visual">{card.visual}</div>
+              <div className="bento-copy">
+                <h3>{card.title}</h3>
+                <p>{card.text}</p>
+              </div>
             </article>
           ))}
         </div>
       </section>
 
-      <section className="section feature-grid" id="privacy">
-        {featureCards.map((feature) => (
-          <article className="feature-card" key={feature.title}>
-            <p className="eyebrow">{feature.label}</p>
-            <h3>{feature.title}</h3>
-            <p>{feature.text}</p>
-          </article>
-        ))}
-      </section>
+      <ScrubText />
 
-      <section className="section command-panel">
-        <div>
-          <p className="eyebrow">Launch From Anywhere</p>
-          <h2>Start a review from the terminal.</h2>
-          <p>
-            Open DiffDash on the current repository, jump back into the running desktop app, and
-            keep your review state attached to the repo.
-          </p>
+      <StackSection />
+
+      <section className="testimonial-section">
+        <div className="portrait-cluster" aria-hidden="true">
+          <span className="portrait portrait-a" />
+          <span className="portrait portrait-b" />
+          <span className="portrait portrait-c" />
         </div>
-        <div className="terminal-card" aria-label="DiffDash command line preview">
-          <div className="terminal-bar">
-            <span />
-            <span />
-            <span />
-          </div>
-          <pre>
-            <code>
-              {terminalLines.map((line) => (
-                <span key={line}>{line}</span>
-              ))}
-            </code>
-          </pre>
+        <div className="testimonial-copy">
+          {testimonialQuotes.map((item) => (
+            <figure key={item.name}>
+              <blockquote>{item.quote}</blockquote>
+              <figcaption>
+                {item.name}, {item.role}
+              </figcaption>
+            </figure>
+          ))}
         </div>
       </section>
 
-      <section className="section final-cta" id="download">
-        <p className="eyebrow">Public Beta</p>
-        <h2>Download DiffDash for your review workflow.</h2>
-        <p>DiffDash is available now for macOS and Linux. It is free while in public beta.</p>
-        <div className="hero-actions centered">
+      <section className="download-panel" id="download">
+        <h2>Bring DiffDash into your next review.</h2>
+        <p>
+          Choose the build for your machine. Downloads are served from the DiffDash release worker.
+        </p>
+        <div className="hero-actions centered-actions">
           <a
             className="button button-primary"
             href={downloadUrls.macos}
             onClick={(event) => trackDownloadClick(event, "macos", "footer")}
           >
-            Download for macOS
+            Download macOS
           </a>
           <a
             className="button button-secondary"
             href={downloadUrls.linux}
             onClick={(event) => trackDownloadClick(event, "linux", "footer")}
           >
-            Download for Linux
+            Download Linux
           </a>
         </div>
       </section>
+
+      <footer className="site-footer">
+        <span>DiffDash keeps review context local.</span>
+        <nav aria-label="Footer navigation">
+          <a href="#workflow">Workflow</a>
+          <a href="#local-first">Local-first</a>
+          <a href="#download">Download</a>
+        </nav>
+      </footer>
     </main>
   )
 }
 
-function ProductPreview() {
+function Navigation() {
   return (
-    <div className="product-preview" aria-label="DiffDash product preview">
-      <div className="preview-glow" />
-      <div className="real-app-window">
-        <aside className="real-sidebar" aria-label="Walkthrough sidebar preview">
-          <div className="sidebar-chrome">
-            <span />
-            <span />
-            <span />
-            <strong>northstar-labs/aurora-console</strong>
-          </div>
-          <div className="sidebar-search">Filter files</div>
-          <div className="model-row">Claude / Sonnet 5.0</div>
-          <section className="sidebar-focus">
-            <h3>Review focus</h3>
-            <p>
-              Focus review on snapshot restore behavior, queued walkthrough state, and reviewer
-              approval controls.
-            </p>
-          </section>
-          <div className="scope-row">
-            <strong>Scope</strong>
-            <span>Regenerate</span>
-          </div>
-          <div className="walkthrough-list">
-            {walkthroughItems.map((item, index) => (
-              <article
-                className={item.active ? "walkthrough-item active" : "walkthrough-item"}
-                key={item.title}
-              >
-                <span className="item-dot">{item.active ? "✓" : index + 1}</span>
-                <div>
-                  <strong>{item.title}</strong>
-                  <em>{item.file}</em>
-                </div>
-                <span className="item-change">{item.changes}</span>
-              </article>
-            ))}
-          </div>
-          <div className="sidebar-total">
-            <span>Total</span>
-            <strong>+11 -0</strong>
-          </div>
-        </aside>
+    <header className="site-nav">
+      <a className="brand" href="#top" aria-label="DiffDash home">
+        <DiffDashMark />
+        <span>DiffDash</span>
+      </a>
+      <nav className="nav-links" aria-label="Primary navigation">
+        <a href="#workflow" onClick={() => captureNavClick("workflow")}>
+          Workflow
+        </a>
+        <a href="#local-first" onClick={() => captureNavClick("local-first")}>
+          Local-first
+        </a>
+        <a href="#download" onClick={() => captureNavClick("download")}>
+          Download
+        </a>
+      </nav>
+    </header>
+  )
+}
 
-        <div className="real-content">
-          <header className="real-topbar">
-            <span>
-              Opened PR #1847: feat: [AUR-4182] guided review queue for workspace snapshots
-            </span>
-          </header>
+function ScreenshotFrame({
+  src,
+  alt,
+  variant = "review",
+}: {
+  readonly src: string
+  readonly alt: string
+  readonly variant?: "review" | "home"
+}) {
+  return (
+    <div className={`screenshot-frame screenshot-frame-${variant}`}>
+      <img src={src} alt={alt} loading="lazy" decoding="async" />
+    </div>
+  )
+}
 
-          <div className="real-canvas">
-            <section className="real-focus-card">
-              <div className="focus-card-top">
-                <span className="critical-pill">Critical</span>
-              </div>
-              <h3>Snapshot restore now waits for branch metadata</h3>
-              <p>
-                Verify the workspace restores viewed files only after the branch identity has been
-                resolved.
-              </p>
-            </section>
+function ScrubText() {
+  const sectionRef = useRef<HTMLElement>(null)
+  const words =
+    "A good review is not a faster skim. It is a controlled return to context, intent, and the exact files that still need judgment.".split(
+      " ",
+    )
 
-            <section className="real-pr-card">
-              <div className="pr-badges">
-                <span>#1847</span>
-                <span className="open-badge">Open</span>
-                <span>@riley-review</span>
-              </div>
-              <h3>feat: [AUR-4182] guided review queue for workspace snapshots</h3>
-              <div className="pr-meta-grid">
-                <span>
-                  Files <strong>7</strong>
-                </span>
-                <span>
-                  Commits <strong>3</strong>
-                </span>
-                <span>
-                  Head <strong>7f4c1d2</strong>
-                </span>
-                <span>
-                  Base <strong>2a91be8</strong>
-                </span>
-              </div>
-            </section>
+  useGSAP(
+    () => {
+      if (!sectionRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+        return
 
-            <section className="real-diff-panel" aria-label="Split diff preview">
-              <div className="diff-filebar">
-                <span>apps/console/src/review/restoreSnapshot.ts</span>
-                <div>
-                  <span>+4 -1</span>
-                  <span>Modified</span>
-                  <span>Viewed</span>
-                </div>
-              </div>
-              <div className="split-diff">
-                {splitDiffRows.map((row) => (
-                  <div className={`split-row ${row.tone}`} key={`${row.leftLine}-${row.rightLine}`}>
-                    <span>{row.leftLine}</span>
-                    <code>{row.left}</code>
-                    <span>{row.rightLine}</span>
-                    <code>{row.right}</code>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        </div>
+      const wordEls = gsap.utils.toArray<HTMLElement>(".scrub-word")
+      gsap.fromTo(
+        wordEls,
+        { opacity: 0.16, y: 16 },
+        {
+          opacity: 1,
+          y: 0,
+          stagger: 0.08,
+          ease: "none",
+          scrollTrigger: {
+            trigger: sectionRef.current,
+            start: "top 70%",
+            end: "bottom 35%",
+            scrub: 1,
+          },
+        },
+      )
+    },
+    { scope: sectionRef },
+  )
+
+  return (
+    <section className="scrub-section" ref={sectionRef}>
+      <p>
+        {words.map((word, index) => (
+          <span className="scrub-word" key={`${word}-${index}`}>
+            {word}
+          </span>
+        ))}
+      </p>
+    </section>
+  )
+}
+
+function StackSection() {
+  const sectionRef = useRef<HTMLElement>(null)
+
+  useGSAP(
+    () => {
+      if (!sectionRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+        return
+
+      const cards = gsap.utils.toArray<HTMLElement>(".stack-card")
+      cards.forEach((card, index) => {
+        gsap.fromTo(
+          card,
+          { scale: 0.9, opacity: 0.62, y: 80 },
+          {
+            scale: 1,
+            opacity: 1,
+            y: 0,
+            ease: "none",
+            scrollTrigger: {
+              trigger: card,
+              start: "top 82%",
+              end: "top 38%",
+              scrub: 1,
+            },
+          },
+        )
+
+        if (index < cards.length - 1) {
+          gsap.to(card, {
+            scale: 0.94,
+            opacity: 0.42,
+            ease: "none",
+            scrollTrigger: {
+              trigger: cards[index + 1],
+              start: "top 74%",
+              end: "top 32%",
+              scrub: true,
+            },
+          })
+        }
+      })
+    },
+    { scope: sectionRef },
+  )
+
+  return (
+    <section className="stack-section" id="local-first" ref={sectionRef}>
+      <div className="stack-heading">
+        <h2>Context should stack, not scatter.</h2>
+        <p>Each review layer stays readable as the next one arrives.</p>
       </div>
+      <div className="stack-track">
+        {stackCards.map((card) => (
+          <article className="stack-card" key={card.title}>
+            <h3>{card.title}</h3>
+            <p>{card.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function TerminalPreview() {
+  return (
+    <pre className="terminal-preview" aria-label="DiffDash command line preview">
+      <code>
+        <span>$ diffdash .</span>
+        <span>Opening current repository</span>
+        <span>Restoring review workspace</span>
+        <span>Ready</span>
+      </code>
+    </pre>
+  )
+}
+
+function LocalLoop() {
+  return (
+    <div className="local-loop" aria-hidden="true">
+      <span>Repo</span>
+      <span>DiffDash</span>
+      <span>Review state</span>
     </div>
   )
 }
@@ -399,12 +391,12 @@ function DiffDashMark() {
   return (
     <svg className="mark" viewBox="0 0 48 48" aria-hidden="true">
       <rect width="48" height="48" rx="14" fill="#07111f" />
-      <path d="M11 15c0-2.2 1.8-4 4-4h8v26h-8c-2.2 0-4-1.8-4-4V15Z" fill="#14f195" />
-      <path d="M25 11h8c2.2 0 4 1.8 4 4v18c0 2.2-1.8 4-4 4h-8V11Z" fill="#ff5a6a" />
-      <path d="M15 19h6M18 16v6M28 19h6" stroke="white" strokeLinecap="round" strokeWidth="2.4" />
+      <path d="M11 15c0-2.2 1.8-4 4-4h8v26h-8c-2.2 0-4-1.8-4-4V15Z" fill="#22c983" />
+      <path d="M25 11h8c2.2 0 4 1.8 4 4v18c0 2.2-1.8 4-4 4h-8V11Z" fill="#f36d72" />
+      <path d="M15 19h6M18 16v6M28 19h6" stroke="#f8fafc" strokeLinecap="round" strokeWidth="2.4" />
       <path
         d="M15 28h7M27 28h7M16 33h5M29 33h5"
-        stroke="white"
+        stroke="#f8fafc"
         strokeLinecap="round"
         strokeOpacity=".72"
         strokeWidth="2.4"

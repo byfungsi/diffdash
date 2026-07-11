@@ -8,7 +8,7 @@ import {
   validateWalkthrough,
   type WalkthroughValidationError,
 } from "../../shared/walkthrough"
-import { AIAgent } from "./ai-agent"
+import { AIAgent, type AIAgentGenerateOptions } from "./ai-agent"
 import type { CliError } from "./cli"
 
 const WALKTHROUGH_GENERATION_TIMEOUT_MS = 90_000
@@ -55,17 +55,13 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
 
       const runAttempt = (input: WalkthroughGenerationInput) => {
         const promptContext = buildWalkthroughPromptContext(input)
+        const options = walkthroughGenerationOptions(input.review)
 
-        return aiAgent
-          .generateText(promptContext.prompt, {
-            reasoningEffort: "low",
-            timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
-          })
-          .pipe(
-            Effect.flatMap((output) => parseModelJson(output)),
-            Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
-            Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
-          )
+        return aiAgent.generateText(promptContext.prompt, options).pipe(
+          Effect.flatMap((output) => parseModelJson(output)),
+          Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
+          Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
+        )
       }
 
       return WalkthroughService.of({
@@ -81,6 +77,14 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
     }),
   )
 }
+
+const walkthroughGenerationOptions = (
+  review: WalkthroughReviewContext,
+): AIAgentGenerateOptions => ({
+  ...(review.kind === "localDiff" ? { cwd: review.localReview.rootPath } : {}),
+  reasoningEffort: "low",
+  timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
+})
 
 const parseModelJson = (output: string): Effect.Effect<unknown, WalkthroughGenerationError> =>
   Effect.try({
@@ -140,6 +144,7 @@ Required JSON shape:
 
 Rules:
 - Use hunk aliases from data.hunks[].h only. Do not use paths or full hunk IDs in hunkIds.
+- Pull request context is diff-only unless data.review.context says otherwise; do not assume repository filesystem access.
 - Put only the main review path in chapters/stops. Omit lower-priority hunks; DiffDash adds support locally.
 - Prefer 3-6 stops. Never return more than 8 stops unless unrelated critical changes require it.
 - Every referenced alias should appear at most once.
@@ -199,12 +204,15 @@ const walkthroughReviewPayload = (
   const pullRequest = review.pullRequest
   return {
     type: "pull-request",
+    context: "diff-only",
     n: pullRequest.number,
     title: pullRequest.title,
     body: pullRequest.body,
     author: pullRequest.author.login,
     base: pullRequest.baseRefName,
+    baseSha: pullRequest.baseRefOid,
     head: pullRequest.headRefName,
+    headSha: pullRequest.headRefOid,
     commits: pullRequest.commits.map((commit) => ({
       oid: commit.oid,
       msg: commit.messageHeadline,

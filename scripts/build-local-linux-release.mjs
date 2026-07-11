@@ -16,7 +16,7 @@ const args = process.argv.slice(2)
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
 const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
 const platform = readOption("--platform") ?? process.env.RELEASE_LINUX_PLATFORM ?? "linux/amd64"
-const image = readOption("--image") ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-bookworm"
+const image = readOption("--image") ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-trixie"
 const pnpmVersion = packageJson.packageManager?.startsWith("pnpm@")
   ? packageJson.packageManager.slice("pnpm@".length)
   : "10.26.1"
@@ -39,6 +39,7 @@ try {
   })
   writeFileSync(archivePath, archive)
   run("tar", ["-xf", archivePath, "-C", sourceDir])
+  writeHomepageMetadata(sourceDir)
 
   const dockerCommand = [
     "set -eu",
@@ -111,6 +112,15 @@ function assertCommand(command, commandArgs) {
   } catch {
     throw new Error(`Required command is not available or failed: ${command}`)
   }
+}
+
+function writeHomepageMetadata(sourceDir) {
+  if (typeof packageJson.homepage !== "string" || packageJson.homepage.trim().length === 0) return
+
+  const packageJsonPath = path.join(sourceDir, "package.json")
+  const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"))
+  sourcePackageJson.homepage = packageJson.homepage
+  writeFileSync(packageJsonPath, `${JSON.stringify(sourcePackageJson, null, 2)}\n`)
 }
 
 function run(command, commandArgs) {

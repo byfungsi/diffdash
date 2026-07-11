@@ -18,6 +18,7 @@ const makeCliLayer = () => {
   const calls: Array<{
     readonly args: readonly string[]
     readonly command: string
+    readonly cwd: string | null
     readonly prompt: string | null
     readonly promptPath: string | null
     readonly timeoutMs: number | undefined
@@ -33,6 +34,7 @@ const makeCliLayer = () => {
           calls.push({
             args: [...args],
             command,
+            cwd: options?.cwd ?? null,
             prompt: promptPath === null ? null : readFileSync(promptPath, "utf8"),
             promptPath,
             timeoutMs: options?.timeoutMs,
@@ -53,7 +55,7 @@ const makeCliLayer = () => {
 }
 
 describe("OpenCodeAgent", () => {
-  it.scoped("passes model, variant, timeout, and prompt attachment to opencode run", () =>
+  it.scoped("passes model, variant, cwd, timeout, and prompt attachment to opencode run", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const { calls, layer: cliLayer } = makeCliLayer()
@@ -70,7 +72,11 @@ describe("OpenCodeAgent", () => {
 
       const output = yield* Effect.gen(function* () {
         const agent = yield* AIAgent
-        return yield* agent.generateText("prompt", { reasoningEffort: "low", timeoutMs: 123 })
+        return yield* agent.generateText("prompt", {
+          cwd: "/workspace/repo",
+          reasoningEffort: "low",
+          timeoutMs: 123,
+        })
       }).pipe(Effect.provide(layer))
 
       expect(output).toBe("generated")
@@ -88,6 +94,7 @@ describe("OpenCodeAgent", () => {
         "Generate a DiffDash walkthrough from the attached prompt file. Return JSON only.",
       ])
       expect(calls[0]?.args).not.toContain("prompt")
+      expect(calls[0]?.cwd).toBe("/workspace/repo")
       expect(calls[0]?.prompt).toBe("prompt")
       expect(promptPath).not.toBeNull()
       if (promptPath !== null && promptPath !== undefined) {

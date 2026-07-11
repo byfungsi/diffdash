@@ -3,6 +3,7 @@
   "productName": "DiffDash",
   "version": "0.1.4",
   "description": "Desktop code review app with Effect-powered TypeScript services.",
+  "homepage": "https://github.com/byfungsi/diffdash",
   "type": "module",
   "main": "out/main/index.js",
   "bin": {

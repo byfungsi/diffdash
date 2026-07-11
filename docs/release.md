@@ -93,6 +93,15 @@ The local macOS build script:
 - verifies `codesign`, Gatekeeper assessment, and stapling
 - copies release DMGs to `release-assets/`
 
+Recovery options:
+
+```bash
+pnpm release:local:mac -- --package-existing --skip-notarize --arch arm64
+node scripts/notarize-app.mjs dist/mac-arm64/DiffDash.app --submission-id <id>
+```
+
+Use `--package-existing --skip-notarize` only after `xcrun stapler validate` confirms an existing app is already stapled.
+
 Build the Linux x64 `.deb` locally through Docker:
 
 ```bash
@@ -102,7 +111,7 @@ pnpm release:local:linux
 The local Linux build script:
 
 - archives `HEAD` into a temporary build directory
-- runs `node:22-bookworm` through Docker with `--platform linux/amd64`
+- runs `node:22-trixie` through Docker with `--platform linux/amd64`
 - installs dependencies with the pinned `pnpm` version from `package.json`
 - rebuilds native modules for Electron on Linux
 - builds the Linux `.deb`
@@ -111,7 +120,7 @@ The local Linux build script:
 Override Docker defaults when needed:
 
 ```bash
-RELEASE_LINUX_IMAGE=node:22-bookworm pnpm release:local:linux
+RELEASE_LINUX_IMAGE=node:22-trixie pnpm release:local:linux
 RELEASE_LINUX_PLATFORM=linux/amd64 pnpm release:local:linux
 ```
 
@@ -126,10 +135,16 @@ The local publish script:
 - generates `SHA256SUMS`
 - generates `latest.json`
 - creates or updates a draft GitHub Release for the package version tag
-- uploads all `release-assets/` files to the draft GitHub Release
+- uploads all `release-assets/` files to the draft GitHub Release with per-file retries
 - mirrors the same assets to R2 at `releases/<tag>/`
 - writes `latest.json` at the R2 bucket root
 - prunes R2 release folders to keep only the latest 3 semver versions
+
+Regenerate metadata without uploading when recovering manually:
+
+```bash
+node scripts/publish-release-assets.mjs --metadata-only
+```
 
 ## Required Local Configuration
 
@@ -152,8 +167,10 @@ security find-identity -v -p codesigning
 Optionally pin the signing identity:
 
 ```dotenv
-CSC_NAME="Developer ID Application: Muhammad Hanif (9M558GH62J)"
+CSC_NAME="Muhammad Hanif (9M558GH62J)"
 ```
+
+Electron Builder expects `CSC_NAME` without the `Developer ID Application:` prefix. The local macOS release script also strips that prefix for compatibility with older `.env` files.
 
 If using a `.p12` certificate export instead of Keychain, also set:
 
