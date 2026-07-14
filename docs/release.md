@@ -118,7 +118,7 @@ The local Linux build script:
 - runs `node:22-trixie` through Docker with `--platform linux/amd64`
 - installs dependencies with the pinned `pnpm` version from `package.json`
 - rebuilds native modules for Electron on Linux
-- builds the Linux AppImage, blockmap, updater metadata, and `.deb`
+- builds the Linux AppImage with its embedded blockmap, updater metadata, and `.deb`
 - copies all Linux release and updater artifacts to `release-assets/`
 
 Override Docker defaults when needed:

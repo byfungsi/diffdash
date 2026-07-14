@@ -128,7 +128,7 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Runs `node:22-trixie` through Docker with `--platform linux/amd64` by default.
 - Installs dependencies with the pinned `pnpm` version from `package.json`.
 - Rebuilds native modules for Electron on Linux.
-- Builds the Linux x64 AppImage, blockmap, updater metadata, and `.deb`.
+- Builds the Linux x64 AppImage with its embedded blockmap, updater metadata, and `.deb`.
 - Copies all Linux release and updater artifacts into `release-assets/`.
 
 `pnpm release:local:publish`:

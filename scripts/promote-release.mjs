@@ -76,7 +76,6 @@ function validateReleaseAssets(names) {
     ["macOS ARM64 metadata", (name) => name === "latest-mac-arm64.yml"],
     ["macOS Intel metadata", (name) => name === "latest-mac-x64.yml"],
     ["Linux x64 AppImage", (name) => /-linux-(?:x64|x86_64)\.AppImage$/.test(name)],
-    ["Linux AppImage blockmap", (name) => name.endsWith(".AppImage.blockmap")],
     ["Linux updater metadata", (name) => name === "latest-linux.yml"],
     ["Linux deb", (name) => /-linux-(?:x64|amd64|x86_64)\.deb$/.test(name)],
     ["release metadata", (name) => name === "latest.json"],
