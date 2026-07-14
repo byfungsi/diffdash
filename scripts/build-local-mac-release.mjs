@@ -68,6 +68,9 @@ if (!packageExisting) {
 for (const arch of archs) {
   const appPath = macAppPath(arch)
   const artifactPath = path.resolve("dist", `${productName}-${version}-mac-${arch}.dmg`)
+  const zipPath = path.resolve("dist", `${productName}-${version}-mac-${arch}.zip`)
+  const blockmapPath = `${zipPath}.blockmap`
+  const metadataPath = path.resolve("dist", "latest-mac.yml")
 
   if (packageExisting) {
     if (!existsSync(appPath)) {
@@ -100,6 +103,7 @@ for (const arch of archs) {
   }
 
   console.log(`Packaging macOS ${arch} DMG`)
+  rmSync(artifactPath, { force: true })
   run("pnpm", [
     "exec",
     "electron-builder",
@@ -113,14 +117,45 @@ for (const arch of archs) {
     "--publish=never",
   ])
 
+  console.log(`Packaging macOS ${arch} updater ZIP`)
+  rmSync(zipPath, { force: true })
+  rmSync(blockmapPath, { force: true })
+  rmSync(metadataPath, { force: true })
+  run("pnpm", [
+    "exec",
+    "electron-builder",
+    "--config",
+    electronBuilderConfig,
+    "--prepackaged",
+    appPath,
+    "--mac",
+    "zip",
+    `--${arch}`,
+    "--publish=never",
+  ])
+
   verifyApp(appPath)
 
   if (!existsSync(artifactPath)) {
     throw new Error(`Expected DMG was not created: ${artifactPath}`)
   }
+  if (!existsSync(zipPath)) throw new Error(`Expected updater ZIP was not created: ${zipPath}`)
+  if (!existsSync(metadataPath)) {
+    throw new Error(`Expected macOS updater metadata was not created: ${metadataPath}`)
+  }
+  const metadata = readFileSync(metadataPath, "utf8")
+  if (!metadata.includes(path.basename(zipPath)) || !metadata.includes(`version: ${version}`)) {
+    throw new Error(`macOS updater metadata does not reference ${path.basename(zipPath)}`)
+  }
 
   copyFileSync(artifactPath, path.join(releaseAssetsDir, path.basename(artifactPath)))
+  copyFileSync(zipPath, path.join(releaseAssetsDir, path.basename(zipPath)))
+  if (existsSync(blockmapPath)) {
+    copyFileSync(blockmapPath, path.join(releaseAssetsDir, path.basename(blockmapPath)))
+  }
+  copyFileSync(metadataPath, path.join(releaseAssetsDir, `latest-mac-${arch}.yml`))
   console.log(`Copied ${path.basename(artifactPath)} to ${releaseAssetsDir}`)
+  console.log(`Copied macOS ${arch} updater artifacts to ${releaseAssetsDir}`)
 }
 
 console.log(`Local macOS release assets are ready in ${releaseAssetsDir}`)

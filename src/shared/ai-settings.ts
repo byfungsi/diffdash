@@ -58,11 +58,13 @@ export class AIProviderModels extends Schema.Class<AIProviderModels>("AIProvider
 export class AISettings extends Schema.Class<AISettings>("AISettings")({
   provider: AIProvider,
   models: AIProviderModels,
+  telemetryEnabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
 }) {}
 
 /** Default AI settings for first launch and invalid/missing settings files. */
 export const DEFAULT_AI_SETTINGS = AISettings.make({
   provider: "auto",
+  telemetryEnabled: true,
   models: AIProviderModels.make({
     auto: "balance",
     claude: "claude-sonnet-5",

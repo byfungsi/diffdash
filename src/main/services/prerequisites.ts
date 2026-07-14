@@ -43,16 +43,15 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
       const cli = yield* CliService
       const config = yield* AppConfig
       const get = Effect.fn("Prerequisites.get")(function* () {
-        const [gitInstalled, ghInstalled, ghAuthenticated, installedCodingAgents] =
-          yield* Effect.all(
-            [
-              commandAvailable(cli, "git"),
-              commandAvailable(cli, "gh"),
-              ghAuthenticatedCheck(cli),
-              installedCodingAgentNames(cli),
-            ],
-            { concurrency: "unbounded" },
-          )
+        const [gitInstalled, githubCli, ghAuthenticated, installedCodingAgents] = yield* Effect.all(
+          [
+            commandAvailable(cli, "git"),
+            githubCliCheck(cli),
+            ghAuthenticatedCheck(cli),
+            installedCodingAgentNames(cli),
+          ],
+          { concurrency: "unbounded" },
+        )
         const diffDashCliPath = resolveExecutableInPath("diffdash")
 
         return AppPrerequisites.make({
@@ -62,7 +61,10 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
           diffDashCliPath,
           gitInstalled,
           ghAuthenticated,
-          ghInstalled,
+          ghInstalled: githubCli.installed,
+          ghSearchRepositoriesAvailable: githubCli.searchRepositoriesAvailable,
+          ghSupported: githubCli.supported,
+          ghVersion: githubCli.version,
           installedCodingAgents,
         })
       })
@@ -85,6 +87,58 @@ const commandAvailable = (cli: CliRunner, command: string) =>
     Effect.as(true),
     Effect.catchAll(() => Effect.succeed(false)),
   )
+
+const githubCliCheck = (cli: CliRunner) =>
+  cli.run("gh", ["--version"], { timeoutMs: 5_000 }).pipe(
+    Effect.flatMap((result) => {
+      const version = parseGitHubCliVersion(result.stdout)
+      return cli.run("gh", ["search", "repos", "--help"], { timeoutMs: 5_000 }).pipe(
+        Effect.as(true),
+        Effect.catchAll(() => Effect.succeed(false)),
+        Effect.map((searchRepositoriesAvailable) => ({
+          installed: true,
+          searchRepositoriesAvailable,
+          supported:
+            version !== null &&
+            isVersionAtLeast(version, MINIMUM_GITHUB_CLI_VERSION) &&
+            searchRepositoriesAvailable,
+          version,
+        })),
+      )
+    }),
+    Effect.catchAll(() =>
+      Effect.succeed({
+        installed: false,
+        searchRepositoriesAvailable: false,
+        supported: false,
+        version: null,
+      }),
+    ),
+  )
+
+const MINIMUM_GITHUB_CLI_VERSION = [2, 7, 0] as const
+
+/** Parses the semantic version reported by `gh --version`. */
+export const parseGitHubCliVersion = (output: string) => {
+  const match = /\bgh version v?(\d+)\.(\d+)\.(\d+)\b/i.exec(output)
+  if (match === null) return null
+
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  const patch = Number(match[3])
+  if (![major, minor, patch].every(Number.isSafeInteger)) return null
+
+  return `${major}.${minor}.${patch}`
+}
+
+const isVersionAtLeast = (version: string, minimum: readonly [number, number, number]) => {
+  const parts = version.split(".").map(Number)
+  for (const [index, minimumPart] of minimum.entries()) {
+    const part = parts[index] ?? 0
+    if (part !== minimumPart) return part > minimumPart
+  }
+  return true
+}
 
 const ghAuthenticatedCheck = (cli: CliRunner) =>
   cli.run("gh", ["auth", "status", "--hostname", "github.com"], { timeoutMs: 10_000 }).pipe(

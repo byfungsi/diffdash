@@ -1,4 +1,4 @@
-export type DownloadPlatform = "macos" | "linux"
+export type DownloadPlatform = "linux_appimage" | "linux_deb" | "macos"
 export type DownloadPlacement = "hero" | "footer"
 
 const distinctIdStorageKey = "diffdash.posthog.distinct_id"

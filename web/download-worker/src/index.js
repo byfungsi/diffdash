@@ -8,10 +8,21 @@ const platformMatchers = {
     preferredTokens: ["universal", "arm64", "mac", "darwin", "x64"],
   },
   linux: {
-    label: "Linux",
+    label: "Linux DEB",
     extensions: [".deb"],
     preferredTokens: ["x64", "amd64", "linux"],
   },
+  appimage: {
+    label: "Linux AppImage",
+    extensions: [".appimage"],
+    preferredTokens: ["x86_64", "x64", "amd64", "linux"],
+  },
+}
+
+const architectureAliases = {
+  amd64: ["amd64", "x64", "x86_64"],
+  x64: ["x64", "amd64", "x86_64"],
+  x86_64: ["x86_64", "x64", "amd64"],
 }
 
 const noStoreHeaders = {
@@ -29,6 +40,10 @@ export default {
     }
 
     const url = new URL(request.url)
+    const updateRequest = getUpdateRequest(url.pathname)
+    if (updateRequest) {
+      return handleUpdateRequest(request, env, updateRequest)
+    }
     const platform = getPlatform(url.pathname)
 
     if (!platform) {
@@ -37,6 +52,7 @@ export default {
           endpoints: {
             macos: "/macos",
             linux: "/linux",
+            linuxAppImage: "/linux/appimage",
           },
         },
         200,
@@ -44,7 +60,7 @@ export default {
     }
 
     try {
-      const asset = await findLatestAsset(env, platform, url.searchParams.get("arch"))
+      const asset = await findStableAsset(env, platform, url.searchParams.get("arch"))
 
       if (!asset) {
         return redirect(fallbackUrl)
@@ -57,12 +73,81 @@ export default {
   },
 }
 
+function getUpdateRequest(pathname) {
+  const segments = pathname.replace(/^\/+|\/+$/g, "").split("/")
+  if (segments[0] !== "updates" || segments[1] !== "stable") return undefined
+  const platform = segments[2]
+  const arch = segments[3]
+  const file = segments.slice(4).join("/")
+  if (platform === "macos" && (arch === "arm64" || arch === "x64")) {
+    return { platform, arch, file }
+  }
+  if (platform === "linux" && arch === "x64") return { platform, arch, file }
+  return undefined
+}
+
+async function handleUpdateRequest(request, env, updateRequest) {
+  if (!env.RELEASES_BUCKET) return new Response("Update storage unavailable", { status: 503 })
+
+  try {
+    const tag = await getStableTag(env.RELEASES_BUCKET)
+    if (!tag) return new Response("No stable release", { status: 404 })
+    const requestedFile = updateRequest.file
+    const metadataName = updateRequest.platform === "macos" ? "latest-mac.yml" : "latest-linux.yml"
+    if (requestedFile === metadataName) {
+      const storedName =
+        updateRequest.platform === "macos"
+          ? `latest-mac-${updateRequest.arch}.yml`
+          : "latest-linux.yml"
+      const object = await env.RELEASES_BUCKET.get(`${releasePrefix}${tag}/${storedName}`)
+      if (!object) return new Response("Update metadata not found", { status: 404 })
+      const body = request.method === "HEAD" ? null : await object.text()
+      return new Response(body, {
+        status: 200,
+        headers: {
+          ...noStoreHeaders,
+          "Content-Type": "application/yaml; charset=utf-8",
+        },
+      })
+    }
+
+    if (!isSafeUpdateAssetName(requestedFile, updateRequest)) {
+      return new Response("Update artifact not found", { status: 404 })
+    }
+    const objects = await listReleaseObjects(env.RELEASES_BUCKET, `${releasePrefix}${tag}/`)
+    const key = `${releasePrefix}${tag}/${requestedFile}`
+    if (!objects.some((object) => object.key === key)) {
+      return new Response("Update artifact not found", { status: 404 })
+    }
+    const baseUrl = String(env.PUBLIC_RELEASE_BASE_URL ?? "").replace(/\/+$/, "")
+    return redirect(`${baseUrl}/${releasePrefix}${tag}/${encodeURIComponent(requestedFile)}`)
+  } catch {
+    return new Response("Update feed unavailable", { status: 503 })
+  }
+}
+
+function isSafeUpdateAssetName(file, updateRequest) {
+  if (!file || file.includes("/") || file.includes("..")) return false
+  const normalized = file.toLowerCase()
+  if (updateRequest.platform === "macos") {
+    return (
+      normalized.includes(`-mac-${updateRequest.arch}.zip`) &&
+      (normalized.endsWith(".zip") || normalized.endsWith(".zip.blockmap"))
+    )
+  }
+  return (
+    (normalized.includes("-linux-x64") || normalized.includes("-linux-x86_64")) &&
+    (normalized.endsWith(".appimage") || normalized.endsWith(".appimage.blockmap"))
+  )
+}
+
 function getPlatform(pathname) {
-  const segment = pathname
-    .replace(/^\/+|\/+$/g, "")
-    .split("/")
-    .at(-1)
-    ?.toLowerCase()
+  const normalizedPath = pathname.replace(/^\/+|\/+$/g, "").toLowerCase()
+  const segment = normalizedPath.split("/").at(-1)
+
+  if (normalizedPath === "linux/appimage") {
+    return "appimage"
+  }
 
   if (segment === "mac" || segment === "macos" || segment === "darwin") {
     return "macos"
@@ -75,33 +160,21 @@ function getPlatform(pathname) {
   return undefined
 }
 
-async function findLatestAsset(env, platform, requestedArch) {
+async function findStableAsset(env, platform, requestedArch) {
   if (!env.RELEASES_BUCKET) {
     throw new Error("Missing RELEASES_BUCKET binding")
   }
 
-  const objects = await listReleaseObjects(env.RELEASES_BUCKET)
-  const releases = new Map()
+  const tag = await getStableTag(env.RELEASES_BUCKET)
+  if (!tag) return undefined
+  const objects = await listReleaseObjects(env.RELEASES_BUCKET, `${releasePrefix}${tag}/`)
+  const assets = []
 
   for (const object of objects) {
     const parsed = parseReleaseKey(object.key)
 
-    if (!parsed || !matchesPlatform(parsed.name, platform)) {
-      continue
-    }
-
-    const assets = releases.get(parsed.tag) ?? []
-    assets.push(parsed)
-    releases.set(parsed.tag, assets)
+    if (parsed?.tag === tag && matchesPlatform(parsed.name, platform)) assets.push(parsed)
   }
-
-  const latest = [...releases.entries()].toSorted(([left], [right]) => compareTags(right, left))[0]
-
-  if (!latest) {
-    return undefined
-  }
-
-  const [tag, assets] = latest
   const selected = assets.toSorted(
     (left, right) =>
       scoreAsset(right.name, platform, requestedArch) -
@@ -120,15 +193,24 @@ async function findLatestAsset(env, platform, requestedArch) {
   return { tag, name: selected.name, url }
 }
 
-async function listReleaseObjects(bucket, cursor, objects = []) {
-  const result = await bucket.list({ cursor, prefix: releasePrefix })
+async function getStableTag(bucket) {
+  const object = await bucket.get("stable.json")
+  if (!object) return undefined
+  const metadata = JSON.parse(await object.text())
+  return typeof metadata.tag === "string" && /^v?\d+\.\d+\.\d+(?:[-+].*)?$/.test(metadata.tag)
+    ? metadata.tag
+    : undefined
+}
+
+async function listReleaseObjects(bucket, prefix, cursor, objects = []) {
+  const result = await bucket.list({ cursor, prefix })
   const nextObjects = [...objects, ...result.objects]
 
   if (!result.truncated) {
     return nextObjects
   }
 
-  return listReleaseObjects(bucket, result.cursor, nextObjects)
+  return listReleaseObjects(bucket, prefix, result.cursor, nextObjects)
 }
 
 function parseReleaseKey(key) {
@@ -153,7 +235,7 @@ function scoreAsset(name, platform, requestedArch) {
   const matcher = platformMatchers[platform]
   let score = 0
 
-  if (requestedArch && normalizedName.includes(requestedArch.toLowerCase())) {
+  if (matchesArchitecture(normalizedName, requestedArch)) {
     score += 100
   }
 
@@ -166,33 +248,15 @@ function scoreAsset(name, platform, requestedArch) {
   return score
 }
 
-function compareTags(left, right) {
-  const leftVersion = parseSemver(left)
-  const rightVersion = parseSemver(right)
+function matchesArchitecture(name, requestedArch) {
+  const normalizedArch = requestedArch?.trim().toLowerCase()
 
-  if (!leftVersion || !rightVersion) {
-    return left.localeCompare(right)
+  if (!normalizedArch) {
+    return false
   }
 
-  return (
-    leftVersion.major - rightVersion.major ||
-    leftVersion.minor - rightVersion.minor ||
-    leftVersion.patch - rightVersion.patch
-  )
-}
-
-function parseSemver(tag) {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(tag)
-
-  if (!match) {
-    return undefined
-  }
-
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  }
+  const aliases = architectureAliases[normalizedArch] ?? [normalizedArch]
+  return aliases.some((alias) => name.includes(alias))
 }
 
 function redirect(url) {

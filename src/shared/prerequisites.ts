@@ -10,6 +10,9 @@ export type CodingAgentName = typeof CodingAgentName.Type
 export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequisites")({
   gitInstalled: Schema.Boolean,
   ghInstalled: Schema.Boolean,
+  ghVersion: Schema.NullOr(Schema.String),
+  ghSearchRepositoriesAvailable: Schema.Boolean,
+  ghSupported: Schema.Boolean,
   ghAuthenticated: Schema.Boolean,
   codingAgentInstalled: Schema.Boolean,
   installedCodingAgents: Schema.Array(CodingAgentName),
@@ -34,5 +37,8 @@ export const EMPTY_APP_PREREQUISITES = AppPrerequisites.make({
   gitInstalled: false,
   ghAuthenticated: false,
   ghInstalled: false,
+  ghSearchRepositoriesAvailable: false,
+  ghSupported: false,
+  ghVersion: null,
   installedCodingAgents: [],
 })

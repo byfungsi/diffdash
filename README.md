@@ -50,15 +50,43 @@ pnpm preview
 
 After building from source, run `pnpm exec diffdash [path]` to open DiffDash on a local repository review. When `[path]` is omitted, the CLI uses the current directory. If DiffDash is already running, the existing window is focused and navigated to that local diff.
 
+Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. The path defaults to the current directory. For PR reviews, DiffDash copies committed Git data into an isolated worktree pool under `~/.diffdash/worktree-pool`, fetches the exact PR head, and runs the agent there without switching or cleaning your checkout.
+
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 
-Build a Linux deb with:
+Linux AppImages are portable. Make the downloaded file executable and open it directly; they do not install a global `diffdash` CLI.
+
+Build both Linux packages with:
 
 ```bash
-pnpm dist:linux:deb
+pnpm dist:linux
 ```
 
+Build only the Debian package with `pnpm dist:linux:deb`.
+
 See `docs/release.md` for production packaging, signing, and publishing notes.
+
+## Anonymous Telemetry
+
+DiffDash can send anonymous installation and product-usage events to the configured PostHog
+project. The first-run checkbox is enabled by default, but no telemetry is sent until onboarding is
+completed. DiffDash does not collect source code, repository details, paths, prompts, comments,
+personal information, or raw error messages. Autocapture, session replay, person profiles, and
+geolocation enrichment are disabled.
+
+The preference is stored in `~/.config/diffdash/settings.json`. To opt out manually, set
+`telemetryEnabled` to `false` and restart DiffDash:
+
+```json
+{
+  "telemetryEnabled": false
+}
+```
+
+Keep the existing `provider` and `models` fields when editing the file. Packaged builds read the
+public PostHog project configuration from `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` at build time;
+the Electron build falls back to the same values in `web/landing/.env`, and analytics is a no-op
+when either value is missing.
 
 ## Quality Gates
 

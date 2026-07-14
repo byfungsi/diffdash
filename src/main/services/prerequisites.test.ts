@@ -6,7 +6,7 @@ import { join } from "node:path"
 
 import { AppConfig } from "./app-config"
 import { CliError, CliService, type CliResult } from "./cli"
-import { Prerequisites, resolveExecutableInPath } from "./prerequisites"
+import { parseGitHubCliVersion, Prerequisites, resolveExecutableInPath } from "./prerequisites"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-prerequisites-test-"))),
@@ -53,10 +53,12 @@ const makeLayer = (
     readonly availableCommands: ReadonlySet<string>
     readonly diffDashCliPath?: string
     readonly ghAuthenticated?: boolean
+    readonly ghSearchRepositoriesAvailable?: boolean
+    readonly ghVersion?: string
   },
 ) =>
   Prerequisites.layer.pipe(
-    Layer.provideMerge(fakeCliLayer(options.availableCommands, options.ghAuthenticated ?? true)),
+    Layer.provideMerge(fakeCliLayer(options)),
     Layer.provide(
       AppConfig.layer({
         databasePath: join(directory, "test.sqlite"),
@@ -95,6 +97,9 @@ describe("Prerequisites", () => {
 
       expect(status.gitInstalled).toBe(true)
       expect(status.ghInstalled).toBe(true)
+      expect(status.ghVersion).toBe("2.76.1")
+      expect(status.ghSearchRepositoriesAvailable).toBe(true)
+      expect(status.ghSupported).toBe(true)
       expect(status.ghAuthenticated).toBe(true)
       expect(status.codingAgentInstalled).toBe(true)
       expect(status.installedCodingAgents).toEqual(["claude"])
@@ -102,6 +107,56 @@ describe("Prerequisites", () => {
       expect(status.diffDashCliPath).toBe(diffDashPath)
     }),
   )
+
+  it.scoped("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const status = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.get
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            availableCommands: new Set(["gh"]),
+            ghVersion: "1.14.0",
+          }),
+        ),
+      )
+
+      expect(status.ghInstalled).toBe(true)
+      expect(status.ghVersion).toBe("1.14.0")
+      expect(status.ghSearchRepositoriesAvailable).toBe(true)
+      expect(status.ghSupported).toBe(false)
+    }),
+  )
+
+  it.scoped("requires the gh search repos capability even when auth succeeds", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const status = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.get
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            availableCommands: new Set(["gh"]),
+            ghSearchRepositoriesAvailable: false,
+          }),
+        ),
+      )
+
+      expect(status.ghAuthenticated).toBe(true)
+      expect(status.ghVersion).toBe("2.76.1")
+      expect(status.ghSearchRepositoriesAvailable).toBe(false)
+      expect(status.ghSupported).toBe(false)
+    }),
+  )
+
+  it("parses standard and v-prefixed GitHub CLI versions", () => {
+    expect(parseGitHubCliVersion("gh version 2.7.0 (2022-02-10)")).toBe("2.7.0")
+    expect(parseGitHubCliVersion("gh version v2.76.1\nhttps://github.com/cli/cli")).toBe("2.76.1")
+    expect(parseGitHubCliVersion("gh development build")).toBeNull()
+  })
 
   it.scoped("installs the bundled diffdash CLI into the first writable PATH directory", () =>
     Effect.gen(function* () {
@@ -175,31 +230,55 @@ describe("Prerequisites", () => {
   )
 })
 
-const fakeCliLayer = (availableCommands: ReadonlySet<string>, ghAuthenticated: boolean) =>
+const fakeCliLayer = (options: {
+  readonly availableCommands: ReadonlySet<string>
+  readonly ghAuthenticated?: boolean
+  readonly ghSearchRepositoriesAvailable?: boolean
+  readonly ghVersion?: string
+}) =>
   Layer.succeed(
     CliService,
     CliService.of({
       run: (command, args) => {
         if (command === "gh" && args[0] === "auth") {
-          return availableCommands.has("gh") && ghAuthenticated
+          return options.availableCommands.has("gh") && (options.ghAuthenticated ?? true)
             ? Effect.succeed(cliResult(command, args))
             : Effect.fail(cliError(command, args))
         }
 
-        return availableCommands.has(command)
+        if (command === "gh" && args[0] === "--version") {
+          return options.availableCommands.has("gh")
+            ? Effect.succeed(
+                cliResult(command, args, `gh version ${options.ghVersion ?? "2.76.1"}`),
+              )
+            : Effect.fail(cliError(command, args))
+        }
+
+        if (command === "gh" && args[0] === "search") {
+          return options.availableCommands.has("gh") &&
+            (options.ghSearchRepositoriesAvailable ?? true)
+            ? Effect.succeed(cliResult(command, args))
+            : Effect.fail(cliError(command, args))
+        }
+
+        return options.availableCommands.has(command)
           ? Effect.succeed(cliResult(command, args))
           : Effect.fail(cliError(command, args))
       },
     }),
   )
 
-const cliResult = (command: string, args: readonly string[]): CliResult => ({
+const cliResult = (
+  command: string,
+  args: readonly string[],
+  stdout = `${command} ok`,
+): CliResult => ({
   args,
   command,
   cwd: null,
   exitCode: 0,
   stderr: "",
-  stdout: `${command} ok`,
+  stdout,
 })
 
 const cliError = (command: string, args: readonly string[]) =>

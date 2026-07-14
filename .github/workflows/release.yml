@@ -329,10 +329,13 @@ jobs:
           process.exit(1)
           NODE
 
-      - name: Build DMG
+      - name: Build DMG and updater ZIP
         env:
           APP_PATH: ${{ matrix.appPath }}
-        run: pnpm exec electron-builder --config "${ELECTRON_BUILDER_CONFIG}" --prepackaged "${APP_PATH}" --mac dmg --${{ matrix.arch }} --publish=never
+        run: |
+          pnpm exec electron-builder --config "${ELECTRON_BUILDER_CONFIG}" --prepackaged "${APP_PATH}" --mac dmg --${{ matrix.arch }} --publish=never
+          pnpm exec electron-builder --config "${ELECTRON_BUILDER_CONFIG}" --prepackaged "${APP_PATH}" --mac zip --${{ matrix.arch }} --publish=never
+          mv dist/latest-mac.yml "dist/latest-mac-${{ matrix.arch }}.yml"
 
       - name: Verify macOS signing and notarization
         env:
@@ -342,16 +345,20 @@ jobs:
           spctl -a -vv --type exec "${APP_PATH}"
           xcrun stapler validate "${APP_PATH}"
 
-      - name: Upload DMG artifact
+      - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-macos-${{ matrix.arch }}
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/latest-mac-*.yml
           if-no-files-found: error
           retention-days: 1
 
   build-linux:
-    name: Build Linux x64 DEB
+    name: Build Linux x64 packages
     needs: checks
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
@@ -378,18 +385,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build DEB
+      - name: Build Linux packages
         run: |
           pnpm assets:icons
           pnpm native:electron
           pnpm build
-          pnpm exec electron-builder --linux deb --x64 --publish=never
+          pnpm exec electron-builder --linux AppImage deb --x64 --publish=never
+          compgen -G "dist/*.AppImage" > /dev/null
+          compgen -G "dist/*.deb" > /dev/null
 
-      - name: Upload DEB artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-linux-x64
-          path: dist/*.deb
+          path: |
+            dist/*.AppImage
+            dist/*.blockmap
+            dist/*.deb
+            dist/latest-linux.yml
           if-no-files-found: error
           retention-days: 1
 
@@ -406,8 +419,10 @@ jobs:
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: "true"
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -421,54 +436,10 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
-      - name: Generate checksums and release metadata
-        run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS
-          cd ..
-          node <<'NODE'
-          const { createHash } = require("node:crypto")
-          const { readdirSync, readFileSync, statSync, writeFileSync } = require("node:fs")
-          const { join } = require("node:path")
-
-          const directory = "release-assets"
-          const tag = process.env.RELEASE_TAG
-          const version = tag.startsWith("v") ? tag.slice(1) : tag
-          const baseUrl = (process.env.R2_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "")
-          const files = readdirSync(directory)
-            .filter((file) => file !== "latest.json")
-            .sort((left, right) => left.localeCompare(right))
-          const assets = files.map((file) => {
-            const path = join(directory, file)
-            const bytes = readFileSync(path)
-            return {
-              name: file,
-              url: `${baseUrl}/releases/${tag}/${encodeURIComponent(file)}`,
-              size: statSync(path).size,
-              sha256: createHash("sha256").update(bytes).digest("hex"),
-            }
-          })
-
-          writeFileSync(
-            join(directory, "latest.json"),
-            `${JSON.stringify({ version, tag, generatedAt: new Date().toISOString(), assets }, null, 2)}\n`,
-          )
-          NODE
-
-      - name: Create or update draft GitHub Release
-        run: |
-          node scripts/extract-release-notes.mjs "${RELEASE_TAG}" > release-notes.md
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes-file release-notes.md
-            gh release upload "${RELEASE_TAG}" release-assets/* --clobber
-          else
-            gh release create "${RELEASE_TAG}" release-assets/* --draft --verify-tag --title "${RELEASE_TAG}" --notes-file release-notes.md
-          fi
-
       - name: Validate R2 configuration
         run: |
           missing=0
-          for name in CLOUDFLARE_ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE_URL; do
+          for name in CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PUBLIC_BASE_URL; do
             if [ -z "$(printenv "$name")" ]; then
               printf '%s\n' "Missing required R2 configuration: ${name}" >&2
               missing=1
@@ -476,61 +447,5 @@ jobs:
           done
           exit "${missing}"
 
-      - name: Upload release assets to R2
-        env:
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-        run: |
-          aws s3 cp release-assets "s3://${R2_BUCKET}/releases/${RELEASE_TAG}/" \
-            --recursive \
-            --exclude "latest.json" \
-            --cache-control "public, max-age=31536000, immutable" \
-            --endpoint-url "${R2_ENDPOINT}"
-
-          aws s3 cp release-assets/latest.json "s3://${R2_BUCKET}/latest.json" \
-            --cache-control "public, max-age=60" \
-            --content-type "application/json" \
-            --endpoint-url "${R2_ENDPOINT}"
-
-      - name: Prune R2 to latest 3 versions
-        env:
-          R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
-        run: |
-          aws s3api list-objects-v2 \
-            --bucket "${R2_BUCKET}" \
-            --prefix "releases/" \
-            --delimiter "/" \
-            --query 'CommonPrefixes[].Prefix' \
-            --output json \
-            --endpoint-url "${R2_ENDPOINT}" > r2-prefixes.json
-
-          node <<'NODE'
-          const { readFileSync, writeFileSync } = require("node:fs")
-
-          const prefixes = JSON.parse(readFileSync("r2-prefixes.json", "utf8"))
-          const parsed = prefixes
-            .map((prefix) => {
-              const match = /^releases\/v?(\d+)\.(\d+)\.(\d+)(?:[-+][^/]*)?\/$/.exec(prefix)
-              if (match === null) return null
-              return {
-                prefix,
-                major: Number(match[1]),
-                minor: Number(match[2]),
-                patch: Number(match[3]),
-              }
-            })
-            .filter(Boolean)
-            .sort((left, right) =>
-              right.major - left.major || right.minor - left.minor || right.patch - left.patch,
-            )
-
-          const keep = new Set(parsed.slice(0, 3).map((entry) => entry.prefix))
-          const remove = parsed.filter((entry) => !keep.has(entry.prefix)).map((entry) => entry.prefix)
-          writeFileSync("r2-delete-prefixes.txt", `${remove.join("\n")}${remove.length === 0 ? "" : "\n"}`)
-          NODE
-
-          while IFS= read -r prefix; do
-            if [ -z "${prefix}" ]; then
-              continue
-            fi
-            aws s3 rm "s3://${R2_BUCKET}/${prefix}" --recursive --endpoint-url "${R2_ENDPOINT}"
-          done < r2-delete-prefixes.txt
+      - name: Stage GitHub draft and immutable R2 assets
+        run: node scripts/publish-release-assets.mjs --tag "${RELEASE_TAG}" --assets-dir release-assets

@@ -13,12 +13,12 @@ Use this skill for DiffDash desktop releases only.
 - Release tags are annotated Git tags named `v<package.version>`.
 - Local release scripts are the default release path. Do not rely on GitHub Actions for normal releases.
 - GitHub Actions release workflow is manual-only fallback and should not be triggered unless explicitly requested.
-- `pnpm release:local` is the normal one-command flow: checks, macOS build/sign/notarize/staple/verify, Linux Docker `.deb` build, GitHub draft Release publishing, and R2 mirroring.
+- `pnpm release:local` is the normal one-command flow: checks, macOS build/sign/notarize/staple/verify, Linux Docker AppImage and `.deb` builds, GitHub draft Release publishing, and R2 mirroring.
 - `pnpm release:local:mac`, `pnpm release:local:linux`, and `pnpm release:local:publish` are partial commands for recovery/debugging.
 - GitHub Releases are created or updated as drafts first.
 - Release notes come from the matching `CHANGELOG.md` section.
 - Cloudflare R2 mirrors release assets and keeps only the latest 3 semver folders.
-- Linux `.deb` artifacts are built locally through Docker using a Linux container.
+- Linux AppImage and `.deb` artifacts are built locally through Docker using a Linux container.
 - Homebrew distribution is intentionally deferred.
 
 ## Required Checks
@@ -55,6 +55,7 @@ Use `pnpm release:check` when the user explicitly wants the full local gate befo
 9. Push `main` and tags only when the user explicitly asks to push.
 10. After confirming local `.env` and Docker are available, run `pnpm release:local` for the full release flow.
 11. Tell the user to review and publish the draft GitHub Release after local publishing succeeds.
+12. Run `pnpm release:promote -- --tag v<version>` only after the GitHub Release is published; this activates manual downloads and automatic updates.
 
 ## Local Release Environment
 
@@ -85,8 +86,8 @@ GH_TOKEN=github_token_with_repo_access
 CLOUDFLARE_ACCOUNT_ID=...
 R2_ACCESS_KEY_ID=...
 R2_SECRET_ACCESS_KEY=...
-R2_BUCKET=diffdash-releases
-R2_PUBLIC_BASE_URL=https://downloads.diffdash.dev
+R2_BUCKET=diffdash
+R2_PUBLIC_BASE_URL=https://download.usediffdash.com
 ```
 
 `GH_TOKEN` is optional if `gh auth status` already has access to `byfungsi/diffdash`.
@@ -103,6 +104,7 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Runs the macOS release stage unless `-- --skip-mac` is passed.
 - Runs the Linux Docker release stage unless `-- --skip-linux` is passed.
 - Runs the publish stage unless `-- --skip-publish` is passed.
+- Builds both macOS architectures by default so stable promotion cannot strand an installed architecture.
 - Warns if the release tag does not point at `HEAD`; `-- --require-tag-at-head` makes that a hard failure.
 
 `pnpm release:local:mac`:
@@ -112,9 +114,9 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Builds a signed `.app` with Electron Builder.
 - Notarizes with `scripts/notarize-app.mjs`, which shows status polling and retries transient status read failures.
 - Staples the accepted notarization ticket.
-- Packages the stapled app into a DMG.
+- Packages the stapled app into a DMG and updater ZIP.
 - Verifies `codesign`, Gatekeeper assessment, and stapling.
-- Copies the DMG into `release-assets/`.
+- Copies DMGs, ZIPs, blockmaps, and architecture-specific updater metadata into `release-assets/`.
 - Supports `-- --package-existing --skip-notarize --arch <arch>` only for recovery after an existing app has already been stapled and validated.
 - `scripts/notarize-app.mjs` supports `--submission-id <id>` to resume polling/stapling an existing Apple notarization submission without rebuilding or resubmitting.
 
@@ -125,8 +127,8 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Runs `node:22-trixie` through Docker with `--platform linux/amd64` by default.
 - Installs dependencies with the pinned `pnpm` version from `package.json`.
 - Rebuilds native modules for Electron on Linux.
-- Builds the Linux x64 `.deb`.
-- Copies `.deb` artifacts into `release-assets/`.
+- Builds the Linux x64 AppImage, blockmap, updater metadata, and `.deb`.
+- Copies all Linux release and updater artifacts into `release-assets/`.
 
 `pnpm release:local:publish`:
 
@@ -135,9 +137,15 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Creates or updates the draft GitHub Release for `v<package.version>`.
 - Uploads all `release-assets/` files to the draft GitHub Release with per-file retries.
 - Mirrors the same files to R2 at `releases/<tag>/`.
-- Updates root `latest.json` in R2.
-- Prunes R2 release folders to keep only the latest 3 semver versions.
+- Does not modify the promoted stable channel while the GitHub Release is a draft.
 - Supports `--metadata-only` to regenerate `SHA256SUMS` and `latest.json` without publishing.
+
+`pnpm release:promote -- --tag v<version>`:
+
+- Requires the GitHub Release to be published and non-prerelease.
+- Requires both macOS architectures and Linux x64 updater artifacts.
+- Verifies the R2 mirror before changing stable state.
+- Updates R2 `stable.json` and root `latest.json`, then prunes retained releases.
 
 ## First Release Flow
 

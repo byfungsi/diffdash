@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
+import { RepositorySearchRequest } from "../../shared/domain"
 import { CliError, CliService, type CliResult } from "./cli"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { GitHubCliParseError, GitHubProvider, parseGitHubRemote } from "./github"
@@ -24,34 +25,17 @@ const cliLayer = (stdout: string) =>
 
 const testLayer = (stdout: string) => GitHubProvider.layer.pipe(Layer.provide(cliLayer(stdout)))
 
-const repositorySearchJson = JSON.stringify({
-  data: {
-    viewer: {
-      repositories: {
-        nodes: [
-          {
-            description: "Desktop review app",
-            isPrivate: false,
-            name: "diffdash",
-            nameWithOwner: "fungsi/diffdash",
-            owner: { login: "fungsi" },
-            updatedAt: "2026-07-07T00:00:00Z",
-            url: "https://github.com/fungsi/diffdash",
-          },
-          {
-            description: "Another accessible repo",
-            isPrivate: true,
-            name: "internal-tools",
-            nameWithOwner: "fungsi/internal-tools",
-            owner: { login: "fungsi" },
-            updatedAt: "2026-07-06T00:00:00Z",
-            url: "https://github.com/fungsi/internal-tools",
-          },
-        ],
-      },
-    },
+const repositorySearchJson = JSON.stringify([
+  {
+    description: "Desktop review app",
+    fullName: "fungsi/diffdash",
+    isPrivate: false,
+    name: "diffdash",
+    owner: { login: "fungsi" },
+    updatedAt: "2026-07-07T00:00:00Z",
+    url: "https://github.com/fungsi/diffdash",
   },
-})
+])
 
 const pullRequestListJson = JSON.stringify([
   {
@@ -204,10 +188,15 @@ describe("GitHubProvider", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.effect("searches accessible GitHub repositories from viewer repo GraphQL JSON", () =>
+  it.effect("searches GitHub repositories across the displayed owner set", () =>
     Effect.gen(function* () {
       const github = yield* GitProvider
-      const repos = yield* github.searchRepositories("diffdash")
+      const repos = yield* github.searchRepositories(
+        RepositorySearchRequest.make({
+          owners: ["hanipcode", "fungsi", "xenithlabs"],
+          query: "diffdash",
+        }),
+      )
       const repo = repos[0]
 
       expect(repos).toHaveLength(1)
@@ -228,7 +217,9 @@ describe("GitHubProvider", () => {
   it.effect("supports owner-scoped repository search queries", () =>
     Effect.gen(function* () {
       const github = yield* GitProvider
-      const repos = yield* github.searchRepositories("owner:xenithlabs dashboard")
+      const repos = yield* github.searchRepositories(
+        RepositorySearchRequest.make({ owners: ["xenithlabs"], query: "dashboard" }),
+      )
 
       expect(repos.map((repo) => repo.nameWithOwner)).toEqual(["xenithlabs/xenith-dashboard"])
     }).pipe(
@@ -267,7 +258,9 @@ describe("GitHubProvider", () => {
 
     return Effect.gen(function* () {
       const github = yield* GitProvider
-      yield* github.searchRepositories("owner:xenithlabs dashboard")
+      yield* github.searchRepositories(
+        RepositorySearchRequest.make({ owners: ["xenithlabs"], query: "dashboard" }),
+      )
 
       expect(calls[0]).toMatchObject({ command: "gh" })
       expect(calls[0]?.args).toEqual([
@@ -284,7 +277,7 @@ describe("GitHubProvider", () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.effect("uses viewer repository affiliations instead of arbitrary public search", () => {
+  it.effect("uses gh repository search for all displayed owners", () => {
     const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = []
     const layer = GitHubProvider.layer.pipe(
       Layer.provide(
@@ -303,16 +296,24 @@ describe("GitHubProvider", () => {
 
     return Effect.gen(function* () {
       const github = yield* GitProvider
-      yield* github.searchRepositories("diffdash")
+      yield* github.searchRepositories(
+        RepositorySearchRequest.make({
+          owners: ["hanipcode", "fungsi", "xenithlabs"],
+          query: "diffdash",
+        }),
+      )
 
       expect(calls[0]?.command).toBe("gh")
       expect(calls[0]?.args).toEqual([
-        "api",
-        "graphql",
-        "-f",
-        expect.stringContaining("affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]"),
-        "-F",
-        "first=100",
+        "search",
+        "repos",
+        "diffdash",
+        "--owner",
+        "hanipcode,fungsi,xenithlabs",
+        "--json",
+        "fullName,name,owner,url,description,isPrivate,updatedAt",
+        "--limit",
+        "30",
       ])
     }).pipe(Effect.provide(layer))
   })
@@ -320,7 +321,11 @@ describe("GitHubProvider", () => {
   it.effect("fails with a typed error when gh returns malformed JSON", () =>
     Effect.gen(function* () {
       const github = yield* GitProvider
-      const result = yield* Effect.either(github.searchRepositories("diffdash"))
+      const result = yield* Effect.either(
+        github.searchRepositories(
+          RepositorySearchRequest.make({ owners: ["fungsi"], query: "diffdash" }),
+        ),
+      )
 
       expect(Either.isLeft(result)).toBe(true)
       if (Either.isLeft(result)) {
@@ -335,22 +340,18 @@ describe("GitHubProvider", () => {
   it.effect("fails with a typed error when parsed rows are missing owner or name", () =>
     Effect.gen(function* () {
       const github = yield* GitProvider
-      const result = yield* Effect.either(github.searchRepositories("diffdash"))
+      const result = yield* Effect.either(
+        github.searchRepositories(
+          RepositorySearchRequest.make({ owners: ["fungsi"], query: "diffdash" }),
+        ),
+      )
 
       expect(Either.isLeft(result)).toBe(true)
       if (Either.isLeft(result)) {
         expect(result.left).toBeInstanceOf(GitHubCliParseError)
       }
     }).pipe(
-      Effect.provide(
-        testLayer(
-          JSON.stringify({
-            data: {
-              viewer: { repositories: { nodes: [{ url: "https://github.com/fungsi/diffdash" }] } },
-            },
-          }),
-        ),
-      ),
+      Effect.provide(testLayer(JSON.stringify([{ url: "https://github.com/fungsi/diffdash" }]))),
     ),
   )
 

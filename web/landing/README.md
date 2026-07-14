@@ -40,7 +40,7 @@ VITE_POSTHOG_HOST=https://us.i.posthog.com
 Tracked events:
 
 - `$pageview`
-- `download_button_clicked` with `platform`, `placement`, `href`, `path`, `url`, and `title`
+- `download_button_clicked` with `platform` (`macos`, `linux_appimage`, or `linux_deb`), `placement`, `href`, `path`, `url`, and `title`
 
 Validate without publishing:
 

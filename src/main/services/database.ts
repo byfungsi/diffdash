@@ -4,11 +4,15 @@ import { dirname } from "node:path"
 import { mkdirSync } from "node:fs"
 
 import { AppConfig } from "./app-config"
+import { runDatabaseMigrations } from "./database-migrations"
 
 type SqlParams = readonly unknown[] | Record<string, unknown>
 
-interface TableInfoRow {
-  readonly name: string
+/** Synchronous statements available inside one SQLite transaction callback. */
+export interface DatabaseTransaction {
+  readonly get: <A>(sql: string, params?: SqlParams) => A | undefined
+  readonly all: <A>(sql: string, params?: SqlParams) => readonly A[]
+  readonly run: (sql: string, params?: SqlParams) => void
 }
 
 /** A typed SQLite persistence failure. */
@@ -27,6 +31,10 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
     ) => Effect.Effect<A | undefined, DatabaseError>
     readonly all: <A>(sql: string, params?: SqlParams) => Effect.Effect<readonly A[], DatabaseError>
     readonly run: (sql: string, params?: SqlParams) => Effect.Effect<void, DatabaseError>
+    readonly transaction: <A>(
+      operation: string,
+      execute: (transaction: DatabaseTransaction) => A,
+    ) => Effect.Effect<A, DatabaseError>
   }
 >() {
   static readonly layer = Layer.scoped(
@@ -38,11 +46,15 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
           try: () => {
             mkdirSync(dirname(config.databasePath), { recursive: true })
             const database = new BetterSqlite3(config.databasePath)
-            database.pragma("journal_mode = WAL")
-            database.pragma("foreign_keys = ON")
-            database.exec(schemaSql)
-            migrateWalkthroughsBaseSha(database)
-            return database
+            try {
+              database.pragma("journal_mode = WAL")
+              database.pragma("foreign_keys = ON")
+              runDatabaseMigrations(database)
+              return database
+            } catch (cause) {
+              database.close()
+              throw cause
+            }
           },
           catch: (cause) => DatabaseError.make({ operation: "open", cause }),
         }),
@@ -64,6 +76,12 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
           runStatement(db, "run", () => {
             db.prepare(sql).run(params)
           }),
+        transaction: <A>(operation: string, execute: (transaction: DatabaseTransaction) => A) =>
+          runStatement(
+            db,
+            operation,
+            db.transaction(() => executeTransaction(db, execute)),
+          ),
       })
     }),
   )
@@ -75,88 +93,45 @@ const runStatement = <A>(_db: BetterSqliteDatabase, operation: string, execute: 
     catch: (cause) => DatabaseError.make({ operation, cause }),
   })
 
-const schemaSql = `
-CREATE TABLE IF NOT EXISTS repos (
-  id TEXT PRIMARY KEY,
-  provider TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  name TEXT NOT NULL,
-  remote_url TEXT NOT NULL,
-  local_path TEXT,
-  is_favorite INTEGER NOT NULL DEFAULT 0,
-  last_opened_at TEXT,
-  last_synced_at TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(provider, owner, name)
-);
-
-CREATE TABLE IF NOT EXISTS pull_requests (
-  id TEXT PRIMARY KEY,
-  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-  number INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  author TEXT NOT NULL,
-  head_sha TEXT NOT NULL,
-  base_ref TEXT NOT NULL,
-  head_ref TEXT NOT NULL,
-  state TEXT NOT NULL,
-  last_fetched_at TEXT NOT NULL,
-  UNIQUE(repo_id, number)
-);
-
-CREATE TABLE IF NOT EXISTS viewed_files (
-  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-  pr_number INTEGER,
-  review_key TEXT NOT NULL,
-  file_path TEXT NOT NULL,
-  head_sha TEXT NOT NULL,
-  viewed_at TEXT NOT NULL,
-  PRIMARY KEY(repo_id, review_key, file_path, head_sha)
-);
-
-CREATE TABLE IF NOT EXISTS walkthroughs (
-  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-  pr_number INTEGER,
-  review_key TEXT NOT NULL,
-  base_sha TEXT NOT NULL,
-  head_sha TEXT NOT NULL,
-  prompt_version TEXT NOT NULL,
-  content_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(repo_id, review_key, base_sha, head_sha, prompt_version)
-);
-`
-
-const migrateWalkthroughsBaseSha = (database: BetterSqliteDatabase) => {
-  const columns = database
-    .prepare("PRAGMA table_info(walkthroughs)")
-    .all() as readonly TableInfoRow[]
-  if (columns.some((column) => column.name === "base_sha")) return
-
-  database.exec(`
-    DROP TABLE IF EXISTS walkthroughs_without_base_sha;
-
-    ALTER TABLE walkthroughs RENAME TO walkthroughs_without_base_sha;
-
-    CREATE TABLE walkthroughs (
-      repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-      pr_number INTEGER,
-      review_key TEXT NOT NULL,
-      base_sha TEXT NOT NULL,
-      head_sha TEXT NOT NULL,
-      prompt_version TEXT NOT NULL,
-      content_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      PRIMARY KEY(repo_id, review_key, base_sha, head_sha, prompt_version)
-    );
-
-    INSERT INTO walkthroughs (
-      repo_id, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
-    )
-    SELECT repo_id, pr_number, review_key, head_sha, head_sha, prompt_version, content_json, created_at
-    FROM walkthroughs_without_base_sha;
-
-    DROP TABLE walkthroughs_without_base_sha;
-  `)
+const executeTransaction = <A>(
+  database: BetterSqliteDatabase,
+  execute: (transaction: DatabaseTransaction) => A,
+) => {
+  let active = true
+  try {
+    const result = execute(makeTransaction(database, () => active))
+    if (Effect.isEffect(result) || isPromiseLike(result)) {
+      throw new Error("Database transaction callbacks must complete synchronously")
+    }
+    return result
+  } finally {
+    active = false
+  }
 }
+
+const makeTransaction = (
+  database: BetterSqliteDatabase,
+  isActive: () => boolean,
+): DatabaseTransaction => ({
+  get: <A>(sql: string, params: SqlParams = []) => {
+    assertTransactionActive(isActive)
+    // SAFETY: Transaction callers parse rows at their repository boundary before returning domain values.
+    return database.prepare(sql).get(params) as A | undefined
+  },
+  all: <A>(sql: string, params: SqlParams = []) => {
+    assertTransactionActive(isActive)
+    // SAFETY: Transaction callers parse rows at their repository boundary before returning domain values.
+    return database.prepare(sql).all(params) as readonly A[]
+  },
+  run: (sql: string, params: SqlParams = []) => {
+    assertTransactionActive(isActive)
+    database.prepare(sql).run(params)
+  },
+})
+
+const assertTransactionActive = (isActive: () => boolean) => {
+  if (!isActive()) throw new Error("Database transaction handle used after its callback completed")
+}
+
+const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
+  typeof value === "object" && value !== null && "then" in value && typeof value.then === "function"

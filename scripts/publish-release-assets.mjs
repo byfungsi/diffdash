@@ -47,6 +47,7 @@ if (assetFiles.length === 0) {
     `No release assets found in ${assetsDir}. Run pnpm release:local first or copy artifacts there.`,
   )
 }
+validateUpdaterAssets(assetFiles)
 
 assertCommand("gh", ["--version"])
 assertCommand("aws", ["--version"], { env: awsEnv })
@@ -61,9 +62,9 @@ if (metadataOnly) {
 
 publishGithubRelease()
 publishR2()
-pruneR2()
 
-console.log(`Published ${tag} assets from ${assetsDir}`)
+console.log(`Staged ${tag} assets from ${assetsDir}`)
+console.log(`Publish the GitHub draft, then run: pnpm release:promote -- --tag ${tag}`)
 
 function readOption(name) {
   const index = args.indexOf(name)
@@ -123,6 +124,34 @@ function writeLatestJson() {
   )
 }
 
+function validateUpdaterAssets(files) {
+  const requiredFiles = ["latest-mac-arm64.yml", "latest-mac-x64.yml", "latest-linux.yml"]
+  for (const file of requiredFiles) {
+    if (!files.includes(file)) throw new Error(`Missing required updater metadata: ${file}`)
+  }
+
+  const macArchitectures = ["arm64", "x64"]
+  for (const arch of macArchitectures) {
+    const zip = files.find((file) => file.endsWith(`-mac-${arch}.zip`))
+    if (zip === undefined) throw new Error(`Missing macOS ${arch} updater ZIP.`)
+    const metadata = readFileSync(path.join(assetsDir, `latest-mac-${arch}.yml`), "utf8")
+    if (!metadata.includes(`version: ${version}`) || !metadata.includes(zip)) {
+      throw new Error(`macOS ${arch} updater metadata does not reference ${zip}.`)
+    }
+  }
+
+  const appImage = files.find(
+    (file) =>
+      (file.includes("-linux-x64") || file.includes("-linux-x86_64")) && file.endsWith(".AppImage"),
+  )
+  if (appImage === undefined) throw new Error("Missing Linux x64 AppImage.")
+  if (!files.includes(`${appImage}.blockmap`)) throw new Error(`Missing ${appImage}.blockmap.`)
+  const linuxMetadata = readFileSync(path.join(assetsDir, "latest-linux.yml"), "utf8")
+  if (!linuxMetadata.includes(`version: ${version}`) || !linuxMetadata.includes(appImage)) {
+    throw new Error(`Linux updater metadata does not reference ${appImage}.`)
+  }
+}
+
 function publishGithubRelease() {
   const notesPath = path.join(
     mkdtempSync(path.join(tmpdir(), "diffdash-release-notes-")),
@@ -135,6 +164,12 @@ function publishGithubRelease() {
 
   const releaseExists = commandSucceeds("gh", ["release", "view", tag])
   if (releaseExists) {
+    const release = JSON.parse(
+      execFileSync("gh", ["release", "view", tag, "--json", "isDraft"], { encoding: "utf8" }),
+    )
+    if (!release.isDraft) {
+      throw new Error(`GitHub release ${tag} is already published; stage a new version instead.`)
+    }
     run("gh", ["release", "edit", tag, "--title", tag, "--notes-file", notesPath])
   } else {
     run("gh", [
@@ -164,8 +199,6 @@ function publishR2() {
       assetsDir,
       `s3://${r2Bucket}/releases/${tag}/`,
       "--recursive",
-      "--exclude",
-      "latest.json",
       "--cache-control",
       "public, max-age=31536000, immutable",
       "--endpoint-url",
@@ -173,77 +206,6 @@ function publishR2() {
     ],
     { env: awsEnv },
   )
-
-  run(
-    "aws",
-    [
-      "s3",
-      "cp",
-      path.join(assetsDir, "latest.json"),
-      `s3://${r2Bucket}/latest.json`,
-      "--cache-control",
-      "public, max-age=60",
-      "--content-type",
-      "application/json",
-      "--endpoint-url",
-      r2Endpoint,
-    ],
-    { env: awsEnv },
-  )
-}
-
-function pruneR2() {
-  const output = execFileSync(
-    "aws",
-    [
-      "s3api",
-      "list-objects-v2",
-      "--bucket",
-      r2Bucket,
-      "--prefix",
-      "releases/",
-      "--delimiter",
-      "/",
-      "--query",
-      "CommonPrefixes[].Prefix",
-      "--output",
-      "json",
-      "--endpoint-url",
-      r2Endpoint,
-    ],
-    { encoding: "utf8", env: awsEnv },
-  )
-
-  const prefixes = JSON.parse(output || "[]") ?? []
-  const parsed = prefixes
-    .map((prefix) => {
-      const match = /^releases\/v?(\d+)\.(\d+)\.(\d+)(?:[-+][^/]*)?\/$/.exec(prefix)
-      if (match === null) return null
-      return {
-        prefix,
-        major: Number(match[1]),
-        minor: Number(match[2]),
-        patch: Number(match[3]),
-      }
-    })
-    .filter(Boolean)
-    .toSorted(
-      (left, right) =>
-        right.major - left.major || right.minor - left.minor || right.patch - left.patch,
-    )
-
-  const keep = new Set(parsed.slice(0, 3).map((entry) => entry.prefix))
-  const remove = parsed.filter((entry) => !keep.has(entry.prefix)).map((entry) => entry.prefix)
-
-  for (const prefix of remove) {
-    run(
-      "aws",
-      ["s3", "rm", `s3://${r2Bucket}/${prefix}`, "--recursive", "--endpoint-url", r2Endpoint],
-      {
-        env: awsEnv,
-      },
-    )
-  }
 }
 
 function allAssetPaths() {

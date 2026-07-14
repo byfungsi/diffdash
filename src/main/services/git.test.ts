@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Either, Layer } from "effect"
 
 import { CliError, CliService, type CliResult } from "./cli"
-import { GitService } from "./git"
+import { GitService, LocalReviewChangedError } from "./git"
 
 const makeCliResult = (stdout: string, args: readonly string[]): CliResult => ({
   args,
@@ -85,7 +85,7 @@ index 0000000..3333333
                 makeCliResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
               )
             }
-            if (joined.includes("diff --no-ext-diff HEAD --")) {
+            if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
               return Effect.succeed(makeCliResult(trackedDiff, args))
             }
             if (joined.includes("ls-files --others --exclude-standard -z")) {
@@ -114,6 +114,7 @@ index 0000000..3333333
       const service = yield* GitService.pipe(Effect.provide(layer))
       const detail = yield* service.getLocalReviewDetail("/workspace/repo/src")
       const diff = yield* service.getLocalReviewDiff("/workspace/repo/src")
+      const snapshot = yield* service.getLocalReviewSnapshot("/workspace/repo/src")
 
       expect(detail).toMatchObject({
         branchName: "feature/local",
@@ -125,7 +126,55 @@ index 0000000..3333333
       expect(detail.files.map((file) => file.changeType)).toEqual(["modified", "added"])
       expect(diff.diff).toContain("diff --git a/src/app.ts b/src/app.ts")
       expect(diff.diff).toContain("diff --git a/notes.txt b/notes.txt")
+      expect(snapshot.baseRevision).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      expect(snapshot.headRevision).toBe(diff.headSha)
       expect(calls.some((call) => call.cwd === "/workspace/repo")).toBe(true)
+    }),
+  )
+
+  it.effect("FUN-80 AC: rejects a local snapshot that changes during repeated capture", () =>
+    Effect.gen(function* () {
+      let diffRead = 0
+      const cliLayer = Layer.succeed(
+        CliService,
+        CliService.of({
+          run: (_command, args) => {
+            const joined = args.join(" ")
+            if (joined.includes("rev-parse --show-toplevel")) {
+              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
+            }
+            if (joined.includes("rev-parse --verify HEAD")) {
+              return Effect.succeed(
+                makeCliResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
+              )
+            }
+            if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+              diffRead += 1
+              return Effect.succeed(
+                makeCliResult(
+                  `diff --git a/src/app.ts b/src/app.ts
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1 +1 @@
+-old
++new-${diffRead}`,
+                  args,
+                ),
+              )
+            }
+            if (joined.includes("ls-files --others --exclude-standard -z")) {
+              return Effect.succeed(makeCliResult("", args))
+            }
+            throw new Error(`Unexpected git call: ${joined}`)
+          },
+        }),
+      )
+      const layer = GitService.layer.pipe(Layer.provide(cliLayer))
+      const service = yield* GitService.pipe(Effect.provide(layer))
+      const result = yield* Effect.either(service.getLocalReviewSnapshot("/workspace/repo"))
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(LocalReviewChangedError)
     }),
   )
 })

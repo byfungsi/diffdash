@@ -243,6 +243,8 @@ blockquote {
   padding: 0 21px;
   border: 1px solid transparent;
   border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
   font-weight: 770;
   white-space: nowrap;
   transition:
@@ -271,6 +273,33 @@ blockquote {
 
 .button-secondary:hover {
   border-color: rgba(255, 255, 255, 0.58);
+}
+
+.button-secondary.is-active {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent);
+  box-shadow: 0 24px 70px rgba(34, 201, 131, 0.28);
+}
+
+.linux-download-options {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.linux-download-options p {
+  margin: 0;
+  font-size: 0.94rem;
+}
+
+.linux-download-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
 }
 
 .bento-section,
@@ -700,6 +729,7 @@ blockquote {
   }
 
   .hero-actions,
+  .linux-download-actions,
   .button {
     width: 100%;
   }
