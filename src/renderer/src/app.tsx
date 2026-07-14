@@ -1326,7 +1326,11 @@ export function App() {
     setSetupActionStatus("Installing diffdash in PATH...")
     try {
       const result = await window.diffDash.installDiffDashCli()
-      setSetupActionStatus(`Installed diffdash at ${result.path}`)
+      setSetupActionStatus(
+        result.pathSetupCommand === null
+          ? `Installed diffdash at ${result.path}`
+          : `Installed diffdash at ${result.path}. Add it to this shell with: ${result.pathSetupCommand}`,
+      )
       refreshDiagnostics()
     } catch (error) {
       setSetupActionStatus(formatError(error, "Could not install diffdash in PATH"))
@@ -2547,8 +2551,12 @@ const prerequisiteRows = (diagnostics: AppDiagnostics): readonly SetupRequiremen
     key: "diffdash-cli",
     title: "DiffDash CLI installed in PATH",
     description: "Install the diffdash command so you can open local reviews from any terminal.",
-    detail: diagnostics.diffDashCliPath ?? "diffdash was not found in PATH.",
-    done: diagnostics.diffDashCliInstalled,
+    detail: diagnostics.diffDashCliInPath
+      ? (diagnostics.diffDashCliPath ?? "diffdash is available in PATH.")
+      : diagnostics.diffDashCliInstalled
+        ? `${diagnostics.diffDashCliPath} exists, but its directory is not in PATH.`
+        : "diffdash was not found in PATH.",
+    done: diagnostics.diffDashCliInPath,
   },
 ]
 

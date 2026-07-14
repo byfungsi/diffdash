@@ -252,6 +252,7 @@ const readyPrerequisites = AppPrerequisites.make({
   checkedAt: "2026-07-08T00:00:00Z",
   codingAgentInstalled: true,
   diffDashCliInstalled: true,
+  diffDashCliInPath: true,
   diffDashCliPath: "/usr/local/bin/diffdash",
   gitInstalled: true,
   ghAuthenticated: true,
@@ -266,6 +267,7 @@ const missingPrerequisites = AppPrerequisites.make({
   checkedAt: "2026-07-08T00:00:00Z",
   codingAgentInstalled: false,
   diffDashCliInstalled: false,
+  diffDashCliInPath: false,
   diffDashCliPath: null,
   gitInstalled: false,
   ghAuthenticated: false,
@@ -353,6 +355,24 @@ describe("App browser interactions", () => {
       expect(calls.captureAnalytics).toHaveBeenCalledWith({ event: "onboarding_completed" })
       expect(document.body.textContent).toContain("Bookmarked Repos")
     })
+  })
+
+  it("shows the shell command when the CLI directory is not in PATH", async () => {
+    const pathSetupCommand = `export PATH='$HOME/.local/bin':$PATH`
+    installDiffDashApi({
+      appState: { onboardingCompleted: false },
+      cliInstallResult: { path: "/home/user/.local/bin/diffdash", pathSetupCommand },
+      diagnostics: missingPrerequisites,
+    })
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Set up DiffDash"))
+    const installButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Install in PATH",
+    )
+    installButton?.click()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain(pathSetupCommand))
   })
 
   it("persists an onboarding telemetry opt-out without sending events", async () => {
@@ -1294,6 +1314,7 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
 const installDiffDashApi = (
   options: {
     readonly appState?: AppState
+    readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
     readonly repositories?: readonly Repo[]
     readonly updateState?: AppUpdateState
@@ -1344,8 +1365,11 @@ const installDiffDashApi = (
     regenerateLocalWalkthrough: vi.fn<(rootPath: string) => Promise<StoredWalkthrough>>(
       async () => localWalkthrough,
     ),
-    installDiffDashCli: vi.fn<() => Promise<{ readonly path: string }>>(async () => ({
-      path: "/usr/local/bin/diffdash",
+    installDiffDashCli: vi.fn<
+      () => Promise<{ readonly path: string; readonly pathSetupCommand: string | null }>
+    >(async () => ({
+      path: options.cliInstallResult?.path ?? "/usr/local/bin/diffdash",
+      pathSetupCommand: options.cliInstallResult?.pathSetupCommand ?? null,
     })),
     installRepository: vi.fn<(localPath: string) => Promise<Repo>>(async (localPath) =>
       Repo.make({ ...repo, localPath }),

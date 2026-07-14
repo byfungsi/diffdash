@@ -17,6 +17,7 @@ export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequ
   codingAgentInstalled: Schema.Boolean,
   installedCodingAgents: Schema.Array(CodingAgentName),
   diffDashCliInstalled: Schema.Boolean,
+  diffDashCliInPath: Schema.Boolean,
   diffDashCliPath: Schema.NullOr(Schema.String),
   checkedAt: Schema.String,
 }) {}
@@ -26,6 +27,7 @@ export class DiffDashCliInstallResult extends Schema.Class<DiffDashCliInstallRes
   "DiffDashCliInstallResult",
 )({
   path: Schema.String,
+  pathSetupCommand: Schema.NullOr(Schema.String),
 }) {}
 
 /** Empty prerequisite status used before the first main-process check resolves. */
@@ -33,6 +35,7 @@ export const EMPTY_APP_PREREQUISITES = AppPrerequisites.make({
   checkedAt: "",
   codingAgentInstalled: false,
   diffDashCliInstalled: false,
+  diffDashCliInPath: false,
   diffDashCliPath: null,
   gitInstalled: false,
   ghAuthenticated: false,

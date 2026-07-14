@@ -338,12 +338,14 @@ Use an in-app install action or Homebrew cask to symlink that helper into a PATH
 
 `pnpm dist:linux` builds AppImage and deb packages on Linux. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:linux` when debugging Linux packaging only. The local Linux release stage uses Docker to build both x64 formats from a Linux container.
 
-The AppImage is portable and does not add `diffdash` to `PATH`:
+The AppImage is portable and does not add `diffdash` to `PATH` automatically:
 
 ```bash
 chmod +x DiffDash-*-linux-x86_64.AppImage
 ./DiffDash-*-linux-x86_64.AppImage
 ```
+
+The in-app **Install in PATH** action creates a durable user-local launcher that points to the AppImage rather than its temporary mount. Keep the AppImage at the same path afterward. If the selected user-local bin directory is not already in the shell's `PATH`, DiffDash displays the required `export PATH=...` command.
 
 The deb package installs:
 

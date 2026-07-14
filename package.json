@@ -103,7 +103,7 @@
     "appId": "dev.diffdash.app",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
-    "compression": "maximum",
+    "compression": "normal",
     "npmRebuild": false,
     "directories": {
       "output": "dist"

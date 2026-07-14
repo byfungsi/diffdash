@@ -7,6 +7,7 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
   {
     readonly databasePath: string
     readonly diffDashCliPath: string
+    readonly appImagePath: string
     readonly appVersion: string
     readonly architecture: string
     readonly packaged: boolean
@@ -21,6 +22,7 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
 >() {
   static readonly layer = (config: {
     readonly databasePath: string
+    readonly appImagePath?: string
     readonly diffDashCliPath?: string
     readonly appVersion?: string
     readonly architecture?: string
@@ -37,6 +39,7 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
       AppConfig,
       AppConfig.of({
         ...config,
+        appImagePath: config.appImagePath ?? "",
         appVersion: config.appVersion ?? "0.0.0",
         architecture: config.architecture ?? "unknown",
         diffDashCliPath: config.diffDashCliPath ?? "",

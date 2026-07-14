@@ -57,6 +57,8 @@ Use `pnpm release:check` when the user explicitly wants the full local gate befo
 10. After confirming local `.env` and Docker are available, run `pnpm release:local` for the full release flow.
 11. Tell the user to review and publish the draft GitHub Release after local publishing succeeds.
 12. Run `pnpm release:promote -- --tag v<version>` only after the GitHub Release is published; this activates manual downloads and automatic updates.
+13. Verify `https://download.usediffdash.com/stable.json` and the macOS ARM64, macOS x64, and Linux x64 updater metadata endpoints all return the promoted version. Do not call the release complete until these public checks pass.
+14. If the stable pointer is correct but updater routes return 404, run the download worker tests, confirm Wrangler is authenticated, deploy with `pnpm --dir web/download-worker run deploy`, and verify the public endpoints again.
 
 ## Local Release Environment
 
@@ -184,3 +186,4 @@ Use `patch` for fixes and small improvements, `minor` for new user-visible featu
 - Do not trigger GitHub Actions release runs while `.github/workflows/release.yml.disabled` is the archived workflow.
 - Do not restore or re-enable the Actions fallback unless the user explicitly asks for it.
 - Do not assume GitHub secrets are readable; GitHub Actions secrets are write-only after creation.
+- Do not report a release as complete while it is still a GitHub draft, has not been promoted, or its public updater feeds fail.

@@ -1,8 +1,21 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { chmodSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { AppConfig } from "./app-config"
 import { CliError, CliService, type CliResult } from "./cli"
@@ -47,10 +60,17 @@ const withHome = (path: string) =>
       }),
   )
 
+const waitForFile = async (path: string, attempts = 500): Promise<void> => {
+  if (existsSync(path) || attempts === 0) return
+  await new Promise((resolveWait) => setTimeout(resolveWait, 10))
+  return waitForFile(path, attempts - 1)
+}
+
 const makeLayer = (
   directory: string,
   options: {
     readonly availableCommands: ReadonlySet<string>
+    readonly appImagePath?: string
     readonly diffDashCliPath?: string
     readonly ghAuthenticated?: boolean
     readonly ghSearchRepositoriesAvailable?: boolean
@@ -61,6 +81,7 @@ const makeLayer = (
     Layer.provideMerge(fakeCliLayer(options)),
     Layer.provide(
       AppConfig.layer({
+        ...(options.appImagePath === undefined ? {} : { appImagePath: options.appImagePath }),
         databasePath: join(directory, "test.sqlite"),
         ...(options.diffDashCliPath === undefined
           ? {}
@@ -104,6 +125,7 @@ describe("Prerequisites", () => {
       expect(status.codingAgentInstalled).toBe(true)
       expect(status.installedCodingAgents).toEqual(["claude"])
       expect(status.diffDashCliInstalled).toBe(true)
+      expect(status.diffDashCliInPath).toBe(true)
       expect(status.diffDashCliPath).toBe(diffDashPath)
     }),
   )
@@ -182,6 +204,7 @@ describe("Prerequisites", () => {
       )
 
       expect(result.path).toBe(join(fakeBin, "diffdash"))
+      expect(result.pathSetupCommand).toBeNull()
       expect(readlinkSync(result.path)).toBe(sourcePath)
     }),
   )
@@ -199,9 +222,11 @@ describe("Prerequisites", () => {
       yield* withPath("")
       yield* withHome(home)
 
-      const result = yield* Effect.gen(function* () {
+      const { installedResult, diagnostics } = yield* Effect.gen(function* () {
         const prerequisites = yield* Prerequisites
-        return yield* prerequisites.installDiffDashCli
+        const createdInstallResult = yield* prerequisites.installDiffDashCli
+        const currentDiagnostics = yield* prerequisites.get
+        return { diagnostics: currentDiagnostics, installedResult: createdInstallResult }
       }).pipe(
         Effect.provide(
           makeLayer(directory, {
@@ -211,8 +236,109 @@ describe("Prerequisites", () => {
         ),
       )
 
-      expect(result.path).toBe(join(home, ".local", "bin", "diffdash"))
-      expect(readlinkSync(result.path)).toBe(sourcePath)
+      expect(installedResult.path).toBe(join(home, ".local", "bin", "diffdash"))
+      expect(installedResult.pathSetupCommand).toBe(
+        `export PATH='${join(home, ".local", "bin")}':$PATH`,
+      )
+      expect(readlinkSync(installedResult.path)).toBe(sourcePath)
+      expect(diagnostics.diffDashCliInstalled).toBe(true)
+      expect(diagnostics.diffDashCliInPath).toBe(false)
+    }),
+  )
+
+  it.scoped("installs a durable AppImage launcher outside the temporary mount", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const home = join(directory, "home")
+      const mountPath = join(directory, ".mount_DiffDash", "resources", "bin")
+      const sourcePath = join(mountPath, "diffdash")
+      const appImagePath = join(directory, "DiffDash user's build.AppImage")
+      const capturePath = join(directory, "captured-args")
+      yield* Effect.sync(() => {
+        mkdirSync(mountPath, { recursive: true })
+        mkdirSync(home, { recursive: true })
+        copyFileSync(resolve("resources/linux/bin/diffdash"), sourcePath)
+        chmodSync(sourcePath, 0o444)
+        writeFileSync(
+          appImagePath,
+          '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\n',
+          "utf8",
+        )
+        chmodSync(appImagePath, 0o755)
+      })
+      yield* withPath("")
+      yield* withHome(home)
+
+      const result = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.installDiffDashCli
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            appImagePath,
+            availableCommands: new Set(),
+            diffDashCliPath: sourcePath,
+          }),
+        ),
+      )
+
+      yield* Effect.sync(() => {
+        rmSync(join(directory, ".mount_DiffDash"), { force: true, recursive: true })
+        const launch = spawnSync("/bin/sh", [result.path, "install", "project with spaces"], {
+          cwd: directory,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DIFFDASH_TEST_CAPTURE: capturePath,
+            PATH: "/usr/bin:/bin",
+          },
+        })
+        expect(launch.status).toBe(0)
+      })
+      yield* Effect.promise(() => waitForFile(capturePath))
+
+      expect(readFileSync(capturePath, "utf8").trim()).toBe(
+        `--diffdash-link-path=${join(realpathSync(directory), "project with spaces")}`,
+      )
+      const launcher = readFileSync(result.path, "utf8")
+      expect(launcher).toContain("Generated by the DiffDash AppImage CLI installer")
+      expect(launcher).not.toContain(sourcePath)
+    }),
+  )
+
+  it.scoped("replaces a stale CLI symlink into an old AppImage mount", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const fakeBin = join(directory, "bin")
+      const sourcePath = join(directory, "current-mount", "resources", "bin", "diffdash")
+      const appImagePath = join(directory, "DiffDash.AppImage")
+      const linkPath = join(fakeBin, "diffdash")
+      yield* Effect.sync(() => {
+        mkdirSync(fakeBin, { recursive: true })
+        mkdirSync(join(directory, "current-mount", "resources", "bin"), { recursive: true })
+        copyFileSync(resolve("resources/linux/bin/diffdash"), sourcePath)
+        writeFileSync(appImagePath, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 })
+        symlinkSync("/tmp/.mount_DiffDash/resources/bin/diffdash", linkPath)
+      })
+      yield* withPath(fakeBin)
+
+      const result = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.installDiffDashCli
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            appImagePath,
+            availableCommands: new Set(),
+            diffDashCliPath: sourcePath,
+          }),
+        ),
+      )
+
+      expect(result.path).toBe(linkPath)
+      expect(readFileSync(linkPath, "utf8")).toContain(
+        "Generated by the DiffDash AppImage CLI installer",
+      )
     }),
   )
 

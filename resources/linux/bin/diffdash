@@ -53,8 +53,11 @@ else
   self_path="$0"
 fi
 
-app_root="$(dirname "$(dirname "$(dirname "$self_path")")")"
-app_binary="$app_root/diffdash-desktop"
+app_binary="${DIFFDASH_APPIMAGE_PATH:-}"
+if [ -z "$app_binary" ]; then
+  app_root="$(dirname "$(dirname "$(dirname "$self_path")")")"
+  app_binary="$app_root/diffdash-desktop"
+fi
 
 if [ ! -x "$app_binary" ]; then
   for candidate in \
