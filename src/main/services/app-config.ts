@@ -15,6 +15,7 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
     readonly posthogKey: string
     readonly settingsPath: string
     readonly tempDir: string
+    readonly remoteWorktreePoolPath: string
     readonly worktreePoolPath: string
   }
 >() {
@@ -29,6 +30,7 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
     readonly posthogKey?: string
     readonly settingsPath: string
     readonly tempDir: string
+    readonly remoteWorktreePoolPath?: string
     readonly worktreePoolPath?: string
   }) =>
     Layer.succeed(
@@ -42,6 +44,8 @@ export class AppConfig extends Context.Tag("@diffdash/AppConfig")<
         platform: config.platform ?? "unknown",
         posthogHost: config.posthogHost ?? "",
         posthogKey: config.posthogKey ?? "",
+        remoteWorktreePoolPath:
+          config.remoteWorktreePoolPath ?? join(config.tempDir, "remote-worktree-pool"),
         worktreePoolPath: config.worktreePoolPath ?? join(config.tempDir, "worktree-pool"),
       }),
     )
