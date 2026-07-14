@@ -12,7 +12,8 @@ Use this skill for DiffDash desktop releases only.
 - Release versions come from `package.json`.
 - Release tags are annotated Git tags named `v<package.version>`.
 - Local release scripts are the default release path. Do not rely on GitHub Actions for normal releases.
-- GitHub Actions release workflow is manual-only fallback and should not be triggered unless explicitly requested.
+- GitHub Actions releases are disabled. The archived workflow lives at `.github/workflows/release.yml.disabled` and must not be dispatched.
+- Restore the Actions fallback only when the user explicitly asks: rename the backup to `.github/workflows/release.yml`, commit it on the default branch, and re-enable the workflow in GitHub before dispatching it.
 - `pnpm release:local` is the normal one-command flow: checks, macOS build/sign/notarize/staple/verify, Linux Docker AppImage and `.deb` builds, GitHub draft Release publishing, and R2 mirroring.
 - `pnpm release:local:mac`, `pnpm release:local:linux`, and `pnpm release:local:publish` are partial commands for recovery/debugging.
 - GitHub Releases are created or updated as drafts first.
@@ -180,5 +181,6 @@ Use `patch` for fixes and small improvements, `minor` for new user-visible featu
 - Never invent release notes; use Changesets and `CHANGELOG.md`.
 - Never commit secrets or real credentials.
 - Do not use `changeset publish`; DiffDash releases desktop artifacts through local scripts, not npm.
-- Do not trigger GitHub Actions release runs unless the user explicitly asks for the manual fallback.
+- Do not trigger GitHub Actions release runs while `.github/workflows/release.yml.disabled` is the archived workflow.
+- Do not restore or re-enable the Actions fallback unless the user explicitly asks for it.
 - Do not assume GitHub secrets are readable; GitHub Actions secrets are write-only after creation.
