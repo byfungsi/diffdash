@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- 16e436b: Fix DiffDash CLI installation from AppImages and reduce cold-start delays on Linux.
+
 ## 0.2.0
 
 ### Minor Changes
