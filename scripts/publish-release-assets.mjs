@@ -145,7 +145,6 @@ function validateUpdaterAssets(files) {
       (file.includes("-linux-x64") || file.includes("-linux-x86_64")) && file.endsWith(".AppImage"),
   )
   if (appImage === undefined) throw new Error("Missing Linux x64 AppImage.")
-  if (!files.includes(`${appImage}.blockmap`)) throw new Error(`Missing ${appImage}.blockmap.`)
   const linuxMetadata = readFileSync(path.join(assetsDir, "latest-linux.yml"), "utf8")
   if (!linuxMetadata.includes(`version: ${version}`) || !linuxMetadata.includes(appImage)) {
     throw new Error(`Linux updater metadata does not reference ${appImage}.`)

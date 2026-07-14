@@ -125,6 +125,9 @@ const createAppLayer = () => {
       : { posthogKey: process.env.VITE_POSTHOG_KEY }),
     settingsPath: join(xdgConfigHome, "diffdash", "settings.json"),
     tempDir: join(app.getPath("temp"), "diffdash"),
+    remoteWorktreePoolPath:
+      process.env.DIFFDASH_REMOTE_WORKTREE_POOL_PATH ??
+      join(homedir(), ".diffdash", "remote-worktree-pool"),
     worktreePoolPath:
       process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool"),
   })

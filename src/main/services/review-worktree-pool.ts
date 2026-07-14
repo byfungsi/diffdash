@@ -15,6 +15,8 @@ const MAX_POOL_SLOTS = 10
 const LOCK_RETRY_MS = 50
 const LOCK_TIMEOUT_MS = 5_000
 const GIT_TIMEOUT_MS = 120_000
+const REMOTE_CLONE_TIMEOUT_MS = 10 * 60 * 1_000
+const REPOSITORY_LOCK_TIMEOUT_MS = 30 * 60 * 1_000
 const REPOSITORY_SCOPED_GIT_ENV = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",
@@ -49,8 +51,16 @@ const WorktreeSlot = Schema.Struct({
   lastError: Schema.NullOr(Schema.String),
 })
 
+const RemoteRepository = Schema.Struct({
+  owner: Schema.String,
+  repo: Schema.String,
+  clonedAt: Schema.String,
+  lastUsedAt: Schema.String,
+})
+
 const WorktreeManifest = Schema.Struct({
   version: Schema.Literal(MANIFEST_VERSION),
+  repositories: Schema.Array(RemoteRepository),
   slots: Schema.Array(WorktreeSlot),
 })
 
@@ -107,7 +117,8 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
     Effect.gen(function* () {
       const config = yield* AppConfig
       const cli = yield* CliStreamService
-      const poolRoot = resolve(config.worktreePoolPath)
+      const localPoolRoot = resolve(config.worktreePoolPath)
+      const remotePoolRoot = resolve(config.remoteWorktreePoolPath)
       const instanceId = randomUUID()
 
       const use = <A, E, R>(
@@ -115,16 +126,7 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
         run: (lease: ReviewWorktreeLease) => Effect.Effect<A, E, R>,
         onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
       ): Effect.Effect<A, E | ReviewWorktreePoolError, R> => {
-        if (input.sourcePath === null) {
-          return Effect.fail(
-            poolError(
-              "link-required",
-              "acquire",
-              `Link a local checkout for ${input.snapshot.detail.repoOwner}/${input.snapshot.detail.repoName} before running a review agent.`,
-              new Error("Repository has no linked checkout"),
-            ),
-          )
-        }
+        const poolRoot = input.sourcePath === null ? remotePoolRoot : localPoolRoot
 
         return Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
@@ -188,17 +190,24 @@ const reserveAndPrepare = (
       Effect.as(lease),
     )
 
+    const quarantine = (reason: string) =>
+      mutateManifest(poolRoot, (manifest) => ({
+        manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
+          ...slot,
+          state: "quarantined",
+          lease: null,
+          lastError: reason,
+        })),
+        value: undefined,
+      }))
+
     return yield* prepared.pipe(
+      Effect.interruptible,
+      Effect.onInterrupt(() =>
+        quarantine("Review workspace preparation was interrupted.").pipe(Effect.ignore),
+      ),
       Effect.catchAll((cause) =>
-        mutateManifest(poolRoot, (manifest) => ({
-          manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
-            ...slot,
-            state: "quarantined",
-            lease: null,
-            lastError: cause.reason,
-          })),
-          value: undefined,
-        })).pipe(Effect.zipRight(Effect.fail(cause))),
+        quarantine(cause.reason).pipe(Effect.zipRight(Effect.fail(cause))),
       ),
     )
   })
@@ -221,76 +230,99 @@ const prepareSlot = (
       : withFileLock(
           join(pathForRepository(poolRoot, evicted.owner, evicted.repo), "repository.lock"),
           () => evictSlot(poolRoot, cli, evicted),
+          REPOSITORY_LOCK_TIMEOUT_MS,
         )
 
   return evict.pipe(
     Effect.zipRight(
-      withFileLock(join(repositoryRoot, "repository.lock"), () =>
-        Effect.gen(function* () {
-          const sourcePath = input.sourcePath
-          if (sourcePath === null) {
-            return yield* poolError(
-              "link-required",
-              "prepare.source",
-              `Link a local checkout for ${owner}/${repo} before running a review agent.`,
-              new Error("Repository has no linked checkout"),
+      withFileLock(
+        join(repositoryRoot, "repository.lock"),
+        () =>
+          Effect.gen(function* () {
+            const sourcePath = input.sourcePath
+            yield* fsOperation("mkdir.repository", () =>
+              mkdir(repositoryRoot, { recursive: true, mode: 0o700 }),
             )
-          }
-          yield* fsOperation("mkdir.repository", () =>
-            mkdir(repositoryRoot, { recursive: true, mode: 0o700 }),
-          )
-          const barePath = join(repositoryRoot, "repository.git")
-          const bareExists = yield* pathExists(barePath)
-          if (!bareExists) {
-            yield* reportProgress(onProgress, "creating-repository")
-            yield* runGit(cli, ["clone", "--bare", "--no-hardlinks", "--", sourcePath, barePath])
-          }
-          const sourceRemote = yield* runGit(cli, ["-C", sourcePath, "remote", "get-url", "origin"])
-          yield* runGit(cli, [
-            "--git-dir",
-            barePath,
-            "remote",
-            "set-url",
-            "origin",
-            sourceRemote.stdout.trim(),
-          ])
+            const barePath = join(repositoryRoot, "repository.git")
+            let bareExists = yield* pathExists(barePath)
+            if (bareExists && !(yield* isBareRepository(cli, barePath))) {
+              yield* fsOperation("repository.removeInvalid", () =>
+                rm(barePath, { recursive: true, force: true }),
+              )
+              bareExists = false
+            }
+            if (!bareExists) {
+              yield* reportProgress(onProgress, "creating-repository")
+              if (sourcePath === null) {
+                yield* runGh(cli, ["repo", "clone", `${owner}/${repo}`, barePath, "--", "--bare"])
+                yield* recordRemoteRepositoryUse(poolRoot, owner, repo, true)
+              } else {
+                yield* runGit(cli, [
+                  "clone",
+                  "--bare",
+                  "--no-hardlinks",
+                  "--",
+                  sourcePath,
+                  barePath,
+                ])
+              }
+            }
+            if (sourcePath !== null) {
+              const sourceRemote = yield* runGit(cli, [
+                "-C",
+                sourcePath,
+                "remote",
+                "get-url",
+                "origin",
+              ])
+              yield* runGit(cli, [
+                "--git-dir",
+                barePath,
+                "remote",
+                "set-url",
+                "origin",
+                sourceRemote.stdout.trim(),
+              ])
+            }
 
-          const pullRef = `refs/diffdash/pull/${input.snapshot.detail.number}/head`
-          yield* reportProgress(onProgress, "fetching-pr-head")
-          yield* runGit(cli, [
-            "--git-dir",
-            barePath,
-            "fetch",
-            "--no-tags",
-            "--force",
-            "origin",
-            `+refs/pull/${input.snapshot.detail.number}/head:${pullRef}`,
-          ])
-          const fetched = yield* runGit(cli, [
-            "--git-dir",
-            barePath,
-            "rev-parse",
-            "--verify",
-            `${pullRef}^{commit}`,
-          ])
-          const fetchedSha = fetched.stdout.trim()
-          if (fetchedSha !== input.snapshot.headRevision) {
-            return yield* poolError(
-              "revision-changed",
-              "prepare.verifyRevision",
-              "The pull request changed while its isolated workspace was being prepared. Refresh the review and retry.",
-              new Error(`Expected ${input.snapshot.headRevision}, fetched ${fetchedSha}`),
+            const pullRef = `refs/diffdash/pull/${input.snapshot.detail.number}/head`
+            yield* reportProgress(onProgress, "fetching-pr-head")
+            yield* runGit(cli, [
+              "--git-dir",
+              barePath,
+              "fetch",
+              "--no-tags",
+              "--force",
+              "origin",
+              `+refs/pull/${input.snapshot.detail.number}/head:${pullRef}`,
+            ])
+            const fetched = yield* runGit(cli, [
+              "--git-dir",
+              barePath,
+              "rev-parse",
+              "--verify",
+              `${pullRef}^{commit}`,
+            ])
+            const fetchedSha = fetched.stdout.trim()
+            if (fetchedSha !== input.snapshot.headRevision) {
+              return yield* poolError(
+                "revision-changed",
+                "prepare.verifyRevision",
+                "The pull request changed while its isolated workspace was being prepared. Refresh the review and retry.",
+                new Error(`Expected ${input.snapshot.headRevision}, fetched ${fetchedSha}`),
+              )
+            }
+
+            yield* reportProgress(onProgress, "checking-out-revision")
+            yield* recreateWorktree(
+              cli,
+              barePath,
+              pathForSlot(poolRoot, reservation.slot),
+              fetchedSha,
             )
-          }
-
-          yield* reportProgress(onProgress, "checking-out-revision")
-          yield* recreateWorktree(
-            cli,
-            barePath,
-            pathForSlot(poolRoot, reservation.slot),
-            fetchedSha,
-          )
-        }),
+            if (sourcePath === null) yield* recordRemoteRepositoryUse(poolRoot, owner, repo, false)
+          }),
+        REPOSITORY_LOCK_TIMEOUT_MS,
       ),
     ),
   )
@@ -314,14 +346,16 @@ const restoreAndRelease = (
     )
     const barePath = join(repositoryRoot, "repository.git")
 
-    const cleanup = withFileLock(join(repositoryRoot, "repository.lock"), () =>
-      recreateWorktree(cli, barePath, lease.localPath, lease.headSha),
+    const cleanup = withFileLock(
+      join(repositoryRoot, "repository.lock"),
+      () => recreateWorktree(cli, barePath, lease.localPath, lease.headSha),
+      REPOSITORY_LOCK_TIMEOUT_MS,
     ).pipe(
       Effect.mapError((cause) =>
         poolError(
           "cleanup",
           "release.restore",
-          "DiffDash could not restore its isolated review workspace. The workspace was quarantined and will not be reused.",
+          "DiffDash could not restore its isolated review workspace. The workspace was quarantined and will be rebuilt before reuse.",
           cause,
         ),
       ),
@@ -442,7 +476,9 @@ const reserveSlot = (
       ? { ...slot, state: "available" as const, lease: null }
       : slot,
   )
-  const available = recovered.filter((slot) => slot.state === "available")
+  const available = recovered.filter(
+    (slot) => slot.state === "available" || slot.state === "quarantined",
+  )
   const preferredCandidates = available.filter((slot) => sameRepository(slot, owner, repo))
   // oxlint-disable-next-line unicorn/no-array-sort -- Sort mutates only the new filtered array.
   preferredCandidates.sort((left, right) => {
@@ -499,7 +535,7 @@ const reserveSlot = (
       ? [...recovered, slot]
       : recovered.map((item) => (item.id === id ? slot : item))
   return {
-    manifest: { version: MANIFEST_VERSION, slots },
+    manifest: { ...manifest, slots },
     value: {
       slot,
       evicted: existing !== undefined && !sameRepository(existing, owner, repo) ? existing : null,
@@ -536,10 +572,13 @@ const readManifest = (manifestPath: string): Effect.Effect<Manifest, ReviewWorkt
   Effect.tryPromise({
     try: async () => {
       try {
-        const json = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
+        const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
+        const json =
+          isRecord(parsed) && !("repositories" in parsed) ? { ...parsed, repositories: [] } : parsed
         return await Effect.runPromise(Schema.decodeUnknown(WorktreeManifest)(json))
       } catch (cause) {
-        if (isNodeError(cause, "ENOENT")) return { version: MANIFEST_VERSION, slots: [] }
+        if (isNodeError(cause, "ENOENT"))
+          return { version: MANIFEST_VERSION, repositories: [], slots: [] }
         throw cause
       }
     },
@@ -562,12 +601,13 @@ const writeManifest = (manifestPath: string, manifest: Manifest) =>
 const withFileLock = <A, E, R>(
   lockPath: string,
   use: () => Effect.Effect<A, E, R>,
+  timeoutMs = LOCK_TIMEOUT_MS,
 ): Effect.Effect<A, E | ReviewWorktreePoolError, R> =>
-  Effect.acquireUseRelease(acquireFileLock(lockPath), use, (token) =>
+  Effect.acquireUseRelease(acquireFileLock(lockPath, timeoutMs), use, (token) =>
     releaseFileLock(lockPath, token),
   )
 
-const acquireFileLock = (lockPath: string) =>
+const acquireFileLock = (lockPath: string, timeoutMs: number) =>
   Effect.tryPromise({
     try: async () => {
       await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
@@ -597,7 +637,7 @@ const acquireFileLock = (lockPath: string) =>
             await rm(lockPath, { force: true })
             continue
           }
-          if (Date.now() - startedAt >= LOCK_TIMEOUT_MS)
+          if (Date.now() - startedAt >= timeoutMs)
             throw new Error(`Timed out waiting for ${lockPath}`, { cause })
           // oxlint-disable-next-line eslint/no-await-in-loop -- Backoff intentionally precedes the next lock attempt.
           await new Promise((resolvePromise) => setTimeout(resolvePromise, LOCK_RETRY_MS))
@@ -691,6 +731,108 @@ const runGit = (cli: CliStreamRunner, args: readonly string[]) =>
       ),
     ) as Effect.Effect<CliStreamResult, ReviewWorktreePoolError>
 
+const runGh = (cli: CliStreamRunner, args: readonly string[]) =>
+  runCommand(
+    cli,
+    "gh",
+    args,
+    {
+      GH_PROMPT_DISABLED: "1",
+      GIT_TERMINAL_PROMPT: "0",
+    },
+    REMOTE_CLONE_TIMEOUT_MS,
+  )
+
+const runCommand = (
+  cli: CliStreamRunner,
+  command: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+  timeoutMs = GIT_TIMEOUT_MS,
+) =>
+  cli
+    .stream(command, args, {
+      timeoutMs,
+      killAfterMs: 1_000,
+      maxOutputBytes: 1024 * 1024,
+      env,
+      unsetEnv: REPOSITORY_SCOPED_GIT_ENV,
+    })
+    .pipe(
+      Stream.runLast,
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              poolError(
+                "git",
+                `${command}.run`,
+                `A ${command} command ended without a result.`,
+                new Error("No exit event"),
+              ),
+            ),
+          onSome: (event) => {
+            const { _tag: tag } = event
+            return tag === "CliExit"
+              ? Effect.succeed(event.result)
+              : Effect.fail(
+                  poolError(
+                    "git",
+                    `${command}.run`,
+                    `A ${command} command ended without an exit event.`,
+                    new Error(event.line),
+                  ),
+                )
+          },
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof ReviewWorktreePoolError
+          ? cause
+          : poolError(
+              "git",
+              `${command}.run`,
+              "DiffDash could not prepare its isolated Git workspace.",
+              cause,
+            ),
+      ),
+    ) as Effect.Effect<CliStreamResult, ReviewWorktreePoolError>
+
+const isBareRepository = (cli: CliStreamRunner, barePath: string) =>
+  runGit(cli, ["--git-dir", barePath, "rev-parse", "--is-bare-repository"]).pipe(
+    Effect.map((result) => result.stdout.trim() === "true"),
+    Effect.catchAll(() => Effect.succeed(false)),
+  )
+
+const recordRemoteRepositoryUse = (
+  poolRoot: string,
+  owner: string,
+  repo: string,
+  cloned: boolean,
+) =>
+  mutateManifest(poolRoot, (manifest) => {
+    const now = new Date().toISOString()
+    const existing = manifest.repositories.find((item) => sameRepository(item, owner, repo))
+    const repository = {
+      owner,
+      repo,
+      clonedAt: cloned || existing === undefined ? now : existing.clonedAt,
+      lastUsedAt: now,
+    }
+    return {
+      manifest: {
+        ...manifest,
+        repositories:
+          existing === undefined
+            ? [...manifest.repositories, repository]
+            : manifest.repositories.map((item) =>
+                sameRepository(item, owner, repo) ? repository : item,
+              ),
+      },
+      value: undefined,
+    }
+  })
+
 const pathExists = (path: string) =>
   Effect.promise(async () => {
     try {
@@ -778,6 +920,9 @@ const isProcessAlive = (pid: number | undefined) => {
 
 const isNodeError = (cause: unknown, code: string): cause is NodeJS.ErrnoException =>
   cause instanceof Error && "code" in cause && cause.code === code
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
 
 const poolError = (
   code: ReviewWorktreePoolError["code"],

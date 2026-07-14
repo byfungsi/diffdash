@@ -11,7 +11,7 @@ import {
 import { AIAgent, type AIAgentGenerateOptions } from "./ai-agent"
 import type { CliError } from "./cli"
 
-const WALKTHROUGH_GENERATION_TIMEOUT_MS = 90_000
+const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
 
 /** Input required to generate a reviewer-oriented walkthrough for a review diff. */
 export interface WalkthroughGenerationInput {

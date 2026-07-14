@@ -236,7 +236,7 @@ describe("WalkthroughService", () => {
       }).pipe(Effect.provide(layer))
 
       expect(calls[0]?.reasoningEffort).toBe("low")
-      expect(calls[0]?.timeoutMs).toBe(90_000)
+      expect(calls[0]?.timeoutMs).toBe(10 * 60 * 1_000)
     }),
   )
 

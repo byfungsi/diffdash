@@ -1,10 +1,18 @@
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
 
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "../../shared/domain"
@@ -21,9 +29,12 @@ interface GitFixture {
   readonly source: string
   readonly remote: string
   readonly pool: string
+  readonly remotePool: string
   readonly baseSha: string
   readonly headSha: string
+  readonly secondHeadSha: string
   readonly snapshot: PullRequestReviewSnapshot
+  readonly secondSnapshot: PullRequestReviewSnapshot
 }
 
 const fixture = Effect.acquireRelease(Effect.sync(makeGitFixture), (value) =>
@@ -202,33 +213,216 @@ describe("ReviewWorktreePool", () => {
 
       expect(providerStarted).toBe(false)
       expect(error).toMatchObject({ code: "revision-changed" })
-      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+      let manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
         readonly slots: ReadonlyArray<{ readonly state: string }>
       }
       expect(manifest.slots[0]?.state).toBe("quarantined")
+
+      providerStarted = false
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-rebuilt"),
+            threadId: ReviewThreadId.make("thread-rebuilt"),
+            snapshot: value.snapshot,
+            sourcePath: value.source,
+          },
+          () =>
+            Effect.sync(() => {
+              providerStarted = true
+            }),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(providerStarted).toBe(true)
+      manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly slots: ReadonlyArray<{ readonly state: string }>
+      }
+      expect(manifest.slots[0]?.state).toBe("available")
     }),
   )
 
-  it.scoped("requires a linked checkout without creating pool metadata", () =>
+  it.scoped("clones a remote repository with gh and reuses it across pull requests", () =>
     Effect.gen(function* () {
       const value = yield* fixture
-      const error = yield* Effect.gen(function* () {
+      const binPath = join(value.root, "bin")
+      const ghPath = join(binPath, "gh")
+      const ghLogPath = join(value.root, "gh.log")
+      mkdirSync(binPath)
+      writeFileSync(
+        ghPath,
+        '#!/bin/sh\nprintf "%s\\n" "$3" >> "$DIFFDASH_TEST_GH_LOG"\nexec git clone --bare "$DIFFDASH_TEST_REMOTE" "$4"\n',
+      )
+      chmodSync(ghPath, 0o755)
+      const inheritedPath = process.env.PATH
+      const inheritedRemote = process.env.DIFFDASH_TEST_REMOTE
+      const inheritedLog = process.env.DIFFDASH_TEST_GH_LOG
+      process.env.PATH = `${binPath}:${inheritedPath ?? ""}`
+      process.env.DIFFDASH_TEST_REMOTE = value.remote
+      process.env.DIFFDASH_TEST_GH_LOG = ghLogPath
+
+      yield* Effect.gen(function* () {
         const pool = yield* ReviewWorktreePool
-        return yield* pool
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-unlinked"),
+            threadId: ReviewThreadId.make("thread-unlinked"),
+            snapshot: value.snapshot,
+            sourcePath: null,
+          },
+          (lease) =>
+            Effect.sync(() => {
+              expect(lease.localPath.startsWith(value.remotePool)).toBe(true)
+              expect(git(lease.localPath, "rev-parse", "HEAD")).toBe(value.headSha)
+            }),
+        )
+        yield* Effect.promise(() => new Promise((resolvePromise) => setTimeout(resolvePromise, 5)))
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-unlinked-second"),
+            threadId: ReviewThreadId.make("thread-unlinked-second"),
+            snapshot: value.secondSnapshot,
+            sourcePath: null,
+          },
+          (lease) =>
+            Effect.sync(() => {
+              expect(git(lease.localPath, "rev-parse", "HEAD")).toBe(value.secondHeadSha)
+              expect(readFileSync(join(lease.localPath, "tracked.txt"), "utf8")).toBe(
+                "feature two\n",
+              )
+            }),
+        )
+
+        const leasedPaths: string[] = []
+        let releaseConcurrentRuns: (() => void) | undefined
+        const concurrentGate = new Promise<void>((resolvePromise) => {
+          releaseConcurrentRuns = resolvePromise
+        })
+        const concurrentRun = (
+          snapshot: PullRequestReviewSnapshot,
+          runId: string,
+          threadId: string,
+        ) =>
+          pool.use(
+            {
+              runId: AgentRunId.make(runId),
+              threadId: ReviewThreadId.make(threadId),
+              snapshot,
+              sourcePath: null,
+            },
+            (lease) =>
+              Effect.promise(async () => {
+                leasedPaths.push(lease.localPath)
+                if (leasedPaths.length === 2) releaseConcurrentRuns?.()
+                await concurrentGate
+              }),
+          )
+        yield* Effect.all(
+          [
+            concurrentRun(value.snapshot, "run-concurrent-one", "thread-concurrent-one"),
+            concurrentRun(value.secondSnapshot, "run-concurrent-two", "thread-concurrent-two"),
+          ],
+          { concurrency: "unbounded" },
+        )
+        expect(new Set(leasedPaths).size).toBe(2)
+      }).pipe(
+        Effect.provide(poolLayer(value)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (inheritedPath === undefined) delete process.env.PATH
+            else process.env.PATH = inheritedPath
+            if (inheritedRemote === undefined) delete process.env.DIFFDASH_TEST_REMOTE
+            else process.env.DIFFDASH_TEST_REMOTE = inheritedRemote
+            if (inheritedLog === undefined) delete process.env.DIFFDASH_TEST_GH_LOG
+            else process.env.DIFFDASH_TEST_GH_LOG = inheritedLog
+          }),
+        ),
+      )
+
+      expect(readFileSync(ghLogPath, "utf8").trim().split("\n")).toEqual(["Acme/Widget"])
+      const manifest = JSON.parse(
+        readFileSync(join(value.remotePool, "manifest.json"), "utf8"),
+      ) as {
+        readonly repositories: ReadonlyArray<{
+          readonly owner: string
+          readonly repo: string
+          readonly clonedAt: string
+          readonly lastUsedAt: string
+        }>
+        readonly slots: ReadonlyArray<{ readonly pullRequestNumber: number | null }>
+      }
+      expect(manifest.repositories).toHaveLength(1)
+      const repository = manifest.repositories[0]
+      expect(repository).toMatchObject({ owner: "Acme", repo: "Widget" })
+      if (repository === undefined) throw new Error("Expected remote repository metadata")
+      expect(Date.parse(repository.clonedAt)).not.toBeNaN()
+      expect(Date.parse(repository.lastUsedAt)).not.toBeNaN()
+      expect(repository.lastUsedAt >= repository.clonedAt).toBe(true)
+      expect(new Set(manifest.slots.map((slot) => slot.pullRequestNumber))).toEqual(new Set([1, 2]))
+      expect(() => readFileSync(join(value.pool, "manifest.json"), "utf8")).toThrow(/ENOENT/u)
+    }),
+  )
+
+  it.scoped("interrupts remote bootstrap and quarantines the reserved slot", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const binPath = join(value.root, "interrupt-bin")
+      const ghPath = join(binPath, "gh")
+      const startedPath = join(value.root, "gh-started")
+      mkdirSync(binPath)
+      writeFileSync(
+        ghPath,
+        '#!/bin/sh\nprintf "started\\n" > "$DIFFDASH_TEST_GH_STARTED"\nexec sleep 30\n',
+      )
+      chmodSync(ghPath, 0o755)
+      const inheritedPath = process.env.PATH
+      const inheritedStarted = process.env.DIFFDASH_TEST_GH_STARTED
+      process.env.PATH = `${binPath}:${inheritedPath ?? ""}`
+      process.env.DIFFDASH_TEST_GH_STARTED = startedPath
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const fiber = yield* pool
           .use(
             {
-              runId: AgentRunId.make("run-unlinked"),
-              threadId: ReviewThreadId.make("thread-unlinked"),
+              runId: AgentRunId.make("run-interrupted"),
+              threadId: ReviewThreadId.make("thread-interrupted"),
               snapshot: value.snapshot,
               sourcePath: null,
             },
             () => Effect.void,
           )
-          .pipe(Effect.flip)
-      }).pipe(Effect.provide(poolLayer(value)))
+          .pipe(Effect.fork)
+        yield* Effect.promise(() => waitForFile(startedPath))
+        expect(readFileSync(startedPath, "utf8")).toBe("started\n")
+        yield* Fiber.interrupt(fiber)
+      }).pipe(
+        Effect.provide(poolLayer(value)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (inheritedPath === undefined) delete process.env.PATH
+            else process.env.PATH = inheritedPath
+            if (inheritedStarted === undefined) delete process.env.DIFFDASH_TEST_GH_STARTED
+            else process.env.DIFFDASH_TEST_GH_STARTED = inheritedStarted
+          }),
+        ),
+      )
 
-      expect(error).toMatchObject({ code: "link-required" })
-      expect(() => readFileSync(join(value.pool, "manifest.json"), "utf8")).toThrow(/ENOENT/u)
+      const manifest = JSON.parse(
+        readFileSync(join(value.remotePool, "manifest.json"), "utf8"),
+      ) as {
+        readonly slots: ReadonlyArray<{
+          readonly state: string
+          readonly lease: unknown
+          readonly lastError: string | null
+        }>
+      }
+      expect(manifest.slots[0]).toMatchObject({
+        state: "quarantined",
+        lease: null,
+        lastError: "Review workspace preparation was interrupted.",
+      })
     }),
   )
 })
@@ -241,6 +435,7 @@ const poolLayer = (value: GitFixture) =>
         databasePath: join(value.root, "test.sqlite"),
         settingsPath: join(value.root, "settings.json"),
         tempDir: join(value.root, "temp"),
+        remoteWorktreePoolPath: value.remotePool,
         worktreePoolPath: value.pool,
       }),
     ),
@@ -251,6 +446,7 @@ function makeGitFixture(): GitFixture {
   const source = join(root, "source")
   const remote = join(root, "origin.git")
   const pool = join(root, "pool")
+  const remotePool = join(root, "remote-pool")
 
   git(root, "init", source)
   writeFileSync(join(source, ".gitignore"), "*.log\n")
@@ -266,6 +462,12 @@ function makeGitFixture(): GitFixture {
   commit(source, "feature")
   const headSha = git(source, "rev-parse", "HEAD")
   git(source, "push", "origin", `HEAD:refs/pull/1/head`)
+
+  writeFileSync(join(source, "tracked.txt"), "feature two\n")
+  git(source, "add", "tracked.txt")
+  commit(source, "feature two")
+  const secondHeadSha = git(source, "rev-parse", "HEAD")
+  git(source, "push", "origin", `HEAD:refs/pull/2/head`)
   git(source, "reset", "--hard", baseSha)
   writeFileSync(join(source, "user-local.txt"), "preserve me\n")
 
@@ -310,7 +512,36 @@ index 1111111..2222222 100644
     parsedDiff: parseUnifiedDiff(diff),
   })
 
-  return { root, source, remote, pool, baseSha, headSha, snapshot }
+  const secondSnapshot = PullRequestReviewSnapshot.make({
+    ...snapshot,
+    reviewKey: ReviewKey.make("github:acme/widget#2"),
+    headRevision: ReviewRevision.make(secondHeadSha),
+    detail: PullRequestDetail.make({
+      ...snapshot.detail,
+      number: 2,
+      title: "Feature two",
+      headRefName: "feature-two",
+      headRefOid: secondHeadSha,
+    }),
+    diff: PullRequestDiff.make({
+      ...snapshot.diff,
+      number: 2,
+      headRefOid: secondHeadSha,
+    }),
+  })
+
+  return {
+    root,
+    source,
+    remote,
+    pool,
+    remotePool,
+    baseSha,
+    headSha,
+    secondHeadSha,
+    snapshot,
+    secondSnapshot,
+  }
 }
 
 const commit = (cwd: string, message: string) =>
@@ -348,4 +579,13 @@ const sanitizedGitEnvironment = () => {
     delete env[key]
   }
   return env
+}
+
+const waitForFile = async (path: string, attemptsRemaining = 100): Promise<void> => {
+  if (existsSync(path)) return
+  if (attemptsRemaining > 0) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+    return waitForFile(path, attemptsRemaining - 1)
+  }
+  throw new Error(`Timed out waiting for ${path}`)
 }
