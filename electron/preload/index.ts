@@ -2,33 +2,79 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { IpcRendererEvent } from "electron"
 
 import type { AppState } from "../../src/shared/app-state"
+import type { AppUpdateState } from "../../src/shared/app-update"
+import type { AnalyticsEvent } from "../../src/shared/analytics"
 import type {
   LocalReviewDetail,
   LocalReviewDiff,
   PullRequestDetail,
   PullRequestDiff,
   PullRequestSummary,
+  RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
   Repo,
 } from "../../src/shared/domain"
 import type { AISettings } from "../../src/shared/ai-settings"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "../../src/shared/prerequisites"
+import type { LinkRepositoryCheckoutRequest } from "../../src/shared/repository-link"
+import type { ReviewAgentProgress } from "../../src/shared/review-agent"
 import type { StoredWalkthrough } from "../../src/shared/walkthrough"
+import type {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  ReviewThread,
+  ReviewThreadDetails,
+  ReviewThreadId,
+  RunReviewThreadAgentRequest,
+  ReviewThreadTarget,
+} from "../../src/shared/review-thread"
 
-const invoke = <A>(channel: string, ...args: readonly unknown[]): Promise<A> => {
-  // SAFETY: Each channel is registered in `electron/main/index.ts` with the matching return type.
-  return ipcRenderer.invoke(channel, ...args) as Promise<A>
+const invoke = async <A>(channel: string, ...args: readonly unknown[]): Promise<A> => {
+  try {
+    // SAFETY: Each channel is registered in `electron/main/index.ts` with the matching return type.
+    return (await ipcRenderer.invoke(channel, ...args)) as A
+  } catch (cause) {
+    throw new Error(`${channel} failed: ${ipcErrorMessage(cause)}`, { cause })
+  }
 }
 
+const ipcErrorMessage = (cause: unknown) =>
+  cause instanceof Error && cause.message.length > 0 ? cause.message : String(cause)
+
 const api = {
+  analytics: {
+    start: () => invoke<void>("analytics:start"),
+    capture: (event: AnalyticsEvent) => invoke<void>("analytics:capture", event),
+  },
+  updates: {
+    getState: () => invoke<AppUpdateState>("updates:getState"),
+    check: () => invoke<void>("updates:check"),
+    download: () => invoke<void>("updates:download"),
+    restartAndInstall: () => invoke<void>("updates:restartAndInstall"),
+    onStateChanged: (listener: (state: AppUpdateState) => void) => {
+      const wrapped = (_event: IpcRendererEvent, state: AppUpdateState) => listener(state)
+      ipcRenderer.on("updates:stateChanged", wrapped)
+      return () => {
+        ipcRenderer.removeListener("updates:stateChanged", wrapped)
+      }
+    },
+  },
   navigation: {
     getPendingLocalReview: () => invoke<string | null>("navigation:getPendingLocalReview"),
+    getPendingRepositoryLink: () => invoke<string | null>("navigation:getPendingRepositoryLink"),
     onOpenLocalReview: (listener: (rootPath: string) => void) => {
       const wrapped = (_event: IpcRendererEvent, rootPath: string) => listener(rootPath)
       ipcRenderer.on("navigation:openLocalReview", wrapped)
       return () => {
         ipcRenderer.removeListener("navigation:openLocalReview", wrapped)
+      }
+    },
+    onLinkRepository: (listener: (rootPath: string) => void) => {
+      const wrapped = (_event: IpcRendererEvent, rootPath: string) => listener(rootPath)
+      ipcRenderer.on("navigation:linkRepository", wrapped)
+      return () => {
+        ipcRenderer.removeListener("navigation:linkRepository", wrapped)
       }
     },
   },
@@ -51,7 +97,29 @@ const api = {
     favoriteRemote: (repo: RepositorySearchResult) =>
       invoke<Repo>("repositories:favoriteRemote", repo),
     addLocal: (localPath: string) => invoke<Repo>("repositories:addLocal", localPath),
+    install: (localPath: string) => invoke<Repo>("repositories:install", localPath),
+    link: (input: LinkRepositoryCheckoutRequest) => invoke<Repo>("repositories:link", input),
     selectLocalFolder: () => invoke<string | null>("repositories:selectLocalFolder"),
+  },
+  reviewThreads: {
+    list: (target: ReviewThreadTarget) =>
+      invoke<readonly ReviewThread[]>("reviewThreads:list", target),
+    create: (input: CreateReviewThreadRequest) =>
+      invoke<ReviewThreadDetails>("reviewThreads:create", input),
+    addUserMessage: (input: AddReviewThreadUserMessageRequest) =>
+      invoke<ReviewThreadDetails>("reviewThreads:addUserMessage", input),
+    get: (threadId: ReviewThreadId) =>
+      invoke<ReviewThreadDetails>("reviewThreads:get", { threadId }),
+    runAgent: (input: RunReviewThreadAgentRequest) =>
+      invoke<ReviewThreadDetails>("reviewThreads:runAgent", input),
+    onAgentProgress: (listener: (progress: ReviewAgentProgress) => void) => {
+      const wrapped = (_event: IpcRendererEvent, progress: ReviewAgentProgress) =>
+        listener(progress)
+      ipcRenderer.on("reviewThreads:agentProgress", wrapped)
+      return () => {
+        ipcRenderer.removeListener("reviewThreads:agentProgress", wrapped)
+      }
+    },
   },
   settings: {
     get: () => invoke<AISettings>("settings:get"),
@@ -62,8 +130,8 @@ const api = {
     update: (state: AppState) => invoke<AppState>("appState:update", state),
   },
   gitProvider: {
-    searchRepositories: (query: string) =>
-      invoke<readonly RepositorySearchResult[]>("gitProvider:searchRepositories", query),
+    searchRepositories: (request: RepositorySearchRequest) =>
+      invoke<readonly RepositorySearchResult[]>("gitProvider:searchRepositories", request),
     listSearchScopes: () =>
       invoke<readonly RepositorySearchScope[]>("gitProvider:listSearchScopes"),
     listPullRequests: (owner: string, name: string) =>

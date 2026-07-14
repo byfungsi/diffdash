@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"codex-thread-invalid"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"message-invalid","type":"agent_message","text":"{\"bodyMarkdown\":\"\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":2}}

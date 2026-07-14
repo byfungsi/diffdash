@@ -1,5 +1,5 @@
 import type { MouseEvent } from "react"
-import { useRef } from "react"
+import { useRef, useState } from "react"
 import { useGSAP } from "@gsap/react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
@@ -16,8 +16,9 @@ import {
 gsap.registerPlugin(ScrollTrigger, useGSAP)
 
 const downloadUrls = {
+  linuxAppImage: "https://download.usediffdash.com/linux/appimage",
+  linuxDeb: "https://download.usediffdash.com/linux",
   macos: "https://download.usediffdash.com/macos",
-  linux: "https://download.usediffdash.com/linux",
 }
 
 const bentoCards = [
@@ -106,6 +107,22 @@ function trackDownloadClick(
 
 /** Promotional landing page for DiffDash. */
 export function App() {
+  const [isLinuxDownloadsOpen, setIsLinuxDownloadsOpen] = useState(false)
+  const linuxDownloadButtonRef = useRef<HTMLButtonElement>(null)
+
+  function openLinuxDownloads(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault()
+    setIsLinuxDownloadsOpen(true)
+
+    window.requestAnimationFrame(() => {
+      linuxDownloadButtonRef.current?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "center",
+      })
+      linuxDownloadButtonRef.current?.focus({ preventScroll: true })
+    })
+  }
+
   return (
     <main className="landing-page overflow-x-hidden w-full max-w-full">
       <Navigation />
@@ -131,11 +148,7 @@ export function App() {
             >
               Download macOS
             </a>
-            <a
-              className="button button-secondary"
-              href={downloadUrls.linux}
-              onClick={(event) => trackDownloadClick(event, "linux", "hero")}
-            >
+            <a className="button button-secondary" href="#download" onClick={openLinuxDownloads}>
               Download Linux
             </a>
           </div>
@@ -185,7 +198,8 @@ export function App() {
       <section className="download-panel" id="download">
         <h2>Bring DiffDash into your next review.</h2>
         <p>
-          Choose the build for your machine. Downloads are served from the DiffDash release worker.
+          Choose the build for your machine. Linux downloads include a portable AppImage and a
+          Debian/Ubuntu package.
         </p>
         <div className="hero-actions centered-actions">
           <a
@@ -193,16 +207,40 @@ export function App() {
             href={downloadUrls.macos}
             onClick={(event) => trackDownloadClick(event, "macos", "footer")}
           >
-            Download macOS
+            Download Mac OS
           </a>
-          <a
-            className="button button-secondary"
-            href={downloadUrls.linux}
-            onClick={(event) => trackDownloadClick(event, "linux", "footer")}
+          <button
+            aria-controls="linux-download-options"
+            aria-expanded={isLinuxDownloadsOpen}
+            className={`button button-secondary ${isLinuxDownloadsOpen ? "is-active" : ""}`}
+            onClick={() => setIsLinuxDownloadsOpen((isOpen) => !isOpen)}
+            ref={linuxDownloadButtonRef}
+            type="button"
           >
             Download Linux
-          </a>
+          </button>
         </div>
+        {isLinuxDownloadsOpen ? (
+          <div className="linux-download-options" id="linux-download-options">
+            <p>Choose a portable AppImage or a Debian/Ubuntu package.</p>
+            <div className="linux-download-actions">
+              <a
+                className="button button-primary"
+                href={downloadUrls.linuxAppImage}
+                onClick={(event) => trackDownloadClick(event, "linux_appimage", "footer")}
+              >
+                Download AppImage
+              </a>
+              <a
+                className="button button-secondary"
+                href={downloadUrls.linuxDeb}
+                onClick={(event) => trackDownloadClick(event, "linux_deb", "footer")}
+              >
+                Download Debian/Ubuntu
+              </a>
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <footer className="site-footer">

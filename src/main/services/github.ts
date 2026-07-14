@@ -6,6 +6,7 @@ import {
   PullRequestDiff,
   PullRequestFile,
   PullRequestSummary,
+  type RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
   ReviewActor,
@@ -263,28 +264,8 @@ export const GitHubProvider = {
           Effect.as(true),
           Effect.catchAll(() => Effect.succeed(false)),
         ),
-        searchRepositories: Effect.fn("GitProvider.searchRepositories")(function (query) {
-          const searchQuery = parseRepositorySearchQuery(query)
-          if (searchQuery.owner !== null) {
-            return searchRepositoriesByOwner(
-              cli,
-              "searchRepositories",
-              searchQuery,
-              decodeRepositorySearch,
-            )
-          }
-
-          return listAccessibleRepositories(
-            cli,
-            "searchRepositories",
-            decodeViewerRepositories,
-          ).pipe(
-            Effect.map((repos) =>
-              searchQuery.term.length === 0
-                ? []
-                : repos.filter((repo) => matchesRepositoryQuery(repo, searchQuery)).slice(0, 30),
-            ),
-          )
+        searchRepositories: Effect.fn("GitProvider.searchRepositories")(function (request) {
+          return searchRepositories(cli, "searchRepositories", request, decodeRepositorySearch)
         }),
         listSearchScopes: Effect.fn("GitProvider.listSearchScopes")(function () {
           return Effect.gen(function* () {
@@ -511,16 +492,19 @@ const githubFileUrl = (owner: string, name: string, filePath: string, ref: strin
   return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/blob/${encodeURIComponent(ref)}/${encodedPath}`
 }
 
-const searchRepositoriesByOwner = (
+const searchRepositories = (
   cli: CliRunner,
   operation: string,
-  query: ReturnType<typeof parseRepositorySearchQuery>,
+  request: RepositorySearchRequest,
   decodeRepositorySearch: (
     operation: string,
     output: string,
   ) => Effect.Effect<readonly RepositorySearchResult[], GitHubCliParseError>,
 ) => {
-  if (query.term.length === 0) return Effect.succeed([] as readonly RepositorySearchResult[])
+  const query = request.query.trim()
+  const owners = [...new Set(request.owners.map((owner) => owner.trim()).filter(Boolean))]
+  if (query.length === 0 || owners.length === 0)
+    return Effect.succeed([] as readonly RepositorySearchResult[])
 
   return cli
     .run(
@@ -528,9 +512,9 @@ const searchRepositoriesByOwner = (
       [
         "search",
         "repos",
-        query.term,
+        query,
         "--owner",
-        query.owner ?? "",
+        owners.join(","),
         "--json",
         repositorySearchFields,
         "--limit",
@@ -539,29 +523,6 @@ const searchRepositoriesByOwner = (
       { timeoutMs: 20_000 },
     )
     .pipe(Effect.flatMap((result) => decodeRepositorySearch(operation, result.stdout)))
-}
-
-const parseRepositorySearchQuery = (query: string) => {
-  const normalizedQuery = query.trim().toLowerCase()
-  const ownerMatch = /(?:^|\s)(?:owner|org|user):([^\s]+)/.exec(normalizedQuery)
-  const owner = ownerMatch?.[1] ?? null
-  const term = normalizedQuery.replace(/(?:^|\s)(?:owner|org|user):[^\s]+/g, " ").trim()
-
-  return { owner, term }
-}
-
-const matchesRepositoryQuery = (
-  repo: RepositorySearchResult,
-  query: ReturnType<typeof parseRepositorySearchQuery>,
-) => {
-  if (query.owner !== null && repo.owner.toLowerCase() !== query.owner) return false
-
-  return (
-    repo.nameWithOwner.toLowerCase().includes(query.term) ||
-    repo.name.toLowerCase().includes(query.term) ||
-    repo.owner.toLowerCase().includes(query.term) ||
-    (repo.description?.toLowerCase().includes(query.term) ?? false)
-  )
 }
 
 const fetchPullRequestDetail = (

@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"claude-session-invalid"}
+{"type":"result","subtype":"success","is_error":false,"session_id":"claude-session-invalid","result":"{\"bodyMarkdown\":\"\"}","total_cost_usd":0.0001,"usage":{"input_tokens":5,"output_tokens":1}}

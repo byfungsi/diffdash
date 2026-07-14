@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { basename } from "node:path"
 
@@ -9,9 +9,19 @@ import {
   PullRequestFile,
   type DetectedRepositoryCheckout,
 } from "../../shared/domain"
+import { LocalReviewSnapshot } from "../../shared/review-context"
+import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
 import { CliService, type CliError } from "./cli"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+/** The local review changed while DiffDash was capturing one coherent snapshot. */
+export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChangedError>()(
+  "LocalReviewChangedError",
+  {
+    rootPath: Schema.String,
+  },
+) {}
 
 /** Main-process service for local Git repository inspection. */
 export class GitService extends Context.Tag("@diffdash/GitService")<
@@ -24,6 +34,9 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
     readonly currentBranch: (localPath: string) => Effect.Effect<string, CliError>
     readonly getLocalReviewDetail: (localPath: string) => Effect.Effect<LocalReviewDetail, CliError>
     readonly getLocalReviewDiff: (localPath: string) => Effect.Effect<LocalReviewDiff, CliError>
+    readonly getLocalReviewSnapshot: (
+      localPath: string,
+    ) => Effect.Effect<LocalReviewSnapshot, CliError | LocalReviewChangedError>
   }
 >() {
   static readonly layer = Layer.effect(
@@ -64,6 +77,45 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         })
       })
 
+      const getLocalReviewSnapshot = Effect.fn("GitService.getLocalReviewSnapshot")(function* (
+        localPath: string,
+      ) {
+        let diff: LocalReviewDiff | null = null
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          const before = yield* getLocalReviewDiff(localPath)
+          const after = yield* getLocalReviewDiff(before.rootPath)
+          if (
+            before.rootPath === after.rootPath &&
+            before.baseSha === after.baseSha &&
+            before.diffHash === after.diffHash
+          ) {
+            diff = after
+            break
+          }
+        }
+        if (diff === null) {
+          const rootPath = yield* detectRoot(localPath)
+          return yield* LocalReviewChangedError.make({ rootPath })
+        }
+        const branchName = yield* currentBranch(diff.rootPath).pipe(
+          Effect.map((branch) => (branch.length === 0 ? null : branch)),
+          Effect.catchAll(() => Effect.succeed(null)),
+        )
+        const parsedDiff = parseUnifiedDiff(diff.diff)
+        const detail = localReviewDetail(diff, branchName)
+
+        return LocalReviewSnapshot.make({
+          reviewKey: ReviewKey.make(
+            `local:${createHash("sha256").update(diff.rootPath).digest("hex")}`,
+          ),
+          baseRevision: ReviewRevision.make(diff.baseSha),
+          headRevision: ReviewRevision.make(diff.headSha),
+          detail,
+          diff,
+          parsedDiff,
+        })
+      })
+
       return GitService.of({
         detectRepository: Effect.fn("GitService.detectRepository")(function* (localPath: string) {
           const rootPath = yield* detectRoot(localPath)
@@ -75,37 +127,17 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         }),
         detectRoot,
         currentBranch,
-        getLocalReviewDetail: Effect.fn("GitService.getLocalReviewDetail")(function* (
-          localPath: string,
-        ) {
-          const diff = yield* getLocalReviewDiff(localPath)
-          const branchName = yield* currentBranch(diff.rootPath).pipe(
-            Effect.map((branch) => (branch.length === 0 ? null : branch)),
-            Effect.catchAll(() => Effect.succeed(null)),
-          )
-          const parsedDiff = parseUnifiedDiff(diff.diff)
-          const repoName = basename(diff.rootPath) || diff.rootPath
-
-          return LocalReviewDetail.make({
-            rootPath: diff.rootPath,
-            repoName,
-            branchName,
-            baseSha: diff.baseSha,
-            headSha: diff.headSha,
-            diffHash: diff.diffHash,
-            title: "Local changes",
-            files: parsedDiff.files.map((file) =>
-              PullRequestFile.make({
-                path: file.path,
-                additions: file.additions,
-                deletions: file.deletions,
-                changeType: file.status,
-              }),
-            ),
-            fetchedAt: diff.fetchedAt,
-          })
-        }),
+        getLocalReviewDetail: (localPath) =>
+          Effect.gen(function* () {
+            const diff = yield* getLocalReviewDiff(localPath)
+            const branchName = yield* currentBranch(diff.rootPath).pipe(
+              Effect.map((branch) => (branch.length === 0 ? null : branch)),
+              Effect.catchAll(() => Effect.succeed(null)),
+            )
+            return localReviewDetail(diff, branchName)
+          }),
         getLocalReviewDiff,
+        getLocalReviewSnapshot,
       })
     }),
   )
@@ -126,7 +158,7 @@ const localTrackedDiff = (rootPath: string, baseSha: string | null) =>
     const args =
       baseSha === null
         ? ["-C", rootPath, "diff", "--cached", "--no-ext-diff", "--"]
-        : ["-C", rootPath, "diff", "--no-ext-diff", "HEAD", "--"]
+        : ["-C", rootPath, "diff", "--no-ext-diff", baseSha, "--"]
     const result = yield* cli.run("git", args, { timeoutMs: 60_000 })
     return result.stdout
   })
@@ -167,3 +199,26 @@ const joinDiffSections = (sections: readonly string[]) =>
     .map((section) => section.trimEnd())
     .filter((section) => section.length > 0)
     .join("\n")
+
+const localReviewDetail = (diff: LocalReviewDiff, branchName: string | null) => {
+  const parsedDiff = parseUnifiedDiff(diff.diff)
+  const repoName = basename(diff.rootPath) || diff.rootPath
+  return LocalReviewDetail.make({
+    rootPath: diff.rootPath,
+    repoName,
+    branchName,
+    baseSha: diff.baseSha,
+    headSha: diff.headSha,
+    diffHash: diff.diffHash,
+    title: "Local changes",
+    files: parsedDiff.files.map((file) =>
+      PullRequestFile.make({
+        path: file.path,
+        additions: file.additions,
+        deletions: file.deletions,
+        changeType: file.status,
+      }),
+    ),
+    fetchedAt: diff.fetchedAt,
+  })
+}

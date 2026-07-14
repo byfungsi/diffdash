@@ -1,12 +1,51 @@
 #!/bin/sh
 set -eu
 
-case "${1:-}" in
-  -h|--help)
-    printf '%s\n' 'Usage: diffdash [path]'
-    exit 0
-    ;;
-esac
+usage() {
+  printf '%s\n' \
+    'Usage: diffdash [path]' \
+    '       diffdash install [path]'
+}
+
+for argument in "$@"; do
+  case "$argument" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+  esac
+done
+
+target_argument='--diffdash-local-path'
+target_path="${1:-$PWD}"
+
+if [ "${1:-}" = 'install' ]; then
+  shift
+
+  for argument in "$@"; do
+    case "$argument" in
+      -*)
+        printf 'Unknown option for `diffdash install`: %s\n' "$argument" >&2
+        printf '%s\n' 'Usage: diffdash install [path]' >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  if [ "$#" -gt 1 ]; then
+    printf '%s\n' \
+      'diffdash install accepts at most one path.' \
+      'Usage: diffdash install [path]' >&2
+    exit 2
+  fi
+
+  target_argument='--diffdash-link-path'
+  target_path="${1:-$PWD}"
+  case "$target_path" in
+    /*) ;;
+    *) target_path="$PWD/$target_path" ;;
+  esac
+fi
 
 if command -v readlink >/dev/null 2>&1; then
   self_path="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
@@ -35,5 +74,4 @@ if [ ! -x "$app_binary" ]; then
   exit 1
 fi
 
-target_path="${1:-$PWD}"
-"$app_binary" "--diffdash-local-path=$target_path" >/dev/null 2>&1 &
+"$app_binary" "$target_argument=$target_path" >/dev/null 2>&1 &

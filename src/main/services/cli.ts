@@ -29,6 +29,8 @@ export interface CliRunOptions {
   readonly stdin?: string
   readonly timeoutMs?: number
   readonly env?: Record<string, string>
+  /** Inherited environment variables to remove before spawning the command. */
+  readonly unsetEnv?: readonly string[]
 }
 
 /** Shared shape for services capable of running local CLI commands. */
@@ -48,6 +50,7 @@ export class CliService extends Context.Tag("@diffdash/CliService")<CliService, 
       run: Effect.fn("CliService.run")(function (command, args, options = {}) {
         return Effect.async<CliResult, CliError>((resume) => {
           const env = { ...process.env, ...options.env }
+          for (const key of options.unsetEnv ?? []) delete env[key]
           env.PATH = defaultExecutablePath(env.PATH, env.HOME)
           const child = spawn(command, [...args], {
             cwd: options.cwd,

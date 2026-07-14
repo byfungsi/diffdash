@@ -1,30 +1,37 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRoot, type Root } from "react-dom/client"
-
-import { App } from "./app"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import type { DiffDashApi } from "../../../electron/preload"
+import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
 import type { AppState } from "../../shared/app-state"
+import {
+  AppUpdateAvailable,
+  AppUpdateDownloaded,
+  AppUpdateDownloading,
+  type AppUpdateState,
+  AppUpdateUnsupported,
+} from "../../shared/app-update"
 import {
   LocalReviewDetail,
   LocalReviewDiff,
-  Repo,
   PullRequestDetail,
   PullRequestDiff,
   PullRequestFile,
   PullRequestSummary,
+  Repo,
+  type RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
   ReviewActor,
 } from "../../shared/domain"
-import type { DiffDashApi } from "../../../electron/preload"
-import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
 import { AppPrerequisites } from "../../shared/prerequisites"
 import {
+  StoredWalkthrough,
   Walkthrough,
   WalkthroughChapter,
   WalkthroughStop,
   WalkthroughSupportItem,
-  StoredWalkthrough,
 } from "../../shared/walkthrough"
+import { App, prepareReviewFileTreeInput } from "./app"
 
 const repo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",
@@ -249,6 +256,9 @@ const readyPrerequisites = AppPrerequisites.make({
   gitInstalled: true,
   ghAuthenticated: true,
   ghInstalled: true,
+  ghSearchRepositoriesAvailable: true,
+  ghSupported: true,
+  ghVersion: "2.76.1",
   installedCodingAgents: ["codex"],
 })
 
@@ -260,6 +270,9 @@ const missingPrerequisites = AppPrerequisites.make({
   gitInstalled: false,
   ghAuthenticated: false,
   ghInstalled: false,
+  ghSearchRepositoriesAvailable: false,
+  ghSupported: false,
+  ghVersion: null,
   installedCodingAgents: [],
 })
 
@@ -274,6 +287,7 @@ let root: Root | null = null
 afterEach(() => {
   root?.unmount()
   root = null
+  vi.restoreAllMocks()
   window.localStorage.clear()
   document.documentElement.classList.remove("dark")
   document.documentElement.style.colorScheme = ""
@@ -281,6 +295,20 @@ afterEach(() => {
 })
 
 describe("App browser interactions", () => {
+  it("sorts non-contiguous directory paths before constructing the file tree", () => {
+    const prepared = prepareReviewFileTreeInput([
+      "src/main/services/database.ts",
+      "web/landing/src/App.tsx",
+      "src/main/services/agent-run-store.ts",
+    ])
+
+    expect(prepared.paths).toEqual([
+      "src/main/services/agent-run-store.ts",
+      "src/main/services/database.ts",
+      "web/landing/src/App.tsx",
+    ])
+  })
+
   it("shows first-run onboarding and lets the user continue", async () => {
     const calls = installDiffDashApi({
       appState: { onboardingCompleted: false },
@@ -290,7 +318,7 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Set up DiffDash")
-      expect(document.body.textContent).toContain("GitHub CLI installed")
+      expect(document.body.textContent).toContain("GitHub CLI supported")
       expect(document.body.textContent).toContain("Coding agent installed")
       expect(document.body.textContent).not.toContain("Bookmarked Repos")
     })
@@ -313,11 +341,42 @@ describe("App browser interactions", () => {
     const continueButton = [...document.querySelectorAll("button")].find(
       (button) => button.textContent === "Continue to DiffDash",
     )
+    expect(continueButton).toBeDefined()
     continueButton?.click()
 
     await vi.waitFor(() => {
       expect(calls.updateAppState).toHaveBeenCalledWith({ onboardingCompleted: true })
+      expect(calls.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ telemetryEnabled: true }),
+      )
+      expect(calls.startAnalytics).toHaveBeenCalled()
+      expect(calls.captureAnalytics).toHaveBeenCalledWith({ event: "onboarding_completed" })
       expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+  })
+
+  it("persists an onboarding telemetry opt-out without sending events", async () => {
+    const calls = installDiffDashApi({ appState: { onboardingCompleted: false } })
+    renderApp()
+
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("Share anonymous usage data"),
+    )
+    const checkbox = document.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    expect(checkbox?.checked).toBe(true)
+    checkbox?.click()
+
+    const continueButton = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === "Continue to DiffDash",
+    )
+    expect(continueButton).toBeDefined()
+    continueButton?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ telemetryEnabled: false }),
+      )
+      expect(calls.captureAnalytics).not.toHaveBeenCalled()
     })
   })
 
@@ -339,6 +398,124 @@ describe("App browser interactions", () => {
     expect(calls.openExternalUrl).toHaveBeenCalledWith(
       "https://cli.github.com/manual/gh_auth_login",
     )
+  })
+
+  it("shows an actionable error for an unsupported GitHub CLI version", async () => {
+    installDiffDashApi({
+      diagnostics: AppPrerequisites.make({
+        ...readyPrerequisites,
+        ghSupported: false,
+        ghVersion: "1.14.0",
+      }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "GitHub CLI 2.7.0 or newer is required for repository search. Found 1.14.0. Update gh, then restart DiffDash.",
+      )
+    })
+  })
+
+  it("asks before downloading an update and restarts only after it is ready", async () => {
+    const calls = installDiffDashApi({
+      updateState: AppUpdateAvailable.make({ currentVersion: "0.1.4", version: "0.1.5" }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("DiffDash v0.1.5 is available")
+    })
+    const downloadButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Download update",
+    )
+    downloadButton?.click()
+    expect(calls.downloadUpdate).toHaveBeenCalledTimes(1)
+
+    calls.emitUpdateState(
+      AppUpdateDownloading.make({
+        currentVersion: "0.1.4",
+        percent: 48.4,
+        version: "0.1.5",
+      }),
+    )
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("48% downloaded")
+    })
+
+    calls.emitUpdateState(AppUpdateDownloaded.make({ currentVersion: "0.1.4", version: "0.1.5" }))
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("DiffDash v0.1.5 is ready")
+    })
+    const restartButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Restart and update",
+    )
+    restartButton?.click()
+    expect(calls.restartAndInstallUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it("debounces remote repository search and sends the displayed owner set", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+    const searchInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Search bookmarked and accessible repositories"]',
+    )
+    expect(searchInput).not.toBeNull()
+    if (searchInput === null) return
+
+    for (const value of ["own", "owner", "owners"]) {
+      setInputValue(searchInput, value)
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+
+    await vi.waitFor(() => {
+      expect(calls.searchRepositories).toHaveBeenCalledTimes(1)
+    })
+    expect(calls.searchRepositories).toHaveBeenLastCalledWith({
+      owners: ["hanipcode", "fungsi"],
+      query: "owners",
+    })
+
+    const fungsiScope = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "fungsi",
+    )
+    expect(fungsiScope).toBeDefined()
+    fungsiScope?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.searchRepositories).toHaveBeenCalledTimes(2)
+    })
+    expect(calls.searchRepositories).toHaveBeenLastCalledWith({
+      owners: ["fungsi"],
+      query: "owners",
+    })
+  })
+
+  it("shows GitHub search failures instead of an empty result", async () => {
+    const calls = installDiffDashApi()
+    calls.searchRepositories.mockRejectedValue(new Error("GitHub search is unavailable"))
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+    const searchInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Search bookmarked and accessible repositories"]',
+    )
+    expect(searchInput).not.toBeNull()
+    if (searchInput === null) return
+    setInputValue(searchInput, "failure-state")
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("GitHub search is unavailable")
+    })
+    expect(document.body.textContent).toContain("Bookmarked repo")
+    expect(document.body.textContent).not.toContain("No matching repos found")
   })
 
   it("disables the walkthrough tab when no coding agent is installed", async () => {
@@ -389,6 +566,144 @@ describe("App browser interactions", () => {
       expect(calls.listPullRequests).toHaveBeenCalledWith("fungsi", "diffdash")
     })
     expect(calls.listPullRequests).not.toHaveBeenCalledWith("local", "diffdash-fe11f30a1061")
+  })
+
+  it("shows, closes, and links the sticky unlinked-repository banner", async () => {
+    const calls = installDiffDashApi()
+    calls.selectLocalFolder.mockResolvedValue("/workspace/diffdash")
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Link a checkout for isolated agent review")
+    })
+    const linkButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Link folder",
+    )
+    linkButton?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.linkRepository).toHaveBeenCalledWith({
+        owner: "fungsi",
+        name: "diffdash",
+        localPath: "/workspace/diffdash",
+      })
+      expect(document.body.textContent).not.toContain("Link a checkout for isolated agent review")
+    })
+
+    calls.openLocalReview()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Opened local changes")
+      expect(document.body.textContent).not.toContain("Link a checkout for isolated agent review")
+    })
+  })
+
+  it("dismisses an unlinked-repository banner without invoking the folder picker", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Link a checkout for isolated agent review")
+    })
+
+    document
+      .querySelector<HTMLButtonElement>('button[aria-label="Dismiss local repository banner"]')
+      ?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain("Link a checkout for isolated agent review")
+    })
+    expect(calls.selectLocalFolder).not.toHaveBeenCalled()
+  })
+
+  it("handles a repository link requested by the diffdash install command", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Bookmarked Repos")
+    })
+    calls.linkRepositoryFromCli("/workspace/diffdash")
+
+    await vi.waitFor(() => {
+      expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
+      expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    })
+  })
+
+  it("keeps a file-tree selection stable while the diff pane scrolls", async () => {
+    installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+      expect(getChangedFilesTreeItem("docs/readme.md")).not.toBeNull()
+    })
+
+    const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const firstCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+    const docsTreeItem = getChangedFilesTreeItem("docs/readme.md")
+    expect(diffPane).not.toBeNull()
+    expect(firstCard).not.toBeNull()
+    expect(docsTreeItem).not.toBeNull()
+    if (diffPane === null || firstCard === null || docsTreeItem === null) return
+
+    const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(firstCard)
+    diffPane.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        clientX: 400,
+        clientY: 300,
+        composed: true,
+        pointerType: "mouse",
+      }),
+    )
+    diffPane.dispatchEvent(
+      new PointerEvent("pointerout", {
+        bubbles: true,
+        composed: true,
+        pointerType: "mouse",
+        relatedTarget: docsTreeItem,
+      }),
+    )
+
+    const scrollTo = vi.spyOn(diffPane, "scrollTo")
+    docsTreeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+    })
+
+    diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+    diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+
+    expect(elementFromPoint).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
+    expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
   it("covers FUN-40/FUN-42/FUN-41/FUN-25/FUN-26 criteria from Home to Review", async () => {
@@ -469,9 +784,87 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).toContain("Viewed")
       expect(document.body.textContent).toContain("+1")
       expect(document.body.textContent).toContain("-1")
+      expect(document.body.textContent).not.toContain("Review comment")
+      expect(document.body.textContent).not.toContain("File comment")
+      expect(document.body.textContent).not.toContain("Hunk 1")
+      expect(document.body.textContent).not.toContain("Select a line number to comment inline")
       expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
       expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
     })
+
+    const diffShadow = getDiffShadowRoot("src/app.tsx")
+    expect(diffShadow).not.toBeNull()
+    const addedLine = getDiffLine(diffShadow!, "new")
+    const lineNumber = addedLine?.getAttribute("data-line")
+    const addedLineIndex = addedLine?.getAttribute("data-line-index")
+    expect(addedLine).not.toBeNull()
+    expect(lineNumber).toBe("1")
+    const gutterNumber = [
+      ...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]"),
+    ].find(
+      (element) =>
+        element.getAttribute("data-column-number") === lineNumber &&
+        element.getAttribute("data-line-index") === addedLineIndex,
+    )
+    expect(gutterNumber).not.toBeUndefined()
+    gutterNumber?.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
+    )
+    await vi.waitFor(() => {
+      expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
+    })
+    const gutterUtility = diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")
+    expect(gutterUtility).not.toBeNull()
+    clickGutterUtility(gutterUtility!)
+    await vi.waitFor(() => {
+      expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
+    })
+    const refreshedGutterNumber = [
+      ...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]"),
+    ].find(
+      (element) =>
+        element.getAttribute("data-column-number") === lineNumber &&
+        element.getAttribute("data-line-index") === addedLineIndex,
+    )
+    refreshedGutterNumber?.dispatchEvent(
+      new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
+    )
+    await vi.waitFor(() => {
+      expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
+    })
+    clickGutterUtility(diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")!)
+    await vi.waitFor(() => {
+      expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
+    })
+
+    getDiffLine(diffShadow!, "new")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true }),
+    )
+    await vi.waitFor(() => {
+      expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
+    })
+    getDiffLine(diffShadow!, "new")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true }),
+    )
+    await vi.waitFor(() => {
+      expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
+    })
+
+    const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Actions") ?? false,
+    )
+    expect(actionsButton).toBeDefined()
+    actionsButton?.click()
+    await vi.waitFor(() => {
+      const menu = document.querySelector('[role="menu"][aria-label="Review actions"]')
+      expect(menu).not.toBeNull()
+      expect(menu?.textContent).toContain("Reload diff")
+      expect(menu?.textContent).toContain("Approve")
+      expect(menu?.textContent).toContain("Regenerate walkthrough")
+      expect(menu?.textContent).toContain("Mark all viewed")
+      expect(menu?.textContent).toContain("Reveal hidden files")
+    })
+    actionsButton?.click()
 
     calls.getPullRequestDetail.mockClear()
     calls.getPullRequestDiff.mockClear()
@@ -548,25 +941,33 @@ describe("App browser interactions", () => {
       expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
     })
 
+    actionsButton?.click()
     await vi.waitFor(() => {
       expect(document.body.textContent).not.toContain("Request changes")
-      const approveButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "Approve",
-      )
-      expect(approveButton).toBeDefined()
-      expect(approveButton?.disabled).toBe(false)
+      expect(
+        document.querySelector<HTMLButtonElement>(
+          '[role="menu"][aria-label="Review actions"] button[role="menuitem"]:not(:disabled)',
+        ),
+      ).not.toBeNull()
     })
-
-    const approveButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent === "Approve",
-    )
+    const approveButton = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '[role="menu"][aria-label="Review actions"] button',
+      ),
+    ].find((button) => button.textContent?.startsWith("Approve") ?? false)
+    expect(approveButton?.disabled).toBe(false)
     approveButton?.click()
 
     await vi.waitFor(() => {
       expect(calls.approvePullRequest).toHaveBeenCalledWith("fungsi", "diffdash", 51)
-      const approvedButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent === "Approved",
-      )
+    })
+    actionsButton?.click()
+    await vi.waitFor(() => {
+      const approvedButton = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[role="menu"][aria-label="Review actions"] button',
+        ),
+      ].find((button) => button.textContent?.startsWith("Approve") ?? false)
       expect(approvedButton).toBeDefined()
       expect(approvedButton?.disabled).toBe(true)
     })
@@ -832,6 +1233,11 @@ const getChangedFilesTreeItemPaths = () =>
     .map((element) => element.getAttribute("data-item-path"))
     .filter((path) => path !== null)
 
+const getChangedFilesTreeItem = (path: string) =>
+  document
+    .querySelector("file-tree-container")
+    ?.shadowRoot?.querySelector<HTMLElement>(`[data-item-path="${path}"]`) ?? null
+
 const getDiffCardPaths = () =>
   [...document.querySelectorAll("[data-diff-card-path]")]
     .map((element) => element.getAttribute("data-diff-card-path"))
@@ -839,6 +1245,20 @@ const getDiffCardPaths = () =>
 
 const getViewedCheckbox = (path: string) =>
   document.querySelector<HTMLInputElement>(`[data-diff-card-path="${path}"] input[type="checkbox"]`)
+
+const getDiffShadowRoot = (path: string) =>
+  document.querySelector(`[data-diff-card-path="${path}"] diffs-container`)?.shadowRoot ?? null
+
+const getDiffLine = (shadowRoot: ShadowRoot, content: string) =>
+  [...shadowRoot.querySelectorAll<HTMLElement>("[data-line]")].find(
+    (element) => element.textContent?.trim() === content,
+  )
+
+const clickGutterUtility = (button: HTMLButtonElement) => {
+  const init = { bubbles: true, button: 0, composed: true, pointerId: 1, pointerType: "mouse" }
+  button.dispatchEvent(new PointerEvent("pointerdown", init))
+  button.dispatchEvent(new PointerEvent("pointerup", init))
+}
 
 const dispatchKeyboardShortcut = (
   key: string,
@@ -876,6 +1296,7 @@ const installDiffDashApi = (
     readonly appState?: AppState
     readonly diagnostics?: AppPrerequisites
     readonly repositories?: readonly Repo[]
+    readonly updateState?: AppUpdateState
   } = {},
 ) => {
   const viewedFileKeys = new Set<string>()
@@ -883,9 +1304,16 @@ const installDiffDashApi = (
   const appState = options.appState ?? { onboardingCompleted: true }
   const diagnostics = options.diagnostics ?? readyPrerequisites
   const repositories = options.repositories ?? [repo]
+  const initialUpdateState =
+    options.updateState ??
+    AppUpdateUnsupported.make({ currentVersion: "0.1.4", reason: "development" })
   let localReviewListener: ((rootPath: string) => void) | null = null
+  let repositoryLinkListener: ((rootPath: string) => void) | null = null
+  let updateStateListener: ((state: AppUpdateState) => void) | null = null
   let approved = false
   const calls = {
+    captureAnalytics: vi.fn<DiffDashApi["analytics"]["capture"]>(async () => undefined),
+    startAnalytics: vi.fn<DiffDashApi["analytics"]["start"]>(async () => undefined),
     generateWalkthrough: vi.fn<
       (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
     >(async () => walkthrough),
@@ -919,8 +1347,22 @@ const installDiffDashApi = (
     installDiffDashCli: vi.fn<() => Promise<{ readonly path: string }>>(async () => ({
       path: "/usr/local/bin/diffdash",
     })),
+    installRepository: vi.fn<(localPath: string) => Promise<Repo>>(async (localPath) =>
+      Repo.make({ ...repo, localPath }),
+    ),
+    linkRepository: vi.fn<
+      (input: {
+        readonly owner: string
+        readonly name: string
+        readonly localPath: string
+      }) => Promise<Repo>
+    >(async (input) => Repo.make({ ...repo, localPath: input.localPath })),
+    selectLocalFolder: vi.fn<() => Promise<string | null>>(async () => null),
     openExternalUrl: vi.fn<(url: string) => Promise<void>>(async () => undefined),
     updateAppState: vi.fn<(state: AppState) => Promise<AppState>>(async (state) => state),
+    checkForUpdates: vi.fn<() => Promise<void>>(async () => undefined),
+    downloadUpdate: vi.fn<() => Promise<void>>(async () => undefined),
+    restartAndInstallUpdate: vi.fn<() => Promise<void>>(async () => undefined),
     getLocalReviewDetail: vi.fn<(rootPath: string) => Promise<LocalReviewDetail>>(
       async () => localReview,
     ),
@@ -933,6 +1375,9 @@ const installDiffDashApi = (
     getPullRequestDiff: vi.fn<
       (owner: string, name: string, number: number) => Promise<PullRequestDiff>
     >(async () => diff),
+    searchRepositories: vi.fn<
+      (request: RepositorySearchRequest) => Promise<readonly RepositorySearchResult[]>
+    >(async () => [remoteSearchResult]),
     openLocalRepositoryFile: vi.fn<(rootPath: string, filePath: string) => Promise<void>>(
       async () => undefined,
     ),
@@ -952,12 +1397,35 @@ const installDiffDashApi = (
     ),
   }
   const api: DiffDashApi = {
+    analytics: {
+      capture: calls.captureAnalytics,
+      start: calls.startAnalytics,
+    },
+    updates: {
+      getState: async () => initialUpdateState,
+      check: calls.checkForUpdates,
+      download: calls.downloadUpdate,
+      restartAndInstall: calls.restartAndInstallUpdate,
+      onStateChanged: (listener) => {
+        updateStateListener = listener
+        return () => {
+          updateStateListener = null
+        }
+      },
+    },
     navigation: {
       getPendingLocalReview: async () => null,
+      getPendingRepositoryLink: async () => null,
       onOpenLocalReview: (listener) => {
         localReviewListener = listener
         return () => {
           localReviewListener = null
+        }
+      },
+      onLinkRepository: (listener) => {
+        repositoryLinkListener = listener
+        return () => {
+          repositoryLinkListener = null
         }
       },
     },
@@ -978,7 +1446,7 @@ const installDiffDashApi = (
         RepositorySearchScope.make({ kind: "organization", login: "fungsi" }),
       ],
       refreshPullRequestDetail: calls.getPullRequestDetail,
-      searchRepositories: async () => [remoteSearchResult],
+      searchRepositories: calls.searchRepositories,
     },
     localReviews: {
       getDetail: calls.getLocalReviewDetail,
@@ -986,6 +1454,8 @@ const installDiffDashApi = (
     },
     repositories: {
       addLocal: async () => repo,
+      install: calls.installRepository,
+      link: calls.linkRepository,
       favoriteRemote: async (remoteRepo: RepositorySearchResult) =>
         Repo.make({
           ...repo,
@@ -995,8 +1465,24 @@ const installDiffDashApi = (
           remoteUrl: remoteRepo.url,
         }),
       list: async () => repositories,
-      selectLocalFolder: async () => null,
+      selectLocalFolder: calls.selectLocalFolder,
       setFavorite: async () => repo,
+    },
+    reviewThreads: {
+      list: async () => [],
+      create: async () => {
+        throw new Error("Review thread creation is not used by this fixture")
+      },
+      addUserMessage: async () => {
+        throw new Error("Review thread messages are not used by this fixture")
+      },
+      get: async () => {
+        throw new Error("Review thread loading is not used by this fixture")
+      },
+      runAgent: async () => {
+        throw new Error("Review thread agents are not used by this fixture")
+      },
+      onAgentProgress: () => () => undefined,
     },
     settings: {
       get: async () => plainAISettings(DEFAULT_AI_SETTINGS),
@@ -1057,12 +1543,15 @@ const installDiffDashApi = (
 
   return {
     ...calls,
+    emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
+    linkRepositoryFromCli: (rootPath: string) => repositoryLinkListener?.(rootPath),
     openLocalReview: (rootPath: string = localReview.rootPath) => localReviewListener?.(rootPath),
   }
 }
 
 const plainAISettings = (settings: AISettings): AISettings => ({
   provider: settings.provider,
+  telemetryEnabled: settings.telemetryEnabled,
   models: {
     auto: settings.models.auto,
     claude: settings.models.claude,

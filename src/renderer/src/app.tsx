@@ -1,8 +1,8 @@
-import type { FileDiffOptions, VirtualFileMetrics } from "@pierre/diffs"
-import { PatchDiff } from "@pierre/diffs/react"
-import { preparePresortedFileTreeInput } from "@pierre/trees"
-import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react"
 import { Atom, Result, useAtomRefresh, useAtomSet, useAtomValue } from "@effect-atom/atom-react"
+import type { DiffLineAnnotation, FileDiffOptions, VirtualFileMetrics } from "@pierre/diffs"
+import { PatchDiff } from "@pierre/diffs/react"
+import { prepareFileTreeInput } from "@pierre/trees"
+import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react"
 import { Effect, Schema } from "effect"
 import {
   ArrowLeft,
@@ -25,43 +25,51 @@ import {
   Moon,
   RefreshCw,
   Search,
+  Settings2,
   Sparkles,
   Star,
-  Settings2,
   Sun,
   UserRound,
   X,
 } from "lucide-react"
-import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Surface } from "@/components/ui/surface"
-import { DEFAULT_APP_STATE, type AppState } from "../../shared/app-state"
+import { UnicodeLoadingText } from "@/components/ui/unicode-loading-text"
+import {
+  ReviewThreadComposer,
+  ReviewThreadIndex,
+  ReviewThreadPanel,
+  type ReviewThreadsController,
+  reviewLineLabel,
+  useReviewThreads,
+} from "@/review-threads"
+import { UpdateBanner } from "@/update-banner"
 import {
   AI_PROVIDER_OPTIONS,
+  type AIProvider,
   AIProviderModels,
   AISettings,
   AUTO_MODEL_OPTIONS,
-  CLAUDE_MODEL_OPTIONS,
-  CODEX_MODEL_OPTIONS,
-  DEFAULT_AI_SETTINGS,
-  OPENCODE_MODEL_OPTIONS,
-  modelOptionsForProvider,
-  selectedModelForProvider,
-  type AIProvider,
   type AutoModel,
+  CLAUDE_MODEL_OPTIONS,
   type ClaudeModel,
+  CODEX_MODEL_OPTIONS,
   type CodexModel,
+  DEFAULT_AI_SETTINGS,
+  modelOptionsForProvider,
+  OPENCODE_MODEL_OPTIONS,
   type OpenCodeModel,
+  selectedModelForProvider,
 } from "../../shared/ai-settings"
+import { type AppState, DEFAULT_APP_STATE } from "../../shared/app-state"
+import type { AppUpdateState } from "../../shared/app-update"
 import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "../../shared/diff-file-filters"
 import { parseUnifiedDiff } from "../../shared/diff-parser"
-import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
-import { Repo } from "../../shared/domain"
-import { EMPTY_APP_PREREQUISITES, type AppPrerequisites } from "../../shared/prerequisites"
 import type {
   LocalReviewDetail,
   ParsedDiff,
@@ -71,17 +79,25 @@ import type {
   RepositorySearchResult,
   RepositorySearchScope,
 } from "../../shared/domain"
+import { Repo, RepositorySearchRequest } from "../../shared/domain"
+import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
+import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "../../shared/prerequisites"
+import {
+  LineReviewAnchor,
+  type ReviewThreadAnchor,
+  type ReviewThreadDetails,
+} from "../../shared/review-thread"
 import {
   buildWalkthroughHunkDigest,
   flattenWalkthroughStops,
   focusFilesForWalkthroughHunks,
-  summarizeWalkthroughHunksByPath,
-  walkthroughLocalDiffScope,
-  walkthroughPullRequestScope,
   type StoredWalkthrough,
+  summarizeWalkthroughHunksByPath,
   type Walkthrough,
   type WalkthroughHunkDigest,
   type WalkthroughRisk,
+  walkthroughLocalDiffScope,
+  walkthroughPullRequestScope,
 } from "../../shared/walkthrough"
 
 type Screen = "home" | "repo" | "review"
@@ -97,6 +113,8 @@ type WalkthroughState =
   | { readonly status: "error"; readonly message: string }
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
+
+type RepositoryLinkState = "checking" | "linked" | "unlinked" | "not-applicable"
 
 type SelectedReviewTarget =
   | {
@@ -162,6 +180,10 @@ const CODING_AGENT_SETUP_MESSAGE =
   "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
 const THEME_STORAGE_KEY = "diffdash.theme"
 
+const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
+  void window.diffDash.analytics.capture(event).catch(() => undefined)
+}
+
 const sameNavigationRoute = (left: AppNavigationRoute, right: AppNavigationRoute) =>
   left.screen === right.screen &&
   left.selectedRepo?.id === right.selectedRepo?.id &&
@@ -191,15 +213,43 @@ const REVIEW_DIFF_OPTIONS = {
   disableFileHeader: true,
   disableVirtualizationBuffers: true,
   diffStyle: "split",
+  enableGutterUtility: true,
   hunkSeparators: "line-info-basic",
+  lineHoverHighlight: "both",
   lineDiffType: "word",
   overflow: "wrap",
   stickyHeader: true,
+  theme: {
+    dark: "dark-plus",
+    light: "github-light",
+  },
   themeType: "light",
   unsafeCSS: `
     :host {
+      --diffs-bg: var(--diff-canvas);
+      --diffs-fg: var(--foreground);
+      --diffs-fg-number-override: var(--muted-foreground);
+      --diffs-fg-number-addition-override: var(--review-success);
+      --diffs-fg-number-deletion-override: var(--review-danger);
+      --diffs-bg-context-override: var(--diff-canvas);
+      --diffs-bg-context-gutter-override: var(--diff-gutter);
+      --diffs-bg-buffer-override: var(--diff-canvas);
+      --diffs-bg-separator-override: var(--diff-separator);
+      --diffs-bg-addition-override: var(--diff-addition);
+      --diffs-bg-addition-number-override: var(--diff-addition-emphasis);
+      --diffs-bg-addition-emphasis-override: var(--diff-addition-emphasis);
+      --diffs-bg-deletion-override: var(--diff-deletion);
+      --diffs-bg-deletion-number-override: var(--diff-deletion-emphasis);
+      --diffs-bg-deletion-emphasis-override: var(--diff-deletion-emphasis);
+      --diffs-bg-hover-override: var(--diff-hover);
+      --diffs-bg-selection-override: var(--diff-selection);
+      --diffs-bg-selection-number-override: var(--diff-selection);
       --diffs-gap-block: 0px;
       --diffs-line-height: 20px;
+    }
+
+    [data-diff-type="split"][data-overflow="wrap"] {
+      --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
     }
 
     [data-code],
@@ -225,7 +275,7 @@ const REVIEW_DIFF_OPTIONS = {
       padding-bottom: 0 !important;
     }
   `,
-} satisfies FileDiffOptions<undefined>
+} satisfies FileDiffOptions<ReviewThreadAnnotation>
 
 const REVIEW_DIFF_METRICS = {
   diffHeaderHeight: 0,
@@ -307,20 +357,11 @@ const repositorySearchAtom = Atom.family((query: string) =>
 const remoteRepositorySearchAtom = Atom.family((key: string) =>
   Atom.make(
     Effect.gen(function* () {
-      const { query, scope } = parseRemoteSearchAtomKey(key)
-      if (query.length === 0) return [] as readonly RepositorySearchResult[]
+      const request = parseRemoteSearchAtomKey(key)
+      if (request.query.length === 0 || request.owners.length === 0)
+        return [] as readonly RepositorySearchResult[]
 
-      const scopedQuery = scopedRemoteSearchQuery(query, scope)
-      const scopedResults = yield* fetchEffect(() =>
-        window.diffDash.gitProvider.searchRepositories(scopedQuery),
-      )
-
-      if (scope === null || scopedResults.length > 0) return scopedResults
-
-      const fallbackResults = yield* fetchEffect(() =>
-        window.diffDash.gitProvider.searchRepositories(query),
-      )
-      return filterRemoteResultsByScope(fallbackResults, scope)
+      return yield* fetchEffect(() => window.diffDash.gitProvider.searchRepositories(request))
     }),
     { initialValue: [] as readonly RepositorySearchResult[] },
   ),
@@ -341,22 +382,15 @@ const diagnosticsAtom = Atom.make(
 const scopedLocalSearchQuery = (query: string, scope: string | null) =>
   scope === null ? query : `${scope}/${query}`
 
-const scopedRemoteSearchQuery = (query: string, scope: string | null) =>
-  scope === null ? query : `owner:${scope} ${query}`
-
-const remoteSearchAtomKey = (query: string, scope: string | null) => `${scope ?? ""}\u0000${query}`
+const remoteSearchAtomKey = (query: string, owners: readonly string[]) =>
+  `${owners.join(",")}\u0000${query}`
 
 const parseRemoteSearchAtomKey = (key: string) => {
-  const [scope = "", query = ""] = key.split("\u0000", 2)
-  return {
+  const [owners = "", query = ""] = key.split("\u0000", 2)
+  return RepositorySearchRequest.make({
+    owners: owners.length === 0 ? [] : owners.split(","),
     query,
-    scope: scope.length === 0 ? null : scope,
-  }
-}
-
-const filterRemoteResultsByScope = (results: readonly RepositorySearchResult[], scope: string) => {
-  const normalizedScope = scope.toLowerCase()
-  return results.filter((repo) => repo.owner.toLowerCase() === normalizedScope)
+  })
 }
 
 const reviewRequestsAtom = Atom.make(
@@ -494,9 +528,40 @@ export function App() {
   const [recentReviews, setRecentReviews] = useState<readonly RecentReviewEntry[]>([])
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [isReloadingReview, setIsReloadingReview] = useState(false)
+  const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
+  const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
   const deferredSearchQuery = useDeferredValue(query.trim())
   const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
-  const remoteSearchKey = remoteSearchAtomKey(deferredSearchQuery, selectedSearchScope)
+
+  useEffect(() => {
+    let cancelled = false
+    const unsubscribe = window.diffDash.updates.onStateChanged((state) => {
+      if (!cancelled) setUpdateState(state)
+    })
+    void window.diffDash.updates
+      .getState()
+      .then((state) => {
+        if (!cancelled) setUpdateState(state)
+        return undefined
+      })
+      .catch(() => undefined)
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    const trimmedQuery = query.trim()
+    if (trimmedQuery.length === 0) {
+      setDebouncedRemoteSearchQuery("")
+      return undefined
+    }
+
+    const timer = window.setTimeout(() => setDebouncedRemoteSearchQuery(trimmedQuery), 300)
+    return () => window.clearTimeout(timer)
+  }, [query])
 
   const selectedRepoKey =
     selectedRepo === null ? "" : repoKey(selectedRepo.owner, selectedRepo.name)
@@ -506,6 +571,13 @@ export function App() {
       : pullRequestAtomKey(selectedReview.repoOwner, selectedReview.repoName, selectedReview.number)
   const selectedLocalReviewKey =
     selectedReview === null || selectedReview.kind !== "localDiff" ? "" : selectedReview.rootPath
+  const repositoriesResult = useAtomValue(repositoriesAtom)
+  const diagnosticsResult = useAtomValue(diagnosticsAtom)
+  const searchScopesResult = useAtomValue(searchScopesAtom)
+  const searchScopes = resultValue(searchScopesResult, [] as readonly RepositorySearchScope[])
+  const remoteSearchOwners =
+    selectedSearchScope === null ? searchScopes.map((scope) => scope.login) : [selectedSearchScope]
+  const remoteSearchKey = remoteSearchAtomKey(debouncedRemoteSearchQuery, remoteSearchOwners)
   const localSearchAtom = repositorySearchAtom(localSearchQuery)
   const remoteSearchAtom = remoteRepositorySearchAtom(remoteSearchKey)
   const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
@@ -514,9 +586,6 @@ export function App() {
   const selectedLocalReviewDetailAtom = localReviewDetailAtom(selectedLocalReviewKey)
   const selectedLocalReviewDiffAtom = localReviewDiffAtom(selectedLocalReviewKey)
 
-  const repositoriesResult = useAtomValue(repositoriesAtom)
-  const diagnosticsResult = useAtomValue(diagnosticsAtom)
-  const searchScopesResult = useAtomValue(searchScopesAtom)
   const localResultsResult = useAtomValue(localSearchAtom)
   const remoteResultsResult = useAtomValue(remoteSearchAtom)
   const reviewRequestsResult = useAtomValue(reviewRequestsAtom)
@@ -543,13 +612,13 @@ export function App() {
   const refreshSelectedLocalReviewDiff = useAtomRefresh(selectedLocalReviewDiffAtom)
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
-  const searchScopes = resultValue(searchScopesResult, [] as readonly RepositorySearchScope[])
   const bookmarkedRepos = repos.filter(isBookmarkedPullRequestRepo)
   const hasQuery = query.trim().length > 0
   const localResults = hasQuery ? resultValue(localResultsResult, [] as readonly Repo[]) : []
-  const remoteResults = hasQuery
-    ? resultValue(remoteResultsResult, [] as readonly RepositorySearchResult[])
-    : []
+  const remoteResults =
+    hasQuery && query.trim() === debouncedRemoteSearchQuery
+      ? resultValue(remoteResultsResult, [] as readonly RepositorySearchResult[])
+      : []
   const reviewRequests = resultValue(reviewRequestsResult, [] as readonly PullRequestSummary[])
   const repoPrCounts = resultValue(repoPrCountsResult, {} as Record<string, number>)
   const diagnostics = resultValue(diagnosticsResult, EMPTY_APP_PREREQUISITES as AppDiagnostics)
@@ -567,6 +636,20 @@ export function App() {
   const selectedDiff =
     selectedReview?.kind === "localDiff" ? selectedLocalDiff : selectedPullRequestDiff
   const selectedReviewKind = selectedReview?.kind ?? null
+  const reviewRepositoryLinkState: RepositoryLinkState =
+    selectedReview?.kind !== "pullRequest"
+      ? "not-applicable"
+      : Result.isWaiting(repositoriesResult) || Result.isFailure(repositoriesResult)
+        ? "checking"
+        : repos.some(
+              (candidate) =>
+                candidate.provider === "github" &&
+                candidate.localPath !== null &&
+                repoKey(candidate.owner, candidate.name) ===
+                  repoKey(selectedReview.repoOwner, selectedReview.repoName),
+            )
+          ? "linked"
+          : "unlinked"
   const bookmarkedRepoKeys = new Set(bookmarkedRepos.map((repo) => repoKey(repo.owner, repo.name)))
   const uniqueRemoteResults = remoteResults.filter(
     (repo) => !bookmarkedRepoKeys.has(repoKey(repo.owner, repo.name)),
@@ -620,9 +703,16 @@ export function App() {
               : `Opened PR #${selectedPullRequest.number}: ${selectedPullRequest.title}`
   const isSearching =
     hasQuery &&
-    (query.trim() !== deferredSearchQuery ||
+    (query.trim() !== debouncedRemoteSearchQuery ||
+      query.trim() !== deferredSearchQuery ||
+      Result.isWaiting(searchScopesResult) ||
       Result.isWaiting(localResultsResult) ||
       Result.isWaiting(remoteResultsResult))
+  const searchError = Result.isFailure(searchScopesResult)
+    ? resultErrorMessage(searchScopesResult, "Could not load repository owners")
+    : Result.isFailure(remoteResultsResult)
+      ? resultErrorMessage(remoteResultsResult, "Could not search GitHub repositories")
+      : null
   const isLoadingPullRequests = selectedRepo !== null && Result.isWaiting(pullRequestsResult)
   const isLoadingReview =
     selectedReview?.kind === "localDiff"
@@ -711,6 +801,11 @@ export function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (appState?.onboardingCompleted !== true) return
+    void window.diffDash.analytics.start().catch(() => undefined)
+  }, [appState?.onboardingCompleted])
 
   useEffect(() => {
     let cancelled = false
@@ -940,6 +1035,13 @@ export function App() {
     const changedFile = selectedDiff?.files.find(
       (file) => file.reviewKey === reviewKey || reviewKey.startsWith(`${file.reviewKey}:`),
     )
+    if (selectedReviewSubject !== null && changedFile !== undefined) {
+      captureAnalytics({
+        event: "review_file_viewed",
+        reviewType: selectedReviewSubject.kind === "pullRequest" ? "pull_request" : "local_diff",
+        viewed,
+      })
+    }
     if (selectedReviewSubject?.kind === "pullRequest" && changedFile !== undefined) {
       if (selectedReviewSubject.pullRequest.headRefOid === null) return
       void window.diffDash.viewedFiles.set(
@@ -1006,6 +1108,7 @@ export function App() {
       refreshRemoteSearch()
       refreshRepoPrCounts()
       setActionStatus(`Bookmarked ${repo.nameWithOwner}`)
+      captureAnalytics({ event: "repository_bookmarked" })
       selectRepository(bookmarked, "home")
     } catch (error) {
       setActionStatus(formatError(error, "Could not bookmark repository"))
@@ -1077,6 +1180,7 @@ export function App() {
     setExpandedFileKeys(new Set())
     setViewedFileKeys(new Set())
     navigateTo({ screen: "review", selectedRepo: sourceRepo, selectedReview: review })
+    captureAnalytics({ event: "review_opened", reviewType: "pull_request" })
     setActionStatus(`Opening PR #${pullRequest.number}...`)
     rememberRecentReview({
       key: pullRequestReviewKey(review),
@@ -1115,7 +1219,48 @@ export function App() {
     setExpandedFileKeys(new Set())
     setViewedFileKeys(new Set())
     navigateTo({ screen: "review", selectedRepo: null, selectedReview: review })
+    captureAnalytics({ event: "review_opened", reviewType: "local_diff" })
     setActionStatus("Opening local changes...")
+  }
+
+  const installRepositoryLink = async (localPath: string) => {
+    setActionStatus("Linking local repository...")
+    try {
+      const linked = await window.diffDash.repositories.install(localPath)
+      refreshRepositories()
+      refreshLocalSearch()
+      refreshRepoPrCounts()
+      setActionStatus(`Linked ${linked.owner}/${linked.name} to ${linked.localPath ?? localPath}.`)
+      captureAnalytics({ event: "repository_linked" })
+      selectRepository(linked, "repo")
+    } catch (error) {
+      setActionStatus(formatError(error, "Could not link local repository"))
+    }
+  }
+  const installRepositoryLinkEvent = useEffectEvent(installRepositoryLink)
+
+  const linkSelectedReviewRepository = async () => {
+    if (selectedReview?.kind !== "pullRequest") return false
+    const localPath = await window.diffDash.repositories.selectLocalFolder()
+    if (localPath === null) return false
+
+    const linked = await window.diffDash.repositories.link({
+      owner: selectedReview.repoOwner,
+      name: selectedReview.repoName,
+      localPath,
+    })
+    refreshRepositories()
+    refreshLocalSearch()
+    refreshRepoPrCounts()
+    if (
+      selectedRepo !== null &&
+      repoKey(selectedRepo.owner, selectedRepo.name) === repoKey(linked.owner, linked.name)
+    ) {
+      setSelectedRepo(linked)
+    }
+    setActionStatus(`Linked ${linked.owner}/${linked.name} to ${linked.localPath ?? localPath}.`)
+    captureAnalytics({ event: "repository_linked" })
+    return true
   }
 
   useEffect(() => {
@@ -1128,13 +1273,25 @@ export function App() {
       })
       .catch(() => undefined)
 
-    const unsubscribe = window.diffDash.navigation.onOpenLocalReview((rootPath) => {
+    window.diffDash.navigation
+      .getPendingRepositoryLink()
+      .then((rootPath) => {
+        if (!cancelled && rootPath !== null) void installRepositoryLinkEvent(rootPath)
+        return undefined
+      })
+      .catch(() => undefined)
+
+    const unsubscribeLocalReview = window.diffDash.navigation.onOpenLocalReview((rootPath) => {
       openLocalReview(rootPath)
+    })
+    const unsubscribeRepositoryLink = window.diffDash.navigation.onLinkRepository((rootPath) => {
+      void installRepositoryLinkEvent(rootPath)
     })
 
     return () => {
       cancelled = true
-      unsubscribe()
+      unsubscribeLocalReview()
+      unsubscribeRepositoryLink()
     }
   }, [])
 
@@ -1176,12 +1333,23 @@ export function App() {
     }
   }
 
-  const completeOnboarding = async () => {
+  const completeOnboarding = async (telemetryEnabled: boolean) => {
     const nextState: AppState = { onboardingCompleted: true }
-    setAppState(nextState)
     try {
+      const savedSettings = await window.diffDash.settings.update(
+        AISettings.make({
+          provider: aiSettings.provider,
+          models: aiProviderModelsFromSettings(aiSettings),
+          telemetryEnabled,
+        }),
+      )
+      setAISettings(savedSettings)
       const savedState = await window.diffDash.appState.update(nextState)
       setAppState(savedState)
+      if (telemetryEnabled) {
+        await window.diffDash.analytics.start()
+        await window.diffDash.analytics.capture({ event: "onboarding_completed" })
+      }
     } catch (error) {
       setSetupActionStatus(formatError(error, "Could not save onboarding state"))
     }
@@ -1193,6 +1361,20 @@ export function App() {
     <main
       className={`bg-background text-foreground h-full ${showReviewShell ? "overflow-hidden" : "overflow-auto"}`}
     >
+      {updateState === null ? null : (
+        <UpdateBanner
+          state={updateState}
+          onCheck={() => void window.diffDash.updates.check().catch(() => undefined)}
+          onDownload={() => {
+            captureAnalytics({ event: "update_download_started" })
+            void window.diffDash.updates.download().catch(() => undefined)
+          }}
+          onRestart={() => {
+            captureAnalytics({ event: "update_install_started" })
+            void window.diffDash.updates.restartAndInstall().catch(() => undefined)
+          }}
+        />
+      )}
       {appState === null ? (
         <section className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-8 py-10">
           <EmptyState>Loading DiffDash...</EmptyState>
@@ -1202,7 +1384,7 @@ export function App() {
           diagnostics={diagnostics}
           isLoadingDiagnostics={isLoadingDiagnostics}
           status={setupActionStatus}
-          onComplete={() => void completeOnboarding()}
+          onComplete={(telemetryEnabled) => void completeOnboarding(telemetryEnabled)}
           onInstallDiffDashCli={() => void installDiffDashCli()}
           onOpenDocs={openSetupDocs}
           onRecheck={recheckPrerequisites}
@@ -1213,6 +1395,7 @@ export function App() {
             aiAgentAvailable={diagnostics.codingAgentInstalled || isLoadingDiagnostics}
             aiSettings={aiSettings}
             parsedDiff={selectedDiff}
+            repositoryLinkState={reviewRepositoryLinkState}
             reviewSubject={selectedReviewSubject}
             diffRenderPass={diffRenderPass}
             expandedFileKeys={expandedFileKeys}
@@ -1223,6 +1406,7 @@ export function App() {
             viewedFileKeys={viewedFileKeys}
             onBack={navigateBack}
             onAISettingsChange={updateAISettings}
+            onLinkRepository={linkSelectedReviewRepository}
             onReload={reloadSelectedReview}
             onSelectPath={setSelectedReviewPath}
             onSetViewed={setFileViewed}
@@ -1257,7 +1441,7 @@ export function App() {
           <header className="space-y-3 pt-3">
             <Badge variant="secondary" className="text-caption w-fit gap-1.5">
               <Sparkles className="size-3" />
-              Repo-first review workspace
+              {import.meta.env.VITE_APP_VERSION}
             </Badge>
             <div className="space-y-2">
               <h1 className="max-w-3xl text-4xl font-semibold tracking-tight">DiffDash</h1>
@@ -1303,6 +1487,8 @@ export function App() {
                       remoteResults={uniqueRemoteResults}
                       scopes={searchScopes}
                       selectedScope={selectedSearchScope}
+                      isSearching={isSearching}
+                      error={searchError}
                       onBookmark={(repo) => void bookmarkRemote(repo)}
                       onSelectLocal={(repo) => void selectRepository(repo, "home")}
                       onSelectRemote={openRemoteRepository}
@@ -1460,6 +1646,8 @@ export function App() {
 }
 
 const SearchResults = ({
+  error,
+  isSearching,
   localResults,
   remoteResults,
   scopes,
@@ -1469,6 +1657,8 @@ const SearchResults = ({
   onSelectRemote,
   onSelectScope,
 }: {
+  readonly error: string | null
+  readonly isSearching: boolean
   readonly localResults: readonly Repo[]
   readonly remoteResults: readonly RepositorySearchResult[]
   readonly scopes: readonly RepositorySearchScope[]
@@ -1504,7 +1694,15 @@ const SearchResults = ({
         })}
       </div>
       <div className="mt-4 space-y-1.5">
-        {!hasResults ? (
+        {error !== null ? (
+          <div
+            role="alert"
+            className="border-destructive/30 bg-destructive/10 text-destructive rounded-lg border p-3 text-xs"
+          >
+            {error}
+          </div>
+        ) : null}
+        {!hasResults && !isSearching && error === null ? (
           <EmptyState className="p-4 text-xs">No matching repos found.</EmptyState>
         ) : null}
         {localResults.map((repo) => (
@@ -1668,6 +1866,7 @@ const ReviewScreen = ({
   aiAgentAvailable,
   aiSettings,
   parsedDiff,
+  repositoryLinkState,
   reviewSubject,
   diffRenderPass,
   expandedFileKeys,
@@ -1678,6 +1877,7 @@ const ReviewScreen = ({
   viewedFileKeys,
   onBack,
   onAISettingsChange,
+  onLinkRepository,
   onReload,
   onSelectPath,
   onSetViewed,
@@ -1686,6 +1886,7 @@ const ReviewScreen = ({
   readonly aiAgentAvailable: boolean
   readonly aiSettings: AISettings
   readonly parsedDiff: ParsedDiff | null
+  readonly repositoryLinkState: RepositoryLinkState
   readonly reviewSubject: ReviewSubject
   readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
@@ -1696,6 +1897,7 @@ const ReviewScreen = ({
   readonly viewedFileKeys: ReadonlySet<string>
   readonly onBack: () => void
   readonly onAISettingsChange: (settings: AISettings) => void
+  readonly onLinkRepository: () => Promise<boolean>
   readonly onReload: () => void
   readonly onSelectPath: (path: string) => void
   readonly onSetViewed: (reviewKey: string, viewed: boolean) => void
@@ -1705,6 +1907,7 @@ const ReviewScreen = ({
     aiAgentAvailable={aiAgentAvailable}
     aiSettings={aiSettings}
     parsedDiff={parsedDiff}
+    repositoryLinkState={repositoryLinkState}
     reviewSubject={reviewSubject}
     diffRenderPass={diffRenderPass}
     expandedFileKeys={expandedFileKeys}
@@ -1715,6 +1918,7 @@ const ReviewScreen = ({
     viewedFileKeys={viewedFileKeys}
     onBack={onBack}
     onAISettingsChange={onAISettingsChange}
+    onLinkRepository={onLinkRepository}
     onReload={onReload}
     onSelectPath={onSelectPath}
     onSetViewed={onSetViewed}
@@ -2068,13 +2272,14 @@ const OnboardingScreen = ({
   readonly diagnostics: AppDiagnostics
   readonly isLoadingDiagnostics: boolean
   readonly status: string | null
-  readonly onComplete: () => void
+  readonly onComplete: (telemetryEnabled: boolean) => void
   readonly onInstallDiffDashCli: () => void
   readonly onOpenDocs: (url: string) => void
   readonly onRecheck: () => void
 }) => {
   const rows = prerequisiteRows(diagnostics)
   const completedCount = rows.filter((row) => row.done).length
+  const [telemetryEnabled, setTelemetryEnabled] = useState(true)
 
   return (
     <section className="mx-auto flex min-h-screen max-w-5xl flex-col justify-center px-6 py-10 text-sm">
@@ -2114,6 +2319,24 @@ const OnboardingScreen = ({
         </CardContent>
       </Card>
 
+      <div className="bg-card mt-4 flex items-start gap-3 rounded-xl border p-4 shadow-xs">
+        <input
+          id="anonymous-telemetry"
+          type="checkbox"
+          checked={telemetryEnabled}
+          className="border-input accent-primary mt-0.5 size-4 rounded"
+          onChange={(event) => setTelemetryEnabled(event.target.checked)}
+        />
+        <label htmlFor="anonymous-telemetry" className="cursor-pointer space-y-1">
+          <span className="block text-sm font-medium">Share anonymous usage data</span>
+          <span className="text-muted-foreground block text-xs leading-5">
+            Help improve DiffDash. We never collect source code, repository details, prompts, or
+            personal information. You can also set <code>telemetryEnabled</code> to false in
+            <code> ~/.config/diffdash/settings.json</code> and restart DiffDash.
+          </span>
+        </label>
+      </div>
+
       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-muted-foreground text-xs">
           {status ?? "You can continue now and finish setup later from Home."}
@@ -2123,7 +2346,7 @@ const OnboardingScreen = ({
             {isLoadingDiagnostics ? <Loader2 className="size-3 animate-spin" /> : null}
             Recheck
           </Button>
-          <Button onClick={onComplete}>Continue to DiffDash</Button>
+          <Button onClick={() => onComplete(telemetryEnabled)}>Continue to DiffDash</Button>
         </div>
       </div>
     </section>
@@ -2299,10 +2522,10 @@ const prerequisiteRows = (diagnostics: AppDiagnostics): readonly SetupRequiremen
   },
   {
     key: "gh-cli",
-    title: "GitHub CLI installed",
+    title: "GitHub CLI supported",
     description: "DiffDash uses gh to search repositories, load PRs, and submit reviews.",
-    detail: diagnostics.ghInstalled ? "gh is available in PATH." : "gh was not found in PATH.",
-    done: diagnostics.ghInstalled,
+    detail: githubCliPrerequisiteDetail(diagnostics),
+    done: diagnostics.ghSupported,
   },
   {
     key: "gh-auth",
@@ -2337,6 +2560,18 @@ const installedCodingAgentDetail = (agents: readonly string[]) => {
   return `Detected ${agents.map(codingAgentLabel).join(", ")}.`
 }
 
+const githubCliPrerequisiteDetail = (diagnostics: AppDiagnostics) => {
+  if (!diagnostics.ghInstalled) return "gh was not found in PATH."
+  if (diagnostics.ghSupported)
+    return `GitHub CLI ${diagnostics.ghVersion ?? "unknown"} supports repository search.`
+
+  const foundVersion = diagnostics.ghVersion ?? "an unknown version"
+  if (!diagnostics.ghSearchRepositoriesAvailable) {
+    return `GitHub CLI 2.7.0 or newer is required for repository search. Found ${foundVersion} without gh search repos support. Update gh, then restart DiffDash.`
+  }
+  return `GitHub CLI 2.7.0 or newer is required for repository search. Found ${foundVersion}. Update gh, then restart DiffDash.`
+}
+
 const codingAgentLabel = (agent: string) => {
   if (agent === "codex") return "Codex"
   if (agent === "claude") return "Claude"
@@ -2348,6 +2583,7 @@ const PullRequestDetailView = ({
   aiAgentAvailable,
   aiSettings,
   parsedDiff,
+  repositoryLinkState,
   reviewSubject,
   diffRenderPass,
   expandedFileKeys,
@@ -2358,6 +2594,7 @@ const PullRequestDetailView = ({
   viewedFileKeys,
   onBack,
   onAISettingsChange,
+  onLinkRepository,
   onReload,
   onSelectPath,
   onSetViewed,
@@ -2366,6 +2603,7 @@ const PullRequestDetailView = ({
   readonly aiAgentAvailable: boolean
   readonly aiSettings: AISettings
   readonly parsedDiff: ParsedDiff | null
+  readonly repositoryLinkState: RepositoryLinkState
   readonly reviewSubject: ReviewSubject
   readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
@@ -2376,12 +2614,14 @@ const PullRequestDetailView = ({
   readonly viewedFileKeys: ReadonlySet<string>
   readonly onBack: () => void
   readonly onAISettingsChange: (settings: AISettings) => void
+  readonly onLinkRepository: () => Promise<boolean>
   readonly onReload: () => void
   readonly onSelectPath: (path: string) => void
   readonly onSetViewed: (reviewKey: string, viewed: boolean) => void
   readonly onToggleExpanded: (reviewKey: string) => void
 }) => {
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
+  const stickyReviewChromeRef = useRef<HTMLDivElement>(null)
   const lastAutoScrolledPathRef = useRef<string | null>(null)
   const lastPointerPositionRef = useRef<{
     readonly clientX: number
@@ -2403,10 +2643,15 @@ const PullRequestDetailView = ({
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
   const [fileOpenStatus, setFileOpenStatus] = useState<string | null>(null)
   const [approvalState, setApprovalState] = useState<PullRequestApprovalState>("checking")
+  const [expandedLineAnchor, setExpandedLineAnchor] = useState<ReviewThreadAnchor | null>(null)
+  const [repositoryBannerDismissed, setRepositoryBannerDismissed] = useState(false)
+  const [repositoryLinking, setRepositoryLinking] = useState(false)
+  const [repositoryLinkError, setRepositoryLinkError] = useState<string | null>(null)
   const reviewFiles = reviewSubjectFiles(reviewSubject)
   const reviewBaseSha = reviewSubjectBaseSha(reviewSubject)
   const reviewHeadSha = reviewSubjectHeadSha(reviewSubject)
   const reviewIdentity = reviewSubjectIdentity(reviewSubject)
+  const reviewThreads = useReviewThreads(reviewThreadScope(reviewSubject))
   const approvalPullRequest =
     reviewSubject.kind === "pullRequest" ? reviewSubject.pullRequest : null
   const changedFiles = parsedDiff?.files ?? []
@@ -2464,12 +2709,16 @@ const PullRequestDetailView = ({
     sidebarTab === "walkthrough" && activeWalkthroughStep !== null
       ? activeWalkthroughFiles
       : filteredChangedFiles
+  const indexedThreadDetails = reviewThreads.details
   const activeStepComplete =
     activeWalkthroughStep !== null &&
     activeStepFiles.length > 0 &&
     activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
   const reviewDiffOptions = reviewDiffOptionsForTheme(theme)
   useEffect(() => {
+    lastAutoScrolledPathRef.current = null
+    lastPointerPositionRef.current = null
+    setActiveFilePath(null)
     setSidebarTab("tree")
     setWalkthroughState({ status: "idle" })
     setActiveWalkthroughStepIndex(0)
@@ -2478,6 +2727,10 @@ const PullRequestDetailView = ({
     setShowHiddenFiles(false)
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
+    setExpandedLineAnchor(null)
+    setRepositoryBannerDismissed(false)
+    setRepositoryLinking(false)
+    setRepositoryLinkError(null)
     setApprovalState("checking")
   }, [reviewIdentity, reviewBaseSha, reviewHeadSha])
 
@@ -2567,7 +2820,9 @@ const PullRequestDetailView = ({
     window.requestAnimationFrame(() => {
       const container = diffScrollContainerRef.current
       const card = document.getElementById(diffCardDomId(file.reviewKey))
-      if (container !== null && card !== null) scrollIntoDiffPane(container, card)
+      if (container !== null && card !== null) {
+        scrollIntoDiffPane(container, card, stickyReviewChromeRef.current?.offsetHeight)
+      }
     })
   }, [selectedPath, visibleChangedFiles])
 
@@ -2647,6 +2902,12 @@ const PullRequestDetailView = ({
       setVisitedWalkthroughStepIndexes(new Set([0]))
       setCollapsedWalkthroughFileKeys(new Set())
       setWalkthroughState({ status: "ready", stored })
+      captureAnalytics({
+        event: "walkthrough_generated",
+        reviewType: reviewSubject.kind === "pullRequest" ? "pull_request" : "local_diff",
+        regenerated: regenerate,
+        provider: aiSettings.provider,
+      })
     } catch (error) {
       setWalkthroughState({ status: "error", message: formatError(error, "Walkthrough failed") })
     }
@@ -2696,6 +2957,9 @@ const PullRequestDetailView = ({
         : focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, walkthroughScope)[0]
     if (file !== undefined && file !== null) selectWalkthroughFile(index, file)
   }
+  const toggleExpandedLine = (anchor: ReviewThreadAnchor) => {
+    setExpandedLineAnchor((current) => (sameReviewThreadLine(current, anchor) ? null : anchor))
+  }
   const reviewGoToItems = reviewGoToPaletteItems({
     files: changedFiles,
     onSelectFile: selectReviewFile,
@@ -2708,9 +2972,11 @@ const PullRequestDetailView = ({
     hiddenFileCount,
     isReloading,
     onMarkAllViewed: markAllFilesViewed,
+    onApprove: () => void approvePullRequest(),
     onRegenerateWalkthrough: () => void loadWalkthrough(true),
     onReload,
     onRevealHidden: revealHiddenFiles,
+    approvalState: reviewSubject.kind === "pullRequest" ? approvalState : null,
     showHiddenFiles,
     walkthroughLoading: walkthroughState.status === "loading",
   })
@@ -2743,6 +3009,8 @@ const PullRequestDetailView = ({
     selectPathAndScroll(file.path, file.reviewKey)
   }
   const selectPathAndScroll = (path: string, reviewKey?: string) => {
+    lastAutoScrolledPathRef.current = path
+    lastPointerPositionRef.current = null
     setActiveFilePath(path)
     onSelectPath(path)
     window.requestAnimationFrame(() => {
@@ -2752,9 +3020,38 @@ const PullRequestDetailView = ({
 
       const card = document.getElementById(diffCardDomId(reviewKey ?? file.reviewKey))
       if (card !== null) {
-        scrollIntoDiffPane(container, card)
+        scrollIntoDiffPane(container, card, stickyReviewChromeRef.current?.offsetHeight)
       }
     })
+  }
+  const selectIndexedThread = (details: ReviewThreadDetails) => {
+    const anchor = details.thread.currentAnchor ?? details.thread.originalAnchor
+    setExpandedLineAnchor(anchor)
+    setFileFilter("")
+    const file = changedFiles.find(
+      (candidate) => candidate.fileId === anchor.fileId || candidate.path === anchor.filePath,
+    )
+    if (file === undefined) return
+    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
+    const walkthroughStepIndex = activeWalkthroughSteps.findIndex((step) =>
+      focusFilesForWalkthroughHunks(changedFiles, step.hunkIds, walkthroughScope).some(
+        (candidate) => lineAnchorIsInFile(anchor, candidate),
+      ),
+    )
+    if (walkthroughStepIndex >= 0) {
+      const walkthroughFile = focusFilesForWalkthroughHunks(
+        changedFiles,
+        activeWalkthroughSteps[walkthroughStepIndex]?.hunkIds ?? [],
+        walkthroughScope,
+      ).find((candidate) => lineAnchorIsInFile(anchor, candidate))
+      if (walkthroughFile !== undefined) {
+        selectSidebarTab("walkthrough")
+        selectWalkthroughStep(walkthroughStepIndex)
+        selectPathAndScroll(walkthroughFile.path, walkthroughFile.reviewKey)
+        return
+      }
+    }
+    selectPathAndScroll(file.path, file.reviewKey)
   }
   const openRepositoryFile = async (path: string) => {
     setFileOpenStatus(`Opening ${path}...`)
@@ -2789,6 +3086,7 @@ const PullRequestDetailView = ({
         pullRequest.number,
       )
       setApprovalState("approved")
+      captureAnalytics({ event: "pull_request_approved" })
       setFileOpenStatus(`Approved PR #${pullRequest.number}.`)
     } catch (error) {
       setApprovalState("unapproved")
@@ -2809,6 +3107,23 @@ const PullRequestDetailView = ({
 
     window.requestAnimationFrame(() => setActiveFileFromPoint(position.clientX, position.clientY))
   }
+  const linkRepository = async () => {
+    if (repositoryLinking) return
+    setRepositoryLinking(true)
+    setRepositoryLinkError(null)
+    try {
+      const linked = await onLinkRepository()
+      if (linked) setRepositoryBannerDismissed(true)
+    } catch (error) {
+      setRepositoryLinkError(formatError(error, "Could not link repository"))
+    } finally {
+      setRepositoryLinking(false)
+    }
+  }
+  const showRepositoryLinkBanner =
+    reviewSubject.kind === "pullRequest" &&
+    repositoryLinkState === "unlinked" &&
+    !repositoryBannerDismissed
 
   return (
     <>
@@ -2919,6 +3234,7 @@ const PullRequestDetailView = ({
 
         <div
           ref={diffScrollContainerRef}
+          data-review-diff-scroll-container
           className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
           onPointerMove={(event) => {
             lastPointerPositionRef.current = {
@@ -2927,49 +3243,68 @@ const PullRequestDetailView = ({
             }
             setActiveFileFromPoint(event.clientX, event.clientY)
           }}
+          onPointerLeave={() => {
+            lastPointerPositionRef.current = null
+          }}
           onScroll={syncActiveFileFromPointer}
         >
-          <div className="bg-background/95 sticky top-0 z-10 border-b px-5 py-2 backdrop-blur">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-muted-foreground min-w-0 truncate text-xs">
-                {fileOpenStatus ?? status}
+          <div
+            ref={stickyReviewChromeRef}
+            className="bg-background/95 sticky top-0 z-10 backdrop-blur"
+          >
+            <div className="border-b px-5 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-muted-foreground min-w-0 truncate text-xs">
+                  {fileOpenStatus ?? status}
+                </div>
+                <div className="flex items-center gap-2">
+                  <ReviewActionsMenu items={reviewActionItems} />
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" disabled={isReloading} onClick={onReload}>
-                  {isReloading ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : (
-                    <RefreshCw className="size-3" />
-                  )}
-                  Reload diff
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setActionPaletteOpen(true)}>
-                  <Command className="size-3" />
-                  Actions
-                </Button>
-                {sidebarTab === "walkthrough" && walkthroughState.status === "ready" ? (
-                  <Button size="sm" variant="outline" onClick={() => void loadWalkthrough(true)}>
-                    Regenerate
-                  </Button>
-                ) : null}
-                {reviewSubject.kind === "pullRequest" ? (
+            </div>
+            {showRepositoryLinkBanner ? (
+              <section
+                aria-label="Local repository not linked"
+                className="bg-accent/70 border-b px-5 py-3"
+              >
+                <div className="mx-auto flex max-w-review-diff items-start gap-3">
+                  <div className="bg-background text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs">
+                    <FolderGit2 className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold">
+                      Link a checkout for isolated agent review
+                    </p>
+                    <p className="text-muted-foreground mt-0.5 text-xs leading-5">
+                      DiffDash creates a private worktree at the exact PR revision. Your branch and
+                      local changes are never switched or cleaned.
+                    </p>
+                    {repositoryLinkError === null ? null : (
+                      <p role="alert" className="text-destructive mt-1 text-xs">
+                        {repositoryLinkError}
+                      </p>
+                    )}
+                  </div>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={approvalState !== "unapproved"}
-                    className={
-                      approvalState === "approved"
-                        ? "border-review-success bg-review-success/10 text-review-success hover:bg-review-success/15 hover:text-review-success disabled:opacity-100"
-                        : undefined
-                    }
-                    onClick={() => void approvePullRequest()}
+                    disabled={repositoryLinking}
+                    onClick={() => void linkRepository()}
                   >
-                    <Check className="size-3" />
-                    {approvalButtonLabel(approvalState)}
+                    {repositoryLinking ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    {repositoryLinking ? "Linking" : "Link folder"}
                   </Button>
-                ) : null}
-              </div>
-            </div>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Dismiss local repository banner"
+                    onClick={() => setRepositoryBannerDismissed(true)}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </div>
+              </section>
+            ) : null}
           </div>
 
           <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
@@ -2989,7 +3324,10 @@ const PullRequestDetailView = ({
                 onRetry={() => void loadWalkthrough(false)}
               />
             ) : null}
-            <section className="bg-card rounded-2xl border p-4 shadow-xs">
+            <section
+              id="review-thread-summary"
+              className="bg-card scroll-mt-14 rounded-2xl border p-4 shadow-xs"
+            >
               <div className="flex flex-wrap items-center gap-1.5">
                 {reviewSubject.kind === "pullRequest" ? (
                   <>
@@ -3054,8 +3392,20 @@ const PullRequestDetailView = ({
                   </>
                 )}
               </div>
+              {reviewThreads.loading ? (
+                <div className="text-muted-foreground mt-3 border-t pt-3 text-caption">
+                  Loading line comments...
+                </div>
+              ) : null}
             </section>
 
+            <ReviewThreadIndex
+              items={indexedThreadDetails}
+              loading={reviewThreads.loading}
+              error={reviewThreads.error}
+              onReload={reviewThreads.reload}
+              onSelect={selectIndexedThread}
+            />
             {parsedDiff === null ? <EmptyState>Loading diff...</EmptyState> : null}
             {parsedDiff !== null &&
             normalizedFileFilter.length === 0 &&
@@ -3077,12 +3427,15 @@ const PullRequestDetailView = ({
                     ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
                     : expandedFileKeys.has(file.reviewKey)
                 }
+                expandedLineAnchor={expandedLineAnchor}
                 file={file}
+                reviewThreads={reviewThreads}
                 selected={selectedVisiblePath === file.path || activeFilePath === file.path}
                 viewed={viewedFileKeys.has(file.reviewKey)}
                 onOpenFile={() => void openRepositoryFile(file.path)}
                 onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
                 onSetViewed={(viewed) => onSetViewed(file.reviewKey, viewed)}
+                onToggleLine={toggleExpandedLine}
                 onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
               />
             ))}
@@ -3134,7 +3487,7 @@ const WalkthroughSidebar = ({
 }) => {
   if (state.status === "loading") {
     return (
-      <BrailleLoadingText
+      <UnicodeLoadingText
         className="text-review-sidebar-muted px-3 py-2 text-xs"
         text={state.message}
       />
@@ -3301,6 +3654,88 @@ const approvalButtonLabel = (state: PullRequestApprovalState) => {
   return "Approve"
 }
 
+/** Anchored context menu for review actions; the keyboard palette shares the same item model. */
+const ReviewActionsMenu = ({ items }: { readonly items: readonly CommandPaletteItem[] }) => {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const closeFromOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return
+      setOpen(false)
+    }
+    const closeFromEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    window.addEventListener("pointerdown", closeFromOutsidePointer)
+    window.addEventListener("keydown", closeFromEscape)
+    return () => {
+      window.removeEventListener("pointerdown", closeFromOutsidePointer)
+      window.removeEventListener("keydown", closeFromEscape)
+    }
+  }, [open])
+
+  return (
+    <div ref={menuRef} className="relative shrink-0">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Command className="size-3" />
+        Actions
+        <ChevronDown className="size-3" />
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Review actions"
+          className="bg-popover text-popover-foreground absolute top-full right-0 z-30 mt-2 w-72 overflow-hidden rounded-xl border p-1 shadow-lg"
+        >
+          {items.map((item) => {
+            const Icon = reviewActionIcon(item.id)
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() => {
+                  if (item.disabled) return
+                  setOpen(false)
+                  item.onSelect()
+                }}
+              >
+                <Icon className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block font-medium">{item.title}</span>
+                  <span className="text-muted-foreground mt-0.5 block truncate text-caption">
+                    {item.subtitle}
+                  </span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+const reviewActionIcon = (id: string) => {
+  if (id === "action:reload-diff") return RefreshCw
+  if (id === "action:regenerate-walkthrough") return Sparkles
+  if (id === "action:approve-pull-request") return Check
+  if (id === "action:mark-all-viewed") return Check
+  return Search
+}
+
 const WalkthroughSettingsMenu = ({
   settings,
   onChange,
@@ -3410,7 +3845,11 @@ const WalkthroughSettingsMenuItem = ({
 )
 
 const aiSettingsWithProvider = (settings: AISettings, provider: AIProvider) =>
-  AISettings.make({ provider, models: aiProviderModelsFromSettings(settings) })
+  AISettings.make({
+    provider,
+    models: aiProviderModelsFromSettings(settings),
+    telemetryEnabled: settings.telemetryEnabled,
+  })
 
 const aiSettingsWithModel = (
   settings: AISettings,
@@ -3419,6 +3858,7 @@ const aiSettingsWithModel = (
   if (settings.provider === "auto" && isAutoModel(model)) {
     return AISettings.make({
       provider: settings.provider,
+      telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
         auto: model,
         codex: settings.models.codex,
@@ -3431,6 +3871,7 @@ const aiSettingsWithModel = (
   if (settings.provider === "claude" && isClaudeModel(model)) {
     return AISettings.make({
       provider: settings.provider,
+      telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
         auto: settings.models.auto,
         codex: settings.models.codex,
@@ -3443,6 +3884,7 @@ const aiSettingsWithModel = (
   if (settings.provider === "opencode" && isOpenCodeModel(model)) {
     return AISettings.make({
       provider: settings.provider,
+      telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
         auto: settings.models.auto,
         codex: settings.models.codex,
@@ -3455,6 +3897,7 @@ const aiSettingsWithModel = (
   if (isCodexModel(model)) {
     return AISettings.make({
       provider: settings.provider,
+      telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
         auto: settings.models.auto,
         codex: model,
@@ -3526,33 +3969,6 @@ const SidebarMessage = ({
   </div>
 )
 
-const BrailleLoadingText = ({
-  className = "",
-  text,
-}: {
-  readonly className?: string
-  readonly text: string
-}) => {
-  const [frameIndex, setFrameIndex] = useState(0)
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setFrameIndex((index) => (index + 1) % BRAILLE_LOADING_FRAMES.length)
-    }, 80)
-
-    return () => window.clearInterval(timer)
-  }, [])
-
-  return (
-    <div className={`inline-flex items-center gap-2 ${className}`}>
-      <span aria-hidden="true" className="font-mono text-sm leading-none">
-        {BRAILLE_LOADING_FRAMES[frameIndex]}
-      </span>
-      <span>{text}</span>
-    </div>
-  )
-}
-
 const WalkthroughErrorNotice = ({
   message,
   variant,
@@ -3616,7 +4032,7 @@ const WalkthroughMainHeader = ({
   readonly onRetry: () => void
 }) => {
   if (state.status === "loading") {
-    return <BrailleLoadingText className="text-muted-foreground text-sm" text={state.message} />
+    return <UnicodeLoadingText className="text-muted-foreground text-sm" text={state.message} />
   }
 
   if (state.status === "error") {
@@ -3683,8 +4099,6 @@ type WalkthroughStepGroup = {
   }[]
 }
 
-const BRAILLE_LOADING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
-
 const WALKTHROUGH_SECTION_ICONS = [GitBranch, GitPullRequest, Sparkles, FolderGit2, Star] as const
 
 const groupWalkthroughSteps = (
@@ -3749,26 +4163,52 @@ const OpenDiffCard = ({
   diffOptions,
   diffRenderPass,
   expanded,
+  expandedLineAnchor,
   file,
+  reviewThreads,
   selected,
   viewed,
   onOpenFile,
   onSelect,
   onSetViewed,
+  onToggleLine,
   onToggleExpanded,
 }: {
-  readonly diffOptions: FileDiffOptions<undefined>
+  readonly diffOptions: FileDiffOptions<ReviewThreadAnnotation>
   readonly diffRenderPass: number
   readonly expanded: boolean
+  readonly expandedLineAnchor: ReviewThreadAnchor | null
   readonly file: ParsedDiffFile
+  readonly reviewThreads: ReviewThreadsController
   readonly selected: boolean
   readonly viewed: boolean
   readonly onOpenFile: () => void
   readonly onSelect: () => void
   readonly onSetViewed: (viewed: boolean) => void
+  readonly onToggleLine: (anchor: ReviewThreadAnchor) => void
   readonly onToggleExpanded: () => void
 }) => {
   const isExpanded = expanded && !viewed
+  const annotations = reviewThreadAnnotations(file, reviewThreads.details, expandedLineAnchor)
+  const interactiveDiffOptions: FileDiffOptions<ReviewThreadAnnotation> = {
+    ...diffOptions,
+    onGutterUtilityClick: ({ side, start }) => {
+      if (side === undefined) return
+      const anchor = lineReviewAnchor(file, side, start)
+      if (anchor !== null) onToggleLine(anchor)
+    },
+    onLineClick: ({ annotationSide, event, lineNumber, numberColumn }) => {
+      if (numberColumn) return
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-review-thread-annotation]") !== null
+      ) {
+        return
+      }
+      const anchor = lineReviewAnchor(file, annotationSide, lineNumber)
+      if (anchor !== null) onToggleLine(anchor)
+    },
+  }
   const selectedClassName = viewed
     ? "border-review-success/55 bg-review-success/[0.03] ring-1 ring-review-success/25"
     : selected
@@ -3820,20 +4260,259 @@ const OpenDiffCard = ({
         onToggleExpanded={onToggleExpanded}
       />
       {isExpanded ? (
-        <div className="bg-background -mt-px overflow-hidden border-t">
-          <PatchDiff
-            key={`${file.reviewKey}:${diffRenderPass}`}
-            className="block overflow-auto text-xs"
-            disableWorkerPool
-            metrics={REVIEW_DIFF_METRICS}
-            options={diffOptions}
-            patch={file.patch}
-          />
-        </div>
+        <>
+          <div className="bg-background -mt-px overflow-hidden border-t">
+            <PatchDiff<ReviewThreadAnnotation>
+              key={`${file.reviewKey}:${diffRenderPass}`}
+              className="block overflow-auto text-xs"
+              disableWorkerPool
+              lineAnnotations={annotations}
+              metrics={REVIEW_DIFF_METRICS}
+              options={interactiveDiffOptions}
+              patch={file.patch}
+              renderAnnotation={(annotation) => {
+                const {
+                  anchor,
+                  details,
+                  draftAnchor,
+                  expanded: reviewExpanded,
+                } = annotation.metadata
+                const contentId = reviewThreadAnnotationContentId(anchor)
+                return (
+                  <div
+                    data-review-thread-annotation
+                    className="bg-background box-border w-full min-w-0 max-w-full overflow-x-clip px-3 py-1.5 [overflow-wrap:anywhere]"
+                  >
+                    <section className="bg-card overflow-hidden rounded-lg border shadow-xs">
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:bg-muted/45 hover:text-foreground focus-visible:ring-ring flex min-h-9 w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
+                        aria-controls={contentId}
+                        aria-expanded={reviewExpanded}
+                        onClick={() => onToggleLine(anchor)}
+                      >
+                        {reviewExpanded ? (
+                          <ChevronDown className="size-3.5 shrink-0" />
+                        ) : (
+                          <ChevronRight className="size-3.5 shrink-0" />
+                        )}
+                        <span>
+                          Review on{" "}
+                          <strong className="text-foreground">{reviewLineLabel(anchor)}</strong>
+                        </span>
+                      </button>
+                      {reviewExpanded ? (
+                        <div id={contentId} className="divide-y border-t">
+                          {details.map((threadDetails) => (
+                            <ReviewThreadPanel
+                              key={threadDetails.thread.id}
+                              embedded
+                              agentRunning={reviewThreads.runningThreadIds.includes(
+                                threadDetails.thread.id,
+                              )}
+                              agentProgress={
+                                reviewThreads.agentProgress.find(
+                                  (progress) => progress.threadId === threadDetails.thread.id,
+                                )?.stage ?? null
+                              }
+                              details={threadDetails}
+                              orchestration={{ retryAgentMessage: reviewThreads.runAgent }}
+                              onAddUserMessage={reviewThreads.addUserMessage}
+                              onRefresh={reviewThreads.refreshThread}
+                            />
+                          ))}
+                          {draftAnchor === null ? null : (
+                            <div className="p-3">
+                              <ReviewThreadComposer
+                                label="Line comment"
+                                onCancel={() => onToggleLine(draftAnchor)}
+                                onSubmit={async (bodyMarkdown) => {
+                                  await reviewThreads.createThread(draftAnchor, bodyMarkdown)
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </section>
+                  </div>
+                )
+              }}
+            />
+          </div>
+        </>
       ) : null}
     </section>
   )
 }
+
+type ReviewThreadAnnotation = {
+  readonly anchor: ReviewThreadAnchor
+  readonly details: readonly ReviewThreadDetails[]
+  readonly draftAnchor: ReviewThreadAnchor | null
+  readonly expanded: boolean
+}
+
+const reviewThreadAnnotations = (
+  file: ParsedDiffFile,
+  details: readonly ReviewThreadDetails[],
+  expandedLineAnchor: ReviewThreadAnchor | null,
+): DiffLineAnnotation<ReviewThreadAnnotation>[] => {
+  const annotations: DiffLineAnnotation<ReviewThreadAnnotation>[] = []
+  for (const item of details) {
+    const anchor = item.thread.currentAnchor
+    if (
+      anchor === null ||
+      item.thread.anchorStatus !== "active" ||
+      !lineAnchorIsInFile(anchor, file)
+    ) {
+      continue
+    }
+    const existingIndex = annotations.findIndex((annotation) =>
+      sameReviewThreadLine(annotation.metadata.anchor, anchor),
+    )
+    if (existingIndex < 0) {
+      annotations.push({
+        ...annotationPosition(anchor),
+        metadata: {
+          anchor,
+          details: [item],
+          draftAnchor: null,
+          expanded: sameReviewThreadLine(expandedLineAnchor, anchor),
+        },
+      })
+      continue
+    }
+    const existing = annotations[existingIndex]
+    if (existing !== undefined) {
+      annotations[existingIndex] = {
+        ...existing,
+        metadata: { ...existing.metadata, details: [...existing.metadata.details, item] },
+      }
+    }
+  }
+
+  if (expandedLineAnchor === null || !lineAnchorIsInFile(expandedLineAnchor, file)) {
+    return annotations
+  }
+  if (
+    annotations.some((annotation) =>
+      sameReviewThreadLine(annotation.metadata.anchor, expandedLineAnchor),
+    )
+  ) {
+    return annotations
+  }
+  return [
+    ...annotations,
+    {
+      ...annotationPosition(expandedLineAnchor),
+      metadata: {
+        anchor: expandedLineAnchor,
+        details: [],
+        draftAnchor: expandedLineAnchor,
+        expanded: true,
+      },
+    },
+  ]
+}
+
+const reviewThreadAnnotationContentId = (anchor: ReviewThreadAnchor) =>
+  `review-thread-${anchor.hunkId}-${anchor.side}-${anchor.lineNumber}`
+
+const annotationPosition = (
+  anchor: ReviewThreadAnchor,
+): Pick<DiffLineAnnotation<ReviewThreadAnnotation>, "lineNumber" | "side"> => ({
+  lineNumber: anchor.lineNumber,
+  side: anchor.side === "old" ? "deletions" : "additions",
+})
+
+const lineReviewAnchor = (
+  file: ParsedDiffFile,
+  annotationSide: "additions" | "deletions",
+  lineNumber: number,
+): ReviewThreadAnchor | null => {
+  const side = annotationSide === "deletions" ? "old" : "new"
+  for (const hunk of file.hunks) {
+    let oldLine = hunk.oldStart
+    let newLine = hunk.newStart
+    for (const line of hunk.lines) {
+      const content = line.slice(1)
+      if (line.startsWith(" ")) {
+        if ((side === "old" ? oldLine : newLine) === lineNumber) {
+          return LineReviewAnchor.make({
+            fileId: file.fileId,
+            filePath: file.path,
+            oldPath: file.oldPath,
+            hunkId: hunk.id,
+            hunkFingerprint: hunk.fingerprint,
+            hunkHeader: hunk.header,
+            side,
+            lineNumber,
+            lineContent: content,
+          })
+        }
+        oldLine += 1
+        newLine += 1
+        continue
+      }
+      if (line.startsWith("-")) {
+        if (side === "old" && oldLine === lineNumber) {
+          return LineReviewAnchor.make({
+            fileId: file.fileId,
+            filePath: file.path,
+            oldPath: file.oldPath,
+            hunkId: hunk.id,
+            hunkFingerprint: hunk.fingerprint,
+            hunkHeader: hunk.header,
+            side,
+            lineNumber,
+            lineContent: content,
+          })
+        }
+        oldLine += 1
+        continue
+      }
+      if (line.startsWith("+")) {
+        if (side === "new" && newLine === lineNumber) {
+          return LineReviewAnchor.make({
+            fileId: file.fileId,
+            filePath: file.path,
+            oldPath: file.oldPath,
+            hunkId: hunk.id,
+            hunkFingerprint: hunk.fingerprint,
+            hunkHeader: hunk.header,
+            side,
+            lineNumber,
+            lineContent: content,
+          })
+        }
+        newLine += 1
+      }
+    }
+  }
+  return null
+}
+
+const lineAnchorIsInFile = (anchor: ReviewThreadAnchor, file: ParsedDiffFile) => {
+  if (anchor.fileId !== file.fileId || anchor.filePath !== file.path) return false
+  const annotationSide = anchor.side === "old" ? "deletions" : "additions"
+  const candidate = lineReviewAnchor(file, annotationSide, anchor.lineNumber)
+  return (
+    candidate !== null &&
+    candidate.hunkId === anchor.hunkId &&
+    candidate.hunkFingerprint === anchor.hunkFingerprint &&
+    candidate.lineContent === anchor.lineContent
+  )
+}
+
+const sameReviewThreadLine = (left: ReviewThreadAnchor | null, right: ReviewThreadAnchor) =>
+  left !== null &&
+  left.fileId === right.fileId &&
+  left.hunkId === right.hunkId &&
+  left.hunkFingerprint === right.hunkFingerprint &&
+  left.side === right.side &&
+  left.lineNumber === right.lineNumber &&
+  left.lineContent === right.lineContent
 
 const DiffCardHeader = ({
   expanded,
@@ -3935,7 +4614,7 @@ const ReviewFileTree = ({
   const appliedSelectedPathRef = useRef<string | null>(null)
   const suppressSelectionChangeRef = useRef(false)
   const treeInput = buildReviewFileTreeInput(files, true)
-  const preparedInput = preparePresortedFileTreeInput(treeInput.paths)
+  const preparedInput = prepareReviewFileTreeInput(treeInput.paths)
   const treeInputKey = `${treeInput.paths.join("\u0000")}\u0001${treeInput.gitStatus
     .map((entry) => `${entry.path}\u0000${entry.status}`)
     .join("\u0000")}`
@@ -4029,6 +4708,9 @@ const FallbackFileTree = ({
   </nav>
 )
 
+/** Sorts arbitrary diff-order paths before they are passed to Pierre's tree model. */
+export const prepareReviewFileTreeInput = (paths: readonly string[]) => prepareFileTreeInput(paths)
+
 const RepoSourceIcon = ({ localPath }: { readonly localPath: string | null }) =>
   localPath === null ? (
     <Cloud className="text-muted-foreground size-4 shrink-0" />
@@ -4061,6 +4743,23 @@ const reviewSubjectFiles = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"
     ? reviewSubject.pullRequest.files
     : reviewSubject.localReview.files
+
+const reviewThreadScope = (reviewSubject: ReviewSubject) =>
+  reviewSubject.kind === "pullRequest"
+    ? ({
+        kind: "pullRequest",
+        owner: reviewSubject.pullRequest.repoOwner,
+        name: reviewSubject.pullRequest.repoName,
+        number: reviewSubject.pullRequest.number,
+        baseRevision: reviewSubject.pullRequest.baseRefOid,
+        headRevision: reviewSubject.pullRequest.headRefOid,
+      } as const)
+    : ({
+        kind: "local",
+        rootPath: reviewSubject.localReview.rootPath,
+        baseRevision: reviewSubject.localReview.baseSha,
+        headRevision: reviewSubject.localReview.headSha,
+      } as const)
 
 const reviewSubjectWalkthroughScope = (
   reviewSubject: ReviewSubject,
@@ -4121,7 +4820,9 @@ const resolveThemePreference = (preference: ThemePreference): ResolvedTheme => {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
 }
 
-const reviewDiffOptionsForTheme = (theme: ResolvedTheme): FileDiffOptions<undefined> => ({
+const reviewDiffOptionsForTheme = (
+  theme: ResolvedTheme,
+): FileDiffOptions<ReviewThreadAnnotation> => ({
   ...REVIEW_DIFF_OPTIONS,
   themeType: theme,
 })
@@ -4219,10 +4920,12 @@ const reviewGoToPaletteItems = ({
 
 const reviewActionPaletteItems = ({
   aiAgentAvailable,
+  approvalState,
   changedFiles,
   hiddenFileCount,
   isReloading,
   onMarkAllViewed,
+  onApprove,
   onRegenerateWalkthrough,
   onReload,
   onRevealHidden,
@@ -4230,10 +4933,12 @@ const reviewActionPaletteItems = ({
   walkthroughLoading,
 }: {
   readonly aiAgentAvailable: boolean
+  readonly approvalState: PullRequestApprovalState | null
   readonly changedFiles: readonly ParsedDiffFile[]
   readonly hiddenFileCount: number
   readonly isReloading: boolean
   readonly onMarkAllViewed: () => void
+  readonly onApprove: () => void
   readonly onRegenerateWalkthrough: () => void
   readonly onReload: () => void
   readonly onRevealHidden: () => void
@@ -4248,6 +4953,21 @@ const reviewActionPaletteItems = ({
     title: "Reload diff",
     onSelect: onReload,
   },
+  ...(approvalState === null
+    ? []
+    : [
+        {
+          disabled: approvalState !== "unapproved",
+          id: "action:approve-pull-request",
+          keywords: "approve pull request review",
+          subtitle:
+            approvalState === "unapproved"
+              ? "Approve this pull request"
+              : approvalButtonLabel(approvalState),
+          title: approvalButtonLabel(approvalState),
+          onSelect: onApprove,
+        },
+      ]),
   {
     disabled: !aiAgentAvailable || walkthroughLoading,
     id: "action:regenerate-walkthrough",
@@ -4295,8 +5015,11 @@ const diffCardDomId = (reviewKey: string) => {
   return `diff-card-${hash.toString(36)}`
 }
 
-const scrollIntoDiffPane = (container: HTMLElement, target: HTMLElement) => {
-  const stickyHeaderOffset = 56
+const scrollIntoDiffPane = (
+  container: HTMLElement,
+  target: HTMLElement,
+  stickyHeaderOffset = 56,
+) => {
   const containerRect = container.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const rawScrollTop = container.scrollTop + targetRect.top - containerRect.top - stickyHeaderOffset

@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+import { ReviewFileId, ReviewHunkFingerprint, ReviewHunkId } from "./review-identity"
+
 /** Supported source providers for repositories tracked by DiffDash. */
 export const RepoProvider = Schema.Literal("github", "local")
 
@@ -40,6 +42,14 @@ export class RepositorySearchScope extends Schema.Class<RepositorySearchScope>(
 )({
   login: Schema.String,
   kind: Schema.Literal("user", "organization"),
+}) {}
+
+/** Owner-scoped input for searching repositories through a Git provider. */
+export class RepositorySearchRequest extends Schema.Class<RepositorySearchRequest>(
+  "RepositorySearchRequest",
+)({
+  query: Schema.String,
+  owners: Schema.Array(Schema.String),
 }) {}
 
 /** Input for creating or updating a repository record. */
@@ -166,6 +176,8 @@ export type DiffFileStatus = typeof DiffFileStatus.Type
 
 /** A parsed unified diff hunk. */
 export class ParsedDiffHunk extends Schema.Class<ParsedDiffHunk>("ParsedDiffHunk")({
+  id: ReviewHunkId,
+  fingerprint: ReviewHunkFingerprint,
   header: Schema.String,
   oldStart: Schema.Number,
   oldLines: Schema.Number,
@@ -176,6 +188,7 @@ export class ParsedDiffHunk extends Schema.Class<ParsedDiffHunk>("ParsedDiffHunk
 
 /** Parsed metadata and renderable patch text for one changed file. */
 export class ParsedDiffFile extends Schema.Class<ParsedDiffFile>("ParsedDiffFile")({
+  fileId: ReviewFileId,
   reviewKey: Schema.String,
   path: Schema.String,
   oldPath: Schema.NullOr(Schema.String),

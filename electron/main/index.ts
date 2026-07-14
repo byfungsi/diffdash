@@ -1,12 +1,47 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
-import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-
-import { AppState as SharedAppState, DEFAULT_APP_STATE } from "../../src/shared/app-state"
+import { Effect, Layer, ManagedRuntime, Schema } from "effect"
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
+import { createAppLifecycle } from "./app-lifecycle"
+import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
+import { electronErrorPageDataUrl } from "../error-page"
+import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
+import { AgentRunStore } from "../../src/main/services/agent-run-store"
+import { AIAgent } from "../../src/main/services/ai-agent"
+import { Analytics } from "../../src/main/services/analytics"
+import { AppConfig } from "../../src/main/services/app-config"
+import { AppSettings } from "../../src/main/services/app-settings"
+import { AppState } from "../../src/main/services/app-state"
+import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
+import { CliError, CliService } from "../../src/main/services/cli"
+import { CliStreamService } from "../../src/main/services/cli-stream"
+import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
+import { DatabaseService } from "../../src/main/services/database"
+import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
+import { GitService } from "../../src/main/services/git"
+import { GitProvider } from "../../src/main/services/git-provider"
+import { GitHubProvider } from "../../src/main/services/github"
+import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
+import { Prerequisites } from "../../src/main/services/prerequisites"
+import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
+import { RepositoryStore } from "../../src/main/services/repository-store"
+import { ReviewAgentService } from "../../src/main/services/review-agent"
+import { ReviewAgentProviderRegistry } from "../../src/main/services/review-agent-provider-registry"
+import { ReviewContextService } from "../../src/main/services/review-context"
+import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
+import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
+import { ReviewThreadStore } from "../../src/main/services/review-thread-store"
+import { ReviewWorktreePool } from "../../src/main/services/review-worktree-pool"
+import { ThreadMemoryStore } from "../../src/main/services/thread-memory-store"
+import { ViewedFileStore } from "../../src/main/services/viewed-file-store"
+import { WalkthroughService } from "../../src/main/services/walkthrough"
+import { WalkthroughStore } from "../../src/main/services/walkthrough-store"
 import { AISettings } from "../../src/shared/ai-settings"
+import { AnalyticsEvent } from "../../src/shared/analytics"
+import { DEFAULT_APP_STATE, AppState as SharedAppState } from "../../src/shared/app-state"
+import type { AppUpdateState } from "../../src/shared/app-update"
 import { parseUnifiedDiff } from "../../src/shared/diff-parser"
 import type {
   LocalReviewDetail,
@@ -14,38 +49,39 @@ import type {
   PullRequestDetail,
   PullRequestDiff,
   PullRequestSummary,
+  Repo,
   RepositorySearchResult,
   RepositorySearchScope,
-  Repo,
 } from "../../src/shared/domain"
+import { RepositorySearchRequest } from "../../src/shared/domain"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "../../src/shared/prerequisites"
+import { LinkRepositoryCheckoutRequest } from "../../src/shared/repository-link"
+import { ReviewAgentProgress } from "../../src/shared/review-agent"
+import { makePullRequestReviewKey } from "../../src/shared/review-identity"
 import {
-  WALKTHROUGH_PROMPT_VERSION,
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  isReviewAnchorInParsedDiff,
+  type ReviewThread,
+  type ReviewThreadDetails,
+  ReviewThreadIdRequest,
+  ReviewThreadTarget,
+  RunReviewThreadAgentRequest,
+} from "../../src/shared/review-thread"
+import {
   prepareWalkthroughPromptInput,
+  type StoredWalkthrough,
+  WALKTHROUGH_PROMPT_VERSION,
   walkthroughLocalDiffScope,
   walkthroughPullRequestScope,
-  type StoredWalkthrough,
 } from "../../src/shared/walkthrough"
-import { AppConfig } from "../../src/main/services/app-config"
-import { AppState } from "../../src/main/services/app-state"
-import { AppSettings } from "../../src/main/services/app-settings"
-import { AIAgent } from "../../src/main/services/ai-agent"
-import { CliService } from "../../src/main/services/cli"
-import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
-import { DatabaseService } from "../../src/main/services/database"
-import { GitService } from "../../src/main/services/git"
-import { GitProvider } from "../../src/main/services/git-provider"
-import { GitHubProvider } from "../../src/main/services/github"
-import { Prerequisites } from "../../src/main/services/prerequisites"
-import { RepositoryStore } from "../../src/main/services/repository-store"
-import { ViewedFileStore } from "../../src/main/services/viewed-file-store"
-import { WalkthroughService } from "../../src/main/services/walkthrough"
-import { WalkthroughStore } from "../../src/main/services/walkthrough-store"
 
 const LOCAL_REVIEW_ARG = "--diffdash-local-path"
+const LINK_REPOSITORY_ARG = "--diffdash-link-path"
 
 let mainWindow: BrowserWindow | null = null
 let pendingLocalReviewPath: string | null = null
+let pendingRepositoryLinkPath: string | null = null
 
 const getDevelopmentIconPath = () =>
   app.isPackaged ? null : resolve(__dirname, "../../resources/icons/icon.png")
@@ -66,34 +102,93 @@ const debugMissingPrerequisites = () =>
     gitInstalled: false,
     ghAuthenticated: false,
     ghInstalled: false,
+    ghSearchRepositoriesAvailable: false,
+    ghSupported: false,
+    ghVersion: null,
     installedCodingAgents: [],
   })
 
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
   const configLayer = AppConfig.layer({
+    appVersion: app.getVersion(),
+    architecture: process.arch,
     databasePath: join(app.getPath("userData"), "diffdash.sqlite"),
     diffDashCliPath: getDiffDashCliPath(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    ...(process.env.VITE_POSTHOG_HOST === undefined
+      ? {}
+      : { posthogHost: process.env.VITE_POSTHOG_HOST }),
+    ...(process.env.VITE_POSTHOG_KEY === undefined
+      ? {}
+      : { posthogKey: process.env.VITE_POSTHOG_KEY }),
     settingsPath: join(xdgConfigHome, "diffdash", "settings.json"),
     tempDir: join(app.getPath("temp"), "diffdash"),
+    worktreePoolPath:
+      process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool"),
   })
   const settingsLayer = AppSettings.layer
+  const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
   const aiAgentLayer = ConfigurableAIAgent.layer.pipe(Layer.provideMerge(settingsLayer))
   const walkthroughLayer = WalkthroughService.layer.pipe(Layer.provideMerge(aiAgentLayer))
+  const reviewContextLayer = ReviewContextService.layer.pipe(
+    Layer.provideMerge(GitService.layer),
+    Layer.provideMerge(GitHubProvider.layer),
+  )
+  const threadStoreLayer = ReviewThreadStore.layer
+  const artifactStoreLayer = AgentRunArtifactStore.layer
+  const providerRegistryLayer = ReviewAgentProviderRegistry.layer.pipe(
+    Layer.provideMerge(OpenCodeSdkClient.layer),
+    Layer.provideMerge(CliStreamService.layer),
+    Layer.provideMerge(AgentArtifactNormalizer.layer),
+  )
+  const mcpLayer = DiffDashMcpServer.layer.pipe(
+    Layer.provideMerge(threadStoreLayer),
+    Layer.provideMerge(artifactStoreLayer),
+  )
+  const reviewAgentLayer = ReviewAgentService.layer.pipe(
+    Layer.provideMerge(settingsLayer),
+    Layer.provideMerge(providerRegistryLayer),
+    Layer.provideMerge(mcpLayer),
+    Layer.provideMerge(ReviewContextBuilder.layer),
+    Layer.provideMerge(ThreadMemoryStore.layer),
+    Layer.provideMerge(AgentRunStore.layer),
+    Layer.provideMerge(ReviewWorktreePool.layer),
+  )
+  const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
+    Layer.provideMerge(threadStoreLayer),
+  )
+  const repositoryLinkerLayer = RepositoryLinker.layer.pipe(
+    Layer.provideMerge(RepositoryStore.layer),
+    Layer.provideMerge(GitService.layer),
+    Layer.provideMerge(GitHubProvider.layer),
+  )
+  const updaterLayer = AppUpdater.layer({
+    adapter: nativeUpdaterAdapter(),
+    ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
+    arch: process.arch,
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+  })
 
   return Layer.mergeAll(
-    RepositoryStore.layer,
-    GitService.layer,
-    GitHubProvider.layer,
+    repositoryLinkerLayer,
+    analyticsLayer,
+    reviewContextLayer,
     AppState.layer,
-    settingsLayer,
     Prerequisites.layer,
     walkthroughLayer,
     ViewedFileStore.layer,
     WalkthroughStore.layer,
+    reviewAgentLayer,
+    threadAnchorMapperLayer,
+    updaterLayer,
   ).pipe(
     Layer.provideMerge(DatabaseService.layer),
     Layer.provideMerge(CliService.layer),
+    Layer.provideMerge(CliStreamService.layer),
     Layer.provide(configLayer),
   )
 }
@@ -108,13 +203,20 @@ const serializeError = (error: unknown) => {
 const installIpcHandlers = (
   appLayer: Layer.Layer<
     | RepositoryStore
+    | Analytics
+    | RepositoryLinker
     | GitService
     | CliService
     | GitProvider
     | AppState
+    | AppUpdater
     | AppSettings
     | AIAgent
     | Prerequisites
+    | ReviewContextService
+    | ReviewAgentService
+    | ReviewThreadAnchorMapper
+    | ReviewThreadStore
     | ViewedFileStore
     | WalkthroughStore
     | WalkthroughService,
@@ -127,27 +229,203 @@ const installIpcHandlers = (
       A,
       unknown,
       | RepositoryStore
+      | Analytics
+      | RepositoryLinker
       | GitService
       | CliService
       | GitProvider
       | AppState
+      | AppUpdater
       | AppSettings
       | AIAgent
       | Prerequisites
+      | ReviewContextService
+      | ReviewAgentService
+      | ReviewThreadAnchorMapper
+      | ReviewThreadStore
       | ViewedFileStore
       | WalkthroughStore
       | WalkthroughService
     >,
   ) => runtime.runPromise(program)
 
-  app.once("before-quit", () => {
-    void runtime.dispose()
+  const lifecycle = createAppLifecycle({ dispose: () => runtime.dispose(), quit: () => app.quit() })
+  app.on("before-quit", lifecycle.beforeQuit)
+
+  ipcMain.handle("analytics:start", async (): Promise<void> => {
+    const analytics = await run(Analytics)
+    return run(analytics.start)
   })
+
+  ipcMain.handle("analytics:capture", async (_event, input: unknown): Promise<void> => {
+    const event = await run(Schema.decodeUnknown(AnalyticsEvent)(input))
+    const analytics = await run(Analytics)
+    return run(analytics.capture(event))
+  })
+
+  ipcMain.handle("updates:getState", async (): Promise<AppUpdateState> => {
+    const updater = await run(AppUpdater)
+    return run(updater.state)
+  })
+
+  ipcMain.handle("updates:check", async (): Promise<void> => {
+    const updater = await run(AppUpdater)
+    return run(updater.check)
+  })
+
+  ipcMain.handle("updates:download", async (): Promise<void> => {
+    const updater = await run(AppUpdater)
+    return run(updater.download)
+  })
+
+  ipcMain.handle("updates:restartAndInstall", async (): Promise<void> => {
+    const updater = await run(AppUpdater)
+    await lifecycle.restartAndInstall(() => Effect.runPromise(updater.quitAndInstall))
+  })
+
+  void run(
+    Effect.gen(function* () {
+      const updater = yield* AppUpdater
+      yield* updater.subscribe((state) => {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) window.webContents.send("updates:stateChanged", state)
+        }
+      })
+      yield* updater.startAutomaticChecks
+    }),
+  )
+
+  const resolveThreadReview = async (target: ReviewThreadTarget) => {
+    const contexts = await run(ReviewContextService)
+    const repositories = await run(RepositoryStore)
+    if (target.kind === "pullRequest") {
+      const gitProvider = await run(GitProvider)
+      const snapshot = await run(
+        contexts.getPullRequestSnapshot(target.owner, target.name, target.number),
+      )
+      const repo = await run(
+        repositories.upsertRepository({
+          provider: "github",
+          owner: target.owner,
+          name: target.name,
+          remoteUrl: gitProvider.repositoryUrl(target.owner, target.name),
+          localPath: null,
+        }),
+      )
+      return { repo, snapshot, prNumber: target.number } as const
+    }
+
+    const snapshot = await run(contexts.getLocalReviewSnapshot(target.rootPath))
+    const repo = await run(
+      repositories.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)),
+    )
+    return { repo, snapshot, prNumber: null } as const
+  }
 
   ipcMain.handle("repositories:list", async (_event, query?: string): Promise<readonly Repo[]> => {
     const store = await run(RepositoryStore)
     return run(store.list(query))
   })
+
+  ipcMain.handle(
+    "reviewThreads:list",
+    async (_event, input: unknown): Promise<readonly ReviewThread[]> => {
+      const target = await run(Schema.decodeUnknown(ReviewThreadTarget)(input))
+      const { repo, snapshot } = await resolveThreadReview(target)
+      const mapper = await run(ReviewThreadAnchorMapper)
+      return run(
+        mapper.mapReview({
+          repoId: repo.id,
+          reviewKey: snapshot.reviewKey,
+          baseRevision: snapshot.baseRevision,
+          headRevision: snapshot.headRevision,
+          parsedDiff: snapshot.parsedDiff,
+        }),
+      )
+    },
+  )
+
+  ipcMain.handle(
+    "reviewThreads:addUserMessage",
+    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
+      const request = await run(Schema.decodeUnknown(AddReviewThreadUserMessageRequest)(input))
+      const threads = await run(ReviewThreadStore)
+      return run(threads.addUserMessage(request))
+    },
+  )
+
+  ipcMain.handle(
+    "reviewThreads:create",
+    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
+      const request = await run(Schema.decodeUnknown(CreateReviewThreadRequest)(input))
+      const { repo, snapshot, prNumber } = await resolveThreadReview(request.target)
+      if (
+        snapshot.baseRevision !== request.expectedBaseRevision ||
+        snapshot.headRevision !== request.expectedHeadRevision
+      ) {
+        throw new Error("Review changed before the local thread was created")
+      }
+      if (!isReviewAnchorInParsedDiff(request.anchor, snapshot.parsedDiff)) {
+        throw new Error("Review thread anchor does not exist in the expected review revision")
+      }
+      const threads = await run(ReviewThreadStore)
+      return run(
+        threads.create({
+          repoId: repo.id,
+          reviewKey: snapshot.reviewKey,
+          prNumber,
+          baseRevision: snapshot.baseRevision,
+          headRevision: snapshot.headRevision,
+          anchor: request.anchor,
+          bodyMarkdown: request.bodyMarkdown,
+        }),
+      )
+    },
+  )
+
+  ipcMain.handle(
+    "reviewThreads:get",
+    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
+      const request = await run(Schema.decodeUnknown(ReviewThreadIdRequest)(input))
+      const threads = await run(ReviewThreadStore)
+      return run(threads.get(request.threadId))
+    },
+  )
+
+  ipcMain.handle(
+    "reviewThreads:runAgent",
+    async (event, input: unknown): Promise<ReviewThreadDetails> => {
+      const request = await run(Schema.decodeUnknown(RunReviewThreadAgentRequest)(input))
+      const { repo, snapshot } = await resolveThreadReview(request.target)
+      const walkthroughs = await run(WalkthroughStore)
+      const walkthrough = await run(
+        walkthroughs.get({
+          repoId: repo.id,
+          reviewKey: snapshot.reviewKey,
+          baseSha: snapshot.baseRevision,
+          headSha: snapshot.headRevision,
+          promptVersion: WALKTHROUGH_PROMPT_VERSION,
+        }),
+      )
+      const agents = await run(ReviewAgentService)
+      return run(
+        agents.runThreadTurn({
+          threadId: request.threadId,
+          snapshot,
+          cwd: repo.localPath,
+          walkthrough,
+          onProgress: (stage) =>
+            Effect.sync(() => {
+              if (event.sender.isDestroyed()) return
+              event.sender.send(
+                "reviewThreads:agentProgress",
+                ReviewAgentProgress.make({ threadId: request.threadId, stage }),
+              )
+            }),
+        }),
+      )
+    },
+  )
 
   ipcMain.handle("settings:get", async (): Promise<AISettings> => {
     const settings = await run(AppSettings)
@@ -223,6 +501,27 @@ const installIpcHandlers = (
     }
   })
 
+  ipcMain.handle("repositories:install", async (_event, localPath: string): Promise<Repo> => {
+    const linker = await run(RepositoryLinker)
+    try {
+      return await run(linker.install(localPath))
+    } catch (error) {
+      if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
+      throw error
+    }
+  })
+
+  ipcMain.handle("repositories:link", async (_event, input: unknown): Promise<Repo> => {
+    const request = await run(Schema.decodeUnknown(LinkRepositoryCheckoutRequest)(input))
+    const linker = await run(RepositoryLinker)
+    try {
+      return await run(linker.link(request))
+    } catch (error) {
+      if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
+      throw error
+    }
+  })
+
   ipcMain.handle("repositories:selectLocalFolder", async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
@@ -233,9 +532,18 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     "gitProvider:searchRepositories",
-    async (_event, query: string): Promise<readonly RepositorySearchResult[]> => {
+    async (_event, input: unknown): Promise<readonly RepositorySearchResult[]> => {
+      const request = await run(Schema.decodeUnknown(RepositorySearchRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.searchRepositories(query))
+      try {
+        return await run(gitProvider.searchRepositories(request))
+      } catch (error) {
+        if (error instanceof CliError) {
+          const detail = error.stderr.trim() || error.stdout?.trim()
+          throw new Error(detail || "GitHub repository search failed.", { cause: error })
+        }
+        throw error
+      }
     },
   )
 
@@ -327,6 +635,10 @@ const installIpcHandlers = (
 
   ipcMain.handle("navigation:getPendingLocalReview", async (): Promise<string | null> => {
     return pendingLocalReviewPath
+  })
+
+  ipcMain.handle("navigation:getPendingRepositoryLink", async (): Promise<string | null> => {
+    return pendingRepositoryLinkPath
   })
 
   ipcMain.handle(
@@ -739,7 +1051,7 @@ const pullRequestReviewKey = (
   owner: string,
   name: string,
   number: number,
-) => `${provider}:${owner}/${name}#${number}`
+) => makePullRequestReviewKey(provider, owner, name, number)
 
 const localReviewKey = (rootPath: string) => `local:${hashText(resolve(rootPath))}`
 
@@ -800,6 +1112,23 @@ const parseLocalReviewPathArg = (argv: readonly string[], cwd: string) => {
   return null
 }
 
+const parseRepositoryLinkPathArg = (argv: readonly string[], cwd: string) => {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === undefined) continue
+
+    if (arg === LINK_REPOSITORY_ARG) {
+      const value = argv[index + 1]
+      return value === undefined ? null : resolve(cwd, value)
+    }
+
+    const prefix = `${LINK_REPOSITORY_ARG}=`
+    if (arg.startsWith(prefix)) return resolve(cwd, arg.slice(prefix.length))
+  }
+
+  return null
+}
+
 const sendLocalReviewNavigation = (localPath: string) => {
   pendingLocalReviewPath = resolve(localPath)
   const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -815,6 +1144,18 @@ const sendLocalReviewNavigation = (localPath: string) => {
     targetWindow.focus()
   }
   targetWindow.webContents.send("navigation:openLocalReview", pendingLocalReviewPath)
+}
+
+const sendRepositoryLinkNavigation = (localPath: string) => {
+  pendingRepositoryLinkPath = resolve(localPath)
+  const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
+  if (targetWindow === null || targetWindow.isDestroyed()) return
+
+  if (targetWindow.isMinimized()) targetWindow.restore()
+  targetWindow.show()
+  if (process.platform === "darwin") app.focus({ steal: true })
+  else targetWindow.focus()
+  targetWindow.webContents.send("navigation:linkRepository", pendingRepositoryLinkPath)
 }
 
 const openExternalUrl = async (url: string) => {
@@ -863,6 +1204,29 @@ const createWindow = () => {
 
   window.once("ready-to-show", showMainWindow)
 
+  const rendererUrl =
+    process.env.ELECTRON_RENDERER_URL ??
+    pathToFileURL(join(__dirname, "../renderer/index.html")).toString()
+  let loadingErrorPage = false
+  const showElectronError = (message: string) => {
+    if (window.isDestroyed() || loadingErrorPage) return
+    loadingErrorPage = true
+    void window
+      .loadURL(electronErrorPageDataUrl(message, rendererUrl))
+      .then(() => showMainWindow())
+      .catch((fallbackError: unknown) => {
+        showMainWindow()
+        dialog.showErrorBox(
+          "DiffDash encountered an error",
+          `${message}\n\n${serializeError(fallbackError).message}`,
+        )
+        app.quit()
+      })
+      .finally(() => {
+        loadingErrorPage = false
+      })
+  }
+
   window.on("closed", () => {
     mainWindow = null
   })
@@ -871,12 +1235,23 @@ const createWindow = () => {
     console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`)
   })
 
-  window.webContents.on("did-fail-load", (_event, errorCode, errorDescription, url) => {
-    console.error(`[renderer:load-failed] ${errorCode} ${errorDescription} ${url}`)
-  })
+  window.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, url, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return
+      const message = `Renderer failed to load (${errorCode}): ${errorDescription}\n${url}`
+      console.error(`[renderer:load-failed] ${errorCode} ${errorDescription} ${url}`)
+      showElectronError(message)
+    },
+  )
 
   window.webContents.on("render-process-gone", (_event, details) => {
     console.error(`[renderer:gone] ${details.reason} ${details.exitCode}`)
+    if (details.reason !== "clean-exit") {
+      showElectronError(
+        `The DiffDash renderer stopped unexpectedly (${details.reason}, exit ${details.exitCode}).`,
+      )
+    }
   })
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -910,10 +1285,15 @@ const createWindow = () => {
       if (pendingLocalReviewPath !== null) {
         sendLocalReviewNavigation(pendingLocalReviewPath)
       }
+      if (pendingRepositoryLinkPath !== null) {
+        sendRepositoryLinkNavigation(pendingRepositoryLinkPath)
+      }
       return undefined
     })
     .catch((error: unknown) => {
-      console.error(`[renderer:load-error] ${serializeError(error).message}`)
+      const message = serializeError(error).message
+      console.error(`[renderer:load-error] ${message}`)
+      showElectronError(message)
     })
 }
 
@@ -944,14 +1324,21 @@ const start = async () => {
   })
 }
 
-const singleInstanceLock = app.requestSingleInstanceLock()
+const singleInstanceLock =
+  process.env.DIFFDASH_ALLOW_MULTIPLE_INSTANCES === "1" || app.requestSingleInstanceLock()
 
 if (!singleInstanceLock) {
   app.quit()
 } else {
   pendingLocalReviewPath = parseLocalReviewPathArg(process.argv, process.cwd())
+  pendingRepositoryLinkPath = parseRepositoryLinkPathArg(process.argv, process.cwd())
 
   app.on("second-instance", (_event, argv, cwd) => {
+    const repositoryLinkPath = parseRepositoryLinkPathArg(argv, cwd)
+    if (repositoryLinkPath !== null) {
+      sendRepositoryLinkNavigation(repositoryLinkPath)
+      return
+    }
     const localReviewPath = parseLocalReviewPathArg(argv, cwd)
     if (localReviewPath !== null) {
       sendLocalReviewNavigation(localReviewPath)

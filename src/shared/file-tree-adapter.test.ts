@@ -2,11 +2,13 @@ import { describe, expect, it } from "@effect/vitest"
 
 import { buildReviewFileTreeInput } from "./file-tree-adapter"
 import { ParsedDiffFile } from "./domain"
+import { makeReviewFileId } from "./review-identity"
 
 const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>
   ParsedDiffFile.make({
     additions: 1,
     deletions: 0,
+    fileId: makeReviewFileId(path, null),
     hunks: [],
     oldPath: null,
     patch: `diff --git a/${path} b/${path}`,

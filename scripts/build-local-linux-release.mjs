@@ -51,7 +51,7 @@ try {
     "pnpm assets:icons",
     "pnpm native:electron",
     "pnpm build",
-    "pnpm exec electron-builder --linux deb --x64 --publish=never",
+    "pnpm exec electron-builder --linux AppImage deb --x64 --publish=never",
   ].join(" && ")
 
   run("docker", [
@@ -80,12 +80,33 @@ try {
     throw new Error("Docker Linux build did not create a dist directory.")
   }
 
-  const debFiles = readdirSync(distDir).filter((file) => file.endsWith(".deb"))
-  if (debFiles.length === 0) {
-    throw new Error("Docker Linux build did not create a .deb artifact.")
+  const artifactTypes = [
+    { extension: ".AppImage", label: "AppImage" },
+    { extension: ".deb", label: "deb" },
+  ]
+  const artifactFiles = readdirSync(distDir).filter(
+    (file) =>
+      artifactTypes.some(({ extension }) => file.endsWith(extension)) ||
+      file.endsWith(".blockmap") ||
+      file === "latest-linux.yml",
+  )
+
+  for (const { extension, label } of artifactTypes) {
+    if (!artifactFiles.some((file) => file.endsWith(extension))) {
+      throw new Error(`Docker Linux build did not create a ${label} artifact.`)
+    }
+  }
+  const appImage = artifactFiles.find((file) => file.endsWith(".AppImage"))
+  const metadataPath = path.join(distDir, "latest-linux.yml")
+  if (appImage === undefined || !existsSync(metadataPath)) {
+    throw new Error("Docker Linux build did not create AppImage updater metadata.")
+  }
+  const metadata = readFileSync(metadataPath, "utf8")
+  if (!metadata.includes(appImage) || !metadata.includes(`version: ${packageJson.version}`)) {
+    throw new Error(`Linux updater metadata does not reference ${appImage}.`)
   }
 
-  for (const file of debFiles) {
+  for (const file of artifactFiles) {
     copyFileSync(path.join(distDir, file), path.join(releaseAssetsDir, file))
     console.log(`Copied ${file} to ${releaseAssetsDir}`)
   }

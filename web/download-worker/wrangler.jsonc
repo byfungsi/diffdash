@@ -12,6 +12,10 @@
     {
       "pattern": "download.usediffdash.com/linux*",
       "zone_name": "usediffdash.com"
+    },
+    {
+      "pattern": "download.usediffdash.com/updates*",
+      "zone_name": "usediffdash.com"
     }
   ],
   "vars": {

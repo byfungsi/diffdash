@@ -6,7 +6,7 @@ The wizard has completed integration of PostHog analytics into the DiffDash land
 | Event | Description | File |
 |---|---|---|
 | `$pageview` | Fired on initial page load to record each landing page visit. | `web/landing/src/main.tsx` (via `initAnalytics()`) |
-| `download_button_clicked` | Fired when any download CTA is clicked; carries `platform` (macos/linux), `placement` (hero/footer), and `href`. | `web/landing/src/App.tsx` |
+| `download_button_clicked` | Fired when any download CTA is clicked; carries `platform` (`macos`, `linux_appimage`, or `linux_deb`), `placement` (hero/footer), and `href`. | `web/landing/src/App.tsx` |
 | `nav_link_clicked` | Fired when a navigation anchor link is clicked; carries `section` (workflow/privacy/download) to measure which sections attract interest. | `web/landing/src/App.tsx` |
 
 ## Next steps
@@ -15,7 +15,7 @@ We've built a dashboard with five insights to keep an eye on download conversion
 
 - **Dashboard:** [Analytics basics (wizard)](https://us.posthog.com/project/505977/dashboard/1827361)
 - [Downloads over time](https://us.posthog.com/project/505977/insights/yddrb7NR) — daily download click volume
-- [Downloads by platform](https://us.posthog.com/project/505977/insights/oK3lDJKm) — macOS vs. Linux split
+- [Downloads by platform](https://us.posthog.com/project/505977/insights/oK3lDJKm) — macOS, Linux AppImage, and Debian/Ubuntu split
 - [Downloads by CTA placement](https://us.posthog.com/project/505977/insights/oVJuSX10) — hero vs. footer CTA effectiveness
 - [Navigation section interest](https://us.posthog.com/project/505977/insights/rQ2bjeTu) — which sections users navigate to
 - [Page visit → download conversion funnel](https://us.posthog.com/project/505977/insights/ndAqeLeW) — overall landing page conversion rate

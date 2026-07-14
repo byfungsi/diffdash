@@ -1,4 +1,14 @@
 import { ParsedDiff, ParsedDiffFile, ParsedDiffHunk, type DiffFileStatus } from "./domain"
+import { makeReviewFileId, makeReviewHunkFingerprint, makeReviewHunkId } from "./review-identity"
+
+interface DraftHunk {
+  readonly header: string
+  readonly oldStart: number
+  readonly oldLines: number
+  readonly newStart: number
+  readonly newLines: number
+  readonly lines: string[]
+}
 
 interface DraftFile {
   readonly gitOldPath: string
@@ -6,7 +16,7 @@ interface DraftFile {
   readonly lines: string[]
   additions: number
   deletions: number
-  hunks: ParsedDiffHunk[]
+  hunks: DraftHunk[]
   newPath: string | null
   oldPath: string | null
   renameFrom: string | null
@@ -18,28 +28,13 @@ interface DraftFile {
 export const parseUnifiedDiff = (diff: string): ParsedDiff => {
   const files: ParsedDiffFile[] = []
   let current: DraftFile | null = null
-  let currentHunkLines: string[] | null = null
-
-  const finishHunk = () => {
-    if (current === null || currentHunkLines === null) return
-    const hunk = current.hunks[current.hunks.length - 1]
-    if (hunk === undefined) return
-    current.hunks[current.hunks.length - 1] = ParsedDiffHunk.make({
-      header: hunk.header,
-      oldStart: hunk.oldStart,
-      oldLines: hunk.oldLines,
-      newStart: hunk.newStart,
-      newLines: hunk.newLines,
-      lines: currentHunkLines,
-    })
-    currentHunkLines = null
-  }
+  let currentHunk: DraftHunk | null = null
 
   const finishFile = () => {
-    finishHunk()
     if (current === null) return
     files.push(toParsedFile(current))
     current = null
+    currentHunk = null
   }
 
   for (const line of diff.split("\n")) {
@@ -98,23 +93,20 @@ export const parseUnifiedDiff = (diff: string): ParsedDiff => {
 
     const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
     if (hunkMatch !== null) {
-      finishHunk()
-      currentHunkLines = []
-      current.hunks.push(
-        ParsedDiffHunk.make({
-          header: line,
-          oldStart: Number(hunkMatch[1]),
-          oldLines: Number(hunkMatch[2] ?? "1"),
-          newStart: Number(hunkMatch[3]),
-          newLines: Number(hunkMatch[4] ?? "1"),
-          lines: [],
-        }),
-      )
+      currentHunk = {
+        header: line,
+        oldStart: Number(hunkMatch[1]),
+        oldLines: Number(hunkMatch[2] ?? "1"),
+        newStart: Number(hunkMatch[3]),
+        newLines: Number(hunkMatch[4] ?? "1"),
+        lines: [],
+      }
+      current.hunks.push(currentHunk)
       continue
     }
 
-    if (currentHunkLines !== null) {
-      currentHunkLines.push(line)
+    if (currentHunk !== null) {
+      currentHunk.lines.push(line)
       if (line.startsWith("+") && !line.startsWith("+++")) current.additions += 1
       if (line.startsWith("-") && !line.startsWith("---")) current.deletions += 1
     }
@@ -128,15 +120,23 @@ const toParsedFile = (file: DraftFile) => {
   const path = file.renameTo ?? file.newPath ?? file.gitNewPath
   const oldPath = file.renameFrom ?? deletedOldPath(file)
   const status = inferStatus(file)
+  const fileId = makeReviewFileId(path, oldPath)
 
   return ParsedDiffFile.make({
+    fileId,
     reviewKey: oldPath === null ? path : `${oldPath}->${path}`,
     path,
     oldPath,
     status,
     additions: file.additions,
     deletions: file.deletions,
-    hunks: file.hunks,
+    hunks: file.hunks.map((hunk) =>
+      ParsedDiffHunk.make({
+        id: makeReviewHunkId(fileId, hunk.header, hunk.lines),
+        fingerprint: makeReviewHunkFingerprint(hunk.lines),
+        ...hunk,
+      }),
+    ),
     patch: trimTrailingEmptyLine(file.lines).join("\n"),
   })
 }

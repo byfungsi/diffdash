@@ -4,9 +4,8 @@
 
 DiffDash currently ships beta builds for:
 
-- macOS arm64 DMG, signed and notarized with Apple Developer ID locally
-- macOS x64 DMG, signed and notarized with Apple Developer ID locally when built on/for Intel macOS
-- Linux x64 deb
+- macOS arm64 and x64 DMGs plus automatic-update ZIPs, signed and notarized with Apple Developer ID
+- Linux x64 AppImage with automatic updates, plus a manually updated deb
 
 GitHub Releases are the long-term artifact archive. Cloudflare R2 is the public download mirror and keeps only the latest 3 versions.
 
@@ -41,14 +40,13 @@ The single command:
 
 - verifies release notes exist in `CHANGELOG.md` for `v<package.version>`
 - runs `pnpm release:check`
-- builds signed, notarized, stapled macOS DMG assets into `release-assets/`
-- builds the Linux x64 `.deb` in Docker into `release-assets/`
+- builds both signed, notarized, stapled macOS DMGs and updater ZIPs into `release-assets/`
+- builds the Linux x64 AppImage, updater metadata, and `.deb` in Docker into `release-assets/`
 - generates `SHA256SUMS` and `latest.json`
 - creates or updates a draft GitHub Release for the version tag
 - uploads all `release-assets/` files to the draft GitHub Release
 - mirrors the same assets to R2 at `releases/<tag>/`
-- writes `latest.json` at the R2 bucket root
-- prunes R2 release folders to keep only the latest 3 semver versions
+- leaves the currently promoted stable release unchanged while the GitHub Release is a draft
 
 The command requires a clean working tree. The tag must match the `package.json` version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
 
@@ -67,7 +65,13 @@ pnpm release:local -- --assets-dir release-assets/test-run
 
 Use skip options for recovery/debugging only. The normal release command should run without skip flags.
 
-Review the draft GitHub Release before publishing it manually.
+Review and publish the draft GitHub Release, then promote it:
+
+```bash
+pnpm release:promote -- --tag v<package.version>
+```
+
+Promotion verifies the published GitHub Release, both macOS architectures, Linux AppImage metadata, checksums, and the R2 mirror. It then updates `stable.json` and root `latest.json`, and prunes R2 to the promoted release plus two retained releases. Manual downloads and automatic update clients only follow this promoted pointer.
 
 Partial commands are available when debugging a single stage.
 
@@ -89,9 +93,9 @@ The local macOS build script:
 - builds a signed `.app`
 - submits it to Apple notarization with visible status polling
 - staples the accepted notarization ticket
-- packages the stapled app into a DMG
+- packages the stapled app into a DMG and updater ZIP
 - verifies `codesign`, Gatekeeper assessment, and stapling
-- copies release DMGs to `release-assets/`
+- copies release DMGs, ZIPs, blockmaps, and architecture-specific updater metadata to `release-assets/`
 
 Recovery options:
 
@@ -102,7 +106,7 @@ node scripts/notarize-app.mjs dist/mac-arm64/DiffDash.app --submission-id <id>
 
 Use `--package-existing --skip-notarize` only after `xcrun stapler validate` confirms an existing app is already stapled.
 
-Build the Linux x64 `.deb` locally through Docker:
+Build the Linux x64 AppImage and `.deb` locally through Docker:
 
 ```bash
 pnpm release:local:linux
@@ -114,8 +118,8 @@ The local Linux build script:
 - runs `node:22-trixie` through Docker with `--platform linux/amd64`
 - installs dependencies with the pinned `pnpm` version from `package.json`
 - rebuilds native modules for Electron on Linux
-- builds the Linux `.deb`
-- copies release `.deb` files to `release-assets/`
+- builds the Linux AppImage, blockmap, updater metadata, and `.deb`
+- copies all Linux release and updater artifacts to `release-assets/`
 
 Override Docker defaults when needed:
 
@@ -137,8 +141,7 @@ The local publish script:
 - creates or updates a draft GitHub Release for the package version tag
 - uploads all `release-assets/` files to the draft GitHub Release with per-file retries
 - mirrors the same assets to R2 at `releases/<tag>/`
-- writes `latest.json` at the R2 bucket root
-- prunes R2 release folders to keep only the latest 3 semver versions
+- does not change the stable download or update channel until `pnpm release:promote` runs
 
 Regenerate metadata without uploading when recovering manually:
 
@@ -193,8 +196,8 @@ Cloudflare R2 publishing:
 CLOUDFLARE_ACCOUNT_ID=...
 R2_ACCESS_KEY_ID=...
 R2_SECRET_ACCESS_KEY=...
-R2_BUCKET=diffdash-releases
-R2_PUBLIC_BASE_URL=https://downloads.diffdash.dev
+R2_BUCKET=diffdash
+R2_PUBLIC_BASE_URL=https://download.usediffdash.com
 ```
 
 Do not commit `.env`, `.p12`, or `.p8` files. They are ignored by `.gitignore`.
@@ -203,7 +206,7 @@ Required local CLIs:
 
 - `gh`, authenticated for GitHub Release creation/upload
 - `aws`, configured by the release script from the R2 env vars
-- `docker`, for building the Linux `.deb` locally through a Linux container
+- `docker`, for building the Linux AppImage and `.deb` locally through a Linux container
 - Xcode command line tools, including `xcrun notarytool` and `stapler`
 
 The R2 access key must be able to list, upload, and delete objects in the release bucket.
@@ -225,8 +228,8 @@ Secrets:
 
 Variables:
 
-- `R2_BUCKET`, for example `diffdash-releases`
-- `R2_PUBLIC_BASE_URL`, for example `https://downloads.diffdash.dev`
+- `R2_BUCKET`, for example `diffdash`
+- `R2_PUBLIC_BASE_URL`, for example `https://download.usediffdash.com`
 
 The R2 access key must be able to list, upload, and delete objects in the release bucket.
 
@@ -333,7 +336,14 @@ Use an in-app install action or Homebrew cask to symlink that helper into a PATH
 
 ## Linux
 
-`pnpm dist:linux` builds AppImage and deb packages on Linux. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:linux` when debugging Linux packaging only. The local Linux release stage uses Docker to build the x64 `.deb` from a Linux container.
+`pnpm dist:linux` builds AppImage and deb packages on Linux. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:linux` when debugging Linux packaging only. The local Linux release stage uses Docker to build both x64 formats from a Linux container.
+
+The AppImage is portable and does not add `diffdash` to `PATH`:
+
+```bash
+chmod +x DiffDash-*-linux-x86_64.AppImage
+./DiffDash-*-linux-x86_64.AppImage
+```
 
 The deb package installs:
 

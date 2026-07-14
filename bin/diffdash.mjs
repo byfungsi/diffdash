@@ -21,6 +21,8 @@ const args = process.argv.slice(2)
 const executablePath = fileURLToPath(import.meta.url)
 const packageRoot = resolve(dirname(executablePath), "..")
 const mainEntry = resolve(packageRoot, "out/main/index.js")
+const usage =
+  "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash --install-cli [directory]\n"
 const ELECTRON_NATIVE_DEPENDENCY_CHECK = `
 const Database = require("better-sqlite3")
 const db = new Database(":memory:")
@@ -29,19 +31,45 @@ db.close()
 `
 
 if (args.includes("--help") || args.includes("-h")) {
-  process.stdout.write("Usage: diffdash [path]\n       diffdash --install-cli [directory]\n")
+  process.stdout.write(usage)
   process.exit(0)
 }
 
 const installCliIndex = args.findIndex(
   (arg) => arg === "--install-cli" || arg.startsWith("--install-cli="),
 )
-if (installCliIndex >= 0) {
+if (installCliIndex >= 0 && args[0] !== "install") {
   installCli(args, installCliIndex)
   process.exit(0)
 }
 
-const targetPath = resolve(process.cwd(), args[0] ?? ".")
+let targetArgument = "--diffdash-local-path"
+let inputPath = args[0] ?? "."
+
+if (args[0] === "install") {
+  const installArgs = args.slice(1)
+  const unknownOption = installArgs.find((arg) => arg.startsWith("-"))
+
+  if (unknownOption !== undefined) {
+    process.stderr.write(
+      `Unknown option for \`diffdash install\`: ${unknownOption}\nUsage: diffdash install [path]\n`,
+    )
+    process.exit(2)
+  }
+
+  if (installArgs.length > 1) {
+    process.stderr.write(
+      "diffdash install accepts at most one path.\nUsage: diffdash install [path]\n",
+    )
+    process.exit(2)
+  }
+
+  targetArgument = "--diffdash-link-path"
+  inputPath = installArgs[0] ?? "."
+}
+
+const targetPath = resolve(process.cwd(), inputPath)
+const launchArgument = `${targetArgument}=${targetPath}`
 
 if (existsSync(mainEntry)) {
   const electronPath = await resolveElectronPath()
@@ -54,7 +82,7 @@ if (existsSync(mainEntry)) {
 
   ensureElectronNativeDependencies(electronPath)
 
-  const child = spawn(electronPath, [packageRoot, `--diffdash-local-path=${targetPath}`], {
+  const child = spawn(electronPath, [packageRoot, launchArgument], {
     detached: true,
     stdio: "ignore",
   })
@@ -64,7 +92,7 @@ if (existsSync(mainEntry)) {
 }
 
 if (process.platform === "darwin") {
-  const child = spawn("open", ["-a", "DiffDash", "--args", `--diffdash-local-path=${targetPath}`], {
+  const child = spawn("open", ["-a", "DiffDash", "--args", launchArgument], {
     stdio: "inherit",
   })
 

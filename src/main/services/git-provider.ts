@@ -5,6 +5,7 @@ import type {
   PullRequestDetail,
   PullRequestDiff,
   PullRequestSummary,
+  RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
 } from "../../shared/domain"
@@ -27,7 +28,7 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
     readonly repositoryUrl: (owner: string, name: string) => string
     readonly fileUrl: (owner: string, name: string, filePath: string, ref: string) => string
     readonly searchRepositories: (
-      query: string,
+      request: RepositorySearchRequest,
     ) => Effect.Effect<readonly RepositorySearchResult[], unknown>
     readonly listSearchScopes: () => Effect.Effect<readonly RepositorySearchScope[], unknown>
     readonly listRepositories: () => Effect.Effect<readonly RepositorySearchResult[], unknown>

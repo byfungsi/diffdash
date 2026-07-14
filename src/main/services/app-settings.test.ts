@@ -61,6 +61,7 @@ describe("AppSettings", () => {
       expect(loaded).toEqual(customSettings)
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
         provider: "claude",
+        telemetryEnabled: true,
         models: { auto: "best", claude: "claude-opus-4-8" },
       })
     }),
@@ -92,6 +93,27 @@ describe("AppSettings", () => {
       expect(settings.models.auto).toBe("balance")
       expect(settings.models.claude).toBe("claude-opus-4-8")
       expect(settings.models.codex).toBe("gpt-5.5")
+      expect(settings.telemetryEnabled).toBe(true)
+    }),
+  )
+
+  it.scoped("reads a manual telemetry opt-out from settings JSON", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsPath = join(directory, "diffdash", "settings.json")
+      mkdirSync(join(directory, "diffdash"), { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({ ...DEFAULT_AI_SETTINGS, telemetryEnabled: false }),
+        "utf8",
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.telemetryEnabled).toBe(false)
     }),
   )
 

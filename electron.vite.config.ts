@@ -1,32 +1,72 @@
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig, externalizeDepsPlugin } from "electron-vite"
+import { execFileSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { loadEnv } from "vite"
 
-export default defineConfig({
-  main: {
-    plugins: [externalizeDepsPlugin()],
-    build: {
-      rollupOptions: {
-        input: resolve("electron/main/index.ts"),
+const packageJson: unknown = JSON.parse(readFileSync(resolve("package.json"), "utf8"))
+const packageVersion =
+  typeof packageJson === "object" &&
+  packageJson !== null &&
+  "version" in packageJson &&
+  typeof packageJson.version === "string"
+    ? packageJson.version
+    : "0.0.0"
+
+const appVersion = (() => {
+  try {
+    const tag = execFileSync(
+      "git",
+      ["describe", "--tags", "--exact-match", "--match", "v[0-9]*", "HEAD"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim()
+    if (/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) return tag
+  } catch {
+    // Untagged development builds use the package version.
+  }
+  return `v${packageVersion}`
+})()
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "")
+  const landingEnv = loadEnv(mode, resolve("web/landing"), "")
+  const posthogHost = env.VITE_POSTHOG_HOST || landingEnv.VITE_POSTHOG_HOST || ""
+  const posthogKey = env.VITE_POSTHOG_KEY || landingEnv.VITE_POSTHOG_KEY || ""
+
+  return {
+    main: {
+      define: {
+        "process.env.VITE_POSTHOG_HOST": JSON.stringify(posthogHost),
+        "process.env.VITE_POSTHOG_KEY": JSON.stringify(posthogKey),
+      },
+      plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          input: resolve("electron/main/index.ts"),
+        },
       },
     },
-  },
-  preload: {
-    plugins: [externalizeDepsPlugin()],
-    build: {
-      rollupOptions: {
-        input: resolve("electron/preload/index.ts"),
+    preload: {
+      plugins: [externalizeDepsPlugin()],
+      build: {
+        rollupOptions: {
+          input: resolve("electron/preload/index.ts"),
+        },
       },
     },
-  },
-  renderer: {
-    root: resolve("src/renderer"),
-    resolve: {
-      alias: {
-        "@": resolve("src/renderer/src"),
+    renderer: {
+      root: resolve("src/renderer"),
+      define: {
+        "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
       },
+      resolve: {
+        alias: {
+          "@": resolve("src/renderer/src"),
+        },
+      },
+      plugins: [react(), tailwindcss()],
     },
-    plugins: [react(), tailwindcss()],
-  },
+  }
 })
