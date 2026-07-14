@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- 9218c82: Add automatic desktop updates, isolated AI review threads for remote GitHub pull requests, and more reliable walkthrough generation for longer-running agents.
+
 ## 0.1.4
 
 ### Patch Changes
