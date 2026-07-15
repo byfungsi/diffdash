@@ -705,6 +705,53 @@ describe("App browser interactions", () => {
     })
   })
 
+  it("restores confirmed walkthrough settings when persistence fails", async () => {
+    const calls = installDiffDashApi({
+      updateSettings: async () => {
+        throw new Error("settings disk denied")
+      },
+    })
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
+    const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Walkthrough",
+    )
+    walkthroughTab?.click()
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Review focus"))
+
+    const settingsButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Walkthrough settings"]',
+    )
+    settingsButton?.click()
+    await vi.waitFor(() => {
+      expect(
+        [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].some(
+          (button) => button.textContent === "Claude",
+        ),
+      ).toBe(true)
+    })
+    const claudeButton = [
+      ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ].find((button) => button.textContent === "Claude")
+    claudeButton?.click()
+
+    await vi.waitFor(() => {
+      expect(calls.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "claude" }),
+      )
+      const autoButton = [
+        ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+      ].find((button) => button.textContent?.includes("Auto") ?? false)
+      expect(autoButton?.getAttribute("aria-checked")).toBe("true")
+    })
+  })
+
   it("does not render or query stale local-provider favorites", async () => {
     const calls = installDiffDashApi({ repositories: [repo, staleLocalFavoriteRepo] })
     renderApp()
@@ -1671,6 +1718,7 @@ const installDiffDashApi = (
     readonly repositories?: readonly Repo[]
     readonly reviewRequests?: readonly PullRequestSummary[]
     readonly settings?: AISettings
+    readonly updateSettings?: DiffDashApi["settings"]["update"]
     readonly updateState?: AppUpdateState
     readonly walkthrough?: StoredWalkthrough
   } = {},
@@ -1733,8 +1781,8 @@ const installDiffDashApi = (
     regenerateWalkthrough: vi.fn<
       (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
     >(async () => options.walkthrough ?? walkthrough),
-    updateSettings: vi.fn<(settings: AISettings) => Promise<AISettings>>(async (settings) =>
-      plainAISettings(settings),
+    updateSettings: vi.fn<DiffDashApi["settings"]["update"]>(
+      options.updateSettings ?? (async (settings) => plainAISettings(settings)),
     ),
     listPullRequests: vi.fn<
       (owner: string, name: string) => Promise<readonly PullRequestSummary[]>

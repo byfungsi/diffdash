@@ -117,6 +117,7 @@ record migration-sensitive invariants added during M8.
 | `SETUP-ONBOARDING-001` | `[B]` | `app.browser.test.tsx` covers first-run setup, limited-capability continuation, telemetry choice, and setup warnings; Electron restart preserves completion. |
 | `SETUP-DIAGNOSTICS-001` | `[B]` | `prerequisites.test.ts` covers installed, missing, unsupported, unauthenticated, CLI installation, and AppImage launcher states. |
 | `SETTINGS-001` | `[B]` | `app-settings.test.ts` covers defaults, legacy defaults, manual telemetry opt-out, malformed fallback, and JSON persistence; Electron restart covers appearance/provider/model restoration. |
+| `SETTINGS-ROLLBACK-001` | `[B]` | Failed walkthrough settings persistence restores the last confirmed provider/model. |
 | `PRIVACY-002` | `[B]` | `AnalyticsEvent` is a closed coarse schema, analytics disables exception autocapture, IPC rejects malformed events, and `analytics.test.ts` locks the emitted property allowlist. |
 | `DIFF-RENDER-001` | `[B]` | `app.browser.test.tsx` covers a 3,000-pair virtualized diff, fewer than 500 mounted lines, trailing navigation, and very-large-file plain mode. |
 | `DIFF-FILTER-001` | `[B]` | `diff-file-filters.test.ts` and browser flows cover hidden generated/vendor/binary files, reveal behavior, and visible filtering. |
@@ -138,6 +139,7 @@ record migration-sensitive invariants added during M8.
 | `GAP-PERSIST-003` | `[G]` | Historical thread migrations deleted legacy thread/run/artifact/memory rows; tests preserve migration history rather than desired future behavior. |
 | `GAP-SETTINGS-001` | `[G]` | One malformed/unknown closed provider value falls back to all defaults instead of preserving independently valid preferences. |
 | `GAP-SETTINGS-002` | `[G]` | Permanent Settings, staged/versioned onboarding, resume, and Run setup again are not implemented. |
+| `GAP-SETTINGS-003` | `[G]` | Walkthrough settings rollback occurs, but its save failure is not visible while a review remains open. |
 | `GAP-IPC-001` | `[G]` | IPC schemas are not uniform and privileged handlers do not validate sender/frame origin. |
 | `GAP-DISTRIBUTION-001` | `[G]` | Signing, notarization, installers, update installation, and public artifacts remain operational rather than unsigned packaged-E2E behavior. |
 | `GAP-RELEASE-001` | `[G]` | Release scripts have limited behavioral coverage for partial failure, checksums, retries, promotion ordering, and retention. |
