@@ -7,7 +7,7 @@ import {
   type AIProviderAgent,
   requireGeneratedText,
 } from "./ai-agent"
-import { CliService, type CliRunner } from "./cli"
+import { CliService, type CliRunner } from "@diffdash/process/cli"
 
 /** Creates a Claude-backed AI agent using the provided model ID. */
 export const makeClaudeAgent = (cli: CliRunner, model: ClaudeModel): AIProviderAgent =>

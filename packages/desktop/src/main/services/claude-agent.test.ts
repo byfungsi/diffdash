@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 
 import { AIAgent } from "./ai-agent"
 import { ClaudeAgent } from "./claude-agent"
-import { CliService, type CliResult } from "./cli"
+import { CliService, type CliResult } from "@diffdash/process/cli"
 
 const makeCliLayer = () => {
   const calls: Array<{

@@ -9,9 +9,9 @@ import {
 } from "@diffdash/domain/ai-settings"
 import { AIAgent, type AIAgentGenerateOptions, type AIProviderAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
-import { AppSettings } from "./app-settings"
+import { AppSettings } from "@diffdash/settings/app-settings"
 import { makeClaudeAgent } from "./claude-agent"
-import { CliError, CliService } from "./cli"
+import { CliError, CliService } from "@diffdash/process/cli"
 import { makeCodexAgent } from "./codex-agent"
 import { makeOpenCodeAgent } from "./opencode-agent"
 

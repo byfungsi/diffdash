@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Schema } from "effect"
+import { Either, Schema } from "effect"
 
 import { EventChannel, InvokeChannel } from "./channels"
 import { AddReviewThreadUserMessageRequest } from "./review-threads"
@@ -21,7 +21,7 @@ describe("protocol boundaries", () => {
       threadId: "",
     })
 
-    expect(result._tag).toBe("Left")
+    expect(Either.isLeft(result)).toBe(true)
   })
 
   it("serializes failures without stack or cause data", () => {

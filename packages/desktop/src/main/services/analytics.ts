@@ -6,7 +6,7 @@ import { PostHog } from "posthog-node"
 
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { AppConfig } from "./app-config"
-import { AppSettings } from "./app-settings"
+import { AppSettings } from "@diffdash/settings/app-settings"
 
 const AnalyticsState = Schema.Struct({
   distinctId: Schema.String,

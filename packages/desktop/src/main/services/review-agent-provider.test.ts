@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 
-import { CliStreamError } from "./cli-stream"
+import { CliStreamError } from "@diffdash/process/cli-stream"
 import {
   ReviewAgentExecutionError,
   executionFailureReason,

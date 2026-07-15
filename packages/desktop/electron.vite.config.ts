@@ -15,7 +15,13 @@ const packageVersion =
     ? packageJson.version
     : "0.0.0"
 
-const internalPackages = ["@diffdash/app", "@diffdash/domain", "@diffdash/protocol"]
+const internalPackages = [
+  "@diffdash/app",
+  "@diffdash/domain",
+  "@diffdash/process",
+  "@diffdash/protocol",
+  "@diffdash/settings",
+]
 
 const appVersion = (() => {
   try {

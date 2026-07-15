@@ -26,6 +26,12 @@
     "@diffdash/protocol#build": {
       "outputs": []
     },
+    "@diffdash/process#build": {
+      "outputs": []
+    },
+    "@diffdash/settings#build": {
+      "outputs": []
+    },
     "@diffdash/e2e#build": {
       "outputs": []
     },

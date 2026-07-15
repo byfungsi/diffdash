@@ -14,7 +14,7 @@ import {
 } from "@diffdash/domain/local-review"
 import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
-import { CliService, type CliError } from "./cli"
+import { CliService, type CliError } from "@diffdash/process/cli"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 

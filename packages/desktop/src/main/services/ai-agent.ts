@@ -1,6 +1,6 @@
 import { Context, Effect } from "effect"
 
-import { CliError, type CliResult } from "./cli"
+import { CliError, type CliResult } from "@diffdash/process/cli"
 
 /** Provider-neutral reasoning effort hint for generation requests. */
 export type AIAgentReasoningEffort = "minimal" | "low" | "medium" | "high"

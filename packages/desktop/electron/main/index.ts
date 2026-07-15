@@ -22,11 +22,11 @@ import { AgentRunStore } from "../../src/main/services/agent-run-store"
 import { AIAgent } from "../../src/main/services/ai-agent"
 import { Analytics } from "../../src/main/services/analytics"
 import { AppConfig } from "../../src/main/services/app-config"
-import { AppSettings } from "../../src/main/services/app-settings"
-import { AppState } from "../../src/main/services/app-state"
+import { AppSettings } from "@diffdash/settings/app-settings"
+import { AppState } from "@diffdash/settings/app-state"
 import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
-import { CliError, CliService } from "../../src/main/services/cli"
-import { CliStreamService } from "../../src/main/services/cli-stream"
+import { CliError, CliService } from "@diffdash/process/cli"
+import { CliStreamService } from "@diffdash/process/cli-stream"
 import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
 import { DatabaseService } from "../../src/main/services/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
@@ -154,7 +154,9 @@ const createAppLayer = () => {
     worktreePoolPath:
       process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool"),
   })
-  const settingsLayer = AppSettings.layer
+  const configDirectory = join(xdgConfigHome, "diffdash")
+  const settingsLayer = AppSettings.layer(join(configDirectory, "settings.json"))
+  const appStateLayer = AppState.layer(join(configDirectory, "state.json"))
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
   const aiAgentLayer = ConfigurableAIAgent.layer.pipe(Layer.provideMerge(settingsLayer))
   const walkthroughLayer = WalkthroughService.layer.pipe(Layer.provideMerge(aiAgentLayer))
@@ -203,7 +205,7 @@ const createAppLayer = () => {
     repositoryLinkerLayer,
     analyticsLayer,
     reviewContextLayer,
-    AppState.layer,
+    appStateLayer,
     Prerequisites.layer,
     walkthroughLayer,
     ViewedFileStore.layer,

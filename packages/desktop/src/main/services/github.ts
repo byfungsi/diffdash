@@ -13,7 +13,12 @@ import {
   RepositorySearchResult,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
-import { CliService, type CliError, type CliResult, type CliRunOptions } from "./cli"
+import {
+  CliService,
+  type CliError,
+  type CliResult,
+  type CliRunOptions,
+} from "@diffdash/process/cli"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 
 type CliRunner = {

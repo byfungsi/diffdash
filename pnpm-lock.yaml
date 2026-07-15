@@ -126,9 +126,15 @@ importers:
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain
+      '@diffdash/process':
+        specifier: workspace:*
+        version: link:../process
       '@diffdash/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@diffdash/settings':
+        specifier: workspace:*
+        version: link:../settings
       '@effect-atom/atom-react':
         specifier: ^0.5.0
         version: 0.5.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.21.4))(effect@3.21.4))(@effect/platform@0.94.5(effect@3.21.4))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.21.4))(effect@3.21.4))(effect@3.21.4)(react@19.2.7)(scheduler@0.27.0)
@@ -288,6 +294,28 @@ importers:
         specifier: 'catalog:'
         version: 6.0.3
 
+  packages/process:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 3.21.4
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 0.29.0(effect@3.21.4)(vitest@3.2.7)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.1.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.73.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.0)(@vitest/browser@3.2.7)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0)
+
   packages/protocol:
     dependencies:
       '@diffdash/domain':
@@ -300,6 +328,31 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 0.29.0(effect@3.21.4)(vitest@3.2.7)
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.73.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.0)(@vitest/browser@3.2.7)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0)
+
+  packages/settings:
+    dependencies:
+      '@diffdash/domain':
+        specifier: workspace:*
+        version: link:../domain
+      effect:
+        specifier: 'catalog:'
+        version: 3.21.4
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 0.29.0(effect@3.21.4)(vitest@3.2.7)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.1.0
       oxlint:
         specifier: 'catalog:'
         version: 1.73.0

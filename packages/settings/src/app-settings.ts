@@ -3,7 +3,6 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { AppConfig } from "./app-config"
 
 const AISettingsFromJson = Schema.parseJson(AISettings)
 
@@ -21,29 +20,27 @@ export class AppSettings extends Context.Tag("@diffdash/AppSettings")<
     readonly save: (settings: AISettings) => Effect.Effect<AISettings, AppSettingsError>
   }
 >() {
-  static readonly layer = Layer.effect(
-    AppSettings,
-    Effect.gen(function* () {
-      const config = yield* AppConfig
+  static readonly layer = (path: string) =>
+    Layer.succeed(
+      AppSettings,
+      AppSettings.of({
+        get: readSettingsFile(path).pipe(
+          Effect.flatMap((content) => {
+            if (content === null) return Effect.succeed(DEFAULT_AI_SETTINGS)
 
-      const get = readSettingsFile(config.settingsPath).pipe(
-        Effect.flatMap((content) => {
-          if (content === null) return Effect.succeed(DEFAULT_AI_SETTINGS)
-
-          return Schema.decodeUnknown(AISettingsFromJson)(content).pipe(
-            Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+            return Schema.decodeUnknown(AISettingsFromJson)(content).pipe(
+              Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+            )
+          }),
+        ),
+        save: Effect.fn("AppSettings.save")(function (settings) {
+          return readSettingsFile(path).pipe(
+            Effect.flatMap((content) => writeSettingsFile(path, mergeSettings(content, settings))),
+            Effect.as(settings),
           )
         }),
-      )
-
-      return AppSettings.of({
-        get,
-        save: Effect.fn("AppSettings.save")(function (settings) {
-          return writeSettingsFile(config.settingsPath, settings).pipe(Effect.as(settings))
-        }),
-      })
-    }),
-  )
+      }),
+    )
 }
 
 const readSettingsFile = (path: string): Effect.Effect<string | null, AppSettingsError> =>
@@ -61,7 +58,7 @@ const readSettingsFile = (path: string): Effect.Effect<string | null, AppSetting
 
 const writeSettingsFile = (
   path: string,
-  settings: AISettings,
+  settings: unknown,
 ): Effect.Effect<void, AppSettingsError> =>
   Effect.try({
     try: () => {
@@ -73,3 +70,18 @@ const writeSettingsFile = (
 
 const isNodeError = (cause: unknown): cause is NodeJS.ErrnoException =>
   cause instanceof Error && "code" in cause
+
+const mergeSettings = (content: string | null, settings: AISettings): unknown => {
+  if (content === null) return settings
+  try {
+    const existing: unknown = JSON.parse(content)
+    if (!isRecord(existing)) return settings
+    const existingModels = isRecord(existing.models) ? existing.models : {}
+    return { ...existing, ...settings, models: { ...existingModels, ...settings.models } }
+  } catch {
+    return settings
+  }
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)

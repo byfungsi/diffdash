@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
 import { AppConfig } from "./app-config"
-import { AppSettings } from "./app-settings"
+import { AppSettings } from "@diffdash/settings/app-settings"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-analytics-test-"))),
@@ -33,7 +33,7 @@ const makeLayer = (directory: string, events: CapturedEvent[]) => {
     settingsPath: join(directory, "diffdash", "settings.json"),
     tempDir: directory,
   })
-  const settingsLayer = AppSettings.layer.pipe(Layer.provide(configLayer))
+  const settingsLayer = AppSettings.layer(join(directory, "diffdash", "settings.json"))
   return Analytics.makeLayer({
     clientFactory: () => ({
       capture: (event) => events.push(event),

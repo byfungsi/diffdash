@@ -1,9 +1,8 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname } from "node:path"
 
 import { AppState as SharedAppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
-import { AppConfig } from "./app-config"
 
 const AppStateFromJson = Schema.parseJson(SharedAppState)
 
@@ -21,30 +20,24 @@ export class AppState extends Context.Tag("@diffdash/AppState")<
     readonly save: (state: SharedAppState) => Effect.Effect<SharedAppState, AppStateError>
   }
 >() {
-  static readonly layer = Layer.effect(
-    AppState,
-    Effect.gen(function* () {
-      const config = yield* AppConfig
-      const statePath = join(dirname(config.settingsPath), "state.json")
+  static readonly layer = (path: string) =>
+    Layer.succeed(
+      AppState,
+      AppState.of({
+        get: readStateFile(path).pipe(
+          Effect.flatMap((content) => {
+            if (content === null) return Effect.succeed(DEFAULT_APP_STATE)
 
-      const get = readStateFile(statePath).pipe(
-        Effect.flatMap((content) => {
-          if (content === null) return Effect.succeed(DEFAULT_APP_STATE)
-
-          return Schema.decodeUnknown(AppStateFromJson)(content).pipe(
-            Effect.catchAll(() => Effect.succeed(DEFAULT_APP_STATE)),
-          )
-        }),
-      )
-
-      return AppState.of({
-        get,
+            return Schema.decodeUnknown(AppStateFromJson)(content).pipe(
+              Effect.catchAll(() => Effect.succeed(DEFAULT_APP_STATE)),
+            )
+          }),
+        ),
         save: Effect.fn("AppState.save")(function (state) {
-          return writeStateFile(statePath, state).pipe(Effect.as(state))
+          return writeStateFile(path, state).pipe(Effect.as(state))
         }),
-      })
-    }),
-  )
+      }),
+    )
 }
 
 const readStateFile = (path: string): Effect.Effect<string | null, AppStateError> =>

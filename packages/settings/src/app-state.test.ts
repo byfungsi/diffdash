@@ -1,11 +1,10 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
-import { AppConfig } from "./app-config"
 import { AppState } from "./app-state"
 
 const makeTempDirectory = Effect.acquireRelease(
@@ -13,16 +12,7 @@ const makeTempDirectory = Effect.acquireRelease(
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
 
-const makeLayer = (directory: string) =>
-  AppState.layer.pipe(
-    Layer.provide(
-      AppConfig.layer({
-        databasePath: join(directory, "test.sqlite"),
-        settingsPath: join(directory, "diffdash", "settings.json"),
-        tempDir: directory,
-      }),
-    ),
-  )
+const makeLayer = (directory: string) => AppState.layer(join(directory, "diffdash", "state.json"))
 
 it.scoped("FUN-148 AC: loads committed incomplete and completed onboarding fixtures", () =>
   Effect.gen(function* () {
@@ -35,7 +25,7 @@ it.scoped("FUN-148 AC: loads committed incomplete and completed onboarding fixtu
     }).pipe(Effect.provide(makeLayer(directory)))
     expect(incomplete.onboardingCompleted).toBe(false)
 
-    copyFileSync(resolve("src/main/services/fixtures/onboarding-completed.json"), statePath)
+    copyFileSync(resolve("src/fixtures/onboarding-completed.json"), statePath)
     const completed = yield* Effect.gen(function* () {
       const appState = yield* AppState
       return yield* appState.get
@@ -93,6 +83,6 @@ const installStateFixture = (directory: string, fixtureName: string) => {
   const stateDirectory = join(directory, "diffdash")
   const statePath = join(stateDirectory, "state.json")
   mkdirSync(stateDirectory, { recursive: true })
-  copyFileSync(resolve("src/main/services/fixtures", fixtureName), statePath)
+  copyFileSync(resolve("src/fixtures", fixtureName), statePath)
   return statePath
 }

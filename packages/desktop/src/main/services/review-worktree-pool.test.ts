@@ -21,7 +21,7 @@ import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
-import { CliStreamService } from "./cli-stream"
+import { CliStreamService } from "@diffdash/process/cli-stream"
 import { ReviewWorktreePool, ReviewWorktreePoolError } from "./review-worktree-pool"
 
 interface GitFixture {

@@ -36,6 +36,8 @@
     "@diffdash/app": "workspace:*",
     "@diffdash/domain": "workspace:*",
     "@diffdash/protocol": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "@diffdash/settings": "workspace:*",
     "@effect-atom/atom-react": "^0.5.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@opencode-ai/sdk": "1.17.16",

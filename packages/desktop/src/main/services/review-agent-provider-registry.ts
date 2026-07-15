@@ -8,7 +8,7 @@ import {
 import type { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { claudeReviewAgentLayer } from "./claude-review-agent"
-import { CliStreamService } from "./cli-stream"
+import { CliStreamService } from "@diffdash/process/cli-stream"
 import { codexReviewAgentLayer } from "./codex-review-agent"
 import { openCodeReviewAgentLayer } from "./opencode-review-agent"
 import { OpenCodeSdkClient } from "./opencode-sdk-client"

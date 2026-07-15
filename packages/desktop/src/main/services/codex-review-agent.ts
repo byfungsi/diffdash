@@ -14,7 +14,7 @@ import {
   ReviewThreadAgentResponse,
 } from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
-import { CliStreamService } from "./cli-stream"
+import { CliStreamService } from "@diffdash/process/cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"
 import { resolveReviewAgentPermissionConfig } from "./review-agent-permissions"
 import {

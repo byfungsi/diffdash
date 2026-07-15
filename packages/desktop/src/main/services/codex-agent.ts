@@ -11,7 +11,7 @@ import {
   requireGeneratedText,
 } from "./ai-agent"
 import { AppConfig } from "./app-config"
-import { CliError, CliService, type CliResult, type CliRunner } from "./cli"
+import { CliError, CliService, type CliResult, type CliRunner } from "@diffdash/process/cli"
 
 /** Creates a Codex-backed AI agent using the provided model ID. */
 export const makeCodexAgent = (

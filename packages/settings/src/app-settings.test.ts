@@ -1,11 +1,10 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { Effect } from "effect"
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { AppConfig } from "./app-config"
 import { AppSettings } from "./app-settings"
 
 const makeTempDirectory = Effect.acquireRelease(
@@ -14,15 +13,7 @@ const makeTempDirectory = Effect.acquireRelease(
 )
 
 const makeLayer = (directory: string) =>
-  AppSettings.layer.pipe(
-    Layer.provide(
-      AppConfig.layer({
-        databasePath: join(directory, "test.sqlite"),
-        settingsPath: join(directory, "diffdash", "settings.json"),
-        tempDir: directory,
-      }),
-    ),
-  )
+  AppSettings.layer(join(directory, "diffdash", "settings.json"))
 
 describe("AppSettings", () => {
   it.scoped("returns default settings when the file is missing", () =>
@@ -35,6 +26,33 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual(DEFAULT_AI_SETTINGS)
+    }),
+  )
+
+  it.scoped("preserves settings owned by unavailable future providers", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsPath = join(directory, "diffdash", "settings.json")
+      mkdirSync(join(directory, "diffdash"), { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          futureProvider: { enabled: true },
+          models: { ...DEFAULT_AI_SETTINGS.models, future: "future-model" },
+        }),
+      )
+
+      yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        yield* appSettings.save(AISettings.make({ ...DEFAULT_AI_SETTINGS, appearance: "dark" }))
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        appearance: "dark",
+        futureProvider: { enabled: true },
+        models: { future: "future-model" },
+      })
     }),
   )
 
@@ -143,8 +161,5 @@ describe("AppSettings", () => {
 const installSettingsFixture = (directory: string, fixtureName: string) => {
   const settingsDirectory = join(directory, "diffdash")
   mkdirSync(settingsDirectory, { recursive: true })
-  copyFileSync(
-    resolve("src/main/services/fixtures", fixtureName),
-    join(settingsDirectory, "settings.json"),
-  )
+  copyFileSync(resolve("src/fixtures", fixtureName), join(settingsDirectory, "settings.json"))
 }

@@ -11,7 +11,7 @@ import {
   type WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
 import { AIAgent, type AIAgentGenerateOptions } from "./ai-agent"
-import type { CliError } from "./cli"
+import type { CliError } from "@diffdash/process/cli"
 
 const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
 

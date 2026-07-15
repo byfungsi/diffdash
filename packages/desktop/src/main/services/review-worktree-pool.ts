@@ -8,7 +8,11 @@ import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/revi
 import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
-import { type CliStreamResult, type CliStreamRunner, CliStreamService } from "./cli-stream"
+import {
+  type CliStreamResult,
+  type CliStreamRunner,
+  CliStreamService,
+} from "@diffdash/process/cli-stream"
 
 const MANIFEST_VERSION = 1
 const MAX_POOL_SLOTS = 10

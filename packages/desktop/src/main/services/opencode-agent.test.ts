@@ -6,7 +6,7 @@ import { join } from "node:path"
 
 import { AIAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
-import { CliService, type CliResult } from "./cli"
+import { CliService, type CliResult } from "@diffdash/process/cli"
 import { OpenCodeAgent } from "./opencode-agent"
 
 const makeTempDirectory = Effect.acquireRelease(

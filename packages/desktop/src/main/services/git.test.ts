@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, Either, Layer } from "effect"
 
-import { CliError, CliService, type CliResult } from "./cli"
+import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
 import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./git"
 
 const makeCliResult = (stdout: string, args: readonly string[]): CliResult => ({

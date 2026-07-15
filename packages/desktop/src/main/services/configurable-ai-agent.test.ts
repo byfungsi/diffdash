@@ -6,8 +6,8 @@ import { join } from "node:path"
 import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AIAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
-import { AppSettings } from "./app-settings"
-import { CliError, CliService, type CliResult } from "./cli"
+import { AppSettings } from "@diffdash/settings/app-settings"
+import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
 import { ConfigurableAIAgent } from "./configurable-ai-agent"
 
 const makeCliResult = (command: string, args: readonly string[], stdout: string): CliResult => ({

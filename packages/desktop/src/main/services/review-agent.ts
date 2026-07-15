@@ -23,7 +23,7 @@ import {
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { AgentRunArtifactStore } from "./agent-run-artifact-store"
 import { AgentRunStore } from "./agent-run-store"
-import { AppSettings } from "./app-settings"
+import { AppSettings } from "@diffdash/settings/app-settings"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
 import { executionFailureReason } from "./review-agent-provider"
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"

@@ -11,7 +11,11 @@ import {
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewLevelAnchor, ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
-import { CliStreamService, type CliStreamEvent, type CliStreamOptions } from "./cli-stream"
+import {
+  CliStreamService,
+  type CliStreamEvent,
+  type CliStreamOptions,
+} from "@diffdash/process/cli-stream"
 import { codexReviewAgentLayer } from "./codex-review-agent"
 import {
   ReviewAgentExecutionError,

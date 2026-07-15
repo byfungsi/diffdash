@@ -6,7 +6,7 @@ import type {
   ReviewAgentTurnInput,
   ReviewAgentTurnResult,
 } from "@diffdash/domain/review-agent"
-import { CliStreamError } from "./cli-stream"
+import { CliStreamError } from "@diffdash/process/cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"
 
 /** Ephemeral execution resources owned by one orchestrated provider turn. */

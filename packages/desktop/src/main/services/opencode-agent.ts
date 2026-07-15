@@ -11,7 +11,7 @@ import {
   requireGeneratedText,
 } from "./ai-agent"
 import { AppConfig } from "./app-config"
-import { CliError, CliService, type CliRunner } from "./cli"
+import { CliError, CliService, type CliRunner } from "@diffdash/process/cli"
 
 const OPENCODE_PROMPT_MESSAGE =
   "Generate a DiffDash walkthrough from the attached prompt file. Return JSON only."

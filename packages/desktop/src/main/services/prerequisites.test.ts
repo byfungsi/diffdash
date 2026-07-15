@@ -18,7 +18,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { AppConfig } from "./app-config"
-import { CliError, CliService, type CliResult } from "./cli"
+import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
 import {
   parseGitHubCliVersion,
   Prerequisites,

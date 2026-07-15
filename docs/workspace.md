@@ -29,6 +29,10 @@ API, canonical IPC channels, request contracts, and serializable transport error
 only on domain and Effect. `@diffdash/app` begins the reusable renderer boundary and owns the
 file-tree adapter; the remaining renderer moves there as an atomic package in M10.
 
+`@diffdash/process` owns captured and streaming subprocess execution plus generic executable
+discovery. `@diffdash/settings` owns path-parameterized JSON settings and app-state stores while
+preserving unknown provider fields. Neither package depends on Electron or concrete providers.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;

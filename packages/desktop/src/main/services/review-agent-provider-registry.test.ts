@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
-import { CliStreamError, CliStreamService } from "./cli-stream"
+import { CliStreamError, CliStreamService } from "@diffdash/process/cli-stream"
 import { OpenCodeSdkClient } from "./opencode-sdk-client"
 import {
   ReviewAgentProviderRegistry,

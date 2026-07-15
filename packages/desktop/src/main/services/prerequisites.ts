@@ -13,7 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs"
-import { delimiter, dirname, extname, join, resolve } from "node:path"
+import { delimiter, dirname, join, resolve } from "node:path"
 import { homedir } from "node:os"
 
 import {
@@ -22,7 +22,10 @@ import {
   DiffDashCliInstallResult,
 } from "@diffdash/protocol/prerequisites"
 import { AppConfig } from "./app-config"
-import { CliService, defaultExecutablePath, type CliRunner } from "./cli"
+import { CliService, type CliRunner } from "@diffdash/process/cli"
+import { resolveExecutableInPath } from "@diffdash/process/executable"
+
+export { resolveExecutableInPath } from "@diffdash/process/executable"
 
 /** A typed failure from installing the DiffDash CLI into PATH. */
 export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
@@ -310,29 +313,6 @@ export const refreshAppImageCliLaunchers = (sourcePath: string, appImagePath: st
   }
 }
 
-/** Returns the absolute path to an executable in PATH, or null if it cannot be found. */
-export const resolveExecutableInPath = (
-  command: string,
-  options: {
-    readonly envPath?: string
-    readonly pathExt?: string
-    readonly platform?: NodeJS.Platform
-  } = {},
-) => {
-  const envPath = options.envPath ?? defaultExecutablePath(process.env.PATH ?? "")
-  const platform = options.platform ?? process.platform
-  const extensions = executableExtensions(command, platform, options.pathExt ?? process.env.PATHEXT)
-
-  for (const directory of envPath.split(delimiter).filter((entry) => entry.length > 0)) {
-    for (const extension of extensions) {
-      const candidate = resolve(directory, `${command}${extension}`)
-      if (canExecuteFile(candidate)) return candidate
-    }
-  }
-
-  return null
-}
-
 const firstWritablePathDirectory = () => {
   const pathDirectories = (process.env.PATH ?? "")
     .split(delimiter)
@@ -363,28 +343,6 @@ const uniqueDirectories = (directories: readonly string[]) => {
     seen.add(resolved)
     return true
   })
-}
-
-const executableExtensions = (
-  command: string,
-  platform: NodeJS.Platform,
-  pathExt: string | undefined,
-) => {
-  if (platform !== "win32" || extname(command).length > 0) return [""]
-
-  const extensions = (pathExt ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .filter((extension) => extension.length > 0)
-  return ["", ...extensions]
-}
-
-const canExecuteFile = (path: string) => {
-  try {
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
 }
 
 const canWriteDirectory = (directory: string) => {

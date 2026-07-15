@@ -11,10 +11,10 @@ import {
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   type ReviewAgentProviderRunId,
 } from "@diffdash/domain/review-agent"
-import { defaultExecutablePath } from "./cli"
-import { type CliStreamRunner, CliStreamService } from "./cli-stream"
+import { defaultExecutablePath } from "@diffdash/process/cli"
+import { type CliStreamRunner, CliStreamService } from "@diffdash/process/cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"
-import { resolveExecutableInPath } from "./prerequisites"
+import { resolveExecutableInPath } from "@diffdash/process/executable"
 import type { OpenCodeReviewPermissionConfig } from "./review-agent-permissions"
 
 /** Input passed to the isolated OpenCode SDK boundary for one review turn. */
