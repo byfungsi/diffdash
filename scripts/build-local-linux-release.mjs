@@ -13,12 +13,13 @@ import path from "node:path"
 import "./load-local-env.mjs"
 
 const args = process.argv.slice(2)
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const workspacePackageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
 const platform = readOption("--platform") ?? process.env.RELEASE_LINUX_PLATFORM ?? "linux/amd64"
 const image = readOption("--image") ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-trixie"
-const pnpmVersion = packageJson.packageManager?.startsWith("pnpm@")
-  ? packageJson.packageManager.slice("pnpm@".length)
+const pnpmVersion = workspacePackageJson.packageManager?.startsWith("pnpm@")
+  ? workspacePackageJson.packageManager.slice("pnpm@".length)
   : "10.26.1"
 
 assertCommand("docker", ["--version"])
@@ -51,7 +52,7 @@ try {
     "pnpm assets:icons",
     "pnpm native:electron",
     "pnpm build",
-    "pnpm exec electron-builder --linux AppImage deb --x64 --publish=never",
+    "pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never",
   ].join(" && ")
 
   run("docker", [
@@ -75,7 +76,7 @@ try {
     dockerCommand,
   ])
 
-  const distDir = path.join(sourceDir, "dist")
+  const distDir = path.join(sourceDir, "packages/desktop/dist")
   if (!existsSync(distDir)) {
     throw new Error("Docker Linux build did not create a dist directory.")
   }
@@ -138,7 +139,7 @@ function assertCommand(command, commandArgs) {
 function writeHomepageMetadata(sourceDir) {
   if (typeof packageJson.homepage !== "string" || packageJson.homepage.trim().length === 0) return
 
-  const packageJsonPath = path.join(sourceDir, "package.json")
+  const packageJsonPath = path.join(sourceDir, "packages/desktop/package.json")
   const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"))
   sourcePackageJson.homepage = packageJson.homepage
   writeFileSync(packageJsonPath, `${JSON.stringify(sourcePackageJson, null, 2)}\n`)

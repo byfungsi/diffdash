@@ -6,7 +6,7 @@ import "./load-local-env.mjs"
 import { retainedReleasePrefixes, validateReleaseAssetNames } from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const tag = readOption("--tag") ?? `v${packageJson.version}`
 const version = tag.replace(/^v/, "")
 const r2Bucket = requiredEnv("R2_BUCKET")

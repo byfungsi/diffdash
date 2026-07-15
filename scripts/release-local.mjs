@@ -4,7 +4,7 @@ import path from "node:path"
 import "./load-local-env.mjs"
 
 const args = process.argv.slice(2)
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const tag = readOption("--tag") ?? `v${packageJson.version}`
 const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
 const macArch = readOption("--mac-arch") ?? process.env.RELEASE_MAC_ARCH ?? "all"

@@ -1,5 +1,5 @@
 {
-  "name": "diffdash-landing",
+  "name": "@diffdash/web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,6 +8,8 @@
     "check:worker": "node --check worker/index.js",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src worker vite.config.ts --no-error-on-unmatched-pattern",
     "deploy": "pnpm check:worker && pnpm build && wrangler deploy",
     "deploy:dry-run": "pnpm check:worker && pnpm build && wrangler deploy --dry-run",
     "preview": "vite preview"
@@ -22,6 +24,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
+    "oxlint": "^1.73.0",
     "typescript": "^6.0.3",
     "vite": "^7.3.6",
     "wrangler": "^4.52.0"

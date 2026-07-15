@@ -1,0 +1,167 @@
+{
+  "name": "@diffdash/desktop",
+  "private": true,
+  "productName": "DiffDash",
+  "version": "0.3.1",
+  "description": "Desktop code review app with Effect-powered TypeScript services.",
+  "homepage": "https://github.com/byfungsi/diffdash",
+  "author": "Muhammad Hanif",
+  "license": "ISC",
+  "type": "module",
+  "main": "out/main/index.js",
+  "bin": {
+    "diffdash": "bin/diffdash.mjs"
+  },
+  "scripts": {
+    "assets:icons": "node scripts/generate-icons.mjs",
+    "dev": "pnpm assets:icons && pnpm native:electron && electron-vite dev",
+    "build": "electron-vite build",
+    "pack": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --dir --publish=never",
+    "dist": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --publish=never",
+    "dist:mac": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --mac dmg zip --publish=never",
+    "dist:linux": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux AppImage deb --publish=never",
+    "dist:linux:deb": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux deb --publish=never",
+    "dist:win": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --win nsis --publish=never",
+    "fixtures:database-v8": "pnpm native:node && node scripts/generate-database-v8-fixture.mjs",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm native:node && vitest run",
+    "test:browser": "vitest --config vitest.browser.config.ts run",
+    "test:watch": "vitest",
+    "lint": "oxlint electron src scripts --no-error-on-unmatched-pattern",
+    "native:electron": "npm_config_runtime=electron npm_config_target=43.0.0 npm_config_disturl=https://electronjs.org/headers node scripts/rebuild-better-sqlite3.mjs",
+    "native:node": "node scripts/rebuild-better-sqlite3.mjs"
+  },
+  "dependencies": {
+    "@effect-atom/atom-react": "^0.5.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@opencode-ai/sdk": "1.17.16",
+    "@pierre/diffs": "^1.2.12",
+    "@pierre/trees": "1.0.0-beta.5",
+    "@radix-ui/react-slot": "^1.3.0",
+    "better-sqlite3": "^12.11.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "effect": "^3.21.4",
+    "electron-updater": "6.8.9",
+    "lucide-react": "^1.23.0",
+    "posthog-node": "5.41.0",
+    "radix-ui": "^1.6.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0",
+    "unicode-animations": "^1.0.3",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@effect/vitest": "^0.29.0",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@vitest/browser": "^3.2.7",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "oxlint": "^1.73.0",
+    "shadcn": "^4.13.0",
+    "tailwindcss": "^4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.7"
+  },
+  "build": {
+    "appId": "dev.diffdash.app",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "compression": "normal",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/**/*.node"
+    ],
+    "removePackageScripts": true,
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://download.usediffdash.com/updates/stable"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "icon": "resources/icons/icon.icns",
+      "notarize": true,
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "type": "distribution",
+      "extraResources": [
+        {
+          "from": "resources/darwin/bin/diffdash",
+          "to": "bin/diffdash"
+        }
+      ]
+    },
+    "dmg": {
+      "backgroundColor": "#111827",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "linux": {
+      "category": "Development",
+      "executableName": "diffdash-desktop",
+      "icon": "resources/icons/png",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "extraResources": [
+        {
+          "from": "resources/linux/bin/diffdash",
+          "to": "bin/diffdash"
+        }
+      ]
+    },
+    "deb": {
+      "maintainer": "Muhammad Hanif <pocisite@gmail.com>",
+      "afterInstall": "resources/linux/deb/after-install.sh",
+      "afterRemove": "resources/linux/deb/after-remove.sh"
+    },
+    "win": {
+      "icon": "resources/icons/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "oneClick": false,
+      "perMachine": false
+    }
+  }
+}

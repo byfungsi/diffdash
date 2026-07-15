@@ -167,7 +167,9 @@ try {
   })
 
   const cacheKey = await hashCaptureInputs()
-  const packageJson = JSON.parse(await readFile(resolve(workspaceRoot, "package.json"), "utf8"))
+  const packageJson = JSON.parse(
+    await readFile(resolve(workspaceRoot, "packages/desktop/package.json"), "utf8"),
+  )
   await writeFile(
     manifestPath,
     `${JSON.stringify(

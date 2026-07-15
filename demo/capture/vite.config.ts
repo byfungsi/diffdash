@@ -7,12 +7,15 @@ const workspaceRoot = resolve(import.meta.dirname, "../..")
 
 export default defineConfig({
   root: import.meta.dirname,
+  worker: {
+    format: "es",
+  },
   define: {
     "import.meta.env.VITE_APP_VERSION": JSON.stringify("v0.2.1"),
   },
   resolve: {
     alias: {
-      "@": resolve(workspaceRoot, "src/renderer/src"),
+      "@": resolve(workspaceRoot, "packages/desktop/src/renderer/src"),
     },
   },
   plugins: [react(), tailwindcss()],

@@ -31,9 +31,12 @@ const appVersion = (() => {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "")
-  const landingEnv = loadEnv(mode, resolve("web/landing"), "")
-  const posthogHost = env.VITE_POSTHOG_HOST || landingEnv.VITE_POSTHOG_HOST || ""
-  const posthogKey = env.VITE_POSTHOG_KEY || landingEnv.VITE_POSTHOG_KEY || ""
+  const rootEnv = loadEnv(mode, resolve("../.."), "")
+  const landingEnv = loadEnv(mode, resolve("../web"), "")
+  const posthogHost =
+    env.VITE_POSTHOG_HOST || rootEnv.VITE_POSTHOG_HOST || landingEnv.VITE_POSTHOG_HOST || ""
+  const posthogKey =
+    env.VITE_POSTHOG_KEY || rootEnv.VITE_POSTHOG_KEY || landingEnv.VITE_POSTHOG_KEY || ""
 
   return {
     main: {

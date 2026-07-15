@@ -1,8 +1,12 @@
 {
-  "extends": "../tsconfig.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "baseUrl": "..",
-    "types": ["vite/client"]
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "paths": {
+      "@/*": ["packages/desktop/src/renderer/src/*"]
+    }
   },
   "include": ["capture"]
 }

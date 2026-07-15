@@ -3,8 +3,8 @@ import { useRef, useState } from "react"
 import { useGSAP } from "@gsap/react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
-import productHomeScreenshot from "../../../product_ss_1.png"
-import productReviewScreenshot from "../../../product_ss_2.png"
+import productHomeScreenshot from "./assets/product_ss_1.png"
+import productReviewScreenshot from "./assets/product_ss_2.png"
 import {
   captureDownloadClick,
   captureNavClick,
@@ -20,6 +20,17 @@ const downloadUrls = {
   linuxDeb: "https://download.usediffdash.com/linux",
   macos: "https://download.usediffdash.com/macos",
 }
+
+const scrubWords = (() => {
+  const occurrences = new Map<string, number>()
+  return "A good review is not a faster skim. It is a controlled return to context, intent, and the exact files that still need judgment."
+    .split(" ")
+    .map((word) => {
+      const occurrence = (occurrences.get(word) ?? 0) + 1
+      occurrences.set(word, occurrence)
+      return { id: `${word}-${occurrence}`, word }
+    })
+})()
 
 const bentoCards = [
   {
@@ -295,10 +306,6 @@ function ScreenshotFrame({
 
 function ScrubText() {
   const sectionRef = useRef<HTMLElement>(null)
-  const words =
-    "A good review is not a faster skim. It is a controlled return to context, intent, and the exact files that still need judgment.".split(
-      " ",
-    )
 
   useGSAP(
     () => {
@@ -329,8 +336,8 @@ function ScrubText() {
   return (
     <section className="scrub-section" ref={sectionRef}>
       <p>
-        {words.map((word, index) => (
-          <span className="scrub-word" key={`${word}-${index}`}>
+        {scrubWords.map(({ id, word }) => (
+          <span className="scrub-word" key={id}>
             {word}
           </span>
         ))}

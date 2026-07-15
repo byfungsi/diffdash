@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const version = packageJson.version
 
 if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {

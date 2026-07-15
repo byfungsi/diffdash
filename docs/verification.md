@@ -35,9 +35,9 @@ cannot be made reliable in local automation.
 | Browser | `pnpm test:browser` | Composed renderer interaction and state transitions |
 | Electron | `pnpm test:e2e` | Full shell, IPC, CLI navigation, worktrees, and restart |
 | Packaged Electron | `pnpm test:e2e:packaged` | ASAR, updater/CLI resources, native SQLite, preload isolation, and restart |
-| Download worker | `pnpm --dir web/download-worker test` | Stable release routing and artifact selection |
+| Download worker | `pnpm --filter @diffdash/download-worker test` | Stable release routing and artifact selection |
 | Full test gate | `pnpm test:all` | Unit, browser, Electron, and worker suites |
-| Landing build | `pnpm --dir web/landing build` | Landing TypeScript and production bundle |
+| Landing build | `pnpm --filter @diffdash/web build` | Landing TypeScript and production bundle |
 | Promo data | `pnpm promo:data:check` | Deterministic demo scenarios |
 | Release infrastructure | `pnpm release:infrastructure:check` | Release-script syntax and worker checks |
 
@@ -231,6 +231,6 @@ M9 remains blocked until every `[B]` requirement has passing automated or approv
 evidence and the snapshot is reviewed.
 
 The frozen compatibility database is generated from
-`src/main/services/fixtures/database-v8-populated.sql`. Regenerate it with
+`packages/desktop/src/main/services/fixtures/database-v8-populated.sql`. Regenerate it with
 `pnpm fixtures:database-v8`; do not replace the source DDL with current migration output when a
 future schema version is added.

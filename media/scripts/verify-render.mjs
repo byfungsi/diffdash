@@ -32,7 +32,12 @@ const deliveries = [
 
 await mkdir(outputDirectory, { recursive: true })
 
-const packageJson = JSON.parse(await readFile(resolve(workspaceRoot, "package.json"), "utf8"))
+const workspacePackageJson = JSON.parse(
+  await readFile(resolve(workspaceRoot, "package.json"), "utf8"),
+)
+const desktopPackageJson = JSON.parse(
+  await readFile(resolve(workspaceRoot, "packages/desktop/package.json"), "utf8"),
+)
 const captureManifest = JSON.parse(await readFile(captureManifestPath, "utf8"))
 const canonicalAudioPacketHash = hashAudioPackets(canonicalAudioPath)
 const canonicalAudioLoudness = measureLoudness(canonicalAudioPath)
@@ -54,7 +59,7 @@ for (const expectedRule of [
   assert(ignoreRules.has(expectedRule), `Missing generated-artifact ignore rule: ${expectedRule}`)
 }
 
-const packagedFiles = packageJson.build?.files
+const packagedFiles = desktopPackageJson.build?.files
 assert(Array.isArray(packagedFiles), "Electron Builder file allowlist is missing")
 assert(
   packagedFiles.every((entry) => typeof entry === "string" && !/^(demo|media)(\/|$)/.test(entry)),
@@ -141,7 +146,7 @@ const verifiedDeliveries = await Promise.all(
 const manifest = {
   campaignId: captureManifest.campaignId,
   scenarioId: captureManifest.scenarioId,
-  appVersion: packageJson.version,
+  appVersion: desktopPackageJson.version,
   verifiedAt: new Date().toISOString(),
   scenarioAndCaptureCacheKey: captureManifest.cacheKey,
   capture: {
@@ -157,7 +162,7 @@ const manifest = {
     fps: 30,
     durationSeconds: 42,
     durationInFrames: 1260,
-    remotionVersion: packageJson.devDependencies.remotion,
+    remotionVersion: workspacePackageJson.devDependencies.remotion,
   },
   tools: {
     node: process.version,

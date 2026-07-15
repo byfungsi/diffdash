@@ -7,7 +7,7 @@ if (tag === undefined || tag.trim().length === 0) {
 }
 
 const version = tag.trim().replace(/^v/, "")
-const changelog = readFileSync("CHANGELOG.md", "utf8")
+const changelog = readFileSync("packages/desktop/CHANGELOG.md", "utf8")
 const lines = changelog.split(/\r?\n/)
 const headingIndex = lines.findIndex((line) => headingVersion(line) === version)
 

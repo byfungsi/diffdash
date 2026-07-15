@@ -13,7 +13,8 @@ import path from "node:path"
 import "./load-local-env.mjs"
 
 const args = process.argv.slice(2)
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const desktopRoot = path.resolve("packages/desktop")
+const packageJson = JSON.parse(readFileSync(path.join(desktopRoot, "package.json"), "utf8"))
 const version = packageJson.version
 const productName = packageJson.productName ?? packageJson.name
 const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
@@ -67,10 +68,10 @@ if (!packageExisting) {
 
 for (const arch of archs) {
   const appPath = macAppPath(arch)
-  const artifactPath = path.resolve("dist", `${productName}-${version}-mac-${arch}.dmg`)
-  const zipPath = path.resolve("dist", `${productName}-${version}-mac-${arch}.zip`)
+  const artifactPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.dmg`)
+  const zipPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.zip`)
   const blockmapPath = `${zipPath}.blockmap`
-  const metadataPath = path.resolve("dist", "latest-mac.yml")
+  const metadataPath = path.join(desktopRoot, "dist", "latest-mac.yml")
 
   if (packageExisting) {
     if (!existsSync(appPath)) {
@@ -79,16 +80,20 @@ for (const arch of archs) {
     console.log(`Packaging existing macOS ${arch} app`)
   } else {
     console.log(`Building signed macOS ${arch} app`)
-    run("pnpm", [
-      "exec",
-      "electron-builder",
-      "--config",
-      electronBuilderConfig,
-      "--mac",
-      "zip",
-      `--${arch}`,
-      "--publish=never",
-    ])
+    run(
+      "pnpm",
+      [
+        "exec",
+        "electron-builder",
+        "--config",
+        electronBuilderConfig,
+        "--mac",
+        "zip",
+        `--${arch}`,
+        "--publish=never",
+      ],
+      desktopRoot,
+    )
   }
 
   verifyAppUpdateConfig(appPath)
@@ -106,35 +111,43 @@ for (const arch of archs) {
 
   console.log(`Packaging macOS ${arch} DMG`)
   rmSync(artifactPath, { force: true })
-  run("pnpm", [
-    "exec",
-    "electron-builder",
-    "--config",
-    electronBuilderConfig,
-    "--prepackaged",
-    appPath,
-    "--mac",
-    "dmg",
-    `--${arch}`,
-    "--publish=never",
-  ])
+  run(
+    "pnpm",
+    [
+      "exec",
+      "electron-builder",
+      "--config",
+      electronBuilderConfig,
+      "--prepackaged",
+      appPath,
+      "--mac",
+      "dmg",
+      `--${arch}`,
+      "--publish=never",
+    ],
+    desktopRoot,
+  )
 
   console.log(`Packaging macOS ${arch} updater ZIP`)
   rmSync(zipPath, { force: true })
   rmSync(blockmapPath, { force: true })
   rmSync(metadataPath, { force: true })
-  run("pnpm", [
-    "exec",
-    "electron-builder",
-    "--config",
-    electronBuilderConfig,
-    "--prepackaged",
-    appPath,
-    "--mac",
-    "zip",
-    `--${arch}`,
-    "--publish=never",
-  ])
+  run(
+    "pnpm",
+    [
+      "exec",
+      "electron-builder",
+      "--config",
+      electronBuilderConfig,
+      "--prepackaged",
+      appPath,
+      "--mac",
+      "zip",
+      `--${arch}`,
+      "--publish=never",
+    ],
+    desktopRoot,
+  )
 
   verifyApp(appPath)
 
@@ -184,7 +197,12 @@ function nativeArch() {
 }
 
 function macAppPath(arch) {
-  return path.resolve("dist", arch === "x64" ? "mac" : `mac-${arch}`, `${productName}.app`)
+  return path.join(
+    desktopRoot,
+    "dist",
+    arch === "x64" ? "mac" : `mac-${arch}`,
+    `${productName}.app`,
+  )
 }
 
 function requiredEnv(name) {
@@ -229,9 +247,9 @@ function verifyAppUpdateConfig(appPath) {
   console.log(`Verified updater configuration: ${updateConfigPath}`)
 }
 
-function run(command, commandArgs) {
+function run(command, commandArgs, cwd) {
   console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
-  execFileSync(command, commandArgs, { env: process.env, stdio: "inherit" })
+  execFileSync(command, commandArgs, { cwd, env: process.env, stdio: "inherit" })
 }
 
 function shellQuote(value) {

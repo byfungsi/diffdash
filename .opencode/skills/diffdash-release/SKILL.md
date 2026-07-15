@@ -9,7 +9,7 @@ Use this skill for DiffDash desktop releases only.
 
 ## Release Model
 
-- Release versions come from `package.json`.
+- Release versions come from `packages/desktop/package.json`.
 - Release tags are annotated Git tags named `v<package.version>`.
 - Local release scripts are the default release path. Do not rely on GitHub Actions for normal releases.
 - GitHub Actions releases are disabled. The archived workflow lives at `.github/workflows/release.yml.disabled` and must not be dispatched.
@@ -17,7 +17,7 @@ Use this skill for DiffDash desktop releases only.
 - `pnpm release:local` is the normal one-command flow: checks, macOS build/sign/notarize/staple/verify, Linux Docker AppImage and `.deb` builds, GitHub draft Release publishing, and R2 mirroring.
 - `pnpm release:local:mac`, `pnpm release:local:linux`, and `pnpm release:local:publish` are partial commands for recovery/debugging.
 - GitHub Releases are created or updated as drafts first.
-- Release notes come from the matching `CHANGELOG.md` section.
+- Release notes come from the matching `packages/desktop/CHANGELOG.md` section.
 - Cloudflare R2 mirrors release assets and keeps only the latest 3 semver folders.
 - Linux AppImage and `.deb` artifacts are built locally through Docker using a Linux container.
 - Homebrew distribution is intentionally deferred.
@@ -48,7 +48,7 @@ Use `pnpm release:check` when the user explicitly wants the full local gate befo
 1. Confirm the intended bump or exact version with the user if it is not clear from `/release` arguments.
 2. Ensure there is a pending Changeset under `.changeset/*.md`, excluding `.changeset/README.md`.
 3. If no Changeset exists, create one with the correct bump and concise user-facing summary.
-4. Run `pnpm release:version` to update `package.json` and `CHANGELOG.md`.
+4. Run `pnpm release:version` to update `packages/desktop/package.json` and `packages/desktop/CHANGELOG.md`.
 5. Run `pnpm release:notes v<version>` and verify the extracted notes are correct.
 6. Run the required checks.
 7. Commit the version/changelog/changeset changes only after user approval unless the user explicitly asked to commit.
@@ -58,7 +58,7 @@ Use `pnpm release:check` when the user explicitly wants the full local gate befo
 11. Tell the user to review and publish the draft GitHub Release after local publishing succeeds.
 12. Run `pnpm release:promote -- --tag v<version>` only after the GitHub Release is published; this activates manual downloads and automatic updates.
 13. Verify `https://download.usediffdash.com/stable.json` and the macOS ARM64, macOS x64, and Linux x64 updater metadata endpoints all return the promoted version. Do not call the release complete until these public checks pass.
-14. If the stable pointer is correct but updater routes return 404, run the download worker tests, confirm Wrangler is authenticated, deploy with `pnpm --dir web/download-worker run deploy`, and verify the public endpoints again.
+14. If the stable pointer is correct but updater routes return 404, run the download worker tests, confirm Wrangler is authenticated, deploy with `pnpm --filter @diffdash/download-worker deploy`, and verify the public endpoints again.
 
 ## Local Release Environment
 
@@ -102,7 +102,7 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 `pnpm release:local`:
 
 - Requires a clean working tree unless `-- --allow-dirty` is passed for testing only.
-- Verifies `CHANGELOG.md` has notes for `v<package.version>`.
+- Verifies `packages/desktop/CHANGELOG.md` has notes for the desktop package version.
 - Runs `pnpm release:check` unless `-- --skip-checks` is passed.
 - Runs the macOS release stage unless `-- --skip-mac` is passed.
 - Runs the Linux Docker release stage unless `-- --skip-linux` is passed.
@@ -152,7 +152,7 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 
 ## First Release Flow
 
-For the initial `0.1.0` release, if `package.json` already has `0.1.0` and `CHANGELOG.md` already has `## 0.1.0`:
+For the initial `0.1.0` release, if `packages/desktop/package.json` already has `0.1.0` and `packages/desktop/CHANGELOG.md` already has `## 0.1.0`:
 
 ```bash
 pnpm release:notes v0.1.0
@@ -179,8 +179,8 @@ Use `patch` for fixes and small improvements, `minor` for new user-visible featu
 ## Guardrails
 
 - Never tag if the working tree is dirty.
-- Never tag a version that does not match `package.json`.
-- Never invent release notes; use Changesets and `CHANGELOG.md`.
+- Never tag a version that does not match `packages/desktop/package.json`.
+- Never invent release notes; use Changesets and `packages/desktop/CHANGELOG.md`.
 - Never commit secrets or real credentials.
 - Do not use `changeset publish`; DiffDash releases desktop artifacts through local scripts, not npm.
 - Do not trigger GitHub Actions release runs while `.github/workflows/release.yml.disabled` is the archived workflow.

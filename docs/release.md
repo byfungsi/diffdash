@@ -20,15 +20,15 @@ Prepare the release version and tag:
 ```bash
 pnpm changeset
 pnpm release:version
-git add package.json pnpm-lock.yaml CHANGELOG.md .changeset
+git add packages/desktop/package.json packages/desktop/CHANGELOG.md pnpm-lock.yaml .changeset
 git commit -m "chore: release v0.1.1"
 pnpm release:tag
 git push origin main --tags
 ```
 
-The tag must match the `package.json` version exactly. For example, `package.json` version `0.1.1` must use tag `v0.1.1`.
+The tag must match the `packages/desktop/package.json` version exactly. For example, desktop version `0.1.1` must use tag `v0.1.1`.
 
-`pnpm release:version` applies pending Changesets and updates `CHANGELOG.md`. The GitHub draft release notes are extracted from the matching `CHANGELOG.md` section.
+`pnpm release:version` applies pending Changesets and updates `packages/desktop/CHANGELOG.md`. The GitHub draft release notes are extracted from its matching section.
 
 Run the complete local release flow:
 
@@ -38,7 +38,7 @@ pnpm release:local
 
 The single command:
 
-- verifies release notes exist in `CHANGELOG.md` for `v<package.version>`
+- verifies release notes exist in `packages/desktop/CHANGELOG.md` for the desktop version
 - runs `pnpm release:check`
 - builds both signed, notarized, stapled macOS DMGs and updater ZIPs into `release-assets/`
 - builds the Linux x64 AppImage, updater metadata, and `.deb` in Docker into `release-assets/`
@@ -48,7 +48,7 @@ The single command:
 - mirrors the same assets to R2 at `releases/<tag>/`
 - leaves the currently promoted stable release unchanged while the GitHub Release is a draft
 
-The command requires a clean working tree. The tag must match the `package.json` version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
+The command requires a clean working tree. The tag must match the desktop package version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
 
 Useful options:
 
@@ -101,7 +101,7 @@ Recovery options:
 
 ```bash
 pnpm release:local:mac -- --package-existing --skip-notarize --arch arm64
-node scripts/notarize-app.mjs dist/mac-arm64/DiffDash.app --submission-id <id>
+node scripts/notarize-app.mjs packages/desktop/dist/mac-arm64/DiffDash.app --submission-id <id>
 ```
 
 Use `--package-existing --skip-notarize` only after `xcrun stapler validate` confirms an existing app is already stapled.
@@ -116,7 +116,7 @@ The local Linux build script:
 
 - archives `HEAD` into a temporary build directory
 - runs `node:22-trixie` through Docker with `--platform linux/amd64`
-- installs dependencies with the pinned `pnpm` version from `package.json`
+- installs dependencies with the pinned `pnpm` version from the root `package.json`
 - rebuilds native modules for Electron on Linux
 - builds the Linux AppImage with its embedded blockmap, updater metadata, and `.deb`
 - copies all Linux release and updater artifacts to `release-assets/`
@@ -318,7 +318,7 @@ pnpm dist:linux:deb
 pnpm dist:win
 ```
 
-Artifacts are written to `dist/`.
+Artifacts are written to `packages/desktop/dist/`.
 
 ## macOS
 
@@ -343,12 +343,12 @@ pnpm release:local:mac
 Verify a local signed build with:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 dist/mac-arm64/DiffDash.app
-spctl -a -vv --type exec dist/mac-arm64/DiffDash.app
-xcrun stapler validate dist/mac-arm64/DiffDash.app
+codesign --verify --deep --strict --verbose=2 packages/desktop/dist/mac-arm64/DiffDash.app
+spctl -a -vv --type exec packages/desktop/dist/mac-arm64/DiffDash.app
+xcrun stapler validate packages/desktop/dist/mac-arm64/DiffDash.app
 ```
 
-For x64 local builds, use `dist/mac/DiffDash.app`.
+For x64 local builds, use `packages/desktop/dist/mac/DiffDash.app`.
 
 Alternative Apple ID notarization credentials are also supported by Electron Builder:
 

@@ -7,4 +7,5 @@ pnpm changeset
 pnpm release:version
 ```
 
-`pnpm release:version` updates `package.json` and `CHANGELOG.md`. Commit those files before tagging a release.
+`pnpm release:version` updates `packages/desktop/package.json` and
+`packages/desktop/CHANGELOG.md`. Commit those files before tagging a release.

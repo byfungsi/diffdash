@@ -24,7 +24,7 @@ https://download.usediffdash.com/linux/appimage?arch=x86_64
 ## Local Deploy
 
 ```bash
-cd web/download-worker
+cd packages/download-worker
 pnpm install
 pnpm run deploy
 ```

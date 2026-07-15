@@ -4,6 +4,8 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { _electron as electron, expect, type Page, test } from "@playwright/test"
 
+const desktopRoot = join(process.cwd(), "packages/desktop")
+
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -42,7 +44,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     REAL_GIT_PATH: "/usr/bin/git",
     XDG_CONFIG_HOME: xdgConfigHome,
   }
-  const appEntry = join(process.cwd(), "out/main/index.js")
+  const appEntry = join(desktopRoot, "out/main/index.js")
   let app = await electron.launch({
     args: [appEntry, `--user-data-dir=${userData}`, `--diffdash-link-path=${linkedRepo}`],
     env: appEnvironment,
@@ -314,7 +316,7 @@ test("opens local working tree review from CLI argument", async ({
 
   const app = await electron.launch({
     args: [
-      join(process.cwd(), "out/main/index.js"),
+      join(desktopRoot, "out/main/index.js"),
       `--user-data-dir=${userData}`,
       `--diffdash-local-path=${localRepo}`,
     ],
@@ -360,7 +362,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
 
   const app = await electron.launch({
     args: [
-      join(process.cwd(), "out/main/index.js"),
+      join(desktopRoot, "out/main/index.js"),
       `--user-data-dir=${userData}`,
       "--diffdash-cli-v1",
       localRepo,
@@ -411,7 +413,7 @@ test("forwards a CLI command to the running DiffDash instance", async ({
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const app = await electron.launch({
-    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
     env: appEnvironment,
   })
 
@@ -421,13 +423,13 @@ test("forwards a CLI command to the running DiffDash instance", async ({
     await expect(window.getByRole("heading", { name: "DiffDash" })).toBeVisible()
 
     const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
-      cwd: process.cwd(),
+      cwd: desktopRoot,
       encoding: "utf8",
     }).trim()
     execFileSync(
       electronExecutable,
       [
-        join(process.cwd(), "out/main/index.js"),
+        join(desktopRoot, "out/main/index.js"),
         `--user-data-dir=${userData}`,
         `--diffdash-cli-v1=${localRepo}`,
         "--",
@@ -451,7 +453,7 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
   await mkdir(userData, { recursive: true })
   const unavailableRendererUrl = "http://127.0.0.1:1"
   const app = await electron.launch({
-    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
@@ -485,7 +487,7 @@ test("recreates the app window when macOS activates with no open windows", async
   await Promise.all([mkdir(userData, { recursive: true }), mkdir(fakeBin, { recursive: true })])
   await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
   const app = await electron.launch({
-    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",

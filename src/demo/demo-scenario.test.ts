@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
-import { getHiddenDiffFileReason } from "../shared/diff-file-filters"
-import { isReviewAnchorInParsedDiff } from "../shared/review-thread"
-import { WALKTHROUGH_PROMPT_VERSION } from "../shared/walkthrough"
+import { getHiddenDiffFileReason } from "../../packages/desktop/src/shared/diff-file-filters"
+import { isReviewAnchorInParsedDiff } from "../../packages/desktop/src/shared/review-thread"
+import { WALKTHROUGH_PROMPT_VERSION } from "../../packages/desktop/src/shared/walkthrough"
 import { loadAtomicWebhookReplayScenario } from "./atomic-webhook-replay"
 
 describe("atomic webhook replay demo scenario", () => {

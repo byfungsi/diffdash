@@ -1,14 +1,15 @@
 node_modules/
+.turbo/
 out/
 dist/
 release-assets/
-web/landing/dist/
+packages/web/dist/
 *.tsbuildinfo
 .DS_Store
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-!src/main/services/fixtures/database-v8-populated.sqlite
+!packages/desktop/src/main/services/fixtures/database-v8-populated.sqlite
 test-results/
 demo/.cache/
 media/.cache/

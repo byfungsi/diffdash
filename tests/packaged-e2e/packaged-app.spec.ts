@@ -145,7 +145,7 @@ type PackagedAppPaths = {
 }
 
 const packagedAppPaths = (): PackagedAppPaths => {
-  const dist = join(process.cwd(), "dist")
+  const dist = join(process.cwd(), "packages/desktop/dist")
   if (process.platform === "darwin") {
     const output = process.arch === "arm64" ? "mac-arm64" : "mac"
     const contents = join(dist, output, "DiffDash.app", "Contents")

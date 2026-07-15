@@ -14,7 +14,7 @@ import "./load-local-env.mjs"
 import { assertTagMatchesVersion, createLatestMetadata, runWithRetries } from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
-const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const tag = readOption("--tag") ?? `v${packageJson.version}`
 const version = tag.startsWith("v") ? tag.slice(1) : tag
 assertTagMatchesVersion(tag, packageJson.version)

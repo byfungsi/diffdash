@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { DemoTimeline } from "../../../src/demo/demo-api"
-import type { DiffDashApi } from "../../../src/shared/diffdash-api"
+import type { DiffDashApi } from "../../../packages/desktop/src/shared/diffdash-api"
 
 declare global {
   interface ImportMetaEnv {

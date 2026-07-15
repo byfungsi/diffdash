@@ -104,7 +104,7 @@ The preference is stored in `~/.config/diffdash/settings.json`. To opt out manua
 
 Keep the existing `provider` and `models` fields when editing the file. Packaged builds read the
 public PostHog project configuration from `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` at build time;
-the Electron build falls back to the same values in `web/landing/.env`, and analytics is a no-op
+the Electron build falls back to the same values in `packages/web/.env`, and analytics is a no-op
 when either value is missing.
 
 ## Quality Gates
@@ -165,7 +165,8 @@ Use the local Effect source reference at `~/.local/share/effect-solutions/effect
 
 Use shadcn/ui for reusable primitives and keep app-specific composition in feature components.
 
-The shadcn config is `components.json`, with aliases pointing to `src/renderer/src`.
+The shadcn config is `packages/desktop/components.json`, with aliases pointing to
+`packages/desktop/src/renderer/src`.
 
 ## Required Local Tools
 
