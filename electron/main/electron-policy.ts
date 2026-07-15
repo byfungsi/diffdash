@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs"
 import { isAbsolute, relative, resolve } from "node:path"
 import type { BrowserWindowConstructorOptions } from "electron"
 
@@ -55,8 +56,8 @@ export const resolveContainedRepositoryPath = (rootPath: string, filePath: strin
     throw new Error("Cannot open an absolute file path from a review")
   }
 
-  const resolvedRootPath = resolve(rootPath)
-  const targetPath = resolve(resolvedRootPath, normalizeReviewFilePath(filePath))
+  const resolvedRootPath = realpathSync(resolve(rootPath))
+  const targetPath = realpathSync(resolve(resolvedRootPath, normalizeReviewFilePath(filePath)))
   const relativePath = relative(resolvedRootPath, targetPath)
   if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
     throw new Error("Cannot open a file outside the repository checkout")

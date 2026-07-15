@@ -1,4 +1,6 @@
-import { resolve } from "node:path"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   createDiffDashBrowserWindowOptions,
@@ -73,19 +75,41 @@ describe("Electron policy", () => {
   })
 
   it("resolves only paths contained by the repository root", () => {
-    const rootPath = resolve("/tmp/diffdash-policy-repository")
-    expect(resolveContainedRepositoryPath(rootPath, "src/app.ts")).toBe(
-      resolve(rootPath, "src/app.ts"),
-    )
-    expect(resolveContainedRepositoryPath(rootPath, "")).toBe(rootPath)
-    expect(() => resolveContainedRepositoryPath(rootPath, resolve(rootPath, "src/app.ts"))).toThrow(
-      "Cannot open an absolute file path from a review",
-    )
-    expect(() => resolveContainedRepositoryPath(rootPath, "../outside.ts")).toThrow(
-      "Cannot open a file outside the repository checkout",
-    )
-    expect(() => resolveContainedRepositoryPath(rootPath, "..notes")).toThrow(
-      "Cannot open a file outside the repository checkout",
-    )
+    const rootPath = mkdtempSync(join(tmpdir(), "diffdash-policy-repository-"))
+    mkdirSync(join(rootPath, "src"))
+    writeFileSync(join(rootPath, "src", "app.ts"), "export {}")
+    writeFileSync(join(rootPath, "..notes"), "notes")
+    try {
+      expect(resolveContainedRepositoryPath(rootPath, "src/app.ts")).toBe(
+        realpathSync(resolve(rootPath, "src/app.ts")),
+      )
+      expect(resolveContainedRepositoryPath(rootPath, "")).toBe(realpathSync(rootPath))
+      expect(() =>
+        resolveContainedRepositoryPath(rootPath, resolve(rootPath, "src/app.ts")),
+      ).toThrow("Cannot open an absolute file path from a review")
+      expect(() => resolveContainedRepositoryPath(rootPath, "../outside.ts")).toThrow(
+        "Cannot open a file outside the repository checkout",
+      )
+      expect(() => resolveContainedRepositoryPath(rootPath, "..notes")).toThrow(
+        "Cannot open a file outside the repository checkout",
+      )
+    } finally {
+      rmSync(rootPath, { force: true, recursive: true })
+    }
+  })
+
+  it("rejects repository symlinks that resolve outside the checkout", () => {
+    const rootPath = mkdtempSync(join(tmpdir(), "diffdash-policy-repository-"))
+    const outsidePath = mkdtempSync(join(tmpdir(), "diffdash-policy-outside-"))
+    writeFileSync(join(outsidePath, "secret.txt"), "outside")
+    symlinkSync(outsidePath, join(rootPath, "linked-outside"), "dir")
+    try {
+      expect(() => resolveContainedRepositoryPath(rootPath, "linked-outside/secret.txt")).toThrow(
+        "Cannot open a file outside the repository checkout",
+      )
+    } finally {
+      rmSync(rootPath, { force: true, recursive: true })
+      rmSync(outsidePath, { force: true, recursive: true })
+    }
   })
 })

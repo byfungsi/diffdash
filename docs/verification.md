@@ -57,6 +57,7 @@ The following requirement IDs are covered by
 | `SHELL-SEC-002` | `[B]` | BrowserWindow options lock context isolation, disabled Node integration, web security, insecure-content denial, preload path, and intentional sandbox state. |
 | `SHELL-NAV-001` | `[B]` | External URL and renderer navigation allowlists preserve their current exact lexical behavior. |
 | `SHELL-FILE-001` | `[B]` | Review file paths reject absolute paths, parent traversal, and targets outside the repository root. |
+| `SHELL-FILE-002` | `[B]` | Review file paths resolve filesystem symlinks and reject canonical targets outside the repository checkout. |
 | `PERSIST-RESTART-001` | `[B]` | Completed onboarding remains completed after Electron closes and relaunches. |
 | `PERSIST-RESTART-002` | `[B]` | Viewed-file state rehydrates from SQLite after restart. |
 | `PERSIST-RESTART-003` | `[B]` | Initial and follow-up thread messages plus completed agent replies rehydrate after restart. |
@@ -91,8 +92,8 @@ The following requirement IDs are covered by
   value falls back to all defaults instead of preserving independently valid preferences.
 - `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
   sender/frame origin.
-- `[G]` Navigation and file policies are characterized, but shell side-effect failures and symlink
-  escape behavior do not yet have handler-level coverage.
+- `[G]` Navigation and file policies are characterized, but shell side-effect failures do not yet
+  have handler-level coverage.
 - `[G]` Installer, signing, notarization, update installation, and public artifact checks remain
   operational rather than part of the unsigned packaged E2E gate.
 - `[G]` Release scripts have syntax checks but limited behavioral tests for partial failure,
