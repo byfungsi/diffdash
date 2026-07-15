@@ -54,7 +54,7 @@ Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. 
 
 Run `diffdash pr` inside a GitHub checkout to save it as a favorite and open its pull request list. Pass a positive pull request number, such as `diffdash pr 123`, to open that review directly.
 
-Run `diffdash diff [branch-name]` to compare the current worktree with another branch. When the target differs from the checked-out branch, DiffDash fetches the target from `origin` without checking it out, then shows the exact target-tip-to-worktree difference, including current-branch commits, staged changes, unstaged changes, and untracked files. With no branch name, DiffDash uses the default branch reported by `origin/HEAD`.
+Run `diffdash diff [branch-name]` to review the current branch and local changes relative to another branch. When the target differs from the checked-out branch, DiffDash fetches the target from `origin` without checking it out, finds its merge base with the current `HEAD`, and shows current-branch commits plus staged, unstaged, and untracked changes. Changes that exist only on the target branch are excluded. With no branch name, DiffDash uses the default branch reported by `origin/HEAD`.
 
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 

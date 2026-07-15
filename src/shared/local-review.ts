@@ -3,7 +3,7 @@ import { Schema } from "effect"
 /** Local changes compared with the checkout's current HEAD. */
 export const WorkingTreeComparison = Schema.TaggedStruct("workingTree", {})
 
-/** Local worktree compared with one resolved local or remote-tracking branch. */
+/** Local checkout compared from its merge base with one resolved comparison branch. */
 export const BranchComparison = Schema.TaggedStruct("branch", {
   branchName: Schema.NonEmptyString,
   baseRef: Schema.NonEmptyString,

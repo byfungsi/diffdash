@@ -870,6 +870,26 @@ describe("App browser interactions", () => {
     })
   })
 
+  it("shows a clear error when a CLI comparison branch has no common ancestor", async () => {
+    const calls = installDiffDashApi()
+    calls.resolveBranch.mockRejectedValueOnce(
+      new Error(
+        `localReviews:resolveBranch failed: LocalReviewTargetError: { "operation": "branch.mergeBase", "reason": "Branch dev does not share a common ancestor with the current HEAD", "cause": {} }`,
+      ),
+    )
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openBranchDiff("dev")
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Could not resolve comparison branch: Branch dev does not share a common ancestor with the current HEAD",
+      )
+      expect(document.body.textContent).not.toContain("branch.mergeBase")
+    })
+  })
+
   it("keeps a file-tree selection stable while the diff pane scrolls", async () => {
     installDiffDashApi()
     renderApp()
