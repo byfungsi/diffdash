@@ -78,6 +78,13 @@ import {
 
 const LOCAL_REVIEW_ARG = "--diffdash-local-path"
 const LINK_REPOSITORY_ARG = "--diffdash-link-path"
+const startupStartedAt = Date.now() - process.uptime() * 1_000
+
+const logStartupStage = (stage: string) => {
+  console.info(`[startup] ${stage} +${Math.round(Date.now() - startupStartedAt)}ms`)
+}
+
+logStartupStage("main module loaded")
 
 let mainWindow: BrowserWindow | null = null
 let pendingLocalReviewPath: string | null = null
@@ -98,6 +105,7 @@ const debugMissingPrerequisites = () =>
     checkedAt: new Date().toISOString(),
     codingAgentInstalled: false,
     diffDashCliInstalled: false,
+    diffDashCliInPath: false,
     diffDashCliPath: null,
     gitInstalled: false,
     ghAuthenticated: false,
@@ -112,6 +120,7 @@ const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
   const configLayer = AppConfig.layer({
     appVersion: app.getVersion(),
+    ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
     architecture: process.arch,
     databasePath: join(app.getPath("userData"), "diffdash.sqlite"),
     diffDashCliPath: getDiffDashCliPath(),
@@ -1190,14 +1199,18 @@ const createWindow = () => {
     },
   })
   mainWindow = window
+  logStartupStage("window created")
 
   let isWindowShown = false
+  let showFallbackTimer: NodeJS.Timeout | null = null
   const showMainWindow = () => {
     if (isWindowShown) {
       return
     }
     isWindowShown = true
+    if (showFallbackTimer !== null) clearTimeout(showFallbackTimer)
     window.show()
+    logStartupStage("window shown")
     if (process.platform === "darwin") {
       app.focus({ steal: true })
     } else {
@@ -1206,6 +1219,8 @@ const createWindow = () => {
   }
 
   window.once("ready-to-show", showMainWindow)
+  showFallbackTimer = setTimeout(showMainWindow, 2_000)
+  showFallbackTimer.unref()
 
   const rendererUrl =
     process.env.ELECTRON_RENDERER_URL ??
@@ -1231,6 +1246,7 @@ const createWindow = () => {
   }
 
   window.on("closed", () => {
+    if (showFallbackTimer !== null) clearTimeout(showFallbackTimer)
     mainWindow = null
   })
 
@@ -1284,6 +1300,7 @@ const createWindow = () => {
 
   void loadWindow
     .then(() => {
+      logStartupStage("renderer loaded")
       showMainWindow()
       if (pendingLocalReviewPath !== null) {
         sendLocalReviewNavigation(pendingLocalReviewPath)
@@ -1309,6 +1326,7 @@ const start = async () => {
   }
 
   await app.whenReady()
+  logStartupStage("electron ready")
   if (process.platform === "darwin") {
     const developmentIconPath = getDevelopmentIconPath()
     if (developmentIconPath !== null) {

@@ -1,7 +1,7 @@
 {
   "name": "diffdash",
   "productName": "DiffDash",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Desktop code review app with Effect-powered TypeScript services.",
   "homepage": "https://github.com/byfungsi/diffdash",
   "type": "module",
@@ -103,7 +103,7 @@
     "appId": "dev.diffdash.app",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
-    "compression": "maximum",
+    "compression": "normal",
     "npmRebuild": false,
     "directories": {
       "output": "dist"

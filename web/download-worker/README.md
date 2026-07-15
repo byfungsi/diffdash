@@ -26,7 +26,7 @@ https://download.usediffdash.com/linux/appimage?arch=x86_64
 ```bash
 cd web/download-worker
 pnpm install
-pnpm deploy
+pnpm run deploy
 ```
 
 The worker expects:

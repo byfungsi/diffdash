@@ -54,7 +54,7 @@ Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. 
 
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 
-Linux AppImages are portable. Make the downloaded file executable and open it directly; they do not install a global `diffdash` CLI.
+Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install in PATH** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward.
 
 Build both Linux packages with:
 
