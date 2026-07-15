@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { retainedReleasePrefixes, validateReleaseAssetNames } from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
@@ -45,7 +46,7 @@ if (release.isDraft) throw new Error(`GitHub release ${tag} is still a draft.`)
 if (release.isPrerelease) throw new Error(`Stable promotion does not accept prerelease ${tag}.`)
 
 const assetNames = release.assets.map((asset) => asset.name)
-validateReleaseAssets(assetNames)
+validateReleaseAssetNames(assetNames, tag)
 validateR2Assets(assetNames)
 
 const stablePath = path.join(mkdtempSync(path.join(tmpdir(), "diffdash-promote-")), "stable.json")
@@ -74,24 +75,6 @@ function requiredEnv(name) {
     throw new Error(`Missing required environment variable: ${name}`)
   }
   return value
-}
-
-function validateReleaseAssets(names) {
-  const requirements = [
-    ["macOS ARM64 DMG", (name) => name.endsWith("-mac-arm64.dmg")],
-    ["macOS ARM64 ZIP", (name) => name.endsWith("-mac-arm64.zip")],
-    ["macOS Intel DMG", (name) => name.endsWith("-mac-x64.dmg")],
-    ["macOS Intel ZIP", (name) => name.endsWith("-mac-x64.zip")],
-    ["macOS ARM64 metadata", (name) => name === "latest-mac-arm64.yml"],
-    ["macOS Intel metadata", (name) => name === "latest-mac-x64.yml"],
-    ["Linux x64 AppImage", (name) => /-linux-(?:x64|x86_64)\.AppImage$/.test(name)],
-    ["Linux updater metadata", (name) => name === "latest-linux.yml"],
-    ["Linux deb", (name) => /-linux-(?:x64|amd64|x86_64)\.deb$/.test(name)],
-    ["release metadata", (name) => name === "latest.json"],
-    ["checksums", (name) => name === "SHA256SUMS"],
-  ]
-  const missing = requirements.filter(([, matches]) => !names.some(matches)).map(([label]) => label)
-  if (missing.length > 0) throw new Error(`Release ${tag} is missing: ${missing.join(", ")}`)
 }
 
 function validateR2Assets(names) {
@@ -177,33 +160,13 @@ function pruneR2() {
     ],
     { encoding: "utf8", env: awsEnv },
   )
-  const parsed = (JSON.parse(output || "[]") ?? [])
-    .map((prefix) => {
-      const match = /^releases\/v?(\d+)\.(\d+)\.(\d+)\/$/.exec(prefix)
-      return match === null
-        ? null
-        : { prefix, version: [Number(match[1]), Number(match[2]), Number(match[3])] }
-    })
-    .filter(Boolean)
-    .toSorted(
-      (left, right) =>
-        right.version[0] - left.version[0] ||
-        right.version[1] - left.version[1] ||
-        right.version[2] - left.version[2],
-    )
-  const promotedPrefix = `releases/${tag}/`
-  const keep = new Set([
-    promotedPrefix,
-    ...parsed
-      .filter((entry) => entry.prefix !== promotedPrefix)
-      .slice(0, 2)
-      .map((entry) => entry.prefix),
-  ])
-  for (const entry of parsed) {
-    if (keep.has(entry.prefix)) continue
+  const prefixes = JSON.parse(output || "[]") ?? []
+  const keep = retainedReleasePrefixes(prefixes, tag)
+  for (const prefix of prefixes) {
+    if (keep.has(prefix) || !/^releases\/v?\d+\.\d+\.\d+\/$/u.test(prefix)) continue
     run(
       "aws",
-      ["s3", "rm", `s3://${r2Bucket}/${entry.prefix}`, "--recursive", "--endpoint-url", r2Endpoint],
+      ["s3", "rm", `s3://${r2Bucket}/${prefix}`, "--recursive", "--endpoint-url", r2Endpoint],
       { env: awsEnv },
     )
   }

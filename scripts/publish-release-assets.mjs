@@ -11,11 +11,13 @@ import {
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { assertTagMatchesVersion, createLatestMetadata, runWithRetries } from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
 const tag = readOption("--tag") ?? `v${packageJson.version}`
 const version = tag.startsWith("v") ? tag.slice(1) : tag
+assertTagMatchesVersion(tag, packageJson.version)
 const assetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
 const baseUrl = normalizePublicBaseUrl(requiredEnv("R2_PUBLIC_BASE_URL"))
 const r2Bucket = requiredEnv("R2_BUCKET")
@@ -112,7 +114,6 @@ function writeLatestJson() {
     const bytes = readFileSync(filePath)
     return {
       name: file,
-      url: `${baseUrl}/releases/${tag}/${encodeURIComponent(file)}`,
       size: statSync(filePath).size,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     }
@@ -120,7 +121,16 @@ function writeLatestJson() {
 
   writeFileSync(
     path.join(assetsDir, "latest.json"),
-    `${JSON.stringify({ version, tag, generatedAt: new Date().toISOString(), assets }, null, 2)}\n`,
+    `${JSON.stringify(
+      createLatestMetadata({
+        tag,
+        baseUrl,
+        generatedAt: new Date().toISOString(),
+        assets,
+      }),
+      null,
+      2,
+    )}\n`,
   )
 }
 
@@ -185,7 +195,11 @@ function publishGithubRelease() {
   }
 
   for (const assetPath of allAssetPaths()) {
-    runWithRetries("gh", ["release", "upload", tag, assetPath, "--clobber"], { attempts: 3 })
+    runWithRetries(() => run("gh", ["release", "upload", tag, assetPath, "--clobber"]), {
+      attempts: 3,
+      onRetry: (attempt, attempts) =>
+        console.warn(`Command failed; retrying attempt ${attempt}/${attempts}.`),
+    })
   }
 }
 
@@ -233,24 +247,6 @@ function commandSucceeds(command, commandArgs) {
 function run(command, commandArgs, options = {}) {
   console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
   execFileSync(command, commandArgs, { env: options.env ?? process.env, stdio: "inherit" })
-}
-
-function runWithRetries(command, commandArgs, options = {}) {
-  const attempts = options.attempts ?? 3
-  let lastError
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      run(command, commandArgs, options)
-      return
-    } catch (error) {
-      lastError = error
-      if (attempt === attempts) break
-      console.warn(`Command failed; retrying attempt ${attempt + 1}/${attempts}.`)
-    }
-  }
-
-  throw lastError
 }
 
 function shellQuote(value) {

@@ -273,7 +273,39 @@ Run the release gate before packaging:
 pnpm release:check
 ```
 
-This runs formatting checks, lint, TypeScript, unit tests, browser tests, and a production build.
+This runs formatting, lint, TypeScript, unit, browser, Electron, packaged Electron, release-policy,
+and download-worker checks.
+
+## Operational Evidence Record
+
+Signing, notarization, installers, and public promotion require one retained Markdown record per
+release. Store the record outside `dist/` and `release-assets/`; do not attach credentials, private
+keys, notarization request payloads, user repositories, or release binaries.
+
+Record these fields:
+
+- Release tag, package version, commit SHA, operator, approver, UTC start/end, host OS/architecture,
+  Node, pnpm, Electron, and command transcript location.
+- SHA-256 for every promoted artifact and the generated `SHA256SUMS`/`latest.json` files.
+- Apple notarization submission ID and final status, with secret-bearing output redacted.
+- Pass/fail/not-run for each check below, including an owner and follow-up issue for every exception.
+
+Run and retain these checks:
+
+| Surface | Exact check | Expected result |
+|---|---|---|
+| macOS signature | `codesign --verify --deep --strict --verbose=2 DiffDash.app` | Exit 0 for arm64 and x64 apps. |
+| macOS Gatekeeper | `spctl --assess --type execute --verbose=4 DiffDash.app` | Accepted Developer ID application. |
+| macOS notarization | `xcrun stapler validate DiffDash.app` and mounted-DMG launch on a clean account | Staple validates and app launches without bypass. |
+| AppImage | Launch the x64 AppImage on a clean supported Linux host | App boots; update eligibility reports AppImage support. |
+| deb | Install, launch `/usr/bin/diffdash`, upgrade, remove, and inspect launcher ownership | Hook creates only the owned launcher and removal leaves unrelated files untouched. |
+| Windows NSIS | Install, launch, upgrade, uninstall on supported Windows | Record `not-run` unless performed on Windows; never infer a pass from another platform. |
+| Public pointers | Fetch `stable.json`, `latest.json`, and platform updater metadata with GET and HEAD | Status, version, tag, cache headers, and referenced artifact match the promoted release. |
+| Public downloads | Resolve macOS arm64/x64, Linux AppImage/deb aliases and download each object | Redirect target is versioned, architecture-correct, downloadable, and matches `SHA256SUMS`. |
+| Retention | List `releases/` after promotion | Promoted release plus two newest other stable versions remain; GitHub archive remains intact. |
+
+Revalidate after release-script, package-name, signing identity, installer-hook, worker-route, R2
+layout, or updater-feed changes.
 
 ## Packaging Commands
 

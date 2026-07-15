@@ -141,6 +141,7 @@ type PackagedAppPaths = {
   readonly executable: string
   readonly resources: string
   readonly cli: string | null
+  readonly icon: string | null
 }
 
 const packagedAppPaths = (): PackagedAppPaths => {
@@ -152,6 +153,7 @@ const packagedAppPaths = (): PackagedAppPaths => {
       executable: join(contents, "MacOS", "DiffDash"),
       resources: join(contents, "Resources"),
       cli: join(contents, "Resources", "bin", "diffdash"),
+      icon: join(contents, "Resources", "icon.icns"),
     }
   }
   if (process.platform === "linux") {
@@ -161,6 +163,7 @@ const packagedAppPaths = (): PackagedAppPaths => {
       executable: join(root, "diffdash-desktop"),
       resources: join(root, "resources"),
       cli: join(root, "resources", "bin", "diffdash"),
+      icon: null,
     }
   }
   if (process.platform === "win32") {
@@ -170,6 +173,7 @@ const packagedAppPaths = (): PackagedAppPaths => {
       executable: join(root, "DiffDash.exe"),
       resources: join(root, "resources"),
       cli: null,
+      icon: null,
     }
   }
   throw new Error(`Unsupported packaged E2E platform: ${process.platform}`)
@@ -181,6 +185,7 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
     assertFile(join(packaged.resources, "app.asar")),
     assertFile(join(packaged.resources, "app-update.yml")),
     ...(packaged.cli === null ? [] : [assertFile(packaged.cli)]),
+    ...(packaged.icon === null ? [] : [assertFile(packaged.icon)]),
   ])
   if (packaged.cli !== null) await access(packaged.cli, constants.X_OK)
 

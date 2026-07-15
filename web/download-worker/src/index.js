@@ -56,6 +56,7 @@ export default {
           },
         },
         200,
+        request.method === "HEAD",
       )
     }
 
@@ -175,7 +176,10 @@ async function findStableAsset(env, platform, requestedArch) {
 
     if (parsed?.tag === tag && matchesPlatform(parsed.name, platform)) assets.push(parsed)
   }
-  const selected = assets.toSorted(
+  const architectureMatches = requestedArch
+    ? assets.filter((asset) => matchesArchitecture(asset.name.toLowerCase(), requestedArch))
+    : assets
+  const selected = architectureMatches.toSorted(
     (left, right) =>
       scoreAsset(right.name, platform, requestedArch) -
       scoreAsset(left.name, platform, requestedArch),
@@ -269,8 +273,8 @@ function redirect(url) {
   })
 }
 
-function json(value, status) {
-  return new Response(JSON.stringify(value, null, 2), {
+function json(value, status, head = false) {
+  return new Response(head ? null : JSON.stringify(value, null, 2), {
     status,
     headers: {
       ...noStoreHeaders,

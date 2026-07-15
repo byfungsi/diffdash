@@ -97,6 +97,44 @@ describe("AppUpdater", () => {
       expect(states).toContain("error")
     }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
   })
+
+  it.scoped("returns to idle when no update exists and clamps native progress", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = yield* AppUpdater
+      yield* updater.check
+      expect(yield* updater.state).toMatchObject({ _tag: "checking" })
+      fake.emitNotAvailable()
+      expect(yield* updater.state).toMatchObject({ _tag: "idle" })
+
+      fake.emitAvailable("0.1.5")
+      fake.emitProgress(150)
+      expect(yield* updater.state).toMatchObject({ _tag: "downloading", percent: 100 })
+      fake.emitProgress(-10)
+      expect(yield* updater.state).toMatchObject({ _tag: "downloading", percent: 0 })
+      fake.emitError(new Error("native updater failed"))
+      expect(yield* updater.state).toMatchObject({
+        _tag: "error",
+        message: "native updater failed",
+      })
+    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+  })
+
+  it.scoped("rejects download and install requests before their required states", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = yield* AppUpdater
+      const downloadError = yield* updater.download.pipe(Effect.flip)
+      expect(downloadError).toMatchObject({ operation: "download" })
+      expect(fake.downloadCount).toBe(0)
+
+      const installError = yield* updater.quitAndInstall.pipe(Effect.flip)
+      expect(installError).toMatchObject({ operation: "quitAndInstall" })
+      expect(fake.installCount).toBe(0)
+    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+  })
 })
 
 const makeFakeUpdater = (options: { readonly checkError?: Error } = {}) => {
@@ -150,6 +188,12 @@ const makeFakeUpdater = (options: { readonly checkError?: Error } = {}) => {
     },
     emitProgress: (percent: number) => {
       for (const listener of progress) listener({ percent })
+    },
+    emitNotAvailable: () => {
+      for (const listener of notAvailable) listener()
+    },
+    emitError: (error: Error) => {
+      for (const listener of errors) listener(error)
     },
     emitDownloaded: (version: string) => {
       for (const listener of downloaded) listener({ version })

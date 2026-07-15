@@ -97,6 +97,7 @@ The following requirement IDs are covered by
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
 | `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
+| `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon in addition to ASAR, updater, CLI, and native SQLite resources. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 
 ## Classified Product Surface
@@ -130,6 +131,9 @@ record migration-sensitive invariants added during M8.
 | `WORKTREE-001` | `[B]` | `review-worktree-pool.test.ts` covers exact GitHub PR heads, clone reuse, capacity, concurrent leases, revision movement, quarantine, destructive reuse, and checkout non-mutation. |
 | `WORKTREE-RECOVERY-001` | `[B]` | Dead-PID leases and manifest locks are recovered, cleanup failures quarantine slots, the globally oldest idle slot is evicted at capacity, and malicious path segments cannot escape the pool. |
 | `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, stable artifact routing, and current local release orchestration. |
+| `RELEASE-POLICY-001` | `[B]` | Credential-free release policy tests lock tag/version matching, the stable asset matrix, deterministic metadata, bounded retries, and promoted-plus-two retention. |
+| `DOWNLOAD-WORKER-001` | `[B]` | Stable download routing covers aliases, GET/HEAD/method policy, exact architecture, unsafe/missing assets, missing/malformed metadata, and storage failures. |
+| `UPDATE-STATE-001` | `[B]` | Desktop updater tests cover architecture feeds, unsupported installs, checking/idle/available/downloading/downloaded/error states, progress clamps, and invalid download/install requests. |
 
 ## Known M8 Gaps
 
