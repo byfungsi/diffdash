@@ -58,8 +58,11 @@ The following requirement IDs are covered by
 | `PERSIST-RESTART-002` | `[B]` | Viewed-file state rehydrates from SQLite after restart. |
 | `PERSIST-RESTART-003` | `[B]` | Initial and follow-up thread messages plus completed agent replies rehydrate after restart. |
 | `PERSIST-RESTART-004` | `[B]` | Generated walkthrough content is served after restart. |
+| `PERSIST-RESTART-005` | `[B]` | Appearance, provider, and telemetry opt-out settings selected through onboarding rehydrate after restart. |
+| `PERSIST-RESTART-006` | `[B]` | Completed runs, normalized artifacts, message ownership, and compact thread memory remain byte-for-byte stable across a real Electron restart. |
 | `PERSIST-V8-001` | `[B]` | A committed populated version-8 database contains all nine durable tables with valid foreign keys and integrity. |
 | `PERSIST-V8-002` | `[B]` | Repository, viewed-file, walkthrough, thread/message, run, artifact, and memory stores decode the frozen v8 graph after two independent opens. |
+| `PERSIST-FIXTURES-001` | `[B]` | Current, legacy, telemetry-disabled, malformed settings, incomplete/completed onboarding, populated v8, and malformed-row fixtures contain no personal data or secrets. |
 | `PERSIST-FAIL-001` | `[B]` | Corrupt SQLite input fails database acquisition with a typed open error. |
 | `PERSIST-FAIL-002` | `[B]` | Malformed persisted JSON fails at each store decoding boundary with a typed operation error. |
 | `PERSIST-DB-001` | `[B]` | Runtime SQLite connections use WAL mode and enforce foreign keys. |

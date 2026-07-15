@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import BetterSqlite3 from "better-sqlite3"
 import { Effect, Either, Layer } from "effect"
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 
@@ -302,11 +302,9 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
       const sqlite = new BetterSqlite3(databasePath)
-      sqlite.prepare("UPDATE walkthroughs SET content_json = '{'").run()
-      sqlite.prepare("UPDATE review_threads SET current_anchor_json = '{}'").run()
-      sqlite.prepare("UPDATE agent_runs SET usage_json = '{}'").run()
-      sqlite.prepare("UPDATE agent_run_artifacts SET metadata_json = 'null'").run()
-      sqlite.prepare("UPDATE thread_memory SET important_artifact_ids_json = '[\"\"]'").run()
+      sqlite.exec(
+        readFileSync(resolve("src/main/services/fixtures/database-v8-malformed-json.sql"), "utf8"),
+      )
       sqlite.close()
 
       const results = yield* Effect.gen(function* () {

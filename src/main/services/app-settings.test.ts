@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
 import { AppConfig } from "./app-config"
@@ -35,6 +35,30 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual(DEFAULT_AI_SETTINGS)
+    }),
+  )
+
+  it.scoped("FUN-148 AC: loads the committed current settings fixture", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      installSettingsFixture(directory, "settings-current.json")
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings).toEqual({
+        appearance: "dark",
+        provider: "codex",
+        models: {
+          auto: "fast",
+          codex: "gpt-5.4-mini",
+          claude: "claude-haiku-4-5",
+          opencode: "openai/gpt-5.4-mini",
+        },
+        telemetryEnabled: true,
+      })
     }),
   )
 
@@ -72,20 +96,7 @@ describe("AppSettings", () => {
   it.scoped("defaults the auto model tier for existing settings files", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
-      const settingsPath = join(directory, "diffdash", "settings.json")
-      mkdirSync(join(directory, "diffdash"), { recursive: true })
-      writeFileSync(
-        settingsPath,
-        JSON.stringify({
-          provider: "auto",
-          models: {
-            claude: "claude-opus-4-8",
-            codex: "gpt-5.5",
-            opencode: "openai/gpt-5.5",
-          },
-        }),
-        "utf8",
-      )
+      installSettingsFixture(directory, "settings-legacy.json")
 
       const settings = yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
@@ -103,13 +114,7 @@ describe("AppSettings", () => {
   it.scoped("reads a manual telemetry opt-out from settings JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
-      const settingsPath = join(directory, "diffdash", "settings.json")
-      mkdirSync(join(directory, "diffdash"), { recursive: true })
-      writeFileSync(
-        settingsPath,
-        JSON.stringify({ ...DEFAULT_AI_SETTINGS, telemetryEnabled: false }),
-        "utf8",
-      )
+      installSettingsFixture(directory, "settings-telemetry-disabled.json")
 
       const settings = yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
@@ -123,9 +128,7 @@ describe("AppSettings", () => {
   it.scoped("falls back to defaults for invalid JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
-      const settingsPath = join(directory, "diffdash", "settings.json")
-      mkdirSync(join(directory, "diffdash"), { recursive: true })
-      writeFileSync(settingsPath, "not json", "utf8")
+      installSettingsFixture(directory, "settings-malformed.txt")
 
       const settings = yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
@@ -136,3 +139,12 @@ describe("AppSettings", () => {
     }),
   )
 })
+
+const installSettingsFixture = (directory: string, fixtureName: string) => {
+  const settingsDirectory = join(directory, "diffdash")
+  mkdirSync(settingsDirectory, { recursive: true })
+  copyFileSync(
+    resolve("src/main/services/fixtures", fixtureName),
+    join(settingsDirectory, "settings.json"),
+  )
+}

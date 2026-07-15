@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { _electron as electron, expect, type Page, test } from "@playwright/test"
 
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
@@ -48,16 +49,22 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
 
   try {
     const window = await app.firstWindow()
-    await dismissOnboardingIfPresent(window)
+    await dismissOnboardingIfPresent(window, { telemetryEnabled: false })
     expect(
-      await window.evaluate(async () => ({
-        onboardingCompleted: (await globalThis.window.diffDash.appState.get()).onboardingCompleted,
-        diffDashType: typeof globalThis.window.diffDash,
-        nodeProcessType: typeof Reflect.get(globalThis.window, "process"),
-        nodeRequireType: typeof Reflect.get(globalThis.window, "require"),
-      })),
+      await window.evaluate(async () => {
+        const settings = await globalThis.window.diffDash.settings.get()
+        return {
+          onboardingCompleted: (await globalThis.window.diffDash.appState.get())
+            .onboardingCompleted,
+          telemetryEnabled: settings.telemetryEnabled,
+          diffDashType: typeof globalThis.window.diffDash,
+          nodeProcessType: typeof Reflect.get(globalThis.window, "process"),
+          nodeRequireType: typeof Reflect.get(globalThis.window, "require"),
+        }
+      }),
     ).toEqual({
       onboardingCompleted: true,
+      telemetryEnabled: false,
       diffDashType: "object",
       nodeProcessType: "undefined",
       nodeRequireType: "undefined",
@@ -152,6 +159,39 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("CRITICAL")).toBeVisible()
 
     await app.close()
+    const beforeRestart = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+    expect(beforeRestart.runs).toHaveLength(2)
+    expect(beforeRestart.runs.map(({ status }) => status)).toEqual(["completed", "completed"])
+    expect(beforeRestart.runs.map(({ provider }) => provider)).toEqual(["codex", "codex"])
+    expect(beforeRestart.runs.map(({ usage }) => usage)).toEqual([
+      expect.objectContaining({ inputTokens: 10, outputTokens: 10 }),
+      expect.objectContaining({ inputTokens: 10, outputTokens: 10 }),
+    ])
+    expect(beforeRestart.artifacts).toHaveLength(2)
+    expect(beforeRestart.artifacts.map(({ type }) => type)).toEqual([
+      "provider_message",
+      "provider_message",
+    ])
+    expect(beforeRestart.artifacts.map(({ metadata }) => metadata)).toEqual([
+      expect.objectContaining({ sourceProvider: "codex", itemId: "message-1" }),
+      expect.objectContaining({ sourceProvider: "codex", itemId: "message-1" }),
+    ])
+    expect(beforeRestart.memory).toEqual([
+      expect.objectContaining({
+        summarizedThroughSequence: 4,
+        summaryAlgorithm: "deterministic-transcript",
+        summaryVersion: 1,
+        summary:
+          "[#1] user: Why was this line changed?\n[#2] assistant: The line check is complete.\n[#3] user: What behavior does it preserve?\n[#4] assistant: The line check is complete.",
+      }),
+    ])
+    expect(new Set(beforeRestart.memory[0]?.importantArtifactIds)).toEqual(
+      new Set(beforeRestart.artifacts.map(({ id }) => id)),
+    )
+    expect(new Set(beforeRestart.agentMessageRunIds)).toEqual(
+      new Set(beforeRestart.runs.map(({ id }) => id)),
+    )
+
     app = await electron.launch({
       args: [appEntry, `--user-data-dir=${userData}`],
       env: appEnvironment,
@@ -161,6 +201,16 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(restartedWindow.getByRole("button", { name: "Continue to DiffDash" })).toHaveCount(
       0,
     )
+    expect(
+      await restartedWindow.evaluate(async () => {
+        const settings = await globalThis.window.diffDash.settings.get()
+        return {
+          appearance: settings.appearance,
+          provider: settings.provider,
+          telemetryEnabled: settings.telemetryEnabled,
+        }
+      }),
+    ).toEqual({ appearance: "dark", provider: "codex", telemetryEnabled: false })
     const reopenedPullRequest = restartedWindow.getByRole("button", {
       name: /Open (?:requested review|PR) #51/,
     })
@@ -188,6 +238,8 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await restartedWindow.getByRole("button", { name: "Walkthrough" }).click()
     await expect(restartedWindow.getByRole("heading", { name: "Entry point" })).toBeVisible()
     expect(await countLogLines(codexRunLog)).toBe(2)
+    await app.close()
+    expect(readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))).toEqual(beforeRestart)
   } finally {
     await app.close().catch(() => undefined)
   }
@@ -397,10 +449,16 @@ const installCodexSettings = async (xdgConfigHome: string) => {
   )
 }
 
-const dismissOnboardingIfPresent = async (window: Page) => {
+const dismissOnboardingIfPresent = async (
+  window: Page,
+  options: { readonly telemetryEnabled?: boolean } = {},
+) => {
   const continueButton = window.getByRole("button", { name: "Continue to DiffDash" })
   try {
     await continueButton.waitFor({ state: "visible", timeout: 2_000 })
+    if (options.telemetryEnabled === false) {
+      await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
+    }
     await continueButton.click()
   } catch {
     // Onboarding is only shown for fresh app state.
@@ -418,6 +476,124 @@ const countLogLines = async (path: string) => {
   } catch {
     return 0
   }
+}
+
+const readReviewPersistenceSnapshot = (databasePath: string) => {
+  const database = new DatabaseSync(databasePath, { readOnly: true })
+  try {
+    const runs = records(
+      database
+        .prepare(
+          `SELECT id, thread_id, provider, model, prompt_version, status, provider_run_id,
+             usage_json, error, started_at, completed_at
+           FROM agent_runs ORDER BY started_at, id`,
+        )
+        .all(),
+    ).map((row) => ({
+      id: stringField(row, "id"),
+      threadId: stringField(row, "thread_id"),
+      provider: stringField(row, "provider"),
+      model: stringField(row, "model"),
+      promptVersion: stringField(row, "prompt_version"),
+      status: stringField(row, "status"),
+      providerRunId: nullableStringField(row, "provider_run_id"),
+      usage: jsonField(row, "usage_json"),
+      error: nullableStringField(row, "error"),
+      startedAt: stringField(row, "started_at"),
+      completedAt: nullableStringField(row, "completed_at"),
+    }))
+    const artifacts = records(
+      database
+        .prepare(
+          `SELECT id, run_id, thread_id, type, title, content, content_digest, metadata_json,
+             truncated, original_size, created_at
+           FROM agent_run_artifacts ORDER BY created_at, id`,
+        )
+        .all(),
+    ).map((row) => ({
+      id: stringField(row, "id"),
+      runId: stringField(row, "run_id"),
+      threadId: stringField(row, "thread_id"),
+      type: stringField(row, "type"),
+      title: stringField(row, "title"),
+      content: stringField(row, "content"),
+      contentDigest: stringField(row, "content_digest"),
+      metadata: jsonField(row, "metadata_json"),
+      truncated: numberField(row, "truncated"),
+      originalSize: numberField(row, "original_size"),
+      createdAt: stringField(row, "created_at"),
+    }))
+    const memory = records(
+      database
+        .prepare(
+          `SELECT thread_id, summary, important_artifact_ids_json, updated_at,
+             summarized_through_sequence, summary_algorithm, summary_version
+           FROM thread_memory ORDER BY thread_id`,
+        )
+        .all(),
+    ).map((row) => ({
+      threadId: stringField(row, "thread_id"),
+      summary: stringField(row, "summary"),
+      importantArtifactIds: stringArrayJsonField(row, "important_artifact_ids_json"),
+      updatedAt: stringField(row, "updated_at"),
+      summarizedThroughSequence: numberField(row, "summarized_through_sequence"),
+      summaryAlgorithm: stringField(row, "summary_algorithm"),
+      summaryVersion: numberField(row, "summary_version"),
+    }))
+    const agentMessageRunIds = records(
+      database
+        .prepare(
+          `SELECT agent_run_id FROM review_thread_messages
+           WHERE agent_run_id IS NOT NULL ORDER BY sequence`,
+        )
+        .all(),
+    ).map((row) => stringField(row, "agent_run_id"))
+
+    return { runs, artifacts, memory, agentMessageRunIds }
+  } finally {
+    database.close()
+  }
+}
+
+const records = (rows: readonly unknown[]): readonly Readonly<Record<string, unknown>>[] =>
+  rows.map((row) => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+      throw new Error("SQLite returned a non-record row")
+    }
+    const record: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(row)) record[key] = value
+    return record
+  })
+
+const stringField = (row: Readonly<Record<string, unknown>>, key: string) => {
+  const value = row[key]
+  if (typeof value !== "string") throw new Error(`SQLite field ${key} is not a string`)
+  return value
+}
+
+const nullableStringField = (row: Readonly<Record<string, unknown>>, key: string) => {
+  const value = row[key]
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`SQLite field ${key} is not a nullable string`)
+  }
+  return value
+}
+
+const numberField = (row: Readonly<Record<string, unknown>>, key: string) => {
+  const value = row[key]
+  if (typeof value !== "number") throw new Error(`SQLite field ${key} is not a number`)
+  return value
+}
+
+const jsonField = (row: Readonly<Record<string, unknown>>, key: string): unknown =>
+  JSON.parse(stringField(row, key)) as unknown
+
+const stringArrayJsonField = (row: Readonly<Record<string, unknown>>, key: string) => {
+  const value: unknown = jsonField(row, key)
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`SQLite field ${key} is not a string array`)
+  }
+  return value
 }
 
 const installPullRequestRepository = async (source: string, remote: string) => {
