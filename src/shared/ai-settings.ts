@@ -1,5 +1,11 @@
 import { Schema } from "effect"
 
+/** Application appearance preference. */
+export const Appearance = Schema.Literal("light", "dark", "system")
+
+/** Application appearance selected in user settings. */
+export type Appearance = typeof Appearance.Type
+
 /** AI agent providers available for walkthrough generation. */
 export const AIProvider = Schema.Literal("auto", "codex", "claude", "opencode")
 
@@ -54,8 +60,9 @@ export class AIProviderModels extends Schema.Class<AIProviderModels>("AIProvider
   opencode: OpenCodeModel,
 }) {}
 
-/** User-configurable AI settings persisted as JSON. */
+/** User-configurable application settings persisted as JSON. */
 export class AISettings extends Schema.Class<AISettings>("AISettings")({
+  appearance: Schema.optionalWith(Appearance, { default: () => "system" as const }),
   provider: AIProvider,
   models: AIProviderModels,
   telemetryEnabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
@@ -63,6 +70,7 @@ export class AISettings extends Schema.Class<AISettings>("AISettings")({
 
 /** Default AI settings for first launch and invalid/missing settings files. */
 export const DEFAULT_AI_SETTINGS = AISettings.make({
+  appearance: "system",
   provider: "auto",
   telemetryEnabled: true,
   models: AIProviderModels.make({

@@ -58,6 +58,9 @@ export default defineConfig(({ mode }) => {
     },
     renderer: {
       root: resolve("src/renderer"),
+      worker: {
+        format: "es",
+      },
       define: {
         "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
       },

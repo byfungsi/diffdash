@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+import { LocalReviewComparison, WorkingTreeComparison } from "./local-review"
+
 import { ReviewFileId, ReviewHunkFingerprint, ReviewHunkId } from "./review-identity"
 
 /** Supported source providers for repositories tracked by DiffDash. */
@@ -150,6 +152,9 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
   rootPath: Schema.String,
   repoName: Schema.String,
   branchName: Schema.NullOr(Schema.String),
+  comparison: Schema.optionalWith(LocalReviewComparison, {
+    default: () => WorkingTreeComparison.make({}),
+  }),
   baseSha: Schema.String,
   headSha: Schema.String,
   diffHash: Schema.String,
@@ -161,6 +166,9 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
 /** Raw unified diff output and cache metadata for local working tree changes. */
 export class LocalReviewDiff extends Schema.Class<LocalReviewDiff>("LocalReviewDiff")({
   rootPath: Schema.String,
+  comparison: Schema.optionalWith(LocalReviewComparison, {
+    default: () => WorkingTreeComparison.make({}),
+  }),
   baseSha: Schema.String,
   headSha: Schema.String,
   diffHash: Schema.String,

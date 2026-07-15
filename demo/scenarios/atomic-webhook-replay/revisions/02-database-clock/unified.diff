@@ -1,0 +1,184 @@
+diff --git a/packages/db/migrations/202607091430_add_replay_claims.sql b/packages/db/migrations/202607091430_add_replay_claims.sql
+new file mode 100644
+index 0000000..ad31867
+--- /dev/null
++++ b/packages/db/migrations/202607091430_add_replay_claims.sql
+@@ -0,0 +1,10 @@
++CREATE TABLE replay_claim (
++  delivery_id uuid PRIMARY KEY REFERENCES webhook_delivery(id) ON DELETE CASCADE,
++  worker_id text NOT NULL,
++  claimed_at timestamptz NOT NULL,
++  claimed_until timestamptz NOT NULL,
++  created_at timestamptz NOT NULL DEFAULT now()
++);
++
++CREATE INDEX replay_claim_expiry_idx
++  ON replay_claim (claimed_until);
+diff --git a/packages/db/src/replay-claims.ts b/packages/db/src/replay-claims.ts
+new file mode 100644
+index 0000000..4f118a9
+--- /dev/null
++++ b/packages/db/src/replay-claims.ts
+@@ -0,0 +1,27 @@
++import type { Database } from "./database"
++
++export interface ClaimDeliveryInput {
++  readonly deliveryId: string
++  readonly workerId: string
++  readonly claimedAt: Date
++  readonly leaseSeconds: number
++}
++
++export const claimDelivery = (
++  database: Database,
++  input: ClaimDeliveryInput,
++) =>
++  database.one<{ deliveryId: string }>(
++    `INSERT INTO replay_claim (delivery_id, worker_id, claimed_at, claimed_until)
++     VALUES ($deliveryId, $workerId, $claimedAt, $claimedUntil)
++     ON CONFLICT (delivery_id)
++     DO UPDATE SET worker_id = excluded.worker_id,
++                   claimed_until = excluded.claimed_until
++     WHERE replay_claim.claimed_until < excluded.claimed_at
++     RETURNING delivery_id AS "deliveryId"`,
++    {
++      ...input,
++      claimedUntil: new Date(input.claimedAt.getTime() + input.leaseSeconds * 1_000),
++    },
++  )
+diff --git a/services/webhooks/src/replay/claim-delivery.ts b/services/webhooks/src/replay/claim-delivery.ts
+index 9bd7381..a82c7d1 100644
+--- a/services/webhooks/src/replay/claim-delivery.ts
++++ b/services/webhooks/src/replay/claim-delivery.ts
+@@ -1,8 +1,20 @@
+ import type { Database } from "@dispatch/db"
++import { claimDelivery } from "@dispatch/db/replay-claims"
+ import { deliverWebhook } from "../delivery/deliver-webhook"
+ 
+-export const replayDelivery = async (database: Database, deliveryId: string) => {
++export const replayDelivery = async (
++  database: Database,
++  deliveryId: string,
++  workerId: string,
++) => {
+   const delivery = await database.webhookDeliveries.getRequired(deliveryId)
++  const claimedAt = await database.one<{ now: Date }>("SELECT transaction_timestamp() AS now")
++  const claim = await claimDelivery(database, {
++    deliveryId,
++    workerId,
++    claimedAt: claimedAt.now,
++    leaseSeconds: 120,
++  })
++  if (claim === null) return { status: "already-claimed" as const }
++
+   await deliverWebhook(delivery)
+-  return { status: "replayed" }
++  return { status: "replayed" as const }
+ }
+diff --git a/services/webhooks/src/replay/__tests__/claim-delivery.test.ts b/services/webhooks/src/replay/__tests__/claim-delivery.test.ts
+new file mode 100644
+index 0000000..bd071c8
+--- /dev/null
++++ b/services/webhooks/src/replay/__tests__/claim-delivery.test.ts
+@@ -0,0 +1,32 @@
++import { describe, expect, it, vi } from "vitest"
++import { createDatabaseFixture } from "../../testing/database-fixture"
++import { replayDelivery } from "../claim-delivery"
++
++describe("replayDelivery", () => {
++  it("uses database time when regional worker clocks disagree", async () => {
++    const database = await createDatabaseFixture()
++    const delivery = await database.webhookDeliveries.insertFailed({
++      destination: "https://merchant.invalid/webhooks",
++      eventType: "order.paid",
++    })
++
++    vi.setSystemTime("2026-07-10T08:00:00-07:00")
++    const east = replayDelivery(database, delivery.id, "worker-us-east-2")
++    vi.setSystemTime("2026-07-10T08:06:00+02:00")
++    const west = replayDelivery(database, delivery.id, "worker-eu-west-1")
++
++    const results = await Promise.all([east, west])
++
++    expect(results.map(({ status }) => status).sort()).toEqual([
++      "already-claimed",
++      "replayed",
++    ])
++    const claim = await database.replayClaims.getRequired(delivery.id)
++    expect(claim.claimedUntil.getTime() - claim.claimedAt.getTime()).toBe(120_000)
++  })
++})
+diff --git a/apps/ops/src/routes/webhook-replays.tsx b/apps/ops/src/routes/webhook-replays.tsx
+index ac83eb2..ea31f7c 100644
+--- a/apps/ops/src/routes/webhook-replays.tsx
++++ b/apps/ops/src/routes/webhook-replays.tsx
+@@ -22,7 +22,16 @@ export const WebhookReplayRow = ({ delivery }: WebhookReplayRowProps) => {
+   return (
+     <TableRow>
+       <TableCell>{delivery.destination}</TableCell>
+-      <TableCell>{delivery.status}</TableCell>
++      <TableCell>
++        {delivery.replayClaim === null ? (
++          delivery.status
++        ) : (
++          <StatusBadge tone="warning">
++            Claimed by {delivery.replayClaim.workerId} until{" "}
++            {formatRelativeTime(delivery.replayClaim.claimedUntil)}
++          </StatusBadge>
++        )}
++      </TableCell>
+       <TableCell>{formatTimestamp(delivery.updatedAt)}</TableCell>
+     </TableRow>
+   )
+diff --git a/docs/runbooks/webhook-replays.md b/docs/runbooks/webhook-replays.md
+new file mode 100644
+index 0000000..ed7c481
+--- /dev/null
++++ b/docs/runbooks/webhook-replays.md
+@@ -0,0 +1,16 @@
++# Webhook replay recovery
++
++Replay workers acquire a two-minute database lease before sending a failed delivery.
++Only the worker returned by the claim statement may continue with delivery.
++Postgres supplies both claim and expiry time so regional process clocks cannot change the lease.
++
++## Rollout checks
++
++1. Enable `atomic_replay_claims` in one region.
++2. Watch `webhook_duplicate_delivery_total` for 24 hours.
++3. Confirm expired claims return to the pending replay queue.
++4. Compare claim duration across at least two worker regions.
++5. Expand the flag to the remaining regions.
++
++Do not delete an active claim manually. Stop the owning worker and allow the lease to expire so
++the next worker acquires ownership through the same atomic path.
+diff --git a/docs/diagrams/webhook-replay-lifecycle.svg b/docs/diagrams/webhook-replay-lifecycle.svg
+new file mode 100644
+index 0000000..a1ca6de
+--- /dev/null
++++ b/docs/diagrams/webhook-replay-lifecycle.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 240">
++  <path d="M80 120h160m80 0h160" stroke="#22c983" stroke-width="4" />
++  <text x="80" y="100">Failed delivery</text>
++  <text x="280" y="100">Atomic claim</text>
++  <text x="480" y="100">Replay</text>
++</svg>
+diff --git a/docs/images/webhook-replay-lifecycle.png b/docs/images/webhook-replay-lifecycle.png
+new file mode 100644
+index 0000000..b027fb4
+Binary files /dev/null and b/docs/images/webhook-replay-lifecycle.png differ
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 472f10e..4fd244d 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -841,6 +841,9 @@ importers:
+       '@dispatch/logger':
+         specifier: workspace:*
+         version: link:../../packages/logger
++      '@dispatch/replay-claims':
++        specifier: workspace:*
++        version: link:../../packages/db
+ 
+ packages:
+   '@effect/platform@0.92.4':

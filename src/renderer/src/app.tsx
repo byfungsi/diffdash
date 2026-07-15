@@ -1,6 +1,21 @@
 import { Atom, Result, useAtomRefresh, useAtomSet, useAtomValue } from "@effect-atom/atom-react"
-import type { DiffLineAnnotation, FileDiffOptions, VirtualFileMetrics } from "@pierre/diffs"
-import { PatchDiff } from "@pierre/diffs/react"
+import {
+  type DiffLineAnnotation,
+  type FileDiffOptions,
+  Virtualizer as DiffVirtualizer,
+  type VirtualFileMetrics,
+} from "@pierre/diffs"
+import {
+  PatchDiff,
+  type WorkerInitializationRenderOptions,
+  WorkerPoolContextProvider,
+  type WorkerPoolOptions,
+  VirtualizerContext,
+  useStableCallback,
+} from "@pierre/diffs/react"
+// Vite's worker query exposes the module as a worker-constructor default export.
+// oxlint-disable-next-line import/default
+import DiffsWorker from "@pierre/diffs/worker/worker.js?worker"
 import { prepareFileTreeInput } from "@pierre/trees"
 import { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react"
 import { Effect, Schema } from "effect"
@@ -21,18 +36,15 @@ import {
   GitPullRequestDraft,
   Laptop,
   Loader2,
-  Monitor,
-  Moon,
   RefreshCw,
   Search,
   Settings2,
   Sparkles,
   Star,
-  Sun,
   UserRound,
   X,
 } from "lucide-react"
-import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useEffectEvent, useMemo, useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -50,6 +62,7 @@ import {
 } from "@/review-threads"
 import { UpdateBanner } from "@/update-banner"
 import {
+  type Appearance,
   AI_PROVIDER_OPTIONS,
   type AIProvider,
   AIProviderModels,
@@ -68,6 +81,7 @@ import {
 } from "../../shared/ai-settings"
 import { type AppState, DEFAULT_APP_STATE } from "../../shared/app-state"
 import type { AppUpdateState } from "../../shared/app-update"
+import type { CliNavigationCommand } from "../../shared/cli-navigation"
 import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "../../shared/diff-file-filters"
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import type {
@@ -81,6 +95,12 @@ import type {
 } from "../../shared/domain"
 import { Repo, RepositorySearchRequest } from "../../shared/domain"
 import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
+import { isVeryLargeDiffFile } from "../../shared/large-diff-policy"
+import {
+  LocalReviewTarget,
+  localReviewTargetKey,
+  workingTreeReviewTarget,
+} from "../../shared/local-review"
 import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "../../shared/prerequisites"
 import {
   LineReviewAnchor,
@@ -125,7 +145,7 @@ type SelectedReviewTarget =
     }
   | {
       readonly kind: "localDiff"
-      readonly rootPath: string
+      readonly target: LocalReviewTarget
     }
 
 type ReviewSubject =
@@ -142,9 +162,12 @@ type PullRequestReviewTarget = Extract<SelectedReviewTarget, { readonly kind: "p
 
 type LocalDiffReviewTarget = Extract<SelectedReviewTarget, { readonly kind: "localDiff" }>
 
-type ResolvedTheme = "light" | "dark"
+type LoadedLocalReview = {
+  readonly detail: LocalReviewDetail
+  readonly parsedDiff: ParsedDiff
+}
 
-type ThemePreference = ResolvedTheme | "system"
+type ResolvedTheme = "light" | "dark"
 
 type RecentReviewEntry = {
   readonly key: string
@@ -178,8 +201,6 @@ const GH_AUTH_DOCS_URL = "https://cli.github.com/manual/gh_auth_login"
 const GIT_DOCS_URL = "https://git-scm.com/downloads"
 const CODING_AGENT_SETUP_MESSAGE =
   "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
-const THEME_STORAGE_KEY = "diffdash.theme"
-
 const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
   void window.diffDash.analytics.capture(event).catch(() => undefined)
 }
@@ -195,7 +216,10 @@ const sameSelectedReviewTarget = (
 ) => {
   if (left === null || right === null) return left === right
   if (left.kind === "localDiff")
-    return right.kind === "localDiff" && left.rootPath === right.rootPath
+    return (
+      right.kind === "localDiff" &&
+      localReviewTargetKey(left.target) === localReviewTargetKey(right.target)
+    )
   if (right.kind !== "pullRequest") return false
   return (
     left.repoOwner === right.repoOwner &&
@@ -211,7 +235,6 @@ class RendererApiError extends Schema.TaggedError<RendererApiError>()("RendererA
 
 const REVIEW_DIFF_OPTIONS = {
   disableFileHeader: true,
-  disableVirtualizationBuffers: true,
   diffStyle: "split",
   enableGutterUtility: true,
   hunkSeparators: "line-info-basic",
@@ -277,6 +300,11 @@ const REVIEW_DIFF_OPTIONS = {
   `,
 } satisfies FileDiffOptions<ReviewThreadAnnotation>
 
+const REVIEW_DIFF_OPTIONS_BY_THEME = {
+  dark: { ...REVIEW_DIFF_OPTIONS, themeType: "dark" },
+  light: { ...REVIEW_DIFF_OPTIONS, themeType: "light" },
+} satisfies Record<ResolvedTheme, FileDiffOptions<ReviewThreadAnnotation>>
+
 const REVIEW_DIFF_METRICS = {
   diffHeaderHeight: 0,
   hunkLineCount: 50,
@@ -285,6 +313,24 @@ const REVIEW_DIFF_METRICS = {
   paddingTop: 0,
   spacing: 0,
 } satisfies VirtualFileMetrics
+
+const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
+  intersectionObserverMargin: 1_500,
+  overscrollSize: 1_000,
+} as const
+
+const REVIEW_DIFF_WORKER_POOL_OPTIONS = {
+  poolSize: 1,
+  totalASTLRUCacheSize: 20,
+  workerFactory: () => new DiffsWorker(),
+} satisfies WorkerPoolOptions
+
+const REVIEW_DIFF_HIGHLIGHTER_OPTIONS = {
+  lineDiffType: REVIEW_DIFF_OPTIONS.lineDiffType,
+  maxLineDiffLength: 1_000,
+  theme: REVIEW_DIFF_OPTIONS.theme,
+  tokenizeMaxLineLength: 1_000,
+} satisfies WorkerInitializationRenderOptions
 
 const REVIEW_FILE_TREE_CSS = `
   :host {
@@ -393,6 +439,17 @@ const parseRemoteSearchAtomKey = (key: string) => {
   })
 }
 
+const serializeLocalReviewAtomKey = (target: LocalReviewTarget) => JSON.stringify(target)
+
+const parseLocalReviewAtomKey = (key: string) => {
+  if (key.length === 0) return null
+  try {
+    return Schema.decodeUnknownSync(LocalReviewTarget)(JSON.parse(key))
+  } catch {
+    return null
+  }
+}
+
 const reviewRequestsAtom = Atom.make(
   fetchEffect(() => window.diffDash.gitProvider.listReviewRequests()),
   {
@@ -464,23 +521,18 @@ const pullRequestDiffAtom = Atom.family((key: string) =>
   ),
 )
 
-const localReviewDetailAtom = Atom.family((rootPath: string) =>
-  Atom.make(
-    rootPath.length === 0
-      ? Effect.succeed(null as LocalReviewDetail | null)
-      : fetchEffect(() => window.diffDash.localReviews.getDetail(rootPath)),
-    { initialValue: null as LocalReviewDetail | null },
-  ),
-)
-
-const localReviewDiffAtom = Atom.family((rootPath: string) =>
+const localReviewSnapshotAtom = Atom.family((key: string) =>
   Atom.make(
     Effect.gen(function* () {
-      if (rootPath.length === 0) return null
-      const diff = yield* fetchEffect(() => window.diffDash.localReviews.getDiff(rootPath))
-      return parseUnifiedDiff(diff.diff)
+      const target = parseLocalReviewAtomKey(key)
+      if (target === null) return null
+      const snapshot = yield* fetchEffect(() => window.diffDash.localReviews.getSnapshot(target))
+      return {
+        detail: snapshot.detail,
+        parsedDiff: parseUnifiedDiff(snapshot.diff.diff),
+      }
     }),
-    { initialValue: null as ParsedDiff | null },
+    { initialValue: null as LoadedLocalReview | null },
   ),
 )
 
@@ -507,23 +559,23 @@ export function App() {
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
   const [selectedReviewPath, setSelectedReviewPath] = useState<string | null>(null)
-  const [diffRenderPass, setDiffRenderPass] = useState(0)
   const [expandedFileKeys, setExpandedFileKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [viewedFileKeys, setViewedFileKeys] = useState<ReadonlySet<string>>(() => new Set())
   const navigationHistoryRef = useRef<readonly AppNavigationRoute[]>([
     { screen: "home", selectedRepo: null, selectedReview: null },
   ])
+  const commandDrainRef = useRef<Promise<void>>(Promise.resolve())
   const navigationIndexRef = useRef(0)
   const handledMouseNavigationButtonRef = useRef<number | null>(null)
   const [query, setQuery] = useState("")
   const [selectedSearchScope, setSelectedSearchScope] = useState<string | null>(null)
   const [actionStatus, setActionStatus] = useState("Search a repo or open a bookmark.")
+  const [cliNavigationError, setCliNavigationError] = useState<string | null>(null)
   const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
   const [aiSettings, setAISettings] = useState<AISettings>(DEFAULT_AI_SETTINGS)
-  const [themePreference, setThemePreference] = useState<ThemePreference>(() => readStoredTheme())
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    resolveThemePreference(themePreference),
+    resolveThemePreference(DEFAULT_AI_SETTINGS.appearance),
   )
   const [recentReviews, setRecentReviews] = useState<readonly RecentReviewEntry[]>([])
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
@@ -570,7 +622,9 @@ export function App() {
       ? ""
       : pullRequestAtomKey(selectedReview.repoOwner, selectedReview.repoName, selectedReview.number)
   const selectedLocalReviewKey =
-    selectedReview === null || selectedReview.kind !== "localDiff" ? "" : selectedReview.rootPath
+    selectedReview === null || selectedReview.kind !== "localDiff"
+      ? ""
+      : serializeLocalReviewAtomKey(selectedReview.target)
   const repositoriesResult = useAtomValue(repositoriesAtom)
   const diagnosticsResult = useAtomValue(diagnosticsAtom)
   const searchScopesResult = useAtomValue(searchScopesAtom)
@@ -583,8 +637,7 @@ export function App() {
   const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
   const selectedPullRequestDetailAtom = pullRequestDetailAtom(selectedPullRequestReviewKey)
   const selectedPullRequestDiffAtom = pullRequestDiffAtom(selectedPullRequestReviewKey)
-  const selectedLocalReviewDetailAtom = localReviewDetailAtom(selectedLocalReviewKey)
-  const selectedLocalReviewDiffAtom = localReviewDiffAtom(selectedLocalReviewKey)
+  const selectedLocalReviewSnapshotAtom = localReviewSnapshotAtom(selectedLocalReviewKey)
 
   const localResultsResult = useAtomValue(localSearchAtom)
   const remoteResultsResult = useAtomValue(remoteSearchAtom)
@@ -593,8 +646,7 @@ export function App() {
   const pullRequestsResult = useAtomValue(selectedRepoPullRequestsAtom)
   const selectedPullRequestResult = useAtomValue(selectedPullRequestDetailAtom)
   const selectedPullRequestDiffResult = useAtomValue(selectedPullRequestDiffAtom)
-  const selectedLocalReviewResult = useAtomValue(selectedLocalReviewDetailAtom)
-  const selectedLocalDiffResult = useAtomValue(selectedLocalReviewDiffAtom)
+  const selectedLocalReviewResult = useAtomValue(selectedLocalReviewSnapshotAtom)
   const bookmarkRemoteRepo = useAtomSet(bookmarkRemoteAtom, { mode: "promise" })
   const unbookmarkFavoriteRepo = useAtomSet(unbookmarkRepoAtom, { mode: "promise" })
   const refreshPullRequestsForRepo = useAtomSet(refreshPullRequestsAtom)
@@ -608,8 +660,7 @@ export function App() {
   const refreshSelectedPullRequests = useAtomRefresh(selectedRepoPullRequestsAtom)
   const refreshSelectedPullRequestDetail = useAtomRefresh(selectedPullRequestDetailAtom)
   const refreshSelectedPullRequestDiff = useAtomRefresh(selectedPullRequestDiffAtom)
-  const refreshSelectedLocalReviewDetail = useAtomRefresh(selectedLocalReviewDetailAtom)
-  const refreshSelectedLocalReviewDiff = useAtomRefresh(selectedLocalReviewDiffAtom)
+  const refreshSelectedLocalReview = useAtomRefresh(selectedLocalReviewSnapshotAtom)
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
   const bookmarkedRepos = repos.filter(isBookmarkedPullRequestRepo)
@@ -626,8 +677,9 @@ export function App() {
   const pullRequests = resultValue(pullRequestsResult, [] as readonly PullRequestSummary[])
   const selectedPullRequest = resultValue(selectedPullRequestResult, null)
   const selectedPullRequestDiff = resultValue(selectedPullRequestDiffResult, null)
-  const selectedLocalReview = resultValue(selectedLocalReviewResult, null)
-  const selectedLocalDiff = resultValue(selectedLocalDiffResult, null)
+  const selectedLocalReviewSnapshot = resultValue(selectedLocalReviewResult, null)
+  const selectedLocalReview = selectedLocalReviewSnapshot?.detail ?? null
+  const selectedLocalDiff = selectedLocalReviewSnapshot?.parsedDiff ?? null
   const selectedReviewSubject = reviewSubjectFromSelection(
     selectedReview,
     selectedPullRequest,
@@ -674,16 +726,11 @@ export function App() {
     selectedReview === null
       ? actionStatus
       : selectedReview.kind === "localDiff"
-        ? Result.isFailure(selectedLocalReviewResult) || Result.isFailure(selectedLocalDiffResult)
-          ? resultErrorMessage(
-              Result.isFailure(selectedLocalReviewResult)
-                ? selectedLocalReviewResult
-                : selectedLocalDiffResult,
-              "Could not open local changes",
-            )
+        ? Result.isFailure(selectedLocalReviewResult)
+          ? resultErrorMessage(selectedLocalReviewResult, "Could not open local changes")
           : selectedLocalReview === null
             ? "Opening local changes..."
-            : Result.isWaiting(selectedLocalDiffResult)
+            : Result.isWaiting(selectedLocalReviewResult)
               ? "Loading local diff..."
               : selectedDiff?.files.length === 0
                 ? `No local changes in ${selectedLocalReview.repoName}`
@@ -716,7 +763,7 @@ export function App() {
   const isLoadingPullRequests = selectedRepo !== null && Result.isWaiting(pullRequestsResult)
   const isLoadingReview =
     selectedReview?.kind === "localDiff"
-      ? Result.isWaiting(selectedLocalReviewResult) || Result.isWaiting(selectedLocalDiffResult)
+      ? Result.isWaiting(selectedLocalReviewResult)
       : Result.isWaiting(selectedPullRequestResult) ||
         Result.isWaiting(selectedPullRequestDiffResult)
   const isLoadingReviewRequests = Result.isWaiting(reviewRequestsResult)
@@ -824,20 +871,19 @@ export function App() {
 
   useEffect(() => {
     const applyTheme = () => {
-      const nextResolvedTheme = resolveThemePreference(themePreference)
+      const nextResolvedTheme = resolveThemePreference(aiSettings.appearance)
       setResolvedTheme(nextResolvedTheme)
       document.documentElement.classList.toggle("dark", nextResolvedTheme === "dark")
       document.documentElement.style.colorScheme = nextResolvedTheme
-      window.localStorage.setItem(THEME_STORAGE_KEY, themePreference)
     }
 
     applyTheme()
-    if (themePreference !== "system") return undefined
+    if (aiSettings.appearance !== "system") return undefined
 
     const media = window.matchMedia("(prefers-color-scheme: dark)")
     media.addEventListener("change", applyTheme)
     return () => media.removeEventListener("change", applyTheme)
-  }, [themePreference])
+  }, [aiSettings.appearance])
 
   useEffect(() => {
     if (
@@ -903,13 +949,6 @@ export function App() {
   }, [screen, selectedDiff])
 
   useEffect(() => {
-    if (screen !== "review" || selectedDiff === null) return
-    setDiffRenderPass(0)
-    const remountTimer = window.setTimeout(() => setDiffRenderPass(1), 250)
-    return () => window.clearTimeout(remountTimer)
-  }, [screen, selectedDiff])
-
-  useEffect(() => {
     if (screen !== "review" || selectedReviewKind === null || selectedDiff === null) {
       return
     }
@@ -956,18 +995,8 @@ export function App() {
     }
 
     if (selectedReview.kind === "localDiff") {
-      if (
-        Result.isFailure(selectedLocalReviewResult) ||
-        Result.isFailure(selectedLocalDiffResult)
-      ) {
-        setActionStatus(
-          resultErrorMessage(
-            Result.isFailure(selectedLocalReviewResult)
-              ? selectedLocalReviewResult
-              : selectedLocalDiffResult,
-            "Reload diff failed",
-          ),
-        )
+      if (Result.isFailure(selectedLocalReviewResult)) {
+        setActionStatus(resultErrorMessage(selectedLocalReviewResult, "Reload diff failed"))
         setIsReloadingReview(false)
         return
       }
@@ -1003,7 +1032,6 @@ export function App() {
     isLoadingReview,
     isReloadingReview,
     selectedLocalDiff,
-    selectedLocalDiffResult,
     selectedLocalReview,
     selectedLocalReviewResult,
     selectedPullRequest,
@@ -1076,8 +1104,7 @@ export function App() {
     )
 
     if (selectedReview.kind === "localDiff") {
-      refreshSelectedLocalReviewDetail()
-      refreshSelectedLocalReviewDiff()
+      refreshSelectedLocalReview()
       return
     }
 
@@ -1213,8 +1240,8 @@ export function App() {
     })
   }
 
-  const openLocalReview = (rootPath: string) => {
-    const review: LocalDiffReviewTarget = { kind: "localDiff", rootPath }
+  const openLocalReview = (target: LocalReviewTarget) => {
+    const review: LocalDiffReviewTarget = { kind: "localDiff", target }
     setSelectedReviewPath(null)
     setExpandedFileKeys(new Set())
     setViewedFileKeys(new Set())
@@ -1223,7 +1250,23 @@ export function App() {
     setActionStatus("Opening local changes...")
   }
 
+  const openPullRequestNumber = (repo: Repo, number: number) => {
+    const review: PullRequestReviewTarget = {
+      kind: "pullRequest",
+      number,
+      repoName: repo.name,
+      repoOwner: repo.owner,
+    }
+    setSelectedReviewPath(null)
+    setExpandedFileKeys(new Set())
+    setViewedFileKeys(new Set())
+    navigateTo({ screen: "review", selectedRepo: repo, selectedReview: review })
+    captureAnalytics({ event: "review_opened", reviewType: "pull_request" })
+    setActionStatus(`Opening PR #${number}...`)
+  }
+
   const installRepositoryLink = async (localPath: string) => {
+    setCliNavigationError(null)
     setActionStatus("Linking local repository...")
     try {
       const linked = await window.diffDash.repositories.install(localPath)
@@ -1234,10 +1277,62 @@ export function App() {
       captureAnalytics({ event: "repository_linked" })
       selectRepository(linked, "repo")
     } catch (error) {
-      setActionStatus(formatError(error, "Could not link local repository"))
+      const message = formatError(error, "Could not link local repository")
+      setActionStatus(message)
+      setCliNavigationError(message)
     }
   }
-  const installRepositoryLinkEvent = useEffectEvent(installRepositoryLink)
+  const handleCliNavigationCommand = async (command: CliNavigationCommand) => {
+    if (command["_tag"] === "error") {
+      setActionStatus(command.message)
+      setCliNavigationError(command.message)
+      return
+    }
+    setCliNavigationError(null)
+    if (command["_tag"] === "openWorkingTree") {
+      openLocalReview(workingTreeReviewTarget(command.localPath))
+      return
+    }
+    if (command["_tag"] === "linkRepository") {
+      await installRepositoryLink(command.localPath)
+      return
+    }
+    if (command["_tag"] === "openBranchDiff") {
+      setActionStatus(
+        command.branchName === null
+          ? "Resolving the default comparison branch..."
+          : `Fetching comparison branch ${command.branchName}...`,
+      )
+      try {
+        const target = await window.diffDash.localReviews.resolveBranch(
+          command.localPath,
+          command.branchName,
+        )
+        openLocalReview(target)
+      } catch (error) {
+        const message = formatError(error, "Could not resolve comparison branch")
+        setActionStatus(message)
+        setCliNavigationError(message)
+      }
+      return
+    }
+
+    setActionStatus("Opening repository pull requests...")
+    try {
+      const repo = await window.diffDash.repositories.install(command.localPath)
+      refreshRepositories()
+      refreshLocalSearch()
+      refreshRepoPrCounts()
+      captureAnalytics({ event: "repository_linked" })
+      if (command.number === null) selectRepository(repo, "repo")
+      else openPullRequestNumber(repo, command.number)
+    } catch (error) {
+      const message = formatError(error, "Could not open repository pull requests")
+      setActionStatus(message)
+      setCliNavigationError(message)
+    }
+  }
+  const handleCliNavigationCommandEvent = useEffectEvent(handleCliNavigationCommand)
 
   const linkSelectedReviewRepository = async () => {
     if (selectedReview?.kind !== "pullRequest") return false
@@ -1264,34 +1359,26 @@ export function App() {
   }
 
   useEffect(() => {
-    let cancelled = false
-    window.diffDash.navigation
-      .getPendingLocalReview()
-      .then((rootPath) => {
-        if (!cancelled && rootPath !== null) openLocalReview(rootPath)
-        return undefined
-      })
-      .catch(() => undefined)
-
-    window.diffDash.navigation
-      .getPendingRepositoryLink()
-      .then((rootPath) => {
-        if (!cancelled && rootPath !== null) void installRepositoryLinkEvent(rootPath)
-        return undefined
-      })
-      .catch(() => undefined)
-
-    const unsubscribeLocalReview = window.diffDash.navigation.onOpenLocalReview((rootPath) => {
-      openLocalReview(rootPath)
+    const drainCommands = () => {
+      commandDrainRef.current = commandDrainRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const commands = await window.diffDash.navigation.drainCommands()
+          await commands.reduce<Promise<void>>(
+            (previous, command) => previous.then(() => handleCliNavigationCommandEvent(command)),
+            Promise.resolve(),
+          )
+          return undefined
+        })
+      return commandDrainRef.current
+    }
+    const unsubscribe = window.diffDash.navigation.onCommandsAvailable(() => {
+      void drainCommands().catch(() => undefined)
     })
-    const unsubscribeRepositoryLink = window.diffDash.navigation.onLinkRepository((rootPath) => {
-      void installRepositoryLinkEvent(rootPath)
-    })
+    void drainCommands().catch(() => undefined)
 
     return () => {
-      cancelled = true
-      unsubscribeLocalReview()
-      unsubscribeRepositoryLink()
+      unsubscribe()
     }
   }, [])
 
@@ -1342,6 +1429,7 @@ export function App() {
     try {
       const savedSettings = await window.diffDash.settings.update(
         AISettings.make({
+          appearance: aiSettings.appearance,
           provider: aiSettings.provider,
           models: aiProviderModelsFromSettings(aiSettings),
           telemetryEnabled,
@@ -1379,6 +1467,17 @@ export function App() {
           }}
         />
       )}
+      {cliNavigationError === null ? null : (
+        <div
+          role="alert"
+          className="bg-destructive text-destructive-foreground fixed top-3 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-lg px-4 py-3 text-sm shadow-lg"
+        >
+          <span className="min-w-0 flex-1">{cliNavigationError}</span>
+          <Button size="sm" variant="secondary" onClick={() => setCliNavigationError(null)}>
+            Dismiss
+          </Button>
+        </div>
+      )}
       {appState === null ? (
         <section className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-8 py-10">
           <EmptyState>Loading DiffDash...</EmptyState>
@@ -1401,7 +1500,6 @@ export function App() {
             parsedDiff={selectedDiff}
             repositoryLinkState={reviewRepositoryLinkState}
             reviewSubject={selectedReviewSubject}
-            diffRenderPass={diffRenderPass}
             expandedFileKeys={expandedFileKeys}
             isReloading={isReloadingReview || isLoadingReview}
             selectedPath={selectedReviewPath}
@@ -1625,9 +1723,6 @@ export function App() {
           </div>
         </section>
       )}
-      {appState?.onboardingCompleted === true ? (
-        <ThemeSelector preference={themePreference} onChange={setThemePreference} />
-      ) : null}
       <CommandPaletteDialog
         items={goToPaletteItems({
           bookmarkedRepos,
@@ -1872,7 +1967,6 @@ const ReviewScreen = ({
   parsedDiff,
   repositoryLinkState,
   reviewSubject,
-  diffRenderPass,
   expandedFileKeys,
   isReloading,
   selectedPath,
@@ -1892,7 +1986,6 @@ const ReviewScreen = ({
   readonly parsedDiff: ParsedDiff | null
   readonly repositoryLinkState: RepositoryLinkState
   readonly reviewSubject: ReviewSubject
-  readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
   readonly isReloading: boolean
   readonly selectedPath: string | null
@@ -1913,7 +2006,6 @@ const ReviewScreen = ({
     parsedDiff={parsedDiff}
     repositoryLinkState={repositoryLinkState}
     reviewSubject={reviewSubject}
-    diffRenderPass={diffRenderPass}
     expandedFileKeys={expandedFileKeys}
     isReloading={isReloading}
     selectedPath={selectedPath}
@@ -2078,38 +2170,6 @@ const RecentReviewRow = ({
       Last reviewed {formatReviewTimestamp(review.lastReviewedAt)}
     </div>
   </button>
-)
-
-const ThemeSelector = ({
-  preference,
-  onChange,
-}: {
-  readonly preference: ThemePreference
-  readonly onChange: (preference: ThemePreference) => void
-}) => (
-  <div className="fixed right-4 bottom-4 z-30 rounded-full border bg-background/90 p-1 shadow-lg backdrop-blur">
-    <div className="flex items-center gap-1" aria-label="Theme preference">
-      {THEME_OPTIONS.map((option) => {
-        const Icon = option.icon
-        return (
-          <button
-            key={option.value}
-            type="button"
-            aria-label={`Use ${option.label} theme`}
-            aria-pressed={preference === option.value}
-            className={`rounded-full p-2 transition ${
-              preference === option.value
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            }`}
-            onClick={() => onChange(option.value)}
-          >
-            <Icon className="size-3.5" />
-          </button>
-        )
-      })}
-    </div>
-  </div>
 )
 
 const CommandPaletteDialog = ({
@@ -2593,7 +2653,6 @@ const PullRequestDetailView = ({
   parsedDiff,
   repositoryLinkState,
   reviewSubject,
-  diffRenderPass,
   expandedFileKeys,
   isReloading,
   selectedPath,
@@ -2613,7 +2672,6 @@ const PullRequestDetailView = ({
   readonly parsedDiff: ParsedDiff | null
   readonly repositoryLinkState: RepositoryLinkState
   readonly reviewSubject: ReviewSubject
-  readonly diffRenderPass: number
   readonly expandedFileKeys: ReadonlySet<string>
   readonly isReloading: boolean
   readonly selectedPath: string | null
@@ -2631,10 +2689,12 @@ const PullRequestDetailView = ({
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
   const stickyReviewChromeRef = useRef<HTMLDivElement>(null)
   const lastAutoScrolledPathRef = useRef<string | null>(null)
+  const pendingActiveFileFrameRef = useRef<number | null>(null)
   const lastPointerPositionRef = useRef<{
     readonly clientX: number
     readonly clientY: number
   } | null>(null)
+  const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [fileFilter, setFileFilter] = useState("")
   const [sidebarTab, setSidebarTab] = useState<ReviewSidebarTab>("tree")
   const [walkthroughState, setWalkthroughState] = useState<WalkthroughState>({ status: "idle" })
@@ -2655,6 +2715,26 @@ const PullRequestDetailView = ({
   const [repositoryBannerDismissed, setRepositoryBannerDismissed] = useState(false)
   const [repositoryLinking, setRepositoryLinking] = useState(false)
   const [repositoryLinkError, setRepositoryLinkError] = useState<string | null>(null)
+  const setDiffScrollContainer = useStableCallback<(node: HTMLDivElement | null) => void>(
+    (node) => {
+      diffScrollContainerRef.current = node
+      if (node === null) {
+        diffVirtualizer.cleanUp()
+        return
+      }
+
+      const content = node.firstElementChild
+      diffVirtualizer.setup(node, content instanceof HTMLElement ? content : undefined)
+    },
+  )
+  useEffect(
+    () => () => {
+      if (pendingActiveFileFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
+      }
+    },
+    [],
+  )
   const reviewFiles = reviewSubjectFiles(reviewSubject)
   const reviewBaseSha = reviewSubjectBaseSha(reviewSubject)
   const reviewHeadSha = reviewSubjectHeadSha(reviewSubject)
@@ -2848,7 +2928,7 @@ const PullRequestDetailView = ({
                 reviewHeadSha,
               )
             : await window.diffDash.localWalkthroughs.get(
-                reviewSubject.localReview.rootPath,
+                localReviewTargetFromDetail(reviewSubject.localReview),
                 reviewBaseSha,
                 reviewHeadSha,
               )
@@ -2893,8 +2973,12 @@ const PullRequestDetailView = ({
                 reviewSubject.pullRequest.number,
               )
           : regenerate
-            ? await window.diffDash.localWalkthroughs.regenerate(reviewSubject.localReview.rootPath)
-            : await window.diffDash.localWalkthroughs.generate(reviewSubject.localReview.rootPath)
+            ? await window.diffDash.localWalkthroughs.regenerate(
+                localReviewTargetFromDetail(reviewSubject.localReview),
+              )
+            : await window.diffDash.localWalkthroughs.generate(
+                localReviewTargetFromDetail(reviewSubject.localReview),
+              )
       if (regenerate) {
         const storedWalkthroughScope = reviewSubjectWalkthroughScope(reviewSubject, stored)
         changedFiles.forEach((file) => onSetViewed(file.reviewKey, false))
@@ -3019,6 +3103,10 @@ const PullRequestDetailView = ({
   const selectPathAndScroll = (path: string, reviewKey?: string) => {
     lastAutoScrolledPathRef.current = path
     lastPointerPositionRef.current = null
+    if (pendingActiveFileFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
+      pendingActiveFileFrameRef.current = null
+    }
     setActiveFilePath(path)
     onSelectPath(path)
     window.requestAnimationFrame(() => {
@@ -3105,15 +3193,20 @@ const PullRequestDetailView = ({
     const path = document
       .elementFromPoint(clientX, clientY)
       ?.closest<HTMLElement>("[data-diff-card-path]")?.dataset.diffCardPath
-    if (path !== undefined && path !== activeFilePath) {
-      setActiveFilePath(path)
-    }
+    if (path !== undefined)
+      setActiveFilePath((currentPath) => (currentPath === path ? currentPath : path))
   }
   const syncActiveFileFromPointer = () => {
     const position = lastPointerPositionRef.current
-    if (position === null) return
+    if (position === null || pendingActiveFileFrameRef.current !== null) return
 
-    window.requestAnimationFrame(() => setActiveFileFromPoint(position.clientX, position.clientY))
+    pendingActiveFileFrameRef.current = window.requestAnimationFrame(() => {
+      pendingActiveFileFrameRef.current = null
+      const latestPosition = lastPointerPositionRef.current
+      if (latestPosition !== null) {
+        setActiveFileFromPoint(latestPosition.clientX, latestPosition.clientY)
+      }
+    })
   }
   const linkRepository = async () => {
     if (repositoryLinking) return
@@ -3133,7 +3226,7 @@ const PullRequestDetailView = ({
     repositoryLinkState === "unlinked" &&
     !repositoryBannerDismissed
 
-  return (
+  const reviewContent = (
     <>
       <section className="bg-background flex h-full min-h-0 overflow-hidden text-sm">
         <aside className="bg-review-sidebar text-review-sidebar-fg border-review-sidebar-border flex h-full min-h-0 w-review-sidebar shrink-0 flex-col border-r">
@@ -3241,7 +3334,7 @@ const PullRequestDetailView = ({
         </aside>
 
         <div
-          ref={diffScrollContainerRef}
+          ref={setDiffScrollContainer}
           data-review-diff-scroll-container
           className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
           onPointerMove={(event) => {
@@ -3253,201 +3346,214 @@ const PullRequestDetailView = ({
           }}
           onPointerLeave={() => {
             lastPointerPositionRef.current = null
+            if (pendingActiveFileFrameRef.current !== null) {
+              window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
+              pendingActiveFileFrameRef.current = null
+            }
           }}
           onScroll={syncActiveFileFromPointer}
         >
-          <div
-            ref={stickyReviewChromeRef}
-            className="bg-background/95 sticky top-0 z-10 backdrop-blur"
-          >
-            <div className="border-b px-5 py-2">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-muted-foreground min-w-0 truncate text-xs">
-                  {fileOpenStatus ?? status}
-                </div>
-                <div className="flex items-center gap-2">
-                  <ReviewActionsMenu items={reviewActionItems} />
-                </div>
-              </div>
-            </div>
-            {showRepositoryLinkBanner ? (
-              <section
-                aria-label="Local repository not linked"
-                className="bg-accent/70 border-b px-5 py-3"
-              >
-                <div className="mx-auto flex max-w-review-diff items-start gap-3">
-                  <div className="bg-background text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs">
-                    <FolderGit2 className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold">
-                      Link a checkout for isolated agent review
-                    </p>
-                    <p className="text-muted-foreground mt-0.5 text-xs leading-5">
-                      DiffDash creates a private worktree at the exact PR revision. Your branch and
-                      local changes are never switched or cleaned.
-                    </p>
-                    {repositoryLinkError === null ? null : (
-                      <p role="alert" className="text-destructive mt-1 text-xs">
-                        {repositoryLinkError}
-                      </p>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={repositoryLinking}
-                    onClick={() => void linkRepository()}
-                  >
-                    {repositoryLinking ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                    {repositoryLinking ? "Linking" : "Link folder"}
-                  </Button>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label="Dismiss local repository banner"
-                    onClick={() => setRepositoryBannerDismissed(true)}
-                  >
-                    <X className="size-3.5" />
-                  </Button>
-                </div>
-              </section>
-            ) : null}
-          </div>
-
-          <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
-            {sidebarTab === "walkthrough" ? (
-              <WalkthroughMainHeader
-                activeStepComplete={activeStepComplete}
-                step={activeWalkthroughStep}
-                state={walkthroughState}
-                onMarkComplete={markActiveWalkthroughStepComplete}
-                onNextStep={() =>
-                  selectWalkthroughStep(
-                    activeWalkthrough === null
-                      ? activeWalkthroughStepIndex
-                      : Math.min(activeWalkthroughStepIndex + 1, activeWalkthroughSteps.length - 1),
-                  )
-                }
-                onRetry={() => void loadWalkthrough(false)}
-              />
-            ) : null}
-            <section
-              id="review-thread-summary"
-              className="bg-card scroll-mt-14 rounded-2xl border p-4 shadow-xs"
+          <div className="min-h-full">
+            <div
+              ref={stickyReviewChromeRef}
+              className="bg-background/95 sticky top-0 z-10 backdrop-blur"
             >
-              <div className="flex flex-wrap items-center gap-1.5">
-                {reviewSubject.kind === "pullRequest" ? (
-                  <>
-                    <Badge variant="outline" className="text-caption">
-                      #{reviewSubject.pullRequest.number}
-                    </Badge>
-                    <PullRequestStateBadge
-                      className="text-caption"
-                      isDraft={reviewSubject.pullRequest.isDraft}
-                      state={reviewSubject.pullRequest.state}
-                    />
-                    <Badge variant="secondary" className="text-caption">
-                      @{reviewSubject.pullRequest.author.login}
-                    </Badge>
-                    {sidebarTab === "walkthrough" ? (
-                      <Badge
-                        variant="outline"
-                        className="text-caption"
-                        title="Walkthrough generated from PR metadata and diff only."
-                      >
-                        <Cloud className="size-3" />
-                        Diff-only
-                      </Badge>
-                    ) : null}
-                  </>
-                ) : (
-                  <>
-                    <Badge variant="outline" className="text-caption">
-                      Local
-                    </Badge>
-                    {reviewSubject.localReview.branchName === null ? null : (
-                      <Badge variant="secondary" className="text-caption">
-                        <GitBranch className="size-3" />
-                        {reviewSubject.localReview.branchName}
-                      </Badge>
-                    )}
-                  </>
-                )}
-              </div>
-              <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-                {reviewSubjectTitle(reviewSubject)}
-              </h1>
-              <div className="text-muted-foreground mt-2 grid gap-2 text-xs md:grid-cols-4">
-                <Metric
-                  label="Files"
-                  value={String(parsedDiff?.files.length ?? fallbackFiles.length)}
-                />
-                {reviewSubject.kind === "pullRequest" ? (
-                  <>
-                    <Metric
-                      label="Commits"
-                      value={String(reviewSubject.pullRequest.commits.length)}
-                    />
-                    <Metric label="Head" value={shortSha(reviewSubject.pullRequest.headRefOid)} />
-                    <Metric label="Base" value={shortSha(reviewSubject.pullRequest.baseRefOid)} />
-                  </>
-                ) : (
-                  <>
-                    <Metric label="Repo" value={reviewSubject.localReview.repoName} />
-                    <Metric label="Diff" value={shortSha(reviewSubject.localReview.headSha)} />
-                    <Metric label="Base" value={shortSha(reviewSubject.localReview.baseSha)} />
-                  </>
-                )}
-              </div>
-              {reviewThreads.loading ? (
-                <div className="text-muted-foreground mt-3 border-t pt-3 text-caption">
-                  Loading line comments...
+              <div className="border-b px-5 py-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-muted-foreground min-w-0 truncate text-xs">
+                    {fileOpenStatus ?? status}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <ReviewActionsMenu items={reviewActionItems} />
+                  </div>
                 </div>
+              </div>
+              {showRepositoryLinkBanner ? (
+                <section
+                  aria-label="Local repository not linked"
+                  className="bg-accent/70 border-b px-5 py-3"
+                >
+                  <div className="mx-auto flex max-w-review-diff items-start gap-3">
+                    <div className="bg-background text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs">
+                      <FolderGit2 className="size-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold">
+                        Link a checkout for isolated agent review
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 text-xs leading-5">
+                        DiffDash creates a private worktree at the exact PR revision. Your branch
+                        and local changes are never switched or cleaned.
+                      </p>
+                      {repositoryLinkError === null ? null : (
+                        <p role="alert" className="text-destructive mt-1 text-xs">
+                          {repositoryLinkError}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={repositoryLinking}
+                      onClick={() => void linkRepository()}
+                    >
+                      {repositoryLinking ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                      {repositoryLinking ? "Linking" : "Link folder"}
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Dismiss local repository banner"
+                      onClick={() => setRepositoryBannerDismissed(true)}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+                </section>
               ) : null}
-            </section>
+            </div>
 
-            <ReviewThreadIndex
-              items={indexedThreadDetails}
-              loading={reviewThreads.loading}
-              error={reviewThreads.error}
-              onReload={reviewThreads.reload}
-              onSelect={selectIndexedThread}
-            />
-            {parsedDiff === null ? <EmptyState>Loading diff...</EmptyState> : null}
-            {parsedDiff !== null &&
-            normalizedFileFilter.length === 0 &&
-            visibleChangedFiles.length === 0 ? (
-              <EmptyState>No changed files found.</EmptyState>
-            ) : null}
-            {parsedDiff !== null &&
-            normalizedFileFilter.length > 0 &&
-            visibleChangedFiles.length === 0 ? (
-              <EmptyState>No files match this filter.</EmptyState>
-            ) : null}
-            {visibleChangedFiles.map((file) => (
-              <OpenDiffCard
-                key={file.reviewKey}
-                diffOptions={reviewDiffOptions}
-                diffRenderPass={diffRenderPass}
-                expanded={
-                  sidebarTab === "walkthrough" && activeWalkthroughStep !== null
-                    ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
-                    : expandedFileKeys.has(file.reviewKey)
-                }
-                expandedLineAnchor={expandedLineAnchor}
-                file={file}
-                reviewThreads={reviewThreads}
-                selected={selectedVisiblePath === file.path || activeFilePath === file.path}
-                viewed={viewedFileKeys.has(file.reviewKey)}
-                onOpenFile={() => void openRepositoryFile(file.path)}
-                onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
-                onSetViewed={(viewed) => onSetViewed(file.reviewKey, viewed)}
-                onToggleLine={toggleExpandedLine}
-                onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
+            <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
+              {sidebarTab === "walkthrough" ? (
+                <WalkthroughMainHeader
+                  activeStepComplete={activeStepComplete}
+                  step={activeWalkthroughStep}
+                  state={walkthroughState}
+                  onMarkComplete={markActiveWalkthroughStepComplete}
+                  onNextStep={() =>
+                    selectWalkthroughStep(
+                      activeWalkthrough === null
+                        ? activeWalkthroughStepIndex
+                        : Math.min(
+                            activeWalkthroughStepIndex + 1,
+                            activeWalkthroughSteps.length - 1,
+                          ),
+                    )
+                  }
+                  onRetry={() => void loadWalkthrough(false)}
+                />
+              ) : null}
+              <section
+                id="review-thread-summary"
+                className="bg-card scroll-mt-14 rounded-2xl border p-4 shadow-xs"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {reviewSubject.kind === "pullRequest" ? (
+                    <>
+                      <Badge variant="outline" className="text-caption">
+                        #{reviewSubject.pullRequest.number}
+                      </Badge>
+                      <PullRequestStateBadge
+                        className="text-caption"
+                        isDraft={reviewSubject.pullRequest.isDraft}
+                        state={reviewSubject.pullRequest.state}
+                      />
+                      <Badge variant="secondary" className="text-caption">
+                        @{reviewSubject.pullRequest.author.login}
+                      </Badge>
+                      {sidebarTab === "walkthrough" ? (
+                        <Badge
+                          variant="outline"
+                          className="text-caption"
+                          title="Walkthrough generated from PR metadata and diff only."
+                        >
+                          <Cloud className="size-3" />
+                          Diff-only
+                        </Badge>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <Badge variant="outline" className="text-caption">
+                        Local
+                      </Badge>
+                      {reviewSubject.localReview.branchName === null ? null : (
+                        <Badge variant="secondary" className="text-caption">
+                          <GitBranch className="size-3" />
+                          {reviewSubject.localReview.branchName}
+                        </Badge>
+                      )}
+                      {reviewSubject.localReview.comparison["_tag"] === "branch" ? (
+                        <Badge variant="outline" className="text-caption">
+                          vs {reviewSubject.localReview.comparison.branchName}
+                        </Badge>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+                  {reviewSubjectTitle(reviewSubject)}
+                </h1>
+                <div className="text-muted-foreground mt-2 grid gap-2 text-xs md:grid-cols-4">
+                  <Metric
+                    label="Files"
+                    value={String(parsedDiff?.files.length ?? fallbackFiles.length)}
+                  />
+                  {reviewSubject.kind === "pullRequest" ? (
+                    <>
+                      <Metric
+                        label="Commits"
+                        value={String(reviewSubject.pullRequest.commits.length)}
+                      />
+                      <Metric label="Head" value={shortSha(reviewSubject.pullRequest.headRefOid)} />
+                      <Metric label="Base" value={shortSha(reviewSubject.pullRequest.baseRefOid)} />
+                    </>
+                  ) : (
+                    <>
+                      <Metric label="Repo" value={reviewSubject.localReview.repoName} />
+                      <Metric label="Diff" value={shortSha(reviewSubject.localReview.headSha)} />
+                      <Metric label="Base" value={shortSha(reviewSubject.localReview.baseSha)} />
+                    </>
+                  )}
+                </div>
+                {reviewThreads.loading ? (
+                  <div className="text-muted-foreground mt-3 border-t pt-3 text-caption">
+                    Loading line comments...
+                  </div>
+                ) : null}
+              </section>
+
+              <ReviewThreadIndex
+                items={indexedThreadDetails}
+                loading={reviewThreads.loading}
+                error={reviewThreads.error}
+                onReload={reviewThreads.reload}
+                onSelect={selectIndexedThread}
               />
-            ))}
-          </main>
+              {parsedDiff === null ? <EmptyState>Loading diff...</EmptyState> : null}
+              {parsedDiff !== null &&
+              normalizedFileFilter.length === 0 &&
+              visibleChangedFiles.length === 0 ? (
+                <EmptyState>No changed files found.</EmptyState>
+              ) : null}
+              {parsedDiff !== null &&
+              normalizedFileFilter.length > 0 &&
+              visibleChangedFiles.length === 0 ? (
+                <EmptyState>No files match this filter.</EmptyState>
+              ) : null}
+              {visibleChangedFiles.map((file) => (
+                <OpenDiffCard
+                  key={file.reviewKey}
+                  diffOptions={reviewDiffOptions}
+                  expanded={
+                    sidebarTab === "walkthrough" && activeWalkthroughStep !== null
+                      ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
+                      : expandedFileKeys.has(file.reviewKey)
+                  }
+                  expandedLineAnchor={expandedLineAnchor}
+                  file={file}
+                  reviewThreads={reviewThreads}
+                  selected={selectedVisiblePath === file.path || activeFilePath === file.path}
+                  viewed={viewedFileKeys.has(file.reviewKey)}
+                  onOpenFile={() => void openRepositoryFile(file.path)}
+                  onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
+                  onSetViewed={(viewed) => onSetViewed(file.reviewKey, viewed)}
+                  onToggleLine={toggleExpandedLine}
+                  onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
+                />
+              ))}
+            </main>
+          </div>
         </div>
       </section>
       <CommandPaletteDialog
@@ -3465,6 +3571,17 @@ const PullRequestDetailView = ({
         onOpenChange={setActionPaletteOpen}
       />
     </>
+  )
+
+  return (
+    <WorkerPoolContextProvider
+      highlighterOptions={REVIEW_DIFF_HIGHLIGHTER_OPTIONS}
+      poolOptions={REVIEW_DIFF_WORKER_POOL_OPTIONS}
+    >
+      <VirtualizerContext.Provider value={diffVirtualizer}>
+        {reviewContent}
+      </VirtualizerContext.Provider>
+    </WorkerPoolContextProvider>
   )
 }
 
@@ -3511,6 +3628,7 @@ const WalkthroughSidebar = ({
   }
 
   const steps = walkthroughReviewSteps(state.stored.walkthrough)
+  const generation = state.stored.walkthrough.generation
 
   return (
     <div className="space-y-4 px-3 py-2 text-xs">
@@ -3520,6 +3638,22 @@ const WalkthroughSidebar = ({
         </div>
         <p className="text-review-sidebar-muted leading-5">{state.stored.walkthrough.summary}</p>
       </div>
+
+      {generation?.mode === "sampled-tree" ? (
+        <div
+          data-sampled-walkthrough-notice
+          className="border-review-sidebar-divider bg-review-sidebar-control rounded-xl border px-3 py-2.5"
+        >
+          <div className="text-review-sidebar-fg font-semibold">Sampled walkthrough</div>
+          <p className="text-review-sidebar-muted mt-1 leading-5">
+            This review is unusually large. DiffDash analyzed{" "}
+            {generation.analyzedFiles.toLocaleString()} of {generation.totalFiles.toLocaleString()}{" "}
+            changed files across {generation.analyzedFolders.toLocaleString()} of{" "}
+            {generation.totalFolders.toLocaleString()} folders. Use the file tree to inspect every
+            change.
+          </p>
+        </div>
+      ) : null}
 
       <div className="border-review-sidebar-divider border-t pt-3">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -3854,6 +3988,7 @@ const WalkthroughSettingsMenuItem = ({
 
 const aiSettingsWithProvider = (settings: AISettings, provider: AIProvider) =>
   AISettings.make({
+    appearance: settings.appearance,
     provider,
     models: aiProviderModelsFromSettings(settings),
     telemetryEnabled: settings.telemetryEnabled,
@@ -3865,6 +4000,7 @@ const aiSettingsWithModel = (
 ) => {
   if (settings.provider === "auto" && isAutoModel(model)) {
     return AISettings.make({
+      appearance: settings.appearance,
       provider: settings.provider,
       telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
@@ -3878,6 +4014,7 @@ const aiSettingsWithModel = (
 
   if (settings.provider === "claude" && isClaudeModel(model)) {
     return AISettings.make({
+      appearance: settings.appearance,
       provider: settings.provider,
       telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
@@ -3891,6 +4028,7 @@ const aiSettingsWithModel = (
 
   if (settings.provider === "opencode" && isOpenCodeModel(model)) {
     return AISettings.make({
+      appearance: settings.appearance,
       provider: settings.provider,
       telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
@@ -3904,6 +4042,7 @@ const aiSettingsWithModel = (
 
   if (isCodexModel(model)) {
     return AISettings.make({
+      appearance: settings.appearance,
       provider: settings.provider,
       telemetryEnabled: settings.telemetryEnabled,
       models: AIProviderModels.make({
@@ -4169,7 +4308,6 @@ const fileNameFromPath = (path: string) => {
 
 const OpenDiffCard = ({
   diffOptions,
-  diffRenderPass,
   expanded,
   expandedLineAnchor,
   file,
@@ -4183,7 +4321,6 @@ const OpenDiffCard = ({
   onToggleExpanded,
 }: {
   readonly diffOptions: FileDiffOptions<ReviewThreadAnnotation>
-  readonly diffRenderPass: number
   readonly expanded: boolean
   readonly expandedLineAnchor: ReviewThreadAnchor | null
   readonly file: ParsedDiffFile
@@ -4196,27 +4333,49 @@ const OpenDiffCard = ({
   readonly onToggleLine: (anchor: ReviewThreadAnchor) => void
   readonly onToggleExpanded: () => void
 }) => {
+  const [renderedPatch, setRenderedPatch] = useState<string | null>(null)
+  const diffReady = renderedPatch === file.patch
+  const renderAsPlainText = isVeryLargeDiffFile(file)
   const isExpanded = expanded && !viewed
-  const annotations = reviewThreadAnnotations(file, reviewThreads.details, expandedLineAnchor)
-  const interactiveDiffOptions: FileDiffOptions<ReviewThreadAnnotation> = {
-    ...diffOptions,
-    onGutterUtilityClick: ({ side, start }) => {
-      if (side === undefined) return
-      const anchor = lineReviewAnchor(file, side, start)
-      if (anchor !== null) onToggleLine(anchor)
-    },
-    onLineClick: ({ annotationSide, event, lineNumber, numberColumn }) => {
-      if (numberColumn) return
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-review-thread-annotation]") !== null
-      ) {
-        return
-      }
-      const anchor = lineReviewAnchor(file, annotationSide, lineNumber)
-      if (anchor !== null) onToggleLine(anchor)
-    },
-  }
+  const annotations = useMemo(
+    () => reviewThreadAnnotations(file, reviewThreads.details, expandedLineAnchor),
+    [expandedLineAnchor, file, reviewThreads.details],
+  )
+  const onGutterUtilityClick = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onGutterUtilityClick"]>
+  >(({ side, start }) => {
+    if (side === undefined) return
+    const anchor = lineReviewAnchor(file, side, start)
+    if (anchor !== null) onToggleLine(anchor)
+  })
+  const onLineClick = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onLineClick"]>
+  >(({ annotationSide, event, lineNumber, numberColumn }) => {
+    if (numberColumn) return
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-review-thread-annotation]") !== null
+    ) {
+      return
+    }
+    const anchor = lineReviewAnchor(file, annotationSide, lineNumber)
+    if (anchor !== null) onToggleLine(anchor)
+  })
+  const onPostRender = useStableCallback<
+    NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
+  >((_node, _instance, phase) => {
+    if (phase !== "unmount") setRenderedPatch(file.patch)
+  })
+  const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewThreadAnnotation>>(
+    () => ({
+      ...diffOptions,
+      ...(renderAsPlainText ? { tokenizeMaxLength: 0 } : {}),
+      onGutterUtilityClick,
+      onLineClick,
+      onPostRender,
+    }),
+    [diffOptions, onGutterUtilityClick, onLineClick, onPostRender, renderAsPlainText],
+  )
   const selectedClassName = viewed
     ? "border-review-success/55 bg-review-success/[0.03] ring-1 ring-review-success/25"
     : selected
@@ -4256,6 +4415,7 @@ const OpenDiffCard = ({
     <section
       id={diffCardDomId(file.reviewKey)}
       data-diff-card-path={file.path}
+      data-diff-render-mode={renderAsPlainText ? "plain" : "highlighted"}
       className={`bg-card scroll-mt-14 overflow-hidden rounded-2xl border shadow-xs ${selectedClassName}`}
     >
       <DiffCardHeader
@@ -4269,11 +4429,13 @@ const OpenDiffCard = ({
       />
       {isExpanded ? (
         <>
-          <div className="bg-background -mt-px overflow-hidden border-t">
+          <div
+            aria-busy={!diffReady}
+            className="bg-background relative -mt-px overflow-hidden border-t"
+          >
+            {diffReady ? null : <DiffLoadingSkeleton />}
             <PatchDiff<ReviewThreadAnnotation>
-              key={`${file.reviewKey}:${diffRenderPass}`}
-              className="block overflow-auto text-xs"
-              disableWorkerPool
+              className="block text-xs"
               lineAnnotations={annotations}
               metrics={REVIEW_DIFF_METRICS}
               options={interactiveDiffOptions}
@@ -4353,6 +4515,19 @@ const OpenDiffCard = ({
     </section>
   )
 }
+
+const DiffLoadingSkeleton = () => (
+  <div
+    data-diff-loading-skeleton
+    aria-hidden="true"
+    className="bg-background pointer-events-none absolute inset-x-0 top-0 z-10 space-y-2 px-3 py-3"
+  >
+    <div className="bg-muted h-3 w-3/4 rounded-sm" />
+    <div className="bg-muted h-3 w-11/12 rounded-sm" />
+    <div className="bg-muted h-3 w-2/3 rounded-sm" />
+    <div className="bg-muted h-3 w-4/5 rounded-sm" />
+  </div>
+)
 
 type ReviewThreadAnnotation = {
   readonly anchor: ReviewThreadAnchor
@@ -4764,7 +4939,7 @@ const reviewThreadScope = (reviewSubject: ReviewSubject) =>
       } as const)
     : ({
         kind: "local",
-        rootPath: reviewSubject.localReview.rootPath,
+        target: localReviewTargetFromDetail(reviewSubject.localReview),
         baseRevision: reviewSubject.localReview.baseSha,
         headRevision: reviewSubject.localReview.headSha,
       } as const)
@@ -4790,7 +4965,14 @@ const reviewSubjectHeadSha = (reviewSubject: ReviewSubject) =>
 const reviewSubjectIdentity = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"
     ? `pr:${reviewSubject.pullRequest.repoOwner}/${reviewSubject.pullRequest.repoName}#${reviewSubject.pullRequest.number}`
-    : `local:${reviewSubject.localReview.rootPath}`
+    : `local:${localReviewTargetKey(localReviewTargetFromDetail(reviewSubject.localReview))}`
+
+const localReviewTargetFromDetail = (detail: LocalReviewDetail) =>
+  LocalReviewTarget.make({
+    kind: "local",
+    rootPath: detail.rootPath,
+    comparison: detail.comparison,
+  })
 
 const reviewSubjectRepositoryLabel = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"
@@ -4808,32 +4990,13 @@ const matchesReviewFileFilter = (file: ParsedDiffFile, normalizedFilter: string)
   file.path.toLowerCase().includes(normalizedFilter) ||
   (file.oldPath?.toLowerCase().includes(normalizedFilter) ?? false)
 
-const THEME_OPTIONS: readonly {
-  readonly icon: typeof Sun
-  readonly label: string
-  readonly value: ThemePreference
-}[] = [
-  { icon: Sun, label: "light", value: "light" },
-  { icon: Moon, label: "dark", value: "dark" },
-  { icon: Monitor, label: "system", value: "system" },
-]
-
-const readStoredTheme = (): ThemePreference => {
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
-  return stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
-}
-
-const resolveThemePreference = (preference: ThemePreference): ResolvedTheme => {
+const resolveThemePreference = (preference: Appearance): ResolvedTheme => {
   if (preference !== "system") return preference
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
 }
 
-const reviewDiffOptionsForTheme = (
-  theme: ResolvedTheme,
-): FileDiffOptions<ReviewThreadAnnotation> => ({
-  ...REVIEW_DIFF_OPTIONS,
-  themeType: theme,
-})
+const reviewDiffOptionsForTheme = (theme: ResolvedTheme): FileDiffOptions<ReviewThreadAnnotation> =>
+  REVIEW_DIFF_OPTIONS_BY_THEME[theme]
 
 const isModKey = (event: KeyboardEvent) => event.metaKey || event.ctrlKey
 
@@ -5101,6 +5264,9 @@ const formatError = (error: unknown, fallback: string) => {
 const cleanErrorMessage = (message: string, fallback: string) => {
   const missingCommand = /spawn\s+([^\s]+)\s+ENOENT/.exec(message)
   if (missingCommand?.[1]) return `${fallback}: ${missingCommand[1]} was not found.`
+
+  const structuredReason = /"reason"\s*:\s*"([^"]+)"/.exec(message)
+  if (structuredReason?.[1]) return `${fallback}: ${structuredReason[1]}`
 
   const taggedError = /\)\s+\w+Error:\s+([^{}\n]+)/.exec(message)
   if (taggedError?.[1]) return taggedError[1].trim()

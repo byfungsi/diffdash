@@ -8,7 +8,7 @@ import {
   PullRequestFile,
   ReviewActor,
 } from "../../shared/domain"
-import type { WalkthroughHunkDigest } from "../../shared/walkthrough"
+import { WalkthroughGenerationDetails, type WalkthroughHunkDigest } from "../../shared/walkthrough"
 import { AIAgent, type AIAgentReasoningEffort } from "./ai-agent"
 import { WalkthroughService } from "./walkthrough"
 
@@ -52,6 +52,7 @@ const pullRequest = PullRequestDetail.make({
 })
 
 const generationInput = {
+  changedFileTree: "",
   diff: `diff --git a/src/app.tsx b/src/app.tsx
 --- a/src/app.tsx
 +++ b/src/app.tsx
@@ -76,6 +77,13 @@ const generationInput = {
       synthetic: false,
     },
   ] satisfies readonly WalkthroughHunkDigest[],
+  generation: WalkthroughGenerationDetails.make({
+    mode: "standard",
+    totalFiles: 2,
+    analyzedFiles: 2,
+    totalFolders: 1,
+    analyzedFolders: 1,
+  }),
   review: { kind: "pullRequest" as const, pullRequest },
 }
 
@@ -187,6 +195,7 @@ describe("WalkthroughService", () => {
       expect(walkthrough.chapters[0]?.stops[0]?.hunkIds).toEqual(["src/app.tsx:pull-request:51:h1"])
       expect(walkthrough.support.map((item) => item.title)).toEqual(["Other changes"])
       expect(walkthrough.support[0]?.hunkIds).toEqual(["src/service.ts:pull-request:51:h1"])
+      expect(walkthrough.generation?.mode).toBe("standard")
       expect(calls).toHaveLength(1)
       expect(calls[0]?.cwd).toBeUndefined()
       expect(calls[0]?.prompt).toContain("Return JSON only")
@@ -299,6 +308,33 @@ describe("WalkthroughService", () => {
       expect(calls[0]?.prompt).toContain('"omittedFiles":2')
       expect(calls[0]?.prompt).toContain("new bounded excerpt")
       expect(calls[0]?.prompt).not.toContain("pnpm-lock.yaml")
+    }),
+  )
+
+  it.effect("uses the changed file tree for sampled walkthrough generation", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = makeLayer([validOutput])
+      const generation = WalkthroughGenerationDetails.make({
+        mode: "sampled-tree",
+        totalFiles: 120,
+        analyzedFiles: 4,
+        totalFolders: 8,
+        analyzedFolders: 4,
+      })
+
+      const result = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate({
+          ...generationInput,
+          changedFileTree: "src/auth (60 files, +600 -200)\nsrc/billing (60 files, +400 -100)",
+          generation,
+        })
+      }).pipe(Effect.provide(layer))
+
+      expect(calls[0]?.prompt).toContain("sampled-tree walkthrough")
+      expect(calls[0]?.prompt).toContain("src/auth (60 files")
+      expect(calls[0]?.prompt).toContain("representative samples")
+      expect(result.generation).toEqual(generation)
     }),
   )
 })

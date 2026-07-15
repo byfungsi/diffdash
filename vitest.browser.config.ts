@@ -4,6 +4,12 @@ import { resolve } from "node:path"
 import { defineConfig } from "vitest/config"
 
 export default defineConfig({
+  worker: {
+    format: "es",
+  },
+  optimizeDeps: {
+    include: ["@pierre/diffs/worker/worker.js"],
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

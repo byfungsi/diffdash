@@ -9,6 +9,12 @@ import {
   PullRequestFile,
   type DetectedRepositoryCheckout,
 } from "../../shared/domain"
+import {
+  BranchComparison,
+  type LocalReviewComparison,
+  LocalReviewTarget,
+  workingTreeReviewTarget,
+} from "../../shared/local-review"
 import { LocalReviewSnapshot } from "../../shared/review-context"
 import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
 import { CliService, type CliError } from "./cli"
@@ -23,6 +29,18 @@ export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChang
   },
 ) {}
 
+/** A requested local comparison branch could not be resolved safely. */
+export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTargetError>()(
+  "LocalReviewTargetError",
+  {
+    operation: Schema.String,
+    reason: Schema.String,
+    cause: Schema.NullOr(Schema.Defect),
+  },
+) {}
+
+type LocalReviewInput = string | LocalReviewTarget
+
 /** Main-process service for local Git repository inspection. */
 export class GitService extends Context.Tag("@diffdash/GitService")<
   GitService,
@@ -32,10 +50,18 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
     ) => Effect.Effect<DetectedRepositoryCheckout, CliError>
     readonly detectRoot: (localPath: string) => Effect.Effect<string, CliError>
     readonly currentBranch: (localPath: string) => Effect.Effect<string, CliError>
-    readonly getLocalReviewDetail: (localPath: string) => Effect.Effect<LocalReviewDetail, CliError>
-    readonly getLocalReviewDiff: (localPath: string) => Effect.Effect<LocalReviewDiff, CliError>
-    readonly getLocalReviewSnapshot: (
+    readonly resolveBranchComparison: (
       localPath: string,
+      branchName: string | null,
+    ) => Effect.Effect<LocalReviewTarget, CliError | LocalReviewTargetError>
+    readonly getLocalReviewDetail: (
+      target: LocalReviewInput,
+    ) => Effect.Effect<LocalReviewDetail, CliError>
+    readonly getLocalReviewDiff: (
+      target: LocalReviewInput,
+    ) => Effect.Effect<LocalReviewDiff, CliError>
+    readonly getLocalReviewSnapshot: (
+      target: LocalReviewInput,
     ) => Effect.Effect<LocalReviewSnapshot, CliError | LocalReviewChangedError>
   }
 >() {
@@ -53,11 +79,63 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         return branch.stdout.trim()
       })
 
-      const getLocalReviewDiff = Effect.fn("GitService.getLocalReviewDiff")(function* (
+      const canonicalTarget = Effect.fn("GitService.canonicalTarget")(function* (
+        input: LocalReviewInput,
+      ) {
+        const target = typeof input === "string" ? workingTreeReviewTarget(input) : input
+        const rootPath = yield* detectRoot(target.rootPath)
+        return LocalReviewTarget.make({ ...target, rootPath })
+      })
+
+      const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
         localPath: string,
+        requestedBranchName: string | null,
       ) {
         const rootPath = yield* detectRoot(localPath)
-        const baseSha = yield* currentHeadSha(rootPath).pipe(Effect.provideService(CliService, cli))
+        const checkedOutBranch = yield* currentBranch(rootPath)
+        const branchName = yield* requestedBranchName === null
+          ? defaultOriginBranch(rootPath).pipe(Effect.provideService(CliService, cli))
+          : validateBranchName(rootPath, requestedBranchName).pipe(
+              Effect.provideService(CliService, cli),
+            )
+        const baseRef =
+          checkedOutBranch === branchName
+            ? `refs/heads/${branchName}`
+            : `refs/remotes/origin/${branchName}`
+
+        if (checkedOutBranch !== branchName) {
+          yield* cli.run(
+            "git",
+            [
+              "-C",
+              rootPath,
+              "fetch",
+              "--no-tags",
+              "origin",
+              `+refs/heads/${branchName}:${baseRef}`,
+            ],
+            { timeoutMs: 60_000 },
+          )
+        }
+        const baseSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
+          Effect.provideService(CliService, cli),
+        )
+
+        return LocalReviewTarget.make({
+          kind: "local",
+          rootPath,
+          comparison: BranchComparison.make({ branchName, baseRef, baseSha }),
+        })
+      })
+
+      const getLocalReviewDiff = Effect.fn("GitService.getLocalReviewDiff")(function* (
+        input: LocalReviewInput,
+      ) {
+        const target = yield* canonicalTarget(input)
+        const rootPath = target.rootPath
+        const baseSha = yield* localReviewBaseSha(target).pipe(
+          Effect.provideService(CliService, cli),
+        )
         const trackedDiff = yield* localTrackedDiff(rootPath, baseSha).pipe(
           Effect.provideService(CliService, cli),
         )
@@ -65,10 +143,11 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
           Effect.provideService(CliService, cli),
         )
         const diff = joinDiffSections([trackedDiff, untrackedDiff])
-        const diffHash = createHash("sha256").update(diff).digest("hex")
+        const diffHash = localDiffHash(target.comparison, baseSha ?? EMPTY_TREE_SHA, diff)
 
         return LocalReviewDiff.make({
           rootPath,
+          comparison: target.comparison,
           baseSha: baseSha ?? EMPTY_TREE_SHA,
           headSha: diffHash,
           diffHash,
@@ -78,12 +157,13 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
       })
 
       const getLocalReviewSnapshot = Effect.fn("GitService.getLocalReviewSnapshot")(function* (
-        localPath: string,
+        input: LocalReviewInput,
       ) {
+        const target = yield* canonicalTarget(input)
         let diff: LocalReviewDiff | null = null
         for (let attempt = 1; attempt <= 2; attempt += 1) {
-          const before = yield* getLocalReviewDiff(localPath)
-          const after = yield* getLocalReviewDiff(before.rootPath)
+          const before = yield* getLocalReviewDiff(target)
+          const after = yield* getLocalReviewDiff(target)
           if (
             before.rootPath === after.rootPath &&
             before.baseSha === after.baseSha &&
@@ -94,8 +174,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
           }
         }
         if (diff === null) {
-          const rootPath = yield* detectRoot(localPath)
-          return yield* LocalReviewChangedError.make({ rootPath })
+          return yield* LocalReviewChangedError.make({ rootPath: target.rootPath })
         }
         const branchName = yield* currentBranch(diff.rootPath).pipe(
           Effect.map((branch) => (branch.length === 0 ? null : branch)),
@@ -105,9 +184,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         const detail = localReviewDetail(diff, branchName)
 
         return LocalReviewSnapshot.make({
-          reviewKey: ReviewKey.make(
-            `local:${createHash("sha256").update(diff.rootPath).digest("hex")}`,
-          ),
+          reviewKey: ReviewKey.make(localReviewKey(diff.rootPath, diff.comparison)),
           baseRevision: ReviewRevision.make(diff.baseSha),
           headRevision: ReviewRevision.make(diff.headSha),
           detail,
@@ -127,9 +204,10 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         }),
         detectRoot,
         currentBranch,
-        getLocalReviewDetail: (localPath) =>
+        resolveBranchComparison,
+        getLocalReviewDetail: (input) =>
           Effect.gen(function* () {
-            const diff = yield* getLocalReviewDiff(localPath)
+            const diff = yield* getLocalReviewDiff(input)
             const branchName = yield* currentBranch(diff.rootPath).pipe(
               Effect.map((branch) => (branch.length === 0 ? null : branch)),
               Effect.catchAll(() => Effect.succeed(null)),
@@ -150,6 +228,78 @@ const currentHeadSha = (rootPath: string) =>
       Effect.map((result) => result.stdout.trim()),
       Effect.catchAll(() => Effect.succeed(null)),
     )
+  })
+
+const resolveCommitSha = (rootPath: string, ref: string) =>
+  Effect.gen(function* () {
+    const cli = yield* CliService
+    const result = yield* cli.run("git", [
+      "-C",
+      rootPath,
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `${ref}^{commit}`,
+    ])
+    return result.stdout.trim()
+  })
+
+const localReviewBaseSha = (target: LocalReviewTarget) =>
+  target.comparison["_tag"] === "workingTree"
+    ? currentHeadSha(target.rootPath)
+    : Effect.succeed(target.comparison.baseSha)
+
+const validateBranchName = (rootPath: string, requestedBranchName: string) =>
+  Effect.gen(function* () {
+    const cli = yield* CliService
+    const branchName = requestedBranchName.startsWith("origin/")
+      ? requestedBranchName.slice("origin/".length)
+      : requestedBranchName
+    if (branchName.length === 0) {
+      return yield* LocalReviewTargetError.make({
+        operation: "branch.validate",
+        reason: "Branch name cannot be empty",
+        cause: null,
+      })
+    }
+    yield* cli.run("git", ["-C", rootPath, "check-ref-format", "--branch", branchName])
+    return branchName
+  })
+
+const defaultOriginBranch = (rootPath: string) =>
+  Effect.gen(function* () {
+    const cli = yield* CliService
+    const local = yield* cli
+      .run("git", [
+        "-C",
+        rootPath,
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+      ])
+      .pipe(Effect.option)
+    if (local["_tag"] === "Some") {
+      const branchName = local.value.stdout.trim().replace(/^origin\//, "")
+      if (branchName.length > 0) return yield* validateBranchName(rootPath, branchName)
+    }
+
+    const remote = yield* cli.run(
+      "git",
+      ["-C", rootPath, "ls-remote", "--symref", "origin", "HEAD"],
+      {
+        timeoutMs: 30_000,
+      },
+    )
+    const match = /^ref:\s+refs\/heads\/([^\t\n]+)\s+HEAD$/m.exec(remote.stdout)
+    if (match?.[1] === undefined) {
+      return yield* LocalReviewTargetError.make({
+        operation: "branch.default",
+        reason: "Could not determine the default branch for origin",
+        cause: null,
+      })
+    }
+    return yield* validateBranchName(rootPath, match[1])
   })
 
 const localTrackedDiff = (rootPath: string, baseSha: string | null) =>
@@ -207,10 +357,14 @@ const localReviewDetail = (diff: LocalReviewDiff, branchName: string | null) => 
     rootPath: diff.rootPath,
     repoName,
     branchName,
+    comparison: diff.comparison,
     baseSha: diff.baseSha,
     headSha: diff.headSha,
     diffHash: diff.diffHash,
-    title: "Local changes",
+    title:
+      diff.comparison["_tag"] === "workingTree"
+        ? "Local changes"
+        : `Changes vs ${diff.comparison.branchName}`,
     files: parsedDiff.files.map((file) =>
       PullRequestFile.make({
         path: file.path,
@@ -221,4 +375,19 @@ const localReviewDetail = (diff: LocalReviewDiff, branchName: string | null) => 
     ),
     fetchedAt: diff.fetchedAt,
   })
+}
+
+const localDiffHash = (comparison: LocalReviewComparison, baseSha: string, diff: string) => {
+  const hash = createHash("sha256")
+  if (comparison["_tag"] === "branch") {
+    hash.update("branch\0").update(comparison.baseRef).update("\0").update(baseSha).update("\0")
+  }
+  return hash.update(diff).digest("hex")
+}
+
+const localReviewKey = (rootPath: string, comparison: LocalReviewComparison) => {
+  const rootHash = createHash("sha256").update(rootPath).digest("hex")
+  if (comparison["_tag"] === "workingTree") return `local:${rootHash}`
+  const refHash = createHash("sha256").update(comparison.baseRef).digest("hex")
+  return `local:${rootHash}:base:${refHash}`
 }

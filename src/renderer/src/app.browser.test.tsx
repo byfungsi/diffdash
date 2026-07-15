@@ -1,8 +1,15 @@
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { DiffDashApi } from "../../../electron/preload"
+import type { DiffDashApi } from "../../shared/diffdash-api"
 import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
 import type { AppState } from "../../shared/app-state"
+import {
+  LinkRepositoryCommand,
+  OpenBranchDiffCommand,
+  OpenPullRequestCommand,
+  OpenWorkingTreeCommand,
+  type CliNavigationCommand,
+} from "../../shared/cli-navigation"
 import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
@@ -10,6 +17,7 @@ import {
   type AppUpdateState,
   AppUpdateUnsupported,
 } from "../../shared/app-update"
+import { parseUnifiedDiff } from "../../shared/diff-parser"
 import {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -25,13 +33,22 @@ import {
 } from "../../shared/domain"
 import { AppPrerequisites } from "../../shared/prerequisites"
 import {
+  BranchComparison,
+  LocalReviewTarget,
+  workingTreeReviewTarget,
+} from "../../shared/local-review"
+import { LocalReviewSnapshot } from "../../shared/review-context"
+import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+import {
   StoredWalkthrough,
   Walkthrough,
   WalkthroughChapter,
+  WalkthroughGenerationDetails,
   WalkthroughStop,
   WalkthroughSupportItem,
 } from "../../shared/walkthrough"
 import { App, prepareReviewFileTreeInput } from "./app"
+import "./styles.css"
 
 const repo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",
@@ -133,6 +150,57 @@ index 5555555..6666666 100644
   repoOwner: "fungsi",
 })
 
+const makeLargeDiffFixture = (lineCount: number, number = 52) => {
+  const changedLines = Array.from(
+    { length: lineCount },
+    (_, index) => `-const value${index + 1} = "before"\n+const value${index + 1} = "after"`,
+  ).join("\n")
+  const largePath = "src/generated-large.ts"
+  const tailPath = "src/tail.ts"
+  const largePullRequest = PullRequestSummary.make({
+    ...pullRequest,
+    number,
+    title: "Large diff virtualization",
+  })
+  const largeDetail = PullRequestDetail.make({
+    ...largePullRequest,
+    commits: [],
+    files: [
+      PullRequestFile.make({
+        additions: lineCount,
+        changeType: "modified",
+        deletions: lineCount,
+        path: largePath,
+      }),
+      PullRequestFile.make({
+        additions: 1,
+        changeType: "modified",
+        deletions: 1,
+        path: tailPath,
+      }),
+    ],
+  })
+  const largeDiff = PullRequestDiff.make({
+    ...diff,
+    diff: `diff --git a/${largePath} b/${largePath}
+index 1111111..2222222 100644
+--- a/${largePath}
++++ b/${largePath}
+@@ -1,${lineCount} +1,${lineCount} @@
+${changedLines}
+diff --git a/${tailPath} b/${tailPath}
+index 3333333..4444444 100644
+--- a/${tailPath}
++++ b/${tailPath}
+@@ -1,1 +1,1 @@
+-tail before
++tail after`,
+    number: largePullRequest.number,
+  })
+
+  return { largeDetail, largeDiff, largePath, largePullRequest, tailPath }
+}
+
 const localReview = LocalReviewDetail.make({
   baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   branchName: "feature/local-review",
@@ -204,6 +272,20 @@ const walkthrough = StoredWalkthrough.make({
         title: "Documentation",
       }),
     ],
+  }),
+})
+
+const sampledWalkthrough = StoredWalkthrough.make({
+  ...walkthrough,
+  walkthrough: Walkthrough.make({
+    ...walkthrough.walkthrough,
+    generation: WalkthroughGenerationDetails.make({
+      mode: "sampled-tree",
+      totalFiles: 1_000,
+      analyzedFiles: 42,
+      totalFolders: 45,
+      analyzedFolders: 31,
+    }),
   }),
 })
 
@@ -290,7 +372,6 @@ afterEach(() => {
   root?.unmount()
   root = null
   vi.restoreAllMocks()
-  window.localStorage.clear()
   document.documentElement.classList.remove("dark")
   document.documentElement.style.colorScheme = ""
   document.body.replaceChildren()
@@ -309,6 +390,19 @@ describe("App browser interactions", () => {
       "src/main/services/database.ts",
       "web/landing/src/App.tsx",
     ])
+  })
+
+  it("applies the configured appearance without rendering a theme selector", async () => {
+    installDiffDashApi({
+      settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, appearance: "dark" }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.documentElement.classList.contains("dark")).toBe(true)
+      expect(document.documentElement.style.colorScheme).toBe("dark")
+    })
+    expect(document.querySelector('button[aria-label^="Use "][aria-label$=" theme"]')).toBeNull()
   })
 
   it("shows first-run onboarding and lets the user continue", async () => {
@@ -565,6 +659,35 @@ describe("App browser interactions", () => {
     expect(calls.getWalkthrough).not.toHaveBeenCalled()
   })
 
+  it("explains sampled coverage for unusually large walkthroughs", async () => {
+    installDiffDashApi({ walkthrough: sampledWalkthrough })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Opened PR #51")
+    })
+    const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Walkthrough",
+    )
+    walkthroughTab?.click()
+
+    await vi.waitFor(() => {
+      expect(document.querySelector("[data-sampled-walkthrough-notice]")).not.toBeNull()
+      expect(document.body.textContent).toContain("Sampled walkthrough")
+      expect(document.body.textContent).toContain("analyzed 42 of 1,000 changed files")
+      expect(document.body.textContent).toContain("31 of 45 folders")
+      expect(document.body.textContent).toContain("Use the file tree to inspect every change")
+    })
+  })
+
   it("does not render or query stale local-provider favorites", async () => {
     const calls = installDiffDashApi({ repositories: [repo, staleLocalFavoriteRepo] })
     renderApp()
@@ -665,6 +788,71 @@ describe("App browser interactions", () => {
     })
   })
 
+  it("opens a repository PR list from the CLI command", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openPullRequest(null, "/workspace/diffdash")
+
+    await vi.waitFor(() => {
+      expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
+      expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    })
+  })
+
+  it("opens a numbered PR from the CLI command", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openPullRequest(51, "/workspace/diffdash")
+
+    await vi.waitFor(() => {
+      expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
+      expect(document.body.textContent).toContain("Opened PR #51")
+    })
+  })
+
+  it("shows the actionable repository reason for a failed PR CLI command", async () => {
+    const calls = installDiffDashApi()
+    calls.installRepository.mockRejectedValueOnce(
+      new Error(
+        `repositories:install failed: (FiberFailure) RepositoryLinkError: { "operation": "detectRepository", "reason": "Select a Git repository with a GitHub origin.", "cause": {} } at internal stack`,
+      ),
+    )
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openPullRequest(3, "/workspace/diffdash")
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Could not open repository pull requests: Select a Git repository with a GitHub origin.",
+      )
+      expect(document.body.textContent).not.toContain("internal stack")
+    })
+  })
+
+  it("opens a fetched branch comparison from the diff CLI command", async () => {
+    const calls = installDiffDashApi()
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openBranchDiff("dev")
+
+    await vi.waitFor(() => {
+      expect(calls.resolveBranch).toHaveBeenCalledWith(localReview.rootPath, "dev")
+      expect(calls.getLocalReviewDetail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          comparison: expect.objectContaining({ branchName: "dev" }),
+        }),
+      )
+      expect(document.body.textContent).toContain("Changes vs dev")
+      expect(document.body.textContent).toContain("vs dev")
+    })
+  })
+
   it("keeps a file-tree selection stable while the diff pane scrolls", async () => {
     installDiffDashApi()
     renderApp()
@@ -726,6 +914,125 @@ describe("App browser interactions", () => {
     expect(scrollTo).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps large diffs in memory while virtualizing their rendered lines", async () => {
+    const lineCount = 3_000
+    const fixture = makeLargeDiffFixture(lineCount)
+    installDiffDashApi({
+      pullRequestDetail: fixture.largeDetail,
+      pullRequestDiff: fixture.largeDiff,
+      reviewRequests: [fixture.largePullRequest],
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #52"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual([fixture.largePath, fixture.tailPath])
+      expect(getChangedFilesTreeItem(fixture.tailPath)).not.toBeNull()
+      expect(getMountedDiffLineCount()).toBeGreaterThan(0)
+    })
+
+    const initialMountedLineCount = getMountedDiffLineCount()
+    expect(initialMountedLineCount).toBeLessThan(500)
+    const largeDiffElement = document.querySelector(
+      `[data-diff-card-path="${fixture.largePath}"] diffs-container`,
+    )
+    expect(largeDiffElement).not.toBeNull()
+    expect(
+      document
+        .querySelector(`[data-diff-card-path="${fixture.largePath}"]`)
+        ?.getAttribute("data-diff-render-mode"),
+    ).toBe("highlighted")
+    await new Promise((resolve) => window.setTimeout(resolve, 300))
+    expect(
+      document.querySelector(`[data-diff-card-path="${fixture.largePath}"] diffs-container`),
+    ).toBe(largeDiffElement)
+
+    const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const tailTreeItem = getChangedFilesTreeItem(fixture.tailPath)
+    expect(diffPane).not.toBeNull()
+    expect(tailTreeItem).not.toBeNull()
+    const scrollTo = diffPane === null ? null : vi.spyOn(diffPane, "scrollTo")
+    tailTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+
+    await vi.waitFor(() => {
+      expect(
+        document.querySelector(`[data-selected-review-path="${fixture.tailPath}"]`),
+      ).not.toBeNull()
+      expect(scrollTo).toHaveBeenCalledTimes(1)
+    })
+    scrollTo?.mockRestore()
+    if (diffPane !== null) {
+      diffPane.scrollTo({ behavior: "instant", top: diffPane.scrollHeight })
+    }
+    await vi.waitFor(
+      () => {
+        const tailCard = document.querySelector<HTMLElement>(
+          `[data-diff-card-path="${fixture.tailPath}"]`,
+        )
+        if (
+          diffPane !== null &&
+          tailCard !== null &&
+          tailCard.getBoundingClientRect().top > diffPane.getBoundingClientRect().bottom
+        ) {
+          diffPane.scrollTo({ behavior: "instant", top: diffPane.scrollHeight })
+        }
+        expect(getDiffShadowRoot(fixture.tailPath)?.textContent).toContain("tail after")
+      },
+      { timeout: 3_000 },
+    )
+    expect(getMountedDiffLineCount()).toBeLessThan(500)
+
+    const filterInput = document.querySelector<HTMLInputElement>(
+      'input[placeholder="Filter files"]',
+    )
+    expect(filterInput).not.toBeNull()
+    if (filterInput !== null) {
+      setInputValue(filterInput, "generated-large")
+      filterInput.dispatchEvent(new Event("input", { bubbles: true }))
+    }
+    await vi.waitFor(() => {
+      expect(getDiffCardPaths()).toEqual([fixture.largePath])
+    })
+  })
+
+  it("renders very large files without whole-file syntax highlighting", async () => {
+    const fixture = makeLargeDiffFixture(10_001, 53)
+    installDiffDashApi({
+      pullRequestDetail: fixture.largeDetail,
+      pullRequestDiff: fixture.largeDiff,
+      reviewRequests: [fixture.largePullRequest],
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Recent Review Requests")
+    })
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #53"),
+    )
+    reviewButton?.click()
+
+    await vi.waitFor(
+      () => {
+        expect(
+          document
+            .querySelector(`[data-diff-card-path="${fixture.largePath}"]`)
+            ?.getAttribute("data-diff-render-mode"),
+        ).toBe("plain")
+        expect(getMountedDiffLineCount()).toBeGreaterThan(0)
+        expect(getMountedDiffLineCount()).toBeLessThan(500)
+      },
+      { timeout: 5_000 },
+    )
+  })
+
   it("covers FUN-40/FUN-42/FUN-41/FUN-25/FUN-26 criteria from Home to Review", async () => {
     const calls = installDiffDashApi()
     renderApp()
@@ -736,15 +1043,6 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).not.toContain("Recently Reviewed")
       expect(document.body.textContent).toContain("Request review flow")
       expect(document.body.textContent).toContain("fungsi/diffdash #51")
-    })
-
-    const darkThemeButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Use dark theme"]',
-    )
-    expect(darkThemeButton).not.toBeNull()
-    darkThemeButton?.click()
-    await vi.waitFor(() => {
-      expect(document.documentElement.classList.contains("dark")).toBe(true)
     })
 
     const searchInput = document.querySelector<HTMLInputElement>(
@@ -812,6 +1110,12 @@ describe("App browser interactions", () => {
       expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
     })
 
+    await new Promise((resolve) => window.setTimeout(resolve, 100))
+    await vi.waitFor(() => {
+      const shadowRoot = getDiffShadowRoot("src/app.tsx")
+      expect(shadowRoot).not.toBeNull()
+      expect(shadowRoot === null ? null : getDiffLine(shadowRoot, "new")).not.toBeNull()
+    })
     const diffShadow = getDiffShadowRoot("src/app.tsx")
     expect(diffShadow).not.toBeNull()
     const addedLine = getDiffLine(diffShadow!, "new")
@@ -1196,9 +1500,11 @@ describe("App browser interactions", () => {
 
     calls.openLocalReview()
 
+    const localTarget = workingTreeReviewTarget(localReview.rootPath)
+
     await vi.waitFor(() => {
-      expect(calls.getLocalReviewDetail).toHaveBeenCalledWith(localReview.rootPath)
-      expect(calls.getLocalReviewDiff).toHaveBeenCalledWith(localReview.rootPath)
+      expect(calls.getLocalReviewDetail).toHaveBeenCalledWith(localTarget)
+      expect(calls.getLocalReviewDiff).toHaveBeenCalledWith(localTarget)
       expect(document.body.textContent).toContain("Local changes")
       expect(document.body.textContent).toContain("src/local.ts")
       expect(document.body.textContent).not.toContain("Approve")
@@ -1212,7 +1518,7 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(calls.getLocalWalkthrough).toHaveBeenCalledWith(
-        localReview.rootPath,
+        localTarget,
         localReview.baseSha,
         localReview.headSha,
       )
@@ -1269,6 +1575,12 @@ const getViewedCheckbox = (path: string) =>
 const getDiffShadowRoot = (path: string) =>
   document.querySelector(`[data-diff-card-path="${path}"] diffs-container`)?.shadowRoot ?? null
 
+const getMountedDiffLineCount = () =>
+  [...document.querySelectorAll("diffs-container")].reduce(
+    (count, element) => count + (element.shadowRoot?.querySelectorAll("[data-line]").length ?? 0),
+    0,
+  )
+
 const getDiffLine = (shadowRoot: ShadowRoot, content: string) =>
   [...shadowRoot.querySelectorAll<HTMLElement>("[data-line]")].find(
     (element) => element.textContent?.trim() === content,
@@ -1301,6 +1613,7 @@ const dispatchSideMouseButton = (button: number) => {
 
 const renderApp = () => {
   const rootElement = document.createElement("div")
+  rootElement.id = "root"
   document.body.append(rootElement)
   root = createRoot(rootElement)
   root.render(<App />)
@@ -1316,8 +1629,13 @@ const installDiffDashApi = (
     readonly appState?: AppState
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
+    readonly pullRequestDetail?: PullRequestDetail
+    readonly pullRequestDiff?: PullRequestDiff
     readonly repositories?: readonly Repo[]
+    readonly reviewRequests?: readonly PullRequestSummary[]
+    readonly settings?: AISettings
     readonly updateState?: AppUpdateState
+    readonly walkthrough?: StoredWalkthrough
   } = {},
 ) => {
   const viewedFileKeys = new Set<string>()
@@ -1328,16 +1646,44 @@ const installDiffDashApi = (
   const initialUpdateState =
     options.updateState ??
     AppUpdateUnsupported.make({ currentVersion: "0.1.4", reason: "development" })
-  let localReviewListener: ((rootPath: string) => void) | null = null
-  let repositoryLinkListener: ((rootPath: string) => void) | null = null
+  let commandsAvailableListener: (() => void) | null = null
+  let pendingCommands: CliNavigationCommand[] = []
   let updateStateListener: ((state: AppUpdateState) => void) | null = null
   let approved = false
+  const getLocalReviewDetail = vi.fn<(target: LocalReviewTarget) => Promise<LocalReviewDetail>>(
+    async (target) =>
+      LocalReviewDetail.make({
+        ...localReview,
+        comparison: target.comparison,
+        title:
+          target.comparison["_tag"] === "branch"
+            ? `Changes vs ${target.comparison.branchName}`
+            : "Local changes",
+      }),
+  )
+  const getLocalReviewDiff = vi.fn<(target: LocalReviewTarget) => Promise<LocalReviewDiff>>(
+    async (target) => LocalReviewDiff.make({ ...localDiff, comparison: target.comparison }),
+  )
+  const getLocalReviewSnapshot = vi.fn<DiffDashApi["localReviews"]["getSnapshot"]>(
+    async (target) => {
+      const localDetail = await getLocalReviewDetail(target)
+      const localReviewPatch = await getLocalReviewDiff(target)
+      return LocalReviewSnapshot.make({
+        reviewKey: ReviewKey.make(`local:${target.rootPath}`),
+        baseRevision: ReviewRevision.make(localReviewPatch.baseSha),
+        headRevision: ReviewRevision.make(localReviewPatch.headSha),
+        detail: localDetail,
+        diff: localReviewPatch,
+        parsedDiff: parseUnifiedDiff(localReviewPatch.diff),
+      })
+    },
+  )
   const calls = {
     captureAnalytics: vi.fn<DiffDashApi["analytics"]["capture"]>(async () => undefined),
     startAnalytics: vi.fn<DiffDashApi["analytics"]["start"]>(async () => undefined),
     generateWalkthrough: vi.fn<
       (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
-    >(async () => walkthrough),
+    >(async () => options.walkthrough ?? walkthrough),
     getWalkthrough: vi.fn<
       (
         owner: string,
@@ -1346,10 +1692,10 @@ const installDiffDashApi = (
         baseSha: string,
         headSha: string,
       ) => Promise<StoredWalkthrough | null>
-    >(async () => walkthrough),
+    >(async () => options.walkthrough ?? walkthrough),
     regenerateWalkthrough: vi.fn<
       (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
-    >(async () => walkthrough),
+    >(async () => options.walkthrough ?? walkthrough),
     updateSettings: vi.fn<(settings: AISettings) => Promise<AISettings>>(async (settings) =>
       plainAISettings(settings),
     ),
@@ -1357,12 +1703,16 @@ const installDiffDashApi = (
       (owner: string, name: string) => Promise<readonly PullRequestSummary[]>
     >(async () => [pullRequest]),
     getLocalWalkthrough: vi.fn<
-      (rootPath: string, baseSha: string, headSha: string) => Promise<StoredWalkthrough | null>
+      (
+        target: LocalReviewTarget,
+        baseSha: string,
+        headSha: string,
+      ) => Promise<StoredWalkthrough | null>
     >(async () => localWalkthrough),
-    generateLocalWalkthrough: vi.fn<(rootPath: string) => Promise<StoredWalkthrough>>(
+    generateLocalWalkthrough: vi.fn<(target: LocalReviewTarget) => Promise<StoredWalkthrough>>(
       async () => localWalkthrough,
     ),
-    regenerateLocalWalkthrough: vi.fn<(rootPath: string) => Promise<StoredWalkthrough>>(
+    regenerateLocalWalkthrough: vi.fn<(target: LocalReviewTarget) => Promise<StoredWalkthrough>>(
       async () => localWalkthrough,
     ),
     installDiffDashCli: vi.fn<
@@ -1387,18 +1737,27 @@ const installDiffDashApi = (
     checkForUpdates: vi.fn<() => Promise<void>>(async () => undefined),
     downloadUpdate: vi.fn<() => Promise<void>>(async () => undefined),
     restartAndInstallUpdate: vi.fn<() => Promise<void>>(async () => undefined),
-    getLocalReviewDetail: vi.fn<(rootPath: string) => Promise<LocalReviewDetail>>(
-      async () => localReview,
-    ),
-    getLocalReviewDiff: vi.fn<(rootPath: string) => Promise<LocalReviewDiff>>(
-      async () => localDiff,
+    getLocalReviewDetail,
+    getLocalReviewDiff,
+    getLocalReviewSnapshot,
+    resolveBranch: vi.fn<DiffDashApi["localReviews"]["resolveBranch"]>(
+      async (localPath, branchName) =>
+        LocalReviewTarget.make({
+          kind: "local",
+          rootPath: localPath,
+          comparison: BranchComparison.make({
+            branchName: branchName ?? "main",
+            baseRef: `refs/remotes/origin/${branchName ?? "main"}`,
+            baseSha: localReview.baseSha,
+          }),
+        }),
     ),
     getPullRequestDetail: vi.fn<
       (owner: string, name: string, number: number) => Promise<PullRequestDetail>
-    >(async () => detail),
+    >(async () => options.pullRequestDetail ?? detail),
     getPullRequestDiff: vi.fn<
       (owner: string, name: string, number: number) => Promise<PullRequestDiff>
-    >(async () => diff),
+    >(async () => options.pullRequestDiff ?? diff),
     searchRepositories: vi.fn<
       (request: RepositorySearchRequest) => Promise<readonly RepositorySearchResult[]>
     >(async () => [remoteSearchResult]),
@@ -1438,18 +1797,15 @@ const installDiffDashApi = (
       },
     },
     navigation: {
-      getPendingLocalReview: async () => null,
-      getPendingRepositoryLink: async () => null,
-      onOpenLocalReview: (listener) => {
-        localReviewListener = listener
-        return () => {
-          localReviewListener = null
-        }
+      drainCommands: async () => {
+        const commands = pendingCommands
+        pendingCommands = []
+        return commands
       },
-      onLinkRepository: (listener) => {
-        repositoryLinkListener = listener
+      onCommandsAvailable: (listener) => {
+        commandsAvailableListener = listener
         return () => {
-          repositoryLinkListener = null
+          commandsAvailableListener = null
         }
       },
     },
@@ -1464,7 +1820,7 @@ const installDiffDashApi = (
       getPullRequestDiff: calls.getPullRequestDiff,
       hasApprovedPullRequest: async () => approved,
       listPullRequests: calls.listPullRequests,
-      listReviewRequests: async () => [pullRequest],
+      listReviewRequests: async () => options.reviewRequests ?? [pullRequest],
       listSearchScopes: async () => [
         RepositorySearchScope.make({ kind: "user", login: "hanipcode" }),
         RepositorySearchScope.make({ kind: "organization", login: "fungsi" }),
@@ -1473,8 +1829,10 @@ const installDiffDashApi = (
       searchRepositories: calls.searchRepositories,
     },
     localReviews: {
+      resolveBranch: calls.resolveBranch,
       getDetail: calls.getLocalReviewDetail,
       getDiff: calls.getLocalReviewDiff,
+      getSnapshot: calls.getLocalReviewSnapshot,
     },
     repositories: {
       addLocal: async () => repo,
@@ -1509,7 +1867,7 @@ const installDiffDashApi = (
       onAgentProgress: () => () => undefined,
     },
     settings: {
-      get: async () => plainAISettings(DEFAULT_AI_SETTINGS),
+      get: async () => plainAISettings(options.settings ?? DEFAULT_AI_SETTINGS),
       update: calls.updateSettings,
     },
     appState: {
@@ -1568,12 +1926,27 @@ const installDiffDashApi = (
   return {
     ...calls,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
-    linkRepositoryFromCli: (rootPath: string) => repositoryLinkListener?.(rootPath),
-    openLocalReview: (rootPath: string = localReview.rootPath) => localReviewListener?.(rootPath),
+    linkRepositoryFromCli: (rootPath: string) => {
+      pendingCommands.push(LinkRepositoryCommand.make({ localPath: rootPath }))
+      commandsAvailableListener?.()
+    },
+    openLocalReview: (rootPath: string = localReview.rootPath) => {
+      pendingCommands.push(OpenWorkingTreeCommand.make({ localPath: rootPath }))
+      commandsAvailableListener?.()
+    },
+    openPullRequest: (number: number | null, localPath = "/workspace/local-repo") => {
+      pendingCommands.push(OpenPullRequestCommand.make({ localPath, number }))
+      commandsAvailableListener?.()
+    },
+    openBranchDiff: (branchName: string | null, localPath = localReview.rootPath) => {
+      pendingCommands.push(OpenBranchDiffCommand.make({ localPath, branchName }))
+      commandsAvailableListener?.()
+    },
   }
 }
 
 const plainAISettings = (settings: AISettings): AISettings => ({
+  appearance: settings.appearance,
   provider: settings.provider,
   telemetryEnabled: settings.telemetryEnabled,
   models: {

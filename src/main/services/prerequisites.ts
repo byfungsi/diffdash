@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { delimiter, dirname, extname, join, resolve } from "node:path"
+import { homedir } from "node:os"
 
 import {
   AppPrerequisites,
@@ -47,6 +48,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
       const cli = yield* CliService
       const config = yield* AppConfig
       const get = Effect.fn("Prerequisites.get")(function* () {
+        refreshAppImageCliLaunchers(config.diffDashCliPath, config.appImagePath)
         const [gitInstalled, githubCli, ghAuthenticated, installedCodingAgents] = yield* Effect.all(
           [
             commandAvailable(cli, "git"),
@@ -278,6 +280,34 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`
 export const makeAppImageCliLauncher = (source: string, appImagePath: string) => {
   const body = source.replace(/^#![^\n]*\n/, "")
   return `#!/bin/sh\n${APPIMAGE_LAUNCHER_MARKER}\nDIFFDASH_APPIMAGE_PATH=${shellQuote(appImagePath)}\nexport DIFFDASH_APPIMAGE_PATH\n${body}`
+}
+
+/** Refreshes only marker-owned AppImage launchers after the desktop app updates. */
+export const refreshAppImageCliLaunchers = (sourcePath: string, appImagePath: string) => {
+  if (appImagePath.length === 0 || !existsSync(sourcePath) || !existsSync(appImagePath)) return
+
+  const candidates = new Set([
+    resolveExecutableInPath("diffdash", { envPath: process.env.PATH ?? "" }),
+    join(homedir(), ".local", "bin", "diffdash"),
+    join(homedir(), "bin", "diffdash"),
+  ])
+  const source = readFileSync(sourcePath, "utf8")
+  const launcher = makeAppImageCliLauncher(source, appImagePath)
+  for (const candidate of candidates) {
+    if (candidate === null || !existsSync(candidate)) continue
+    try {
+      const existing = lstatSync(candidate)
+      if (!existing.isFile()) continue
+      const current = readFileSync(candidate, "utf8")
+      if (!current.includes(APPIMAGE_LAUNCHER_MARKER) || current === launcher) continue
+      const temporaryPath = `${candidate}.${process.pid}.tmp`
+      writeFileSync(temporaryPath, launcher, { encoding: "utf8", mode: 0o755 })
+      chmodSync(temporaryPath, 0o755)
+      renameSync(temporaryPath, candidate)
+    } catch {
+      // Diagnostics must remain available when a marker-owned launcher is not writable.
+    }
+  }
 }
 
 /** Returns the absolute path to an executable in PATH, or null if it cannot be found. */

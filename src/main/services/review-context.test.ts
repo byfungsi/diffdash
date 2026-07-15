@@ -92,6 +92,7 @@ const makeLayer = (input: {
       detectRepository: () => unavailable(),
       detectRoot: () => unavailable(),
       currentBranch: () => unavailable(),
+      resolveBranchComparison: () => unavailable(),
       getLocalReviewDetail: () => unavailable<LocalReviewDetail>(),
       getLocalReviewDiff: () => unavailable<LocalReviewDiff>(),
       getLocalReviewSnapshot: () => unavailable<LocalReviewSnapshot>(),

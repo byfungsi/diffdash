@@ -1,0 +1,11 @@
+{
+  "scenario": "atomic-webhook-replay",
+  "assets": [
+    {
+      "path": "replay-lifecycle.svg",
+      "origin": "Created for the DiffDash promotional scenario",
+      "license": "DiffDash project asset",
+      "redistributable": true
+    }
+  ]
+}

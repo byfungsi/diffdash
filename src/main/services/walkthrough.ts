@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import type { LocalReviewDetail, PullRequestDetail } from "../../shared/domain"
 import {
   Walkthrough,
+  type WalkthroughGenerationDetails,
   type WalkthroughHunkDigest,
   type WalkthroughPromptStats,
   validateWalkthrough,
@@ -18,6 +19,8 @@ export interface WalkthroughGenerationInput {
   readonly review: WalkthroughReviewContext
   readonly diff: string
   readonly hunkDigest: readonly WalkthroughHunkDigest[]
+  readonly changedFileTree: string
+  readonly generation: WalkthroughGenerationDetails
   readonly promptStats?: WalkthroughPromptStats
 }
 
@@ -61,6 +64,9 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
           Effect.flatMap((output) => parseModelJson(output)),
           Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
           Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
+          Effect.map((walkthrough) =>
+            Walkthrough.make({ ...walkthrough, generation: input.generation }),
+          ),
         )
       }
 
@@ -111,6 +117,8 @@ const buildWalkthroughPromptContext = ({
   review,
   diff,
   hunkDigest,
+  changedFileTree,
+  generation,
   promptStats,
 }: WalkthroughGenerationInput) => {
   const promptHunks = hunkDigest.map((hunk, index) => ({
@@ -127,8 +135,23 @@ const buildWalkthroughPromptContext = ({
   const payload = {
     review: walkthroughReviewPayload(review, hunkDigest),
     hunks: promptHunks,
+    generation,
     prompt: promptStatsPayload(promptStats),
   }
+  const sampledTreeGuidance =
+    generation.mode === "sampled-tree"
+      ? `
+- This is a sampled-tree walkthrough for an unusually large review.
+- Use the changed file tree to infer each folder's use case, then use representative excerpts to ground the review order.
+- Combine folders that implement the same use case. Do not imply that representative files exhaustively cover the review.`
+      : ""
+  const changedFileTreeSection =
+    generation.mode === "sampled-tree"
+      ? `
+
+Changed file tree. Folder totals cover the large review; excerpts below are representative samples:
+${changedFileTree}`
+      : ""
 
   return {
     aliasToHunkId,
@@ -157,9 +180,11 @@ Rules:
 - Do not return support, path, additions, deletions, status, or patch data. DiffDash computes those locally.
 - Do not suggest PR comments.
 - Do not judge likely bugs; only orient the reviewer.
+${sampledTreeGuidance}
 
 Data compact JSON. h=alias, p=path, r=hunk header, a=additions, d=deletions, s=synthetic file unit:
 ${JSON.stringify(payload)}
+${changedFileTreeSection}
 
 Bounded diff excerpts. These may omit noisy files and truncate oversized hunks; data.hunks is the source of truth for aliases:
 ${diff}

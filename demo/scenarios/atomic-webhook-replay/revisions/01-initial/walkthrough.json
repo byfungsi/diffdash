@@ -1,0 +1,66 @@
+{
+  "title": "Make replay ownership atomic",
+  "summary": "Start with the database ownership contract, then verify worker integration, recovery coverage, and operator visibility.",
+  "chapters": [
+    {
+      "id": "claim-contract",
+      "title": "Establish replay ownership",
+      "summary": "The migration and claim query define uniqueness, lease expiry, and the atomic handoff between workers.",
+      "stops": [
+        {
+          "id": "claim-schema",
+          "title": "Persist one active claim per delivery",
+          "summary": "Check the primary key and lease fields before reviewing the acquisition query.",
+          "risk": "critical",
+          "hunks": [
+            { "path": "packages/db/migrations/202607091430_add_replay_claims.sql", "ordinal": 1 }
+          ]
+        },
+        {
+          "id": "atomic-acquisition",
+          "title": "Acquire or recover in one statement",
+          "summary": "The conflict predicate is the concurrency boundary that prevents two workers from owning the same replay.",
+          "risk": "critical",
+          "hunks": [{ "path": "packages/db/src/replay-claims.ts", "ordinal": 1 }]
+        }
+      ]
+    },
+    {
+      "id": "runtime-flow",
+      "title": "Carry ownership through delivery",
+      "summary": "Verify the worker only delivers after receiving a claim and leaves a clear result for retries.",
+      "stops": [
+        {
+          "id": "worker-claim",
+          "title": "Gate replay execution on ownership",
+          "summary": "The handler constructs the lease and exits when another worker owns the delivery.",
+          "risk": "review",
+          "hunks": [{ "path": "services/webhooks/src/replay/claim-delivery.ts", "ordinal": 1 }]
+        },
+        {
+          "id": "operator-state",
+          "title": "Expose active ownership to operators",
+          "summary": "The operations route distinguishes an actively claimed replay from an ordinary retry.",
+          "risk": "review",
+          "hunks": [{ "path": "apps/ops/src/routes/webhook-replays.tsx", "ordinal": 1 }]
+        }
+      ]
+    }
+  ],
+  "support": [
+    {
+      "id": "concurrency-coverage",
+      "title": "Concurrent worker regression coverage",
+      "reason": "Confirms only one worker receives ownership while the lease remains active.",
+      "hunks": [
+        { "path": "services/webhooks/src/replay/__tests__/claim-delivery.test.ts", "ordinal": 1 }
+      ]
+    },
+    {
+      "id": "recovery-runbook",
+      "title": "Operational recovery guidance",
+      "reason": "Documents lease duration, rollout metrics, and manual recovery boundaries.",
+      "hunks": [{ "path": "docs/runbooks/webhook-replays.md", "ordinal": 1 }]
+    }
+  ]
+}

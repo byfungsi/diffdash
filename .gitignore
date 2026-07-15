@@ -9,6 +9,13 @@ web/landing/dist/
 *.sqlite-shm
 *.sqlite-wal
 test-results/
+demo/.cache/
+media/.cache/
+media/output/
+media/public/audio/
+media/public/captures/
+media/public/fonts/
+media/recall_promo_song.mp3
 .env
 .env.local
 .env.*.local

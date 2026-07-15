@@ -345,7 +345,7 @@ chmod +x DiffDash-*-linux-x86_64.AppImage
 ./DiffDash-*-linux-x86_64.AppImage
 ```
 
-The in-app **Install in PATH** action creates a durable user-local launcher that points to the AppImage rather than its temporary mount. Keep the AppImage at the same path afterward. If the selected user-local bin directory is not already in the shell's `PATH`, DiffDash displays the required `export PATH=...` command.
+The in-app **Install in PATH** action creates a durable user-local launcher that points to the AppImage rather than its temporary mount. Keep the AppImage at the same path afterward. If the selected user-local bin directory is not already in the shell's `PATH`, DiffDash displays the required `export PATH=...` command. On startup, an updated AppImage refreshes marker-owned launchers found in the desktop environment's `PATH`, `~/.local/bin`, or `~/bin`; unrelated user-owned executables are never replaced. Launchers in other custom directories must be reinstalled after updating.
 
 The deb package installs:
 
@@ -353,7 +353,7 @@ The deb package installs:
 /usr/bin/diffdash
 ```
 
-as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository or `diffdash /path/to/repo`.
+as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository, `diffdash /path/to/repo`, `diffdash pr [pr-number]`, or `diffdash diff [branch-name]`.
 
 ## Windows
 

@@ -48,6 +48,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
+    await expect(window.locator("html")).toHaveClass(/dark/)
+    await expect(
+      window.getByRole("button", { name: /Use (?:light|dark|system) theme/ }),
+    ).toHaveCount(0)
     await expect(window.getByRole("button", { name: "Home" })).toBeVisible()
     const openPullRequest = window.getByRole("button", { name: /Open (?:requested review|PR) #51/ })
     await expect(openPullRequest).toBeVisible()
@@ -77,7 +81,15 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     })
     const gutterUtility = window.locator("diffs-container [data-utility-button]")
     await expect(gutterUtility).toBeVisible()
-    await gutterUtility.click()
+    const utilityPointerEvent = {
+      bubbles: true,
+      button: 0,
+      composed: true,
+      pointerId: 1,
+      pointerType: "mouse",
+    }
+    await gutterUtility.dispatchEvent("pointerdown", utilityPointerEvent)
+    await gutterUtility.dispatchEvent("pointerup", utilityPointerEvent)
     const initialComposer = window.getByRole("textbox", { name: "Thread message" })
     await expect(initialComposer).toBeVisible()
     await initialComposer.fill("Why was this line changed?")
@@ -170,6 +182,104 @@ test("opens local working tree review from CLI argument", async ({
   }
 })
 
+test("opens an exact branch comparison from the versioned CLI command", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await mkdir(fakeBin, { recursive: true })
+  await mkdir(localRepo, { recursive: true })
+  await mkdir(xdgConfigHome, { recursive: true })
+  await mkdir(userData, { recursive: true })
+  await installFakeCli(fakeBin)
+  await installCodexSettings(xdgConfigHome)
+
+  const app = await electron.launch({
+    args: [
+      join(process.cwd(), "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      "--diffdash-cli-v1",
+      localRepo,
+      "--",
+      "diff",
+      "dev",
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      FAKE_REPO_ROOT: localRepo,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.getByRole("heading", { name: "Changes vs dev" })).toBeVisible()
+    await expect(window.getByText("vs dev", { exact: true })).toBeVisible()
+    await expect(window.getByText("src/local.ts").first()).toBeVisible()
+  } finally {
+    await app.close()
+  }
+})
+
+test("forwards a CLI command to the running DiffDash instance", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await mkdir(fakeBin, { recursive: true })
+  await mkdir(localRepo, { recursive: true })
+  await mkdir(xdgConfigHome, { recursive: true })
+  await mkdir(userData, { recursive: true })
+  await installFakeCli(fakeBin)
+  await installCodexSettings(xdgConfigHome)
+
+  const appEnvironment = {
+    ...process.env,
+    FAKE_REPO_ROOT: localRepo,
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
+  const app = await electron.launch({
+    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    env: appEnvironment,
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.getByRole("heading", { name: "DiffDash" })).toBeVisible()
+
+    const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).trim()
+    execFileSync(
+      electronExecutable,
+      [
+        join(process.cwd(), "out/main/index.js"),
+        `--user-data-dir=${userData}`,
+        `--diffdash-cli-v1=${localRepo}`,
+        "--",
+        "diff",
+        "dev",
+      ],
+      { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
+    )
+
+    await expect(window.getByRole("heading", { name: "Changes vs dev" })).toBeVisible()
+    await expect(window.getByText("src/local.ts").first()).toBeVisible()
+  } finally {
+    await app.close()
+  }
+})
+
 test("shows a reloadable Electron fallback when the renderer cannot load", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -216,6 +326,7 @@ const installCodexSettings = async (xdgConfigHome: string) => {
   await writeFile(
     join(settingsDirectory, "settings.json"),
     JSON.stringify({
+      appearance: "dark",
       provider: "codex",
       models: {
         auto: "balance",
@@ -318,6 +429,20 @@ if (joined.includes("branch --show-current")) {
   process.exit(0)
 }
 
+if (joined.includes("check-ref-format --branch dev")) {
+  console.log("dev")
+  process.exit(0)
+}
+
+if (joined.includes("fetch --no-tags origin +refs/heads/dev:refs/remotes/origin/dev")) {
+  process.exit(0)
+}
+
+if (joined.includes("rev-parse --verify --end-of-options refs/remotes/origin/dev^{commit}")) {
+  console.log("dddddddddddddddddddddddddddddddddddddddd")
+  process.exit(0)
+}
+
 if (joined.includes("rev-parse --verify HEAD")) {
   console.log("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
   process.exit(0)
@@ -332,6 +457,19 @@ if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     "@@ -1,1 +1,1 @@",
     "-old local",
     "+new local"
+  ].join("\\n"))
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff dddddddddddddddddddddddddddddddddddddddd --")) {
+  console.log([
+    "diff --git a/src/local.ts b/src/local.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/local.ts",
+    "+++ b/src/local.ts",
+    "@@ -1,1 +1,1 @@",
+    "-dev version",
+    "+feature worktree"
   ].join("\\n"))
   process.exit(0)
 }

@@ -37,6 +37,7 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
               Effect.succeed({ rootPath: linkedRepo.localPath ?? "", remoteUrl }),
             detectRoot: () => unavailable(),
             currentBranch: () => unavailable(),
+            resolveBranchComparison: () => unavailable(),
             getLocalReviewDetail: () => unavailable(),
             getLocalReviewDiff: () => unavailable(),
             getLocalReviewSnapshot: () => unavailable(),

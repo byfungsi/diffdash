@@ -309,6 +309,48 @@ ${largeLines}`)
     }),
   )
 
+  it.effect("samples primary and supporting files by folder for large reviews", () =>
+    Effect.gen(function* () {
+      const paths = [
+        ...Array.from({ length: 40 }, (_, index) => `src/auth/module-${index}.ts`),
+        "src/auth/auth.test.ts",
+        ...Array.from({ length: 39 }, (_, index) => `src/billing/module-${index}.ts`),
+        "src/billing/billing.test.ts",
+      ]
+      const diff = parseUnifiedDiff(
+        paths
+          .map(
+            (path, index) => `diff --git a/${path} b/${path}
+index 1111111..2222222 100644
+--- a/${path}
++++ b/${path}
+@@ -1,1 +1,1 @@
+-export const value = ${index}
++export const value = ${index + 1}`,
+          )
+          .join("\n"),
+      )
+
+      const prepared = yield* prepareWalkthroughPromptInput(diff.files, scope)
+      const sampledPaths = prepared.hunkDigest.map((hunk) => hunk.path)
+
+      expect(prepared.generation).toEqual({
+        mode: "sampled-tree",
+        totalFiles: 81,
+        analyzedFiles: 4,
+        totalFolders: 2,
+        analyzedFolders: 2,
+      })
+      expect(sampledPaths).toHaveLength(4)
+      expect(sampledPaths.some((path) => path.startsWith("src/auth/module-"))).toBe(true)
+      expect(sampledPaths).toContain("src/auth/auth.test.ts")
+      expect(sampledPaths.some((path) => path.startsWith("src/billing/module-"))).toBe(true)
+      expect(sampledPaths).toContain("src/billing/billing.test.ts")
+      expect(prepared.changedFileTree).toContain("src/auth (41 files")
+      expect(prepared.changedFileTree).toContain("src/billing (40 files")
+    }),
+  )
+
   it.effect("returns a clear error when there are no reviewable changes", () =>
     Effect.gen(function* () {
       const error = yield* prepareWalkthroughPromptInput([], scope).pipe(Effect.flip)

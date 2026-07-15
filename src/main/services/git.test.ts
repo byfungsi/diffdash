@@ -132,6 +132,121 @@ index 0000000..3333333
     }),
   )
 
+  it.effect("fetches a different target branch and compares its tip with the live worktree", () =>
+    Effect.gen(function* () {
+      const baseSha = "dddddddddddddddddddddddddddddddddddddddd"
+      const calls: string[][] = []
+      const cliLayer = Layer.succeed(
+        CliService,
+        CliService.of({
+          run: (_command, args) => {
+            calls.push([...args])
+            const joined = args.join(" ")
+            if (joined.includes("rev-parse --show-toplevel")) {
+              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
+            }
+            if (joined.includes("branch --show-current")) {
+              return Effect.succeed(makeCliResult("feat/abc\n", args))
+            }
+            if (joined.includes("check-ref-format --branch dev")) {
+              return Effect.succeed(makeCliResult("dev\n", args))
+            }
+            if (joined.includes(" fetch --no-tags origin ")) {
+              return Effect.succeed(makeCliResult("", args))
+            }
+            if (
+              joined.includes(
+                "rev-parse --verify --end-of-options refs/remotes/origin/dev^{commit}",
+              )
+            ) {
+              return Effect.succeed(makeCliResult(`${baseSha}\n`, args))
+            }
+            if (joined.includes(`diff --no-ext-diff ${baseSha} --`)) {
+              return Effect.succeed(
+                makeCliResult(
+                  "diff --git a/src/feature.ts b/src/feature.ts\n--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-old\n+new",
+                  args,
+                ),
+              )
+            }
+            if (joined.includes("ls-files --others --exclude-standard -z")) {
+              return Effect.succeed(makeCliResult("", args))
+            }
+            throw new Error(`Unexpected git call: ${joined}`)
+          },
+        }),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+      )
+      const target = yield* service.resolveBranchComparison("/workspace/repo", "dev")
+      const detail = yield* service.getLocalReviewDetail(target)
+
+      expect(target.comparison).toMatchObject({
+        _tag: "branch",
+        branchName: "dev",
+        baseRef: "refs/remotes/origin/dev",
+      })
+      expect(detail).toMatchObject({ baseSha, title: "Changes vs dev" })
+      expect(calls.some((args) => args.includes("+refs/heads/dev:refs/remotes/origin/dev"))).toBe(
+        true,
+      )
+      expect(
+        calls.some((args) => args.join(" ").includes(`diff --no-ext-diff ${baseSha} --`)),
+      ).toBe(true)
+    }),
+  )
+
+  it.effect("resolves the origin default branch when diff has no branch argument", () =>
+    Effect.gen(function* () {
+      const calls: string[][] = []
+      const cliLayer = Layer.succeed(
+        CliService,
+        CliService.of({
+          run: (_command, args) => {
+            calls.push([...args])
+            const joined = args.join(" ")
+            if (joined.includes("rev-parse --show-toplevel")) {
+              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
+            }
+            if (joined.includes("branch --show-current")) {
+              return Effect.succeed(makeCliResult("feat/abc\n", args))
+            }
+            if (joined.includes("symbolic-ref --quiet --short refs/remotes/origin/HEAD")) {
+              return Effect.succeed(makeCliResult("origin/main\n", args))
+            }
+            if (joined.includes("check-ref-format --branch main")) {
+              return Effect.succeed(makeCliResult("main\n", args))
+            }
+            if (joined.includes("fetch --no-tags origin")) {
+              return Effect.succeed(makeCliResult("", args))
+            }
+            if (joined.includes("refs/remotes/origin/main^{commit}")) {
+              return Effect.succeed(
+                makeCliResult("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n", args),
+              )
+            }
+            throw new Error(`Unexpected git call: ${joined}`)
+          },
+        }),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+      )
+
+      const target = yield* service.resolveBranchComparison("/workspace/repo", null)
+
+      expect(target.comparison).toMatchObject({
+        _tag: "branch",
+        branchName: "main",
+        baseRef: "refs/remotes/origin/main",
+      })
+      expect(calls.some((args) => args.includes("+refs/heads/main:refs/remotes/origin/main"))).toBe(
+        true,
+      )
+    }),
+  )
+
   it.effect("FUN-80 AC: rejects a local snapshot that changes during repeated capture", () =>
     Effect.gen(function* () {
       let diffRead = 0
