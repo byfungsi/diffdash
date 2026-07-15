@@ -1,22 +1,22 @@
 import { describe, expect, it } from "@effect/vitest"
 import BetterSqlite3 from "better-sqlite3"
 import { Effect, Either, Layer } from "effect"
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs"
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 
 import { AgentRunId, ReviewAgentArtifactId } from "../../shared/review-agent"
 import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
 import { ReviewThreadId } from "../../shared/review-thread"
-import { AgentRunArtifactStore } from "./agent-run-artifact-store"
-import { AgentRunStore } from "./agent-run-store"
+import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
+import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
 import { AppConfig } from "./app-config"
-import { DatabaseService } from "./database"
+import { DatabaseError, DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
-import { ReviewThreadStore } from "./review-thread-store"
-import { ThreadMemoryStore } from "./thread-memory-store"
+import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
+import { ThreadMemoryStore, ThreadMemoryStoreError } from "./thread-memory-store"
 import { ViewedFileStore } from "./viewed-file-store"
-import { WalkthroughStore } from "./walkthrough-store"
+import { WalkthroughStore, WalkthroughStoreError } from "./walkthrough-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-database-test-"))),
@@ -150,6 +150,93 @@ describe("DatabaseService", () => {
       expect(sqlite.pragma("integrity_check", { simple: true })).toBe("ok")
       expect(sqlite.pragma("foreign_key_check")).toEqual([])
       sqlite.close()
+    }),
+  )
+
+  it.scoped("FUN-148 AC: reports a corrupt database as a typed open failure", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      writeFileSync(databasePath, "not a sqlite database")
+
+      const result = yield* Effect.either(
+        Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath)))),
+      )
+
+      expect(Either.isLeft(result) && result.left).toEqual(
+        expect.objectContaining<Partial<DatabaseError>>({
+          _tag: "DatabaseError",
+          operation: "open",
+        }),
+      )
+    }),
+  )
+
+  it.scoped("FUN-148 AC: reports malformed durable JSON at typed store boundaries", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+      const sqlite = new BetterSqlite3(databasePath)
+      sqlite.prepare("UPDATE walkthroughs SET content_json = '{'").run()
+      sqlite.prepare("UPDATE review_threads SET current_anchor_json = '{}'").run()
+      sqlite.prepare("UPDATE agent_runs SET usage_json = '{}'").run()
+      sqlite.prepare("UPDATE agent_run_artifacts SET metadata_json = 'null'").run()
+      sqlite.prepare("UPDATE thread_memory SET important_artifact_ids_json = '[\"\"]'").run()
+      sqlite.close()
+
+      const results = yield* Effect.gen(function* () {
+        const walkthroughs = yield* WalkthroughStore
+        const threads = yield* ReviewThreadStore
+        const runs = yield* AgentRunStore
+        const artifacts = yield* AgentRunArtifactStore
+        const memory = yield* ThreadMemoryStore
+
+        return {
+          walkthrough: yield* Effect.either(
+            walkthroughs.get({
+              repoId: "github:byfungsi/diffdash",
+              reviewKey: "github:byfungsi/diffdash#147",
+              baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              promptVersion: "walkthrough-v4",
+            }),
+          ),
+          thread: yield* Effect.either(threads.get(ReviewThreadId.make("thread-v8"))),
+          run: yield* Effect.either(runs.get(AgentRunId.make("run-v8"))),
+          artifact: yield* Effect.either(artifacts.get(ReviewAgentArtifactId.make("artifact-v8"))),
+          memory: yield* Effect.either(memory.get(ReviewThreadId.make("thread-v8"))),
+        }
+      }).pipe(Effect.provide(makeCompatibilityLayer(databasePath)))
+
+      expect(Either.isLeft(results.walkthrough) && results.walkthrough.left).toEqual(
+        expect.objectContaining<Partial<WalkthroughStoreError>>({
+          _tag: "WalkthroughStoreError",
+          operation: "decodeContentJson.parse",
+        }),
+      )
+      expect(Either.isLeft(results.thread) && results.thread.left).toEqual(
+        expect.objectContaining<Partial<ReviewThreadStoreError>>({
+          _tag: "ReviewThreadStoreError",
+          operation: "get",
+        }),
+      )
+      expect(Either.isLeft(results.run) && results.run.left).toEqual(
+        expect.objectContaining<Partial<AgentRunStoreError>>({
+          _tag: "AgentRunStoreError",
+          operation: "get.decode",
+        }),
+      )
+      expect(Either.isLeft(results.artifact) && results.artifact.left).toEqual(
+        expect.objectContaining<Partial<AgentRunArtifactStoreError>>({
+          _tag: "AgentRunArtifactStoreError",
+          operation: "get.decode",
+        }),
+      )
+      expect(Either.isLeft(results.memory) && results.memory.left).toEqual(
+        expect.objectContaining<Partial<ThreadMemoryStoreError>>({
+          _tag: "ThreadMemoryStoreError",
+          operation: "get.decode",
+        }),
+      )
     }),
   )
 

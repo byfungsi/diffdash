@@ -60,6 +60,8 @@ The following requirement IDs are covered by
 | `PERSIST-RESTART-004` | `[B]` | Generated walkthrough content is served after restart. |
 | `PERSIST-V8-001` | `[B]` | A committed populated version-8 database contains all nine durable tables with valid foreign keys and integrity. |
 | `PERSIST-V8-002` | `[B]` | Repository, viewed-file, walkthrough, thread/message, run, artifact, and memory stores decode the frozen v8 graph after two independent opens. |
+| `PERSIST-FAIL-001` | `[B]` | Corrupt SQLite input fails database acquisition with a typed open error. |
+| `PERSIST-FAIL-002` | `[B]` | Malformed persisted JSON fails at each store decoding boundary with a typed operation error. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
@@ -68,8 +70,8 @@ The following requirement IDs are covered by
 
 ## Known M8 Gaps
 
-- `[G]` Malformed-row, corrupt-database, locked-database, and interrupted future-migration startup
-  behavior still needs broader user-visible characterization.
+- `[G]` Locked-database and interrupted future-migration startup behavior still needs broader
+  user-visible characterization.
 - `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
   sender/frame origin.
 - `[G]` Navigation and file policies are characterized, but shell side-effect failures and symlink
