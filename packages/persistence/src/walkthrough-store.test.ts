@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 
 import {
   Walkthrough,
@@ -11,7 +11,6 @@ import {
   WalkthroughSupportItem,
   WALKTHROUGH_PROMPT_VERSION,
 } from "@diffdash/domain/walkthrough"
-import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { WalkthroughStore } from "./walkthrough-store"
@@ -23,14 +22,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
 
 const makeLayer = (databasePath: string) =>
   Layer.mergeAll(RepositoryStore.layer, WalkthroughStore.layer).pipe(
-    Layer.provideMerge(DatabaseService.layer),
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
+    Layer.provideMerge(DatabaseService.layer(databasePath)),
   )
 
 const makeWalkthrough = (summary: string) =>

@@ -13,9 +13,9 @@ import { type AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-
 import { PullRequestReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
-import { AgentRunArtifactStore } from "./agent-run-artifact-store"
+import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { CliError, type CliRunner, CliService } from "@diffdash/process/cli"
-import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 
 const MAX_REQUEST_BYTES = 1024 * 1024
 const DEFAULT_TOOL_OUTPUT_BYTES = 128 * 1024

@@ -8,10 +8,10 @@ import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { makePullRequestReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
-import { DatabaseService } from "./database"
-import { RepositoryStore } from "./repository-store"
+import { DatabaseService } from "@diffdash/persistence/database"
+import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadAnchorMapper } from "./review-thread-anchor-mapper"
-import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-anchor-mapper-test-"))),
@@ -22,7 +22,7 @@ const makeLayer = (databasePath: string) =>
   ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(ReviewThreadStore.layer),
     Layer.provideMerge(RepositoryStore.layer),
-    Layer.provideMerge(DatabaseService.layer),
+    Layer.provideMerge(DatabaseService.layer(databasePath)),
     Layer.provide(
       AppConfig.layer({
         databasePath,

@@ -12,7 +12,7 @@ import {
   ReviewThreadStore,
   type ReviewThreadCurrentMapping,
   type ReviewThreadStoreError,
-} from "./review-thread-store"
+} from "@diffdash/persistence/review-thread-store"
 
 /** A coherent target revision used to remap every local thread for one review. */
 export interface MapReviewThreadAnchorsInput {

@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
 
@@ -24,13 +24,12 @@ import {
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
-import { AgentRunArtifactStore } from "./agent-run-artifact-store"
-import { AgentRunStore } from "./agent-run-store"
-import { AppConfig } from "./app-config"
+import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
+import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
 import { AppSettings } from "@diffdash/settings/app-settings"
-import { DatabaseService } from "./database"
+import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
-import { RepositoryStore } from "./repository-store"
+import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewAgentService } from "./review-agent"
 import {
   ReviewAgentExecutionError,
@@ -39,9 +38,9 @@ import {
 } from "./review-agent-provider"
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder } from "./review-context-builder"
-import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewWorktreePool } from "./review-worktree-pool"
-import { ThreadMemoryStore } from "./thread-memory-store"
+import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 
 const diff = `diff --git a/src/a.ts b/src/a.ts
 index 1111111..2222222 100644
@@ -133,15 +132,7 @@ const makeLayer = (
   runTurn: Context.Tag.Service<ReviewAgentProvider>["runThreadTurn"],
   released: { count: number; events?: string[]; mcpPaths?: Array<string | null> },
 ) => {
-  const database = DatabaseService.layer.pipe(
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
-  )
+  const database = DatabaseService.layer(databasePath)
   const persistence = Layer.mergeAll(
     RepositoryStore.layer,
     ReviewThreadStore.layer,

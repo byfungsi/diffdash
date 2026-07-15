@@ -33,6 +33,11 @@ file-tree adapter; the remaining renderer moves there as an atomic package in M1
 discovery. `@diffdash/settings` owns path-parameterized JSON settings and app-state stores while
 preserving unknown provider fields. Neither package depends on Electron or concrete providers.
 
+`@diffdash/persistence` is the sole owner of SQLite lifecycle, migrations, durable stores, and
+versioned database fixtures. Its layer receives the database path from desktop composition;
+workspace source is bundled while the native `better-sqlite3` dependency remains external and
+unpacked for Electron.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;

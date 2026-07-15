@@ -231,6 +231,6 @@ M9 remains blocked until every `[B]` requirement has passing automated or approv
 evidence and the snapshot is reviewed.
 
 The frozen compatibility database is generated from
-`packages/desktop/src/main/services/fixtures/database-v8-populated.sql`. Regenerate it with
+`packages/persistence/src/fixtures/database-v8-populated.sql`. Regenerate it with
 `pnpm fixtures:database-v8`; do not replace the source DDL with current migration output when a
 future schema version is added.

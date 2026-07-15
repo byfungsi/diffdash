@@ -4,7 +4,7 @@ import type { Repo } from "@diffdash/domain/repository"
 import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitService } from "./git"
 import { GitProvider } from "./git-provider"
-import { RepositoryStore } from "./repository-store"
+import { RepositoryStore } from "@diffdash/persistence/repository-store"
 
 /** A local checkout could not be safely linked to a GitHub repository. */
 export class RepositoryLinkError extends Schema.TaggedError<RepositoryLinkError>()(

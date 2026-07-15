@@ -32,6 +32,9 @@
     "@diffdash/settings#build": {
       "outputs": []
     },
+    "@diffdash/persistence#build": {
+      "outputs": []
+    },
     "@diffdash/e2e#build": {
       "outputs": []
     },

@@ -3,7 +3,6 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { dirname } from "node:path"
 import { mkdirSync } from "node:fs"
 
-import { AppConfig } from "./app-config"
 import { runDatabaseMigrations } from "./database-migrations"
 
 type SqlParams = readonly unknown[] | Record<string, unknown>
@@ -37,54 +36,54 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
     ) => Effect.Effect<A, DatabaseError>
   }
 >() {
-  static readonly layer = Layer.scoped(
-    DatabaseService,
-    Effect.gen(function* () {
-      const config = yield* AppConfig
-      const db = yield* Effect.acquireRelease(
-        Effect.try({
-          try: () => {
-            mkdirSync(dirname(config.databasePath), { recursive: true })
-            const database = new BetterSqlite3(config.databasePath)
-            try {
-              database.pragma("journal_mode = WAL")
-              database.pragma("foreign_keys = ON")
-              runDatabaseMigrations(database)
-              return database
-            } catch (cause) {
-              database.close()
-              throw cause
-            }
-          },
-          catch: (cause) => DatabaseError.make({ operation: "open", cause }),
-        }),
-        (database) => Effect.sync(() => database.close()),
-      )
+  static readonly layer = (databasePath: string) =>
+    Layer.scoped(
+      DatabaseService,
+      Effect.gen(function* () {
+        const db = yield* Effect.acquireRelease(
+          Effect.try({
+            try: () => {
+              mkdirSync(dirname(databasePath), { recursive: true })
+              const database = new BetterSqlite3(databasePath)
+              try {
+                database.pragma("journal_mode = WAL")
+                database.pragma("foreign_keys = ON")
+                runDatabaseMigrations(database)
+                return database
+              } catch (cause) {
+                database.close()
+                throw cause
+              }
+            },
+            catch: (cause) => DatabaseError.make({ operation: "open", cause }),
+          }),
+          (database) => Effect.sync(() => database.close()),
+        )
 
-      return DatabaseService.of({
-        get: <A>(sql: string, params: SqlParams = []) =>
-          runStatement(db, "get", () => {
-            // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
-            return db.prepare(sql).get(params) as A | undefined
-          }),
-        all: <A>(sql: string, params: SqlParams = []) =>
-          runStatement(db, "all", () => {
-            // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
-            return db.prepare(sql).all(params) as readonly A[]
-          }),
-        run: (sql: string, params: SqlParams = []) =>
-          runStatement(db, "run", () => {
-            db.prepare(sql).run(params)
-          }),
-        transaction: <A>(operation: string, execute: (transaction: DatabaseTransaction) => A) =>
-          runStatement(
-            db,
-            operation,
-            db.transaction(() => executeTransaction(db, execute)),
-          ),
-      })
-    }),
-  )
+        return DatabaseService.of({
+          get: <A>(sql: string, params: SqlParams = []) =>
+            runStatement(db, "get", () => {
+              // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
+              return db.prepare(sql).get(params) as A | undefined
+            }),
+          all: <A>(sql: string, params: SqlParams = []) =>
+            runStatement(db, "all", () => {
+              // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
+              return db.prepare(sql).all(params) as readonly A[]
+            }),
+          run: (sql: string, params: SqlParams = []) =>
+            runStatement(db, "run", () => {
+              db.prepare(sql).run(params)
+            }),
+          transaction: <A>(operation: string, execute: (transaction: DatabaseTransaction) => A) =>
+            runStatement(
+              db,
+              operation,
+              db.transaction(() => executeTransaction(db, execute)),
+            ),
+        })
+      }),
+    )
 }
 
 const runStatement = <A>(_db: BetterSqliteDatabase, operation: string, execute: () => A) =>

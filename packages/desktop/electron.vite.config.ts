@@ -18,6 +18,7 @@ const packageVersion =
 const internalPackages = [
   "@diffdash/app",
   "@diffdash/domain",
+  "@diffdash/persistence",
   "@diffdash/process",
   "@diffdash/protocol",
   "@diffdash/settings",

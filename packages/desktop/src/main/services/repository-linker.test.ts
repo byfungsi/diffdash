@@ -6,7 +6,7 @@ import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-lin
 import { GitService } from "./git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { RepositoryLinkError, RepositoryLinker } from "./repository-linker"
-import { RepositoryStore } from "./repository-store"
+import { RepositoryStore } from "@diffdash/persistence/repository-store"
 
 const linkedRepo = Repo.make({
   id: "github:fungsi/diffdash",

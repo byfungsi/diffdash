@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 
 import { ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import {
@@ -13,7 +13,6 @@ import {
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
-import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore } from "./review-thread-store"
@@ -26,14 +25,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
 
 const makeLayer = (databasePath: string) =>
   Layer.mergeAll(RepositoryStore.layer, ReviewThreadStore.layer, ThreadMemoryStore.layer).pipe(
-    Layer.provideMerge(DatabaseService.layer),
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
+    Layer.provideMerge(DatabaseService.layer(databasePath)),
   )
 
 const lineAnchor = LineReviewAnchor.make({

@@ -17,8 +17,8 @@ import { createNavigationCommandQueue } from "./navigation-command-queue"
 import { revealAppWindow } from "./window-activation"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
-import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
-import { AgentRunStore } from "../../src/main/services/agent-run-store"
+import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
+import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
 import { AIAgent } from "../../src/main/services/ai-agent"
 import { Analytics } from "../../src/main/services/analytics"
 import { AppConfig } from "../../src/main/services/app-config"
@@ -28,7 +28,7 @@ import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-up
 import { CliError, CliService } from "@diffdash/process/cli"
 import { CliStreamService } from "@diffdash/process/cli-stream"
 import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
-import { DatabaseService } from "../../src/main/services/database"
+import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitService } from "../../src/main/services/git"
 import { GitProvider } from "../../src/main/services/git-provider"
@@ -36,18 +36,18 @@ import { GitHubProvider } from "../../src/main/services/github"
 import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
-import { RepositoryStore } from "../../src/main/services/repository-store"
+import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewAgentService } from "../../src/main/services/review-agent"
 import { ReviewAgentProviderRegistry } from "../../src/main/services/review-agent-provider-registry"
 import { ReviewContextService } from "../../src/main/services/review-context"
 import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
 import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
-import { ReviewThreadStore } from "../../src/main/services/review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewWorktreePool } from "../../src/main/services/review-worktree-pool"
-import { ThreadMemoryStore } from "../../src/main/services/thread-memory-store"
-import { ViewedFileStore } from "../../src/main/services/viewed-file-store"
+import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
+import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughService } from "../../src/main/services/walkthrough"
-import { WalkthroughStore } from "../../src/main/services/walkthrough-store"
+import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { AISettings } from "@diffdash/domain/ai-settings"
 import { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { DEFAULT_APP_STATE, AppState as SharedAppState } from "@diffdash/domain/app-state"
@@ -132,11 +132,12 @@ const debugMissingPrerequisites = () =>
 
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+  const databasePath = join(app.getPath("userData"), "diffdash.sqlite")
   const configLayer = AppConfig.layer({
     appVersion: app.getVersion(),
     ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
     architecture: process.arch,
-    databasePath: join(app.getPath("userData"), "diffdash.sqlite"),
+    databasePath,
     diffDashCliPath: getDiffDashCliPath(),
     packaged: app.isPackaged,
     platform: process.platform,
@@ -214,7 +215,7 @@ const createAppLayer = () => {
     threadAnchorMapperLayer,
     updaterLayer,
   ).pipe(
-    Layer.provideMerge(DatabaseService.layer),
+    Layer.provideMerge(DatabaseService.layer(databasePath)),
     Layer.provideMerge(CliService.layer),
     Layer.provideMerge(CliStreamService.layer),
     Layer.provide(configLayer),

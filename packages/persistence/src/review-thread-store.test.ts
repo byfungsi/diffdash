@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 
 import {
   makePullRequestReviewKey,
@@ -13,7 +13,6 @@ import {
 } from "@diffdash/domain/review-identity"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LineReviewAnchor, MarkdownBody, ReviewThreadId } from "@diffdash/domain/review-thread"
-import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
@@ -25,14 +24,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
 
 const makeLayer = (databasePath: string) =>
   Layer.mergeAll(RepositoryStore.layer, ReviewThreadStore.layer).pipe(
-    Layer.provideMerge(DatabaseService.layer),
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
+    Layer.provideMerge(DatabaseService.layer(databasePath)),
   )
 
 const reviewKey = makePullRequestReviewKey("github", "fungsi", "diffdash", 51)

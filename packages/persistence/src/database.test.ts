@@ -3,14 +3,13 @@ import BetterSqlite3 from "better-sqlite3"
 import { Effect, Either, Layer } from "effect"
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { join, resolve } from "node:path"
 
 import { AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
-import { AppConfig } from "./app-config"
 import { DatabaseError, DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
@@ -23,16 +22,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
-const makeLayer = (databasePath: string) =>
-  DatabaseService.layer.pipe(
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
-  )
+const makeLayer = (databasePath: string) => DatabaseService.layer(databasePath)
 
 const makeCompatibilityLayer = (databasePath: string) =>
   Layer.mergeAll(
@@ -164,7 +154,7 @@ describe("DatabaseService", () => {
   it.scoped("FUN-148 AC: enforces every version-8 durable uniqueness boundary", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+      copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
@@ -201,7 +191,7 @@ describe("DatabaseService", () => {
   it.scoped("FUN-148 AC: cascades repository deletion through the complete durable graph", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+      copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
@@ -262,7 +252,7 @@ describe("DatabaseService", () => {
   it.scoped("FUN-148 AC: preserves the populated version-8 graph across fresh layers", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+      copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
 
       yield* Effect.scoped(
         assertPopulatedVersion8Fixture.pipe(Effect.provide(makeCompatibilityLayer(databasePath))),
@@ -300,11 +290,9 @@ describe("DatabaseService", () => {
   it.scoped("FUN-148 AC: reports malformed durable JSON at typed store boundaries", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+      copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
       const sqlite = new BetterSqlite3(databasePath)
-      sqlite.exec(
-        readFileSync(resolve("src/main/services/fixtures/database-v8-malformed-json.sql"), "utf8"),
-      )
+      sqlite.exec(readFileSync(resolve("src/fixtures/database-v8-malformed-json.sql"), "utf8"))
       sqlite.close()
 
       const results = yield* Effect.gen(function* () {

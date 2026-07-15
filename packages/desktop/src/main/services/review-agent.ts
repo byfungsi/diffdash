@@ -21,17 +21,17 @@ import {
   type ReviewThreadMessage,
 } from "@diffdash/domain/review-thread"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
-import { AgentRunArtifactStore } from "./agent-run-artifact-store"
-import { AgentRunStore } from "./agent-run-store"
+import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
+import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
 import { executionFailureReason } from "./review-agent-provider"
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder, type SelectedReviewAgentArtifact } from "./review-context-builder"
-import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewWorktreePool, ReviewWorktreePoolError } from "./review-worktree-pool"
 import { createFallbackThreadMemoryUpdate, selectThreadMemoryWindow } from "./thread-memory"
-import { ThreadMemoryStore } from "./thread-memory-store"
+import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 
 const REVIEW_THREAD_PROMPT_VERSION = AgentPromptVersion.make("review-thread-v3")
 const PROVIDER_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgorithm.make("provider-summary")

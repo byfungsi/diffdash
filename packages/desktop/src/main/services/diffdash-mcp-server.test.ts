@@ -26,10 +26,13 @@ import {
   ReviewThreadMessage,
   ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
-import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
+import {
+  AgentRunArtifactStore,
+  AgentRunArtifactStoreError,
+} from "@diffdash/persistence/agent-run-artifact-store"
 import { type CliResult, CliService } from "@diffdash/process/cli"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
-import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 
 const rawDiff = `diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644

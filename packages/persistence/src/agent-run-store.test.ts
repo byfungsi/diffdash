@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 
 import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import {
@@ -18,10 +18,8 @@ import {
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
-import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
-import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore } from "./review-thread-store"
@@ -39,17 +37,7 @@ const makeLayer = (databasePath: string) =>
     AgentRunStore.layer,
     AgentRunArtifactStore.layer,
     ThreadMemoryStore.layer,
-    AgentArtifactNormalizer.layer,
-  ).pipe(
-    Layer.provideMerge(DatabaseService.layer),
-    Layer.provide(
-      AppConfig.layer({
-        databasePath,
-        settingsPath: join(dirname(databasePath), "settings.json"),
-        tempDir: tmpdir(),
-      }),
-    ),
-  )
+  ).pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
 
 const reviewKey = makePullRequestReviewKey("github", "fungsi", "diffdash", 69)
 const lineAnchor = LineReviewAnchor.make({
@@ -163,7 +151,6 @@ describe("agent run persistence", () => {
         const thread = yield* createThread
         const runs = yield* AgentRunStore
         const artifacts = yield* AgentRunArtifactStore
-        const normalizer = yield* AgentArtifactNormalizer
         const database = yield* DatabaseService
         const run = yield* runs.start({
           threadId: thread.thread.id,
@@ -171,12 +158,15 @@ describe("agent run persistence", () => {
           model: "claude-sonnet-4",
           promptVersion: AgentPromptVersion.make("thread-v1"),
         })
-        const normalized = yield* normalizer.normalize({
+        const normalized = ReviewAgentArtifact.make({
           type: "file_read",
           provider: "claude",
           title: "Read src/main.ts",
           content: "export const answer = 42\n",
-          metadata: { toolName: "Read", path: "src/main.ts" },
+          contentDigest: "digest-file-read",
+          metadata: { toolName: "Read", path: "src/main.ts", sourceProvider: "claude" },
+          originalSize: 25,
+          truncated: false,
         })
         const first = yield* artifacts.save({
           runId: run.id,
@@ -241,7 +231,6 @@ describe("agent run persistence", () => {
         const runs = yield* AgentRunStore
         const artifacts = yield* AgentRunArtifactStore
         const memory = yield* ThreadMemoryStore
-        const normalizer = yield* AgentArtifactNormalizer
         const database = yield* DatabaseService
         const run = yield* runs.start({
           threadId: thread.thread.id,
@@ -249,12 +238,15 @@ describe("agent run persistence", () => {
           model: "configured-model",
           promptVersion: AgentPromptVersion.make("thread-v1"),
         })
-        const normalized = yield* normalizer.normalize({
+        const normalized = ReviewAgentArtifact.make({
           type: "mcp_tool_result",
           provider: "opencode",
           title: "getDiffHunk",
           content: "@@ -1 +1 @@\n-old\n+new",
+          contentDigest: "digest-mcp-result",
           metadata: { toolName: "getDiffHunk", hunkId: "hunk-1" },
+          originalSize: 24,
+          truncated: false,
         })
         const artifact = yield* artifacts.save({
           runId: run.id,

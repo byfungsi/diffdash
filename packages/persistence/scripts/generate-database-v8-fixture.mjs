@@ -2,8 +2,8 @@ import { existsSync, readFileSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
 import BetterSqlite3 from "better-sqlite3"
 
-const sourcePath = resolve("src/main/services/fixtures/database-v8-populated.sql")
-const databasePath = resolve("src/main/services/fixtures/database-v8-populated.sqlite")
+const sourcePath = resolve("src/fixtures/database-v8-populated.sql")
+const databasePath = resolve("src/fixtures/database-v8-populated.sqlite")
 
 for (const path of [databasePath, `${databasePath}-shm`, `${databasePath}-wal`]) {
   if (existsSync(path)) rmSync(path)
