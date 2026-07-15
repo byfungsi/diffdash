@@ -85,11 +85,13 @@ for (const arch of archs) {
       "--config",
       electronBuilderConfig,
       "--mac",
-      "dir",
+      "zip",
       `--${arch}`,
       "--publish=never",
     ])
   }
+
+  verifyAppUpdateConfig(appPath)
 
   if (skipNotarize) {
     console.log(`Skipping notarization for ${appPath}`)
@@ -209,6 +211,22 @@ function verifyApp(appPath) {
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath])
   run("spctl", ["-a", "-vv", "--type", "exec", appPath])
   run("xcrun", ["stapler", "validate", appPath])
+}
+
+function verifyAppUpdateConfig(appPath) {
+  const updateConfigPath = path.join(appPath, "Contents", "Resources", "app-update.yml")
+  if (!existsSync(updateConfigPath)) {
+    throw new Error(`Packaged macOS app is missing updater configuration: ${updateConfigPath}`)
+  }
+
+  const updateConfig = readFileSync(updateConfigPath, "utf8")
+  if (!/^provider:\s*generic\s*$/m.test(updateConfig)) {
+    throw new Error("Packaged macOS updater configuration is missing the generic provider.")
+  }
+  if (!/^updaterCacheDirName:\s*\S+\s*$/m.test(updateConfig)) {
+    throw new Error("Packaged macOS updater configuration is missing updaterCacheDirName.")
+  }
+  console.log(`Verified updater configuration: ${updateConfigPath}`)
 }
 
 function run(command, commandArgs) {

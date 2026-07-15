@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
@@ -16,6 +16,15 @@ const awsEnv = {
   AWS_SECRET_ACCESS_KEY: requiredEnv("R2_SECRET_ACCESS_KEY"),
   AWS_DEFAULT_REGION: "auto",
   AWS_EC2_METADATA_DISABLED: "true",
+}
+const homebrewExpatLib = "/opt/homebrew/opt/expat/lib"
+
+if (
+  process.platform === "darwin" &&
+  awsEnv.DYLD_LIBRARY_PATH === undefined &&
+  existsSync(homebrewExpatLib)
+) {
+  awsEnv.DYLD_LIBRARY_PATH = homebrewExpatLib
 }
 
 if (!/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) {

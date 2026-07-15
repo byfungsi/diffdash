@@ -14,6 +14,7 @@ import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
   AppUpdateDownloading,
+  AppUpdateFailed,
   type AppUpdateState,
   AppUpdateUnsupported,
 } from "../../shared/app-update"
@@ -566,6 +567,22 @@ describe("App browser interactions", () => {
     )
     restartButton?.click()
     expect(calls.restartAndInstallUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it("uses a generic title for failures outside the update check", async () => {
+    installDiffDashApi({
+      updateState: AppUpdateFailed.make({
+        currentVersion: "0.3.0",
+        message: "Could not prepare the update download.",
+      }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Update failed")
+      expect(document.body.textContent).toContain("Could not prepare the update download.")
+      expect(document.body.textContent).not.toContain("Update check failed")
+    })
   })
 
   it("debounces remote repository search and sends the displayed owner set", async () => {
