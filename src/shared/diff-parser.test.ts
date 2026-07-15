@@ -117,4 +117,41 @@ describe("parseUnifiedDiff", () => {
       status: "binary",
     })
   })
+
+  it("preserves multiple hunks and no-newline markers without counting markers as changes", () => {
+    const parsed = parseUnifiedDiff(`diff --git a/src/app.ts b/src/app.ts
+index 1111111..2222222 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1 +1 @@
+-first old
++first new
+\\ No newline at end of file
+@@ -20 +20 @@
+-second old
++second new
+\\ No newline at end of file`)
+    const file = parsed.files[0]
+
+    expect(file?.hunks).toHaveLength(2)
+    expect(file).toMatchObject({ additions: 2, deletions: 2 })
+    expect(file?.hunks.map(({ lines }) => lines.at(-1))).toEqual([
+      "\\ No newline at end of file",
+      "\\ No newline at end of file",
+    ])
+  })
+
+  it("preserves mode-only patches as modified files without line hunks", () => {
+    const parsed = parseUnifiedDiff(`diff --git a/scripts/run.sh b/scripts/run.sh
+old mode 100644
+new mode 100755`)
+
+    expect(parsed.files[0]).toMatchObject({
+      additions: 0,
+      deletions: 0,
+      hunks: [],
+      path: "scripts/run.sh",
+      status: "modified",
+    })
+  })
 })

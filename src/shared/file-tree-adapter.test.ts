@@ -44,4 +44,19 @@ describe("buildReviewFileTreeInput", () => {
       paths: ["src/app.tsx", "pnpm-lock.yaml", "assets/logo.png"],
     })
   })
+
+  it("preserves a deterministic 10,000-file canonical inventory", () => {
+    const files = Array.from({ length: 10_000 }, (_, index) =>
+      file(`packages/feature-${String(index).padStart(5, "0")}/src/index.ts`),
+    )
+
+    const input = buildReviewFileTreeInput(files, false)
+
+    expect(input.paths).toHaveLength(10_000)
+    expect(input.gitStatus).toHaveLength(10_000)
+    expect(input.hiddenCount).toBe(0)
+    expect(input.paths[0]).toBe("packages/feature-00000/src/index.ts")
+    expect(input.paths.at(-1)).toBe("packages/feature-09999/src/index.ts")
+    expect(new Set(input.paths)).toHaveLength(10_000)
+  })
 })

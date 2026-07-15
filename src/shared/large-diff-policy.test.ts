@@ -16,6 +16,13 @@ describe("large diff policy", () => {
         patch: "small patch",
       }),
     ).toBe(false)
+    expect(
+      isVeryLargeDiffFile({
+        additions: 1,
+        deletions: 1,
+        patch: "x".repeat(VERY_LARGE_DIFF_CHARACTER_THRESHOLD),
+      }),
+    ).toBe(false)
   })
 
   it("classifies files over either the line or character threshold as very large", () => {

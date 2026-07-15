@@ -85,6 +85,9 @@ The following requirement IDs are covered by
 | `REVIEW-IDENTITY-001` | `[B]` | Hosted, working-tree, branch-ref, and frozen branch-revision cache identities do not collide. |
 | `REVIEW-REVISION-001` | `[B]` | Viewed-file state is isolated by immutable head revision. |
 | `PRIVACY-001` | `[B]` | Telemetry opt-out takes effect after analytics startup, preserves unrelated preferences, and emitted payloads retain only approved coarse properties. |
+| `DIFF-PARSE-001` | `[B]` | Modified, added, deleted, renamed, binary, multi-hunk, no-newline-marker, and mode-only patch forms retain deterministic metadata. |
+| `DIFF-LARGE-001` | `[B]` | Exact 20,000-line and 2,000,000-character boundaries remain eligible for highlighted rendering; values above either boundary use plain mode. |
+| `TREE-SCALE-001` | `[B]` | A deterministic 10,000-file fixture preserves one unique canonical path and status per input file. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
@@ -111,6 +114,10 @@ The following requirement IDs are covered by
   procedure.
 - `[G]` Performance has bounded mounted-node assertions but no recorded fixture metrics for startup,
   memory, or large datasets.
+- `[G]` The current parser does not return typed failures for malformed hunk counts, quoted/escaped
+  paths, copy metadata, `GIT binary patch`, CRLF metadata, or combined diffs.
+- `[G]` The 10,000-file canonical inventory is covered, but the current tree component has no
+  bounded mounted-row assertion for that fixture.
 
 ## Baseline Snapshot Record
 
