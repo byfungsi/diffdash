@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {},
   "scripts": {
     "build": "tsc --noEmit",
     "audio": "node scripts/generate-audio.mjs",
@@ -13,6 +14,7 @@
     "render:all": "pnpm render && pnpm render:vertical && pnpm verify",
     "verify": "node scripts/verify-render.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "node --test",
     "lint": "oxlint src scripts --no-error-on-unmatched-pattern"
   },
   "dependencies": {

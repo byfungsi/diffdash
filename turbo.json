@@ -3,7 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "out/**"]
+      "outputs": []
     },
     "@diffdash/download-worker#build": {
       "outputs": []
@@ -13,6 +13,12 @@
     },
     "@diffdash/promo-capture#build": {
       "outputs": [".cache/host/**"]
+    },
+    "@diffdash/desktop#build": {
+      "outputs": ["out/**"]
+    },
+    "@diffdash/web#build": {
+      "outputs": ["dist/**"]
     },
     "@diffdash/promo-media#build": {
       "outputs": []

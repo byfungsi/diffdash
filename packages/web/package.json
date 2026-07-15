@@ -3,11 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "exports": {},
   "scripts": {
     "check:worker": "node --check worker/index.js",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test": "node --test",
     "lint": "oxlint src worker vite.config.ts --no-error-on-unmatched-pattern",
     "deploy": "pnpm check:worker && pnpm build && wrangler deploy",
     "deploy:dry-run": "pnpm check:worker && pnpm build && wrangler deploy --dry-run",

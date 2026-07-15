@@ -3,12 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {},
   "scripts": {
     "build": "vite build",
     "dev": "vite",
     "capture": "node capture.mjs",
     "record": "node record-demo.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "node --test",
     "lint": "oxlint src vite.config.ts --no-error-on-unmatched-pattern"
   },
   "dependencies": {

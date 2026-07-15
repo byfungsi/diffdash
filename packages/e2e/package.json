@@ -3,9 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {},
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "playwright test --list",
     "lint": "oxlint tests playwright.config.ts --no-error-on-unmatched-pattern",
     "test:desktop": "pnpm --filter @diffdash/desktop native:electron && playwright test --project=desktop",
     "package:e2e": "pnpm --filter @diffdash/desktop assets:icons && pnpm --filter @diffdash/desktop native:electron && pnpm --filter @diffdash/desktop build && node scripts/build-packaged-e2e.mjs",
