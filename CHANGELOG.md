@@ -4,7 +4,11 @@
 
 ### Minor Changes
 
-- 6756e1d: Add CLI commands for opening repository pull requests and comparing the current worktree with a fetched target branch.
+- ac41cc9: Add CLI commands for opening repository pull requests and comparing the current worktree with a fetched target branch.
+
+### Patch Changes
+
+- 836b595: Reliably forward CLI commands to an already-running DiffDash instance and show actionable repository errors.
 
 ## 0.2.1
 
