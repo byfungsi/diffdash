@@ -1,14 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
 
-import { ThreadMemory, ThreadMemorySummaryAlgorithm } from "../../shared/agent-run"
-import { ReviewAgentArtifactId } from "../../shared/review-agent"
+import { ThreadMemory, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
+import { ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import {
   MarkdownBody,
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
   type ReviewThreadMessageStatus,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   createFallbackThreadMemoryUpdate,
   FALLBACK_THREAD_MEMORY_SUMMARY_ALGORITHM,

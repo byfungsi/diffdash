@@ -6,7 +6,7 @@ import {
   DEFAULT_AI_SETTINGS,
   type AISettings,
   type ConcreteAIProvider,
-} from "../../shared/ai-settings"
+} from "@diffdash/domain/ai-settings"
 import { AIAgent, type AIAgentGenerateOptions, type AIProviderAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "./app-settings"

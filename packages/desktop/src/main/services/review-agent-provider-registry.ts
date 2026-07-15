@@ -4,8 +4,8 @@ import {
   AUTO_AI_PROVIDER_ORDER,
   type AIProvider,
   type ConcreteAIProvider,
-} from "../../shared/ai-settings"
-import type { ReviewAgentProviderId } from "../../shared/review-agent"
+} from "@diffdash/domain/ai-settings"
+import type { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { claudeReviewAgentLayer } from "./claude-review-agent"
 import { CliStreamService } from "./cli-stream"

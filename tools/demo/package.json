@@ -15,7 +15,8 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
-    "@diffdash/desktop": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

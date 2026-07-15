@@ -1,15 +1,15 @@
 import { Context, Effect, Layer, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 
-import { type SaveAgentRunArtifactInput, StoredAgentRunArtifact } from "../../shared/agent-run"
+import { type SaveAgentRunArtifactInput, StoredAgentRunArtifact } from "@diffdash/domain/agent-run"
 import {
   AgentRunId,
   ReviewAgentArtifact,
   ReviewAgentArtifactId,
   ReviewAgentArtifactType,
   ReviewAgentProviderId,
-} from "../../shared/review-agent"
-import { ReviewThreadId } from "../../shared/review-thread"
+} from "@diffdash/domain/review-agent"
+import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
 const ArtifactMetadata = Schema.Record({ key: Schema.String, value: Schema.Unknown })

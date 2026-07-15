@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Redacted } from "effect"
 
-import { THREAD_MODE_REVIEW_AGENT_PERMISSIONS } from "../../shared/review-agent"
+import { THREAD_MODE_REVIEW_AGENT_PERMISSIONS } from "@diffdash/domain/review-agent"
 import { makeOpenCodeServerConfig, resolveOpenCodeExecutable } from "./opencode-sdk-client"
 import { resolveReviewAgentPermissionConfig } from "./review-agent-permissions"
 

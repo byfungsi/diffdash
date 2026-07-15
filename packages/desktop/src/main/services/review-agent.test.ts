@@ -4,31 +4,26 @@ import { dirname, join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
 
-import { AgentPromptVersion } from "../../shared/agent-run"
-import { DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  PullRequestDetail,
-  PullRequestDiff,
-  ReviewActor,
-} from "../../shared/domain"
+import { AgentPromptVersion } from "@diffdash/domain/agent-run"
+import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
 import {
   ReviewAgentArtifact,
   ReviewAgentTurnResult,
   ReviewAgentUsage,
   ReviewThreadAgentResponse,
-} from "../../shared/review-agent"
-import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "../../shared/review-context"
+} from "@diffdash/domain/review-agent"
+import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
   ReviewRevision,
-} from "../../shared/review-identity"
-import { LineReviewAnchor, MarkdownBody } from "../../shared/review-thread"
+} from "@diffdash/domain/review-identity"
+import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AgentRunArtifactStore } from "./agent-run-artifact-store"
 import { AgentRunStore } from "./agent-run-store"
 import { AppConfig } from "./app-config"

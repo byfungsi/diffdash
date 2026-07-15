@@ -1,4 +1,4 @@
-import type { ParsedDiffFile } from "./domain"
+import type { ParsedDiffFile } from "./diff"
 
 /** Reasons a diff file is hidden by default in review navigation. */
 export type HiddenDiffFileReason = "binary" | "generated" | "lockfile" | "vendored"

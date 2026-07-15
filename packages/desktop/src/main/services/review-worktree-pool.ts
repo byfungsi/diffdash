@@ -4,9 +4,9 @@ import { access, mkdir, open, readFile, rename, rm, stat, writeFile } from "node
 import { dirname, join, relative, resolve } from "node:path"
 import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 
-import type { AgentRunId, ReviewAgentProgressStage } from "../../shared/review-agent"
-import type { PullRequestReviewSnapshot } from "../../shared/review-context"
-import type { ReviewThreadId } from "../../shared/review-thread"
+import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
+import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
+import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
 import { type CliStreamResult, type CliStreamRunner, CliStreamService } from "./cli-stream"
 

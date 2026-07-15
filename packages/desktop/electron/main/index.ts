@@ -48,46 +48,50 @@ import { ThreadMemoryStore } from "../../src/main/services/thread-memory-store"
 import { ViewedFileStore } from "../../src/main/services/viewed-file-store"
 import { WalkthroughService } from "../../src/main/services/walkthrough"
 import { WalkthroughStore } from "../../src/main/services/walkthrough-store"
-import { AISettings } from "../../src/shared/ai-settings"
-import { AnalyticsEvent } from "../../src/shared/analytics"
-import { DEFAULT_APP_STATE, AppState as SharedAppState } from "../../src/shared/app-state"
-import type { AppUpdateState } from "../../src/shared/app-update"
-import type { CliNavigationCommand } from "../../src/shared/cli-navigation"
-import { parseUnifiedDiff } from "../../src/shared/diff-parser"
-import type { LocalReviewSnapshot } from "../../src/shared/review-context"
+import { AISettings } from "@diffdash/domain/ai-settings"
+import { AnalyticsEvent } from "@diffdash/protocol/analytics"
+import { DEFAULT_APP_STATE, AppState as SharedAppState } from "@diffdash/domain/app-state"
+import type { AppUpdateState } from "@diffdash/protocol/app-update"
+import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import type { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import type {
-  LocalReviewDetail,
-  LocalReviewDiff,
   PullRequestDetail,
   PullRequestDiff,
   PullRequestSummary,
+} from "@diffdash/domain/pull-request"
+import type {
   Repo,
   RepositorySearchResult,
   RepositorySearchScope,
-} from "../../src/shared/domain"
-import { RepositorySearchRequest } from "../../src/shared/domain"
-import { AppPrerequisites, type DiffDashCliInstallResult } from "../../src/shared/prerequisites"
-import { LinkRepositoryCheckoutRequest } from "../../src/shared/repository-link"
-import { LocalReviewTarget } from "../../src/shared/local-review"
-import { ReviewAgentProgress } from "../../src/shared/review-agent"
-import { makePullRequestReviewKey } from "../../src/shared/review-identity"
+} from "@diffdash/domain/repository"
+import { RepositorySearchRequest } from "@diffdash/domain/repository"
+import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
+import { makePullRequestReviewKey } from "@diffdash/domain/review-identity"
 import {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
   isReviewAnchorInParsedDiff,
   type ReviewThread,
   type ReviewThreadDetails,
-  ReviewThreadIdRequest,
   ReviewThreadTarget,
+} from "@diffdash/domain/review-thread"
+import {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  ReviewThreadIdRequest,
   RunReviewThreadAgentRequest,
-} from "../../src/shared/review-thread"
+} from "@diffdash/protocol/review-threads"
 import {
   prepareWalkthroughPromptInput,
   type StoredWalkthrough,
   WALKTHROUGH_PROMPT_VERSION,
   walkthroughLocalDiffScope,
   walkthroughPullRequestScope,
-} from "../../src/shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 
 const startupStartedAt = Date.now() - process.uptime() * 1_000
 
@@ -274,33 +278,33 @@ const installIpcHandlers = (
   const lifecycle = createAppLifecycle({ dispose: () => runtime.dispose(), quit: () => app.quit() })
   app.on("before-quit", lifecycle.beforeQuit)
 
-  ipcMain.handle("analytics:start", async (): Promise<void> => {
+  ipcMain.handle(InvokeChannel.analyticsStart, async (): Promise<void> => {
     const analytics = await run(Analytics)
     return run(analytics.start)
   })
 
-  ipcMain.handle("analytics:capture", async (_event, input: unknown): Promise<void> => {
+  ipcMain.handle(InvokeChannel.analyticsCapture, async (_event, input: unknown): Promise<void> => {
     const event = await run(Schema.decodeUnknown(AnalyticsEvent)(input))
     const analytics = await run(Analytics)
     return run(analytics.capture(event))
   })
 
-  ipcMain.handle("updates:getState", async (): Promise<AppUpdateState> => {
+  ipcMain.handle(InvokeChannel.updatesGetState, async (): Promise<AppUpdateState> => {
     const updater = await run(AppUpdater)
     return run(updater.state)
   })
 
-  ipcMain.handle("updates:check", async (): Promise<void> => {
+  ipcMain.handle(InvokeChannel.updatesCheck, async (): Promise<void> => {
     const updater = await run(AppUpdater)
     return run(updater.check)
   })
 
-  ipcMain.handle("updates:download", async (): Promise<void> => {
+  ipcMain.handle(InvokeChannel.updatesDownload, async (): Promise<void> => {
     const updater = await run(AppUpdater)
     return run(updater.download)
   })
 
-  ipcMain.handle("updates:restartAndInstall", async (): Promise<void> => {
+  ipcMain.handle(InvokeChannel.updatesRestartAndInstall, async (): Promise<void> => {
     const updater = await run(AppUpdater)
     await lifecycle.restartAndInstall(() => Effect.runPromise(updater.quitAndInstall))
   })
@@ -310,7 +314,7 @@ const installIpcHandlers = (
       const updater = yield* AppUpdater
       yield* updater.subscribe((state) => {
         for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) window.webContents.send("updates:stateChanged", state)
+          if (!window.isDestroyed()) window.webContents.send(EventChannel.updateStateChanged, state)
         }
       })
       yield* updater.startAutomaticChecks
@@ -344,13 +348,16 @@ const installIpcHandlers = (
     return { repo, snapshot, prNumber: null } as const
   }
 
-  ipcMain.handle("repositories:list", async (_event, query?: string): Promise<readonly Repo[]> => {
-    const store = await run(RepositoryStore)
-    return run(store.list(query))
-  })
+  ipcMain.handle(
+    InvokeChannel.listRepositories,
+    async (_event, query?: string): Promise<readonly Repo[]> => {
+      const store = await run(RepositoryStore)
+      return run(store.list(query))
+    },
+  )
 
   ipcMain.handle(
-    "reviewThreads:list",
+    InvokeChannel.listReviewThreads,
     async (_event, input: unknown): Promise<readonly ReviewThread[]> => {
       const target = await run(Schema.decodeUnknown(ReviewThreadTarget)(input))
       const { repo, snapshot } = await resolveThreadReview(target)
@@ -368,7 +375,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "reviewThreads:addUserMessage",
+    InvokeChannel.addReviewThreadUserMessage,
     async (_event, input: unknown): Promise<ReviewThreadDetails> => {
       const request = await run(Schema.decodeUnknown(AddReviewThreadUserMessageRequest)(input))
       const threads = await run(ReviewThreadStore)
@@ -377,7 +384,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "reviewThreads:create",
+    InvokeChannel.createReviewThread,
     async (_event, input: unknown): Promise<ReviewThreadDetails> => {
       const request = await run(Schema.decodeUnknown(CreateReviewThreadRequest)(input))
       const { repo, snapshot, prNumber } = await resolveThreadReview(request.target)
@@ -406,7 +413,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "reviewThreads:get",
+    InvokeChannel.getReviewThread,
     async (_event, input: unknown): Promise<ReviewThreadDetails> => {
       const request = await run(Schema.decodeUnknown(ReviewThreadIdRequest)(input))
       const threads = await run(ReviewThreadStore)
@@ -415,7 +422,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "reviewThreads:runAgent",
+    InvokeChannel.runReviewThreadAgent,
     async (event, input: unknown): Promise<ReviewThreadDetails> => {
       const request = await run(Schema.decodeUnknown(RunReviewThreadAgentRequest)(input))
       const { repo, snapshot } = await resolveThreadReview(request.target)
@@ -440,7 +447,7 @@ const installIpcHandlers = (
             Effect.sync(() => {
               if (event.sender.isDestroyed()) return
               event.sender.send(
-                "reviewThreads:agentProgress",
+                EventChannel.reviewThreadAgentProgress,
                 ReviewAgentProgress.make({ threadId: request.threadId, stage }),
               )
             }),
@@ -449,34 +456,40 @@ const installIpcHandlers = (
     },
   )
 
-  ipcMain.handle("settings:get", async (): Promise<AISettings> => {
+  ipcMain.handle(InvokeChannel.settingsGet, async (): Promise<AISettings> => {
     const settings = await run(AppSettings)
     return run(settings.get)
   })
 
-  ipcMain.handle("settings:update", async (_event, input: unknown): Promise<AISettings> => {
-    const parsed = await run(Schema.decodeUnknown(AISettings)(input))
-    const settings = await run(AppSettings)
-    return run(settings.save(parsed))
-  })
+  ipcMain.handle(
+    InvokeChannel.settingsUpdate,
+    async (_event, input: unknown): Promise<AISettings> => {
+      const parsed = await run(Schema.decodeUnknown(AISettings)(input))
+      const settings = await run(AppSettings)
+      return run(settings.save(parsed))
+    },
+  )
 
-  ipcMain.handle("appState:get", async (): Promise<SharedAppState> => {
+  ipcMain.handle(InvokeChannel.appStateGet, async (): Promise<SharedAppState> => {
     if (isDebugOnboardingEnabled()) return DEFAULT_APP_STATE
 
     const appState = await run(AppState)
     return run(appState.get)
   })
 
-  ipcMain.handle("appState:update", async (_event, input: unknown): Promise<SharedAppState> => {
-    const parsed = await run(Schema.decodeUnknown(SharedAppState)(input))
-    if (isDebugOnboardingEnabled()) return parsed
+  ipcMain.handle(
+    InvokeChannel.appStateUpdate,
+    async (_event, input: unknown): Promise<SharedAppState> => {
+      const parsed = await run(Schema.decodeUnknown(SharedAppState)(input))
+      if (isDebugOnboardingEnabled()) return parsed
 
-    const appState = await run(AppState)
-    return run(appState.save(parsed))
-  })
+      const appState = await run(AppState)
+      return run(appState.save(parsed))
+    },
+  )
 
   ipcMain.handle(
-    "repositories:setFavorite",
+    InvokeChannel.setRepositoryFavorite,
     async (_event, id: string, isFavorite: boolean): Promise<Repo> => {
       const store = await run(RepositoryStore)
       return run(store.setFavorite(id, isFavorite))
@@ -484,7 +497,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "repositories:favoriteRemote",
+    InvokeChannel.favoriteRemoteRepository,
     async (_event, repo: RepositorySearchResult): Promise<Repo> => {
       const store = await run(RepositoryStore)
       return run(
@@ -500,40 +513,46 @@ const installIpcHandlers = (
     },
   )
 
-  ipcMain.handle("repositories:addLocal", async (_event, localPath: string): Promise<Repo> => {
-    const git = await run(GitService)
-    const gitProvider = await run(GitProvider)
-    const store = await run(RepositoryStore)
-    const rootPath = await run(git.detectRoot(localPath))
-    try {
-      const checkout = await run(git.detectRepository(rootPath))
-      const detected = await run(gitProvider.parseRemoteUrl(checkout.remoteUrl))
-      return run(
-        store.upsertRepository({
-          provider: detected.provider,
-          owner: detected.owner,
-          name: detected.name,
-          remoteUrl: checkout.remoteUrl,
-          localPath: checkout.rootPath,
-          isFavorite: true,
-        }),
-      )
-    } catch {
-      return run(store.upsertRepository(localRepositoryInput(rootPath)))
-    }
-  })
+  ipcMain.handle(
+    InvokeChannel.addLocalRepository,
+    async (_event, localPath: string): Promise<Repo> => {
+      const git = await run(GitService)
+      const gitProvider = await run(GitProvider)
+      const store = await run(RepositoryStore)
+      const rootPath = await run(git.detectRoot(localPath))
+      try {
+        const checkout = await run(git.detectRepository(rootPath))
+        const detected = await run(gitProvider.parseRemoteUrl(checkout.remoteUrl))
+        return run(
+          store.upsertRepository({
+            provider: detected.provider,
+            owner: detected.owner,
+            name: detected.name,
+            remoteUrl: checkout.remoteUrl,
+            localPath: checkout.rootPath,
+            isFavorite: true,
+          }),
+        )
+      } catch {
+        return run(store.upsertRepository(localRepositoryInput(rootPath)))
+      }
+    },
+  )
 
-  ipcMain.handle("repositories:install", async (_event, localPath: string): Promise<Repo> => {
-    const linker = await run(RepositoryLinker)
-    try {
-      return await run(linker.install(localPath))
-    } catch (error) {
-      if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
-      throw error
-    }
-  })
+  ipcMain.handle(
+    InvokeChannel.installRepository,
+    async (_event, localPath: string): Promise<Repo> => {
+      const linker = await run(RepositoryLinker)
+      try {
+        return await run(linker.install(localPath))
+      } catch (error) {
+        if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
+        throw error
+      }
+    },
+  )
 
-  ipcMain.handle("repositories:link", async (_event, input: unknown): Promise<Repo> => {
+  ipcMain.handle(InvokeChannel.linkRepository, async (_event, input: unknown): Promise<Repo> => {
     const request = await run(Schema.decodeUnknown(LinkRepositoryCheckoutRequest)(input))
     const linker = await run(RepositoryLinker)
     try {
@@ -544,7 +563,7 @@ const installIpcHandlers = (
     }
   })
 
-  ipcMain.handle("repositories:selectLocalFolder", async (): Promise<string | null> => {
+  ipcMain.handle(InvokeChannel.selectLocalFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
       properties: ["openDirectory"],
       title: "Select a local Git repository",
@@ -553,7 +572,7 @@ const installIpcHandlers = (
   })
 
   ipcMain.handle(
-    "gitProvider:searchRepositories",
+    InvokeChannel.searchRepositories,
     async (_event, input: unknown): Promise<readonly RepositorySearchResult[]> => {
       const request = await run(Schema.decodeUnknown(RepositorySearchRequest)(input))
       const gitProvider = await run(GitProvider)
@@ -570,7 +589,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:listSearchScopes",
+    InvokeChannel.listSearchScopes,
     async (): Promise<readonly RepositorySearchScope[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listSearchScopes())
@@ -578,7 +597,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:listPullRequests",
+    InvokeChannel.listPullRequests,
     async (_event, owner: string, name: string): Promise<readonly PullRequestSummary[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listPullRequests(owner, name))
@@ -586,7 +605,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:listReviewRequests",
+    InvokeChannel.listReviewRequests,
     async (): Promise<readonly PullRequestSummary[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listReviewRequests())
@@ -594,7 +613,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:getPullRequestDetail",
+    InvokeChannel.getPullRequestDetail,
     async (_event, owner: string, name: string, number: number): Promise<PullRequestDetail> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.getPullRequestDetail(owner, name, number))
@@ -602,7 +621,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:refreshPullRequestDetail",
+    InvokeChannel.refreshPullRequestDetail,
     async (_event, owner: string, name: string, number: number): Promise<PullRequestDetail> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.refreshPullRequestDetail(owner, name, number))
@@ -610,7 +629,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:getPullRequestDiff",
+    InvokeChannel.getPullRequestDiff,
     async (_event, owner: string, name: string, number: number): Promise<PullRequestDiff> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.getPullRequestDiff(owner, name, number))
@@ -618,7 +637,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:hasApprovedPullRequest",
+    InvokeChannel.hasApprovedPullRequest,
     async (_event, owner: string, name: string, number: number): Promise<boolean> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.hasApprovedPullRequest(owner, name, number))
@@ -626,7 +645,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "gitProvider:approvePullRequest",
+    InvokeChannel.approvePullRequest,
     async (_event, owner: string, name: string, number: number): Promise<void> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.approvePullRequest(owner, name, number))
@@ -634,7 +653,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localReviews:resolveBranch",
+    InvokeChannel.resolveLocalBranch,
     async (_event, localPath: string, branchName: string | null): Promise<LocalReviewTarget> => {
       const git = await run(GitService)
       return run(git.resolveBranchComparison(localPath, branchName))
@@ -642,7 +661,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localReviews:getDetail",
+    InvokeChannel.localReviewDetail,
     async (_event, input: unknown): Promise<LocalReviewDetail> => {
       const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const git = await run(GitService)
@@ -654,7 +673,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localReviews:getDiff",
+    InvokeChannel.localReviewDiff,
     async (_event, input: unknown): Promise<LocalReviewDiff> => {
       const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const git = await run(GitService)
@@ -666,7 +685,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localReviews:getSnapshot",
+    InvokeChannel.localReviewSnapshot,
     async (_event, input: unknown): Promise<LocalReviewSnapshot> => {
       const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const git = await run(GitService)
@@ -677,12 +696,15 @@ const installIpcHandlers = (
     },
   )
 
-  ipcMain.handle("navigation:drainCommands", async (): Promise<readonly CliNavigationCommand[]> => {
-    return navigationCommandQueue.drain()
-  })
+  ipcMain.handle(
+    InvokeChannel.drainNavigationCommands,
+    async (): Promise<readonly CliNavigationCommand[]> => {
+      return navigationCommandQueue.drain()
+    },
+  )
 
   ipcMain.handle(
-    "walkthroughs:get",
+    InvokeChannel.getWalkthrough,
     async (
       _event,
       owner: string,
@@ -716,7 +738,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localWalkthroughs:get",
+    InvokeChannel.getLocalWalkthrough,
     async (
       _event,
       input: unknown,
@@ -742,7 +764,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "viewedFiles:list",
+    InvokeChannel.listViewedFiles,
     async (
       _event,
       owner: string,
@@ -767,7 +789,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "viewedFiles:set",
+    InvokeChannel.setViewedFile,
     async (
       _event,
       owner: string,
@@ -804,7 +826,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "viewedFiles:listLocal",
+    InvokeChannel.listLocalViewedFiles,
     async (_event, rootPath: string, headSha: string): Promise<readonly string[]> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
@@ -816,7 +838,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "viewedFiles:setLocal",
+    InvokeChannel.setLocalViewedFile,
     async (
       _event,
       rootPath: string,
@@ -844,7 +866,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "walkthroughs:generate",
+    InvokeChannel.generateWalkthrough,
     async (
       _event,
       owner: string,
@@ -923,7 +945,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "localWalkthroughs:generate",
+    InvokeChannel.generateLocalWalkthrough,
     async (_event, input: unknown, regenerate: boolean): Promise<StoredWalkthrough> => {
       const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const contexts = await run(ReviewContextService)
@@ -973,24 +995,27 @@ const installIpcHandlers = (
     },
   )
 
-  ipcMain.handle("app:diagnostics", async (): Promise<AppPrerequisites> => {
+  ipcMain.handle(InvokeChannel.appDiagnostics, async (): Promise<AppPrerequisites> => {
     if (isDebugOnboardingEnabled()) return debugMissingPrerequisites()
 
     const prerequisites = await run(Prerequisites)
     return run(prerequisites.get)
   })
 
-  ipcMain.handle("app:installDiffDashCli", async (): Promise<DiffDashCliInstallResult> => {
-    const prerequisites = await run(Prerequisites)
-    return run(prerequisites.installDiffDashCli)
-  })
+  ipcMain.handle(
+    InvokeChannel.appInstallDiffDashCli,
+    async (): Promise<DiffDashCliInstallResult> => {
+      const prerequisites = await run(Prerequisites)
+      return run(prerequisites.installDiffDashCli)
+    },
+  )
 
-  ipcMain.handle("app:openExternalUrl", async (_event, url: string): Promise<void> => {
+  ipcMain.handle(InvokeChannel.appOpenExternalUrl, async (_event, url: string): Promise<void> => {
     await openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
   })
 
   ipcMain.handle(
-    "app:openRepositoryFile",
+    InvokeChannel.appOpenRepositoryFile,
     async (
       _event,
       owner: string,
@@ -1063,7 +1088,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    "app:openLocalRepositoryFile",
+    InvokeChannel.appOpenLocalRepositoryFile,
     async (_event, rootPath: string, filePath: string): Promise<void> => {
       const git = await run(GitService)
       const canonicalRootPath = await run(git.detectRoot(rootPath))
@@ -1114,7 +1139,7 @@ const enqueueNavigationCommand = (command: CliNavigationCommand) => {
   if (targetWindow === null || targetWindow.isDestroyed()) return
 
   revealWindow(targetWindow)
-  targetWindow.webContents.send("navigation:commandsAvailable")
+  targetWindow.webContents.send(EventChannel.navigationCommandsAvailable)
 }
 
 const createWindow = () => {
@@ -1223,7 +1248,7 @@ const createWindow = () => {
       logStartupStage("renderer loaded")
       showMainWindow()
       if (navigationCommandQueue.hasPending()) {
-        window.webContents.send("navigation:commandsAvailable")
+        window.webContents.send(EventChannel.navigationCommandsAvailable)
       }
       return undefined
     })

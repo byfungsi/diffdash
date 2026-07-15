@@ -15,7 +15,7 @@ import {
   type AppUpdateState,
   AppUpdateUnsupported,
   type AppUpdateUnsupportedReason,
-} from "../../shared/app-update"
+} from "@diffdash/protocol/app-update"
 
 const DEFAULT_UPDATE_BASE_URL = "https://download.usediffdash.com/updates/stable"
 const INITIAL_CHECK_DELAY_MS = 10_000

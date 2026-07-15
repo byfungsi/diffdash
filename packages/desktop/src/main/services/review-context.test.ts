@@ -1,14 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
-import {
-  PullRequestDetail,
-  PullRequestDiff,
-  ReviewActor,
-  type LocalReviewDetail,
-  type LocalReviewDiff,
-} from "../../shared/domain"
-import type { LocalReviewSnapshot } from "../../shared/review-context"
+import type { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
+import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import { GitService } from "./git"
 import { GitProvider } from "./git-provider"
 import { ReviewContextError, ReviewContextService } from "./review-context"

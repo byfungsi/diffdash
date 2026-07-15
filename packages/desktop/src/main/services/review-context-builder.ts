@@ -5,14 +5,14 @@ import {
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   type ReviewAgentArtifact,
   type ReviewAgentArtifactId,
-} from "../../shared/review-agent"
-import { PullRequestReviewSnapshot, type ReviewSnapshot } from "../../shared/review-context"
-import type { ReviewFileId, ReviewHunkId } from "../../shared/review-identity"
+} from "@diffdash/domain/review-agent"
+import { PullRequestReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import type { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
 import type {
   ReviewThread,
   ReviewThreadAnchor,
   ReviewThreadMessage,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 
 const DEFAULT_TOTAL_PROMPT_BUDGET_BYTES = 64 * 1024
 const MAX_ANCHOR_HUNK_BYTES = 32 * 1024

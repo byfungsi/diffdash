@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 
 import {
-  type AddReviewThreadUserMessageRequest,
+  type AddReviewThreadUserMessageInput,
   type CreatePendingReviewThreadAgentMessageInput,
   type CreateReviewThreadInput,
   MarkdownBody,
@@ -19,8 +19,8 @@ import {
   ReviewThreadMessageId,
   ReviewThreadMessageStatus,
   type ReviewThreadRevisionKey,
-} from "../../shared/review-thread"
-import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+} from "@diffdash/domain/review-thread"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
 /** One thread's complete current-revision mapping, persisted as a single logical update. */
@@ -104,7 +104,7 @@ export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore"
       input: CreatePendingReviewThreadAgentMessageInput,
     ) => Effect.Effect<ReviewThreadMessage, ReviewThreadStoreError>
     readonly addUserMessage: (
-      input: AddReviewThreadUserMessageRequest,
+      input: AddReviewThreadUserMessageInput,
     ) => Effect.Effect<ReviewThreadDetails, ReviewThreadStoreError>
     readonly completeAgentMessage: (
       input: CompleteReviewThreadAgentMessageInput,

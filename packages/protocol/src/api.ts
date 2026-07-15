@@ -1,34 +1,40 @@
-import type { AISettings } from "./ai-settings"
+import type { AISettings } from "@diffdash/domain/ai-settings"
 import type { AnalyticsEvent } from "./analytics"
-import type { AppState } from "./app-state"
+import type { AppState } from "@diffdash/domain/app-state"
 import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
 import type {
   LocalReviewDetail,
   LocalReviewDiff,
+  LocalReviewTarget,
+} from "@diffdash/domain/local-review"
+import type {
   PullRequestDetail,
   PullRequestDiff,
   PullRequestSummary,
+} from "@diffdash/domain/pull-request"
+import type {
   Repo,
   RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
-} from "./domain"
+} from "@diffdash/domain/repository"
+import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
+import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import type { LinkRepositoryCheckoutRequest } from "./repository-link"
-import type { LocalReviewTarget } from "./local-review"
-import type { LocalReviewSnapshot } from "./review-context"
-import type { ReviewAgentProgress } from "./review-agent"
 import type {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
   ReviewThreadTarget,
+} from "@diffdash/domain/review-thread"
+import type {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
   RunReviewThreadAgentRequest,
-} from "./review-thread"
-import type { StoredWalkthrough } from "./walkthrough"
+} from "./review-threads"
+import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 
 /** Complete renderer-facing platform contract implemented by preload and demo runtimes. */
 export interface DiffDashApi {

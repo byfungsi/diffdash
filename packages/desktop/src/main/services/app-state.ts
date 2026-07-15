@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
-import { AppState as SharedAppState, DEFAULT_APP_STATE } from "../../shared/app-state"
+import { AppState as SharedAppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
 import { AppConfig } from "./app-config"
 
 const AppStateFromJson = Schema.parseJson(SharedAppState)

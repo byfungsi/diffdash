@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { DiffDashApi } from "../../shared/diffdash-api"
+import type { DiffDashApi } from "@diffdash/protocol/api"
 
 declare global {
   interface ImportMetaEnv {

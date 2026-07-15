@@ -9,7 +9,7 @@
       "!**/dist",
       "!**/.turbo",
       "!**/coverage",
-      "!test-results",
+      "!**/test-results",
       "!demo/.cache",
       "!media/.cache",
       "!media/output",

@@ -1,5 +1,5 @@
-import { filterVisibleDiffFiles } from "./diff-file-filters"
-import type { ParsedDiffFile } from "./domain"
+import { filterVisibleDiffFiles } from "@diffdash/domain/diff-file-filters"
+import type { ParsedDiffFile } from "@diffdash/domain/diff"
 
 /** Git-style status values supported by @pierre/trees. */
 export type FileTreeGitStatus = "added" | "deleted" | "modified" | "renamed" | "untracked"

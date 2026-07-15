@@ -12,8 +12,11 @@
     "lint": "oxlint src vite.config.ts --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@diffdash/app": "workspace:*",
     "@diffdash/demo": "workspace:*",
     "@diffdash/desktop": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
     "effect": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"

@@ -4,20 +4,20 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "../../shared/agent-run"
+import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import {
   ReviewAgentArtifact,
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 import {
   makePullRequestReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
-} from "../../shared/review-identity"
-import { LineReviewAnchor, MarkdownBody } from "../../shared/review-thread"
+} from "@diffdash/domain/review-identity"
+import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"

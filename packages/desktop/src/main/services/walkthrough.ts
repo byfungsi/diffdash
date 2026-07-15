@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import type { LocalReviewDetail, PullRequestDetail } from "../../shared/domain"
+import type { LocalReviewDetail } from "@diffdash/domain/local-review"
+import type { PullRequestDetail } from "@diffdash/domain/pull-request"
 import {
   Walkthrough,
   type WalkthroughGenerationDetails,
@@ -8,7 +9,7 @@ import {
   type WalkthroughPromptStats,
   validateWalkthrough,
   type WalkthroughValidationError,
-} from "../../shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 import { AIAgent, type AIAgentGenerateOptions } from "./ai-agent"
 import type { CliError } from "./cli"
 

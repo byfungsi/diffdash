@@ -6,23 +6,22 @@ import {
   PullRequestDiff,
   PullRequestFile,
   PullRequestSummary,
-  Repo,
-  RepositorySearchScope,
   ReviewActor,
-  type ParsedDiff,
-} from "../../../packages/desktop/src/shared/domain"
-import { parseUnifiedDiff } from "../../../packages/desktop/src/shared/diff-parser"
-import { PullRequestReviewSnapshot } from "../../../packages/desktop/src/shared/review-context"
+} from "@diffdash/domain/pull-request"
+import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import type { ParsedDiff } from "@diffdash/domain/diff"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   makePullRequestReviewKey,
   ReviewRevision,
   type ReviewKey,
-} from "../../../packages/desktop/src/shared/review-identity"
+} from "@diffdash/domain/review-identity"
 import {
   ReviewAgentProgress,
   ReviewAgentProgressStage,
   ReviewThreadAgentResponse,
-} from "../../../packages/desktop/src/shared/review-agent"
+} from "@diffdash/domain/review-agent"
 import {
   isReviewAnchorInParsedDiff,
   LineReviewAnchor,
@@ -32,7 +31,7 @@ import {
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
-} from "../../../packages/desktop/src/shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   buildWalkthroughHunkDigest,
   StoredWalkthrough,
@@ -44,7 +43,7 @@ import {
   WalkthroughStop,
   WalkthroughSupportItem,
   type WalkthroughHunkDigest,
-} from "../../../packages/desktop/src/shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 
 /** Stable locator for an authored walkthrough hunk before parser IDs are derived. */
 export class DemoHunkLocator extends Schema.Class<DemoHunkLocator>("DemoHunkLocator")({

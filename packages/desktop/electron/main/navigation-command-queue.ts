@@ -1,4 +1,4 @@
-import type { CliNavigationCommand } from "../../src/shared/cli-navigation"
+import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 
 /** Creates the in-memory FIFO used to retain navigation commands until the renderer drains them. */
 export const createNavigationCommandQueue = () => {

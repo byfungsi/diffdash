@@ -1,15 +1,15 @@
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { DiffDashApi } from "../../shared/diffdash-api"
-import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
-import type { AppState } from "../../shared/app-state"
+import type { DiffDashApi } from "@diffdash/protocol/api"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import type { AppState } from "@diffdash/domain/app-state"
 import {
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
   OpenPullRequestCommand,
   OpenWorkingTreeCommand,
   type CliNavigationCommand,
-} from "../../shared/cli-navigation"
+} from "@diffdash/protocol/cli-navigation"
 import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
@@ -17,29 +17,30 @@ import {
   AppUpdateFailed,
   type AppUpdateState,
   AppUpdateUnsupported,
-} from "../../shared/app-update"
-import { parseUnifiedDiff } from "../../shared/diff-parser"
+} from "@diffdash/protocol/app-update"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import {
-  LocalReviewDetail,
-  LocalReviewDiff,
   PullRequestDetail,
   PullRequestDiff,
   PullRequestFile,
   PullRequestSummary,
+  ReviewActor,
+} from "@diffdash/domain/pull-request"
+import {
   Repo,
   type RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
-  ReviewActor,
-} from "../../shared/domain"
-import { AppPrerequisites } from "../../shared/prerequisites"
+} from "@diffdash/domain/repository"
+import { AppPrerequisites } from "@diffdash/protocol/prerequisites"
 import {
   BranchComparison,
   LocalReviewTarget,
   workingTreeReviewTarget,
-} from "../../shared/local-review"
-import { LocalReviewSnapshot } from "../../shared/review-context"
-import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+} from "@diffdash/domain/local-review"
+import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   StoredWalkthrough,
   Walkthrough,
@@ -47,7 +48,7 @@ import {
   WalkthroughGenerationDetails,
   WalkthroughStop,
   WalkthroughSupportItem,
-} from "../../shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 import { App, prepareReviewFileTreeInput } from "./app"
 import "./styles.css"
 

@@ -4,7 +4,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-import { DEFAULT_APP_STATE } from "../../shared/app-state"
+import { DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
 import { AppConfig } from "./app-config"
 import { AppState } from "./app-state"
 

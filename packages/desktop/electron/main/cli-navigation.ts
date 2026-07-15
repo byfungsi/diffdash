@@ -7,7 +7,7 @@ import {
   OpenPullRequestCommand,
   OpenWorkingTreeCommand,
   type CliNavigationCommand,
-} from "../../src/shared/cli-navigation"
+} from "@diffdash/protocol/cli-navigation"
 
 /** Private argv sentinel used by update-safe DiffDash launchers. */
 export const DIFFDASH_CLI_ARG = "--diffdash-cli-v1"

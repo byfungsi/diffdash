@@ -4,7 +4,7 @@ import { dirname, join } from "node:path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { PostHog } from "posthog-node"
 
-import type { AnalyticsEvent } from "../../shared/analytics"
+import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "./app-settings"
 

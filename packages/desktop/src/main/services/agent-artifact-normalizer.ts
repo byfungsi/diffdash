@@ -6,7 +6,7 @@ import {
   ReviewAgentArtifact,
   type ReviewAgentArtifactType,
   type ReviewAgentProviderId,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 
 /** Default maximum UTF-8 byte size retained for one normalized artifact body. */
 export const DEFAULT_AGENT_ARTIFACT_CONTENT_LIMIT_BYTES = 64 * 1024

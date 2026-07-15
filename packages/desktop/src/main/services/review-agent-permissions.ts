@@ -1,4 +1,4 @@
-import type { ReviewAgentPermissions, ReviewAgentProviderId } from "../../shared/review-agent"
+import type { ReviewAgentPermissions, ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 
 const DIFFDASH_MCP_TOOLS = [
   "getReviewContext",

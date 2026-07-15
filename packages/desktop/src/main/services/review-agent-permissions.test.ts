@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 
-import { THREAD_MODE_REVIEW_AGENT_PERMISSIONS } from "../../shared/review-agent"
+import { THREAD_MODE_REVIEW_AGENT_PERMISSIONS } from "@diffdash/domain/review-agent"
 import { resolveReviewAgentPermissionConfig } from "./review-agent-permissions"
 
 describe("review agent permission configuration", () => {

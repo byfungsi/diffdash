@@ -5,7 +5,7 @@ import {
   Walkthrough,
   type SaveWalkthroughInput,
   type WalkthroughCacheKey,
-} from "../../shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 import { DatabaseService } from "./database"
 
 interface WalkthroughRow {

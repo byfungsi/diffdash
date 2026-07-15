@@ -1,4 +1,4 @@
-import { ParsedDiff, ParsedDiffFile, ParsedDiffHunk, type DiffFileStatus } from "./domain"
+import { ParsedDiff, ParsedDiffFile, ParsedDiffHunk, type DiffFileStatus } from "./diff"
 import { makeReviewFileId, makeReviewHunkFingerprint, makeReviewHunkId } from "./review-identity"
 
 interface DraftHunk {

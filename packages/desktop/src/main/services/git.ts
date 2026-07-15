@@ -2,21 +2,18 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { basename } from "node:path"
 
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  PullRequestFile,
-  type DetectedRepositoryCheckout,
-} from "../../shared/domain"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { PullRequestFile } from "@diffdash/domain/pull-request"
+import type { DetectedRepositoryCheckout } from "@diffdash/domain/repository"
 import {
   BranchComparison,
   type LocalReviewComparison,
   LocalReviewTarget,
   workingTreeReviewTarget,
-} from "../../shared/local-review"
-import { LocalReviewSnapshot } from "../../shared/review-context"
-import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+} from "@diffdash/domain/local-review"
+import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { CliService, type CliError } from "./cli"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"

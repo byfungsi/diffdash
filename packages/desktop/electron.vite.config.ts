@@ -15,6 +15,8 @@ const packageVersion =
     ? packageJson.version
     : "0.0.0"
 
+const internalPackages = ["@diffdash/app", "@diffdash/domain", "@diffdash/protocol"]
+
 const appVersion = (() => {
   try {
     const tag = execFileSync(
@@ -44,7 +46,7 @@ export default defineConfig(({ mode }) => {
         "process.env.VITE_POSTHOG_HOST": JSON.stringify(posthogHost),
         "process.env.VITE_POSTHOG_KEY": JSON.stringify(posthogKey),
       },
-      plugins: [externalizeDepsPlugin()],
+      plugins: [externalizeDepsPlugin({ exclude: internalPackages })],
       build: {
         rollupOptions: {
           input: resolve("electron/main/index.ts"),
@@ -52,7 +54,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     preload: {
-      plugins: [externalizeDepsPlugin()],
+      plugins: [externalizeDepsPlugin({ exclude: internalPackages })],
       build: {
         rollupOptions: {
           input: resolve("electron/preload/index.ts"),

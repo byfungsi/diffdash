@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import type { LocalReviewSnapshot } from "../../shared/review-context"
-import { PullRequestReviewSnapshot } from "../../shared/review-context"
-import { makePullRequestReviewKey, ReviewRevision } from "../../shared/review-identity"
-import type { LocalReviewTarget } from "../../shared/local-review"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
+import { makePullRequestReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { GitService } from "./git"
 import { GitProvider } from "./git-provider"
 

@@ -1,0 +1,38 @@
+{
+  "name": "@diffdash/domain",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./agent-run": "./src/agent-run.ts",
+    "./ai-settings": "./src/ai-settings.ts",
+    "./app-state": "./src/app-state.ts",
+    "./diff": "./src/diff.ts",
+    "./diff-file-filters": "./src/diff-file-filters.ts",
+    "./diff-parser": "./src/diff-parser.ts",
+    "./large-diff-policy": "./src/large-diff-policy.ts",
+    "./local-review": "./src/local-review.ts",
+    "./pull-request": "./src/pull-request.ts",
+    "./repository": "./src/repository.ts",
+    "./review-agent": "./src/review-agent.ts",
+    "./review-context": "./src/review-context.ts",
+    "./review-identity": "./src/review-identity.ts",
+    "./review-thread": "./src/review-thread.ts",
+    "./walkthrough": "./src/walkthrough.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

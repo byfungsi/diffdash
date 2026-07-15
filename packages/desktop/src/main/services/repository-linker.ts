@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import type { Repo } from "../../shared/domain"
-import type { LinkRepositoryCheckoutRequest } from "../../shared/repository-link"
+import type { Repo } from "@diffdash/domain/repository"
+import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitService } from "./git"
 import { GitProvider } from "./git-provider"
 import { RepositoryStore } from "./repository-store"

@@ -1,4 +1,4 @@
-import type { ParsedDiffFile } from "./domain"
+import type { ParsedDiffFile } from "./diff"
 
 /** Changed-line threshold after which a diff is treated as very large. */
 export const VERY_LARGE_DIFF_CHANGED_LINE_THRESHOLD = 20_000

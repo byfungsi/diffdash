@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { OpenBranchDiffCommand, OpenWorkingTreeCommand } from "../../src/shared/cli-navigation"
+import { OpenBranchDiffCommand, OpenWorkingTreeCommand } from "@diffdash/protocol/cli-navigation"
 import { createNavigationCommandQueue } from "./navigation-command-queue"
 
 describe("createNavigationCommandQueue", () => {

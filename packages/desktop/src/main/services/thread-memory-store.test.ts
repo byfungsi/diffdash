@@ -4,15 +4,15 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
-import { ThreadMemorySummaryAlgorithm } from "../../shared/agent-run"
+import { ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import {
   makePullRequestReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
-} from "../../shared/review-identity"
-import { LineReviewAnchor, MarkdownBody } from "../../shared/review-thread"
+} from "@diffdash/domain/review-identity"
+import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"

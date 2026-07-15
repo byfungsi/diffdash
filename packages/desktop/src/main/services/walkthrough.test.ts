@@ -1,14 +1,17 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 
+import { LocalReviewDetail } from "@diffdash/domain/local-review"
 import {
-  LocalReviewDetail,
   PullRequestCommit,
   PullRequestDetail,
   PullRequestFile,
   ReviewActor,
-} from "../../shared/domain"
-import { WalkthroughGenerationDetails, type WalkthroughHunkDigest } from "../../shared/walkthrough"
+} from "@diffdash/domain/pull-request"
+import {
+  WalkthroughGenerationDetails,
+  type WalkthroughHunkDigest,
+} from "@diffdash/domain/walkthrough"
 import { AIAgent, type AIAgentReasoningEffort } from "./ai-agent"
 import { WalkthroughService } from "./walkthrough"
 

@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 
 import { getHiddenDiffFileReason } from "./diff-file-filters"
-import { ParsedDiffFile } from "./domain"
+import { ParsedDiffFile } from "./diff"
 import { changedLineCount, isVeryLargeDiff } from "./large-diff-policy"
 
 /** Prompt/cache version for the bounded hunk-backed walkthrough contract. */

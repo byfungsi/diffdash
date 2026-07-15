@@ -1,12 +1,8 @@
 import { Schema } from "effect"
 
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  ParsedDiff,
-  PullRequestDetail,
-  PullRequestDiff,
-} from "./domain"
+import { ParsedDiff } from "./diff"
+import { LocalReviewDetail, LocalReviewDiff } from "./local-review"
+import { PullRequestDetail, PullRequestDiff } from "./pull-request"
 import { ReviewKey, ReviewRevision } from "./review-identity"
 
 /** Coherent metadata and diff content for one GitHub pull request revision. */

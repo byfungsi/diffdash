@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
-import { RepositorySearchRequest } from "../../shared/domain"
+import { RepositorySearchRequest } from "@diffdash/domain/repository"
 import { CliError, CliService, type CliResult } from "./cli"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { GitHubCliParseError, GitHubProvider, parseGitHubRemote } from "./github"

@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect"
 
-import { DEFAULT_AI_SETTINGS, type ClaudeModel } from "../../shared/ai-settings"
+import { DEFAULT_AI_SETTINGS, type ClaudeModel } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,

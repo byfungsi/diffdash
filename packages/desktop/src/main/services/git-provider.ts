@@ -2,13 +2,15 @@ import { Context, Effect, Schema } from "effect"
 
 import type {
   ProviderRepositoryReference,
-  PullRequestDetail,
-  PullRequestDiff,
-  PullRequestSummary,
   RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
-} from "../../shared/domain"
+} from "@diffdash/domain/repository"
+import type {
+  PullRequestDetail,
+  PullRequestDiff,
+  PullRequestSummary,
+} from "@diffdash/domain/pull-request"
 
 /** A typed failure for unsupported or malformed provider remote URLs. */
 export class GitProviderRemoteParseError extends Schema.TaggedError<GitProviderRemoteParseError>()(

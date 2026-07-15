@@ -6,11 +6,13 @@ import {
   PullRequestDiff,
   PullRequestFile,
   PullRequestSummary,
+  ReviewActor,
+} from "@diffdash/domain/pull-request"
+import {
   type RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
-  ReviewActor,
-} from "../../shared/domain"
+} from "@diffdash/domain/repository"
 import { CliService, type CliError, type CliResult, type CliRunOptions } from "./cli"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 

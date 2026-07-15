@@ -9,14 +9,14 @@ import {
   type FailAgentRunInput,
   type SetAgentProviderRunIdInput,
   type StartAgentRunInput,
-} from "../../shared/agent-run"
+} from "@diffdash/domain/agent-run"
 import {
   AgentRunId,
   ReviewAgentProviderId,
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
-} from "../../shared/review-agent"
-import { ReviewThreadId } from "../../shared/review-thread"
+} from "@diffdash/domain/review-agent"
+import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
 const ReviewAgentUsageJson = Schema.NullOr(Schema.parseJson(ReviewAgentUsage))

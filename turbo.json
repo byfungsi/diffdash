@@ -17,6 +17,15 @@
     "@diffdash/promo-media#build": {
       "outputs": []
     },
+    "@diffdash/app#build": {
+      "outputs": []
+    },
+    "@diffdash/domain#build": {
+      "outputs": []
+    },
+    "@diffdash/protocol#build": {
+      "outputs": []
+    },
     "@diffdash/e2e#build": {
       "outputs": []
     },

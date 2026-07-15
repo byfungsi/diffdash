@@ -5,7 +5,7 @@ import type {
   ReviewAgentProviderRunId,
   ReviewAgentTurnInput,
   ReviewAgentTurnResult,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 import { CliStreamError } from "./cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"
 

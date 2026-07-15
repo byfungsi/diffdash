@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { buildReviewFileTreeInput } from "./file-tree-adapter"
-import { ParsedDiffFile } from "./domain"
-import { makeReviewFileId } from "./review-identity"
+import { ParsedDiffFile } from "@diffdash/domain/diff"
+import { makeReviewFileId } from "@diffdash/domain/review-identity"
 
 const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>
   ParsedDiffFile.make({

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
-import { DEFAULT_AI_SETTINGS, type CodexModel } from "../../shared/ai-settings"
+import { DEFAULT_AI_SETTINGS, type CodexModel } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,

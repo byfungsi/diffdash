@@ -2,11 +2,12 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either } from "effect"
 import { Buffer } from "node:buffer"
 
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import { LocalReviewDetail, LocalReviewDiff, ParsedDiff } from "../../shared/domain"
-import { ReviewAgentArtifact, ReviewAgentArtifactId } from "../../shared/review-agent"
-import { LocalReviewSnapshot, type ReviewSnapshot } from "../../shared/review-context"
-import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { ParsedDiff } from "@diffdash/domain/diff"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { ReviewAgentArtifact, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
+import { LocalReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
   MarkdownBody,
@@ -15,7 +16,7 @@ import {
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   type BuildReviewPromptContextInput,
   ReviewContextBuilder,

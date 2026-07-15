@@ -23,6 +23,12 @@ Remotion, audio, storyboard, and verification work. Capture and render ordering 
 component tests remain with the desktop renderer; full-product development and packaged flows run
 through uncached, ABI-safe Turbo tasks.
 
+`@diffdash/domain` owns browser-safe schemas, identities, diff decisions, review models, and
+walkthrough models through explicit subpath exports. `@diffdash/protocol` owns the renderer-facing
+API, canonical IPC channels, request contracts, and serializable transport errors while depending
+only on domain and Effect. `@diffdash/app` begins the reusable renderer boundary and owns the
+file-tree adapter; the remaining renderer moves there as an atomic package in M10.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;

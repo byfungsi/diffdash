@@ -10,7 +10,7 @@ import { Context, Deferred, Effect, Exit, Layer, Redacted, Schema, Stream } from
 import {
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   type ReviewAgentProviderRunId,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 import { defaultExecutablePath } from "./cli"
 import { type CliStreamRunner, CliStreamService } from "./cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"

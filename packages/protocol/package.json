@@ -1,0 +1,33 @@
+{
+  "name": "@diffdash/protocol",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./analytics": "./src/analytics.ts",
+    "./api": "./src/api.ts",
+    "./app-update": "./src/app-update.ts",
+    "./channels": "./src/channels.ts",
+    "./cli-navigation": "./src/cli-navigation.ts",
+    "./prerequisites": "./src/prerequisites.ts",
+    "./repository-link": "./src/repository-link.ts",
+    "./review-threads": "./src/review-threads.ts",
+    "./transport-error": "./src/transport-error.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

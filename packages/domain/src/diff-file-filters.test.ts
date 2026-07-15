@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { getHiddenDiffFileReason, filterVisibleDiffFiles } from "./diff-file-filters"
-import { ParsedDiffFile } from "./domain"
+import { ParsedDiffFile } from "./diff"
 import { makeReviewFileId } from "./review-identity"
 
 const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>

@@ -10,7 +10,7 @@ import {
   WalkthroughStop,
   WalkthroughSupportItem,
   WALKTHROUGH_PROMPT_VERSION,
-} from "../../shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"

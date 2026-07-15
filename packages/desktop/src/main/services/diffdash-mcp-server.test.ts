@@ -4,16 +4,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import { Effect, Layer, Redacted } from "effect"
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  PullRequestDetail,
-  PullRequestDiff,
-  ReviewActor,
-} from "../../shared/domain"
-import { AgentRunId } from "../../shared/review-agent"
-import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "../../shared/review-context"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
+import { AgentRunId } from "@diffdash/domain/review-agent"
+import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   makePullRequestReviewKey,
   ReviewFileId,
@@ -21,7 +16,7 @@ import {
   ReviewHunkId,
   ReviewKey,
   ReviewRevision,
-} from "../../shared/review-identity"
+} from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
   MarkdownBody,
@@ -30,7 +25,7 @@ import {
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { type CliResult, CliService } from "./cli"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"

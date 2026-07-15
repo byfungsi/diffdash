@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
-import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AppConfig } from "./app-config"
 
 const AISettingsFromJson = Schema.parseJson(AISettings)

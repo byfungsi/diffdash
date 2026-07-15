@@ -16,33 +16,35 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
   MarkdownBody,
   PullRequestReviewTarget,
   ReviewThreadDetails,
-  RunReviewThreadAgentRequest,
   type ReviewThreadAnchor,
   type ReviewThreadId,
   type ReviewThreadMessage,
   type ReviewThreadMessageId,
   type ReviewThreadTarget,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
+import {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  RunReviewThreadAgentRequest,
+} from "@diffdash/protocol/review-threads"
 import {
   BranchComparison,
   LocalReviewTarget,
   WorkingTreeComparison,
-} from "../../shared/local-review"
+} from "@diffdash/domain/local-review"
 
 const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
   void window.diffDash.analytics.capture(event).catch(() => undefined)
 }
-import { ReviewRevision } from "../../shared/review-identity"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   ReviewAgentProgress,
   type ReviewAgentProgressStage,
   REVIEW_AGENT_PROGRESS_LABELS,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 
 /** Renderer-owned review scope used to derive typed preload requests. */
 export type ReviewThreadScope =

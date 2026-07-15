@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 
-import { DEFAULT_AI_SETTINGS, type OpenCodeModel } from "../../shared/ai-settings"
+import { DEFAULT_AI_SETTINGS, type OpenCodeModel } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,

@@ -10,9 +10,9 @@ import {
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
-} from "../../shared/review-identity"
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import { LineReviewAnchor, MarkdownBody, ReviewThreadId } from "../../shared/review-thread"
+} from "@diffdash/domain/review-identity"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LineReviewAnchor, MarkdownBody, ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"

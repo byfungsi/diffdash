@@ -2,9 +2,9 @@ import {
   ThreadMemorySummaryAlgorithm,
   type ThreadMemory,
   UpsertThreadMemoryInput,
-} from "../../shared/agent-run"
-import type { ReviewAgentArtifactId } from "../../shared/review-agent"
-import type { ReviewThreadId, ReviewThreadMessage } from "../../shared/review-thread"
+} from "@diffdash/domain/agent-run"
+import type { ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
+import type { ReviewThreadId, ReviewThreadMessage } from "@diffdash/domain/review-thread"
 
 /** Number of recent completed messages retained beside compact thread memory. */
 export const DEFAULT_THREAD_MEMORY_MESSAGE_LIMIT = 10

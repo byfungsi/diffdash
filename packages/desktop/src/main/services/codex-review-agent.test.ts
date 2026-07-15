@@ -7,9 +7,9 @@ import {
   ReviewAgentProviderRunId,
   ReviewAgentTurnInput,
   THREAD_MODE_REVIEW_AGENT_PERMISSIONS,
-} from "../../shared/review-agent"
-import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
-import { ReviewLevelAnchor, ReviewThreadId } from "../../shared/review-thread"
+} from "@diffdash/domain/review-agent"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewLevelAnchor, ReviewThreadId } from "@diffdash/domain/review-thread"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { CliStreamService, type CliStreamEvent, type CliStreamOptions } from "./cli-stream"
 import { codexReviewAgentLayer } from "./codex-review-agent"

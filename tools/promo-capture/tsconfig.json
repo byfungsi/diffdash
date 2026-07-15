@@ -3,8 +3,8 @@
   "compilerOptions": {
     "baseUrl": "../..",
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["node", "vite/client"],
     "paths": { "@/*": ["packages/desktop/src/renderer/src/*"] }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts", "../../packages/desktop/src/renderer/src/vite-env.d.ts"]
 }

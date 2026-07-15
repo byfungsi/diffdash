@@ -20,7 +20,7 @@ import {
   AppPrerequisites,
   type CodingAgentName,
   DiffDashCliInstallResult,
-} from "../../shared/prerequisites"
+} from "@diffdash/protocol/prerequisites"
 import { AppConfig } from "./app-config"
 import { CliService, defaultExecutablePath, type CliRunner } from "./cli"
 

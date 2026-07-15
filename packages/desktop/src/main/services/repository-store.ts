@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import { Repo, type RepoProvider, type UpsertRepositoryInput } from "../../shared/domain"
+import { Repo, type RepoProvider, type UpsertRepositoryInput } from "@diffdash/domain/repository"
 import { DatabaseService } from "./database"
 
 interface RepoRow {

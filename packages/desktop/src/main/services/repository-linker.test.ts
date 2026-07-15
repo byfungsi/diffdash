@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
-import { Repo } from "../../shared/domain"
-import { LinkRepositoryCheckoutRequest } from "../../shared/repository-link"
+import { Repo } from "@diffdash/domain/repository"
+import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitService } from "./git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { RepositoryLinkError, RepositoryLinker } from "./repository-linker"

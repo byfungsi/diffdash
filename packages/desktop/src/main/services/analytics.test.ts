@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { AISettings, DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "./app-settings"

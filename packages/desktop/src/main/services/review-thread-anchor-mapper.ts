@@ -1,13 +1,13 @@
 import { Context, Effect, Layer } from "effect"
 
-import type { ParsedDiff, ParsedDiffFile, ParsedDiffHunk } from "../../shared/domain"
-import type { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+import type { ParsedDiff, ParsedDiffFile, ParsedDiffHunk } from "@diffdash/domain/diff"
+import type { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
   type ReviewThreadAnchor,
   type ReviewAnchorStatus,
   type ReviewThread,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   ReviewThreadStore,
   type ReviewThreadCurrentMapping,

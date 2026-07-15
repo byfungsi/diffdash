@@ -19,14 +19,14 @@ import {
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
   ReviewRevision,
-} from "../../shared/review-identity"
+} from "@diffdash/domain/review-identity"
 
 let root: Root | null = null
 

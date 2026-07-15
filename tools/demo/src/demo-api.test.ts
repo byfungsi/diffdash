@@ -1,12 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
+import { MarkdownBody, PullRequestReviewTarget } from "@diffdash/domain/review-thread"
 import {
   AddReviewThreadUserMessageRequest,
-  MarkdownBody,
-  PullRequestReviewTarget,
   RunReviewThreadAgentRequest,
-} from "../../../packages/desktop/src/shared/review-thread"
+} from "@diffdash/protocol/review-threads"
 import { loadAtomicWebhookReplayScenario } from "./atomic-webhook-replay"
 import { createDemoRuntime } from "./demo-api"
 

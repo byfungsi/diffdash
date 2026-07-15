@@ -4,9 +4,9 @@ import {
   ThreadMemory,
   ThreadMemorySummaryAlgorithm,
   type UpsertThreadMemoryInput,
-} from "../../shared/agent-run"
-import { ReviewAgentArtifactId } from "../../shared/review-agent"
-import { ReviewThreadId } from "../../shared/review-thread"
+} from "@diffdash/domain/agent-run"
+import { ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
+import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { DatabaseService } from "./database"
 
 const ImportantArtifactIdsJson = Schema.parseJson(Schema.Array(ReviewAgentArtifactId))

@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+import { PullRequestFile } from "./pull-request"
+
 /** Local changes compared with the checkout's current HEAD. */
 export const WorkingTreeComparison = Schema.TaggedStruct("workingTree", {})
 
@@ -23,6 +25,35 @@ export class LocalReviewTarget extends Schema.Class<LocalReviewTarget>("LocalRev
   comparison: Schema.optionalWith(LocalReviewComparison, {
     default: () => WorkingTreeComparison.make({}),
   }),
+}) {}
+
+/** Detailed metadata for reviewing local working tree changes. */
+export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalReviewDetail")({
+  rootPath: Schema.String,
+  repoName: Schema.String,
+  branchName: Schema.NullOr(Schema.String),
+  comparison: Schema.optionalWith(LocalReviewComparison, {
+    default: () => WorkingTreeComparison.make({}),
+  }),
+  baseSha: Schema.String,
+  headSha: Schema.String,
+  diffHash: Schema.String,
+  title: Schema.String,
+  files: Schema.Array(PullRequestFile),
+  fetchedAt: Schema.String,
+}) {}
+
+/** Raw unified diff output and cache metadata for local working tree changes. */
+export class LocalReviewDiff extends Schema.Class<LocalReviewDiff>("LocalReviewDiff")({
+  rootPath: Schema.String,
+  comparison: Schema.optionalWith(LocalReviewComparison, {
+    default: () => WorkingTreeComparison.make({}),
+  }),
+  baseSha: Schema.String,
+  headSha: Schema.String,
+  diffHash: Schema.String,
+  diff: Schema.String,
+  fetchedAt: Schema.String,
 }) {}
 
 /** Creates the legacy working-tree-versus-HEAD review target. */

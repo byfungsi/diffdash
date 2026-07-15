@@ -3,8 +3,8 @@ import {
   AgentPromptVersion,
   ThreadMemorySummaryAlgorithm,
   UpsertThreadMemoryInput,
-} from "../../shared/agent-run"
-import { type AISettings, autoModelProviderModels } from "../../shared/ai-settings"
+} from "@diffdash/domain/agent-run"
+import { type AISettings, autoModelProviderModels } from "@diffdash/domain/ai-settings"
 import {
   AgentRunId,
   type ReviewAgentProgressStage,
@@ -12,15 +12,15 @@ import {
   ReviewAgentTurnInput,
   ReviewAgentTurnResult,
   THREAD_MODE_REVIEW_AGENT_PERMISSIONS,
-} from "../../shared/review-agent"
-import { PullRequestReviewSnapshot, type ReviewSnapshot } from "../../shared/review-context"
+} from "@diffdash/domain/review-agent"
+import { PullRequestReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   MarkdownBody,
   type ReviewThreadDetails,
   type ReviewThreadId,
   type ReviewThreadMessage,
-} from "../../shared/review-thread"
-import type { StoredWalkthrough } from "../../shared/walkthrough"
+} from "@diffdash/domain/review-thread"
+import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { AgentRunArtifactStore } from "./agent-run-artifact-store"
 import { AgentRunStore } from "./agent-run-store"
 import { AppSettings } from "./app-settings"

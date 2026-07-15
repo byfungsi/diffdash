@@ -78,35 +78,30 @@ import {
   OPENCODE_MODEL_OPTIONS,
   type OpenCodeModel,
   selectedModelForProvider,
-} from "../../shared/ai-settings"
-import { type AppState, DEFAULT_APP_STATE } from "../../shared/app-state"
-import type { AppUpdateState } from "../../shared/app-update"
-import type { CliNavigationCommand } from "../../shared/cli-navigation"
-import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "../../shared/diff-file-filters"
-import { parseUnifiedDiff } from "../../shared/diff-parser"
-import type {
-  LocalReviewDetail,
-  ParsedDiff,
-  ParsedDiffFile,
-  PullRequestDetail,
-  PullRequestSummary,
-  RepositorySearchResult,
-  RepositorySearchScope,
-} from "../../shared/domain"
-import { Repo, RepositorySearchRequest } from "../../shared/domain"
-import { buildReviewFileTreeInput } from "../../shared/file-tree-adapter"
-import { isVeryLargeDiffFile } from "../../shared/large-diff-policy"
+} from "@diffdash/domain/ai-settings"
+import { type AppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
+import type { AppUpdateState } from "@diffdash/protocol/app-update"
+import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
+import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "@diffdash/domain/diff-file-filters"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import type { LocalReviewDetail } from "@diffdash/domain/local-review"
+import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
+import type { PullRequestDetail, PullRequestSummary } from "@diffdash/domain/pull-request"
+import type { RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
+import { Repo, RepositorySearchRequest } from "@diffdash/domain/repository"
+import { buildReviewFileTreeInput } from "@diffdash/app/file-tree-adapter"
+import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import {
   LocalReviewTarget,
   localReviewTargetKey,
   workingTreeReviewTarget,
-} from "../../shared/local-review"
-import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "../../shared/prerequisites"
+} from "@diffdash/domain/local-review"
+import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import {
   LineReviewAnchor,
   type ReviewThreadAnchor,
   type ReviewThreadDetails,
-} from "../../shared/review-thread"
+} from "@diffdash/domain/review-thread"
 import {
   buildWalkthroughHunkDigest,
   flattenWalkthroughStops,
@@ -118,7 +113,7 @@ import {
   type WalkthroughRisk,
   walkthroughLocalDiffScope,
   walkthroughPullRequestScope,
-} from "../../shared/walkthrough"
+} from "@diffdash/domain/walkthrough"
 
 type Screen = "home" | "repo" | "review"
 

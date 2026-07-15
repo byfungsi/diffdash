@@ -12,7 +12,7 @@ import {
   ReviewAgentTurnResult,
   ReviewAgentUsage,
   ReviewThreadAgentResponse,
-} from "../../shared/review-agent"
+} from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { CliStreamService } from "./cli-stream"
 import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"

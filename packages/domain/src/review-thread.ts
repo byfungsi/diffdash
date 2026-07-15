@@ -11,7 +11,7 @@ import {
   ReviewKey,
   ReviewRevision,
 } from "./review-identity"
-import type { ParsedDiff } from "./domain"
+import type { ParsedDiff } from "./diff"
 
 /** Persistent identity for one local DiffDash review thread. */
 export const ReviewThreadId = Schema.String.pipe(
@@ -172,9 +172,9 @@ export class CreatePendingReviewThreadAgentMessageInput extends Schema.Class<Cre
   agentRunId: Schema.NullOr(Schema.String),
 }) {}
 
-/** Request to append a follow-up user message to an existing local line thread. */
-export class AddReviewThreadUserMessageRequest extends Schema.Class<AddReviewThreadUserMessageRequest>(
-  "AddReviewThreadUserMessageRequest",
+/** Input to append a follow-up user message to an existing local line thread. */
+export class AddReviewThreadUserMessageInput extends Schema.Class<AddReviewThreadUserMessageInput>(
+  "AddReviewThreadUserMessageInput",
 )({
   threadId: ReviewThreadId,
   bodyMarkdown: MarkdownBody,
@@ -210,32 +210,6 @@ export const ReviewThreadTarget = Schema.Union(PullRequestReviewTarget, LocalRev
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
 export type ReviewThreadTarget = typeof ReviewThreadTarget.Type
-
-/** Request to create a local thread against the latest coherent review snapshot. */
-export class CreateReviewThreadRequest extends Schema.Class<CreateReviewThreadRequest>(
-  "CreateReviewThreadRequest",
-)({
-  target: ReviewThreadTarget,
-  expectedBaseRevision: ReviewRevision,
-  expectedHeadRevision: ReviewRevision,
-  anchor: ReviewThreadAnchor,
-  bodyMarkdown: MarkdownBody,
-}) {}
-
-/** Renderer request to run the local agent for the latest unanswered user message. */
-export class RunReviewThreadAgentRequest extends Schema.Class<RunReviewThreadAgentRequest>(
-  "RunReviewThreadAgentRequest",
-)({
-  threadId: ReviewThreadId,
-  target: ReviewThreadTarget,
-}) {}
-
-/** Request carrying one validated review thread identity. */
-export class ReviewThreadIdRequest extends Schema.Class<ReviewThreadIdRequest>(
-  "ReviewThreadIdRequest",
-)({
-  threadId: ReviewThreadId,
-}) {}
 
 /** Checks that an anchor still identifies exact content in a coherent parsed review snapshot. */
 export const isReviewAnchorInParsedDiff = (anchor: ReviewThreadAnchor, diff: ParsedDiff) => {

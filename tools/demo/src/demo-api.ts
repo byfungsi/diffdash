@@ -1,35 +1,21 @@
-import {
-  AIProviderModels,
-  AISettings,
-  DEFAULT_AI_SETTINGS,
-} from "../../../packages/desktop/src/shared/ai-settings"
-import { AppState } from "../../../packages/desktop/src/shared/app-state"
+import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { AppState } from "@diffdash/domain/app-state"
 import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
   AppUpdateDownloading,
   AppUpdateUnsupported,
   type AppUpdateState,
-} from "../../../packages/desktop/src/shared/app-update"
-import type { DiffDashApi } from "../../../packages/desktop/src/shared/diffdash-api"
-import { parseUnifiedDiff } from "../../../packages/desktop/src/shared/diff-parser"
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  Repo,
-  RepositorySearchResult,
-} from "../../../packages/desktop/src/shared/domain"
-import {
-  BranchComparison,
-  LocalReviewTarget,
-} from "../../../packages/desktop/src/shared/local-review"
-import {
-  AppPrerequisites,
-  DiffDashCliInstallResult,
-} from "../../../packages/desktop/src/shared/prerequisites"
-import { ReviewAgentProgress } from "../../../packages/desktop/src/shared/review-agent"
-import { LocalReviewSnapshot } from "../../../packages/desktop/src/shared/review-context"
-import { ReviewKey, ReviewRevision } from "../../../packages/desktop/src/shared/review-identity"
+} from "@diffdash/protocol/app-update"
+import type { DiffDashApi } from "@diffdash/protocol/api"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { Repo, RepositorySearchResult } from "@diffdash/domain/repository"
+import { BranchComparison, LocalReviewTarget } from "@diffdash/domain/local-review"
+import { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
+import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   MarkdownBody,
   ReviewThread,
@@ -38,8 +24,8 @@ import {
   ReviewThreadMessage,
   ReviewThreadMessageId,
   type ReviewThreadTarget,
-} from "../../../packages/desktop/src/shared/review-thread"
-import { StoredWalkthrough } from "../../../packages/desktop/src/shared/walkthrough"
+} from "@diffdash/domain/review-thread"
+import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
 
 /** One deterministic renderer action recorded by the demo runtime. */

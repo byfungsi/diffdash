@@ -1,65 +1,12 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import ts from "typescript"
 import { describe, expect, it } from "vitest"
 
-const EXPECTED_INVOKE_CHANNELS = [
-  "analytics:capture",
-  "analytics:start",
-  "app:diagnostics",
-  "app:installDiffDashCli",
-  "app:openExternalUrl",
-  "app:openLocalRepositoryFile",
-  "app:openRepositoryFile",
-  "appState:get",
-  "appState:update",
-  "gitProvider:approvePullRequest",
-  "gitProvider:getPullRequestDetail",
-  "gitProvider:getPullRequestDiff",
-  "gitProvider:hasApprovedPullRequest",
-  "gitProvider:listPullRequests",
-  "gitProvider:listReviewRequests",
-  "gitProvider:listSearchScopes",
-  "gitProvider:refreshPullRequestDetail",
-  "gitProvider:searchRepositories",
-  "localReviews:getDetail",
-  "localReviews:getDiff",
-  "localReviews:getSnapshot",
-  "localReviews:resolveBranch",
-  "localWalkthroughs:generate",
-  "localWalkthroughs:get",
-  "navigation:drainCommands",
-  "repositories:addLocal",
-  "repositories:favoriteRemote",
-  "repositories:install",
-  "repositories:link",
-  "repositories:list",
-  "repositories:selectLocalFolder",
-  "repositories:setFavorite",
-  "reviewThreads:addUserMessage",
-  "reviewThreads:create",
-  "reviewThreads:get",
-  "reviewThreads:list",
-  "reviewThreads:runAgent",
-  "settings:get",
-  "settings:update",
-  "updates:check",
-  "updates:download",
-  "updates:getState",
-  "updates:restartAndInstall",
-  "viewedFiles:list",
-  "viewedFiles:listLocal",
-  "viewedFiles:set",
-  "viewedFiles:setLocal",
-  "walkthroughs:generate",
-  "walkthroughs:get",
-] as const
+const EXPECTED_INVOKE_CHANNELS = Object.values(InvokeChannel)
 
-const EXPECTED_EVENT_CHANNELS = [
-  "navigation:commandsAvailable",
-  "reviewThreads:agentProgress",
-  "updates:stateChanged",
-] as const
+const EXPECTED_EVENT_CHANNELS = Object.values(EventChannel)
 
 const EXPECTED_PRELOAD_OPERATIONS = [
   "analytics.capture => analytics:capture(event)",
@@ -178,10 +125,10 @@ const collectCallChannels = (source: ts.SourceFile, method: string, owner?: stri
       if (
         callMethod === method &&
         (owner === undefined || callOwner === owner) &&
-        channel !== undefined &&
-        ts.isStringLiteral(channel)
+        channel !== undefined
       ) {
-        channels.push(channel.text)
+        const channelName = resolveChannel(channel)
+        if (channelName !== undefined) channels.push(channelName)
       }
     }
     ts.forEachChild(node, visit)
@@ -198,11 +145,11 @@ const collectPreloadOperations = (source: ts.SourceFile) => {
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === "invoke" &&
-      channelArgument !== undefined &&
-      ts.isStringLiteral(channelArgument)
+      channelArgument !== undefined
     ) {
       const path = propertyPath(node)
-      const channel = channelArgument.text
+      const channel = resolveChannel(channelArgument)
+      if (channel === undefined) return
       const args = node.arguments
         .slice(1)
         .map((argument) => argument.getText(source))
@@ -236,10 +183,10 @@ const collectListenerBindings = (source: ts.SourceFile, method: "on" | "removeLi
       node.expression.expression.getText(source) === "ipcRenderer" &&
       node.expression.name.text === method &&
       channelArgument !== undefined &&
-      ts.isStringLiteral(channelArgument) &&
       listenerArgument !== undefined
     ) {
-      bindings.push(`${channelArgument.text}:${listenerArgument.getText(source)}`)
+      const channel = resolveChannel(channelArgument)
+      if (channel !== undefined) bindings.push(`${channel}:${listenerArgument.getText(source)}`)
     }
     ts.forEachChild(node, visit)
   }
@@ -250,6 +197,17 @@ const collectListenerBindings = (source: ts.SourceFile, method: "on" | "removeLi
 const duplicates = (values: readonly string[]) => [
   ...new Set(values.filter((value, index) => values.indexOf(value) !== index)),
 ]
+
+const resolveChannel = (node: ts.Expression) => {
+  if (ts.isStringLiteral(node)) return node.text
+  if (!ts.isPropertyAccessExpression(node)) return undefined
+
+  if (node.expression.getText() === "InvokeChannel")
+    return InvokeChannel[node.name.text as keyof typeof InvokeChannel]
+  if (node.expression.getText() === "EventChannel")
+    return EventChannel[node.name.text as keyof typeof EventChannel]
+  return undefined
+}
 
 const sortStrings = (values: readonly string[]) => {
   const copy = [...values]
