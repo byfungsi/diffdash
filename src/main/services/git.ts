@@ -117,7 +117,10 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
             { timeoutMs: 60_000 },
           )
         }
-        const baseSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
+        const targetSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
+          Effect.provideService(CliService, cli),
+        )
+        const baseSha = yield* resolveMergeBaseSha(rootPath, branchName, targetSha).pipe(
           Effect.provideService(CliService, cli),
         )
 
@@ -242,6 +245,33 @@ const resolveCommitSha = (rootPath: string, ref: string) =>
       `${ref}^{commit}`,
     ])
     return result.stdout.trim()
+  })
+
+const resolveMergeBaseSha = (rootPath: string, branchName: string, targetSha: string) =>
+  Effect.gen(function* () {
+    const cli = yield* CliService
+    const result = yield* cli.run("git", ["-C", rootPath, "merge-base", targetSha, "HEAD"]).pipe(
+      Effect.catchTag("CliError", (cause) =>
+        Effect.fail<CliError | LocalReviewTargetError>(
+          cause.exitCode === 1
+            ? LocalReviewTargetError.make({
+                operation: "branch.mergeBase",
+                reason: `Branch ${branchName} does not share a common ancestor with the current HEAD`,
+                cause,
+              })
+            : cause,
+        ),
+      ),
+    )
+    const mergeBaseSha = result.stdout.trim()
+    if (mergeBaseSha.length === 0) {
+      return yield* LocalReviewTargetError.make({
+        operation: "branch.mergeBase",
+        reason: `Branch ${branchName} does not share a common ancestor with the current HEAD`,
+        cause: null,
+      })
+    }
+    return mergeBaseSha
   })
 
 const localReviewBaseSha = (target: LocalReviewTarget) =>

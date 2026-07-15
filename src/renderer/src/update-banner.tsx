@@ -91,7 +91,7 @@ const updateTitle = (state: AppUpdateState) => {
   if (state["_tag"] === "available") return `DiffDash v${state.version} is available`
   if (state["_tag"] === "downloading") return `Downloading DiffDash v${state.version}`
   if (state["_tag"] === "downloaded") return `DiffDash v${state.version} is ready`
-  if (state["_tag"] === "error") return "Update check failed"
+  if (state["_tag"] === "error") return "Update failed"
   return "DiffDash updates"
 }
 

@@ -28,10 +28,14 @@ const runSourceCli = (args: ReadonlyArray<string>, cwd = projectRoot) =>
 const runPackagedCli = (cli: string, args: ReadonlyArray<string>) =>
   spawnSync("/bin/sh", [cli, ...args], { encoding: "utf8" })
 
-const waitForCapture = (capturePath: string): Promise<ReadonlyArray<string>> => {
+const waitForCapture = (
+  capturePath: string,
+  expectedLineCount: number,
+): Promise<ReadonlyArray<string>> => {
   const readCapture = (attempt: number): Promise<ReadonlyArray<string>> => {
     if (existsSync(capturePath)) {
-      return Promise.resolve(readFileSync(capturePath, "utf8").trimEnd().split("\n"))
+      const lines = readFileSync(capturePath, "utf8").trimEnd().split("\n")
+      if (lines.length >= expectedLineCount) return Promise.resolve(lines)
     }
 
     if (attempt >= 500) {
@@ -109,7 +113,7 @@ describe("diffdash CLI", () => {
           env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
         })
         expect(result.status).toBe(0)
-        return waitForCapture(capturePath)
+        return waitForCapture(capturePath, args.length + 3)
       }
 
       await expect(runHarness(["changes"])).resolves.toEqual([
@@ -175,7 +179,7 @@ describe("diffdash CLI", () => {
           })
 
           expect(result.status).toBe(0)
-          await expect(waitForCapture(capturePath)).resolves.toEqual([
+          await expect(waitForCapture(capturePath, 4)).resolves.toEqual([
             `--diffdash-cli-v1=${realpathSync(workingDirectory)}`,
             "--",
             "install",

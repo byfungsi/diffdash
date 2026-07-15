@@ -14,6 +14,7 @@ import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
   AppUpdateDownloading,
+  AppUpdateFailed,
   type AppUpdateState,
   AppUpdateUnsupported,
 } from "../../shared/app-update"
@@ -568,6 +569,22 @@ describe("App browser interactions", () => {
     expect(calls.restartAndInstallUpdate).toHaveBeenCalledTimes(1)
   })
 
+  it("uses a generic title for failures outside the update check", async () => {
+    installDiffDashApi({
+      updateState: AppUpdateFailed.make({
+        currentVersion: "0.3.0",
+        message: "Could not prepare the update download.",
+      }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Update failed")
+      expect(document.body.textContent).toContain("Could not prepare the update download.")
+      expect(document.body.textContent).not.toContain("Update check failed")
+    })
+  })
+
   it("debounces remote repository search and sends the displayed owner set", async () => {
     const calls = installDiffDashApi()
     renderApp()
@@ -850,6 +867,26 @@ describe("App browser interactions", () => {
       )
       expect(document.body.textContent).toContain("Changes vs dev")
       expect(document.body.textContent).toContain("vs dev")
+    })
+  })
+
+  it("shows a clear error when a CLI comparison branch has no common ancestor", async () => {
+    const calls = installDiffDashApi()
+    calls.resolveBranch.mockRejectedValueOnce(
+      new Error(
+        `localReviews:resolveBranch failed: LocalReviewTargetError: { "operation": "branch.mergeBase", "reason": "Branch dev does not share a common ancestor with the current HEAD", "cause": {} }`,
+      ),
+    )
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openBranchDiff("dev")
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Could not resolve comparison branch: Branch dev does not share a common ancestor with the current HEAD",
+      )
+      expect(document.body.textContent).not.toContain("branch.mergeBase")
     })
   })
 

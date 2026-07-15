@@ -182,7 +182,7 @@ test("opens local working tree review from CLI argument", async ({
   }
 })
 
-test("opens an exact branch comparison from the versioned CLI command", async ({
+test("opens a merge-base branch comparison from the versioned CLI command", async ({
   browserName: _browserName,
 }, testInfo) => {
   const fakeBin = testInfo.outputPath("fake-bin")
@@ -443,6 +443,11 @@ if (joined.includes("rev-parse --verify --end-of-options refs/remotes/origin/dev
   process.exit(0)
 }
 
+if (joined.includes("merge-base dddddddddddddddddddddddddddddddddddddddd HEAD")) {
+  console.log("cccccccccccccccccccccccccccccccccccccccc")
+  process.exit(0)
+}
+
 if (joined.includes("rev-parse --verify HEAD")) {
   console.log("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
   process.exit(0)
@@ -461,7 +466,7 @@ if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff dddddddddddddddddddddddddddddddddddddddd --")) {
+if (joined.includes("diff --no-ext-diff cccccccccccccccccccccccccccccccccccccccc --")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",

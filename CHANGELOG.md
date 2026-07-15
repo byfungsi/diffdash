@@ -1,5 +1,13 @@
 # DiffDash Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- 17f57be: Restore macOS automatic updates by packaging the updater configuration required to download releases.
+
+- 7cfaf16: Compare `diffdash diff` reviews from the branches' merge base so target-only changes no longer appear as unrelated reverse changes.
+
 ## 0.3.0
 
 ### Minor Changes
