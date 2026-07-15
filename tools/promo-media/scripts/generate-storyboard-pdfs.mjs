@@ -3,9 +3,9 @@ import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { chromium } from "playwright"
 
-const workspaceRoot = resolve(import.meta.dirname, "../..")
-const cacheDirectory = resolve(workspaceRoot, "media/.cache/storyboard")
-const outputDirectory = resolve(workspaceRoot, "media/output")
+const packageRoot = resolve(import.meta.dirname, "..")
+const cacheDirectory = resolve(packageRoot, ".cache/storyboard")
+const outputDirectory = resolve(packageRoot, "output")
 const frames = [60, 195, 450, 720, 1020, 1140]
 const formats = [
   {
@@ -33,10 +33,10 @@ const renderedFormats = formats.map((format) => {
       "exec",
       "remotion",
       "still",
-      "media/src/index.ts",
+      "src/index.ts",
       format.composition,
       framePath,
-      "--public-dir=media/public",
+      "--public-dir=public",
       `--frame=${frame}`,
       "--log=error",
     ])
@@ -55,7 +55,9 @@ await Promise.all(
   ),
 )
 
-process.stdout.write("Generated landscape and vertical storyboard PDFs in media/output\n")
+process.stdout.write(
+  "Generated landscape and vertical storyboard PDFs in tools/promo-media/output\n",
+)
 
 async function createPdf(imagePaths, outputPath, pageSize) {
   const images = await Promise.all(
@@ -102,7 +104,7 @@ async function createPdf(imagePaths, outputPath, pageSize) {
 
 function run(command, arguments_) {
   const result = spawnSync(command, arguments_, {
-    cwd: workspaceRoot,
+    cwd: packageRoot,
     encoding: "utf8",
   })
   if (result.error !== undefined) throw result.error

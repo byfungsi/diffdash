@@ -11,9 +11,13 @@ DiffDash uses one pnpm workspace and Turborepo task graph.
 - `scripts/*` contains repository orchestration only. Product runtime code and reusable libraries do
   not live in scripts.
 
-The migration begins with the existing desktop product at the root so baseline commands remain
-stable. `FUN-118` moves product ownership into `packages/*`; after that move, the root manifest owns
-only repository-wide tooling and convenience commands.
+The root manifest owns only repository-wide tooling and convenience commands. Shipped products own
+their versions and runtime dependencies under `packages/*`.
+
+Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime,
+`@diffdash/promo-capture` for browser capture and recording, and `@diffdash/promo-media` for
+Remotion, audio, storyboard, and verification work. Capture and render ordering is declared in
+`turbo.json`; generated media and tool caches remain ignored.
 
 ## Task Policy
 

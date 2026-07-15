@@ -1,8 +1,8 @@
 import { Effect } from "effect"
 import { createRoot } from "react-dom/client"
 
-import { loadAtomicWebhookReplayScenario } from "../../../src/demo/atomic-webhook-replay"
-import { createDemoRuntime } from "../../../src/demo/demo-api"
+import { loadAtomicWebhookReplayScenario } from "@diffdash/demo/atomic-webhook-replay"
+import { createDemoRuntime } from "@diffdash/demo/demo-api"
 import "./host.css"
 
 const rootElement = document.getElementById("root")

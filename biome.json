@@ -16,6 +16,12 @@
       "!media/public/audio",
       "!media/public/captures",
       "!media/public/fonts",
+      "!tools/promo-capture/.cache",
+      "!tools/promo-media/.cache",
+      "!tools/promo-media/output",
+      "!tools/promo-media/public/audio",
+      "!tools/promo-media/public/captures",
+      "!tools/promo-media/public/fonts",
       "!pnpm-lock.yaml",
       "!*.tsbuildinfo"
     ]

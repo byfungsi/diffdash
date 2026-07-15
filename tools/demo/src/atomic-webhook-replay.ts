@@ -1,10 +1,10 @@
 import { Effect } from "effect"
 
-import initialDiff from "../../demo/scenarios/atomic-webhook-replay/revisions/01-initial/unified.diff?raw"
-import initialWalkthrough from "../../demo/scenarios/atomic-webhook-replay/revisions/01-initial/walkthrough.json?raw"
-import databaseClockDiff from "../../demo/scenarios/atomic-webhook-replay/revisions/02-database-clock/unified.diff?raw"
-import databaseClockWalkthrough from "../../demo/scenarios/atomic-webhook-replay/revisions/02-database-clock/walkthrough.json?raw"
-import manifestSource from "../../demo/scenarios/atomic-webhook-replay/scenario.json?raw"
+import initialDiff from "../scenarios/atomic-webhook-replay/revisions/01-initial/unified.diff?raw"
+import initialWalkthrough from "../scenarios/atomic-webhook-replay/revisions/01-initial/walkthrough.json?raw"
+import databaseClockDiff from "../scenarios/atomic-webhook-replay/revisions/02-database-clock/unified.diff?raw"
+import databaseClockWalkthrough from "../scenarios/atomic-webhook-replay/revisions/02-database-clock/walkthrough.json?raw"
+import manifestSource from "../scenarios/atomic-webhook-replay/scenario.json?raw"
 import {
   decodeDemoJson,
   DemoScenarioManifest,

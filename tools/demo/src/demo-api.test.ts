@@ -6,7 +6,7 @@ import {
   MarkdownBody,
   PullRequestReviewTarget,
   RunReviewThreadAgentRequest,
-} from "../../packages/desktop/src/shared/review-thread"
+} from "../../../packages/desktop/src/shared/review-thread"
 import { loadAtomicWebhookReplayScenario } from "./atomic-webhook-replay"
 import { createDemoRuntime } from "./demo-api"
 

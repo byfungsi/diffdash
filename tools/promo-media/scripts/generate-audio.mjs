@@ -1,15 +1,21 @@
 import { mkdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
-const workspaceRoot = resolve(import.meta.dirname, "../..")
-const outputDirectory = resolve(workspaceRoot, "media/public/audio")
+const packageRoot = resolve(import.meta.dirname, "..")
+const workspaceRoot = resolve(packageRoot, "../..")
+const outputDirectory = resolve(packageRoot, "public/audio")
+const packageSource = resolve(packageRoot, "recall_promo_song.mp3")
+const sourcePath = existsSync(packageSource)
+  ? packageSource
+  : resolve(workspaceRoot, "media/recall_promo_song.mp3")
 
 await mkdir(outputDirectory, { recursive: true })
 
 renderAudio("promo-song.mp3", [
   "-i",
-  resolve(workspaceRoot, "media/recall_promo_song.mp3"),
+  sourcePath,
   "-t",
   "42",
   "-map",

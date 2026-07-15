@@ -10,20 +10,20 @@ const workspaceRoot = resolve(scriptDirectory, "../..")
 const scenarioId = "atomic-webhook-replay"
 const campaignId = "ai-review"
 const viewport = { width: 1440, height: 900 }
-const outputDirectory = resolve(workspaceRoot, "media/public/captures", campaignId)
+const outputDirectory = resolve(workspaceRoot, "tools/promo-media/public/captures", campaignId)
 const manifestPath = resolve(outputDirectory, "capture-manifest.json")
-const fontDirectory = resolve(workspaceRoot, "media/public/fonts")
+const fontDirectory = resolve(workspaceRoot, "tools/promo-media/public/fonts")
 const fixedTime = "2026-07-10T08:36:19Z"
 
 await mkdir(outputDirectory, { recursive: true })
 await mkdir(fontDirectory, { recursive: true })
 await copyFile(
-  resolve(workspaceRoot, "demo/capture/src/Inter-Latin.woff2"),
+  resolve(workspaceRoot, "tools/promo-capture/src/Inter-Latin.woff2"),
   resolve(fontDirectory, "Inter-Latin.woff2"),
 )
 
 const server = await createServer({
-  configFile: resolve(workspaceRoot, "demo/capture/vite.config.ts"),
+  configFile: resolve(workspaceRoot, "tools/promo-capture/vite.config.ts"),
   server: { host: "127.0.0.1", port: 0 },
 })
 await server.listen()
@@ -221,9 +221,9 @@ async function capture(name, targets) {
 async function hashCaptureInputs() {
   const hash = createHash("sha256")
   const roots = [
-    resolve(workspaceRoot, "demo/scenarios", scenarioId),
-    resolve(workspaceRoot, "demo/capture"),
-    resolve(workspaceRoot, "src/demo"),
+    resolve(workspaceRoot, "tools/demo/scenarios", scenarioId),
+    resolve(workspaceRoot, "tools/promo-capture"),
+    resolve(workspaceRoot, "tools/demo/src"),
     resolve(workspaceRoot, "pnpm-lock.yaml"),
   ]
   const files = (await Promise.all(roots.map((root) => listFiles(root))))
@@ -244,9 +244,10 @@ async function listFiles(path) {
     entries
       .toSorted((left, right) => left.name.localeCompare(right.name))
       .map(async (entry) => {
+        if ([".cache", ".turbo", "node_modules"].includes(entry.name)) return []
         const child = resolve(path, entry.name)
         if (entry.isDirectory()) return listFiles(child)
-        return child.includes(`${resolve(workspaceRoot, "demo/.cache")}/`) ? [] : [child]
+        return [child]
       }),
   )
   return children.flat()

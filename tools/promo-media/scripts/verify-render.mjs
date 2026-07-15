@@ -3,12 +3,13 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
-const workspaceRoot = resolve(import.meta.dirname, "../..")
-const outputDirectory = resolve(workspaceRoot, "media/output")
-const canonicalAudioPath = resolve(workspaceRoot, "media/public/audio/promo-song.mp3")
+const workspaceRoot = resolve(import.meta.dirname, "../../..")
+const packageRoot = resolve(import.meta.dirname, "..")
+const outputDirectory = resolve(packageRoot, "output")
+const canonicalAudioPath = resolve(packageRoot, "public/audio/promo-song.mp3")
 const captureManifestPath = resolve(
   workspaceRoot,
-  "media/public/captures/ai-review/capture-manifest.json",
+  "tools/promo-media/public/captures/ai-review/capture-manifest.json",
 )
 const reviewFrames = [60, 195, 450, 720, 1020, 1140]
 const deliveries = [
@@ -32,9 +33,7 @@ const deliveries = [
 
 await mkdir(outputDirectory, { recursive: true })
 
-const workspacePackageJson = JSON.parse(
-  await readFile(resolve(workspaceRoot, "package.json"), "utf8"),
-)
+const mediaPackageJson = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8"))
 const desktopPackageJson = JSON.parse(
   await readFile(resolve(workspaceRoot, "packages/desktop/package.json"), "utf8"),
 )
@@ -49,12 +48,12 @@ const ignoreRules = new Set(
 )
 
 for (const expectedRule of [
-  "demo/.cache/",
-  "media/.cache/",
-  "media/output/",
-  "media/public/audio/",
-  "media/public/captures/",
-  "media/public/fonts/",
+  "tools/promo-capture/.cache/",
+  "tools/promo-media/.cache/",
+  "tools/promo-media/output/",
+  "tools/promo-media/public/audio/",
+  "tools/promo-media/public/captures/",
+  "tools/promo-media/public/fonts/",
 ]) {
   assert(ignoreRules.has(expectedRule), `Missing generated-artifact ignore rule: ${expectedRule}`)
 }
@@ -162,7 +161,7 @@ const manifest = {
     fps: 30,
     durationSeconds: 42,
     durationInFrames: 1260,
-    remotionVersion: workspacePackageJson.devDependencies.remotion,
+    remotionVersion: mediaPackageJson.dependencies.remotion,
   },
   tools: {
     node: process.version,
@@ -170,9 +169,9 @@ const manifest = {
     ffprobe: firstLine(run("ffprobe", ["-version"])),
   },
   provenance: [
-    "media/audio-provenance.md",
-    "demo/capture/src/INTER-LICENSE.txt",
-    "demo/scenarios/atomic-webhook-replay/assets/provenance.json",
+    "tools/promo-media/audio-provenance.md",
+    "tools/promo-capture/src/INTER-LICENSE.txt",
+    "tools/demo/scenarios/atomic-webhook-replay/assets/provenance.json",
   ],
   packaging: {
     generatedArtifactsIgnored: true,
@@ -185,7 +184,7 @@ const manifest = {
 const manifestPath = resolve(outputDirectory, "diffdash-v0.2.1-render-manifest.json")
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 process.stdout.write(
-  `Verified ${verifiedDeliveries.length} deliveries and wrote media/output/${manifestPath.split("/").at(-1)}\n`,
+  `Verified ${verifiedDeliveries.length} deliveries and wrote tools/promo-media/output/${manifestPath.split("/").at(-1)}\n`,
 )
 
 function probeMedia(path) {

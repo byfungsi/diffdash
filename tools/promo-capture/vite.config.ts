@@ -25,7 +25,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: resolve(workspaceRoot, "demo/.cache/host"),
+    outDir: resolve(import.meta.dirname, ".cache/host"),
     emptyOutDir: true,
   },
 })

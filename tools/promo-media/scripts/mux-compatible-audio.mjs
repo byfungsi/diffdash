@@ -2,16 +2,16 @@ import { rename, rm } from "node:fs/promises"
 import { resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
-const workspaceRoot = resolve(import.meta.dirname, "../..")
+const packageRoot = resolve(import.meta.dirname, "..")
 const targetArgument = process.argv[2]
 
 if (targetArgument === undefined) {
   throw new Error("Expected the rendered MP4 path")
 }
 
-const targetPath = resolve(workspaceRoot, targetArgument)
+const targetPath = resolve(packageRoot, targetArgument)
 const temporaryPath = `${targetPath}.muxing.mp4`
-const audioPath = resolve(workspaceRoot, "media/public/audio/promo-song.mp3")
+const audioPath = resolve(packageRoot, "public/audio/promo-song.mp3")
 
 try {
   const result = spawnSync(

@@ -8,6 +8,15 @@
     "@diffdash/download-worker#build": {
       "outputs": []
     },
+    "@diffdash/demo#build": {
+      "outputs": []
+    },
+    "@diffdash/promo-capture#build": {
+      "outputs": [".cache/host/**"]
+    },
+    "@diffdash/promo-media#build": {
+      "outputs": []
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "outputs": []
@@ -23,6 +32,21 @@
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "capture": {
+      "cache": false
+    },
+    "render": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
+    },
+    "render:vertical": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
+    },
+    "render:all": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
     }
   }
 }

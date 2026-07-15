@@ -8,8 +8,8 @@ import { createServer } from "vite"
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = resolve(scriptDirectory, "../..")
-const cacheDirectory = resolve(workspaceRoot, "media/.cache/app-demo")
-const outputDirectory = resolve(workspaceRoot, "media/output")
+const cacheDirectory = resolve(workspaceRoot, "tools/promo-media/.cache/app-demo")
+const outputDirectory = resolve(workspaceRoot, "tools/promo-media/output")
 const rawVideoPath = resolve(cacheDirectory, "diffdash-v0.2.1-app-demo.webm")
 const outputPath = resolve(outputDirectory, "diffdash-v0.2.1-app-demo-landscape.mp4")
 const viewport = { width: 1600, height: 900 }
@@ -18,7 +18,7 @@ await mkdir(cacheDirectory, { recursive: true })
 await mkdir(outputDirectory, { recursive: true })
 
 const server = await createServer({
-  configFile: resolve(workspaceRoot, "demo/capture/vite.config.ts"),
+  configFile: resolve(workspaceRoot, "tools/promo-capture/vite.config.ts"),
   server: { host: "127.0.0.1", port: 0 },
 })
 await server.listen()
@@ -174,7 +174,7 @@ run("ffmpeg", [
   "title=DiffDash v0.2.1 App Demo",
   outputPath,
 ])
-process.stdout.write("Recorded media/output/diffdash-v0.2.1-app-demo-landscape.mp4\n")
+process.stdout.write("Recorded tools/promo-media/output/diffdash-v0.2.1-app-demo-landscape.mp4\n")
 
 async function moveAndClick(locator) {
   await locator.scrollIntoViewIfNeeded()
