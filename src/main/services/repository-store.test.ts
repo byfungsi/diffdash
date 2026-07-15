@@ -89,4 +89,37 @@ describe("RepositoryStore", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
+
+  it.scoped("upgrades a hosted favorite with its local checkout without duplicating it", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const hosted = yield* store.upsertRepository({
+          isFavorite: true,
+          localPath: null,
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+        })
+        const linked = yield* store.upsertRepository({
+          isFavorite: false,
+          localPath: "/tmp/diffdash",
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash.git",
+        })
+        const repositories = yield* store.list()
+
+        expect(repositories).toHaveLength(1)
+        expect(linked.id).toBe(hosted.id)
+        expect(linked.createdAt).toBe(hosted.createdAt)
+        expect(linked.localPath).toBe("/tmp/diffdash")
+        expect(linked.isFavorite).toBe(true)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
 })

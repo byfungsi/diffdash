@@ -81,6 +81,10 @@ The following requirement IDs are covered by
 | `PERSIST-STORES-001` | `[B]` | Every public method on the current SQLite-backed stores has real-database integration coverage. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
+| `REPOSITORY-LIFECYCLE-001` | `[B]` | Linking a local checkout upgrades the matching hosted favorite in place without duplicating or losing its identity. |
+| `REVIEW-IDENTITY-001` | `[B]` | Hosted, working-tree, branch-ref, and frozen branch-revision cache identities do not collide. |
+| `REVIEW-REVISION-001` | `[B]` | Viewed-file state is isolated by immutable head revision. |
+| `PRIVACY-001` | `[B]` | Telemetry opt-out takes effect after analytics startup, preserves unrelated preferences, and emitted payloads retain only approved coarse properties. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |

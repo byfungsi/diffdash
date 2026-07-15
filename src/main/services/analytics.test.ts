@@ -96,4 +96,51 @@ describe("Analytics", () => {
       expect(events).toEqual([])
     }),
   )
+
+  it.scoped("stops immediately after opt-out without changing unrelated settings", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const events: CapturedEvent[] = []
+
+      yield* Effect.gen(function* () {
+        const settings = yield* AppSettings
+        yield* settings.save(
+          AISettings.make({
+            ...DEFAULT_AI_SETTINGS,
+            appearance: "dark",
+            provider: "claude",
+          }),
+        )
+        const analytics = yield* Analytics
+        yield* analytics.start
+        yield* settings.save(
+          AISettings.make({
+            ...DEFAULT_AI_SETTINGS,
+            appearance: "dark",
+            provider: "claude",
+            telemetryEnabled: false,
+          }),
+        )
+        yield* analytics.capture({ event: "repository_bookmarked" })
+
+        const persisted = yield* settings.get
+        expect(persisted.appearance).toBe("dark")
+        expect(persisted.provider).toBe("claude")
+        expect(persisted.telemetryEnabled).toBe(false)
+      }).pipe(Effect.provide(makeLayer(directory, events)))
+
+      expect(events.map(({ event }) => event)).toEqual(["app_installed", "app_opened"])
+      for (const event of events) {
+        expect(new Set(Object.keys(event.properties))).toEqual(
+          new Set([
+            "$process_person_profile",
+            "app_version",
+            "architecture",
+            "packaged",
+            "platform",
+          ]),
+        )
+      }
+    }),
+  )
 })

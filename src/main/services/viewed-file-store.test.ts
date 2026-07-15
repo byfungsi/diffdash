@@ -54,6 +54,10 @@ describe("ViewedFileStore", () => {
           viewed: true,
         })
         const viewed = yield* viewedFileStore.list(key)
+        const nextRevision = yield* viewedFileStore.list({
+          ...key,
+          headSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        })
 
         yield* viewedFileStore.set({
           ...key,
@@ -64,6 +68,7 @@ describe("ViewedFileStore", () => {
         const cleared = yield* viewedFileStore.list(key)
 
         expect(viewed).toEqual(["src/app.tsx"])
+        expect(nextRevision).toEqual([])
         expect(cleared).toEqual([])
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

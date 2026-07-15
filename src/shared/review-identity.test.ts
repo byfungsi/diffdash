@@ -1,6 +1,12 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { parseUnifiedDiff } from "./diff-parser"
+import {
+  BranchComparison,
+  LocalReviewTarget,
+  localReviewTargetKey,
+  workingTreeReviewTarget,
+} from "./local-review"
 import { makePullRequestReviewKey } from "./review-identity"
 
 const shiftedDiff = (oldStart: number, newStart: number) => `diff --git a/src/app.ts b/src/app.ts
@@ -17,6 +23,46 @@ describe("review identity", () => {
     expect(makePullRequestReviewKey("github", "fungsi", "diffdash", 51)).toBe(
       "github:fungsi/diffdash#51",
     )
+  })
+
+  it("keeps hosted, working-tree, branch, and frozen branch revisions distinct", () => {
+    const workingTree = workingTreeReviewTarget("/repo")
+    const mainAtA = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: "/repo",
+      comparison: BranchComparison.make({
+        branchName: "main",
+        baseRef: "refs/heads/main",
+        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    })
+    const mainAtB = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: "/repo",
+      comparison: BranchComparison.make({
+        branchName: "main",
+        baseRef: "refs/heads/main",
+        baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
+    })
+    const develop = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: "/repo",
+      comparison: BranchComparison.make({
+        branchName: "develop",
+        baseRef: "refs/heads/develop",
+        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      }),
+    })
+    const keys = [
+      makePullRequestReviewKey("github", "fungsi", "diffdash", 51),
+      localReviewTargetKey(workingTree),
+      localReviewTargetKey(mainAtA),
+      localReviewTargetKey(mainAtB),
+      localReviewTargetKey(develop),
+    ]
+
+    expect(new Set(keys)).toHaveLength(keys.length)
   })
 
   it("FUN-80 AC: creates deterministic file and hunk identities", () => {
