@@ -114,7 +114,7 @@ when either value is missing.
 - `pnpm test` runs unit tests for utilities, Effect services, persistence, CLI adapters, and isolated components.
 - `pnpm test:browser` runs Vitest Browser Mode interaction tests for composed renderer behavior.
 - `pnpm test:e2e` rebuilds native modules for Electron, builds the app, and runs Playwright Electron E2E tests.
-- `pnpm test:all` runs unit, browser integration, and Electron E2E tests in sequence.
+- `pnpm test:all` runs unit, browser integration, Electron E2E, and download-worker tests in sequence.
 - `pnpm check` runs formatting check, lint, TypeScript, and tests.
 - `.husky/pre-commit` runs lint-staged auto-formatting, `pnpm typecheck`, and `pnpm test` once the folder is inside a Git repository and `pnpm prepare` has run.
 
@@ -130,6 +130,10 @@ Use three levels of tests:
 - Vitest Browser Mode integration tests for page/component interaction and renderer state transitions.
 - Playwright Electron E2E tests for complete flows through the real app shell, preload IPC, main-process services, and renderer.
 
+The primary Electron E2E flow also closes and relaunches DiffDash against the same user-data and
+settings directories. It verifies preload isolation, SQLite-backed viewed files, completed review
+threads, cached walkthroughs, and source-checkout safety across a real application restart.
+
 Tests should use real seams:
 
 - Effect layers for service dependencies
@@ -144,8 +148,6 @@ pnpm exec playwright install chromium
 ```
 
 Browser-backed tests run headless by default. Use non-headless mode only when debugging a visual or timing issue.
-
-This workspace is currently not a Git repository, so Husky hook installation is skipped until `.git` exists.
 
 ## Effect Guidance
 

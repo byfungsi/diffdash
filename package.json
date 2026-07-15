@@ -51,7 +51,7 @@
     "test": "pnpm native:node && vitest run",
     "test:browser": "vitest --config vitest.browser.config.ts run",
     "test:e2e": "pnpm native:electron && pnpm build && pnpm exec electron --version && playwright test",
-    "test:all": "pnpm test && pnpm test:browser && pnpm test:e2e",
+    "test:all": "pnpm test && pnpm test:browser && pnpm test:e2e && pnpm --dir web/download-worker test",
     "test:watch": "vitest",
     "lint": "oxlint . --no-error-on-unmatched-pattern",
     "lint:fix": "oxlint . --fix --no-error-on-unmatched-pattern",

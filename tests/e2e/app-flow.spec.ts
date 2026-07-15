@@ -1,12 +1,14 @@
 import { execFileSync } from "node:child_process"
-import { chmod, mkdir, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { _electron as electron, expect, type Page, test } from "@playwright/test"
 
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
   browserName: _browserName,
 }, testInfo) => {
+  testInfo.setTimeout(60_000)
   const fakeBin = testInfo.outputPath("fake-bin")
+  const codexRunLog = testInfo.outputPath("codex-runs.log")
   const linkedRepo = testInfo.outputPath("linked-repo")
   const poolPath = testInfo.outputPath("worktree-pool")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
@@ -23,31 +25,43 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   const sourceBranch = realGit(linkedRepo, "branch", "--show-current")
   const sourceStatus = realGit(linkedRepo, "status", "--porcelain", "--untracked-files=all")
 
-  const app = await electron.launch({
-    args: [
-      join(process.cwd(), "out/main/index.js"),
-      `--user-data-dir=${userData}`,
-      `--diffdash-link-path=${linkedRepo}`,
-    ],
-    env: {
-      ...process.env,
-      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
-      DIFFDASH_WORKTREE_POOL_PATH: poolPath,
-      FAKE_PR_BASE_SHA: pullRequest.baseSha,
-      FAKE_PR_HEAD_SHA: pullRequest.headSha,
-      FAKE_USE_REAL_GIT: "1",
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: `url.${pullRequest.remote}.insteadOf`,
-      GIT_CONFIG_VALUE_0: "git@github.com:fungsi/diffdash.git",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      REAL_GIT_PATH: "/usr/bin/git",
-      XDG_CONFIG_HOME: xdgConfigHome,
-    },
+  const appEnvironment = {
+    ...process.env,
+    DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+    DIFFDASH_WORKTREE_POOL_PATH: poolPath,
+    FAKE_CODEX_RUN_LOG: codexRunLog,
+    FAKE_PR_BASE_SHA: pullRequest.baseSha,
+    FAKE_PR_HEAD_SHA: pullRequest.headSha,
+    FAKE_USE_REAL_GIT: "1",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `url.${pullRequest.remote}.insteadOf`,
+    GIT_CONFIG_VALUE_0: "git@github.com:fungsi/diffdash.git",
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    REAL_GIT_PATH: "/usr/bin/git",
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
+  const appEntry = join(process.cwd(), "out/main/index.js")
+  let app = await electron.launch({
+    args: [appEntry, `--user-data-dir=${userData}`, `--diffdash-link-path=${linkedRepo}`],
+    env: appEnvironment,
   })
 
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
+    expect(
+      await window.evaluate(async () => ({
+        onboardingCompleted: (await globalThis.window.diffDash.appState.get()).onboardingCompleted,
+        diffDashType: typeof globalThis.window.diffDash,
+        nodeProcessType: typeof Reflect.get(globalThis.window, "process"),
+        nodeRequireType: typeof Reflect.get(globalThis.window, "require"),
+      })),
+    ).toEqual({
+      onboardingCompleted: true,
+      diffDashType: "object",
+      nodeProcessType: "undefined",
+      nodeRequireType: "undefined",
+    })
     await expect(window.locator("html")).toHaveClass(/dark/)
     await expect(
       window.getByRole("button", { name: /Use (?:light|dark|system) theme/ }),
@@ -117,8 +131,14 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("What behavior does it preserve?")).toBeVisible()
     await expect(window.getByText("Agent is reviewing...")).toBeVisible()
     await expect(window.getByText("The line check is complete.")).toHaveCount(2)
+    expect(await countLogLines(codexRunLog)).toBe(2)
     await expect(window.getByRole("button", { name: "Close" })).toBeHidden()
     await expect(window.getByRole("heading", { name: "Request review flow" })).toBeVisible()
+
+    const diffCard = window.locator('[data-diff-card-path="src/app.tsx"]')
+    const viewedCheckbox = diffCard.getByRole("checkbox")
+    await viewedCheckbox.check({ force: true })
+    await expect(viewedCheckbox).toBeChecked()
 
     await window.getByRole("button", { name: "Actions" }).click()
     await window.getByRole("menuitem", { name: /Approve/ }).click()
@@ -130,8 +150,46 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     await expect(window.getByText("CRITICAL")).toBeVisible()
-  } finally {
+
     await app.close()
+    app = await electron.launch({
+      args: [appEntry, `--user-data-dir=${userData}`],
+      env: appEnvironment,
+    })
+
+    const restartedWindow = await app.firstWindow()
+    await expect(restartedWindow.getByRole("button", { name: "Continue to DiffDash" })).toHaveCount(
+      0,
+    )
+    const reopenedPullRequest = restartedWindow.getByRole("button", {
+      name: /Open (?:requested review|PR) #51/,
+    })
+    await expect(reopenedPullRequest).toBeVisible()
+    await reopenedPullRequest.click()
+    await expect(
+      restartedWindow.getByRole("heading", { name: "Request review flow" }),
+    ).toBeVisible()
+
+    const restartedDiffCard = restartedWindow.locator('[data-diff-card-path="src/app.tsx"]')
+    const restartedViewedCheckbox = restartedDiffCard.getByRole("checkbox")
+    await expect(restartedViewedCheckbox).toBeChecked()
+    expect(await countLogLines(codexRunLog)).toBe(2)
+
+    await restartedViewedCheckbox.uncheck({ force: true })
+    const restartedReviewDisclosure = restartedWindow.getByRole("button", {
+      name: "Review on L1",
+    })
+    await expect(restartedReviewDisclosure).toBeVisible()
+    await restartedReviewDisclosure.click()
+    await expect(restartedWindow.getByText("Why was this line changed?")).toBeVisible()
+    await expect(restartedWindow.getByText("What behavior does it preserve?")).toBeVisible()
+    await expect(restartedWindow.getByText("The line check is complete.")).toHaveCount(2)
+
+    await restartedWindow.getByRole("button", { name: "Walkthrough" }).click()
+    await expect(restartedWindow.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    expect(await countLogLines(codexRunLog)).toBe(2)
+  } finally {
+    await app.close().catch(() => undefined)
   }
   expect(realGit(linkedRepo, "branch", "--show-current")).toBe(sourceBranch)
   expect(realGit(linkedRepo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus)
@@ -354,6 +412,14 @@ const writeExecutable = async (path: string, content: string) => {
   await chmod(path, 0o755)
 }
 
+const countLogLines = async (path: string) => {
+  try {
+    return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).length
+  } catch {
+    return 0
+  }
+}
+
 const installPullRequestRepository = async (source: string, remote: string) => {
   await mkdir(source, { recursive: true })
   realGit(source, "init")
@@ -502,6 +568,7 @@ process.exit(1)
 `
 
 const fakeCodexScript = `#!/usr/bin/env node
+import { appendFileSync } from "node:fs"
 const args = process.argv.slice(2)
 
 if (args[0] === "--version") {
@@ -513,6 +580,9 @@ if (!args.includes("exec")) {
   console.error("Unhandled fake codex call: " + args.join(" "))
   process.exit(1)
 } else if (args.includes("--output-schema")) {
+    if (process.env.FAKE_CODEX_RUN_LOG) {
+      appendFileSync(process.env.FAKE_CODEX_RUN_LOG, "run\\n")
+    }
     setTimeout(() => {
       console.log([
         JSON.stringify({ type: "thread.started", thread_id: "codex-e2e-thread" }),
