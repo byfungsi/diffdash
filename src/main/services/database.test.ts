@@ -1,12 +1,22 @@
 import { describe, expect, it } from "@effect/vitest"
 import BetterSqlite3 from "better-sqlite3"
 import { Effect, Either, Layer } from "effect"
-import { mkdtempSync, rmSync } from "node:fs"
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
+import { AgentRunId, ReviewAgentArtifactId } from "../../shared/review-agent"
+import { ReviewKey, ReviewRevision } from "../../shared/review-identity"
+import { ReviewThreadId } from "../../shared/review-thread"
+import { AgentRunArtifactStore } from "./agent-run-artifact-store"
+import { AgentRunStore } from "./agent-run-store"
 import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
+import { RepositoryStore } from "./repository-store"
+import { ReviewThreadStore } from "./review-thread-store"
+import { ThreadMemoryStore } from "./thread-memory-store"
+import { ViewedFileStore } from "./viewed-file-store"
+import { WalkthroughStore } from "./walkthrough-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-database-test-"))),
@@ -23,6 +33,17 @@ const makeLayer = (databasePath: string) =>
       }),
     ),
   )
+
+const makeCompatibilityLayer = (databasePath: string) =>
+  Layer.mergeAll(
+    RepositoryStore.layer,
+    ViewedFileStore.layer,
+    WalkthroughStore.layer,
+    ReviewThreadStore.layer,
+    AgentRunStore.layer,
+    AgentRunArtifactStore.layer,
+    ThreadMemoryStore.layer,
+  ).pipe(Layer.provideMerge(makeLayer(databasePath)))
 
 interface CountRow {
   readonly count: number
@@ -53,6 +74,19 @@ interface ThreadMigrationCountRow {
 interface ThreadLifecycleMigrationRow {
   readonly closed_at: string | null
   readonly status: string
+}
+
+interface PullRequestFixtureRow {
+  readonly author: string
+  readonly base_ref: string
+  readonly head_ref: string
+  readonly head_sha: string
+  readonly id: string
+  readonly last_fetched_at: string
+  readonly number: number
+  readonly repo_id: string
+  readonly state: string
+  readonly title: string
 }
 
 describe("DatabaseService", () => {
@@ -95,6 +129,26 @@ describe("DatabaseService", () => {
 
       const sqlite = new BetterSqlite3(databasePath)
       expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      sqlite.close()
+    }),
+  )
+
+  it.scoped("FUN-148 AC: preserves the populated version-8 graph across fresh layers", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+
+      yield* Effect.scoped(
+        assertPopulatedVersion8Fixture.pipe(Effect.provide(makeCompatibilityLayer(databasePath))),
+      )
+      yield* Effect.scoped(
+        assertPopulatedVersion8Fixture.pipe(Effect.provide(makeCompatibilityLayer(databasePath))),
+      )
+
+      const sqlite = new BetterSqlite3(databasePath)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(sqlite.pragma("integrity_check", { simple: true })).toBe("ok")
+      expect(sqlite.pragma("foreign_key_check")).toEqual([])
       sqlite.close()
     }),
   )
@@ -478,6 +532,243 @@ describe("DatabaseService", () => {
         expect(Either.isLeft(result)).toBe(true)
         expect(row?.count).toBe(0)
       }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+})
+
+const assertPopulatedVersion8Fixture = Effect.gen(function* () {
+  const database = yield* DatabaseService
+  const repositories = yield* RepositoryStore
+  const viewedFiles = yield* ViewedFileStore
+  const walkthroughs = yield* WalkthroughStore
+  const threads = yield* ReviewThreadStore
+  const runs = yield* AgentRunStore
+  const artifacts = yield* AgentRunArtifactStore
+  const memory = yield* ThreadMemoryStore
+
+  const counts = yield* database.get<{
+    readonly agent_run_artifacts: number
+    readonly agent_runs: number
+    readonly pull_requests: number
+    readonly repos: number
+    readonly review_thread_messages: number
+    readonly review_threads: number
+    readonly thread_memory: number
+    readonly viewed_files: number
+    readonly walkthroughs: number
+  }>(`SELECT
+    (SELECT COUNT(*) FROM repos) AS repos,
+    (SELECT COUNT(*) FROM pull_requests) AS pull_requests,
+    (SELECT COUNT(*) FROM viewed_files) AS viewed_files,
+    (SELECT COUNT(*) FROM walkthroughs) AS walkthroughs,
+    (SELECT COUNT(*) FROM review_threads) AS review_threads,
+    (SELECT COUNT(*) FROM review_thread_messages) AS review_thread_messages,
+    (SELECT COUNT(*) FROM agent_runs) AS agent_runs,
+    (SELECT COUNT(*) FROM agent_run_artifacts) AS agent_run_artifacts,
+    (SELECT COUNT(*) FROM thread_memory) AS thread_memory`)
+  expect(counts).toEqual({
+    repos: 1,
+    pull_requests: 1,
+    viewed_files: 1,
+    walkthroughs: 1,
+    review_threads: 1,
+    review_thread_messages: 3,
+    agent_runs: 1,
+    agent_run_artifacts: 1,
+    thread_memory: 1,
+  })
+
+  const repositoryRows = yield* repositories.list()
+  expect(repositoryRows).toEqual([
+    expect.objectContaining({
+      id: "github:byfungsi/diffdash",
+      provider: "github",
+      owner: "byfungsi",
+      name: "diffdash",
+      remoteUrl: "https://github.com/byfungsi/diffdash",
+      localPath: "/fixtures/diffdash",
+      isFavorite: true,
+    }),
+  ])
+
+  const pullRequest = yield* database.get<PullRequestFixtureRow>(
+    "SELECT * FROM pull_requests WHERE id = ?",
+    ["pr-v8"],
+  )
+  expect(pullRequest).toEqual({
+    id: "pr-v8",
+    repo_id: "github:byfungsi/diffdash",
+    number: 147,
+    title: "Persist version 8 compatibility",
+    author: "fixture-author",
+    head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    base_ref: "main",
+    head_ref: "fixture/v8",
+    state: "OPEN",
+    last_fetched_at: "2026-07-15T12:00:02.000Z",
+  })
+
+  expect(
+    yield* viewedFiles.list({
+      repoId: "github:byfungsi/diffdash",
+      prNumber: 147,
+      headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    }),
+  ).toEqual(["src/main/services/database.ts"])
+  expect(
+    yield* viewedFiles.list({
+      repoId: "github:byfungsi/diffdash",
+      prNumber: 147,
+      headSha: "cccccccccccccccccccccccccccccccccccccccc",
+    }),
+  ).toEqual([])
+
+  const walkthrough = yield* walkthroughs.get({
+    repoId: "github:byfungsi/diffdash",
+    reviewKey: "github:byfungsi/diffdash#147",
+    baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    promptVersion: "walkthrough-v4",
+  })
+  expect(walkthrough).toEqual(
+    expect.objectContaining({
+      repoId: "github:byfungsi/diffdash",
+      prNumber: 147,
+      reviewKey: "github:byfungsi/diffdash#147",
+      baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      promptVersion: "walkthrough-v4",
+      walkthrough: expect.objectContaining({
+        title: "Version 8 review path",
+        summary: "Verify the persisted database graph.",
+      }),
+    }),
+  )
+  expect(
+    yield* walkthroughs.get({
+      repoId: "github:byfungsi/diffdash",
+      reviewKey: "github:byfungsi/diffdash#147",
+      baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      headSha: "cccccccccccccccccccccccccccccccccccccccc",
+      promptVersion: "walkthrough-v4",
+    }),
+  ).toBeNull()
+
+  const threadId = ReviewThreadId.make("thread-v8")
+  const reviewKey = ReviewKey.make("github:byfungsi/diffdash#147")
+  const headRevision = ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  const thread = yield* threads.get(threadId)
+  expect(thread.thread).toEqual(
+    expect.objectContaining({
+      id: threadId,
+      repoId: "github:byfungsi/diffdash",
+      reviewKey: "github:byfungsi/diffdash#147",
+      anchorStatus: "active",
+      currentAnchor: expect.objectContaining({
+        _tag: "line",
+        filePath: "src/main/services/database.ts",
+        lineNumber: 1,
+      }),
+    }),
+  )
+  expect(
+    thread.messages.map(({ author, bodyMarkdown, sequence, status, agentRunId }) => ({
+      author,
+      bodyMarkdown,
+      sequence,
+      status,
+      agentRunId,
+    })),
+  ).toEqual([
+    {
+      author: "user",
+      bodyMarkdown: "Why must this survive restart?",
+      sequence: 1,
+      status: "complete",
+      agentRunId: null,
+    },
+    {
+      author: "agent",
+      bodyMarkdown: "SQLite retains the thread and its related records.",
+      sequence: 2,
+      status: "complete",
+      agentRunId: "run-v8",
+    },
+    {
+      author: "user",
+      bodyMarkdown: "Confirm it still exists after reopening.",
+      sequence: 3,
+      status: "complete",
+      agentRunId: null,
+    },
+  ])
+  expect(
+    (yield* threads.listForReview({
+      repoId: "github:byfungsi/diffdash",
+      reviewKey,
+    })).map(({ id }) => id),
+  ).toEqual([threadId])
+  expect(
+    (yield* threads.listForRevision({
+      repoId: "github:byfungsi/diffdash",
+      reviewKey,
+      headRevision,
+    })).map(({ id }) => id),
+  ).toEqual([threadId])
+
+  const runId = AgentRunId.make("run-v8")
+  expect(yield* runs.get(runId)).toEqual(
+    expect.objectContaining({
+      id: runId,
+      threadId,
+      provider: "claude",
+      model: "claude-sonnet-4",
+      promptVersion: "thread-v1",
+      status: "completed",
+      providerRunId: "claude-session-v8",
+      usage: {
+        inputTokens: 120,
+        outputTokens: 40,
+        cacheReadTokens: 20,
+        cacheWriteTokens: null,
+        costUsd: 0.0042,
+      },
+    }),
+  )
+  expect((yield* runs.listForThread(threadId)).map(({ id }) => id)).toEqual([runId])
+
+  const artifactId = ReviewAgentArtifactId.make("artifact-v8")
+  expect(yield* artifacts.get(artifactId)).toEqual(
+    expect.objectContaining({
+      id: artifactId,
+      runId,
+      threadId,
+      artifact: {
+        type: "file_read",
+        provider: "claude",
+        title: "Read database.ts",
+        content: "fixture",
+        contentDigest: "sha256:fixture-v8",
+        metadata: {
+          path: "src/main/services/database.ts",
+          sourceProvider: "claude",
+        },
+        truncated: false,
+        originalSize: 7,
+      },
+    }),
+  )
+  expect((yield* artifacts.listForRun(runId)).map(({ id }) => id)).toEqual([artifactId])
+  expect((yield* artifacts.listForThread(threadId)).map(({ id }) => id)).toEqual([artifactId])
+
+  expect(yield* memory.get(threadId)).toEqual(
+    expect.objectContaining({
+      threadId,
+      summary: "The discussion verifies version-8 persistence across reopen.",
+      summarizedThroughSequence: 3,
+      summaryAlgorithm: "deterministic-transcript",
+      summaryVersion: 1,
+      importantArtifactIds: [artifactId],
     }),
   )
 })

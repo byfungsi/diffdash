@@ -58,6 +58,8 @@ The following requirement IDs are covered by
 | `PERSIST-RESTART-002` | `[B]` | Viewed-file state rehydrates from SQLite after restart. |
 | `PERSIST-RESTART-003` | `[B]` | Initial and follow-up thread messages plus completed agent replies rehydrate after restart. |
 | `PERSIST-RESTART-004` | `[B]` | Generated walkthrough content is served after restart. |
+| `PERSIST-V8-001` | `[B]` | A committed populated version-8 database contains all nine durable tables with valid foreign keys and integrity. |
+| `PERSIST-V8-002` | `[B]` | Repository, viewed-file, walkthrough, thread/message, run, artifact, and memory stores decode the frozen v8 graph after two independent opens. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
@@ -66,8 +68,8 @@ The following requirement IDs are covered by
 
 ## Known M8 Gaps
 
-- `[G]` A populated version-8 database fixture does not yet cover every durable entity in one
-  upgrade/restart scenario.
+- `[G]` Malformed-row, corrupt-database, locked-database, and interrupted future-migration startup
+  behavior still needs broader user-visible characterization.
 - `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
   sender/frame origin.
 - `[G]` Navigation and file policies are characterized, but shell side-effect failures and symlink
@@ -94,3 +96,8 @@ Before M9 begins, record the following in `FUN-147`:
 
 M9 remains blocked until every `[B]` requirement has passing automated or approved repeatable
 evidence and the snapshot is reviewed.
+
+The frozen compatibility database is generated from
+`src/main/services/fixtures/database-v8-populated.sql`. Regenerate it with
+`pnpm fixtures:database-v8`; do not replace the source DDL with current migration output when a
+future schema version is added.
