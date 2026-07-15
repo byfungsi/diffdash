@@ -122,6 +122,7 @@ record migration-sensitive invariants added during M8.
 | `DIFF-FILTER-001` | `[B]` | `diff-file-filters.test.ts` and browser flows cover hidden generated/vendor/binary files, reveal behavior, and visible filtering. |
 | `TREE-001` | `[B]` | `file-tree-adapter.test.ts` and browser tests cover canonical inventory, status mapping, deterministic ordering input, stable selection, and Tree/Walkthrough navigation. |
 | `WALKTHROUGH-001` | `[B]` | Shared/service/store/browser suites cover bounded prompt preparation, validation, one retry, revision cache identity, regeneration, sampled disclosure, and completion. |
+| `WALKTHROUGH-CACHE-001` | `[B]` | Cached walkthroughs are isolated by repository, review key, base/head revision, and current prompt version. |
 | `THREAD-001` | `[B]` | Thread store/shared/browser/Electron suites cover line threads, Markdown safety, follow-ups, progress, failed/complete states, retry entry, and revision mapping. |
 | `AGENT-001` | `[B]` | Agent store/memory/orchestration/provider suites cover run/message/artifact/memory lifecycle, current provider protocols, session behavior, and process interruption cleanup. |
 | `MCP-001` | `[B]` | `diffdash-mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, immutable diff/repository context, traversal denial, and local reviews. |

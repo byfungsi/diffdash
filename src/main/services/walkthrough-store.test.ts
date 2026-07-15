@@ -9,6 +9,7 @@ import {
   WalkthroughChapter,
   WalkthroughStop,
   WalkthroughSupportItem,
+  WALKTHROUGH_PROMPT_VERSION,
 } from "../../shared/walkthrough"
 import { AppConfig } from "./app-config"
 import { DatabaseService } from "./database"
@@ -65,7 +66,7 @@ const makeWalkthrough = (summary: string) =>
 const cacheKey = {
   baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  promptVersion: "walkthrough-v2",
+  promptVersion: WALKTHROUGH_PROMPT_VERSION,
   reviewKey: "github:fungsi/diffdash#51",
 }
 
@@ -167,44 +168,70 @@ describe("WalkthroughStore", () => {
     }),
   )
 
-  it.scoped("FUN-47 AC: cache is not reused across different base or head SHAs", () =>
-    Effect.gen(function* () {
-      const databasePath = yield* makeTempDatabasePath
+  it.scoped(
+    "FUN-47 AC: cache is isolated by repository, review, revision, and prompt version",
+    () =>
+      Effect.gen(function* () {
+        const databasePath = yield* makeTempDatabasePath
 
-      return yield* Effect.gen(function* () {
-        const repositoryStore = yield* RepositoryStore
-        const walkthroughStore = yield* WalkthroughStore
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
+        return yield* Effect.gen(function* () {
+          const repositoryStore = yield* RepositoryStore
+          const walkthroughStore = yield* WalkthroughStore
+          const repo = yield* repositoryStore.upsertRepository({
+            localPath: null,
+            name: "diffdash",
+            owner: "fungsi",
+            provider: "github",
+            remoteUrl: "https://github.com/fungsi/diffdash",
+          })
+          const otherRepo = yield* repositoryStore.upsertRepository({
+            localPath: null,
+            name: "other",
+            owner: "fungsi",
+            provider: "github",
+            remoteUrl: "https://github.com/fungsi/other",
+          })
 
-        yield* walkthroughStore.save({
-          ...cacheKey,
-          repoId: repo.id,
-          prNumber: 51,
-          walkthrough: makeWalkthrough("Head A order."),
-        })
+          yield* walkthroughStore.save({
+            ...cacheKey,
+            repoId: repo.id,
+            prNumber: 51,
+            walkthrough: makeWalkthrough("Head A order."),
+          })
 
-        const matching = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
-        const differentHead = yield* walkthroughStore.get({
-          ...cacheKey,
-          repoId: repo.id,
-          headSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        })
-        const differentBase = yield* walkthroughStore.get({
-          ...cacheKey,
-          repoId: repo.id,
-          baseSha: "cccccccccccccccccccccccccccccccccccccccc",
-        })
+          const matching = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
+          const differentHead = yield* walkthroughStore.get({
+            ...cacheKey,
+            repoId: repo.id,
+            headSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          })
+          const differentBase = yield* walkthroughStore.get({
+            ...cacheKey,
+            repoId: repo.id,
+            baseSha: "cccccccccccccccccccccccccccccccccccccccc",
+          })
+          const differentPrompt = yield* walkthroughStore.get({
+            ...cacheKey,
+            repoId: repo.id,
+            promptVersion: "walkthrough-future",
+          })
+          const differentReview = yield* walkthroughStore.get({
+            ...cacheKey,
+            repoId: repo.id,
+            reviewKey: "github:fungsi/diffdash#52",
+          })
+          const differentRepository = yield* walkthroughStore.get({
+            ...cacheKey,
+            repoId: otherRepo.id,
+          })
 
-        expect(matching?.walkthrough.summary).toBe("Head A order.")
-        expect(differentHead).toBeNull()
-        expect(differentBase).toBeNull()
-      }).pipe(Effect.provide(makeLayer(databasePath)))
-    }),
+          expect(matching?.walkthrough.summary).toBe("Head A order.")
+          expect(differentHead).toBeNull()
+          expect(differentBase).toBeNull()
+          expect(differentPrompt).toBeNull()
+          expect(differentReview).toBeNull()
+          expect(differentRepository).toBeNull()
+        }).pipe(Effect.provide(makeLayer(databasePath)))
+      }),
   )
 })
