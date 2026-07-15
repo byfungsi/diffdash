@@ -80,6 +80,7 @@ The following requirement IDs are covered by
 | `PERSIST-MIGRATE-001` | `[B]` | Databases newer than the application fail acquisition without downgrade or mutation. |
 | `PERSIST-STORES-001` | `[B]` | Every public method on the current SQLite-backed stores has real-database integration coverage. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
+| `AGENT-LIFECYCLE-002` | `[B]` | Provider finalization and scoped MCP revocation complete before isolated PR workspace restoration on success and provider failure. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
 | `REPOSITORY-LIFECYCLE-001` | `[B]` | Linking a local checkout upgrades the matching hosted favorite in place without duplicating or losing its identity. |
 | `REVIEW-IDENTITY-001` | `[B]` | Hosted, working-tree, branch-ref, and frozen branch-revision cache identities do not collide. |

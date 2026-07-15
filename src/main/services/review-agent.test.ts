@@ -231,20 +231,22 @@ describe("ReviewAgentService", () => {
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0, events: [] as string[], mcpPaths: [] as Array<string | null> }
+      const providerResult = ReviewAgentTurnResult.make({
+        response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Reviewed exact head." }),
+        artifacts: [],
+        providerRunId: null,
+        usage: null,
+      })
       const layer = makeLayer(
         databasePath,
-        (input) => {
-          released.events.push("provider.run")
-          expect(input.cwd).toBe("/workspace/pool")
-          return Effect.succeed(
-            ReviewAgentTurnResult.make({
-              response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Reviewed exact head." }),
-              artifacts: [],
-              providerRunId: null,
-              usage: null,
-            }),
-          )
-        },
+        (input) =>
+          Effect.sync(() => {
+            released.events.push("provider.run")
+            expect(input.cwd).toBe("/workspace/pool")
+          }).pipe(
+            Effect.as(providerResult),
+            Effect.ensuring(Effect.sync(() => released.events.push("provider.finalized"))),
+          ),
         released,
       )
 
@@ -286,6 +288,7 @@ describe("ReviewAgentService", () => {
         "mcp.acquire",
         "progress.reviewing",
         "provider.run",
+        "provider.finalized",
         "mcp.release",
         "progress.restoring-workspace",
         "worktree.release",
@@ -384,32 +387,37 @@ describe("ReviewAgentService", () => {
   it.scoped("FUN-72 AC: records a retryable failed message and failed run", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      const released = { count: 0 }
+      const released = { count: 0, events: [] as string[] }
       const layer = makeLayer(
         databasePath,
         () =>
-          Effect.fail<ReviewAgentProviderError>(
-            ReviewAgentExecutionError.make({
-              provider: "opencode",
-              reason: "sanitized provider failure",
-              cause: new Error("sanitized provider failure"),
-            }),
+          Effect.sync(() => released.events.push("provider.run")).pipe(
+            Effect.flatMap(() =>
+              Effect.fail<ReviewAgentProviderError>(
+                ReviewAgentExecutionError.make({
+                  provider: "opencode",
+                  reason: "sanitized provider failure",
+                  cause: new Error("sanitized provider failure"),
+                }),
+              ),
+            ),
+            Effect.ensuring(Effect.sync(() => released.events.push("provider.finalized"))),
           ),
         released,
       )
 
       yield* Effect.gen(function* () {
         const repo = yield* (yield* RepositoryStore).upsertRepository({
-          provider: "local",
-          owner: "local",
+          provider: "github",
+          owner: "fungsi",
           name: "diffdash",
-          remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          remoteUrl: "git@github.com:fungsi/diffdash.git",
+          localPath: "/workspace/user-checkout",
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey,
-          prNumber: null,
+          reviewKey: pullRequestSnapshot.reviewKey,
+          prNumber: 42,
           baseRevision,
           headRevision,
           anchor: lineAnchor,
@@ -418,7 +426,7 @@ describe("ReviewAgentService", () => {
         yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            snapshot,
+            snapshot: pullRequestSnapshot,
             cwd: repo.localPath,
             walkthrough: null,
           })
@@ -431,6 +439,14 @@ describe("ReviewAgentService", () => {
       }).pipe(Effect.provide(layer))
 
       expect(released.count).toBe(1)
+      expect(released.events).toEqual([
+        "worktree.acquire",
+        "mcp.acquire",
+        "provider.run",
+        "provider.finalized",
+        "mcp.release",
+        "worktree.release",
+      ])
     }),
   )
 
