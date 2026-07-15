@@ -1,34 +1,13 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "preserve",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
     "jsx": "react-jsx",
-    "strict": true,
-    "exactOptionalPropertyTypes": true,
-    "noUncheckedIndexedAccess": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noImplicitOverride": true,
-    "sourceMap": true,
-    "ignoreDeprecations": "6.0",
-    "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "incremental": true,
-    "noEmit": true,
-    "verbatimModuleSyntax": true,
-    "rewriteRelativeImportExtensions": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/renderer/src/*"]
-    },
-    "plugins": [
-      {
-        "name": "@effect/language-service"
-      }
-    ]
+    }
   },
   "include": [
     "src",

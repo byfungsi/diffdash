@@ -1,5 +1,6 @@
 {
   "name": "diffdash",
+  "private": true,
   "productName": "DiffDash",
   "version": "0.3.1",
   "description": "Desktop code review app with Effect-powered TypeScript services.",
@@ -62,7 +63,11 @@
     "format:check": "biome format .",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "native:electron": "npm_config_runtime=electron npm_config_target=43.0.0 npm_config_disturl=https://electronjs.org/headers node scripts/rebuild-better-sqlite3.mjs",
-    "native:node": "node scripts/rebuild-better-sqlite3.mjs"
+    "native:node": "node scripts/rebuild-better-sqlite3.mjs",
+    "workspace:build": "turbo run build",
+    "workspace:typecheck": "turbo run typecheck",
+    "workspace:test": "turbo run test",
+    "workspace:lint": "turbo run lint"
   },
   "keywords": [],
   "author": "Muhammad Hanif",
@@ -116,6 +121,7 @@
     "remotion": "4.0.489",
     "shadcn": "^4.13.0",
     "tailwindcss": "^4.3.2",
+    "turbo": "^2.10.5",
     "typescript": "^6.0.3",
     "vite": "^7.3.6",
     "vitest": "^3.2.7"
