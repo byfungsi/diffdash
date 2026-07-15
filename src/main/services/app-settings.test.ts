@@ -25,7 +25,7 @@ const makeLayer = (directory: string) =>
   )
 
 describe("AppSettings", () => {
-  it.scoped("returns default AI settings when the file is missing", () =>
+  it.scoped("returns default settings when the file is missing", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
 
@@ -38,11 +38,12 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("persists AI settings as JSON", () =>
+  it.scoped("persists settings as JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsPath = join(directory, "diffdash", "settings.json")
       const customSettings = AISettings.make({
+        appearance: "dark",
         provider: "claude",
         models: AIProviderModels.make({
           auto: "best",
@@ -60,6 +61,7 @@ describe("AppSettings", () => {
 
       expect(loaded).toEqual(customSettings)
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        appearance: "dark",
         provider: "claude",
         telemetryEnabled: true,
         models: { auto: "best", claude: "claude-opus-4-8" },
@@ -93,6 +95,7 @@ describe("AppSettings", () => {
       expect(settings.models.auto).toBe("balance")
       expect(settings.models.claude).toBe("claude-opus-4-8")
       expect(settings.models.codex).toBe("gpt-5.5")
+      expect(settings.appearance).toBe("system")
       expect(settings.telemetryEnabled).toBe(true)
     }),
   )

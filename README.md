@@ -52,9 +52,13 @@ After building from source, run `pnpm exec diffdash [path]` to open DiffDash on 
 
 Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. The path defaults to the current directory. For PR reviews, DiffDash copies committed Git data into an isolated worktree pool under `~/.diffdash/worktree-pool`, fetches the exact PR head, and runs the agent there without switching or cleaning your checkout.
 
+Run `diffdash pr` inside a GitHub checkout to save it as a favorite and open its pull request list. Pass a positive pull request number, such as `diffdash pr 123`, to open that review directly.
+
+Run `diffdash diff [branch-name]` to compare the current worktree with another branch. When the target differs from the checked-out branch, DiffDash fetches the target from `origin` without checking it out, then shows the exact target-tip-to-worktree difference, including current-branch commits, staged changes, unstaged changes, and untracked files. With no branch name, DiffDash uses the default branch reported by `origin/HEAD`.
+
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 
-Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install in PATH** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward.
+Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install in PATH** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward. Updated apps refresh marker-owned launchers found in the desktop environment's `PATH`, `~/.local/bin`, or `~/bin`; reinstall the CLI after updating if it lives in another custom directory.
 
 Build both Linux packages with:
 
@@ -65,6 +69,21 @@ pnpm dist:linux
 Build only the Debian package with `pnpm dist:linux:deb`.
 
 See `docs/release.md` for production packaging, signing, and publishing notes.
+
+## Appearance
+
+DiffDash follows the system appearance by default. To select a fixed appearance, add
+`appearance` to `~/.config/diffdash/settings.json` with a value of `"light"`, `"dark"`, or
+`"system"`, then restart DiffDash:
+
+```json
+{
+  "appearance": "dark"
+}
+```
+
+Keep the existing `provider`, `models`, and telemetry fields when editing the file. If
+`XDG_CONFIG_HOME` is set, DiffDash reads `$XDG_CONFIG_HOME/diffdash/settings.json` instead.
 
 ## Anonymous Telemetry
 

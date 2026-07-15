@@ -4,6 +4,7 @@ import type { IpcRendererEvent } from "electron"
 import type { AppState } from "../../src/shared/app-state"
 import type { AppUpdateState } from "../../src/shared/app-update"
 import type { AnalyticsEvent } from "../../src/shared/analytics"
+import type { CliNavigationCommand } from "../../src/shared/cli-navigation"
 import type {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -16,8 +17,11 @@ import type {
   Repo,
 } from "../../src/shared/domain"
 import type { AISettings } from "../../src/shared/ai-settings"
+import type { DiffDashApi } from "../../src/shared/diffdash-api"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "../../src/shared/prerequisites"
 import type { LinkRepositoryCheckoutRequest } from "../../src/shared/repository-link"
+import type { LocalReviewTarget } from "../../src/shared/local-review"
+import type { LocalReviewSnapshot } from "../../src/shared/review-context"
 import type { ReviewAgentProgress } from "../../src/shared/review-agent"
 import type { StoredWalkthrough } from "../../src/shared/walkthrough"
 import type {
@@ -42,7 +46,7 @@ const invoke = async <A>(channel: string, ...args: readonly unknown[]): Promise<
 const ipcErrorMessage = (cause: unknown) =>
   cause instanceof Error && cause.message.length > 0 ? cause.message : String(cause)
 
-const api = {
+const api: DiffDashApi = {
   analytics: {
     start: () => invoke<void>("analytics:start"),
     capture: (event: AnalyticsEvent) => invoke<void>("analytics:capture", event),
@@ -61,20 +65,12 @@ const api = {
     },
   },
   navigation: {
-    getPendingLocalReview: () => invoke<string | null>("navigation:getPendingLocalReview"),
-    getPendingRepositoryLink: () => invoke<string | null>("navigation:getPendingRepositoryLink"),
-    onOpenLocalReview: (listener: (rootPath: string) => void) => {
-      const wrapped = (_event: IpcRendererEvent, rootPath: string) => listener(rootPath)
-      ipcRenderer.on("navigation:openLocalReview", wrapped)
+    drainCommands: () => invoke<readonly CliNavigationCommand[]>("navigation:drainCommands"),
+    onCommandsAvailable: (listener: () => void) => {
+      const wrapped = () => listener()
+      ipcRenderer.on("navigation:commandsAvailable", wrapped)
       return () => {
-        ipcRenderer.removeListener("navigation:openLocalReview", wrapped)
-      }
-    },
-    onLinkRepository: (listener: (rootPath: string) => void) => {
-      const wrapped = (_event: IpcRendererEvent, rootPath: string) => listener(rootPath)
-      ipcRenderer.on("navigation:linkRepository", wrapped)
-      return () => {
-        ipcRenderer.removeListener("navigation:linkRepository", wrapped)
+        ipcRenderer.removeListener("navigation:commandsAvailable", wrapped)
       }
     },
   },
@@ -150,8 +146,13 @@ const api = {
       invoke<void>("gitProvider:approvePullRequest", owner, name, number),
   },
   localReviews: {
-    getDetail: (rootPath: string) => invoke<LocalReviewDetail>("localReviews:getDetail", rootPath),
-    getDiff: (rootPath: string) => invoke<LocalReviewDiff>("localReviews:getDiff", rootPath),
+    resolveBranch: (localPath: string, branchName: string | null) =>
+      invoke<LocalReviewTarget>("localReviews:resolveBranch", localPath, branchName),
+    getDetail: (target: LocalReviewTarget) =>
+      invoke<LocalReviewDetail>("localReviews:getDetail", target),
+    getDiff: (target: LocalReviewTarget) => invoke<LocalReviewDiff>("localReviews:getDiff", target),
+    getSnapshot: (target: LocalReviewTarget) =>
+      invoke<LocalReviewSnapshot>("localReviews:getSnapshot", target),
   },
   viewedFiles: {
     list: (owner: string, name: string, number: number, headSha: string) =>
@@ -184,16 +185,16 @@ const api = {
       invoke<StoredWalkthrough>("walkthroughs:generate", owner, name, number, true),
   },
   localWalkthroughs: {
-    get: (rootPath: string, baseSha: string, headSha: string) =>
-      invoke<StoredWalkthrough | null>("localWalkthroughs:get", rootPath, baseSha, headSha),
-    generate: (rootPath: string) =>
-      invoke<StoredWalkthrough>("localWalkthroughs:generate", rootPath, false),
-    regenerate: (rootPath: string) =>
-      invoke<StoredWalkthrough>("localWalkthroughs:generate", rootPath, true),
+    get: (target: LocalReviewTarget, baseSha: string, headSha: string) =>
+      invoke<StoredWalkthrough | null>("localWalkthroughs:get", target, baseSha, headSha),
+    generate: (target: LocalReviewTarget) =>
+      invoke<StoredWalkthrough>("localWalkthroughs:generate", target, false),
+    regenerate: (target: LocalReviewTarget) =>
+      invoke<StoredWalkthrough>("localWalkthroughs:generate", target, true),
   },
 }
 
 contextBridge.exposeInMainWorld("diffDash", api)
 
 /** Typed renderer API exposed through Electron preload. */
-export type DiffDashApi = typeof api
+export type { DiffDashApi } from "../../src/shared/diffdash-api"

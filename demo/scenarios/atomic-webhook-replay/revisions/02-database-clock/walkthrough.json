@@ -1,0 +1,62 @@
+{
+  "title": "Make replay leases region-safe",
+  "summary": "Review the unchanged atomic claim contract first, then confirm database time governs lease creation and concurrent workers cannot disagree.",
+  "chapters": [
+    {
+      "id": "claim-contract",
+      "title": "Preserve atomic ownership",
+      "summary": "The schema and upsert still provide one ownership boundary for every failed delivery.",
+      "stops": [
+        {
+          "id": "atomic-acquisition",
+          "title": "Keep lease recovery inside the upsert",
+          "summary": "The expiry predicate remains the only path for replacing an existing replay owner.",
+          "risk": "critical",
+          "hunks": [{ "path": "packages/db/src/replay-claims.ts", "ordinal": 1 }]
+        }
+      ]
+    },
+    {
+      "id": "database-clock",
+      "title": "Use one clock across regions",
+      "summary": "The handler now obtains the lease timestamp from Postgres before attempting the claim.",
+      "stops": [
+        {
+          "id": "authoritative-time",
+          "title": "Create leases from database time",
+          "summary": "Confirm application clock drift can no longer change the effective lease window.",
+          "risk": "critical",
+          "hunks": [{ "path": "services/webhooks/src/replay/claim-delivery.ts", "ordinal": 1 }]
+        },
+        {
+          "id": "skewed-worker-coverage",
+          "title": "Exercise skewed regional clocks",
+          "summary": "The regression case proves two workers still agree on ownership despite different process clocks.",
+          "risk": "review",
+          "hunks": [
+            {
+              "path": "services/webhooks/src/replay/__tests__/claim-delivery.test.ts",
+              "ordinal": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "support": [
+    {
+      "id": "claim-schema",
+      "title": "Replay claim schema",
+      "reason": "The primary key and lease columns are unchanged by the clock-source follow-up.",
+      "hunks": [
+        { "path": "packages/db/migrations/202607091430_add_replay_claims.sql", "ordinal": 1 }
+      ]
+    },
+    {
+      "id": "operator-state",
+      "title": "Operator claim status",
+      "reason": "The existing operations state continues to expose the active owner and lease expiry.",
+      "hunks": [{ "path": "apps/ops/src/routes/webhook-replays.tsx", "ordinal": 1 }]
+    }
+  ]
+}

@@ -2,9 +2,10 @@ import { Effect, Schema } from "effect"
 
 import { getHiddenDiffFileReason } from "./diff-file-filters"
 import { ParsedDiffFile } from "./domain"
+import { changedLineCount, isVeryLargeDiff } from "./large-diff-policy"
 
 /** Prompt/cache version for the bounded hunk-backed walkthrough contract. */
-export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v3"
+export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v4"
 
 /** Default safety budget for AI walkthrough prompt preparation. */
 export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
@@ -13,6 +14,8 @@ export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
   maxHunks: 160,
   maxLinesPerHunk: 80,
 } as const
+
+const MAX_SAMPLED_FILE_TREE_CHARS = 60_000
 
 /** Risk level assigned to a walkthrough stop. */
 export const WalkthroughRisk = Schema.Literal("critical", "review", "support")
@@ -47,12 +50,30 @@ export class WalkthroughSupportItem extends Schema.Class<WalkthroughSupportItem>
   hunkIds: Schema.Array(Schema.String),
 }) {}
 
+/** Strategy used to prepare source material for walkthrough generation. */
+export const WalkthroughGenerationMode = Schema.Literal("standard", "sampled-tree")
+
+/** Strategy used to prepare source material for walkthrough generation. */
+export type WalkthroughGenerationMode = typeof WalkthroughGenerationMode.Type
+
+/** Coverage metadata explaining how much of a review informed a walkthrough. */
+export class WalkthroughGenerationDetails extends Schema.Class<WalkthroughGenerationDetails>(
+  "WalkthroughGenerationDetails",
+)({
+  mode: WalkthroughGenerationMode,
+  totalFiles: Schema.Number,
+  analyzedFiles: Schema.Number,
+  totalFolders: Schema.Number,
+  analyzedFolders: Schema.Number,
+}) {}
+
 /** AI-generated hunk-backed review path for a PR or local diff. */
 export class Walkthrough extends Schema.Class<Walkthrough>("Walkthrough")({
   title: Schema.String,
   summary: Schema.String,
   chapters: Schema.Array(WalkthroughChapter),
   support: Schema.Array(WalkthroughSupportItem),
+  generation: Schema.optional(WalkthroughGenerationDetails),
 }) {}
 
 /** Cached walkthrough artifact keyed by a concrete review target and prompt version. */
@@ -97,6 +118,8 @@ export interface WalkthroughPromptInput {
   readonly diff: string
   readonly hunkDigest: readonly WalkthroughHunkDigest[]
   readonly stats: WalkthroughPromptStats
+  readonly changedFileTree: string
+  readonly generation: WalkthroughGenerationDetails
 }
 
 /** Safety budget for preparing walkthrough prompt input. */
@@ -191,49 +214,23 @@ export const prepareWalkthroughPromptInput = (
   const usedHiddenFallback = visibleFiles.length === 0 && files.length > 0
   const candidateFiles = usedHiddenFallback ? files : visibleFiles
   const totalHunks = files.reduce((total, file) => total + fileReviewUnitCount(file), 0)
-  const chunks: string[] = []
-  const hunkDigest: WalkthroughHunkDigest[] = []
-  const selectedFilePaths = new Set<string>()
-  let selectedHunks = 0
-  let truncatedHunks = 0
-  let truncatedByCharBudget = false
+  const candidateHunks = candidateFiles.reduce(
+    (total, file) => total + fileReviewUnitCount(file),
+    0,
+  )
+  const standard = preparePromptCandidates(candidateFiles, scope, validBudget)
+  const useSampledTree =
+    isVeryLargeDiff(files) ||
+    candidateFiles.length > validBudget.maxFiles ||
+    candidateHunks > validBudget.maxHunks ||
+    standard.truncatedByCharBudget ||
+    standard.selectedFilePaths.size < candidateFiles.length ||
+    standard.hunkDigest.length < candidateHunks
+  const prepared = useSampledTree
+    ? preparePromptCandidates(sampleFilesByFolder(candidateFiles), scope, validBudget)
+    : standard
 
-  for (const file of candidateFiles) {
-    if (selectedFilePaths.size >= validBudget.maxFiles) break
-    const entries = filePromptEntries(file, scope)
-    let selectedFile = false
-
-    for (const entry of entries) {
-      if (selectedHunks >= validBudget.maxHunks) break
-
-      const alias = hunkAlias(hunkDigest.length)
-      const excerpt = promptExcerptForEntry(file, entry, alias, validBudget.maxLinesPerHunk)
-      const nextDiff = appendPromptChunk(chunks, excerpt)
-      if (nextDiff.length > validBudget.maxDiffChars) {
-        truncatedByCharBudget = true
-        if (hunkDigest.length === 0) {
-          const truncatedExcerpt = truncateText(excerpt, validBudget.maxDiffChars)
-          chunks.push(truncatedExcerpt.text)
-          truncatedHunks += truncatedExcerpt.truncated ? 1 : 0
-          hunkDigest.push(entry.digest)
-          selectedHunks += 1
-          selectedFile = true
-        }
-        break
-      }
-
-      chunks.push(excerpt.text)
-      hunkDigest.push(entry.digest)
-      selectedHunks += 1
-      selectedFile = true
-      if (excerpt.truncated) truncatedHunks += 1
-    }
-
-    if (selectedFile) selectedFilePaths.add(file.path)
-    if (selectedHunks >= validBudget.maxHunks || truncatedByCharBudget) break
-  }
-
-  if (hunkDigest.length === 0) {
+  if (prepared.hunkDigest.length === 0) {
     return WalkthroughPromptPreparationError.make({
       message: "Cannot generate a walkthrough because the diff has no reviewable changes.",
       details: [
@@ -243,19 +240,30 @@ export const prepareWalkthroughPromptInput = (
     })
   }
 
+  const analyzedFiles = files.filter((file) => prepared.selectedFilePaths.has(file.path))
+  const generation = WalkthroughGenerationDetails.make({
+    mode: useSampledTree ? "sampled-tree" : "standard",
+    totalFiles: files.length,
+    analyzedFiles: analyzedFiles.length,
+    totalFolders: countFolders(files),
+    analyzedFolders: countFolders(analyzedFiles),
+  })
+
   return Effect.succeed({
-    diff: chunks.join("\n\n"),
-    hunkDigest,
+    diff: prepared.chunks.join("\n\n"),
+    hunkDigest: prepared.hunkDigest,
+    changedFileTree: useSampledTree ? buildChangedFileTree(files) : "",
+    generation,
     stats: {
       hiddenFiles: hiddenFiles.length,
-      omittedFiles: Math.max(0, files.length - selectedFilePaths.size),
-      omittedHunks: Math.max(0, totalHunks - selectedHunks),
-      selectedFiles: selectedFilePaths.size,
-      selectedHunks,
+      omittedFiles: Math.max(0, files.length - prepared.selectedFilePaths.size),
+      omittedHunks: Math.max(0, totalHunks - prepared.hunkDigest.length),
+      selectedFiles: prepared.selectedFilePaths.size,
+      selectedHunks: prepared.hunkDigest.length,
       totalFiles: files.length,
       totalHunks,
-      truncatedByCharBudget,
-      truncatedHunks,
+      truncatedByCharBudget: prepared.truncatedByCharBudget,
+      truncatedHunks: prepared.truncatedHunks,
       usedHiddenFallback,
     },
   })
@@ -359,6 +367,149 @@ export const flattenWalkthroughStops = (walkthrough: Walkthrough) =>
 interface WalkthroughPromptEntry {
   readonly digest: WalkthroughHunkDigest
   readonly lines: readonly string[]
+}
+
+interface PreparedPromptCandidates {
+  readonly chunks: readonly string[]
+  readonly hunkDigest: readonly WalkthroughHunkDigest[]
+  readonly selectedFilePaths: ReadonlySet<string>
+  readonly truncatedByCharBudget: boolean
+  readonly truncatedHunks: number
+}
+
+const preparePromptCandidates = (
+  files: readonly ParsedDiffFile[],
+  scope: string,
+  budget: WalkthroughPromptBudget,
+): PreparedPromptCandidates => {
+  const chunks: string[] = []
+  const hunkDigest: WalkthroughHunkDigest[] = []
+  const selectedFilePaths = new Set<string>()
+  let truncatedHunks = 0
+  let truncatedByCharBudget = false
+
+  for (const file of files) {
+    if (selectedFilePaths.size >= budget.maxFiles) break
+    const entries = filePromptEntries(file, scope)
+    let selectedFile = false
+
+    for (const entry of entries) {
+      if (hunkDigest.length >= budget.maxHunks) break
+
+      const alias = hunkAlias(hunkDigest.length)
+      const excerpt = promptExcerptForEntry(file, entry, alias, budget.maxLinesPerHunk)
+      const nextDiff = appendPromptChunk(chunks, excerpt)
+      if (nextDiff.length > budget.maxDiffChars) {
+        truncatedByCharBudget = true
+        if (hunkDigest.length === 0) {
+          const truncatedExcerpt = truncateText(excerpt, budget.maxDiffChars)
+          chunks.push(truncatedExcerpt.text)
+          truncatedHunks += truncatedExcerpt.truncated ? 1 : 0
+          hunkDigest.push(entry.digest)
+          selectedFile = true
+        }
+        break
+      }
+
+      chunks.push(excerpt.text)
+      hunkDigest.push(entry.digest)
+      selectedFile = true
+      if (excerpt.truncated) truncatedHunks += 1
+    }
+
+    if (selectedFile) selectedFilePaths.add(file.path)
+    if (hunkDigest.length >= budget.maxHunks || truncatedByCharBudget) break
+  }
+
+  return {
+    chunks,
+    hunkDigest,
+    selectedFilePaths,
+    truncatedByCharBudget,
+    truncatedHunks,
+  }
+}
+
+const sampleFilesByFolder = (files: readonly ParsedDiffFile[]): readonly ParsedDiffFile[] => {
+  const filesByFolder = new Map<string, ParsedDiffFile[]>()
+  for (const file of files) {
+    const folder = folderPath(file.path)
+    const folderFiles = filesByFolder.get(folder) ?? []
+    folderFiles.push(file)
+    filesByFolder.set(folder, folderFiles)
+  }
+
+  const primaryFiles: ParsedDiffFile[] = []
+  const supportingFiles: ParsedDiffFile[] = []
+  // oxlint-disable-next-line unicorn/no-array-sort -- Sort a copied key list for stable sampling.
+  for (const folder of [...filesByFolder.keys()].sort()) {
+    // oxlint-disable-next-line unicorn/no-array-sort -- Sort a copied file list without mutating input.
+    const folderFiles = [...(filesByFolder.get(folder) ?? [])].sort(compareRepresentativeFiles)
+    const primary =
+      folderFiles.find((file) => !isSupportingRepresentative(file.path)) ?? folderFiles[0]
+    if (primary === undefined) continue
+    primaryFiles.push(primary)
+
+    const supporting = folderFiles.find(
+      (file) => file.path !== primary.path && isSupportingRepresentative(file.path),
+    )
+    if (supporting !== undefined) supportingFiles.push(supporting)
+  }
+
+  return [...primaryFiles, ...supportingFiles]
+}
+
+const compareRepresentativeFiles = (left: ParsedDiffFile, right: ParsedDiffFile) =>
+  changedLineCount(right) - changedLineCount(left) ||
+  right.patch.length - left.patch.length ||
+  left.path.localeCompare(right.path)
+
+const isSupportingRepresentative = (path: string) =>
+  /(?:^|\/)(?:__tests__|docs?|fixtures?|tests?)(?:\/|$)|\.(?:spec|test)\.[^/]+$|(?:^|\/)(?:package\.json|tsconfig[^/]*\.json|vite\.config\.[^/]+)$/i.test(
+    path,
+  )
+
+const folderPath = (path: string) => {
+  const separatorIndex = path.lastIndexOf("/")
+  return separatorIndex < 0 ? "(root)" : path.slice(0, separatorIndex)
+}
+
+const countFolders = (files: readonly ParsedDiffFile[]) =>
+  new Set(files.map((file) => folderPath(file.path))).size
+
+const buildChangedFileTree = (files: readonly ParsedDiffFile[]) => {
+  const filesByFolder = new Map<string, ParsedDiffFile[]>()
+  for (const file of files) {
+    const folder = folderPath(file.path)
+    const folderFiles = filesByFolder.get(folder) ?? []
+    folderFiles.push(file)
+    filesByFolder.set(folder, folderFiles)
+  }
+
+  const folderSummaries: string[] = []
+  const treeLines: string[] = []
+  // oxlint-disable-next-line unicorn/no-array-sort -- Sort a copied key list for stable prompt output.
+  for (const folder of [...filesByFolder.keys()].sort()) {
+    // oxlint-disable-next-line unicorn/no-array-sort -- Sort a copied file list without mutating input.
+    const folderFiles = [...(filesByFolder.get(folder) ?? [])].sort((left, right) =>
+      left.path.localeCompare(right.path),
+    )
+    const additions = folderFiles.reduce((total, file) => total + file.additions, 0)
+    const deletions = folderFiles.reduce((total, file) => total + file.deletions, 0)
+    const summary = `${folder} (${folderFiles.length} files, +${additions} -${deletions})`
+    folderSummaries.push(summary)
+    treeLines.push(summary, ...folderFiles.map((file) => `  ${file.path}`))
+  }
+
+  const completeTree = treeLines.join("\n")
+  if (completeTree.length <= MAX_SAMPLED_FILE_TREE_CHARS) return completeTree
+
+  const compactTree = folderSummaries.join("\n")
+  if (compactTree.length <= MAX_SAMPLED_FILE_TREE_CHARS) {
+    return `${compactTree}\n[File paths omitted to keep the changed-folder tree bounded.]`
+  }
+  const marker = "\n[Changed-folder tree truncated to fit the prompt budget.]"
+  return `${compactTree.slice(0, MAX_SAMPLED_FILE_TREE_CHARS - marker.length)}${marker}`
 }
 
 const normalizePromptBudget = (budget: WalkthroughPromptBudget): WalkthroughPromptBudget => ({

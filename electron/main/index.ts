@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { createAppLifecycle } from "./app-lifecycle"
+import { parseCliNavigationCommand } from "./cli-navigation"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
 import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
@@ -42,7 +43,9 @@ import { AISettings } from "../../src/shared/ai-settings"
 import { AnalyticsEvent } from "../../src/shared/analytics"
 import { DEFAULT_APP_STATE, AppState as SharedAppState } from "../../src/shared/app-state"
 import type { AppUpdateState } from "../../src/shared/app-update"
+import type { CliNavigationCommand } from "../../src/shared/cli-navigation"
 import { parseUnifiedDiff } from "../../src/shared/diff-parser"
+import type { LocalReviewSnapshot } from "../../src/shared/review-context"
 import type {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -56,6 +59,7 @@ import type {
 import { RepositorySearchRequest } from "../../src/shared/domain"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "../../src/shared/prerequisites"
 import { LinkRepositoryCheckoutRequest } from "../../src/shared/repository-link"
+import { LocalReviewTarget } from "../../src/shared/local-review"
 import { ReviewAgentProgress } from "../../src/shared/review-agent"
 import { makePullRequestReviewKey } from "../../src/shared/review-identity"
 import {
@@ -76,8 +80,6 @@ import {
   walkthroughPullRequestScope,
 } from "../../src/shared/walkthrough"
 
-const LOCAL_REVIEW_ARG = "--diffdash-local-path"
-const LINK_REPOSITORY_ARG = "--diffdash-link-path"
 const startupStartedAt = Date.now() - process.uptime() * 1_000
 
 const logStartupStage = (stage: string) => {
@@ -87,8 +89,7 @@ const logStartupStage = (stage: string) => {
 logStartupStage("main module loaded")
 
 let mainWindow: BrowserWindow | null = null
-let pendingLocalReviewPath: string | null = null
-let pendingRepositoryLinkPath: string | null = null
+let pendingNavigationCommands: CliNavigationCommand[] = []
 
 const getDevelopmentIconPath = () =>
   app.isPackaged ? null : resolve(__dirname, "../../resources/icons/icon.png")
@@ -327,7 +328,7 @@ const installIpcHandlers = (
       return { repo, snapshot, prNumber: target.number } as const
     }
 
-    const snapshot = await run(contexts.getLocalReviewSnapshot(target.rootPath))
+    const snapshot = await run(contexts.getLocalReviewSnapshot(target))
     const repo = await run(
       repositories.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)),
     )
@@ -624,11 +625,20 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
+    "localReviews:resolveBranch",
+    async (_event, localPath: string, branchName: string | null): Promise<LocalReviewTarget> => {
+      const git = await run(GitService)
+      return run(git.resolveBranchComparison(localPath, branchName))
+    },
+  )
+
+  ipcMain.handle(
     "localReviews:getDetail",
-    async (_event, localPath: string): Promise<LocalReviewDetail> => {
+    async (_event, input: unknown): Promise<LocalReviewDetail> => {
+      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const git = await run(GitService)
       const store = await run(RepositoryStore)
-      const detail = await run(git.getLocalReviewDetail(localPath))
+      const detail = await run(git.getLocalReviewDetail(target))
       await run(store.upsertRepository(localRepositoryInput(detail.rootPath)))
       return detail
     },
@@ -636,21 +646,32 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     "localReviews:getDiff",
-    async (_event, localPath: string): Promise<LocalReviewDiff> => {
+    async (_event, input: unknown): Promise<LocalReviewDiff> => {
+      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
       const git = await run(GitService)
       const store = await run(RepositoryStore)
-      const diff = await run(git.getLocalReviewDiff(localPath))
+      const diff = await run(git.getLocalReviewDiff(target))
       await run(store.upsertRepository(localRepositoryInput(diff.rootPath)))
       return diff
     },
   )
 
-  ipcMain.handle("navigation:getPendingLocalReview", async (): Promise<string | null> => {
-    return pendingLocalReviewPath
-  })
+  ipcMain.handle(
+    "localReviews:getSnapshot",
+    async (_event, input: unknown): Promise<LocalReviewSnapshot> => {
+      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+      const git = await run(GitService)
+      const store = await run(RepositoryStore)
+      const snapshot = await run(git.getLocalReviewSnapshot(target))
+      await run(store.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)))
+      return snapshot
+    },
+  )
 
-  ipcMain.handle("navigation:getPendingRepositoryLink", async (): Promise<string | null> => {
-    return pendingRepositoryLinkPath
+  ipcMain.handle("navigation:drainCommands", async (): Promise<readonly CliNavigationCommand[]> => {
+    const commands = pendingNavigationCommands
+    pendingNavigationCommands = []
+    return commands
   })
 
   ipcMain.handle(
@@ -691,19 +712,20 @@ const installIpcHandlers = (
     "localWalkthroughs:get",
     async (
       _event,
-      rootPath: string,
+      input: unknown,
       baseSha: string,
       headSha: string,
     ): Promise<StoredWalkthrough | null> => {
-      const git = await run(GitService)
+      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+      const contexts = await run(ReviewContextService)
       const store = await run(RepositoryStore)
       const walkthroughStore = await run(WalkthroughStore)
-      const canonicalRootPath = await run(git.detectRoot(rootPath))
-      const repo = await run(store.upsertRepository(localRepositoryInput(canonicalRootPath)))
+      const snapshot = await run(contexts.getLocalReviewSnapshot(target))
+      const repo = await run(store.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)))
       return run(
         walkthroughStore.get({
           repoId: repo.id,
-          reviewKey: localReviewKey(canonicalRootPath),
+          reviewKey: snapshot.reviewKey,
           baseSha,
           headSha,
           promptVersion: WALKTHROUGH_PROMPT_VERSION,
@@ -877,6 +899,8 @@ const installIpcHandlers = (
           review: { kind: "pullRequest", pullRequest },
           diff: promptInput.diff,
           hunkDigest: promptInput.hunkDigest,
+          changedFileTree: promptInput.changedFileTree,
+          generation: promptInput.generation,
           promptStats: promptInput.stats,
         }),
       )
@@ -893,18 +917,20 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     "localWalkthroughs:generate",
-    async (_event, rootPath: string, regenerate: boolean): Promise<StoredWalkthrough> => {
-      const git = await run(GitService)
+    async (_event, input: unknown, regenerate: boolean): Promise<StoredWalkthrough> => {
+      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+      const contexts = await run(ReviewContextService)
       const repositoryStore = await run(RepositoryStore)
       const walkthroughStore = await run(WalkthroughStore)
       const walkthroughService = await run(WalkthroughService)
 
-      const localReview = await run(git.getLocalReviewDetail(rootPath))
-      const diff = await run(git.getLocalReviewDiff(localReview.rootPath))
+      const snapshot = await run(contexts.getLocalReviewSnapshot(target))
+      const localReview = snapshot.detail
+      const diff = snapshot.diff
       const repo = await run(repositoryStore.upsertRepository(localRepositoryInput(diff.rootPath)))
       const cacheKey = {
         repoId: repo.id,
-        reviewKey: localReviewKey(diff.rootPath),
+        reviewKey: snapshot.reviewKey,
         baseSha: diff.baseSha,
         headSha: diff.headSha,
         promptVersion: WALKTHROUGH_PROMPT_VERSION,
@@ -924,6 +950,8 @@ const installIpcHandlers = (
           review: { kind: "localDiff", localReview },
           diff: promptInput.diff,
           hunkDigest: promptInput.hunkDigest,
+          changedFileTree: promptInput.changedFileTree,
+          generation: promptInput.generation,
           promptStats: promptInput.stats,
         }),
       )
@@ -1065,8 +1093,6 @@ const pullRequestReviewKey = (
   number: number,
 ) => makePullRequestReviewKey(provider, owner, name, number)
 
-const localReviewKey = (rootPath: string) => `local:${hashText(resolve(rootPath))}`
-
 const localRepositoryInput = (rootPath: string) => {
   const resolvedRootPath = resolve(rootPath)
   const hash = hashText(resolvedRootPath).slice(0, 12)
@@ -1105,61 +1131,8 @@ const openProviderFile = async (
   await shell.openExternal(gitProvider.fileUrl(owner, name, filePath, ref))
 }
 
-const parseLocalReviewPathArg = (argv: readonly string[], cwd: string) => {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (arg === undefined) continue
-
-    if (arg === LOCAL_REVIEW_ARG) {
-      const value = argv[index + 1]
-      return value === undefined ? null : resolve(cwd, value)
-    }
-
-    const prefix = `${LOCAL_REVIEW_ARG}=`
-    if (arg.startsWith(prefix)) {
-      return resolve(cwd, arg.slice(prefix.length))
-    }
-  }
-
-  return null
-}
-
-const parseRepositoryLinkPathArg = (argv: readonly string[], cwd: string) => {
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index]
-    if (arg === undefined) continue
-
-    if (arg === LINK_REPOSITORY_ARG) {
-      const value = argv[index + 1]
-      return value === undefined ? null : resolve(cwd, value)
-    }
-
-    const prefix = `${LINK_REPOSITORY_ARG}=`
-    if (arg.startsWith(prefix)) return resolve(cwd, arg.slice(prefix.length))
-  }
-
-  return null
-}
-
-const sendLocalReviewNavigation = (localPath: string) => {
-  pendingLocalReviewPath = resolve(localPath)
-  const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
-  if (targetWindow === null || targetWindow.isDestroyed()) return
-
-  if (targetWindow.isMinimized()) {
-    targetWindow.restore()
-  }
-  targetWindow.show()
-  if (process.platform === "darwin") {
-    app.focus({ steal: true })
-  } else {
-    targetWindow.focus()
-  }
-  targetWindow.webContents.send("navigation:openLocalReview", pendingLocalReviewPath)
-}
-
-const sendRepositoryLinkNavigation = (localPath: string) => {
-  pendingRepositoryLinkPath = resolve(localPath)
+const enqueueNavigationCommand = (command: CliNavigationCommand) => {
+  pendingNavigationCommands.push(command)
   const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
   if (targetWindow === null || targetWindow.isDestroyed()) return
 
@@ -1167,7 +1140,7 @@ const sendRepositoryLinkNavigation = (localPath: string) => {
   targetWindow.show()
   if (process.platform === "darwin") app.focus({ steal: true })
   else targetWindow.focus()
-  targetWindow.webContents.send("navigation:linkRepository", pendingRepositoryLinkPath)
+  targetWindow.webContents.send("navigation:commandsAvailable")
 }
 
 const openExternalUrl = async (url: string) => {
@@ -1302,11 +1275,8 @@ const createWindow = () => {
     .then(() => {
       logStartupStage("renderer loaded")
       showMainWindow()
-      if (pendingLocalReviewPath !== null) {
-        sendLocalReviewNavigation(pendingLocalReviewPath)
-      }
-      if (pendingRepositoryLinkPath !== null) {
-        sendRepositoryLinkNavigation(pendingRepositoryLinkPath)
+      if (pendingNavigationCommands.length > 0) {
+        window.webContents.send("navigation:commandsAvailable")
       }
       return undefined
     })
@@ -1351,18 +1321,13 @@ const singleInstanceLock =
 if (!singleInstanceLock) {
   app.quit()
 } else {
-  pendingLocalReviewPath = parseLocalReviewPathArg(process.argv, process.cwd())
-  pendingRepositoryLinkPath = parseRepositoryLinkPathArg(process.argv, process.cwd())
+  const initialCommand = parseCliNavigationCommand(process.argv, process.cwd())
+  if (initialCommand !== null) pendingNavigationCommands.push(initialCommand)
 
   app.on("second-instance", (_event, argv, cwd) => {
-    const repositoryLinkPath = parseRepositoryLinkPathArg(argv, cwd)
-    if (repositoryLinkPath !== null) {
-      sendRepositoryLinkNavigation(repositoryLinkPath)
-      return
-    }
-    const localReviewPath = parseLocalReviewPathArg(argv, cwd)
-    if (localReviewPath !== null) {
-      sendLocalReviewNavigation(localReviewPath)
+    const command = parseCliNavigationCommand(argv, cwd)
+    if (command !== null) {
+      enqueueNavigationCommand(command)
       return
     }
 

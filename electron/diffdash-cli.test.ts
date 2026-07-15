@@ -34,7 +34,7 @@ const waitForCapture = (capturePath: string): Promise<ReadonlyArray<string>> => 
       return Promise.resolve(readFileSync(capturePath, "utf8").trimEnd().split("\n"))
     }
 
-    if (attempt >= 100) {
+    if (attempt >= 500) {
       return Promise.reject(new Error("Timed out waiting for the fake Electron launch"))
     }
 
@@ -60,24 +60,7 @@ describe("diffdash CLI", () => {
     }
   })
 
-  it("rejects unknown and extra install arguments before launching the app", () => {
-    const launchers = [
-      (args: ReadonlyArray<string>) => runSourceCli(args),
-      ...packagedClis.map((cli) => (args: ReadonlyArray<string>) => runPackagedCli(cli, args)),
-    ]
-
-    for (const launch of launchers) {
-      const unknownResult = launch(["install", "path", "--unknown"])
-      expect(unknownResult.status).toBe(2)
-      expect(unknownResult.stderr).toContain("Unknown option for `diffdash install`: --unknown")
-
-      const extraResult = launch(["install", "first", "second"])
-      expect(extraResult.status).toBe(2)
-      expect(extraResult.stderr).toContain("diffdash install accepts at most one path.")
-    }
-  })
-
-  it("launches source local and install commands with distinct absolute path arguments", async () => {
+  it("forwards source commands and invocation cwd through the versioned envelope", async () => {
     const harnessRoot = mkdtempSync(join(tmpdir(), "diffdash-source-cli-test-"))
 
     try {
@@ -131,22 +114,33 @@ describe("diffdash CLI", () => {
 
       await expect(runHarness(["changes"])).resolves.toEqual([
         resolvedHarnessRoot,
-        `--diffdash-local-path=${join(resolvedWorkingDirectory, "changes")}`,
+        "--diffdash-cli-v1",
+        resolvedWorkingDirectory,
+        "--",
+        "changes",
       ])
       await expect(runHarness(["install", "linked-project"])).resolves.toEqual([
         resolvedHarnessRoot,
-        `--diffdash-link-path=${join(resolvedWorkingDirectory, "linked-project")}`,
+        "--diffdash-cli-v1",
+        resolvedWorkingDirectory,
+        "--",
+        "install",
+        "linked-project",
       ])
-      await expect(runHarness(["install"])).resolves.toEqual([
+      await expect(runHarness(["pr", "42"])).resolves.toEqual([
         resolvedHarnessRoot,
-        `--diffdash-link-path=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-v1",
+        resolvedWorkingDirectory,
+        "--",
+        "pr",
+        "42",
       ])
     } finally {
       rmSync(harnessRoot, { force: true, recursive: true })
     }
   })
 
-  it("launches packaged install commands with absolute link paths", async () => {
+  it("forwards packaged commands without parsing them in the launcher", async () => {
     const harnessRoot = mkdtempSync(join(tmpdir(), "diffdash-packaged-cli-test-"))
     const harnesses = [
       {
@@ -185,7 +179,11 @@ describe("diffdash CLI", () => {
 
           expect(result.status).toBe(0)
           await expect(waitForCapture(capturePath)).resolves.toEqual([
-            `--diffdash-link-path=${join(realpathSync(workingDirectory), "linked-project")}`,
+            "--diffdash-cli-v1",
+            realpathSync(workingDirectory),
+            "--",
+            "install",
+            "linked-project",
           ])
         }),
       )

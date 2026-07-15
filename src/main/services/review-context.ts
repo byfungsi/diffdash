@@ -4,6 +4,7 @@ import { parseUnifiedDiff } from "../../shared/diff-parser"
 import type { LocalReviewSnapshot } from "../../shared/review-context"
 import { PullRequestReviewSnapshot } from "../../shared/review-context"
 import { makePullRequestReviewKey, ReviewRevision } from "../../shared/review-identity"
+import type { LocalReviewTarget } from "../../shared/local-review"
 import { GitService } from "./git"
 import { GitProvider } from "./git-provider"
 
@@ -27,7 +28,7 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
       number: number,
     ) => Effect.Effect<PullRequestReviewSnapshot, ReviewContextError>
     readonly getLocalReviewSnapshot: (
-      localPath: string,
+      target: LocalReviewTarget,
     ) => Effect.Effect<LocalReviewSnapshot, ReviewContextError>
   }
 >() {
@@ -81,9 +82,9 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
           },
         ),
         getLocalReviewSnapshot: Effect.fn("ReviewContextService.getLocalReviewSnapshot")(
-          function (localPath) {
+          function (target) {
             return git
-              .getLocalReviewSnapshot(localPath)
+              .getLocalReviewSnapshot(target)
               .pipe(Effect.mapError(snapshotOperationError("local.snapshot")))
           },
         ),

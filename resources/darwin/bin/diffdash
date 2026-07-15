@@ -4,7 +4,9 @@ set -eu
 usage() {
   printf '%s\n' \
     'Usage: diffdash [path]' \
-    '       diffdash install [path]'
+    '       diffdash install [path]' \
+    '       diffdash pr [pr-number]' \
+    '       diffdash diff [branch-name]'
 }
 
 for argument in "$@"; do
@@ -15,37 +17,6 @@ for argument in "$@"; do
       ;;
   esac
 done
-
-target_argument='--diffdash-local-path'
-target_path="${1:-$PWD}"
-
-if [ "${1:-}" = 'install' ]; then
-  shift
-
-  for argument in "$@"; do
-    case "$argument" in
-      -*)
-        printf 'Unknown option for `diffdash install`: %s\n' "$argument" >&2
-        printf '%s\n' 'Usage: diffdash install [path]' >&2
-        exit 2
-        ;;
-    esac
-  done
-
-  if [ "$#" -gt 1 ]; then
-    printf '%s\n' \
-      'diffdash install accepts at most one path.' \
-      'Usage: diffdash install [path]' >&2
-    exit 2
-  fi
-
-  target_argument='--diffdash-link-path'
-  target_path="${1:-$PWD}"
-  case "$target_path" in
-    /*) ;;
-    *) target_path="$PWD/$target_path" ;;
-  esac
-fi
 
 self_path="$0"
 if command -v readlink >/dev/null 2>&1; then
@@ -70,4 +41,4 @@ if [ ! -x "$app_binary" ]; then
   exit 1
 fi
 
-"$app_binary" "$target_argument=$target_path" >/dev/null 2>&1 &
+"$app_binary" --diffdash-cli-v1 "$PWD" -- "$@" >/dev/null 2>&1 &

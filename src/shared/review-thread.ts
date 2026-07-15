@@ -1,5 +1,9 @@
 import { Schema } from "effect"
 
+import { LocalReviewTarget } from "./local-review"
+
+export { LocalReviewTarget } from "./local-review"
+
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
@@ -199,12 +203,6 @@ export class PullRequestReviewTarget extends Schema.Class<PullRequestReviewTarge
   owner: Schema.String,
   name: Schema.String,
   number: Schema.Number,
-}) {}
-
-/** Renderer-safe locator for one local working-tree review. */
-export class LocalReviewTarget extends Schema.Class<LocalReviewTarget>("LocalReviewTarget")({
-  kind: Schema.Literal("local"),
-  rootPath: Schema.String,
 }) {}
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */

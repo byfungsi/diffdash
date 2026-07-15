@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
 } from "react"
@@ -17,7 +18,6 @@ import { cn } from "@/lib/utils"
 import {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
-  LocalReviewTarget,
   MarkdownBody,
   PullRequestReviewTarget,
   ReviewThreadDetails,
@@ -28,6 +28,11 @@ import {
   type ReviewThreadMessageId,
   type ReviewThreadTarget,
 } from "../../shared/review-thread"
+import {
+  BranchComparison,
+  LocalReviewTarget,
+  WorkingTreeComparison,
+} from "../../shared/local-review"
 
 const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
   void window.diffDash.analytics.capture(event).catch(() => undefined)
@@ -51,7 +56,7 @@ export type ReviewThreadScope =
     }
   | {
       readonly kind: "local"
-      readonly rootPath: string
+      readonly target: LocalReviewTarget
       readonly baseRevision: string
       readonly headRevision: string
     }
@@ -91,7 +96,41 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const owner = scope.kind === "pullRequest" ? scope.owner : null
   const name = scope.kind === "pullRequest" ? scope.name : null
   const number = scope.kind === "pullRequest" ? scope.number : null
-  const rootPath = scope.kind === "local" ? scope.rootPath : null
+  const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
+  const localBranchName =
+    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
+      ? scope.target.comparison.branchName
+      : null
+  const localBaseRef =
+    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
+      ? scope.target.comparison.baseRef
+      : null
+  const localBaseSha =
+    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
+      ? scope.target.comparison.baseSha
+      : null
+  const localTarget = useMemo(
+    () =>
+      localRootPath === null
+        ? null
+        : LocalReviewTarget.make({
+            kind: "local",
+            rootPath: localRootPath,
+            comparison:
+              localBranchName === null || localBaseRef === null || localBaseSha === null
+                ? WorkingTreeComparison.make({})
+                : BranchComparison.make({
+                    branchName: localBranchName,
+                    baseRef: localBaseRef,
+                    baseSha: localBaseSha,
+                  }),
+          }),
+    [localBaseRef, localBaseSha, localBranchName, localRootPath],
+  )
+  const localTargetKey =
+    localRootPath === null
+      ? null
+      : `${localRootPath}\u0000${localBaseRef ?? "workingTree"}\u0000${localBaseSha ?? ""}`
   const available = baseRevision !== null && headRevision !== null
 
   const load = async () => {
@@ -106,7 +145,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setError(null)
     try {
       const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(owner, name, number, rootPath),
+        reviewThreadTarget(owner, name, number, localTarget),
       )
       const loaded = await Promise.all(
         threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
@@ -143,7 +182,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     window.diffDash.reviewThreads
-      .list(reviewThreadTarget(owner, name, number, rootPath))
+      .list(reviewThreadTarget(owner, name, number, localTarget))
       .then((threads) =>
         Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
       )
@@ -161,7 +200,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     return () => {
       cancelled = true
     }
-  }, [available, baseRevision, headRevision, name, number, owner, rootPath])
+  }, [available, baseRevision, headRevision, localTarget, localTargetKey, name, number, owner])
 
   const refreshThread = async (threadId: ReviewThreadId) => {
     try {
@@ -188,7 +227,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const pending = window.diffDash.reviewThreads.runAgent(
         RunReviewThreadAgentRequest.make({
           threadId,
-          target: reviewThreadTarget(owner, name, number, rootPath),
+          target: reviewThreadTarget(owner, name, number, localTarget),
         }),
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
@@ -198,7 +237,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       captureAnalytics({
         event: "review_agent_completed",
-        reviewType: rootPath === null ? "pull_request" : "local_diff",
+        reviewType: localTarget === null ? "pull_request" : "local_diff",
       })
       setError(null)
     } catch (cause) {
@@ -217,7 +256,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     try {
       const created = await window.diffDash.reviewThreads.create(
         CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(owner, name, number, rootPath),
+          target: reviewThreadTarget(owner, name, number, localTarget),
           expectedBaseRevision: ReviewRevision.make(baseRevision),
           expectedHeadRevision: ReviewRevision.make(headRevision),
           anchor,
@@ -227,7 +266,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       setDetails((current) => sortThreadDetails([...current, created]))
       captureAnalytics({
         event: "review_thread_created",
-        reviewType: rootPath === null ? "pull_request" : "local_diff",
+        reviewType: localTarget === null ? "pull_request" : "local_diff",
       })
       setError(null)
       void runAgent(created.thread.id)
@@ -740,11 +779,14 @@ const reviewThreadTarget = (
   owner: string | null,
   name: string | null,
   number: number | null,
-  rootPath: string | null,
-): ReviewThreadTarget =>
-  owner !== null && name !== null && number !== null
-    ? PullRequestReviewTarget.make({ kind: "pullRequest", owner, name, number })
-    : LocalReviewTarget.make({ kind: "local", rootPath: rootPath ?? "" })
+  localTarget: LocalReviewTarget | null,
+): ReviewThreadTarget => {
+  if (owner !== null && name !== null && number !== null) {
+    return PullRequestReviewTarget.make({ kind: "pullRequest", owner, name, number })
+  }
+  if (localTarget === null) throw new Error("Local review target is unavailable")
+  return localTarget
+}
 
 /** Human-readable label for any persisted anchor. */
 export const anchorLabel = (anchor: ReviewThreadAnchor) => {

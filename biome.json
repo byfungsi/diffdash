@@ -10,6 +10,12 @@
       "!web/landing/dist",
       "!coverage",
       "!test-results",
+      "!demo/.cache",
+      "!media/.cache",
+      "!media/output",
+      "!media/public/audio",
+      "!media/public/captures",
+      "!media/public/fonts",
       "!pnpm-lock.yaml",
       "!*.tsbuildinfo"
     ]

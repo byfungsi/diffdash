@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title description">
+  <title id="title">Webhook replay claim lifecycle</title>
+  <desc id="description">A failed delivery is claimed, replayed, and either completed or released after lease expiry.</desc>
+  <rect width="960" height="420" rx="32" fill="#07111f"/>
+  <g fill="none" stroke="#22c983" stroke-width="4">
+    <path d="M225 210h115"/>
+    <path d="M490 210h115"/>
+    <path d="M755 210h70"/>
+  </g>
+  <g fill="#102033" stroke="#334155" stroke-width="2">
+    <rect x="55" y="145" width="170" height="130" rx="18"/>
+    <rect x="340" y="145" width="150" height="130" rx="18"/>
+    <rect x="605" y="145" width="150" height="130" rx="18"/>
+    <rect x="825" y="145" width="80" height="130" rx="18"/>
+  </g>
+  <g fill="#f8fafc" font-family="Inter, sans-serif" font-size="20" text-anchor="middle">
+    <text x="140" y="202">Failed delivery</text>
+    <text x="415" y="202">Atomic claim</text>
+    <text x="680" y="202">Replay</text>
+    <text x="865" y="202">Done</text>
+  </g>
+  <text x="480" y="350" fill="#94a3b8" font-family="Inter, sans-serif" font-size="18" text-anchor="middle">Expired leases return to the claim step using database time.</text>
+</svg>
