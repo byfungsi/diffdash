@@ -8,11 +8,11 @@ import { createAppLifecycle } from "./app-lifecycle"
 import { parseCliNavigationCommand } from "./cli-navigation"
 import {
   createDiffDashBrowserWindowOptions,
-  isExternalUrlAllowed,
   isInternalNavigationAllowed,
   normalizeReviewFilePath,
   resolveContainedRepositoryPath,
 } from "./electron-policy"
+import { openAllowedExternalUrl, openLocalPath, openProviderFile } from "./file-opening"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
 import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
@@ -986,7 +986,7 @@ const installIpcHandlers = (
   })
 
   ipcMain.handle("app:openExternalUrl", async (_event, url: string): Promise<void> => {
-    await openExternalUrl(url)
+    await openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
   })
 
   ipcMain.handle(
@@ -1018,6 +1018,7 @@ const installIpcHandlers = (
       if (repository?.localPath === null || repository?.localPath === undefined) {
         await openProviderFile(
           gitProvider,
+          (targetUrl) => shell.openExternal(targetUrl),
           owner,
           name,
           normalizedFilePath,
@@ -1033,6 +1034,7 @@ const installIpcHandlers = (
       } catch {
         await openProviderFile(
           gitProvider,
+          (targetUrl) => shell.openExternal(targetUrl),
           owner,
           name,
           normalizedFilePath,
@@ -1044,6 +1046,7 @@ const installIpcHandlers = (
       if (currentBranch !== headRefName) {
         await openProviderFile(
           gitProvider,
+          (targetUrl) => shell.openExternal(targetUrl),
           owner,
           name,
           normalizedFilePath,
@@ -1055,10 +1058,7 @@ const installIpcHandlers = (
 
       const targetPath = resolveContainedRepositoryPath(repository.localPath, normalizedFilePath)
 
-      const errorMessage = await shell.openPath(targetPath)
-      if (errorMessage.length > 0) {
-        throw new Error(errorMessage)
-      }
+      await openLocalPath((path) => shell.openPath(path), targetPath)
     },
   )
 
@@ -1070,10 +1070,7 @@ const installIpcHandlers = (
 
       const targetPath = resolveContainedRepositoryPath(canonicalRootPath, filePath)
 
-      const errorMessage = await shell.openPath(targetPath)
-      if (errorMessage.length > 0) {
-        throw new Error(errorMessage)
-      }
+      await openLocalPath((path) => shell.openPath(path), targetPath)
     },
   )
 }
@@ -1101,20 +1098,6 @@ const localRepositoryInput = (rootPath: string) => {
 
 const hashText = (text: string) => createHash("sha256").update(text).digest("hex")
 
-const openProviderFile = async (
-  gitProvider: {
-    readonly fileUrl: (owner: string, name: string, filePath: string, ref: string) => string
-  },
-  owner: string,
-  name: string,
-  filePath: string,
-  headRefName: string,
-  headRefOid: string | null,
-) => {
-  const ref = headRefOid ?? headRefName
-  await shell.openExternal(gitProvider.fileUrl(owner, name, filePath, ref))
-}
-
 const enqueueNavigationCommand = (command: CliNavigationCommand) => {
   pendingNavigationCommands.push(command)
   const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -1125,11 +1108,6 @@ const enqueueNavigationCommand = (command: CliNavigationCommand) => {
   if (process.platform === "darwin") app.focus({ steal: true })
   else targetWindow.focus()
   targetWindow.webContents.send("navigation:commandsAvailable")
-}
-
-const openExternalUrl = async (url: string) => {
-  if (!isExternalUrlAllowed(url)) return
-  await shell.openExternal(url)
 }
 
 const createWindow = () => {
@@ -1216,7 +1194,7 @@ const createWindow = () => {
   })
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void openExternalUrl(url)
+    void openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
     return { action: "deny" }
   })
 
@@ -1225,7 +1203,7 @@ const createWindow = () => {
     if (isInternalNavigationAllowed(url, currentUrl)) return
 
     event.preventDefault()
-    void openExternalUrl(url)
+    void openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
   })
 
   if (app.isPackaged) {
