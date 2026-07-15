@@ -114,6 +114,7 @@ when either value is missing.
 - `pnpm test` runs unit tests for utilities, Effect services, persistence, CLI adapters, and isolated components.
 - `pnpm test:browser` runs Vitest Browser Mode interaction tests for composed renderer behavior.
 - `pnpm test:e2e` rebuilds native modules for Electron, builds the app, and runs Playwright Electron E2E tests.
+- `pnpm test:e2e:packaged` builds unsigned electron-builder output and verifies packaged resources, native SQLite, preload isolation, and restart persistence.
 - `pnpm test:all` runs unit, browser integration, Electron E2E, and download-worker tests in sequence.
 - `pnpm check` runs formatting check, lint, TypeScript, and tests.
 - `.husky/pre-commit` runs lint-staged auto-formatting, `pnpm typecheck`, and `pnpm test` once the folder is inside a Git repository and `pnpm prepare` has run.

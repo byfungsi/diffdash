@@ -34,6 +34,7 @@ cannot be made reliable in local automation.
 | Unit/service | `pnpm test` | Effect services, SQLite, Git/CLI/providers, and shared logic |
 | Browser | `pnpm test:browser` | Composed renderer interaction and state transitions |
 | Electron | `pnpm test:e2e` | Full shell, IPC, CLI navigation, worktrees, and restart |
+| Packaged Electron | `pnpm test:e2e:packaged` | ASAR, updater/CLI resources, native SQLite, preload isolation, and restart |
 | Download worker | `pnpm --dir web/download-worker test` | Stable release routing and artifact selection |
 | Full test gate | `pnpm test:all` | Unit, browser, Electron, and worker suites |
 | Landing build | `pnpm --dir web/landing build` | Landing TypeScript and production bundle |
@@ -55,6 +56,9 @@ The following requirement IDs are covered by
 | `PERSIST-RESTART-004` | `[B]` | Generated walkthrough content is served after restart. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
+| `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
+| `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
+| `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 
 ## Known M8 Gaps
 
@@ -63,8 +67,8 @@ The following requirement IDs are covered by
 - `[G]` Main/preload channel parity is not mechanically checked for the entire `DiffDashApi`.
 - `[G]` BrowserWindow security options, navigation denial, sender validation, and file containment
   lack direct contract tests.
-- `[G]` No test launches unsigned electron-builder output, inspects packaged resources, or loads
-  packaged `better-sqlite3`.
+- `[G]` Installer, signing, notarization, update installation, and public artifact checks remain
+  operational rather than part of the unsigned packaged E2E gate.
 - `[G]` Release scripts have syntax checks but limited behavioral tests for partial failure,
   checksums, retries, promotion ordering, and retention.
 - `[G]` Accessibility has interaction assertions but no automated audit or recorded screen-reader
