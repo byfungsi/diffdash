@@ -16,10 +16,27 @@ test("boots packaged resources and preserves SQLite data across restart", async 
   await Promise.all([
     mkdir(localRepo, { recursive: true }),
     mkdir(userData, { recursive: true }),
-    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(join(xdgConfigHome, "diffdash"), { recursive: true }),
   ])
   execGit(localRepo, "init")
-  await writeFile(join(localRepo, "README.md"), "# Packaged E2E\n", "utf8")
+  await writeFile(join(localRepo, "README.md"), "# Before packaged review\n", "utf8")
+  execGit(localRepo, "add", ".")
+  execGit(
+    localRepo,
+    "-c",
+    "user.name=DiffDash Test",
+    "-c",
+    "user.email=test@diffdash.dev",
+    "commit",
+    "-m",
+    "baseline",
+  )
+  await writeFile(join(localRepo, "README.md"), "# After packaged review\n", "utf8")
+  await writeFile(
+    join(xdgConfigHome, "diffdash", "state.json"),
+    JSON.stringify({ onboardingCompleted: true }),
+    "utf8",
+  )
 
   const launchOptions = {
     executablePath: packaged.executable,
@@ -31,7 +48,10 @@ test("boots packaged resources and preserves SQLite data across restart", async 
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   }
-  let app = await electron.launch(launchOptions)
+  let app = await electron.launch({
+    ...launchOptions,
+    args: [...launchOptions.args, `--diffdash-local-path=${localRepo}`],
+  })
 
   try {
     expect(
@@ -47,6 +67,9 @@ test("boots packaged resources and preserves SQLite data across restart", async 
     })
 
     const window = await app.firstWindow()
+    await expect(window.getByRole("heading", { name: "Local changes" })).toBeVisible()
+    await expect(window.getByText("README.md").first()).toBeVisible()
+    await expect(window.getByText("After packaged review")).toBeVisible()
     expect(
       await window.evaluate(async (repositoryPath) => {
         await globalThis.window.diffDash.appState.update({ onboardingCompleted: true })
