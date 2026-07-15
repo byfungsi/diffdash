@@ -41,4 +41,4 @@ if [ ! -x "$app_binary" ]; then
   exit 1
 fi
 
-"$app_binary" --diffdash-cli-v1 "$PWD" -- "$@" >/dev/null 2>&1 &
+"$app_binary" "--diffdash-cli-v1=$PWD" -- "$@" >/dev/null 2>&1 &

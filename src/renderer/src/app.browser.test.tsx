@@ -814,6 +814,26 @@ describe("App browser interactions", () => {
     })
   })
 
+  it("shows the actionable repository reason for a failed PR CLI command", async () => {
+    const calls = installDiffDashApi()
+    calls.installRepository.mockRejectedValueOnce(
+      new Error(
+        `repositories:install failed: (FiberFailure) RepositoryLinkError: { "operation": "detectRepository", "reason": "Select a Git repository with a GitHub origin.", "cause": {} } at internal stack`,
+      ),
+    )
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    calls.openPullRequest(3, "/workspace/diffdash")
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Could not open repository pull requests: Select a Git repository with a GitHub origin.",
+      )
+      expect(document.body.textContent).not.toContain("internal stack")
+    })
+  })
+
   it("opens a fetched branch comparison from the diff CLI command", async () => {
     const calls = installDiffDashApi()
     renderApp()

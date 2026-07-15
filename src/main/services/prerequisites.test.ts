@@ -303,8 +303,7 @@ describe("Prerequisites", () => {
       yield* Effect.promise(() => waitForFile(capturePath))
 
       expect(readFileSync(capturePath, "utf8").trim().split("\n")).toEqual([
-        "--diffdash-cli-v1",
-        realpathSync(directory),
+        `--diffdash-cli-v1=${realpathSync(directory)}`,
         "--",
         "install",
         "project with spaces",

@@ -226,6 +226,60 @@ test("opens an exact branch comparison from the versioned CLI command", async ({
   }
 })
 
+test("forwards a CLI command to the running DiffDash instance", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await mkdir(fakeBin, { recursive: true })
+  await mkdir(localRepo, { recursive: true })
+  await mkdir(xdgConfigHome, { recursive: true })
+  await mkdir(userData, { recursive: true })
+  await installFakeCli(fakeBin)
+  await installCodexSettings(xdgConfigHome)
+
+  const appEnvironment = {
+    ...process.env,
+    FAKE_REPO_ROOT: localRepo,
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
+  const app = await electron.launch({
+    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    env: appEnvironment,
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.getByRole("heading", { name: "DiffDash" })).toBeVisible()
+
+    const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).trim()
+    execFileSync(
+      electronExecutable,
+      [
+        join(process.cwd(), "out/main/index.js"),
+        `--user-data-dir=${userData}`,
+        `--diffdash-cli-v1=${localRepo}`,
+        "--",
+        "diff",
+        "dev",
+      ],
+      { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
+    )
+
+    await expect(window.getByRole("heading", { name: "Changes vs dev" })).toBeVisible()
+    await expect(window.getByText("src/local.ts").first()).toBeVisible()
+  } finally {
+    await app.close()
+  }
+})
+
 test("shows a reloadable Electron fallback when the renderer cannot load", async ({
   browserName: _browserName,
 }, testInfo) => {

@@ -4,7 +4,7 @@ import { parseCliNavigationCommand } from "./cli-navigation"
 
 const parse = (args: readonly string[]) =>
   parseCliNavigationCommand(
-    ["electron", "app", "--diffdash-cli-v1", "/workspace/repo", "--", ...args],
+    ["electron", "app", "--diffdash-cli-v1=/workspace/repo", "--", ...args],
     "/fallback",
   )
 
@@ -50,5 +50,23 @@ describe("parseCliNavigationCommand", () => {
     expect(
       parseCliNavigationCommand(["DiffDash", "--diffdash-link-path", "project"], "/workspace"),
     ).toMatchObject({ _tag: "linkRepository", localPath: "/workspace/project" })
+  })
+
+  it("keeps the legacy envelope working when Electron injects and reorders switches", () => {
+    expect(
+      parseCliNavigationCommand(
+        [
+          "electron",
+          "--diffdash-cli-v1",
+          "--allow-file-access-from-files",
+          "/workspace/app",
+          "/workspace/repo",
+          "--",
+          "pr",
+          "3",
+        ],
+        "/fallback",
+      ),
+    ).toMatchObject({ _tag: "openPullRequest", localPath: "/workspace/repo", number: 3 })
   })
 })

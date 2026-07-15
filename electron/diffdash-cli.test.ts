@@ -114,23 +114,20 @@ describe("diffdash CLI", () => {
 
       await expect(runHarness(["changes"])).resolves.toEqual([
         resolvedHarnessRoot,
-        "--diffdash-cli-v1",
-        resolvedWorkingDirectory,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
         "--",
         "changes",
       ])
       await expect(runHarness(["install", "linked-project"])).resolves.toEqual([
         resolvedHarnessRoot,
-        "--diffdash-cli-v1",
-        resolvedWorkingDirectory,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
         "--",
         "install",
         "linked-project",
       ])
       await expect(runHarness(["pr", "42"])).resolves.toEqual([
         resolvedHarnessRoot,
-        "--diffdash-cli-v1",
-        resolvedWorkingDirectory,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
         "--",
         "pr",
         "42",
@@ -179,8 +176,7 @@ describe("diffdash CLI", () => {
 
           expect(result.status).toBe(0)
           await expect(waitForCapture(capturePath)).resolves.toEqual([
-            "--diffdash-cli-v1",
-            realpathSync(workingDirectory),
+            `--diffdash-cli-v1=${realpathSync(workingDirectory)}`,
             "--",
             "install",
             "linked-project",

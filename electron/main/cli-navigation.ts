@@ -1,4 +1,4 @@
-import { resolve } from "node:path"
+import { isAbsolute, resolve } from "node:path"
 
 import {
   CliNavigationErrorCommand,
@@ -11,6 +11,7 @@ import {
 
 /** Private argv sentinel used by update-safe DiffDash launchers. */
 export const DIFFDASH_CLI_ARG = "--diffdash-cli-v1"
+const DIFFDASH_CLI_ARG_PREFIX = `${DIFFDASH_CLI_ARG}=`
 
 const LOCAL_REVIEW_ARG = "--diffdash-local-path"
 const LINK_REPOSITORY_ARG = "--diffdash-link-path"
@@ -20,12 +21,20 @@ export const parseCliNavigationCommand = (
   argv: readonly string[],
   fallbackCwd: string,
 ): CliNavigationCommand | null => {
+  const inlineSentinelIndex = argv.findIndex((argument) =>
+    argument.startsWith(DIFFDASH_CLI_ARG_PREFIX),
+  )
+  if (inlineSentinelIndex >= 0) {
+    const argument = argv[inlineSentinelIndex]
+    const cwd = argument?.slice(DIFFDASH_CLI_ARG_PREFIX.length) || fallbackCwd
+    return parsePublicCommand(parsePublicArguments(argv, inlineSentinelIndex, 1), cwd)
+  }
+
   const sentinelIndex = argv.indexOf(DIFFDASH_CLI_ARG)
   if (sentinelIndex >= 0) {
-    const cwd = argv[sentinelIndex + 1] ?? fallbackCwd
     const separatorIndex = argv.indexOf("--", sentinelIndex + 2)
-    const args = separatorIndex < 0 ? argv.slice(sentinelIndex + 2) : argv.slice(separatorIndex + 1)
-    return parsePublicCommand(args, cwd)
+    const cwd = parseLegacyEnvelopeCwd(argv, sentinelIndex, separatorIndex) ?? fallbackCwd
+    return parsePublicCommand(parsePublicArguments(argv, sentinelIndex, 2), cwd)
   }
 
   const repositoryLinkPath = parseLegacyPathArg(argv, fallbackCwd, LINK_REPOSITORY_ARG)
@@ -37,6 +46,32 @@ export const parseCliNavigationCommand = (
   return localReviewPath === null
     ? null
     : OpenWorkingTreeCommand.make({ localPath: localReviewPath })
+}
+
+const parsePublicArguments = (
+  argv: readonly string[],
+  sentinelIndex: number,
+  argumentsOffset: number,
+) => {
+  const separatorIndex = argv.indexOf("--", sentinelIndex + 1)
+  return separatorIndex < 0
+    ? argv.slice(sentinelIndex + argumentsOffset)
+    : argv.slice(separatorIndex + 1)
+}
+
+const parseLegacyEnvelopeCwd = (
+  argv: readonly string[],
+  sentinelIndex: number,
+  separatorIndex: number,
+) => {
+  if (separatorIndex < 0) return argv[sentinelIndex + 1]
+
+  // Electron may group Chromium switches ahead of positional arguments for a second instance.
+  for (let index = separatorIndex - 1; index > sentinelIndex; index -= 1) {
+    const argument = argv[index]
+    if (argument !== undefined && isAbsolute(argument)) return argument
+  }
+  return undefined
 }
 
 const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigationCommand => {

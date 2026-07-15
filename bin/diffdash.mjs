@@ -43,7 +43,7 @@ if (installCliRequested) {
   process.exit(0)
 }
 
-const launchArguments = [CLI_ARGUMENT, process.cwd(), "--", ...args]
+const launchArguments = [`${CLI_ARGUMENT}=${process.cwd()}`, "--", ...args]
 
 if (existsSync(mainEntry)) {
   const electronPath = await resolveElectronPath()
