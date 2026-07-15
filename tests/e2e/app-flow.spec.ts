@@ -29,6 +29,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   const appEnvironment = {
     ...process.env,
     DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+    DIFFDASH_E2E_HIDDEN: "1",
     DIFFDASH_WORKTREE_POOL_PATH: poolPath,
     FAKE_CODEX_RUN_LOG: codexRunLog,
     FAKE_PR_BASE_SHA: pullRequest.baseSha,
@@ -270,6 +271,7 @@ test("opens local working tree review from CLI argument", async ({
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -319,6 +321,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -352,6 +355,7 @@ test("forwards a CLI command to the running DiffDash instance", async ({
 
   const appEnvironment = {
     ...process.env,
+    DIFFDASH_E2E_HIDDEN: "1",
     FAKE_REPO_ROOT: localRepo,
     PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     XDG_CONFIG_HOME: xdgConfigHome,
@@ -401,6 +405,7 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
       ELECTRON_RENDERER_URL: unavailableRendererUrl,
     },
   })

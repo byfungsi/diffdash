@@ -27,6 +27,7 @@ test("boots packaged resources and preserves SQLite data across restart", async 
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   }

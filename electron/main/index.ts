@@ -1098,15 +1098,22 @@ const localRepositoryInput = (rootPath: string) => {
 
 const hashText = (text: string) => createHash("sha256").update(text).digest("hex")
 
+const isHiddenE2EWindow = () => process.env.DIFFDASH_E2E_HIDDEN === "1"
+
+const revealWindow = (targetWindow: BrowserWindow) => {
+  if (isHiddenE2EWindow()) return
+  if (targetWindow.isMinimized()) targetWindow.restore()
+  targetWindow.show()
+  if (process.platform === "darwin") app.focus({ steal: true })
+  else targetWindow.focus()
+}
+
 const enqueueNavigationCommand = (command: CliNavigationCommand) => {
   pendingNavigationCommands.push(command)
   const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
   if (targetWindow === null || targetWindow.isDestroyed()) return
 
-  if (targetWindow.isMinimized()) targetWindow.restore()
-  targetWindow.show()
-  if (process.platform === "darwin") app.focus({ steal: true })
-  else targetWindow.focus()
+  revealWindow(targetWindow)
   targetWindow.webContents.send("navigation:commandsAvailable")
 }
 
@@ -1129,13 +1136,8 @@ const createWindow = () => {
     }
     isWindowShown = true
     if (showFallbackTimer !== null) clearTimeout(showFallbackTimer)
-    window.show()
-    logStartupStage("window shown")
-    if (process.platform === "darwin") {
-      app.focus({ steal: true })
-    } else {
-      window.focus()
-    }
+    revealWindow(window)
+    logStartupStage(isHiddenE2EWindow() ? "window ready (hidden)" : "window shown")
   }
 
   window.once("ready-to-show", showMainWindow)
@@ -1237,12 +1239,12 @@ const start = async () => {
 
   if (process.platform === "darwin") {
     app.setName("DiffDash")
-    app.setActivationPolicy("regular")
+    app.setActivationPolicy(isHiddenE2EWindow() ? "accessory" : "regular")
   }
 
   await app.whenReady()
   logStartupStage("electron ready")
-  if (process.platform === "darwin") {
+  if (process.platform === "darwin" && !isHiddenE2EWindow()) {
     const developmentIconPath = getDevelopmentIconPath()
     if (developmentIconPath !== null) {
       app.dock?.setIcon(developmentIconPath)
@@ -1278,9 +1280,7 @@ if (!singleInstanceLock) {
 
     const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
     if (targetWindow === null || targetWindow.isDestroyed()) return
-    if (targetWindow.isMinimized()) targetWindow.restore()
-    targetWindow.show()
-    targetWindow.focus()
+    revealWindow(targetWindow)
   })
 
   void start()
