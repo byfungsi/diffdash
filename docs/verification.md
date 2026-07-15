@@ -92,6 +92,7 @@ The following requirement IDs are covered by
 | `DIFF-PARSE-001` | `[B]` | Modified, added, deleted, renamed, binary, multi-hunk, no-newline-marker, and mode-only patch forms retain deterministic metadata. |
 | `DIFF-LARGE-001` | `[B]` | Exact 20,000-line and 2,000,000-character boundaries remain eligible for highlighted rendering; values above either boundary use plain mode. |
 | `TREE-SCALE-001` | `[B]` | A deterministic 10,000-file fixture preserves one unique canonical path and status per input file. |
+| `DIFF-SCALE-001` | `[B]` | A deterministic 1,000-file fixture classifies exactly one over-threshold file for plain rendering while retaining 999 highlight-eligible files. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
@@ -177,6 +178,35 @@ record migration-sensitive invariants added during M8.
   rewrite these baseline claims.
 - `[G]` rows are accepted pre-existing gaps. A migration failure is only a regression when a `[B]`
   row loses evidence or a landed `[T]` row fails its owning issue's gate.
+
+## Accessibility Procedure
+
+Retain the result, platform, assistive technology version, and any exception when running this
+procedure. Automation remains authoritative for roles and interactions already asserted by browser
+tests; this procedure covers behavior that is not reliable to automate locally.
+
+| Surface | Keyboard and screen-reader procedure | Expected evidence |
+|---|---|---|
+| Onboarding | Traverse from the page heading through diagnostics, telemetry, Recheck, and Continue without a pointer. | Controls have persistent names, focus is visible, diagnostic state is announced, and Continue remains available with optional tools missing. |
+| Home/search | Focus repository search, enter a query, traverse results, bookmark a result, and open a review request. | Search purpose and result actions are announced; loading, empty, and failure states are distinguishable without color. |
+| Review tree | Move through files and directories, expand/collapse directories, filter files, reveal hidden files, and open one file. | Tree level, expansion, selection, status, hidden count, and active file are understandable without pointer position. |
+| Diff | Expand a file, navigate visible lines, toggle viewed state, and open a line comment. | File status, changed-line side/number, viewed state, and comment entry are keyboard reachable and announced. |
+| Walkthrough | Switch from Tree, move through chapters/stops/support, mark a stop complete, and return to Tree. | Mode, selected/visited/completed state, sampled coverage, and referenced file are not conveyed by color alone. |
+| Threads | Submit Markdown, wait for progress, inspect a completed or failed response, retry, and submit a follow-up. | Composer focus, busy progress, terminal status, retry action, and new response are announced in sequence. |
+| Commands/errors/updates | Open and close command navigation, trigger a recoverable error, and inspect an available update. | Focus enters and returns from the command surface; active option, alert, retry, update status, and restart action have stable names. |
+
+## Performance Observations
+
+Baseline environment on 2026-07-15: macOS arm64, Node 22.20.0, Electron 43.0.0. These are
+observations, not wall-clock pass thresholds.
+
+| Fixture | Stable assertion | Current observation |
+|---|---|---|
+| 10,000 canonical tree files | 10,000 unique paths and statuses, no loss or duplication | Unit runs observed approximately 190-394 ms; mounted tree rows remain `GAP-TREE-001`. |
+| 3,000 replacement pairs | Fewer than 500 mounted diff-line nodes; trailing navigation and filtering remain functional | Browser baseline passes headlessly. |
+| 20,002 changed lines | Plain mode and fewer than 500 mounted diff-line nodes | Browser baseline passes headlessly; exact 20,000-line boundary remains highlighted by unit policy. |
+| 1,000 files, one over threshold | Exactly one file uses very-large classification; aggregate review is sampled | Unit baseline passes; renderer peak heap and IPC copy cost remain `GAP-PERF-001`. |
+| Syntax worker | Pool configuration remains one worker with bounded AST cache | Queue depth, task completion, and steady-state idle observations remain `GAP-PERF-001`. |
 
 ## Baseline Snapshot Record
 

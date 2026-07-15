@@ -59,4 +59,15 @@ describe("large diff policy", () => {
       ]),
     ).toBe(true)
   })
+
+  it("classifies an extreme 1,000-file review with exactly one plain-mode file", () => {
+    const files = Array.from({ length: 1_000 }, (_, index) => ({
+      additions: index === 0 ? VERY_LARGE_DIFF_CHANGED_LINE_THRESHOLD + 1 : 1,
+      deletions: 0,
+      patch: `file-${index}`,
+    }))
+
+    expect(files.filter(isVeryLargeDiffFile)).toHaveLength(1)
+    expect(isVeryLargeDiff(files)).toBe(true)
+  })
 })
