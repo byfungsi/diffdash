@@ -67,6 +67,19 @@ test("boots packaged resources and preserves SQLite data across restart", async 
     })
 
     const window = await app.firstWindow()
+    expect(
+      await window.evaluate(() => globalThis.window.open("file:///tmp/blocked-popup")),
+    ).toBeNull()
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+    expect(
+      await app.evaluate(async ({ BrowserWindow }) => {
+        const targetWindow = BrowserWindow.getAllWindows()[0]
+        if (targetWindow === undefined) throw new Error("Packaged BrowserWindow was not found")
+        targetWindow.webContents.openDevTools({ mode: "detach" })
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        return targetWindow.webContents.isDevToolsOpened()
+      }),
+    ).toBe(false)
     await expect(window.getByRole("heading", { name: "Local changes" })).toBeVisible()
     await expect(window.getByText("README.md").first()).toBeVisible()
     await expect(window.getByText("After packaged review")).toBeVisible()

@@ -70,6 +70,56 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       nodeProcessType: "undefined",
       nodeRequireType: "undefined",
     })
+    const malformedIpcErrors = await window.evaluate(async () => {
+      const requests = [
+        Reflect.apply(globalThis.window.diffDash.analytics.capture, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewThreads.list, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewThreads.create, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewThreads.addUserMessage, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewThreads.get, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewThreads.runAgent, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.settings.update, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.appState.update, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.repositories.link, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.gitProvider.searchRepositories, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.localReviews.getDetail, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.localReviews.getDiff, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.localReviews.getSnapshot, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.localWalkthroughs.get, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.localWalkthroughs.generate, undefined, [null]),
+      ]
+      return Promise.all(
+        requests.map(async (request) => {
+          try {
+            await request
+            return "resolved unexpectedly"
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error)
+          }
+        }),
+      )
+    })
+    const decodedChannels = [
+      "analytics:capture",
+      "reviewThreads:list",
+      "reviewThreads:create",
+      "reviewThreads:addUserMessage",
+      "reviewThreads:get",
+      "reviewThreads:runAgent",
+      "settings:update",
+      "appState:update",
+      "repositories:link",
+      "gitProvider:searchRepositories",
+      "localReviews:getDetail",
+      "localReviews:getDiff",
+      "localReviews:getSnapshot",
+      "localWalkthroughs:get",
+      "localWalkthroughs:generate",
+    ]
+    expect(malformedIpcErrors).toHaveLength(decodedChannels.length)
+    for (const [index, channel] of decodedChannels.entries()) {
+      expect(malformedIpcErrors[index]).toContain(`${channel} failed`)
+    }
     await expect(window.locator("html")).toHaveClass(/dark/)
     await expect(
       window.getByRole("button", { name: /Use (?:light|dark|system) theme/ }),

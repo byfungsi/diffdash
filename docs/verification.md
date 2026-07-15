@@ -52,6 +52,7 @@ The following requirement IDs are covered by
 | `SHELL-SEC-001` | `[B]` | Renderer globals do not expose Node `require` or `process`. |
 | `SHELL-IPC-002` | `[B]` | All 49 preload request channels have one matching main handler; all 3 event subscriptions have cleanup and a main emission. |
 | `SHELL-IPC-003` | `[B]` | All 51 public preload request operations preserve their exact channel, argument order, object wrapping, and generate/regenerate transformation. |
+| `SHELL-IPC-004` | `[B]` | All 15 currently schema-decoded structured IPC operations reject malformed payloads through the real preload/main boundary. |
 | `SHELL-EVENT-001` | `[B]` | Each preload event cleanup removes the exact listener wrapper registered for its channel. |
 | `SHELL-LIFECYCLE-001` | `[B]` | Repeated ordinary quits share one disposal, and neither ordinary quit nor update installation proceeds before disposal completes. |
 | `SHELL-SEC-002` | `[B]` | BrowserWindow options lock context isolation, disabled Node integration, web security, insecure-content denial, preload path, and intentional sandbox state. |
@@ -80,6 +81,7 @@ The following requirement IDs are covered by
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
+| `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 
 ## Known M8 Gaps
