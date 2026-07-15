@@ -98,30 +98,85 @@ The following requirement IDs are covered by
 | `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 
+## Classified Product Surface
+
+These rows classify implemented behavior already covered by the named suites. More focused rows above
+record migration-sensitive invariants added during M8.
+
+| Requirement | Class | Evidence |
+|---|---|---|
+| `REPOSITORY-DISCOVERY-001` | `[B]` | `github.test.ts` covers authenticated scopes, owner-scoped search, review requests, and provider failures; `app.browser.test.tsx` covers debounce and actionable search errors. |
+| `REPOSITORY-FAVORITES-001` | `[B]` | `repository-store.test.ts` covers favorite state, search, touch, and hosted-to-local identity-preserving upgrade. |
+| `REPOSITORY-LINK-001` | `[B]` | `repository-linker.test.ts` covers canonical matching checkouts, mismatched remotes, unsupported origins, and no-persist failure behavior. |
+| `REVIEW-CAPTURE-001` | `[B]` | `review-context.test.ts` covers stable hosted snapshots, retry after movement, and rejection of continued inconsistency; `git.test.ts` covers coherent local snapshots. |
+| `REVIEW-CACHE-001` | `[B]` | Viewed files, walkthroughs, and threads are keyed by immutable review revisions in their store suites and restart E2E. |
+| `CLI-PARSE-001` | `[B]` | `cli-navigation.test.ts` covers public working-tree, repository, PR, and branch commands, relative paths, legacy envelopes, and invalid syntax. |
+| `CLI-FORWARD-001` | `[B]` | `diffdash-cli.test.ts` and `prerequisites.test.ts` cover source, macOS, Linux, and AppImage launcher forwarding without launcher-side parsing. |
+| `CLI-NAVIGATION-001` | `[B]` | `app-flow.spec.ts` covers startup working-tree/branch commands and forwarding to an existing instance; queue and activation suites cover ordering and focus policy. |
+| `SETUP-ONBOARDING-001` | `[B]` | `app.browser.test.tsx` covers first-run setup, limited-capability continuation, telemetry choice, and setup warnings; Electron restart preserves completion. |
+| `SETUP-DIAGNOSTICS-001` | `[B]` | `prerequisites.test.ts` covers installed, missing, unsupported, unauthenticated, CLI installation, and AppImage launcher states. |
+| `SETTINGS-001` | `[B]` | `app-settings.test.ts` covers defaults, legacy defaults, manual telemetry opt-out, malformed fallback, and JSON persistence; Electron restart covers appearance/provider/model restoration. |
+| `PRIVACY-002` | `[B]` | `AnalyticsEvent` is a closed coarse schema, analytics disables exception autocapture, IPC rejects malformed events, and `analytics.test.ts` locks the emitted property allowlist. |
+| `DIFF-RENDER-001` | `[B]` | `app.browser.test.tsx` covers a 3,000-pair virtualized diff, fewer than 500 mounted lines, trailing navigation, and very-large-file plain mode. |
+| `DIFF-FILTER-001` | `[B]` | `diff-file-filters.test.ts` and browser flows cover hidden generated/vendor/binary files, reveal behavior, and visible filtering. |
+| `TREE-001` | `[B]` | `file-tree-adapter.test.ts` and browser tests cover canonical inventory, status mapping, deterministic ordering input, stable selection, and Tree/Walkthrough navigation. |
+| `WALKTHROUGH-001` | `[B]` | Shared/service/store/browser suites cover bounded prompt preparation, validation, one retry, revision cache identity, regeneration, sampled disclosure, and completion. |
+| `THREAD-001` | `[B]` | Thread store/shared/browser/Electron suites cover line threads, Markdown safety, follow-ups, progress, failed/complete states, retry entry, and revision mapping. |
+| `AGENT-001` | `[B]` | Agent store/memory/orchestration/provider suites cover run/message/artifact/memory lifecycle, current provider protocols, session behavior, and process interruption cleanup. |
+| `MCP-001` | `[B]` | `diffdash-mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, immutable diff/repository context, traversal denial, and local reviews. |
+| `WORKTREE-001` | `[B]` | `review-worktree-pool.test.ts` covers exact GitHub PR heads, clone reuse, capacity, concurrent leases, revision movement, quarantine, destructive reuse, and checkout non-mutation. |
+| `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, stable artifact routing, and current local release orchestration. |
+
 ## Known M8 Gaps
 
-- `[G]` Locked-database and interrupted future-migration startup behavior still needs broader
-  user-visible characterization.
-- `[G]` Settings and onboarding JSON writes replace files directly rather than using atomic
-  temporary-file and rename semantics.
-- `[G]` Historical thread migrations intentionally deleted legacy thread, run, artifact, and memory
-  rows; tests preserve this behavior as migration history rather than desired future behavior.
-- `[G]` Settings decode as one closed provider/model domain, so one malformed or unknown provider
-  value falls back to all defaults instead of preserving independently valid preferences.
-- `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
-  sender/frame origin.
-- `[G]` Installer, signing, notarization, update installation, and public artifact checks remain
-  operational rather than part of the unsigned packaged E2E gate.
-- `[G]` Release scripts have syntax checks but limited behavioral tests for partial failure,
-  checksums, retries, promotion ordering, and retention.
-- `[G]` Accessibility has interaction assertions but no automated audit or recorded screen-reader
-  procedure.
-- `[G]` Performance has bounded mounted-node assertions but no recorded fixture metrics for startup,
-  memory, or large datasets.
-- `[G]` The current parser does not return typed failures for malformed hunk counts, quoted/escaped
-  paths, copy metadata, `GIT binary patch`, CRLF metadata, or combined diffs.
-- `[G]` The 10,000-file canonical inventory is covered, but the current tree component has no
-  bounded mounted-row assertion for that fixture.
+| Requirement | Class | Known pre-existing behavior |
+|---|---|---|
+| `GAP-PERSIST-001` | `[G]` | Locked-database and interrupted future-migration startup behavior lacks broader user-visible characterization. |
+| `GAP-PERSIST-002` | `[G]` | Settings and onboarding JSON writes replace files directly instead of temporary-file plus atomic rename. |
+| `GAP-PERSIST-003` | `[G]` | Historical thread migrations deleted legacy thread/run/artifact/memory rows; tests preserve migration history rather than desired future behavior. |
+| `GAP-SETTINGS-001` | `[G]` | One malformed/unknown closed provider value falls back to all defaults instead of preserving independently valid preferences. |
+| `GAP-SETTINGS-002` | `[G]` | Permanent Settings, staged/versioned onboarding, resume, and Run setup again are not implemented. |
+| `GAP-IPC-001` | `[G]` | IPC schemas are not uniform and privileged handlers do not validate sender/frame origin. |
+| `GAP-DISTRIBUTION-001` | `[G]` | Signing, notarization, installers, update installation, and public artifacts remain operational rather than unsigned packaged-E2E behavior. |
+| `GAP-RELEASE-001` | `[G]` | Release scripts have limited behavioral coverage for partial failure, checksums, retries, promotion ordering, and retention. |
+| `GAP-A11Y-001` | `[G]` | There is no automated accessibility audit or retained screen-reader procedure. |
+| `GAP-A11Y-002` | `[G]` | File filter labels, Tree/Walkthrough tab semantics, command active-option semantics, live announcements, and focus restoration are incomplete. |
+| `GAP-PERF-001` | `[G]` | Mounted diff-line bounds exist, but startup, heap, syntax-queue, steady-state, and extreme-review metrics are not recorded. |
+| `GAP-TREE-001` | `[G]` | The 10,000-file canonical inventory lacks a bounded mounted-row assertion; all-hidden and explicit-versus-active states are incomplete. |
+| `GAP-DIFF-001` | `[G]` | Parser typed failures are absent for malformed hunk counts, quoted paths, copy metadata, `GIT binary patch`, CRLF metadata, and combined diffs. |
+| `GAP-DIFF-002` | `[G]` | Syntax-worker failure fallback, live theme token changes, and the extreme 1,000-file fixture lack evidence. |
+| `GAP-WALKTHROUGH-001` | `[G]` | Cached walkthrough without an installed agent, provider/model provenance, stale-generation cancellation, and viewed-state preservation on regeneration are incomplete. |
+| `GAP-THREAD-001` | `[G]` | Persisted thread creation is line-only; review/file/hunk creation and an explicit carried-forward state are not implemented. |
+| `GAP-WORKTREE-001` | `[G]` | Stale lock/lease recovery, idle LRU eviction, malicious-manifest containment, and cleanup-failure quarantine need direct evidence. |
+| `GAP-REVIEW-001` | `[G]` | Visible hosted PR rendering fetches detail and diff separately rather than through the coherent snapshot service. |
+| `GAP-REVIEW-002` | `[G]` | Recent reviews and navigation history are process-local and do not restore after restart. |
+| `GAP-CLI-001` | `[G]` | Branch comparison intentionally uses merge-base semantics, not exact target-tip comparison. |
+
+## Migration Targets
+
+| Requirement | Class | Owning issue |
+|---|---|---|
+| `TARGET-WORKSPACE-001` | `[T]` | pnpm/Turbo topology and root commands: `FUN-117`, `FUN-116`, `FUN-118`, `FUN-119`, `FUN-120`. |
+| `TARGET-E2E-001` | `[T]` | Private full-product E2E workspace: `FUN-155`; final packaged contributor verification: `FUN-141`. |
+| `TARGET-DOMAIN-001` | `[T]` | Platform-neutral domain/protocol packages: `FUN-123`. |
+| `TARGET-PERSIST-001` | `[T]` | SQLite persistence package: `FUN-122`; process/settings packages: `FUN-121`. |
+| `TARGET-RENDERER-001` | `[T]` | Reusable React app and demo host: `FUN-124`; feature decomposition: `FUN-142`. |
+| `TARGET-GIT-001` | `[T]` | Provider-neutral local Git/workspaces: `FUN-125`; Git SDK/registry/conformance: `FUN-127`; GitHub isolation: `FUN-129`, `FUN-130`. |
+| `TARGET-GIT-IDENTITY-001` | `[T]` | Instance-aware hosted identities and routing: `FUN-126`, `FUN-128`. |
+| `TARGET-AGENT-001` | `[T]` | Open agent IDs/settings and manifest UI: `FUN-131`, `FUN-133`; provider-neutral walkthrough/review orchestration: `FUN-136`, `FUN-137`. |
+| `TARGET-AGENT-SDK-001` | `[T]` | Agent SDK/registry/conformance: `FUN-138`; Codex/OpenCode/Claude packages: `FUN-132`, `FUN-134`, `FUN-135`. |
+| `TARGET-IPC-001` | `[T]` | Validated IPC requests/responses/events/errors: `FUN-140`; thin Electron composition host: `FUN-144`. |
+| `TARGET-ENFORCEMENT-001` | `[T]` | Package boundaries and affected-package CI: `FUN-139`. |
+| `TARGET-RELEASE-001` | `[T]` | Build/release orchestration under scripts: `FUN-143`; packaged verification and provider documentation: `FUN-141`. |
+
+## Specification Versioning
+
+- The v0.1 product PRD is historical context, not a migration gate.
+- M8 freezes the worktree, comment-thread, CLI, file-tree, and diff behavior represented by the
+  `[B]` rows above. Future spec revisions append migration sections and owner IDs; they do not
+  rewrite these baseline claims.
+- `[G]` rows are accepted pre-existing gaps. A migration failure is only a regression when a `[B]`
+  row loses evidence or a landed `[T]` row fails its owning issue's gate.
 
 ## Baseline Snapshot Record
 
