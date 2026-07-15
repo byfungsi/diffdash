@@ -16,7 +16,9 @@ import { codexReviewAgentLayer } from "./codex-review-agent"
 import {
   ReviewAgentExecutionError,
   ReviewAgentInvalidResponseError,
+  ReviewAgentPermissionError,
   ReviewAgentProvider,
+  ReviewAgentProtocolError,
 } from "./review-agent-provider"
 
 const baseInput = ReviewAgentTurnInput.make({
@@ -181,5 +183,23 @@ describe("Codex review agent", () => {
       expect(error).toBeInstanceOf(ReviewAgentExecutionError)
       expect(error.reason).toContain("model request failed")
     }).pipe(Effect.provide(makeTestLayer({ fixture: "codex-review-error.jsonl" }))),
+  )
+
+  it.effect("rejects malformed JSONL as a protocol failure", () =>
+    Effect.gen(function* () {
+      const provider = yield* ReviewAgentProvider
+      const error = yield* provider.runThreadTurn(baseInput, execution()).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(ReviewAgentProtocolError)
+      expect(error.reason).toContain("Codex emitted invalid JSONL")
+    }).pipe(Effect.provide(makeTestLayer({ fixture: "codex-review-malformed.jsonl" }))),
+  )
+
+  it.effect("fails closed when Codex emits a file change", () =>
+    Effect.gen(function* () {
+      const provider = yield* ReviewAgentProvider
+      const error = yield* provider.runThreadTurn(baseInput, execution()).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(ReviewAgentPermissionError)
+      expect(error.reason).toContain("attempted a file change")
+    }).pipe(Effect.provide(makeTestLayer({ fixture: "codex-review-file-change.jsonl" }))),
   )
 })

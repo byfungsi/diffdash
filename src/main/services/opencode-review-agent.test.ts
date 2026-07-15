@@ -15,7 +15,11 @@ import {
   type OpenCodeSdkTurnInput,
   type OpenCodeSdkTurnOutput,
 } from "./opencode-sdk-client"
-import { ReviewAgentInvalidResponseError, ReviewAgentProvider } from "./review-agent-provider"
+import {
+  ReviewAgentInvalidResponseError,
+  ReviewAgentPermissionError,
+  ReviewAgentProvider,
+} from "./review-agent-provider"
 
 const baseInput = ReviewAgentTurnInput.make({
   threadId: ReviewThreadId.make("thread-73"),
@@ -218,6 +222,31 @@ describe("OpenCode review agent", () => {
                 id: "text-fallback",
                 messageId: "assistant-message-1",
                 text: '```json\n{"bodyMarkdown":"Fallback response"}\n```',
+              },
+            ],
+          }),
+        }),
+      ),
+    ),
+  )
+
+  it.effect("fails closed when OpenCode emits a patch part", () =>
+    Effect.gen(function* () {
+      const provider = yield* ReviewAgentProvider
+      const error = yield* provider.runThreadTurn(baseInput, execution()).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(ReviewAgentPermissionError)
+      expect(error.reason).toContain("emitted a patch")
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          output: successfulOutput({
+            parts: [
+              {
+                type: "patch",
+                id: "patch-1",
+                messageId: "assistant-message-1",
+                hash: "patch-hash",
+                files: ["src/main.ts"],
               },
             ],
           }),

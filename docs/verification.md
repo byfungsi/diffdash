@@ -83,6 +83,7 @@ The following requirement IDs are covered by
 | `AGENT-LIFECYCLE-002` | `[B]` | Provider finalization and scoped MCP revocation complete before isolated PR workspace restoration on success and provider failure. |
 | `AGENT-LIFECYCLE-003` | `[B]` | Interrupted running turns become terminal before replacement, and concurrent same-thread requests create only one run and pending response. |
 | `MCP-CONTEXT-001` | `[B]` | Scoped MCP tools expose bounded thread context and pagination while unavailable hunks, artifacts, and walkthroughs return explicit unavailable results. |
+| `AGENT-PROTOCOL-001` | `[B]` | Codex and Claude reject malformed JSONL as protocol failures; Codex file-change and OpenCode patch events fail closed as permission violations. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
 | `REPOSITORY-LIFECYCLE-001` | `[B]` | Linking a local checkout upgrades the matching hosted favorite in place without duplicating or losing its identity. |
 | `REVIEW-IDENTITY-001` | `[B]` | Hosted, working-tree, branch-ref, and frozen branch-revision cache identities do not collide. |

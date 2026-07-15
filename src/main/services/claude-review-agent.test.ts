@@ -16,6 +16,7 @@ import {
   ReviewAgentExecutionError,
   ReviewAgentInvalidResponseError,
   ReviewAgentProvider,
+  ReviewAgentProtocolError,
 } from "./review-agent-provider"
 
 const baseInput = ReviewAgentTurnInput.make({
@@ -182,5 +183,14 @@ describe("Claude review agent", () => {
       expect(error).toBeInstanceOf(ReviewAgentExecutionError)
       expect(error.reason).toContain("authentication failed")
     }).pipe(Effect.provide(makeTestLayer({ fixture: "claude-review-error.jsonl" }))),
+  )
+
+  it.effect("rejects malformed JSONL as a protocol failure", () =>
+    Effect.gen(function* () {
+      const provider = yield* ReviewAgentProvider
+      const error = yield* provider.runThreadTurn(baseInput, execution()).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(ReviewAgentProtocolError)
+      expect(error.reason).toContain("Claude emitted invalid stream-json")
+    }).pipe(Effect.provide(makeTestLayer({ fixture: "claude-review-malformed.jsonl" }))),
   )
 })
