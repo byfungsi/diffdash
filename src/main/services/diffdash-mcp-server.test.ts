@@ -323,6 +323,21 @@ describe("DiffDashMcpServer", () => {
           arguments: { fileId, hunkId: "missing-hunk" },
         }),
       )
+      const threadContext = yield* Effect.promise(() =>
+        client.callTool({ name: "getThreadContext", arguments: {} }),
+      )
+      const olderMessages = yield* Effect.promise(() =>
+        client.callTool({
+          name: "getOlderThreadMessages",
+          arguments: { beforeSequence: 2, limit: 1 },
+        }),
+      )
+      const unavailableArtifact = yield* Effect.promise(() =>
+        client.callTool({ name: "getPriorArtifact", arguments: { artifactId: "missing" } }),
+      )
+      const unavailableWalkthrough = yield* Effect.promise(() =>
+        client.callTool({ name: "getWalkthroughContext", arguments: {} }),
+      )
 
       // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 lacks toSorted; this is a fresh array.
       expect(tools.tools.map(({ name }) => name).sort()).toEqual([
@@ -350,6 +365,13 @@ describe("DiffDashMcpServer", () => {
       expect(toolText(file)).toContain('"status":"truncated"')
       expect(Buffer.byteLength(toolText(file), "utf8")).toBeLessThanOrEqual(400)
       expect(toolText(unavailableHunk)).toContain('"status":"unavailable"')
+      expect(toolText(threadContext)).toContain('"status":"truncated"')
+      expect(toolText(threadContext)).toContain('\\"id\\":\\"thread-1\\"')
+      expect(toolText(olderMessages)).toContain('"bodyMarkdown":"What changed?"')
+      expect(toolText(olderMessages)).toContain('"nextBeforeSequence":1')
+      expect(toolText(olderMessages)).toContain('"hasMore":false')
+      expect(toolText(unavailableArtifact)).toContain('"status":"unavailable"')
+      expect(toolText(unavailableWalkthrough)).toContain('"status":"unavailable"')
     }).pipe(Effect.provide(testLayer)),
   )
 
