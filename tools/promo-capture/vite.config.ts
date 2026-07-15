@@ -15,7 +15,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": resolve(workspaceRoot, "packages/desktop/src/renderer/src"),
+      "@": resolve(workspaceRoot, "packages/app/src"),
     },
   },
   plugins: [react(), tailwindcss()],

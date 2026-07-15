@@ -20,14 +20,15 @@ Remotion, audio, storyboard, and verification work. Capture and render ordering 
 `turbo.json`; generated media and tool caches remain ignored.
 
 `@diffdash/e2e` owns full-product Playwright projects and deterministic Electron fixtures. Browser
-component tests remain with the desktop renderer; full-product development and packaged flows run
-through uncached, ABI-safe Turbo tasks.
+component tests remain with `@diffdash/app`; full-product development and packaged flows run through
+uncached, ABI-safe Turbo tasks.
 
 `@diffdash/domain` owns browser-safe schemas, identities, diff decisions, review models, and
 walkthrough models through explicit subpath exports. `@diffdash/protocol` owns the renderer-facing
 API, canonical IPC channels, request contracts, and serializable transport errors while depending
-only on domain and Effect. `@diffdash/app` begins the reusable renderer boundary and owns the
-file-tree adapter; the remaining renderer moves there as an atomic package in M10.
+only on domain and Effect. `@diffdash/app` owns the reusable React application, theme, UI primitives,
+renderer adapters, and browser tests. Electron and promotional capture are thin hosts that consume
+its explicit package exports.
 
 `@diffdash/process` owns captured and streaming subprocess execution plus generic executable
 discovery. `@diffdash/settings` owns path-parameterized JSON settings and app-state stores while

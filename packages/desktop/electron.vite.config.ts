@@ -78,7 +78,7 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          "@": resolve("src/renderer/src"),
+          "@": resolve("../app/src"),
         },
       },
       plugins: [react(), tailwindcss()],

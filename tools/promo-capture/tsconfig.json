@@ -4,7 +4,7 @@
     "baseUrl": "../..",
     "jsx": "react-jsx",
     "types": ["node", "vite/client"],
-    "paths": { "@/*": ["packages/desktop/src/renderer/src/*"] }
+    "paths": { "@/*": ["packages/app/src/*"] }
   },
-  "include": ["src", "vite.config.ts", "../../packages/desktop/src/renderer/src/vite-env.d.ts"]
+  "include": ["src", "vite.config.ts", "../../packages/app/src/vite-env.d.ts"]
 }

@@ -24,7 +24,7 @@ const mount = async () => {
     value: runtime.timeline,
   })
 
-  const { App } = await import("../../../packages/desktop/src/renderer/src/app")
+  const { App } = await import("@diffdash/app")
   rootElement.replaceChildren()
   createRoot(rootElement).render(<App />)
   await document.fonts.ready

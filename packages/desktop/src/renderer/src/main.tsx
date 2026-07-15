@@ -1,10 +1,10 @@
 import { lazy, StrictMode, Suspense } from "react"
 import { createRoot } from "react-dom/client"
 
-import { AppErrorBoundary, AppErrorFallback } from "./app-error-boundary"
-import "./styles.css"
+import { AppErrorBoundary, AppErrorFallback } from "@diffdash/app/app-error-boundary"
+import "@diffdash/app/styles.css"
 
-const LazyApp = lazy(() => import("./app").then(({ App }) => ({ default: App })))
+const LazyApp = lazy(() => import("@diffdash/app").then(({ App }) => ({ default: App })))
 const existingRootElement = document.getElementById("root")
 const rootElement = existingRootElement ?? document.body.appendChild(document.createElement("div"))
 

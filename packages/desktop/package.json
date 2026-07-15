@@ -27,7 +27,6 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm native:node && pnpm test:unit",
     "test:unit": "vitest run",
-    "test:browser": "vitest --config vitest.browser.config.ts run",
     "test:watch": "vitest",
     "lint": "oxlint electron src scripts --no-error-on-unmatched-pattern",
     "native:electron": "npm_config_runtime=electron npm_config_target=43.0.0 npm_config_disturl=https://electronjs.org/headers node scripts/rebuild-better-sqlite3.mjs",

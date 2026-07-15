@@ -1,5 +1,5 @@
-@import "../../../packages/desktop/src/renderer/src/styles.css";
-@source "../../../packages/desktop/src/renderer/src";
+@import "@diffdash/app/styles.css";
+@source "../../../packages/app/src";
 
 @font-face {
   font-family: "Inter";

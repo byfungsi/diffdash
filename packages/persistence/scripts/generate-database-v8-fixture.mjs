@@ -31,4 +31,4 @@ try {
   database.close()
 }
 
-console.log(`Generated ${databasePath}`)
+process.stdout.write(`Generated ${databasePath}\n`)

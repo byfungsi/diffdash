@@ -166,7 +166,7 @@ Use the local Effect source reference at `~/.local/share/effect-solutions/effect
 Use shadcn/ui for reusable primitives and keep app-specific composition in feature components.
 
 The shadcn config is `packages/desktop/components.json`, with aliases pointing to
-`packages/desktop/src/renderer/src`.
+`packages/app/src`.
 
 ## Required Local Tools
 
