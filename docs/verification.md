@@ -55,6 +55,9 @@ The following requirement IDs are covered by
 | `SHELL-IPC-004` | `[B]` | All 15 currently schema-decoded structured IPC operations reject malformed payloads through the real preload/main boundary. |
 | `SHELL-EVENT-001` | `[B]` | Each preload event cleanup removes the exact listener wrapper registered for its channel. |
 | `SHELL-LIFECYCLE-001` | `[B]` | Repeated ordinary quits share one disposal, and neither ordinary quit nor update installation proceeds before disposal completes. |
+| `SHELL-WINDOW-001` | `[B]` | Existing minimized windows restore before reveal, use platform-specific focus behavior, and remain untouched in hidden E2E mode. |
+| `SHELL-WINDOW-002` | `[B]` | Activating the app with no windows recreates its BrowserWindow. |
+| `SHELL-NAV-002` | `[B]` | Initial and pre-ready second-instance commands remain FIFO-ordered until one renderer drain; later commands remain available after prior drains. |
 | `SHELL-SEC-002` | `[B]` | BrowserWindow options lock context isolation, disabled Node integration, web security, insecure-content denial, preload path, and intentional sandbox state. |
 | `SHELL-NAV-001` | `[B]` | External URL and renderer navigation allowlists preserve their current exact lexical behavior. |
 | `SHELL-FILE-001` | `[B]` | Review file paths reject absolute paths, parent traversal, and targets outside the repository root. |

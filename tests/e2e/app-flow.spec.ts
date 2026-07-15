@@ -475,6 +475,43 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
   }
 })
 
+test("recreates the app window when macOS activates with no open windows", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  test.skip(process.platform !== "darwin", "Electron activation recreation is macOS behavior")
+  const userData = testInfo.outputPath("user-data")
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  await Promise.all([mkdir(userData, { recursive: true }), mkdir(fakeBin, { recursive: true })])
+  await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+  const app = await electron.launch({
+    args: [join(process.cwd(), "out/main/index.js"), `--user-data-dir=${userData}`],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const initialWindow = await app.firstWindow()
+    await initialWindow.close()
+    await expect
+      .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
+      .toBe(0)
+
+    const recreatedWindowPromise = app.waitForEvent("window")
+    await app.evaluate(({ app: electronApp }) => electronApp.emit("activate"))
+    const recreatedWindow = await recreatedWindowPromise
+
+    await expect(recreatedWindow.getByRole("heading", { name: "DiffDash" })).toBeVisible()
+  } finally {
+    await app.close()
+  }
+})
+
 const installFakeCli = async (directory: string) => {
   await Promise.all([
     writeExecutable(join(directory, "diffdash"), fakeDiffDashScript),

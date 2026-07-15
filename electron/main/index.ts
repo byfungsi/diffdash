@@ -13,6 +13,8 @@ import {
   resolveContainedRepositoryPath,
 } from "./electron-policy"
 import { openAllowedExternalUrl, openLocalPath, openProviderFile } from "./file-opening"
+import { createNavigationCommandQueue } from "./navigation-command-queue"
+import { revealAppWindow } from "./window-activation"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
 import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
@@ -96,7 +98,7 @@ const logStartupStage = (stage: string) => {
 logStartupStage("main module loaded")
 
 let mainWindow: BrowserWindow | null = null
-let pendingNavigationCommands: CliNavigationCommand[] = []
+const navigationCommandQueue = createNavigationCommandQueue()
 
 const getDevelopmentIconPath = () =>
   app.isPackaged ? null : resolve(__dirname, "../../resources/icons/icon.png")
@@ -676,9 +678,7 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle("navigation:drainCommands", async (): Promise<readonly CliNavigationCommand[]> => {
-    const commands = pendingNavigationCommands
-    pendingNavigationCommands = []
-    return commands
+    return navigationCommandQueue.drain()
   })
 
   ipcMain.handle(
@@ -1101,15 +1101,15 @@ const hashText = (text: string) => createHash("sha256").update(text).digest("hex
 const isHiddenE2EWindow = () => process.env.DIFFDASH_E2E_HIDDEN === "1"
 
 const revealWindow = (targetWindow: BrowserWindow) => {
-  if (isHiddenE2EWindow()) return
-  if (targetWindow.isMinimized()) targetWindow.restore()
-  targetWindow.show()
-  if (process.platform === "darwin") app.focus({ steal: true })
-  else targetWindow.focus()
+  revealAppWindow(targetWindow, {
+    hidden: isHiddenE2EWindow(),
+    platform: process.platform,
+    focusApplication: () => app.focus({ steal: true }),
+  })
 }
 
 const enqueueNavigationCommand = (command: CliNavigationCommand) => {
-  pendingNavigationCommands.push(command)
+  navigationCommandQueue.enqueue(command)
   const targetWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
   if (targetWindow === null || targetWindow.isDestroyed()) return
 
@@ -1222,7 +1222,7 @@ const createWindow = () => {
     .then(() => {
       logStartupStage("renderer loaded")
       showMainWindow()
-      if (pendingNavigationCommands.length > 0) {
+      if (navigationCommandQueue.hasPending()) {
         window.webContents.send("navigation:commandsAvailable")
       }
       return undefined
@@ -1269,7 +1269,7 @@ if (!singleInstanceLock) {
   app.quit()
 } else {
   const initialCommand = parseCliNavigationCommand(process.argv, process.cwd())
-  if (initialCommand !== null) pendingNavigationCommands.push(initialCommand)
+  if (initialCommand !== null) navigationCommandQueue.enqueue(initialCommand)
 
   app.on("second-instance", (_event, argv, cwd) => {
     const command = parseCliNavigationCommand(argv, cwd)
