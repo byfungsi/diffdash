@@ -53,6 +53,7 @@ The following requirement IDs are covered by
 | `SHELL-IPC-002` | `[B]` | All 49 preload request channels have one matching main handler; all 3 event subscriptions have cleanup and a main emission. |
 | `SHELL-IPC-003` | `[B]` | All 51 public preload request operations preserve their exact channel, argument order, object wrapping, and generate/regenerate transformation. |
 | `SHELL-EVENT-001` | `[B]` | Each preload event cleanup removes the exact listener wrapper registered for its channel. |
+| `SHELL-LIFECYCLE-001` | `[B]` | Repeated ordinary quits share one disposal, and neither ordinary quit nor update installation proceeds before disposal completes. |
 | `SHELL-SEC-002` | `[B]` | BrowserWindow options lock context isolation, disabled Node integration, web security, insecure-content denial, preload path, and intentional sandbox state. |
 | `SHELL-NAV-001` | `[B]` | External URL and renderer navigation allowlists preserve their current exact lexical behavior. |
 | `SHELL-FILE-001` | `[B]` | Review file paths reject absolute paths, parent traversal, and targets outside the repository root. |
