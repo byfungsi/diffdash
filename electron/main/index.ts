@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
-import { basename, isAbsolute, join, relative, resolve } from "node:path"
+import { basename, isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { Effect, Layer, ManagedRuntime, Schema } from "effect"
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron"
 import { createAppLifecycle } from "./app-lifecycle"
 import { parseCliNavigationCommand } from "./cli-navigation"
+import {
+  createDiffDashBrowserWindowOptions,
+  isExternalUrlAllowed,
+  isInternalNavigationAllowed,
+  normalizeReviewFilePath,
+  resolveContainedRepositoryPath,
+} from "./electron-policy"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
 import { AgentRunArtifactStore } from "../../src/main/services/agent-run-artifact-store"
@@ -1046,12 +1053,7 @@ const installIpcHandlers = (
         return
       }
 
-      const rootPath = resolve(repository.localPath)
-      const targetPath = resolve(rootPath, normalizedFilePath)
-      const relativePath = relative(rootPath, targetPath)
-      if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-        throw new Error("Cannot open a file outside the repository checkout")
-      }
+      const targetPath = resolveContainedRepositoryPath(repository.localPath, normalizedFilePath)
 
       const errorMessage = await shell.openPath(targetPath)
       if (errorMessage.length > 0) {
@@ -1066,17 +1068,7 @@ const installIpcHandlers = (
       const git = await run(GitService)
       const canonicalRootPath = await run(git.detectRoot(rootPath))
 
-      if (isAbsolute(filePath)) {
-        throw new Error("Cannot open an absolute file path from a review")
-      }
-
-      const normalizedFilePath = normalizeReviewFilePath(filePath)
-      const resolvedRootPath = resolve(canonicalRootPath)
-      const targetPath = resolve(resolvedRootPath, normalizedFilePath)
-      const relativePath = relative(resolvedRootPath, targetPath)
-      if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
-        throw new Error("Cannot open a file outside the repository checkout")
-      }
+      const targetPath = resolveContainedRepositoryPath(canonicalRootPath, filePath)
 
       const errorMessage = await shell.openPath(targetPath)
       if (errorMessage.length > 0) {
@@ -1109,14 +1101,6 @@ const localRepositoryInput = (rootPath: string) => {
 
 const hashText = (text: string) => createHash("sha256").update(text).digest("hex")
 
-const normalizeReviewFilePath = (filePath: string) => {
-  const normalized = filePath.replaceAll("\\", "/")
-  if (normalized.split("/").some((segment) => segment === "..")) {
-    throw new Error("Cannot open a file outside the repository checkout")
-  }
-  return normalized
-}
-
 const openProviderFile = async (
   gitProvider: {
     readonly fileUrl: (owner: string, name: string, filePath: string, ref: string) => string
@@ -1144,33 +1128,18 @@ const enqueueNavigationCommand = (command: CliNavigationCommand) => {
 }
 
 const openExternalUrl = async (url: string) => {
-  if (!url.startsWith("https://") && !url.startsWith("http://")) return
+  if (!isExternalUrlAllowed(url)) return
   await shell.openExternal(url)
 }
 
 const createWindow = () => {
   const developmentIconPath = getDevelopmentIconPath()
-  const window = new BrowserWindow({
-    width: 1320,
-    height: 860,
-    minWidth: 1080,
-    minHeight: 720,
-    title: "DiffDash",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 18 },
-    show: false,
-    backgroundColor: "#ffffff",
-    autoHideMenuBar: true,
-    ...(developmentIconPath === null ? {} : { icon: developmentIconPath }),
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-    },
-  })
+  const window = new BrowserWindow(
+    createDiffDashBrowserWindowOptions({
+      iconPath: developmentIconPath,
+      preloadPath: join(__dirname, "../preload/index.mjs"),
+    }),
+  )
   mainWindow = window
   logStartupStage("window created")
 
@@ -1253,9 +1222,7 @@ const createWindow = () => {
 
   window.webContents.on("will-navigate", (event, url) => {
     const currentUrl = window.webContents.getURL()
-    if (url === currentUrl || url.startsWith("file://") || url.startsWith("http://localhost:")) {
-      return
-    }
+    if (isInternalNavigationAllowed(url, currentUrl)) return
 
     event.preventDefault()
     void openExternalUrl(url)

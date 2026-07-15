@@ -50,6 +50,10 @@ The following requirement IDs are covered by
 |---|---|---|
 | `SHELL-IPC-001` | `[B]` | Preload exposes the typed `window.diffDash` contract and a real app-state request succeeds. |
 | `SHELL-SEC-001` | `[B]` | Renderer globals do not expose Node `require` or `process`. |
+| `SHELL-IPC-002` | `[B]` | All 49 preload request channels have one matching main handler; all 3 event subscriptions have cleanup and a main emission. |
+| `SHELL-SEC-002` | `[B]` | BrowserWindow options lock context isolation, disabled Node integration, web security, insecure-content denial, preload path, and intentional sandbox state. |
+| `SHELL-NAV-001` | `[B]` | External URL and renderer navigation allowlists preserve their current exact lexical behavior. |
+| `SHELL-FILE-001` | `[B]` | Review file paths reject absolute paths, parent traversal, and targets outside the repository root. |
 | `PERSIST-RESTART-001` | `[B]` | Completed onboarding remains completed after Electron closes and relaunches. |
 | `PERSIST-RESTART-002` | `[B]` | Viewed-file state rehydrates from SQLite after restart. |
 | `PERSIST-RESTART-003` | `[B]` | Initial and follow-up thread messages plus completed agent replies rehydrate after restart. |
@@ -64,9 +68,10 @@ The following requirement IDs are covered by
 
 - `[G]` A populated version-8 database fixture does not yet cover every durable entity in one
   upgrade/restart scenario.
-- `[G]` Main/preload channel parity is not mechanically checked for the entire `DiffDashApi`.
-- `[G]` BrowserWindow security options, navigation denial, sender validation, and file containment
-  lack direct contract tests.
+- `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
+  sender/frame origin.
+- `[G]` Navigation and file policies are characterized, but shell side-effect failures and symlink
+  escape behavior do not yet have handler-level coverage.
 - `[G]` Installer, signing, notarization, update installation, and public artifact checks remain
   operational rather than part of the unsigned packaged E2E gate.
 - `[G]` Release scripts have syntax checks but limited behavioral tests for partial failure,
