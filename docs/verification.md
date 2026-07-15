@@ -128,6 +128,7 @@ record migration-sensitive invariants added during M8.
 | `AGENT-001` | `[B]` | Agent store/memory/orchestration/provider suites cover run/message/artifact/memory lifecycle, current provider protocols, session behavior, and process interruption cleanup. |
 | `MCP-001` | `[B]` | `diffdash-mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, immutable diff/repository context, traversal denial, and local reviews. |
 | `WORKTREE-001` | `[B]` | `review-worktree-pool.test.ts` covers exact GitHub PR heads, clone reuse, capacity, concurrent leases, revision movement, quarantine, destructive reuse, and checkout non-mutation. |
+| `WORKTREE-RECOVERY-001` | `[B]` | Dead-PID leases and manifest locks are recovered, cleanup failures quarantine slots, the globally oldest idle slot is evicted at capacity, and malicious path segments cannot escape the pool. |
 | `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, stable artifact routing, and current local release orchestration. |
 
 ## Known M8 Gaps
@@ -151,7 +152,7 @@ record migration-sensitive invariants added during M8.
 | `GAP-DIFF-002` | `[G]` | Syntax-worker failure fallback, live theme token changes, and the extreme 1,000-file fixture lack evidence. |
 | `GAP-WALKTHROUGH-001` | `[G]` | Cached walkthrough without an installed agent, provider/model provenance, stale-generation cancellation, and viewed-state preservation on regeneration are incomplete. |
 | `GAP-THREAD-001` | `[G]` | Persisted thread creation is line-only; review/file/hunk creation and an explicit carried-forward state are not implemented. |
-| `GAP-WORKTREE-001` | `[G]` | Stale lock/lease recovery, idle LRU eviction, malicious-manifest containment, and cleanup-failure quarantine need direct evidence. |
+| `GAP-WORKTREE-001` | `[G]` | PID reuse, malformed-but-valid lock owners, pre-existing symlink containment, and validation before reserving malicious manifest paths remain incomplete. |
 | `GAP-REVIEW-001` | `[G]` | Visible hosted PR rendering fetches detail and diff separately rather than through the coherent snapshot service. |
 | `GAP-REVIEW-002` | `[G]` | Recent reviews and navigation history are process-local and do not restore after restart. |
 | `GAP-CLI-001` | `[G]` | Branch comparison intentionally uses merge-base semantics, not exact target-tip comparison. |

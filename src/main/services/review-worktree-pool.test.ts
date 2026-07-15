@@ -12,7 +12,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer } from "effect"
+import { Cause, Effect, Fiber, Layer } from "effect"
 
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "../../shared/domain"
@@ -181,6 +181,234 @@ describe("ReviewWorktreePool", () => {
 
       expect(error).toBeInstanceOf(ReviewWorktreePoolError)
       expect(error).toMatchObject({ code: "capacity" })
+    }),
+  )
+
+  it.scoped("recovers a dead lease and stale manifest lock before reusing the slot", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const deadPid = 2_147_483_647
+      expect(() => process.kill(deadPid, 0)).toThrow(/ESRCH/u)
+      mkdirSync(value.pool, { recursive: true })
+      const staleAt = "2000-01-01T00:00:00.000Z"
+      writeFileSync(
+        join(value.pool, "manifest.json"),
+        JSON.stringify({
+          version: 1,
+          slots: [
+            {
+              id: "stale-slot",
+              owner: "Acme",
+              repo: "Widget",
+              state: "leased",
+              headSha: value.baseSha,
+              pullRequestNumber: 1,
+              lastThreadId: "thread-stale",
+              lease: {
+                id: "lease-stale",
+                runId: "run-stale",
+                threadId: "thread-stale",
+                instanceId: "dead-instance",
+                pid: deadPid,
+                acquiredAt: staleAt,
+              },
+              createdAt: staleAt,
+              lastUsedAt: staleAt,
+              lastError: null,
+            },
+          ],
+        }),
+      )
+      writeFileSync(
+        join(value.pool, "manifest.lock"),
+        JSON.stringify({ token: "stale-lock", pid: deadPid, createdAt: staleAt }),
+      )
+
+      let leasedSlot = ""
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-recovered"),
+            threadId: ReviewThreadId.make("thread-recovered"),
+            snapshot: value.snapshot,
+            sourcePath: value.source,
+          },
+          (lease) => Effect.sync(() => (leasedSlot = lease.slotId)),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly slots: ReadonlyArray<{
+          readonly id: string
+          readonly state: string
+          readonly lease: unknown
+          readonly lastThreadId: string | null
+        }>
+      }
+      expect(leasedSlot).toBe("stale-slot")
+      expect(manifest.slots).toHaveLength(1)
+      expect(manifest.slots[0]).toMatchObject({
+        id: "stale-slot",
+        state: "available",
+        lease: null,
+        lastThreadId: "thread-recovered",
+      })
+      expect(existsSync(join(value.pool, "manifest.lock"))).toBe(false)
+    }),
+  )
+
+  it.scoped("quarantines a slot when post-provider workspace restoration fails", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      let providerStarted = false
+
+      const error = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .use(
+            {
+              runId: AgentRunId.make("run-cleanup-failure"),
+              threadId: ReviewThreadId.make("thread-cleanup-failure"),
+              snapshot: value.snapshot,
+              sourcePath: value.source,
+            },
+            () =>
+              Effect.sync(() => {
+                providerStarted = true
+                rmSync(join(value.pool, "Acme", "Widget", "repository.git"), {
+                  recursive: true,
+                  force: true,
+                })
+              }),
+          )
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly slots: ReadonlyArray<{
+          readonly state: string
+          readonly lease: unknown
+          readonly lastError: string | null
+        }>
+      }
+      expect(providerStarted).toBe(true)
+      expect(error).toMatchObject({ code: "cleanup", operation: "release.restore" })
+      expect(manifest.slots[0]).toMatchObject({
+        state: "quarantined",
+        lease: null,
+        lastError:
+          "DiffDash could not restore its isolated review workspace. The workspace was quarantined and will be rebuilt before reuse.",
+      })
+    }),
+  )
+
+  it.scoped("evicts and reuses the globally oldest idle slot at capacity", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      mkdirSync(value.pool, { recursive: true })
+      const slots = Array.from({ length: 10 }, (_, index) => ({
+        id: `idle-${index}`,
+        owner: "Other",
+        repo: `Repo-${index}`,
+        state: "available",
+        headSha: null,
+        pullRequestNumber: null,
+        lastThreadId: null,
+        lease: null,
+        createdAt: new Date(Date.UTC(2000, 0, index + 1)).toISOString(),
+        lastUsedAt: new Date(Date.UTC(2000, 0, index + 1)).toISOString(),
+        lastError: null,
+      }))
+      writeFileSync(join(value.pool, "manifest.json"), JSON.stringify({ version: 1, slots }))
+      const oldestSentinel = join(value.pool, "Other", "Repo-0", "idle-0", "sentinel")
+      mkdirSync(join(value.pool, "Other", "Repo-0", "idle-0"), { recursive: true })
+      writeFileSync(oldestSentinel, "remove me")
+
+      let leasedSlot = ""
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-lru"),
+            threadId: ReviewThreadId.make("thread-lru"),
+            snapshot: value.snapshot,
+            sourcePath: value.source,
+          },
+          (lease) => Effect.sync(() => (leasedSlot = lease.slotId)),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly slots: ReadonlyArray<{
+          readonly id: string
+          readonly owner: string
+          readonly repo: string
+          readonly state: string
+        }>
+      }
+      expect(leasedSlot).toBe("idle-0")
+      expect(manifest.slots).toHaveLength(10)
+      expect(manifest.slots.find(({ id }) => id === "idle-0")).toMatchObject({
+        owner: "Acme",
+        repo: "Widget",
+        state: "available",
+      })
+      expect(existsSync(oldestSentinel)).toBe(false)
+      expect(manifest.slots.slice(1).every(({ owner }) => owner === "Other")).toBe(true)
+    }),
+  )
+
+  it.scoped("rejects malicious manifest slot paths without touching files outside the pool", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      mkdirSync(value.pool, { recursive: true })
+      const outsideSentinel = join(value.root, "outside-sentinel")
+      writeFileSync(outsideSentinel, "preserve me")
+      const now = new Date().toISOString()
+      writeFileSync(
+        join(value.pool, "manifest.json"),
+        JSON.stringify({
+          version: 1,
+          slots: [
+            {
+              id: "../../../outside-sentinel",
+              owner: "Acme",
+              repo: "Widget",
+              state: "available",
+              headSha: value.headSha,
+              pullRequestNumber: 1,
+              lastThreadId: null,
+              lease: null,
+              createdAt: now,
+              lastUsedAt: now,
+              lastError: null,
+            },
+          ],
+        }),
+      )
+      let providerStarted = false
+
+      const cause = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .use(
+            {
+              runId: AgentRunId.make("run-malicious-manifest"),
+              threadId: ReviewThreadId.make("thread-malicious-manifest"),
+              snapshot: value.snapshot,
+              sourcePath: value.source,
+            },
+            () => Effect.sync(() => (providerStarted = true)),
+          )
+          .pipe(Effect.sandbox, Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+      const error = Cause.squash(cause)
+
+      expect(providerStarted).toBe(false)
+      expect(error).toBeInstanceOf(ReviewWorktreePoolError)
+      expect(error).toMatchObject({ code: "manifest", operation: "path.segment" })
+      expect(readFileSync(outsideSentinel, "utf8")).toBe("preserve me")
     }),
   )
 
