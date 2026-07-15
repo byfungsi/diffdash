@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Context, Effect, Layer, Redacted } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
 
+import { AgentPromptVersion } from "../../shared/agent-run"
 import { DEFAULT_AI_SETTINGS } from "../../shared/ai-settings"
 import { parseUnifiedDiff } from "../../shared/diff-parser"
 import {
@@ -499,6 +500,149 @@ describe("ReviewAgentService", () => {
       }).pipe(Effect.provide(layer))
 
       expect(released.count).toBe(1)
+    }),
+  )
+
+  it.scoped("recovers an interrupted pending run before starting its replacement", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const released = { count: 0 }
+      const layer = makeLayer(
+        databasePath,
+        () =>
+          Effect.succeed(
+            ReviewAgentTurnResult.make({
+              response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Recovered response." }),
+              artifacts: [],
+              providerRunId: null,
+              usage: null,
+            }),
+          ),
+        released,
+      )
+
+      yield* Effect.gen(function* () {
+        const repo = yield* (yield* RepositoryStore).upsertRepository({
+          provider: "local",
+          owner: "local",
+          name: "diffdash",
+          remoteUrl: "file:///workspace/diffdash",
+          localPath: "/workspace/diffdash",
+        })
+        const threads = yield* ReviewThreadStore
+        const runs = yield* AgentRunStore
+        const created = yield* threads.create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: null,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Recover this interrupted turn."),
+        })
+        const interruptedRun = yield* runs.start({
+          threadId: created.thread.id,
+          provider: "opencode",
+          model: "openai/gpt-5.3-codex-spark",
+          promptVersion: AgentPromptVersion.make("review-thread-v3"),
+        })
+        yield* threads.createPendingAgentMessage({
+          threadId: created.thread.id,
+          agentRunId: interruptedRun.id,
+        })
+
+        const completed = yield* (yield* ReviewAgentService).runThreadTurn({
+          threadId: created.thread.id,
+          snapshot,
+          cwd: repo.localPath,
+          walkthrough: null,
+        })
+        const persistedRuns = yield* runs.listForThread(created.thread.id)
+
+        expect(completed.messages).toHaveLength(3)
+        expect(completed.messages[1]).toMatchObject({
+          author: "agent",
+          status: "failed",
+          bodyMarkdown: "The previous local agent run was interrupted. Retry to try again.",
+        })
+        expect(completed.messages[2]).toMatchObject({
+          author: "agent",
+          status: "complete",
+          bodyMarkdown: "Recovered response.",
+        })
+        expect(new Set(persistedRuns.map(({ status }) => status))).toEqual(
+          new Set(["completed", "failed"]),
+        )
+        expect(persistedRuns.find(({ id }) => id === interruptedRun.id)?.error).toBe(
+          "The previous local agent run was interrupted.",
+        )
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
+  it.scoped("rejects a concurrent turn before creating a second run or message", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const providerStarted = yield* Deferred.make<void>()
+      const releaseProvider = yield* Deferred.make<void>()
+      const released = { count: 0 }
+      const layer = makeLayer(
+        databasePath,
+        () =>
+          Deferred.succeed(providerStarted, undefined).pipe(
+            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.as(
+              ReviewAgentTurnResult.make({
+                response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Only response." }),
+                artifacts: [],
+                providerRunId: null,
+                usage: null,
+              }),
+            ),
+          ),
+        released,
+      )
+
+      yield* Effect.gen(function* () {
+        const repo = yield* (yield* RepositoryStore).upsertRepository({
+          provider: "local",
+          owner: "local",
+          name: "diffdash",
+          remoteUrl: "file:///workspace/diffdash",
+          localPath: "/workspace/diffdash",
+        })
+        const created = yield* (yield* ReviewThreadStore).create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: null,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Run this once."),
+        })
+        const service = yield* ReviewAgentService
+        const input = {
+          threadId: created.thread.id,
+          snapshot,
+          cwd: repo.localPath,
+          walkthrough: null,
+        } as const
+        const firstTurn = yield* service.runThreadTurn(input).pipe(Effect.fork)
+        yield* Deferred.await(providerStarted)
+
+        const concurrentError = yield* service.runThreadTurn(input).pipe(Effect.flip)
+        yield* Deferred.succeed(releaseProvider, undefined)
+        const completed = yield* Fiber.join(firstTurn)
+        const runs = yield* (yield* AgentRunStore).listForThread(created.thread.id)
+
+        expect(concurrentError.reason).toBe("A review agent turn is already running")
+        expect(runs).toHaveLength(1)
+        expect(completed.messages).toHaveLength(2)
+        expect(completed.messages[1]).toMatchObject({
+          status: "complete",
+          bodyMarkdown: "Only response.",
+        })
+      }).pipe(Effect.provide(layer))
     }),
   )
 })
