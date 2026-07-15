@@ -33,7 +33,12 @@ uncached orchestration commands.
 Package TypeScript configurations extend `tsconfig.base.json` and add only their environment needs:
 Node/Electron packages select Node types and browser packages select DOM libraries and JSX.
 
-## Transitional Commands
+## Dependency Policy
 
-Root desktop development, unit, browser, Electron E2E, packaged E2E, and release commands remain
-runnable during M9. Turbo convenience commands are additive until product packages own those tasks.
+Internal dependencies use `workspace:*`. The repository has one `pnpm-lock.yaml`; shared Effect,
+React, TypeScript, Vite, Vitest, Playwright, Electron, Wrangler, and lint/tooling versions live in the
+default catalog in `pnpm-workspace.yaml`. Runtime dependencies remain in the package that consumes
+them.
+
+Root desktop development, unit, browser, Electron E2E, packaged E2E, web deployment, promo, and
+release commands are stable convenience wrappers around package-owned scripts.

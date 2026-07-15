@@ -16,13 +16,13 @@
   },
   "dependencies": {
     "@diffdash/desktop": "workspace:*",
-    "effect": "^3.21.4"
+    "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/vitest": "^0.29.0",
-    "oxlint": "^1.73.0",
-    "typescript": "^6.0.3",
-    "vite": "^7.3.6",
-    "vitest": "^3.2.7"
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }

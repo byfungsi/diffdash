@@ -7,7 +7,6 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint tests playwright.config.ts --no-error-on-unmatched-pattern",
-    "test": "pnpm test:desktop",
     "test:desktop": "pnpm --filter @diffdash/desktop native:electron && playwright test --project=desktop",
     "package:e2e": "pnpm --filter @diffdash/desktop assets:icons && pnpm --filter @diffdash/desktop native:electron && pnpm --filter @diffdash/desktop build && node scripts/build-packaged-e2e.mjs",
     "test:packaged": "pnpm package:e2e && playwright test --project=packaged",
@@ -18,10 +17,10 @@
   },
   "devDependencies": {
     "@diffdash/desktop": "workspace:*",
-    "@playwright/test": "^1.61.1",
-    "@types/node": "^26.1.0",
-    "electron": "^43.0.0",
-    "oxlint": "^1.73.0",
-    "typescript": "^6.0.3"
+    "@playwright/test": "catalog:",
+    "@types/node": "catalog:",
+    "electron": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:"
   }
 }

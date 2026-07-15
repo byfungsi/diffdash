@@ -17,13 +17,16 @@
     "@diffdash/promo-media#build": {
       "outputs": []
     },
+    "@diffdash/e2e#build": {
+      "outputs": []
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": []
     },
     "lint": {
       "dependsOn": ["^lint"],
@@ -57,6 +60,36 @@
     },
     "e2e:packaged": {
       "dependsOn": ["@diffdash/e2e#package:e2e"],
+      "cache": false
+    },
+    "deploy": {
+      "cache": false
+    },
+    "deploy:dry-run": {
+      "cache": false
+    },
+    "pack": {
+      "cache": false
+    },
+    "dist": {
+      "cache": false
+    },
+    "dist:mac": {
+      "cache": false
+    },
+    "dist:linux": {
+      "cache": false
+    },
+    "dist:linux:deb": {
+      "cache": false
+    },
+    "dist:win": {
+      "cache": false
+    },
+    "native:electron": {
+      "cache": false
+    },
+    "native:node": {
       "cache": false
     }
   }
