@@ -47,6 +47,17 @@
     "render:all": {
       "dependsOn": ["@diffdash/promo-capture#capture"],
       "cache": false
+    },
+    "e2e": {
+      "dependsOn": ["@diffdash/desktop#build"],
+      "cache": false
+    },
+    "package:e2e": {
+      "cache": false
+    },
+    "e2e:packaged": {
+      "dependsOn": ["@diffdash/e2e#package:e2e"],
+      "cache": false
     }
   }
 }

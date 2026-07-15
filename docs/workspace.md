@@ -19,6 +19,10 @@ Current tooling packages are `@diffdash/demo` for deterministic scenario data/ru
 Remotion, audio, storyboard, and verification work. Capture and render ordering is declared in
 `turbo.json`; generated media and tool caches remain ignored.
 
+`@diffdash/e2e` owns full-product Playwright projects and deterministic Electron fixtures. Browser
+component tests remain with the desktop renderer; full-product development and packaged flows run
+through uncached, ABI-safe Turbo tasks.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;

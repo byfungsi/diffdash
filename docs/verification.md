@@ -44,7 +44,7 @@ cannot be made reliable in local automation.
 ## Executable Baseline Evidence
 
 The following requirement IDs are covered by
-`tests/e2e/app-flow.spec.ts` in `covers finished Home to Review flow with fake CLI fixtures`.
+`packages/e2e/tests/desktop/app-flow.spec.ts` in `covers finished Home to Review flow with fake CLI fixtures`.
 
 | Requirement | Class | Evidence |
 |---|---|---|

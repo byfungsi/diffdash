@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { _electron as electron, expect, type Page, test } from "@playwright/test"
 
-const desktopRoot = join(process.cwd(), "packages/desktop")
+const desktopRoot = join(process.cwd(), "../desktop")
 
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
   browserName: _browserName,
@@ -521,6 +521,7 @@ const installFakeCli = async (directory: string) => {
     writeExecutable(join(directory, "git"), fakeGitScript),
     writeExecutable(join(directory, "codex"), fakeCodexScript),
     writeExecutable(join(directory, "claude"), fakeClaudeScript),
+    writeExecutable(join(directory, "opencode"), fakeOpenCodeScript),
   ])
 }
 
@@ -927,6 +928,16 @@ if (args[0] === "--print") {
 
 console.error("Unhandled fake claude call: " + args.join(" "))
 process.exit(1)
+`
+
+const fakeOpenCodeScript = `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args.includes("--version")) {
+  console.log("opencode 0.1.0")
+  process.exit(0)
+}
+console.error("Unhandled fake opencode call: " + args.join(" "))
+process.exit(2)
 `
 
 const fakeGhScript = `#!/usr/bin/env node

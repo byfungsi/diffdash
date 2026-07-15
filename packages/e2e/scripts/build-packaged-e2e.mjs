@@ -13,7 +13,7 @@ const target =
 if (target === null) throw new Error(`Unsupported packaged E2E platform: ${process.platform}`)
 
 const result = spawnSync(pnpm, ["exec", "electron-builder", ...target, "--publish=never"], {
-  cwd: new URL("../packages/desktop", import.meta.url),
+  cwd: new URL("../../desktop", import.meta.url),
   env: {
     ...process.env,
     CSC_IDENTITY_AUTO_DISCOVERY: "false",

@@ -1,0 +1,27 @@
+{
+  "name": "@diffdash/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint tests playwright.config.ts --no-error-on-unmatched-pattern",
+    "test": "pnpm test:desktop",
+    "test:desktop": "pnpm --filter @diffdash/desktop native:electron && playwright test --project=desktop",
+    "package:e2e": "pnpm --filter @diffdash/desktop assets:icons && pnpm --filter @diffdash/desktop native:electron && pnpm --filter @diffdash/desktop build && node scripts/build-packaged-e2e.mjs",
+    "test:packaged": "pnpm package:e2e && playwright test --project=packaged",
+    "test:restart": "playwright test --project=packaged --grep restart",
+    "test:providers": "playwright test --project=desktop --grep 'Home to Review'",
+    "e2e": "pnpm test:desktop",
+    "e2e:packaged": "playwright test --project=packaged"
+  },
+  "devDependencies": {
+    "@diffdash/desktop": "workspace:*",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.1.0",
+    "electron": "^43.0.0",
+    "oxlint": "^1.73.0",
+    "typescript": "^6.0.3"
+  }
+}

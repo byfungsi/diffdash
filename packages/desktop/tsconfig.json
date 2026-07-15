@@ -12,10 +12,7 @@
   "include": [
     "src",
     "electron",
-    "tests",
     "electron.vite.config.ts",
-    "playwright.config.ts",
-    "playwright.packaged.config.ts",
     "vitest.config.ts",
     "vitest.browser.config.ts"
   ]

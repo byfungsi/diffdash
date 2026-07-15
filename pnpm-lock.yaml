@@ -17,15 +17,9 @@ importers:
       '@effect/language-service':
         specifier: ^0.86.4
         version: 0.86.4
-      '@playwright/test':
-        specifier: ^1.61.1
-        version: 1.61.1
       '@types/node':
         specifier: ^26.1.0
         version: 26.1.0
-      electron:
-        specifier: ^43.0.0
-        version: 43.0.0
       husky:
         specifier: ^9.1.7
         version: 9.1.7
@@ -38,9 +32,6 @@ importers:
       oxlint-plugin-react-doctor:
         specifier: ^0.7.1
         version: 0.7.1
-      playwright:
-        specifier: ^1.61.1
-        version: 1.61.1
       turbo:
         specifier: ^2.10.5
         version: 2.10.5
@@ -168,6 +159,27 @@ importers:
       wrangler:
         specifier: ^4.52.0
         version: 4.111.0
+
+  packages/e2e:
+    devDependencies:
+      '@diffdash/desktop':
+        specifier: workspace:*
+        version: link:../desktop
+      '@playwright/test':
+        specifier: ^1.61.1
+        version: 1.61.1
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
+      electron:
+        specifier: ^43.0.0
+        version: 43.0.0
+      oxlint:
+        specifier: ^1.73.0
+        version: 1.73.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   packages/web:
     dependencies:
@@ -8086,13 +8098,13 @@ snapshots:
       '@remotion/timeline-utils': 4.0.489
       '@rspack/core': 1.7.11
       '@rspack/plugin-react-refresh': 1.6.1(react-refresh@0.18.0)
-      css-loader: 7.1.4(@rspack/core@1.7.11)(webpack@5.105.0(postcss@8.5.16))
+      css-loader: 7.1.4(@rspack/core@1.7.11)(webpack@5.105.0(esbuild@0.28.1)(postcss@8.5.16))
       esbuild: 0.28.1
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
       react-refresh: 0.18.0
       remotion: 4.0.489(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      style-loader: 4.0.0(webpack@5.105.0(postcss@8.5.16))
+      style-loader: 4.0.0(webpack@5.105.0(esbuild@0.28.1)(postcss@8.5.16))
       webpack: 5.105.0(esbuild@0.28.1)(postcss@8.5.16)
     transitivePeerDependencies:
       - '@minify-html/node'
@@ -9308,7 +9320,7 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
-  css-loader@7.1.4(@rspack/core@1.7.11)(webpack@5.105.0(postcss@8.5.16)):
+  css-loader@7.1.4(@rspack/core@1.7.11)(webpack@5.105.0(esbuild@0.28.1)(postcss@8.5.16)):
     dependencies:
       icss-utils: 5.1.0(postcss@8.5.16)
       postcss: 8.5.16
@@ -11526,7 +11538,7 @@ snapshots:
     dependencies:
       js-tokens: 9.0.1
 
-  style-loader@4.0.0(webpack@5.105.0(postcss@8.5.16)):
+  style-loader@4.0.0(webpack@5.105.0(esbuild@0.28.1)(postcss@8.5.16)):
     dependencies:
       webpack: 5.105.0(esbuild@0.28.1)(postcss@8.5.16)
 
