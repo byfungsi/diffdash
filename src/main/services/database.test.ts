@@ -133,6 +133,132 @@ describe("DatabaseService", () => {
     }),
   )
 
+  it.scoped("FUN-148 AC: enables WAL mode and enforces foreign keys", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const database = yield* DatabaseService
+        const journalMode = yield* database.get<{ readonly journal_mode: string }>(
+          "PRAGMA journal_mode",
+        )
+        const foreignKeys = yield* database.get<{ readonly foreign_keys: number }>(
+          "PRAGMA foreign_keys",
+        )
+        const orphan = yield* Effect.either(
+          database.run(
+            `INSERT INTO viewed_files (
+              repo_id, pr_number, review_key, file_path, head_sha, viewed_at
+            ) VALUES ('missing-repo', 1, 'missing#1', 'src/orphan.ts', 'head', '2026-07-15T00:00:00.000Z')`,
+          ),
+        )
+
+        expect(journalMode?.journal_mode).toBe("wal")
+        expect(foreignKeys?.foreign_keys).toBe(1)
+        expect(Either.isLeft(orphan)).toBe(true)
+        if (Either.isLeft(orphan)) expect(orphan.left.operation).toBe("run")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("FUN-148 AC: enforces every version-8 durable uniqueness boundary", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+
+      yield* Effect.gen(function* () {
+        const database = yield* DatabaseService
+        const duplicateStatements = [
+          `INSERT INTO repos
+           SELECT 'github:duplicate/diffdash', provider, owner, name, remote_url, local_path,
+             is_favorite, last_opened_at, last_synced_at, created_at, updated_at FROM repos`,
+          `INSERT INTO pull_requests
+           SELECT 'pr-v8-duplicate', repo_id, number, title, author, head_sha, base_ref, head_ref,
+             state, last_fetched_at FROM pull_requests`,
+          "INSERT INTO viewed_files SELECT * FROM viewed_files",
+          "INSERT INTO walkthroughs SELECT * FROM walkthroughs",
+          `INSERT INTO review_threads
+           SELECT 'thread-v8-duplicate', repo_id, review_key, pr_number, base_sha, head_sha,
+             current_base_sha, current_head_sha, original_anchor_json, current_anchor_json,
+             anchor_status, status, closed_at, created_at, updated_at FROM review_threads`,
+          `INSERT INTO review_thread_messages
+           SELECT 'message-v8-duplicate', thread_id, sequence, author, body_markdown, status,
+             agent_run_id, created_at, updated_at FROM review_thread_messages WHERE sequence = 1`,
+          "INSERT INTO agent_runs SELECT * FROM agent_runs",
+          "INSERT INTO agent_run_artifacts SELECT * FROM agent_run_artifacts",
+          "INSERT INTO thread_memory SELECT * FROM thread_memory",
+        ]
+
+        for (const statement of duplicateStatements) {
+          const result = yield* Effect.either(database.run(statement))
+          expect(Either.isLeft(result)).toBe(true)
+          if (Either.isLeft(result)) expect(result.left.operation).toBe("run")
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("FUN-148 AC: cascades repository deletion through the complete durable graph", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      copyFileSync(resolve("src/main/services/fixtures/database-v8-populated.sqlite"), databasePath)
+
+      yield* Effect.gen(function* () {
+        const database = yield* DatabaseService
+        yield* database.run("DELETE FROM repos WHERE id = ?", ["github:byfungsi/diffdash"])
+
+        for (const table of [
+          "repos",
+          "pull_requests",
+          "viewed_files",
+          "walkthroughs",
+          "review_threads",
+          "review_thread_messages",
+          "agent_runs",
+          "agent_run_artifacts",
+          "thread_memory",
+        ]) {
+          const row = yield* database.get<CountRow>(`SELECT COUNT(*) AS count FROM ${table}`)
+          expect(row?.count).toBe(0)
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("FUN-148 AC: rejects newer database versions without mutating them", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const sqlite = new BetterSqlite3(databasePath)
+      sqlite.exec(
+        "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
+      )
+      sqlite.pragma("user_version = 9")
+      sqlite.close()
+
+      const result = yield* Effect.either(
+        Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath)))),
+      )
+      expect(Either.isLeft(result) && result.left).toEqual(
+        expect.objectContaining<Partial<DatabaseError>>({
+          _tag: "DatabaseError",
+          operation: "open",
+        }),
+      )
+      if (Either.isLeft(result)) {
+        expect(String(result.left.cause)).toContain(
+          "Database schema version 9 is newer than supported version 8",
+        )
+      }
+
+      const reopened = new BetterSqlite3(databasePath)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(9)
+      expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
+        value: "preserve-me",
+      })
+      reopened.close()
+    }),
+  )
+
   it.scoped("FUN-148 AC: preserves the populated version-8 graph across fresh layers", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath

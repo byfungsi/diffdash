@@ -64,6 +64,7 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
+        const database = yield* DatabaseService
         const repo = yield* store.upsertRepository({
           localPath: null,
           name: "searchable",
@@ -74,10 +75,17 @@ describe("RepositoryStore", () => {
 
         const updated = yield* store.setFavorite(repo.id, true)
         const matches = yield* store.list("fungsi/search")
+        yield* database.run(
+          "UPDATE repos SET last_opened_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+          [repo.id],
+        )
+        const touched = yield* store.touch(repo.id)
 
         expect(updated.isFavorite).toBe(true)
         expect(matches).toHaveLength(1)
         expect(matches[0]?.id).toBe(repo.id)
+        expect(touched.lastOpenedAt).not.toBe("2000-01-01T00:00:00.000Z")
+        expect(touched.updatedAt).not.toBe("2000-01-01T00:00:00.000Z")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

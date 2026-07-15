@@ -62,6 +62,11 @@ The following requirement IDs are covered by
 | `PERSIST-V8-002` | `[B]` | Repository, viewed-file, walkthrough, thread/message, run, artifact, and memory stores decode the frozen v8 graph after two independent opens. |
 | `PERSIST-FAIL-001` | `[B]` | Corrupt SQLite input fails database acquisition with a typed open error. |
 | `PERSIST-FAIL-002` | `[B]` | Malformed persisted JSON fails at each store decoding boundary with a typed operation error. |
+| `PERSIST-DB-001` | `[B]` | Runtime SQLite connections use WAL mode and enforce foreign keys. |
+| `PERSIST-DB-002` | `[B]` | Every version-8 primary/composite uniqueness boundary rejects duplicate durable identity. |
+| `PERSIST-DB-003` | `[B]` | Repository deletion cascades through pull requests, viewed files, walkthroughs, threads, messages, runs, artifacts, and memory. |
+| `PERSIST-MIGRATE-001` | `[B]` | Databases newer than the application fail acquisition without downgrade or mutation. |
+| `PERSIST-STORES-001` | `[B]` | Every public method on the current SQLite-backed stores has real-database integration coverage. |
 | `AGENT-LIFECYCLE-001` | `[B]` | Reopening a completed thread or walkthrough does not rerun the agent. |
 | `WORKTREE-SAFETY-001` | `[B]` | The source checkout branch and dirty state are unchanged after review and restart. |
 | `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
@@ -72,6 +77,12 @@ The following requirement IDs are covered by
 
 - `[G]` Locked-database and interrupted future-migration startup behavior still needs broader
   user-visible characterization.
+- `[G]` Settings and onboarding JSON writes replace files directly rather than using atomic
+  temporary-file and rename semantics.
+- `[G]` Historical thread migrations intentionally deleted legacy thread, run, artifact, and memory
+  rows; tests preserve this behavior as migration history rather than desired future behavior.
+- `[G]` Settings decode as one closed provider/model domain, so one malformed or unknown provider
+  value falls back to all defaults instead of preserving independently valid preferences.
 - `[G]` IPC argument schemas are not decoded uniformly, and privileged handlers do not yet validate
   sender/frame origin.
 - `[G]` Navigation and file policies are characterized, but shell side-effect failures and symlink
