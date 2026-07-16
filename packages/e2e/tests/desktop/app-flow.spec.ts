@@ -6,6 +6,53 @@ import { _electron as electron, expect, type Page, test } from "@playwright/test
 
 const desktopRoot = join(process.cwd(), "../desktop")
 
+test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+
+  const app = await electron.launch({
+    args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
+      DIFFDASH_E2E_FAKE_GIT_REMOTE: "https://git.fixture.test/platform/backend/service.git",
+      DIFFDASH_E2E_HIDDEN: "1",
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.getByRole("option", { name: "Fixture Forge" })).toHaveCount(1)
+
+    const fixtureReview = window.getByRole("button", {
+      name: /Open requested review #73: Fixture merge request flow/,
+    })
+    await expect(fixtureReview).toBeVisible()
+    await fixtureReview.click()
+
+    await expect(window.getByRole("heading", { name: "Fixture merge request flow" })).toBeVisible()
+    await expect(window.getByText("Opened MR #73: Fixture merge request flow")).toBeVisible()
+    await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
+    await window.getByRole("button", { name: "Actions" }).click()
+    await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
+  } finally {
+    await app.close()
+  }
+})
+
 test("covers finished Home to Review flow with fake CLI fixtures", async ({
   browserName: _browserName,
 }, testInfo) => {

@@ -249,7 +249,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-148 AC: preserves the populated version-8 graph across fresh layers", () =>
+  it.scoped("FUN-130 AC: opens and preserves the populated GitHub version-8 graph", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)

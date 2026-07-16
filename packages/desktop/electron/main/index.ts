@@ -32,7 +32,8 @@ import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "../../src/main/services/git-provider"
-import { GitProviderRegistry } from "@diffdash/git-provider"
+import { GitProviderRegistry, type GitProviderRegistration } from "@diffdash/git-provider"
+import { createFixtureGitProvider } from "@diffdash/git-provider-fixture"
 import { createGitHubProvider } from "@diffdash/git-provider-github"
 import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
 import { Prerequisites } from "../../src/main/services/prerequisites"
@@ -183,9 +184,32 @@ const createAppLayer = () => {
     GitProviderRegistry,
     Effect.gen(function* () {
       const cli = yield* CliService
+      const registrations: GitProviderRegistration[] = [createGitHubProvider({}, cli)]
+      if (process.env.DIFFDASH_E2E_FAKE_GIT_PROVIDER === "1") {
+        const remoteUrl = process.env.DIFFDASH_E2E_FAKE_GIT_REMOTE
+        registrations.push(
+          createFixtureGitProvider({
+            ...(remoteUrl === undefined ? {} : { remoteUrl }),
+            ...(process.env.DIFFDASH_E2E_FAKE_GIT_BASE_SHA === undefined
+              ? {}
+              : { baseRevision: process.env.DIFFDASH_E2E_FAKE_GIT_BASE_SHA }),
+            ...(process.env.DIFFDASH_E2E_FAKE_GIT_HEAD_SHA === undefined
+              ? {}
+              : { headRevision: process.env.DIFFDASH_E2E_FAKE_GIT_HEAD_SHA }),
+            bootstrapBareRepository: (destination) =>
+              remoteUrl === undefined
+                ? Effect.dieMessage("DIFFDASH_E2E_FAKE_GIT_REMOTE is required")
+                : cli
+                    .run("git", ["clone", "--bare", "--", remoteUrl, destination], {
+                      timeoutMs: 120_000,
+                    })
+                    .pipe(Effect.asVoid),
+          }),
+        )
+      }
       const registry = yield* Effect.provide(
         GitProviderRegistry,
-        GitProviderRegistry.layer([createGitHubProvider({}, cli)]),
+        GitProviderRegistry.layer(registrations),
       )
       return registry
     }),

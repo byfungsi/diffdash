@@ -115,7 +115,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("isolates nested repositories across configured provider instances", () =>
+  it.scoped("FUN-130 AC: isolates nested repositories across provider IDs", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 

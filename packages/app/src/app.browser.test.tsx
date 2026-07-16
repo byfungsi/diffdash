@@ -175,6 +175,66 @@ index 5555555..6666666 100644
   repoOwner: "fungsi",
 })
 
+const fixtureProvider = GitProviderDescriptor.make({
+  id: GitProviderId.make("fixture"),
+  kind: GitProviderKind.make("fixture"),
+  displayName: "Fixture Forge",
+  host: "git.fixture.test",
+  capabilities: GitProviderCapabilities.make({
+    repositorySearch: true,
+    searchScopes: false,
+    assignedReviews: true,
+    reviewDecisions: false,
+    fileUrls: true,
+    remoteWorkspaceBootstrap: true,
+  }),
+  terminology: GitProviderTerminology.make({
+    repositorySingular: "project",
+    repositoryPlural: "projects",
+    reviewSingular: "merge request",
+    reviewPlural: "merge requests",
+    reviewAbbreviation: "MR",
+  }),
+})
+
+const fixturePullRequest = PullRequestSummary.make({
+  ...pullRequest,
+  providerId: GitProviderId.make("fixture"),
+  number: 73,
+  repoOwner: "platform/backend",
+  repoName: "service",
+  title: "Fixture merge request flow",
+  url: "https://git.fixture.test/platform/backend/service/merge-requests/73",
+})
+
+const fixtureDetail = PullRequestDetail.make({
+  ...fixturePullRequest,
+  commits: [],
+  files: [
+    PullRequestFile.make({
+      additions: 1,
+      changeType: "modified",
+      deletions: 1,
+      path: "src/fixture.ts",
+    }),
+  ],
+})
+
+const fixtureDiff = PullRequestDiff.make({
+  ...diff,
+  providerId: GitProviderId.make("fixture"),
+  number: 73,
+  repoOwner: "platform/backend",
+  repoName: "service",
+  diff: `diff --git a/src/fixture.ts b/src/fixture.ts
+index 1111111..2222222 100644
+--- a/src/fixture.ts
++++ b/src/fixture.ts
+@@ -1 +1 @@
+-old fixture
++new fixture`,
+})
+
 const makeLargeDiffFixture = (lineCount: number, number = 52) => {
   const changedLines = Array.from(
     { length: lineCount },
@@ -1701,6 +1761,37 @@ describe("App browser interactions", () => {
       )
     })
   })
+
+  it("FUN-130 AC: uses provider terminology and hides unsupported review decisions", async () => {
+    const calls = installDiffDashApi({
+      providers: [fixtureProvider],
+      pullRequestDetail: fixtureDetail,
+      pullRequestDiff: fixtureDiff,
+      reviewRequests: [fixturePullRequest],
+    })
+    renderApp()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("open a merge request")
+    })
+    const openReview = document.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open requested review #73"]',
+    )
+    expect(openReview).not.toBeNull()
+    openReview?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Opened MR #73")
+      expect(document.body.textContent).toContain("Fixture merge request flow")
+    })
+    const actions = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Actions",
+    )
+    actions?.click()
+    await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Approve")
+    expect(calls.approvePullRequest).not.toHaveBeenCalled()
+  })
 })
 
 const getChangedFilesTreeItemPaths = () =>
@@ -1784,6 +1875,7 @@ const installDiffDashApi = (
     readonly diagnostics?: AppPrerequisites
     readonly pullRequestDetail?: PullRequestDetail
     readonly pullRequestDiff?: PullRequestDiff
+    readonly providers?: readonly GitProviderDescriptor[]
     readonly repositories?: readonly Repo[]
     readonly reviewRequests?: readonly PullRequestSummary[]
     readonly settings?: AISettings
@@ -1946,7 +2038,7 @@ const installDiffDashApi = (
     openExternalUrl: calls.openExternalUrl,
     openLocalRepositoryFile: calls.openLocalRepositoryFile,
     openRepositoryFile: calls.openRepositoryFile,
-    providers: { list: async () => [provider] },
+    providers: { list: async () => options.providers ?? [provider] },
     hostedRepositories: {
       listSearchScopes: async () => [
         RepositorySearchScope.make({ kind: "user", login: "hanipcode" }),

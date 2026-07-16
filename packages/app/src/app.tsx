@@ -819,12 +819,12 @@ export function App() {
         : `${reviewRequests.length} review request${reviewRequests.length === 1 ? "" : "s"} need attention.`
   const selectedRepoStatus =
     selectedRepo === null
-      ? `Select a repo to preview its first 3 open ${selectedProvider?.terminology.reviewAbbreviation ?? "reviews"}s.`
+      ? `Select a repo to preview its first 3 open ${selectedProvider?.terminology.reviewPlural ?? "reviews"}.`
       : Result.isFailure(pullRequestsResult)
         ? resultErrorMessage(pullRequestsResult, "Could not load pull requests")
         : Result.isWaiting(pullRequestsResult)
-          ? `Loading open ${selectedRepoProvider?.terminology.reviewAbbreviation ?? "review"}s for ${selectedRepo.owner}/${selectedRepo.name}...`
-          : `${pullRequests.length} open ${selectedRepoProvider?.terminology.reviewAbbreviation ?? "review"}${pullRequests.length === 1 ? "" : "s"} in ${selectedRepo.owner}/${selectedRepo.name}`
+          ? `Loading open ${providerReviewLabel(selectedRepoProvider, 2)} for ${selectedRepo.owner}/${selectedRepo.name}...`
+          : `${pullRequests.length} open ${providerReviewLabel(selectedRepoProvider, pullRequests.length)} in ${selectedRepo.owner}/${selectedRepo.name}`
   const reviewStatus =
     selectedReview === null
       ? actionStatus
@@ -1679,7 +1679,8 @@ export function App() {
             <div className="space-y-2">
               <h1 className="max-w-3xl text-4xl font-semibold tracking-tight">DiffDash</h1>
               <p className="text-muted-foreground max-w-3xl text-sm">
-                Find a repo, open a PR, and jump into focused review without leaving the desktop.
+                Find a repo, open a {selectedProvider?.terminology.reviewSingular ?? "review"}, and
+                jump into focused review without leaving the desktop.
               </p>
             </div>
           </header>
@@ -3187,7 +3188,7 @@ const PullRequestDetailView = ({
     onRegenerateWalkthrough: () => void loadWalkthrough(true),
     onReload,
     onRevealHidden: revealHiddenFiles,
-    approvalState: reviewSubject.kind === "pullRequest" ? approvalState : null,
+    approvalState: approvalPullRequest === null ? null : approvalState,
     showHiddenFiles,
     walkthroughLoading: walkthroughState.status === "loading",
   })
@@ -5299,6 +5300,13 @@ const formatReviewTimestamp = (value: string) =>
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
+
+const providerReviewLabel = (provider: GitProviderDescriptor | null, count: number) =>
+  provider?.terminology.reviewAbbreviation === undefined
+    ? count === 1
+      ? (provider?.terminology.reviewSingular ?? "review")
+      : (provider?.terminology.reviewPlural ?? "reviews")
+    : `${provider.terminology.reviewAbbreviation}${count === 1 ? "" : "s"}`
 
 const diffCardDomId = (reviewKey: string) => {
   let hash = 0

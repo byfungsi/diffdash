@@ -69,27 +69,33 @@ test("relative imports stay inside their package", () => {
   }
 })
 
-test("GitHub provider remains an isolated leaf integration", () => {
-  const github = manifests.find(({ manifest }) => manifest.name === "@diffdash/git-provider-github")
-  assert.ok(github, "GitHub provider package must exist")
-  assert.deepEqual(Object.keys(github.manifest.dependencies).toSorted(), [
-    "@diffdash/git-provider",
-    "@diffdash/process",
-    "effect",
-  ])
-  const source = sourceFiles(join(github.directory, "src"))
-    .map((file) => readFileSync(file, "utf8"))
-    .join("\n")
-  assert.doesNotMatch(
-    source,
-    /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|persistence|settings))(?:\/[^"']*)?\1/,
+test("concrete Git providers remain isolated leaf integrations", () => {
+  const providers = manifests.filter(({ manifest }) =>
+    manifest.name.startsWith("@diffdash/git-provider-"),
   )
+  const names = new Set(providers.map(({ manifest }) => manifest.name))
+  assert.ok(names.has("@diffdash/git-provider-fixture"))
+  assert.ok(names.has("@diffdash/git-provider-github"))
+  for (const provider of providers) {
+    assert.ok(
+      Object.keys(provider.manifest.dependencies).includes("@diffdash/git-provider"),
+      `${provider.manifest.name} must depend on the provider SDK`,
+    )
+    const source = sourceFiles(join(provider.directory, "src"))
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n")
+    assert.doesNotMatch(
+      source,
+      /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|persistence|protocol|settings)|@diffdash\/git-provider-[^"']+)(?:\/[^"']*)?\1/,
+      `${provider.manifest.name} crosses the provider leaf boundary`,
+    )
+  }
 })
 
 test("only desktop composition imports a concrete Git provider", () => {
   const allowedComposition = resolve(root, "packages/desktop/electron/main/index.ts")
   for (const { directory, manifest } of manifests) {
-    if (manifest.name === "@diffdash/git-provider-github") continue
+    if (manifest.name.startsWith("@diffdash/git-provider-")) continue
     const source = join(directory, "src")
     let files = []
     try {
@@ -104,7 +110,7 @@ test("only desktop composition imports a concrete Git provider", () => {
       if (resolve(file) === allowedComposition) continue
       assert.doesNotMatch(
         readFileSync(file, "utf8"),
-        /["']@diffdash\/git-provider-github(?:\/[^"']*)?["']/,
+        /["']@diffdash\/git-provider-[^"']+(?:\/[^"']*)?["']/,
         `${file} imports a concrete Git provider outside desktop composition`,
       )
     }
