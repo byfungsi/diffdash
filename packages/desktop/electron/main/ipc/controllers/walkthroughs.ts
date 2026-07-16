@@ -1,5 +1,4 @@
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import type { PullRequestDiff } from "@diffdash/domain/pull-request"
 import {
   prepareWalkthroughPromptInput,
@@ -11,12 +10,7 @@ import {
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import {
-  GenerateHostedWalkthroughRequest,
-  HostedWalkthroughRequest,
-} from "@diffdash/protocol/hosted-git"
 import { WalkthroughService } from "@diffdash/walkthrough"
-import { Schema } from "effect"
 import { GitProvider } from "../../../../src/main/services/git-provider"
 import { ReviewContextService } from "../../../../src/main/services/review-context"
 import type { ApplicationRuntime } from "../../application-runtime"
@@ -32,8 +26,7 @@ export const defineWalkthroughHandlers = (
 
   handlers.define(
     InvokeChannel.getWalkthrough,
-    async (_event, input: unknown): Promise<StoredWalkthrough | null> => {
-      const request = await run(Schema.decodeUnknown(HostedWalkthroughRequest)(input))
+    async (_event, request): Promise<StoredWalkthrough | null> => {
       const hostedRepository = request.review.repository
       const store = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
@@ -66,13 +59,7 @@ export const defineWalkthroughHandlers = (
 
   handlers.define(
     InvokeChannel.getLocalWalkthrough,
-    async (
-      _event,
-      input: unknown,
-      baseSha: string,
-      headSha: string,
-    ): Promise<StoredWalkthrough | null> => {
-      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+    async (_event, { target, baseSha, headSha }): Promise<StoredWalkthrough | null> => {
       const contexts = await run(ReviewContextService)
       const store = await run(RepositoryStore)
       const walkthroughStore = await run(WalkthroughStore)
@@ -92,8 +79,7 @@ export const defineWalkthroughHandlers = (
 
   handlers.define(
     InvokeChannel.generateWalkthrough,
-    async (_event, input: unknown): Promise<StoredWalkthrough> => {
-      const request = await run(Schema.decodeUnknown(GenerateHostedWalkthroughRequest)(input))
+    async (_event, request): Promise<StoredWalkthrough> => {
       const { repository } = request.review
       const repositoryStore = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
@@ -175,8 +161,7 @@ export const defineWalkthroughHandlers = (
 
   handlers.define(
     InvokeChannel.generateLocalWalkthrough,
-    async (_event, input: unknown, regenerate: boolean): Promise<StoredWalkthrough> => {
-      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+    async (_event, { target, regenerate }): Promise<StoredWalkthrough> => {
       const contexts = await run(ReviewContextService)
       const repositoryStore = await run(RepositoryStore)
       const walkthroughStore = await run(WalkthroughStore)

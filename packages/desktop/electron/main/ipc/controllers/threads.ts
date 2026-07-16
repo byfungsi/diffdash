@@ -10,18 +10,13 @@ import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  ReviewThreadIdRequest,
-  RunReviewThreadAgentRequest,
-} from "@diffdash/protocol/review-threads"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { GitProvider } from "../../../../src/main/services/git-provider"
 import { ReviewAgentService } from "../../../../src/main/services/review-agent"
 import { ReviewContextService } from "../../../../src/main/services/review-context"
 import { ReviewThreadAnchorMapper } from "../../../../src/main/services/review-thread-anchor-mapper"
 import type { ApplicationRuntime } from "../../application-runtime"
+import { sendProtocolEvent } from "../transport"
 import { IpcControllerRegistry } from "./controller-registry"
 import { hostedReview, localRepositoryInput } from "./helpers"
 
@@ -59,8 +54,7 @@ export const defineThreadHandlers = (
 
   handlers.define(
     InvokeChannel.listReviewThreads,
-    async (_event, input: unknown): Promise<readonly ReviewThread[]> => {
-      const target = await run(Schema.decodeUnknown(ReviewThreadTarget)(input))
+    async (_event, { target }): Promise<readonly ReviewThread[]> => {
       const { repo, snapshot } = await resolveThreadReview(target)
       const mapper = await run(ReviewThreadAnchorMapper)
       return run(
@@ -77,8 +71,7 @@ export const defineThreadHandlers = (
 
   handlers.define(
     InvokeChannel.addReviewThreadUserMessage,
-    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
-      const request = await run(Schema.decodeUnknown(AddReviewThreadUserMessageRequest)(input))
+    async (_event, request): Promise<ReviewThreadDetails> => {
       const threads = await run(ReviewThreadStore)
       return run(threads.addUserMessage(request))
     },
@@ -86,8 +79,7 @@ export const defineThreadHandlers = (
 
   handlers.define(
     InvokeChannel.createReviewThread,
-    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
-      const request = await run(Schema.decodeUnknown(CreateReviewThreadRequest)(input))
+    async (_event, request): Promise<ReviewThreadDetails> => {
       const { repo, snapshot, prNumber } = await resolveThreadReview(request.target)
       if (
         snapshot.baseRevision !== request.expectedBaseRevision ||
@@ -115,8 +107,7 @@ export const defineThreadHandlers = (
 
   handlers.define(
     InvokeChannel.getReviewThread,
-    async (_event, input: unknown): Promise<ReviewThreadDetails> => {
-      const request = await run(Schema.decodeUnknown(ReviewThreadIdRequest)(input))
+    async (_event, request): Promise<ReviewThreadDetails> => {
       const threads = await run(ReviewThreadStore)
       return run(threads.get(request.threadId))
     },
@@ -124,8 +115,7 @@ export const defineThreadHandlers = (
 
   handlers.define(
     InvokeChannel.runReviewThreadAgent,
-    async (event, input: unknown): Promise<ReviewThreadDetails> => {
-      const request = await run(Schema.decodeUnknown(RunReviewThreadAgentRequest)(input))
+    async (event, request): Promise<ReviewThreadDetails> => {
       const { repo, snapshot } = await resolveThreadReview(request.target)
       const walkthroughs = await run(WalkthroughStore)
       const walkthrough = await run(
@@ -147,7 +137,8 @@ export const defineThreadHandlers = (
           onProgress: (stage) =>
             Effect.sync(() => {
               if (event.sender.isDestroyed()) return
-              event.sender.send(
+              sendProtocolEvent(
+                event.sender,
                 EventChannel.reviewThreadAgentProgress,
                 ReviewAgentProgress.make({ threadId: request.threadId, stage }),
               )

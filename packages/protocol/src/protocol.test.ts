@@ -5,6 +5,7 @@ import { EventChannel, InvokeChannel } from "./channels"
 import { AddReviewThreadUserMessageRequest } from "./review-threads"
 import { toTransportError, TransportError } from "./transport-error"
 import { HostedReviewRequest, HostedRepositorySearchRequest } from "./hosted-git"
+import { getEventContract, getInvokeContract } from "./ipc"
 
 describe("protocol boundaries", () => {
   it("owns unique invoke and event channel names", () => {
@@ -54,5 +55,14 @@ describe("protocol boundaries", () => {
     })
     expect(encoded).not.toHaveProperty("stack")
     expect(encoded).not.toHaveProperty("cause")
+  })
+
+  it("rejects unknown invoke and event channels with typed errors", () => {
+    expect(() => getInvokeContract("repositories:deleteEverything")).toThrowError(
+      expect.objectContaining({ _tag: "TransportError", code: "UNKNOWN_CHANNEL" }),
+    )
+    expect(() => getEventContract("updates:rawUpdater")).toThrowError(
+      expect.objectContaining({ _tag: "TransportError", code: "UNKNOWN_CHANNEL" }),
+    )
   })
 })

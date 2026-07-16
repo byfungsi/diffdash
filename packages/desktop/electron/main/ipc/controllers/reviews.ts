@@ -1,5 +1,5 @@
 import type { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
-import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import type {
   PullRequestDetail,
   PullRequestDiff,
@@ -10,15 +10,6 @@ import { GitService } from "@diffdash/local-git/local-git"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import {
-  HostedProviderRequest,
-  HostedRepositoryRequest,
-  HostedReviewRequest,
-  HostedViewedFilesRequest,
-  SetHostedViewedFileRequest,
-  SubmitHostedReviewDecisionRequest,
-} from "@diffdash/protocol/hosted-git"
-import { Schema } from "effect"
 import { GitProvider } from "../../../../src/main/services/git-provider"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
@@ -33,8 +24,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listHostedReviews,
-    async (_event, input: unknown): Promise<readonly PullRequestSummary[]> => {
-      const request = await run(Schema.decodeUnknown(HostedRepositoryRequest)(input))
+    async (_event, request): Promise<readonly PullRequestSummary[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listPullRequests(request.repository))
     },
@@ -42,8 +32,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listAssignedHostedReviews,
-    async (_event, input: unknown): Promise<readonly PullRequestSummary[]> => {
-      const request = await run(Schema.decodeUnknown(HostedProviderRequest)(input))
+    async (_event, request): Promise<readonly PullRequestSummary[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listReviewRequests(request.providerId))
     },
@@ -51,8 +40,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.getHostedReview,
-    async (_event, input: unknown): Promise<PullRequestDetail> => {
-      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
+    async (_event, request): Promise<PullRequestDetail> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.getPullRequestDetail(request.review))
     },
@@ -60,8 +48,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.refreshHostedReview,
-    async (_event, input: unknown): Promise<PullRequestDetail> => {
-      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
+    async (_event, request): Promise<PullRequestDetail> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.refreshPullRequestDetail(request.review))
     },
@@ -69,8 +56,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.getHostedReviewDiff,
-    async (_event, input: unknown): Promise<PullRequestDiff> => {
-      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
+    async (_event, request): Promise<PullRequestDiff> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.getPullRequestDiff(request.review))
     },
@@ -78,11 +64,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.getHostedReviewDecision,
-    async (
-      _event,
-      input: unknown,
-    ): Promise<import("@diffdash/domain/git-provider").ReviewDecision> => {
-      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
+    async (_event, request): Promise<import("@diffdash/domain/git-provider").ReviewDecision> => {
       const gitProvider = await run(GitProvider)
       return (await run(gitProvider.hasApprovedPullRequest(request.review))) ? "approved" : "none"
     },
@@ -90,8 +72,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.submitHostedReviewDecision,
-    async (_event, input: unknown): Promise<void> => {
-      const request = await run(Schema.decodeUnknown(SubmitHostedReviewDecisionRequest)(input))
+    async (_event, request): Promise<void> => {
       if (request.decision !== "approved") throw new Error("Only approval is currently supported")
       const gitProvider = await run(GitProvider)
       return run(gitProvider.approvePullRequest(request.review))
@@ -100,7 +81,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.resolveLocalBranch,
-    async (_event, localPath: string, branchName: string | null): Promise<LocalReviewTarget> => {
+    async (_event, { localPath, branchName }): Promise<LocalReviewTarget> => {
       const git = await run(GitService)
       return run(git.resolveBranchComparison(localPath, branchName))
     },
@@ -108,8 +89,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.localReviewDetail,
-    async (_event, input: unknown): Promise<LocalReviewDetail> => {
-      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+    async (_event, { target }): Promise<LocalReviewDetail> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
       const detail = await run(git.getLocalReviewDetail(target))
@@ -120,8 +100,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.localReviewDiff,
-    async (_event, input: unknown): Promise<LocalReviewDiff> => {
-      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+    async (_event, { target }): Promise<LocalReviewDiff> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
       const diff = await run(git.getLocalReviewDiff(target))
@@ -132,8 +111,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.localReviewSnapshot,
-    async (_event, input: unknown): Promise<LocalReviewSnapshot> => {
-      const target = await run(Schema.decodeUnknown(LocalReviewTarget)(input))
+    async (_event, { target }): Promise<LocalReviewSnapshot> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
       const snapshot = await run(git.getLocalReviewSnapshot(target))
@@ -144,8 +122,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listViewedFiles,
-    async (_event, input: unknown): Promise<readonly string[]> => {
-      const request = await run(Schema.decodeUnknown(HostedViewedFilesRequest)(input))
+    async (_event, request): Promise<readonly string[]> => {
       const hostedRepository = request.review.repository
       const store = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
@@ -169,8 +146,7 @@ export const defineReviewHandlers = (
     },
   )
 
-  handlers.define(InvokeChannel.setViewedFile, async (_event, input: unknown): Promise<void> => {
-    const request = await run(Schema.decodeUnknown(SetHostedViewedFileRequest)(input))
+  handlers.define(InvokeChannel.setViewedFile, async (_event, request): Promise<void> => {
     const hostedRepository = request.review.repository
     const store = await run(RepositoryStore)
     const gitProvider = await run(GitProvider)
@@ -198,7 +174,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listLocalViewedFiles,
-    async (_event, rootPath: string, headSha: string): Promise<readonly string[]> => {
+    async (_event, { rootPath, headSha }): Promise<readonly string[]> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
       const viewedFiles = await run(ViewedFileStore)
@@ -210,14 +186,7 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.setLocalViewedFile,
-    async (
-      _event,
-      rootPath: string,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ): Promise<void> => {
+    async (_event, { rootPath, headSha, reviewKey, filePath, viewed }): Promise<void> => {
       const git = await run(GitService)
       const store = await run(RepositoryStore)
       const viewedFiles = await run(ViewedFileStore)

@@ -5,7 +5,6 @@ import { InvokeChannel } from "@diffdash/protocol/channels"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { AppState } from "@diffdash/settings/app-state"
-import { Schema } from "effect"
 import { app } from "electron"
 import { AgentProviders } from "../../../../src/main/services/agent-providers"
 import { Prerequisites } from "../../../../src/main/services/prerequisites"
@@ -54,8 +53,7 @@ export const defineSettingsHandlers = (
 
   handlers.define(
     InvokeChannel.settingsUpdate,
-    async (_event, input: unknown): Promise<AISettings> => {
-      const parsed = await run(Schema.decodeUnknown(AISettings)(input))
+    async (_event, { settings: parsed }): Promise<AISettings> => {
       const settings = await run(AppSettings)
       return run(settings.save(parsed))
     },
@@ -70,8 +68,7 @@ export const defineSettingsHandlers = (
 
   handlers.define(
     InvokeChannel.appStateUpdate,
-    async (_event, input: unknown): Promise<SharedAppState> => {
-      const parsed = await run(Schema.decodeUnknown(SharedAppState)(input))
+    async (_event, { state: parsed }): Promise<SharedAppState> => {
       if (isDebugOnboardingEnabled()) return parsed
 
       const appState = await run(AppState)

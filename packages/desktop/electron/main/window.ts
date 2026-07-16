@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, shell } from "electron"
 import { electronErrorPageDataUrl } from "../error-page"
 import { createDiffDashBrowserWindowOptions, isInternalNavigationAllowed } from "./electron-policy"
 import { openAllowedExternalUrl } from "./file-opening"
+import { sendProtocolEvent } from "./ipc/transport"
 import type { createNavigationCommandQueue } from "./navigation-command-queue"
 import { applicationPaths } from "./paths"
 
@@ -119,7 +120,7 @@ export const createMainWindow = ({
       logStartupStage("renderer loaded")
       showMainWindow()
       if (navigationCommands.hasPending()) {
-        window.webContents.send(EventChannel.navigationCommandsAvailable)
+        sendProtocolEvent(window.webContents, EventChannel.navigationCommandsAvailable, {})
       }
       return undefined
     })

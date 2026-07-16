@@ -11,6 +11,7 @@
     "./channels": "./src/channels.ts",
     "./cli-navigation": "./src/cli-navigation.ts",
     "./hosted-git": "./src/hosted-git.ts",
+    "./ipc": "./src/ipc.ts",
     "./prerequisites": "./src/prerequisites.ts",
     "./repository-link": "./src/repository-link.ts",
     "./review-threads": "./src/review-threads.ts",

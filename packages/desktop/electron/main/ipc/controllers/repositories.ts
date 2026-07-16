@@ -4,15 +4,9 @@ import { GitService } from "@diffdash/local-git/local-git"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { CliError } from "@diffdash/process/cli"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { HostedProviderRequest, HostedRepositorySearchRequest } from "@diffdash/protocol/hosted-git"
-import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
-import { Schema } from "effect"
 import { dialog } from "electron"
 import { GitProvider } from "../../../../src/main/services/git-provider"
-import {
-  RepositoryLinker,
-  RepositoryLinkError,
-} from "../../../../src/main/services/repository-linker"
+import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 import { localRepositoryInput } from "./helpers"
@@ -26,15 +20,15 @@ export const defineRepositoryHandlers = (
 
   handlers.define(
     InvokeChannel.listRepositories,
-    async (_event, query?: string): Promise<readonly Repo[]> => {
+    async (_event, { query }): Promise<readonly Repo[]> => {
       const store = await run(RepositoryStore)
-      return run(store.list(query))
+      return run(store.list(query ?? undefined))
     },
   )
 
   handlers.define(
     InvokeChannel.setRepositoryFavorite,
-    async (_event, id: string, isFavorite: boolean): Promise<Repo> => {
+    async (_event, { id, isFavorite }): Promise<Repo> => {
       const store = await run(RepositoryStore)
       return run(store.setFavorite(id, isFavorite))
     },
@@ -42,8 +36,7 @@ export const defineRepositoryHandlers = (
 
   handlers.define(
     InvokeChannel.favoriteRemoteRepository,
-    async (_event, input: unknown): Promise<Repo> => {
-      const repo = await run(Schema.decodeUnknown(RepositorySearchResult)(input))
+    async (_event, { repository: repo }): Promise<Repo> => {
       const store = await run(RepositoryStore)
       return run(
         store.upsertRepository({
@@ -60,7 +53,7 @@ export const defineRepositoryHandlers = (
 
   handlers.define(
     InvokeChannel.addLocalRepository,
-    async (_event, localPath: string): Promise<Repo> => {
+    async (_event, { localPath }): Promise<Repo> => {
       const git = await run(GitService)
       const gitProvider = await run(GitProvider)
       const store = await run(RepositoryStore)
@@ -84,28 +77,14 @@ export const defineRepositoryHandlers = (
     },
   )
 
-  handlers.define(
-    InvokeChannel.installRepository,
-    async (_event, localPath: string): Promise<Repo> => {
-      const linker = await run(RepositoryLinker)
-      try {
-        return await run(linker.install(localPath))
-      } catch (error) {
-        if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
-        throw error
-      }
-    },
-  )
-
-  handlers.define(InvokeChannel.linkRepository, async (_event, input: unknown): Promise<Repo> => {
-    const request = await run(Schema.decodeUnknown(LinkRepositoryCheckoutRequest)(input))
+  handlers.define(InvokeChannel.installRepository, async (_event, { localPath }): Promise<Repo> => {
     const linker = await run(RepositoryLinker)
-    try {
-      return await run(linker.link(request))
-    } catch (error) {
-      if (error instanceof RepositoryLinkError) throw new Error(error.reason, { cause: error })
-      throw error
-    }
+    return run(linker.install(localPath))
+  })
+
+  handlers.define(InvokeChannel.linkRepository, async (_event, request): Promise<Repo> => {
+    const linker = await run(RepositoryLinker)
+    return run(linker.link(request))
   })
 
   handlers.define(InvokeChannel.selectLocalFolder, async (): Promise<string | null> => {
@@ -126,8 +105,7 @@ export const defineRepositoryHandlers = (
 
   handlers.define(
     InvokeChannel.searchHostedRepositories,
-    async (_event, input: unknown): Promise<readonly RepositorySearchResult[]> => {
-      const request = await run(Schema.decodeUnknown(HostedRepositorySearchRequest)(input))
+    async (_event, request): Promise<readonly RepositorySearchResult[]> => {
       const gitProvider = await run(GitProvider)
       try {
         return await run(
@@ -151,8 +129,7 @@ export const defineRepositoryHandlers = (
 
   handlers.define(
     InvokeChannel.listHostedRepositorySearchScopes,
-    async (_event, input: unknown): Promise<readonly RepositorySearchScope[]> => {
-      const request = await run(Schema.decodeUnknown(HostedProviderRequest)(input))
+    async (_event, request): Promise<readonly RepositorySearchScope[]> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.listSearchScopes(request.providerId))
     },
