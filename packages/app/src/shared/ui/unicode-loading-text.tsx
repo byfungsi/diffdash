@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { spinners as unicodeAnimations } from "unicode-animations"
 
-import { cn } from "@/lib/utils"
+import { cn } from "@/shared/utils"
 
 const BRAILLE_SPINNER = unicodeAnimations.braille
 

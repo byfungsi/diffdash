@@ -10,11 +10,11 @@ import {
   useState,
 } from "react"
 
-import { Badge } from "@/components/ui/badge"
-import { UnicodeLoadingText } from "@/components/ui/unicode-loading-text"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
+import { Badge } from "@/shared/ui/badge"
+import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
+import { Button } from "@/shared/ui/button"
+import { Textarea } from "@/shared/ui/textarea"
+import { cn } from "@/shared/utils"
 import {
   MarkdownBody,
   PullRequestReviewTarget,

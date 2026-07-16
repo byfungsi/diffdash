@@ -12,9 +12,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(51)
+    expect(new Set(invokeChannels).size).toBe(52)
     expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(54)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(55)
   })
 
   it("rejects malformed review-thread requests", () => {

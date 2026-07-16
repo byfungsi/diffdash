@@ -120,6 +120,8 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.refreshHostedReview, request),
     getDiff: (request: HostedReviewRequest) =>
       transport.invoke(InvokeChannel.getHostedReviewDiff, request),
+    getSnapshot: (request: HostedReviewRequest) =>
+      transport.invoke(InvokeChannel.getHostedReviewSnapshot, request),
     getDecision: (request: HostedReviewRequest) =>
       transport.invoke(InvokeChannel.getHostedReviewDecision, request),
     submitDecision: (request: SubmitHostedReviewDecisionRequest) =>

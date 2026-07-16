@@ -1,7 +1,7 @@
 import { Download, Loader2, RefreshCw, RotateCcw, X } from "lucide-react"
 import { useState } from "react"
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/shared/ui/button"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 
 /** Global automatic-update status and actions. */

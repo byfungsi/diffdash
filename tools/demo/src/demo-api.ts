@@ -662,6 +662,14 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         )
         return currentRevision.diff
       },
+      getSnapshot: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        return currentRevision.snapshot
+      },
       getDecision: async (request) => {
         requireReview(
           request.review.repository.namespace,

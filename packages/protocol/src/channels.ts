@@ -14,6 +14,7 @@ export const InvokeChannel = {
   submitHostedReviewDecision: "hostedReviews:submitDecision",
   getHostedReview: "hostedReviews:get",
   getHostedReviewDiff: "hostedReviews:getDiff",
+  getHostedReviewSnapshot: "hostedReviews:getSnapshot",
   getHostedReviewDecision: "hostedReviews:getDecision",
   listHostedReviews: "hostedReviews:list",
   listAssignedHostedReviews: "hostedReviews:listAssigned",

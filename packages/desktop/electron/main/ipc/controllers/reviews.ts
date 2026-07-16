@@ -6,11 +6,13 @@ import type {
   PullRequestSummary,
 } from "@diffdash/domain/pull-request"
 import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import { GitService } from "@diffdash/local-git/local-git"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { GitProvider } from "../../../../src/main/services/git-provider"
+import { ReviewContextService } from "../../../../src/main/services/review-context"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 import { localRepositoryInput } from "./helpers"
@@ -59,6 +61,14 @@ export const defineReviewHandlers = (
     async (_event, request): Promise<PullRequestDiff> => {
       const gitProvider = await run(GitProvider)
       return run(gitProvider.getPullRequestDiff(request.review))
+    },
+  )
+
+  handlers.define(
+    InvokeChannel.getHostedReviewSnapshot,
+    async (_event, request): Promise<PullRequestReviewSnapshot> => {
+      const contexts = await run(ReviewContextService)
+      return run(contexts.getPullRequestSnapshot(request.review))
     },
   )
 
@@ -214,6 +224,7 @@ export const installReviewsController = (registry: IpcControllerRegistry) =>
     InvokeChannel.getHostedReview,
     InvokeChannel.refreshHostedReview,
     InvokeChannel.getHostedReviewDiff,
+    InvokeChannel.getHostedReviewSnapshot,
     InvokeChannel.getHostedReviewDecision,
     InvokeChannel.submitHostedReviewDecision,
     InvokeChannel.resolveLocalBranch,

@@ -1,2 +1,2 @@
 export { App } from "./app"
-export { AppErrorBoundary, AppErrorFallback } from "./app-error-boundary"
+export { AppErrorBoundary, AppErrorFallback } from "./shared/ui/app-error-boundary"

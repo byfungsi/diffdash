@@ -21,7 +21,10 @@ import type {
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import type {
+  LocalReviewSnapshot,
+  PullRequestReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import type { LinkRepositoryCheckoutRequest } from "./repository-link"
 import type {
@@ -120,6 +123,7 @@ export interface DiffDashApi {
     readonly get: (request: HostedReviewRequest) => Promise<PullRequestDetail>
     readonly refresh: (request: HostedReviewRequest) => Promise<PullRequestDetail>
     readonly getDiff: (request: HostedReviewRequest) => Promise<PullRequestDiff>
+    readonly getSnapshot: (request: HostedReviewRequest) => Promise<PullRequestReviewSnapshot>
     readonly getDecision: (request: HostedReviewRequest) => Promise<ReviewDecision>
     readonly submitDecision: (request: SubmitHostedReviewDecisionRequest) => Promise<void>
   }

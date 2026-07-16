@@ -5,8 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./app-error-boundary": "./src/app-error-boundary.tsx",
-    "./file-tree-adapter": "./src/file-tree-adapter.ts",
+    "./app-error-boundary": "./src/shared/ui/app-error-boundary.tsx",
+    "./file-tree-adapter": "./src/review/file-tree-adapter.ts",
     "./styles.css": "./src/styles.css"
   },
   "scripts": {

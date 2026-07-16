@@ -13,7 +13,7 @@ import {
 } from "@diffdash/domain/pull-request"
 import { Repo, RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   ReviewThread,
   ReviewThreadDetails,
@@ -129,6 +129,11 @@ export const InvokeContract = {
     InvokeChannel.getHostedReviewDiff,
     HostedReviewRequest,
     PullRequestDiff,
+  ),
+  [InvokeChannel.getHostedReviewSnapshot]: defineInvoke(
+    InvokeChannel.getHostedReviewSnapshot,
+    HostedReviewRequest,
+    PullRequestReviewSnapshot,
   ),
   [InvokeChannel.getHostedReviewDecision]: defineInvoke(
     InvokeChannel.getHostedReviewDecision,
