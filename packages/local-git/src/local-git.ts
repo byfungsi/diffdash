@@ -38,6 +38,12 @@ export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTarget
 
 type LocalReviewInput = string | LocalReviewTarget
 
+/** One configured local Git remote and all of its fetch URLs. */
+export class LocalGitRemote extends Schema.Class<LocalGitRemote>("LocalGitRemote")({
+  name: Schema.String,
+  fetchUrls: Schema.Array(Schema.String),
+}) {}
+
 /** Main-process service for local Git repository inspection. */
 export class GitService extends Context.Tag("@diffdash/GitService")<
   GitService,
@@ -47,6 +53,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
     ) => Effect.Effect<DetectedRepositoryCheckout, CliError>
     readonly detectRoot: (localPath: string) => Effect.Effect<string, CliError>
     readonly currentBranch: (localPath: string) => Effect.Effect<string, CliError>
+    readonly listRemotes: (localPath: string) => Effect.Effect<readonly LocalGitRemote[], CliError>
     readonly resolveBranchComparison: (
       localPath: string,
       branchName: string | null,
@@ -74,6 +81,30 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
       const currentBranch = Effect.fn("GitService.currentBranch")(function* (localPath: string) {
         const branch = yield* cli.run("git", ["-C", localPath, "branch", "--show-current"])
         return branch.stdout.trim()
+      })
+
+      const listRemotes = Effect.fn("GitService.listRemotes")(function* (localPath: string) {
+        const rootPath = yield* detectRoot(localPath)
+        const names = yield* cli.run("git", ["-C", rootPath, "remote"])
+        return yield* Effect.forEach(
+          names.stdout
+            .split("\n")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+          (name) =>
+            cli.run("git", ["-C", rootPath, "remote", "get-url", "--all", name]).pipe(
+              Effect.map((result) =>
+                LocalGitRemote.make({
+                  name,
+                  fetchUrls: result.stdout
+                    .split("\n")
+                    .map((url) => url.trim())
+                    .filter((url) => url.length > 0),
+                }),
+              ),
+            ),
+          { concurrency: 1 },
+        )
       })
 
       const canonicalTarget = Effect.fn("GitService.canonicalTarget")(function* (
@@ -204,6 +235,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
         }),
         detectRoot,
         currentBranch,
+        listRemotes,
         resolveBranchComparison,
         getLocalReviewDetail: (input) =>
           Effect.gen(function* () {

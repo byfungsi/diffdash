@@ -128,6 +128,10 @@ export interface GitProviderRegistration {
   ) => Effect.Effect<void, GitProviderOperationError>
   readonly repositoryUrl: (repository: HostedRepositoryLocator) => string
   readonly fileUrl: (repository: HostedRepositoryLocator, path: string, revision: string) => string
+  readonly bootstrapBareRepository: (
+    repository: HostedRepositoryLocator,
+    destination: string,
+  ) => Effect.Effect<void, GitProviderOperationError>
   readonly checkoutSpec: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import {
   chmodSync,
   existsSync,
@@ -275,7 +276,7 @@ describe("ReviewWorktreePool", () => {
             () =>
               Effect.sync(() => {
                 providerStarted = true
-                rmSync(join(value.pool, "Acme", "Widget", "repository.git"), {
+                rmSync(join(repositoryPoolPath(value.pool, "Acme", "Widget"), "repository.git"), {
                   recursive: true,
                   force: true,
                 })
@@ -320,8 +321,9 @@ describe("ReviewWorktreePool", () => {
         lastError: null,
       }))
       writeFileSync(join(value.pool, "manifest.json"), JSON.stringify({ version: 1, slots }))
-      const oldestSentinel = join(value.pool, "Other", "Repo-0", "idle-0", "sentinel")
-      mkdirSync(join(value.pool, "Other", "Repo-0", "idle-0"), { recursive: true })
+      const oldestSlotPath = join(repositoryPoolPath(value.pool, "Other", "Repo-0"), "idle-0")
+      const oldestSentinel = join(oldestSlotPath, "sentinel")
+      mkdirSync(oldestSlotPath, { recursive: true })
       writeFileSync(oldestSentinel, "remove me")
 
       let leasedSlot = ""
@@ -571,22 +573,39 @@ describe("ReviewWorktreePool", () => {
       const manifest = JSON.parse(
         readFileSync(join(value.remotePool, "manifest.json"), "utf8"),
       ) as {
+        readonly version: number
         readonly repositories: ReadonlyArray<{
           readonly owner: string
           readonly repo: string
+          readonly providerId: string
+          readonly repositoryKey: string
           readonly clonedAt: string
           readonly lastUsedAt: string
         }>
-        readonly slots: ReadonlyArray<{ readonly pullRequestNumber: number | null }>
+        readonly slots: ReadonlyArray<{
+          readonly pullRequestNumber: number | null
+          readonly reviewNumber: number | null
+          readonly providerId: string
+          readonly repositoryKey: string
+        }>
       }
+      expect(manifest.version).toBe(2)
       expect(manifest.repositories).toHaveLength(1)
       const repository = manifest.repositories[0]
-      expect(repository).toMatchObject({ owner: "Acme", repo: "Widget" })
+      expect(repository).toMatchObject({
+        owner: "Acme",
+        repo: "Widget",
+        providerId: "github",
+        repositoryKey: "github:Acme/Widget",
+      })
       if (repository === undefined) throw new Error("Expected remote repository metadata")
       expect(Date.parse(repository.clonedAt)).not.toBeNaN()
       expect(Date.parse(repository.lastUsedAt)).not.toBeNaN()
       expect(repository.lastUsedAt >= repository.clonedAt).toBe(true)
       expect(new Set(manifest.slots.map((slot) => slot.pullRequestNumber))).toEqual(new Set([1, 2]))
+      expect(new Set(manifest.slots.map((slot) => slot.reviewNumber))).toEqual(new Set([1, 2]))
+      expect(manifest.slots.every((slot) => slot.providerId === "github")).toBe(true)
+      expect(manifest.slots.every((slot) => slot.repositoryKey === "github:Acme/Widget")).toBe(true)
       expect(() => readFileSync(join(value.pool, "manifest.json"), "utf8")).toThrow(/ENOENT/u)
     }),
   )
@@ -773,6 +792,13 @@ const commit = (cwd: string, message: string) =>
     "commit",
     "-m",
     message,
+  )
+
+const repositoryPoolPath = (poolRoot: string, owner: string, repo: string) =>
+  join(
+    poolRoot,
+    "repositories",
+    createHash("sha256").update(`github:${owner}/${repo}`).digest("hex"),
   )
 
 const git = (cwd: string, ...args: readonly string[]) =>

@@ -54,6 +54,40 @@ describe("GitService", () => {
       }),
   )
 
+  it.effect("enumerates all local remotes and fetch URLs without provider assumptions", () =>
+    Effect.gen(function* () {
+      const cliLayer = Layer.succeed(
+        CliService,
+        CliService.of({
+          run: (_command, args) => {
+            const stdout = args.includes("rev-parse")
+              ? "/workspace/repo\n"
+              : args.at(-1) === "origin"
+                ? "git@example.com:group/repo.git\nhttps://example.com/group/repo.git\n"
+                : args.at(-1) === "upstream"
+                  ? "https://upstream.example/group/repo.git\n"
+                  : "origin\nupstream\n"
+            return Effect.succeed(makeCliResult(stdout, args))
+          },
+        }),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+      )
+
+      expect(yield* service.listRemotes("/workspace/repo/src")).toEqual([
+        {
+          name: "origin",
+          fetchUrls: ["git@example.com:group/repo.git", "https://example.com/group/repo.git"],
+        },
+        {
+          name: "upstream",
+          fetchUrls: ["https://upstream.example/group/repo.git"],
+        },
+      ])
+    }),
+  )
+
   it.effect("builds local review details from tracked and untracked changes", () =>
     Effect.gen(function* () {
       const trackedDiff = `diff --git a/src/app.ts b/src/app.ts

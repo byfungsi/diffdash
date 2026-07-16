@@ -84,6 +84,7 @@ const makeLayer = (input: {
   const gitLayer = Layer.succeed(
     GitService,
     GitService.of({
+      listRemotes: () => Effect.succeed([]),
       detectRepository: () => unavailable(),
       detectRoot: () => unavailable(),
       currentBranch: () => unavailable(),

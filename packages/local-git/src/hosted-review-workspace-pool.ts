@@ -13,7 +13,7 @@ import {
   CliStreamService,
 } from "@diffdash/process/cli-stream"
 
-const MANIFEST_VERSION = 1
+const MANIFEST_VERSION = 2
 const MAX_POOL_SLOTS = 10
 const LOCK_RETRY_MS = 50
 const LOCK_TIMEOUT_MS = 5_000
@@ -44,9 +44,12 @@ const WorktreeSlot = Schema.Struct({
   id: Schema.String,
   owner: Schema.String,
   repo: Schema.String,
+  providerId: Schema.optional(Schema.String),
+  repositoryKey: Schema.optional(Schema.String),
   state: Schema.Literal("preparing", "leased", "cleaning", "available", "quarantined"),
   headSha: Schema.NullOr(Schema.String),
   pullRequestNumber: Schema.NullOr(Schema.Number),
+  reviewNumber: Schema.optional(Schema.NullOr(Schema.Number)),
   lastThreadId: Schema.NullOr(Schema.String),
   lease: Schema.NullOr(WorktreeLease),
   createdAt: Schema.String,
@@ -57,12 +60,14 @@ const WorktreeSlot = Schema.Struct({
 const RemoteRepository = Schema.Struct({
   owner: Schema.String,
   repo: Schema.String,
+  providerId: Schema.optional(Schema.String),
+  repositoryKey: Schema.optional(Schema.String),
   clonedAt: Schema.String,
   lastUsedAt: Schema.String,
 })
 
 const WorktreeManifest = Schema.Struct({
-  version: Schema.Literal(MANIFEST_VERSION),
+  version: Schema.Literal(1, MANIFEST_VERSION),
   repositories: Schema.Array(RemoteRepository),
   slots: Schema.Array(WorktreeSlot),
 })
@@ -527,9 +532,12 @@ const reserveSlot = (
     id,
     owner,
     repo,
+    providerId: "github",
+    repositoryKey: canonicalRepositoryKey(owner, repo),
     state: "preparing",
     headSha: input.snapshot.headRevision,
     pullRequestNumber: input.snapshot.detail.number,
+    reviewNumber: input.snapshot.detail.number,
     lastThreadId: existing?.lastThreadId ?? null,
     lease,
     createdAt: existing?.createdAt ?? now,
@@ -569,7 +577,7 @@ const mutateManifest = <A>(
                 cause,
               ),
       })
-      yield* writeManifest(manifestPath, changed.manifest)
+      yield* writeManifest(manifestPath, { ...changed.manifest, version: MANIFEST_VERSION })
       return changed.value
     }),
   )
@@ -822,6 +830,8 @@ const recordRemoteRepositoryUse = (
     const repository = {
       owner,
       repo,
+      providerId: "github",
+      repositoryKey: canonicalRepositoryKey(owner, repo),
       clonedAt: cloned || existing === undefined ? now : existing.clonedAt,
       lastUsedAt: now,
     }
@@ -876,10 +886,13 @@ const updateSlot = (
 })
 
 const pathForRepository = (poolRoot: string, owner: string, repo: string) => {
-  const path = resolve(poolRoot, safeSegment(owner), safeSegment(repo))
+  const digest = createHash("sha256").update(canonicalRepositoryKey(owner, repo)).digest("hex")
+  const path = resolve(poolRoot, "repositories", digest)
   assertContained(poolRoot, path)
   return path
 }
+
+const canonicalRepositoryKey = (owner: string, repo: string) => `github:${owner}/${repo}`
 
 const pathForSlot = (poolRoot: string, slot: Pick<Slot, "owner" | "repo" | "id">) => {
   const path = resolve(pathForRepository(poolRoot, slot.owner, slot.repo), safeSegment(slot.id))

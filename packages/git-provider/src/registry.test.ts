@@ -116,6 +116,7 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
     repositoryUrl: () => `https://${host}/platform/backend/service`,
     fileUrl: (_repository, path, revision) =>
       `https://${host}/platform/backend/service/blob/${revision}/${path}`,
+    bootstrapBareRepository: () => Effect.void,
     checkoutSpec: () =>
       Effect.succeed(
         HostedReviewCheckoutSpec.make({

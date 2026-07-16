@@ -33,6 +33,7 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
         Layer.succeed(
           GitService,
           GitService.of({
+            listRemotes: () => Effect.succeed([]),
             detectRepository: () =>
               Effect.succeed({ rootPath: linkedRepo.localPath ?? "", remoteUrl }),
             detectRoot: () => unavailable(),
