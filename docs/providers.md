@@ -69,8 +69,9 @@ for each implemented capability.
 An agent provider package may depend only on `@diffdash/agent-provider`, `@diffdash/process`, Effect,
 and its official provider integration dependency. It must not import Electron, React, domain or
 protocol models, settings or persistence implementations, a concrete MCP server, host orchestration,
-the registry implementation as a host service, or another concrete provider. Only the future desktop
-composition root may import concrete agent provider packages.
+the registry implementation as a host service, or another concrete provider. Only
+`packages/desktop/electron/main/agent-provider-composition.ts` may import concrete agent provider
+packages.
 
 Each package contributes exactly one `AgentProviderRegistration`. Its manifest owns display metadata,
 models, defaults, runtime/version requirements, capability-specific auto candidacy, and session
@@ -85,7 +86,29 @@ Concrete packages must invoke the relevant exports from `@diffdash/agent-provide
 responses, non-mutation, MCP tool and token isolation, artifact restrictions, usage/session behavior,
 cleanup, duplicate IDs, separate automatic routes, and explicit fail-closed selection.
 
-Adding a provider requires one leaf package, its conformance fixtures, one registration in desktop
-composition, lockfile changes, and documentation. It must not require provider branches in the
-renderer, a settings schema shape change, a persistence constraint, orchestration changes, registry
-changes, or edits to an existing provider.
+## Adding A Built-In Agent Provider
+
+1. Create one leaf package named `@diffdash/agent-provider-<name>` that depends on the agent-provider
+   SDK and exports one `AgentProviderRegistration`.
+2. Define its open provider ID, descriptor, capability-specific model catalog, defaults, automatic
+   priorities, runtime setup requirements, session support, probes, policy translation, and
+   executions in that package.
+3. Run the applicable shared manifest, walkthrough, review, security, and cancellation conformance
+   suites with deterministic provider-native fixtures.
+4. Add the workspace dependency and construct the registration in
+   `packages/desktop/electron/main/agent-provider-composition.ts`. Automatic candidate lists are
+   derived from manifest priorities; do not add a second provider list.
+5. Add a parameterized fixture smoke case for every contributed capability, update the lockfile, and
+   run boundary, type, unit, browser, Electron E2E, build, and package verification.
+
+The renderer receives provider status, capabilities, models, defaults, automatic candidates, and
+setup requirements through the serialized protocol catalog. Adding a provider must not require
+provider branches in renderer business logic, a settings schema shape change, persistence changes,
+walkthrough or review-agent orchestration changes, registry changes, or edits to an existing
+provider.
+
+Provider package isolation is an architecture and dependency boundary, not a runtime security
+sandbox. Provider code executes in the trusted Electron main process with the host capabilities
+explicitly passed to its registration. The scoped MCP token, non-mutating execution policy,
+provider-native permission controls, artifact normalization, and process cleanup reduce exposure;
+they do not make an untrusted provider package safe to install or execute.

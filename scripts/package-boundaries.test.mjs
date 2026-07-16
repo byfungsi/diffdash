@@ -141,6 +141,34 @@ test("agent providers remain isolated leaf integrations", () => {
   }
 })
 
+test("only the desktop agent composition imports concrete agent providers", () => {
+  const allowedComposition = resolve(
+    root,
+    "packages/desktop/electron/main/agent-provider-composition.ts",
+  )
+  for (const { directory, manifest } of manifests) {
+    if (manifest.name.startsWith("@diffdash/agent-provider-")) continue
+    const source = join(directory, "src")
+    let files = []
+    try {
+      files = sourceFiles(source)
+    } catch {
+      // Packages without source directories do not participate.
+    }
+    if (manifest.name === "@diffdash/desktop") {
+      files.push(...sourceFiles(join(directory, "electron")))
+    }
+    for (const file of files) {
+      if (resolve(file) === allowedComposition) continue
+      assert.doesNotMatch(
+        readFileSync(file, "utf8"),
+        /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/,
+        `${file} imports a concrete agent provider outside desktop composition`,
+      )
+    }
+  }
+})
+
 test("agent provider SDK and registry import no concrete provider", () => {
   const sdkSource = sourceFiles(join(root, "packages/agent-provider/src"))
     .map((file) => readFileSync(file, "utf8"))

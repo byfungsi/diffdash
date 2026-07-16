@@ -24,6 +24,7 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_FAKE_AGENT_PROVIDER: "1",
       DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
       DIFFDASH_E2E_FAKE_GIT_REMOTE: "https://git.fixture.test/platform/backend/service.git",
       DIFFDASH_E2E_HIDDEN: "1",
@@ -35,6 +36,23 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
+    expect(
+      await window.evaluate(async () => {
+        const catalog = await globalThis.window.diffDash.agentProviders.getCatalog()
+        return {
+          fixture: catalog.providers.find(({ id }) => id === "fixture-agent"),
+          autoWalkthrough: catalog.autoCandidates.walkthrough,
+        }
+      }),
+    ).toEqual({
+      fixture: expect.objectContaining({
+        displayName: "Fixture Agent",
+        defaults: { reviewThreadModel: "fixture-model", walkthroughModel: "fixture-model" },
+        models: [expect.objectContaining({ id: "fixture-model" })],
+        setup: [expect.objectContaining({ name: "fixture-runtime" })],
+      }),
+      autoWalkthrough: ["claude", "codex", "opencode"],
+    })
     await expect(window.getByRole("option", { name: "Fixture Forge" })).toHaveCount(1)
 
     const fixtureReview = window.getByRole("button", {
@@ -395,6 +413,85 @@ test("opens local working tree review from CLI argument", async ({
   }
 })
 
+for (const fixture of [
+  { provider: "codex", response: "The line check is complete." },
+  { provider: "claude", response: "Claude completed the line review." },
+  { provider: "opencode", response: "OpenCode completed the line review." },
+] as const) {
+  test(`FUN-133 AC: runs a fixture review turn through ${fixture.provider}`, async ({
+    browserName: _browserName,
+  }, testInfo) => {
+    testInfo.setTimeout(45_000)
+    const fakeBin = testInfo.outputPath("fake-bin")
+    const localRepo = testInfo.outputPath("local-repo")
+    const xdgConfigHome = testInfo.outputPath("xdg-config")
+    const userData = testInfo.outputPath("user-data")
+    await Promise.all([
+      mkdir(fakeBin, { recursive: true }),
+      mkdir(localRepo, { recursive: true }),
+      mkdir(xdgConfigHome, { recursive: true }),
+      mkdir(userData, { recursive: true }),
+    ])
+    await Promise.all([
+      installFakeCli(fakeBin),
+      installAgentSettings(xdgConfigHome, fixture.provider),
+    ])
+
+    const app = await electron.launch({
+      args: [
+        join(desktopRoot, "out/main/index.js"),
+        `--user-data-dir=${userData}`,
+        `--diffdash-local-path=${localRepo}`,
+      ],
+      env: {
+        ...process.env,
+        DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+        DIFFDASH_E2E_HIDDEN: "1",
+        FAKE_REPO_ROOT: localRepo,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        XDG_CONFIG_HOME: xdgConfigHome,
+      },
+    })
+
+    try {
+      const window = await app.firstWindow()
+      await dismissOnboardingIfPresent(window)
+      await expect(window.getByRole("heading", { name: "Local changes" })).toBeVisible()
+      const gutterNumber = window
+        .locator("diffs-container [data-column-number]")
+        .filter({ hasText: "1" })
+        .first()
+      await gutterNumber.dispatchEvent("pointermove", {
+        bubbles: true,
+        composed: true,
+        pointerType: "mouse",
+      })
+      const utility = window.locator("diffs-container [data-utility-button]")
+      await expect(utility).toBeVisible()
+      const pointerEvent = {
+        bubbles: true,
+        button: 0,
+        composed: true,
+        pointerId: 1,
+        pointerType: "mouse",
+      }
+      await utility.dispatchEvent("pointerdown", pointerEvent)
+      await utility.dispatchEvent("pointerup", pointerEvent)
+      await window.getByRole("textbox", { name: "Thread message" }).fill("Review this line")
+      await window.getByRole("button", { name: "Comment" }).click()
+      await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await app.close()
+    }
+
+    const snapshot = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+    expect(snapshot.runs).toHaveLength(1)
+    expect(snapshot.runs[0]).toEqual(
+      expect.objectContaining({ provider: fixture.provider, status: "completed" }),
+    )
+  })
+}
+
 test("opens a merge-base branch comparison from the versioned CLI command", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -575,13 +672,17 @@ const installFakeCli = async (directory: string) => {
 }
 
 const installCodexSettings = async (xdgConfigHome: string) => {
+  await installAgentSettings(xdgConfigHome, "codex")
+}
+
+const installAgentSettings = async (xdgConfigHome: string, provider: string) => {
   const settingsDirectory = join(xdgConfigHome, "diffdash")
   await mkdir(settingsDirectory, { recursive: true })
   await writeFile(
     join(settingsDirectory, "settings.json"),
     JSON.stringify({
       appearance: "dark",
-      provider: "codex",
+      provider,
       models: {
         auto: "balance",
         claude: "claude-sonnet-5",
@@ -955,6 +1056,23 @@ if (args[0] === "--version") {
   process.exit(0)
 }
 
+if (args.includes("stream-json")) {
+  console.log(JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    session_id: "claude-e2e-session",
+    result: JSON.stringify({
+      bodyMarkdown: "Claude completed the line review.",
+      threadSummaryUpdate: null,
+      referencedAnchors: null
+    }),
+    total_cost_usd: 0.001,
+    usage: { input_tokens: 10, output_tokens: 10 }
+  }))
+  process.exit(0)
+}
+
 if (args[0] === "--print") {
   console.log(JSON.stringify({
     title: "Review path",
@@ -980,13 +1098,57 @@ process.exit(1)
 `
 
 const fakeOpenCodeScript = `#!/usr/bin/env node
+import { createServer } from "node:http"
 const args = process.argv.slice(2)
 if (args.includes("--version")) {
   console.log("opencode 0.1.0")
   process.exit(0)
 }
-console.error("Unhandled fake opencode call: " + args.join(" "))
-process.exit(2)
+if (args[0] === "serve") {
+  const port = Number((args.find((arg) => arg.startsWith("--port=")) ?? "").slice(7))
+  const server = createServer((request, response) => {
+    request.resume()
+    request.on("end", () => {
+      response.setHeader("content-type", "application/json")
+      const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname
+      if (request.method === "POST" && pathname.startsWith("/session/") && pathname.endsWith("/message")) {
+        response.end(JSON.stringify({
+          info: {
+            id: "opencode-e2e-message",
+            modelID: "gpt-5.3-codex-spark",
+            providerID: "openai",
+            structured: {
+              bodyMarkdown: "OpenCode completed the line review.",
+              threadSummaryUpdate: null,
+              referencedAnchors: null
+            },
+            tokens: { input: 10, output: 10, cache: { read: 0, write: 0 } },
+            cost: 0
+          },
+          parts: []
+        }))
+        return
+      }
+      if (request.method === "POST" && pathname.startsWith("/session/") && pathname.endsWith("/abort")) {
+        response.end("true")
+        return
+      }
+      if (request.method === "POST" && pathname === "/session") {
+        response.end(JSON.stringify({ id: "opencode-e2e-session" }))
+        return
+      }
+      response.statusCode = 404
+      response.end(JSON.stringify({ error: "Unhandled fake OpenCode route " + request.method + " " + request.url }))
+    })
+  })
+  server.listen(port, "127.0.0.1", () => {
+    console.log("opencode server listening on http://127.0.0.1:" + port)
+  })
+  process.on("SIGTERM", () => server.close(() => process.exit(0)))
+} else {
+  console.error("Unhandled fake opencode call: " + args.join(" "))
+  process.exit(2)
+}
 `
 
 const fakeGhScript = `#!/usr/bin/env node

@@ -8,6 +8,14 @@ import {
   type AppUpdateState,
 } from "@diffdash/protocol/app-update"
 import type { DiffDashApi } from "@diffdash/protocol/api"
+import {
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderModel,
+  AgentProviderStatus,
+} from "@diffdash/protocol/agent-providers"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { Repo, RepositorySearchResult } from "@diffdash/domain/repository"
@@ -342,6 +350,50 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         diffDashCliPath: "/usr/local/bin/diffdash",
         checkedAt: "2026-07-10T08:36:19Z",
       }),
+    agentProviders: {
+      getCatalog: async () =>
+        AgentProviderCatalog.make({
+          providers: [
+            AgentProviderStatus.make({
+              id: "codex",
+              displayName: "Codex",
+              description: "Demo agent provider",
+              homepage: null,
+              capabilities: [
+                AgentProviderCapabilityStatus.make({
+                  capability: "walkthrough",
+                  status: "ready",
+                  runtimeVersion: "demo",
+                  reason: null,
+                }),
+                AgentProviderCapabilityStatus.make({
+                  capability: "review-thread",
+                  status: "ready",
+                  runtimeVersion: "demo",
+                  reason: null,
+                }),
+              ],
+              models: [
+                AgentProviderModel.make({
+                  id: "gpt-5.3-codex-spark",
+                  displayName: "GPT 5.3 Codex Spark",
+                  capabilities: ["walkthrough", "review-thread"],
+                  quality: "balanced",
+                }),
+              ],
+              defaults: AgentProviderDefaults.make({
+                walkthroughModel: "gpt-5.3-codex-spark",
+                reviewThreadModel: "gpt-5.3-codex-spark",
+              }),
+              setup: [],
+            }),
+          ],
+          autoCandidates: AgentProviderAutoCandidates.make({
+            walkthrough: ["codex"],
+            reviewThread: ["codex"],
+          }),
+        }),
+    },
     installDiffDashCli: async () => {
       record("app.installDiffDashCli")
       return DiffDashCliInstallResult.make({

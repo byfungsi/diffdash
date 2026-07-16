@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
+    "./agent-providers": "./src/agent-providers.ts",
     "./analytics": "./src/analytics.ts",
     "./api": "./src/api.ts",
     "./app-update": "./src/app-update.ts",

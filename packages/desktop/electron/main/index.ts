@@ -16,16 +16,12 @@ import {
 import { openAllowedExternalUrl, openLocalPath, openProviderFile } from "./file-opening"
 import { createNavigationCommandQueue } from "./navigation-command-queue"
 import { revealAppWindow } from "./window-activation"
+import { createAgentProviderComposition } from "./agent-provider-composition"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
+import { AgentProviders } from "../../src/main/services/agent-providers"
 import { electronErrorPageDataUrl } from "../error-page"
-import { AgentProviderId, type AgentProviderRegistration } from "@diffdash/agent-provider"
-import {
-  type AgentAutoRoutingPolicies,
-  AgentProviderRegistry,
-} from "@diffdash/agent-provider/registry"
-import { CLAUDE_PROVIDER_ID, makeClaudeProvider } from "@diffdash/agent-provider-claude"
-import { CODEX_PROVIDER_ID, makeCodexProvider } from "@diffdash/agent-provider-codex"
-import { OPENCODE_PROVIDER_ID, makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
+import { AgentProviderId } from "@diffdash/agent-provider"
+import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
 import { Analytics } from "../../src/main/services/analytics"
@@ -71,6 +67,7 @@ import type {
 import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import { RepositorySearchRequest, RepositorySearchResult } from "@diffdash/domain/repository"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import type { AgentProviderCatalog } from "@diffdash/protocol/agent-providers"
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
@@ -224,30 +221,19 @@ const createAppLayer = () => {
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
   const appStateLayer = AppState.layer(join(configDirectory, "state.json"))
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
-  const agentAutoRoutingPolicies: AgentAutoRoutingPolicies = {
-    walkthrough: [CLAUDE_PROVIDER_ID, CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID],
-    reviewThread: [CLAUDE_PROVIDER_ID, CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID],
-  }
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
       const cli = yield* CliService
       const cliStream = yield* CliStreamService
-      const registrations: readonly AgentProviderRegistration[] = [
-        makeClaudeProvider({
-          cli,
-          cliStream,
-          tempDirectory: agentWorkingDirectory,
-        }),
-        makeCodexProvider({ cli, cliStream, tempDirectory: agentWorkingDirectory }),
-        makeOpenCodeProvider({
-          cli,
-          cliStream,
-          tempDirectory: agentWorkingDirectory,
-        }),
-      ]
+      const { registrations, policies } = createAgentProviderComposition({
+        cli,
+        cliStream,
+        tempDirectory: agentWorkingDirectory,
+        includeFixture: process.env.DIFFDASH_E2E_FAKE_AGENT_PROVIDER === "1",
+      })
       return yield* AgentProviderRegistry.pipe(
-        Effect.provide(AgentProviderRegistry.layer(registrations, agentAutoRoutingPolicies)),
+        Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
       )
     }),
   ).pipe(Layer.provide(cliLayer), Layer.provide(CliStreamService.layer))
@@ -276,6 +262,7 @@ const createAppLayer = () => {
   const walkthroughLayer = WalkthroughService.layer({
     remoteWorkingDirectory: agentWorkingDirectory,
   }).pipe(Layer.provide(agentProviderRegistryLayer), Layer.provide(walkthroughRoutingLayer))
+  const agentProvidersLayer = AgentProviders.layer.pipe(Layer.provide(agentProviderRegistryLayer))
   const reviewContextLayer = ReviewContextService.layer.pipe(
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
@@ -344,7 +331,11 @@ const createAppLayer = () => {
     analyticsLayer,
     reviewContextLayer,
     appStateLayer,
-    Prerequisites.layer.pipe(Layer.provideMerge(gitProviderLayer)),
+    Prerequisites.layer.pipe(
+      Layer.provideMerge(gitProviderLayer),
+      Layer.provideMerge(agentProvidersLayer),
+    ),
+    agentProvidersLayer,
     gitProviderLayer,
     walkthroughLayer,
     ViewedFileStore.layer,
@@ -379,6 +370,7 @@ const installIpcHandlers = (
     | AppUpdater
     | AppSettings
     | Prerequisites
+    | AgentProviders
     | ReviewContextService
     | ReviewAgentService
     | ReviewThreadAnchorMapper
@@ -404,6 +396,7 @@ const installIpcHandlers = (
       | AppUpdater
       | AppSettings
       | Prerequisites
+      | AgentProviders
       | ReviewContextService
       | ReviewAgentService
       | ReviewThreadAnchorMapper
@@ -416,6 +409,14 @@ const installIpcHandlers = (
 
   const lifecycle = createAppLifecycle({ dispose: () => runtime.dispose(), quit: () => app.quit() })
   app.on("before-quit", lifecycle.beforeQuit)
+
+  ipcMain.handle(
+    InvokeChannel.agentProvidersGetCatalog,
+    async (): Promise<AgentProviderCatalog> => {
+      const providers = await run(AgentProviders)
+      return run(providers.catalog)
+    },
+  )
 
   ipcMain.handle(InvokeChannel.analyticsStart, async (): Promise<void> => {
     const analytics = await run(Analytics)

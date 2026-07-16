@@ -64,14 +64,14 @@ import { UpdateBanner } from "@/update-banner"
 import {
   type Appearance,
   type AICapabilityRoute,
-  AI_PROVIDER_OPTIONS,
   AISettings,
-  AUTO_MODEL_OPTIONS,
   type AutoQuality,
   DEFAULT_AI_SETTINGS,
-  modelOptionsForProvider,
-  selectedModelForProvider,
 } from "@diffdash/domain/ai-settings"
+import {
+  type AgentProviderCatalog,
+  EMPTY_AGENT_PROVIDER_CATALOG,
+} from "@diffdash/protocol/agent-providers"
 import { type AppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
@@ -208,7 +208,7 @@ const MOUSE_BUTTON_BACK = 3
 const MOUSE_BUTTON_FORWARD = 4
 const GIT_DOCS_URL = "https://git-scm.com/downloads"
 const CODING_AGENT_SETUP_MESSAGE =
-  "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
+  "Walkthroughs require an available agent provider. Complete provider setup to enable guided review."
 const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
   void window.diffDash.analytics.capture(event).catch(() => undefined)
 }
@@ -450,6 +450,11 @@ const diagnosticsAtom = Atom.make(
     initialValue: EMPTY_APP_PREREQUISITES as AppDiagnostics,
   },
 ).pipe(Atom.keepAlive)
+
+const agentProviderCatalogAtom = Atom.make(
+  fetchEffect(() => window.diffDash.agentProviders.getCatalog()),
+  { initialValue: EMPTY_AGENT_PROVIDER_CATALOG },
+)
 
 const scopedLocalSearchQuery = (query: string, scope: string | null) =>
   scope === null ? query : `${scope}/${query}`
@@ -699,6 +704,7 @@ export function App() {
       ? null
       : (availableProviders.find((provider) => provider.id === selectedRepo.provider) ?? null)
   const diagnosticsResult = useAtomValue(diagnosticsAtom)
+  const agentProviderCatalogResult = useAtomValue(agentProviderCatalogAtom)
   const selectedProviderSearchScopesAtom = searchScopesAtom(
     selectedProvider?.capabilities.searchScopes === true ? (activeProviderId ?? "") : "",
   )
@@ -737,6 +743,7 @@ export function App() {
   const refreshLocalSearch = useAtomRefresh(localSearchAtom)
   const refreshRemoteSearch = useAtomRefresh(remoteSearchAtom)
   const refreshDiagnostics = useAtomRefresh(diagnosticsAtom)
+  const refreshAgentProviderCatalog = useAtomRefresh(agentProviderCatalogAtom)
   const refreshSearchScopes = useAtomRefresh(selectedProviderSearchScopesAtom)
   const refreshReviewRequests = useAtomRefresh(reviewRequestsAtom)
   const refreshRepoPrCounts = useAtomRefresh(repoPrCountsAtom)
@@ -757,6 +764,7 @@ export function App() {
   const reviewRequests = resultValue(reviewRequestsResult, [] as readonly PullRequestSummary[])
   const repoPrCounts = resultValue(repoPrCountsResult, {} as Record<string, number>)
   const diagnostics = resultValue(diagnosticsResult, EMPTY_APP_PREREQUISITES as AppDiagnostics)
+  const agentProviderCatalog = resultValue(agentProviderCatalogResult, EMPTY_AGENT_PROVIDER_CATALOG)
   const isLoadingDiagnostics = Result.isWaiting(diagnosticsResult)
   const pullRequests = resultValue(pullRequestsResult, [] as readonly PullRequestSummary[])
   const selectedPullRequest = resultValue(selectedPullRequestResult, null)
@@ -921,11 +929,13 @@ export function App() {
     refreshRepositories()
     refreshProviders()
     refreshDiagnostics()
+    refreshAgentProviderCatalog()
     refreshSearchScopes()
     refreshReviewRequests()
     refreshRepoPrCounts()
   }, [
     refreshDiagnostics,
+    refreshAgentProviderCatalog,
     refreshRepoPrCounts,
     refreshRepositories,
     refreshProviders,
@@ -1616,7 +1626,10 @@ export function App() {
       ) : screen === "review" ? (
         selectedReviewSubject ? (
           <ReviewScreen
-            aiAgentAvailable={diagnostics.codingAgentInstalled || isLoadingDiagnostics}
+            aiAgentAvailable={
+              walkthroughAvailable(agentProviderCatalog) ||
+              Result.isWaiting(agentProviderCatalogResult)
+            }
             aiSettings={aiSettings}
             parsedDiff={selectedDiff}
             repositoryLinkState={reviewRepositoryLinkState}
@@ -2753,14 +2766,7 @@ const missingPrerequisiteRows = (diagnostics: AppDiagnostics) =>
 
 const installedCodingAgentDetail = (agents: readonly string[]) => {
   if (agents.length === 0) return "No supported coding agent was found in PATH."
-  return `Detected ${agents.map(codingAgentLabel).join(", ")}.`
-}
-
-const codingAgentLabel = (agent: string) => {
-  if (agent === "codex") return "Codex"
-  if (agent === "claude") return "Claude"
-  if (agent === "opencode") return "OpenCode"
-  return agent
+  return `Detected ${agents.length} available agent provider${agents.length === 1 ? "" : "s"}.`
 }
 
 const PullRequestDetailView = ({
@@ -2804,6 +2810,8 @@ const PullRequestDetailView = ({
   readonly onSetViewed: (reviewKey: string, viewed: boolean) => void
   readonly onToggleExpanded: (reviewKey: string) => void
 }) => {
+  const agentProviderCatalogResult = useAtomValue(agentProviderCatalogAtom)
+  const agentProviderCatalog = resultValue(agentProviderCatalogResult, EMPTY_AGENT_PROVIDER_CATALOG)
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
   const stickyReviewChromeRef = useRef<HTMLDivElement>(null)
   const lastAutoScrolledPathRef = useRef<string | null>(null)
@@ -3392,13 +3400,30 @@ const PullRequestDetailView = ({
               </p>
             ) : null}
             {sidebarTab === "walkthrough" ? (
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
-                  {aiProviderLabel(aiSettings.routes.walkthrough)} /{" "}
-                  {selectedAIModelLabel(aiSettings)}
+              <>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
+                    {aiProviderLabel(aiSettings.routes.walkthrough, agentProviderCatalog)} /{" "}
+                    {selectedAIModelLabel(aiSettings, agentProviderCatalog)}
+                  </div>
+                  <WalkthroughSettingsMenu
+                    catalog={agentProviderCatalog}
+                    settings={aiSettings}
+                    onChange={onAISettingsChange}
+                  />
                 </div>
-                <WalkthroughSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
-              </div>
+                {walkthroughUnavailableReason(
+                  aiSettings.routes.walkthrough,
+                  agentProviderCatalog,
+                ) === null ? null : (
+                  <p className="text-caption text-review-sidebar-muted leading-4">
+                    {walkthroughUnavailableReason(
+                      aiSettings.routes.walkthrough,
+                      agentProviderCatalog,
+                    )}
+                  </p>
+                )}
+              </>
             ) : null}
           </div>
 
@@ -3993,17 +4018,20 @@ const reviewActionIcon = (id: string) => {
 }
 
 const WalkthroughSettingsMenu = ({
+  catalog,
   settings,
   onChange,
 }: {
+  readonly catalog: AgentProviderCatalog
   readonly settings: AISettings
   readonly onChange: (settings: AISettings) => void
 }) => {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const route = settings.routes.walkthrough
-  const selectedModel = selectedModelForProvider(settings, route)
-  const modelOptions = modelOptionsForProvider(route)
+  const providerOptions = walkthroughProviderOptions(catalog, route)
+  const selectedModel = selectedModelForProvider(settings, route, catalog)
+  const modelOptions = modelOptionsForProvider(route, catalog)
 
   useEffect(() => {
     if (!open) return undefined
@@ -4047,12 +4075,15 @@ const WalkthroughSettingsMenu = ({
             <div className="text-caption text-review-sidebar-muted px-2 font-semibold tracking-wide uppercase">
               Agent
             </div>
-            {AI_PROVIDER_OPTIONS.map((option) => (
+            {providerOptions.map((option) => (
               <WalkthroughSettingsMenuItem
                 key={option.provider}
                 label={option.label}
+                detail={option.reason}
                 selected={route === option.provider}
-                onSelect={() => onChange(aiSettingsWithProvider(settings, option.provider))}
+                onSelect={() =>
+                  onChange(aiSettingsWithProvider(settings, option.provider, catalog))
+                }
               />
             ))}
           </div>
@@ -4077,10 +4108,12 @@ const WalkthroughSettingsMenu = ({
 }
 
 const WalkthroughSettingsMenuItem = ({
+  detail,
   label,
   selected,
   onSelect,
 }: {
+  readonly detail?: string | null
   readonly label: string
   readonly selected: boolean
   readonly onSelect: () => void
@@ -4096,16 +4129,31 @@ const WalkthroughSettingsMenuItem = ({
     }`}
     onClick={onSelect}
   >
-    <span className="truncate">{label}</span>
+    <span className="min-w-0">
+      <span className="block truncate">{label}</span>
+      {detail === undefined || detail === null ? null : (
+        <span className="text-caption block text-pretty opacity-75">{detail}</span>
+      )}
+    </span>
     {selected ? <Check className="size-3" /> : null}
   </button>
 )
 
-const aiSettingsWithProvider = (settings: AISettings, provider: AICapabilityRoute) =>
-  AISettings.make({
+const aiSettingsWithProvider = (
+  settings: AISettings,
+  provider: AICapabilityRoute,
+  catalog: AgentProviderCatalog,
+) => {
+  const defaultModel = providerStatus(catalog, provider)?.defaults.walkthroughModel
+  return AISettings.make({
     ...settings,
     routes: { ...settings.routes, walkthrough: provider },
+    models:
+      provider === "auto" || settings.models[provider] !== undefined || defaultModel == null
+        ? settings.models
+        : { ...settings.models, [provider]: defaultModel },
   })
+}
 
 const aiSettingsWithModel = (settings: AISettings, model: string) => {
   const route = settings.routes.walkthrough
@@ -4116,7 +4164,7 @@ const aiSettingsWithModel = (settings: AISettings, model: string) => {
     })
   }
 
-  if (route !== "auto" && modelOptionsForProvider(route).some((option) => option.model === model)) {
+  if (route !== "auto") {
     return AISettings.make({
       ...settings,
       models: { ...settings.models, [route]: model },
@@ -4126,20 +4174,93 @@ const aiSettingsWithModel = (settings: AISettings, model: string) => {
   return settings
 }
 
-const aiProviderLabel = (provider: AICapabilityRoute) =>
-  AI_PROVIDER_OPTIONS.find((option) => option.provider === provider)?.label ?? provider
+const aiProviderLabel = (provider: AICapabilityRoute, catalog: AgentProviderCatalog) =>
+  provider === "auto" ? "Auto" : (providerStatus(catalog, provider)?.displayName ?? provider)
 
-const selectedAIModelLabel = (settings: AISettings) => {
+const selectedAIModelLabel = (settings: AISettings, catalog: AgentProviderCatalog) => {
   const route = settings.routes.walkthrough
-  const selectedModel = selectedModelForProvider(settings, route)
+  const selectedModel = selectedModelForProvider(settings, route, catalog)
   return (
-    modelOptionsForProvider(route).find((option) => option.model === selectedModel)?.label ??
-    selectedModel
+    modelOptionsForProvider(route, catalog).find((option) => option.model === selectedModel)
+      ?.label ?? selectedModel
   )
 }
 
 const isAutoQuality = (model: string): model is AutoQuality =>
-  AUTO_MODEL_OPTIONS.some((option) => option.model === model)
+  model === "best" || model === "balanced" || model === "fast"
+
+const autoModelOptions = [
+  { model: "best", label: "Best" },
+  { model: "balanced", label: "Balance" },
+  { model: "fast", label: "Fast" },
+] as const
+
+const providerStatus = (catalog: AgentProviderCatalog, provider: AICapabilityRoute) =>
+  catalog.providers.find(({ id }) => id === provider)
+
+const walkthroughProviderOptions = (
+  catalog: AgentProviderCatalog,
+  selectedRoute: AICapabilityRoute,
+) => {
+  const options = catalog.providers
+    .filter((provider) =>
+      provider.capabilities.some(
+        ({ capability, status }) => capability === "walkthrough" && status !== "unsupported",
+      ),
+    )
+    .map((provider) => ({
+      provider: provider.id,
+      label: provider.displayName,
+      reason: walkthroughUnavailableReason(provider.id, catalog),
+    }))
+  if (selectedRoute !== "auto" && !options.some(({ provider }) => provider === selectedRoute)) {
+    options.push({
+      provider: selectedRoute,
+      label: selectedRoute,
+      reason: "This saved provider is not currently registered.",
+    })
+  }
+  return [{ provider: "auto", label: "Auto", reason: null }, ...options]
+}
+
+const modelOptionsForProvider = (provider: AICapabilityRoute, catalog: AgentProviderCatalog) =>
+  provider === "auto"
+    ? autoModelOptions
+    : (providerStatus(catalog, provider)?.models ?? [])
+        .filter(({ capabilities }) => capabilities.includes("walkthrough"))
+        .map(({ id, displayName }) => ({ model: id, label: displayName }))
+
+const selectedModelForProvider = (
+  settings: AISettings,
+  provider: AICapabilityRoute,
+  catalog: AgentProviderCatalog,
+) =>
+  provider === "auto"
+    ? settings.autoQuality
+    : (settings.models[provider] ??
+      providerStatus(catalog, provider)?.defaults.walkthroughModel ??
+      "")
+
+const walkthroughUnavailableReason = (route: AICapabilityRoute, catalog: AgentProviderCatalog) => {
+  if (route === "auto") {
+    return walkthroughAvailable(catalog)
+      ? null
+      : "No automatic walkthrough provider is currently available."
+  }
+  const provider = providerStatus(catalog, route)
+  if (provider === undefined) return "This saved provider is not currently registered."
+  const walkthrough = provider.capabilities.find(({ capability }) => capability === "walkthrough")
+  return walkthrough?.status === "ready"
+    ? null
+    : (walkthrough?.reason ?? "This provider is currently unavailable for walkthroughs.")
+}
+
+const walkthroughAvailable = (catalog: AgentProviderCatalog) =>
+  catalog.providers.some((provider) =>
+    provider.capabilities.some(
+      ({ capability, status }) => capability === "walkthrough" && status === "ready",
+    ),
+  )
 
 const SidebarMessage = ({
   action,

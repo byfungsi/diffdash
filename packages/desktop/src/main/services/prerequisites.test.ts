@@ -25,6 +25,14 @@ import {
   resolveExecutableInPath,
 } from "./prerequisites"
 import { GitProvider } from "./git-provider"
+import { AgentProviders } from "./agent-providers"
+import {
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderStatus,
+} from "@diffdash/protocol/agent-providers"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -96,6 +104,7 @@ const makeLayer = (
   Prerequisites.layer.pipe(
     Layer.provideMerge(fakeCliLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
+    Layer.provideMerge(fakeAgentProvidersLayer(options)),
     Layer.provide(
       AppConfig.layer({
         ...(options.appImagePath === undefined ? {} : { appImagePath: options.appImagePath }),
@@ -460,6 +469,44 @@ const fakeGitProviderLayer = (options: {
     }),
   )
 }
+
+const fakeAgentProvidersLayer = (options: { readonly availableCommands: ReadonlySet<string> }) =>
+  Layer.succeed(
+    AgentProviders,
+    AgentProviders.of({
+      catalog: Effect.succeed(
+        AgentProviderCatalog.make({
+          providers: ["claude", "codex", "opencode"].map((id) => {
+            const ready = options.availableCommands.has(id)
+            return AgentProviderStatus.make({
+              id,
+              displayName: id,
+              description: `${id} fixture`,
+              homepage: null,
+              capabilities: [
+                AgentProviderCapabilityStatus.make({
+                  capability: "walkthrough",
+                  status: ready ? "ready" : "unavailable",
+                  runtimeVersion: ready ? "1.0.0" : null,
+                  reason: ready ? null : `${id} is unavailable`,
+                }),
+              ],
+              models: [],
+              defaults: AgentProviderDefaults.make({
+                walkthroughModel: null,
+                reviewThreadModel: null,
+              }),
+              setup: [],
+            })
+          }),
+          autoCandidates: AgentProviderAutoCandidates.make({
+            walkthrough: ["claude", "codex", "opencode"],
+            reviewThread: ["claude", "codex", "opencode"],
+          }),
+        }),
+      ),
+    }),
+  )
 
 const fakeCliLayer = (options: {
   readonly availableCommands: ReadonlySet<string>

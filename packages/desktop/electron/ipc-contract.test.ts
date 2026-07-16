@@ -9,6 +9,7 @@ const EXPECTED_INVOKE_CHANNELS = Object.values(InvokeChannel)
 const EXPECTED_EVENT_CHANNELS = Object.values(EventChannel)
 
 const EXPECTED_PRELOAD_OPERATIONS = [
+  "agentProviders.getCatalog => agentProviders:getCatalog()",
   "analytics.capture => analytics:capture(event)",
   "analytics.start => analytics:start()",
   "appState.get => appState:get()",

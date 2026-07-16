@@ -3,6 +3,7 @@ import type { IpcRendererEvent } from "electron"
 
 import type { AppState } from "@diffdash/domain/app-state"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
+import type { AgentProviderCatalog } from "@diffdash/protocol/agent-providers"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
@@ -92,6 +93,9 @@ const api: DiffDashApi = {
     },
   },
   diagnostics: () => invoke<AppPrerequisites>(InvokeChannel.appDiagnostics),
+  agentProviders: {
+    getCatalog: () => invoke<AgentProviderCatalog>(InvokeChannel.agentProvidersGetCatalog),
+  },
   installDiffDashCli: () => invoke<DiffDashCliInstallResult>(InvokeChannel.appInstallDiffDashCli),
   openExternalUrl: (url: string) => invoke<void>(InvokeChannel.appOpenExternalUrl, url),
   openRepositoryFile: (request: OpenHostedReviewFileRequest) =>

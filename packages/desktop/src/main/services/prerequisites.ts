@@ -18,14 +18,13 @@ import { homedir } from "node:os"
 
 import {
   AppPrerequisites,
-  type CodingAgentName,
   DiffDashCliInstallResult,
   ProviderDiagnostic,
   SetupRequirement,
 } from "@diffdash/protocol/prerequisites"
-import { probeCodexCapability } from "@diffdash/agent-provider-codex"
-import { probeClaudeCapability } from "@diffdash/agent-provider-claude"
+import type { AgentProviderStatus } from "@diffdash/protocol/agent-providers"
 import { AppConfig } from "./app-config"
+import { AgentProviders } from "./agent-providers"
 import { CliService, type CliRunner } from "@diffdash/process/cli"
 import { resolveExecutableInPath } from "@diffdash/process/executable"
 import { GitProvider } from "./git-provider"
@@ -55,18 +54,22 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
       const cli = yield* CliService
       const config = yield* AppConfig
       const gitProvider = yield* GitProvider
+      const agentProviders = yield* AgentProviders
       const get = Effect.fn("Prerequisites.get")(function* () {
         refreshAppImageCliLaunchers(config.diffDashCliPath, config.appImagePath)
-        const [gitInstalled, providerDescriptors, providerDiagnostics, installedCodingAgents] =
+        const [gitInstalled, providerDescriptors, providerDiagnostics, agentCatalog] =
           yield* Effect.all(
             [
               commandAvailable(cli, "git"),
               gitProvider.listProviders,
               gitProvider.diagnoseProviders,
-              installedCodingAgentNames(cli),
+              agentProviders.catalog,
             ],
             { concurrency: "unbounded" },
           )
+        const installedCodingAgents = agentCatalog.providers
+          .filter((provider) => provider.capabilities.some(({ status }) => status === "ready"))
+          .map(({ id }) => id)
         const diffDashCliInPath = resolveExecutableInPath("diffdash", {
           envPath: process.env.PATH ?? "",
         })
@@ -92,23 +95,28 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
               ? []
               : [ProviderDiagnostic.make({ descriptor, diagnostic })]
           }),
-          setupRequirements: providerDescriptors.map((descriptor) => {
-            const diagnostic = providerDiagnostics.find((item) => item.providerId === descriptor.id)
-            const ready = diagnostic?.available === true && diagnostic.authenticated
-            return SetupRequirement.make({
-              key: `provider:${descriptor.id}`,
-              providerId: descriptor.id,
-              title: `${descriptor.displayName} ready`,
-              description: `Connect ${descriptor.displayName} to search ${descriptor.terminology.repositoryPlural} and review ${descriptor.terminology.reviewPlural}.`,
-              detail: ready
-                ? `${descriptor.displayName} is available and authenticated.`
-                : (diagnostic?.message ??
-                  `${descriptor.displayName} needs setup or authentication.`),
-              ready,
-              requiredForLocalUse: false,
-              helpUrl: null,
-            })
-          }),
+          setupRequirements: [
+            ...providerDescriptors.map((descriptor) => {
+              const diagnostic = providerDiagnostics.find(
+                (item) => item.providerId === descriptor.id,
+              )
+              const ready = diagnostic?.available === true && diagnostic.authenticated
+              return SetupRequirement.make({
+                key: `provider:${descriptor.id}`,
+                providerId: descriptor.id,
+                title: `${descriptor.displayName} ready`,
+                description: `Connect ${descriptor.displayName} to search ${descriptor.terminology.repositoryPlural} and review ${descriptor.terminology.reviewPlural}.`,
+                detail: ready
+                  ? `${descriptor.displayName} is available and authenticated.`
+                  : (diagnostic?.message ??
+                    `${descriptor.displayName} needs setup or authentication.`),
+                ready,
+                requiredForLocalUse: false,
+                helpUrl: null,
+              })
+            }),
+            ...agentCatalog.providers.map(agentSetupRequirement),
+          ],
         })
       })
       const install = Effect.fn("Prerequisites.installDiffDashCli")(function () {
@@ -123,30 +131,32 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
   )
 }
 
-const CODING_AGENT_NAMES: readonly CodingAgentName[] = ["codex", "claude", "opencode"]
-
 const commandAvailable = (cli: CliRunner, command: string) =>
   cli.run(command, ["--version"], { timeoutMs: 5_000 }).pipe(
     Effect.as(true),
     Effect.catchAll(() => Effect.succeed(false)),
   )
 
-const installedCodingAgentNames = (cli: CliRunner) =>
-  Effect.all(
-    CODING_AGENT_NAMES.map((agent) =>
-      (agent === "codex" || agent === "claude"
-        ? (agent === "codex"
-            ? probeCodexCapability(cli, "walkthrough")
-            : probeClaudeCapability(cli, "walkthrough")
-          ).pipe(
-            Effect.map(({ _tag: tag }) => tag === "AgentCapabilityReady"),
-            Effect.catchAll(() => Effect.succeed(false)),
-          )
-        : commandAvailable(cli, agent)
-      ).pipe(Effect.map((installed) => (installed ? agent : null))),
-    ),
-    { concurrency: "unbounded" },
-  ).pipe(Effect.map((agents) => agents.filter(isNonNull)))
+const agentSetupRequirement = (provider: AgentProviderStatus) => {
+  const supported = provider.capabilities.filter(({ status }) => status !== "unsupported")
+  const ready = supported.length > 0 && supported.every(({ status }) => status === "ready")
+  const unavailable = supported.find(({ status }) => status !== "ready")
+  const setupHint = provider.setup.find(
+    (requirement) => requirement.installHint !== null,
+  )?.installHint
+  return SetupRequirement.make({
+    key: `agent-provider:${provider.id}`,
+    providerId: provider.id,
+    title: `${provider.displayName} ready`,
+    description: provider.description,
+    detail: ready
+      ? `${provider.displayName} is available.`
+      : (unavailable?.reason ?? setupHint ?? `${provider.displayName} needs setup.`),
+    ready,
+    requiredForLocalUse: false,
+    helpUrl: provider.homepage,
+  })
+}
 
 const APPIMAGE_LAUNCHER_MARKER = "# Generated by the DiffDash AppImage CLI installer."
 
@@ -337,5 +347,3 @@ const canWriteDirectory = (directory: string) => {
     return false
   }
 }
-
-const isNonNull = <A>(value: A | null): value is A => value !== null

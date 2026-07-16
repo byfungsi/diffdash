@@ -37,6 +37,16 @@ import {
 } from "@diffdash/domain/git-provider"
 import { AppPrerequisites, SetupRequirement } from "@diffdash/protocol/prerequisites"
 import {
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderModel,
+  AgentProviderSetupRequirement,
+  AgentProviderStatus,
+  EMPTY_AGENT_PROVIDER_CATALOG,
+} from "@diffdash/protocol/agent-providers"
+import {
   BranchComparison,
   LocalReviewTarget,
   workingTreeReviewTarget,
@@ -430,6 +440,58 @@ const readyPrerequisites = AppPrerequisites.make({
   installedCodingAgents: ["codex"],
 })
 
+const readyAgentProviderCatalog = AgentProviderCatalog.make({
+  providers: [
+    ["codex", "Codex", "gpt-5.3-codex-spark", "GPT 5.3 Codex Spark"],
+    ["claude", "Claude", "claude-sonnet-5", "Sonnet 5.0"],
+    ["opencode", "OpenCode", "openai/gpt-5.3-codex-spark", "GPT 5.3 Codex Spark"],
+  ].map(([id, displayName, model, modelName]) =>
+    AgentProviderStatus.make({
+      id: id ?? "",
+      displayName: displayName ?? "",
+      description: `${displayName} provider`,
+      homepage: null,
+      capabilities: [
+        AgentProviderCapabilityStatus.make({
+          capability: "walkthrough",
+          status: "ready",
+          runtimeVersion: "1.0.0",
+          reason: null,
+        }),
+        AgentProviderCapabilityStatus.make({
+          capability: "review-thread",
+          status: "ready",
+          runtimeVersion: "1.0.0",
+          reason: null,
+        }),
+      ],
+      models: [
+        AgentProviderModel.make({
+          id: model ?? "",
+          displayName: modelName ?? "",
+          capabilities: ["walkthrough", "review-thread"],
+          quality: "balanced",
+        }),
+      ],
+      defaults: AgentProviderDefaults.make({
+        walkthroughModel: model ?? null,
+        reviewThreadModel: model ?? null,
+      }),
+      setup: [
+        AgentProviderSetupRequirement.make({
+          name: id ?? "",
+          versionRange: null,
+          installHint: null,
+        }),
+      ],
+    }),
+  ),
+  autoCandidates: AgentProviderAutoCandidates.make({
+    walkthrough: ["claude", "codex", "opencode"],
+    reviewThread: ["claude", "codex", "opencode"],
+  }),
+})
+
 const missingPrerequisites = AppPrerequisites.make({
   checkedAt: "2026-07-08T00:00:00Z",
   codingAgentInstalled: false,
@@ -601,7 +663,9 @@ describe("App browser interactions", () => {
       expect(document.body.textContent).toContain("Finish setup")
       expect(document.body.textContent).toContain("git was not found in PATH")
       expect(document.body.textContent).toContain("GitHub needs setup or authentication")
-      expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
+      expect(document.body.textContent).toContain(
+        "Walkthroughs require an available agent provider",
+      )
     })
 
     const authDocsButton = [...document.querySelectorAll("button")].find(
@@ -761,7 +825,10 @@ describe("App browser interactions", () => {
   })
 
   it("disables the walkthrough tab when no coding agent is installed", async () => {
-    const calls = installDiffDashApi({ diagnostics: noAgentPrerequisites })
+    const calls = installDiffDashApi({
+      diagnostics: noAgentPrerequisites,
+      agentProviderCatalog: EMPTY_AGENT_PROVIDER_CATALOG,
+    })
     renderApp()
 
     await vi.waitFor(() => {
@@ -775,7 +842,9 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Opened PR #51")
-      expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
+      expect(document.body.textContent).toContain(
+        "Walkthroughs require an available agent provider",
+      )
     })
 
     const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -785,6 +854,54 @@ describe("App browser interactions", () => {
     expect(walkthroughTab?.disabled).toBe(true)
     walkthroughTab?.click()
     expect(calls.getWalkthrough).not.toHaveBeenCalled()
+  })
+
+  it("preserves an unavailable explicit provider route and shows its probe reason", async () => {
+    const unavailableReason = "Claude authentication is required."
+    const catalog = AgentProviderCatalog.make({
+      ...readyAgentProviderCatalog,
+      providers: readyAgentProviderCatalog.providers.map((provider) =>
+        provider.id === "claude"
+          ? AgentProviderStatus.make({
+              ...provider,
+              capabilities: provider.capabilities.map((capability) =>
+                capability.capability === "walkthrough"
+                  ? AgentProviderCapabilityStatus.make({
+                      ...capability,
+                      status: "unavailable",
+                      runtimeVersion: null,
+                      reason: unavailableReason,
+                    })
+                  : capability,
+              ),
+            })
+          : provider,
+      ),
+    })
+    installDiffDashApi({
+      agentProviderCatalog: catalog,
+      settings: AISettings.make({
+        ...DEFAULT_AI_SETTINGS,
+        routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+      }),
+    })
+    renderApp()
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+    const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+      button.getAttribute("aria-label")?.includes("Open requested review #51"),
+    )
+    reviewButton?.click()
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
+    const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Walkthrough",
+    )
+    walkthroughTab?.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Claude / Sonnet 5.0")
+      expect(document.body.textContent).toContain(unavailableReason)
+    })
   })
 
   it("explains sampled coverage for unusually large walkthroughs", async () => {
@@ -1875,6 +1992,7 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
 const installDiffDashApi = (
   options: {
     readonly appState?: AppState
+    readonly agentProviderCatalog?: AgentProviderCatalog
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
     readonly pullRequestDetail?: PullRequestDetail
@@ -2038,6 +2156,9 @@ const installDiffDashApi = (
       },
     },
     diagnostics: async () => diagnostics,
+    agentProviders: {
+      getCatalog: async () => options.agentProviderCatalog ?? readyAgentProviderCatalog,
+    },
     installDiffDashCli: calls.installDiffDashCli,
     openExternalUrl: calls.openExternalUrl,
     openLocalRepositoryFile: calls.openLocalRepositoryFile,

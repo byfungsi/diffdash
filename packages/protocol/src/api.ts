@@ -1,4 +1,5 @@
 import type { AISettings } from "@diffdash/domain/ai-settings"
+import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppState } from "@diffdash/domain/app-state"
 import type { AppUpdateState } from "./app-update"
@@ -66,6 +67,9 @@ export interface DiffDashApi {
     readonly onCommandsAvailable: (listener: () => void) => () => void
   }
   readonly diagnostics: () => Promise<AppPrerequisites>
+  readonly agentProviders: {
+    readonly getCatalog: () => Promise<AgentProviderCatalog>
+  }
   readonly installDiffDashCli: () => Promise<DiffDashCliInstallResult>
   readonly openExternalUrl: (url: string) => Promise<void>
   readonly openRepositoryFile: (request: OpenHostedReviewFileRequest) => Promise<void>

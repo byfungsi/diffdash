@@ -28,6 +28,14 @@ export interface AgentAutoRoutingPolicies {
   readonly reviewThread: readonly AgentProviderId[]
 }
 
+/** Derives independent automatic routes from manifest capability priorities. */
+export const agentAutoRoutingPolicies = (
+  registrations: readonly AgentProviderRegistration[],
+): AgentAutoRoutingPolicies => ({
+  walkthrough: orderedAutoCandidates(registrations, "walkthrough"),
+  reviewThread: orderedAutoCandidates(registrations, "reviewThread"),
+})
+
 /** No automatic candidate can safely serve a capability. */
 export class NoAgentProviderAvailableError extends Schema.TaggedError<NoAgentProviderAvailableError>()(
   "NoAgentProviderAvailableError",
@@ -106,6 +114,21 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
       }),
     )
 }
+
+const orderedAutoCandidates = (
+  registrations: readonly AgentProviderRegistration[],
+  capability: "walkthrough" | "reviewThread",
+): readonly AgentProviderId[] =>
+  [...registrations]
+    .flatMap((registration) => {
+      const declaration = registration.manifest.capabilities[capability]
+      return declaration.supported && declaration.autoPriority !== null
+        ? [{ id: registration.manifest.descriptor.id, priority: declaration.autoPriority }]
+        : []
+    })
+    // oxlint-disable-next-line unicorn/no-array-sort -- ES2022 is required by Electron's build target.
+    .sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id))
+    .map(({ id }) => id)
 
 const capabilityResolver = <Capability extends WalkthroughCapability | ReviewThreadCapability>(
   capabilityName: "walkthrough" | "review-thread",

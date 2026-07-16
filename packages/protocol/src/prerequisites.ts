@@ -5,8 +5,8 @@ import {
   GitProviderId,
 } from "@diffdash/domain/git-provider"
 
-/** CLI coding agents that can power walkthrough generation. */
-export const CodingAgentName = Schema.Literal("codex", "claude", "opencode")
+/** Open registered agent-provider identity retained for legacy diagnostic consumers. */
+export const CodingAgentName = Schema.String.pipe(Schema.minLength(1))
 
 /** CLI coding agent name. */
 export type CodingAgentName = typeof CodingAgentName.Type
@@ -20,7 +20,7 @@ export class ProviderDiagnostic extends Schema.Class<ProviderDiagnostic>("Provid
 /** One advisory setup item; hosted-provider items never block local-only use. */
 export class SetupRequirement extends Schema.Class<SetupRequirement>("SetupRequirement")({
   key: Schema.String,
-  providerId: Schema.NullOr(GitProviderId),
+  providerId: Schema.NullOr(Schema.Union(GitProviderId, Schema.String.pipe(Schema.minLength(1)))),
   title: Schema.String,
   description: Schema.String,
   detail: Schema.String,

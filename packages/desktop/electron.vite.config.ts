@@ -20,6 +20,7 @@ const internalPackages = [
   "@diffdash/agent-provider/registry",
   "@diffdash/agent-provider-claude",
   "@diffdash/agent-provider-codex",
+  "@diffdash/agent-provider-fixture",
   "@diffdash/agent-provider-opencode",
   "@diffdash/app",
   "@diffdash/domain",
