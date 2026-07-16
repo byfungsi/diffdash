@@ -73,6 +73,7 @@ test("browser packages bundle without platform dependencies", async () => {
   await Promise.all(
     [
       "packages/domain/src/repository.ts",
+      "packages/git-provider/src/registry.ts",
       "packages/protocol/src/api.ts",
       "packages/app/src/index.ts",
     ].map((entryPoint) =>

@@ -39,6 +39,10 @@ versioned database fixtures. Its layer receives the database path from desktop c
 workspace source is bundled while the native `better-sqlite3` dependency remains external and
 unpacked for Electron.
 
+`@diffdash/git-provider` defines the hosted Git extension contract, multi-instance registry, typed
+errors, and reusable provider conformance suite. Concrete providers are leaf packages imported only
+by desktop composition; contributor dependency rules are documented in `docs/providers.md`.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;
