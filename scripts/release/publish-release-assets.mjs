@@ -11,7 +11,12 @@ import {
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
-import { assertTagMatchesVersion, createLatestMetadata, runWithRetries } from "./release-policy.mjs"
+import {
+  assertTagMatchesVersion,
+  createLatestMetadata,
+  runWithRetries,
+  selectReleaseArtifacts,
+} from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
@@ -135,29 +140,22 @@ function writeLatestJson() {
 }
 
 function validateUpdaterAssets(files) {
-  const requiredFiles = ["latest-mac-arm64.yml", "latest-mac-x64.yml", "latest-linux.yml"]
-  for (const file of requiredFiles) {
-    if (!files.includes(file)) throw new Error(`Missing required updater metadata: ${file}`)
-  }
-
-  const macArchitectures = ["arm64", "x64"]
-  for (const arch of macArchitectures) {
-    const zip = files.find((file) => file.endsWith(`-mac-${arch}.zip`))
-    if (zip === undefined) throw new Error(`Missing macOS ${arch} updater ZIP.`)
-    const metadata = readFileSync(path.join(assetsDir, `latest-mac-${arch}.yml`), "utf8")
+  const selected = selectReleaseArtifacts(files, tag)
+  for (const arch of ["arm64", "x64"]) {
+    const zip = selected[arch === "arm64" ? "macArm64Zip" : "macX64Zip"]
+    const metadataName = selected[arch === "arm64" ? "macArm64Metadata" : "macX64Metadata"]
+    const metadata = readFileSync(path.join(assetsDir, metadataName), "utf8")
     if (!metadata.includes(`version: ${version}`) || !metadata.includes(zip)) {
       throw new Error(`macOS ${arch} updater metadata does not reference ${zip}.`)
     }
   }
 
-  const appImage = files.find(
-    (file) =>
-      (file.includes("-linux-x64") || file.includes("-linux-x86_64")) && file.endsWith(".AppImage"),
-  )
-  if (appImage === undefined) throw new Error("Missing Linux x64 AppImage.")
-  const linuxMetadata = readFileSync(path.join(assetsDir, "latest-linux.yml"), "utf8")
-  if (!linuxMetadata.includes(`version: ${version}`) || !linuxMetadata.includes(appImage)) {
-    throw new Error(`Linux updater metadata does not reference ${appImage}.`)
+  const linuxMetadata = readFileSync(path.join(assetsDir, selected.linuxMetadata), "utf8")
+  if (
+    !linuxMetadata.includes(`version: ${version}`) ||
+    !linuxMetadata.includes(selected.linuxAppImage)
+  ) {
+    throw new Error(`Linux updater metadata does not reference ${selected.linuxAppImage}.`)
   }
 }
 
@@ -166,7 +164,7 @@ function publishGithubRelease() {
     mkdtempSync(path.join(tmpdir(), "diffdash-release-notes-")),
     "release-notes.md",
   )
-  const notes = execFileSync("node", ["scripts/extract-release-notes.mjs", tag], {
+  const notes = execFileSync("node", ["scripts/release/extract-release-notes.mjs", tag], {
     encoding: "utf8",
   })
   writeFileSync(notesPath, notes)

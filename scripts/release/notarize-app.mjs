@@ -10,7 +10,7 @@ const appPathArg = args.find((arg) => !arg.startsWith("--"))
 
 if (appPathArg === undefined) {
   throw new Error(
-    "Usage: node scripts/notarize-app.mjs <path-to-app> [--submission-id ID] [--timeout-minutes N] [--poll-seconds N]",
+    "Usage: node scripts/release/notarize-app.mjs <path-to-app> [--submission-id ID] [--timeout-minutes N] [--poll-seconds N]",
   )
 }
 

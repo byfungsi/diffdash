@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 const tag = process.argv[2]
 
 if (tag === undefined || tag.trim().length === 0) {
-  throw new Error("Usage: node scripts/extract-release-notes.mjs <tag>")
+  throw new Error("Usage: node scripts/release/extract-release-notes.mjs <tag>")
 }
 
 const version = tag.trim().replace(/^v/, "")

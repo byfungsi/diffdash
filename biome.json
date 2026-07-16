@@ -10,6 +10,7 @@
       "!**/.turbo",
       "!**/coverage",
       "!**/test-results",
+      "!**/release-assets",
       "!demo/.cache",
       "!media/.cache",
       "!media/output",

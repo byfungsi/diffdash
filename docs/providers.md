@@ -45,7 +45,7 @@ A future GitLab integration requires:
 2. Its package dependency and one registration in desktop composition.
 
 It must not require changes to persistence, renderer business logic, protocol routing, the SDK
-registry, or an existing concrete provider. `scripts/package-boundaries.test.mjs` discovers all
+registry, or an existing concrete provider. `scripts/build/package-boundaries.test.mjs` discovers all
 `@diffdash/git-provider-*` packages and enforces that leaf and composition boundary.
 
 ## Worktree Manifest Migration

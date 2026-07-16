@@ -6,7 +6,7 @@ import test from "node:test"
 
 import { build } from "esbuild"
 
-const root = resolve(import.meta.dirname, "..")
+const root = resolve(import.meta.dirname, "../..")
 const workspaceDirectories = ["packages", "tools"].flatMap((parent) =>
   readdirSync(join(root, parent)).map((name) => join(root, parent, name)),
 )

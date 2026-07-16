@@ -102,7 +102,7 @@ for (const arch of archs) {
     console.log(`Skipping notarization for ${appPath}`)
   } else {
     console.log(`Notarizing and stapling ${appPath}`)
-    const notarizeArgs = ["scripts/notarize-app.mjs", appPath]
+    const notarizeArgs = ["scripts/release/notarize-app.mjs", appPath]
     if (submissionId !== undefined) {
       notarizeArgs.push("--submission-id", submissionId)
     }

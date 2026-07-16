@@ -115,13 +115,13 @@ Never print or commit env values. `.env`, `.p12`, and `.p8` files are ignored an
 - Builds the host macOS architecture by default.
 - Supports `-- --arch arm64`, `-- --arch x64`, or `-- --arch all`.
 - Builds a signed `.app` with Electron Builder.
-- Notarizes with `scripts/notarize-app.mjs`, which shows status polling and retries transient status read failures.
+- Notarizes with `scripts/release/notarize-app.mjs`, which shows status polling and retries transient status read failures.
 - Staples the accepted notarization ticket.
 - Packages the stapled app into a DMG and updater ZIP.
 - Verifies `codesign`, Gatekeeper assessment, and stapling.
 - Copies DMGs, ZIPs, blockmaps, and architecture-specific updater metadata into `release-assets/`.
 - Supports `-- --package-existing --skip-notarize --arch <arch>` only for recovery after an existing app has already been stapled and validated.
-- `scripts/notarize-app.mjs` supports `--submission-id <id>` to resume polling/stapling an existing Apple notarization submission without rebuilding or resubmitting.
+- `scripts/release/notarize-app.mjs` supports `--submission-id <id>` to resume polling/stapling an existing Apple notarization submission without rebuilding or resubmitting.
 
 `pnpm release:local:linux`:
 

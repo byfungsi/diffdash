@@ -43,14 +43,14 @@ if (tagCommit !== headCommit) {
   console.warn(`Warning: ${message}`)
 }
 
-run("node", ["scripts/extract-release-notes.mjs", tag])
+run("node", ["scripts/release/extract-release-notes.mjs", tag])
 
 if (!skipChecks) {
   run("pnpm", ["release:check"])
 }
 
 if (!skipMac) {
-  const macArgs = ["scripts/build-local-mac-release.mjs", "--assets-dir", releaseAssetsDir]
+  const macArgs = ["scripts/release/build-local-mac-release.mjs", "--assets-dir", releaseAssetsDir]
   if (macArch !== undefined && macArch.trim().length > 0) {
     macArgs.push("--arch", macArch)
   }
@@ -58,12 +58,12 @@ if (!skipMac) {
 }
 
 if (!skipLinux) {
-  run("node", ["scripts/build-local-linux-release.mjs", "--assets-dir", releaseAssetsDir])
+  run("node", ["scripts/release/build-local-linux-release.mjs", "--assets-dir", releaseAssetsDir])
 }
 
 if (!skipPublish) {
   run("node", [
-    "scripts/publish-release-assets.mjs",
+    "scripts/release/publish-release-assets.mjs",
     "--tag",
     tag,
     "--assets-dir",

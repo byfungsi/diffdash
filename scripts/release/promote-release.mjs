@@ -3,12 +3,15 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
-import { retainedReleasePrefixes, validateReleaseAssetNames } from "./release-policy.mjs"
+import {
+  createStableMetadata,
+  retainedReleasePrefixes,
+  validateReleaseAssetNames,
+} from "./release-policy.mjs"
 
 const args = process.argv.slice(2)
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const tag = readOption("--tag") ?? `v${packageJson.version}`
-const version = tag.replace(/^v/, "")
 const r2Bucket = requiredEnv("R2_BUCKET")
 const r2Endpoint = `https://${requiredEnv("CLOUDFLARE_ACCOUNT_ID")}.r2.cloudflarestorage.com`
 const awsEnv = {
@@ -52,7 +55,7 @@ validateR2Assets(assetNames)
 const stablePath = path.join(mkdtempSync(path.join(tmpdir(), "diffdash-promote-")), "stable.json")
 writeFileSync(
   stablePath,
-  `${JSON.stringify({ version, tag, promotedAt: new Date().toISOString() }, null, 2)}\n`,
+  `${JSON.stringify(createStableMetadata({ tag, promotedAt: new Date().toISOString() }), null, 2)}\n`,
 )
 
 copyVersionLatestJson()

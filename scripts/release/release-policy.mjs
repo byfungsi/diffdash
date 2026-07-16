@@ -7,21 +7,35 @@ export const assertTagMatchesVersion = (tag, packageVersion) => {
 
 /** Verifies the complete cross-platform stable release asset matrix. */
 export const validateReleaseAssetNames = (names, tag = "release") => {
-  const requirements = [
-    ["macOS ARM64 DMG", (name) => name.endsWith("-mac-arm64.dmg")],
-    ["macOS ARM64 ZIP", (name) => name.endsWith("-mac-arm64.zip")],
-    ["macOS Intel DMG", (name) => name.endsWith("-mac-x64.dmg")],
-    ["macOS Intel ZIP", (name) => name.endsWith("-mac-x64.zip")],
-    ["macOS ARM64 metadata", (name) => name === "latest-mac-arm64.yml"],
-    ["macOS Intel metadata", (name) => name === "latest-mac-x64.yml"],
-    ["Linux x64 AppImage", (name) => /-linux-(?:x64|x86_64)\.AppImage$/u.test(name)],
-    ["Linux updater metadata", (name) => name === "latest-linux.yml"],
-    ["Linux deb", (name) => /-linux-(?:x64|amd64|x86_64)\.deb$/u.test(name)],
-    ["release metadata", (name) => name === "latest.json"],
-    ["checksums", (name) => name === "SHA256SUMS"],
-  ]
-  const missing = requirements.filter(([, matches]) => !names.some(matches)).map(([label]) => label)
+  selectReleaseArtifacts(names, tag)
+  const missing = ["latest.json", "SHA256SUMS"].filter((name) => !names.includes(name))
   if (missing.length > 0) throw new Error(`Release ${tag} is missing: ${missing.join(", ")}`)
+}
+
+const artifactRequirements = {
+  macArm64Dmg: ["macOS ARM64 DMG", (name) => name.endsWith("-mac-arm64.dmg")],
+  macArm64Zip: ["macOS ARM64 ZIP", (name) => name.endsWith("-mac-arm64.zip")],
+  macX64Dmg: ["macOS Intel DMG", (name) => name.endsWith("-mac-x64.dmg")],
+  macX64Zip: ["macOS Intel ZIP", (name) => name.endsWith("-mac-x64.zip")],
+  macArm64Metadata: ["macOS ARM64 metadata", (name) => name === "latest-mac-arm64.yml"],
+  macX64Metadata: ["macOS Intel metadata", (name) => name === "latest-mac-x64.yml"],
+  linuxAppImage: ["Linux x64 AppImage", (name) => /-linux-(?:x64|x86_64)\.AppImage$/u.test(name)],
+  linuxMetadata: ["Linux updater metadata", (name) => name === "latest-linux.yml"],
+  linuxDeb: ["Linux deb", (name) => /-linux-(?:x64|amd64|x86_64)\.deb$/u.test(name)],
+}
+
+/** Selects the deterministic platform artifact matrix used by publishing and promotion. */
+export const selectReleaseArtifacts = (names, tag = "release") => {
+  const sortedNames = names.toSorted((left, right) => left.localeCompare(right))
+  const selected = {}
+  const missing = []
+  for (const [key, [label, matches]] of Object.entries(artifactRequirements)) {
+    const name = sortedNames.find(matches)
+    if (name === undefined) missing.push(label)
+    else selected[key] = name
+  }
+  if (missing.length > 0) throw new Error(`Release ${tag} is missing: ${missing.join(", ")}`)
+  return selected
 }
 
 /** Builds deterministic public metadata from already-hashed release assets. */
@@ -37,6 +51,13 @@ export const createLatestMetadata = ({ tag, baseUrl, generatedAt, assets }) => (
       size: asset.size,
       sha256: asset.sha256,
     })),
+})
+
+/** Builds the stable pointer consumed by the download worker. */
+export const createStableMetadata = ({ tag, promotedAt }) => ({
+  version: tag.replace(/^v/u, ""),
+  tag,
+  promotedAt,
 })
 
 /** Runs one synchronous operation with a fixed bounded retry count. */

@@ -101,7 +101,7 @@ Recovery options:
 
 ```bash
 pnpm release:local:mac -- --package-existing --skip-notarize --arch arm64
-node scripts/notarize-app.mjs packages/desktop/dist/mac-arm64/DiffDash.app --submission-id <id>
+node scripts/release/notarize-app.mjs packages/desktop/dist/mac-arm64/DiffDash.app --submission-id <id>
 ```
 
 Use `--package-existing --skip-notarize` only after `xcrun stapler validate` confirms an existing app is already stapled.
@@ -146,7 +146,7 @@ The local publish script:
 Regenerate metadata without uploading when recovering manually:
 
 ```bash
-node scripts/publish-release-assets.mjs --metadata-only
+node scripts/release/publish-release-assets.mjs --metadata-only
 ```
 
 ## Required Local Configuration
@@ -275,6 +275,20 @@ pnpm release:check
 
 This runs formatting, lint, TypeScript, unit, browser, Electron, packaged Electron, release-policy,
 and download-worker checks.
+
+## Script Ownership And Caching
+
+Repository-wide build/setup checks live in `scripts/build/`. Release orchestration lives in
+`scripts/release/`. Scripts remain inside a package only when they implement that package's own
+build or runtime boundary, such as desktop icon generation and native module rebuilds, persistence
+fixture generation, and packaged-E2E assembly.
+
+Signing, notarization, native rebuilds, installer packaging, GitHub draft creation, R2 upload,
+promotion, deployment, captures, and media rendering are intentionally uncached because they use
+host tools, credentials, external state, or generated binaries. macOS signing/notarization and DMG
+packaging must run on macOS; Linux AppImage/deb packaging runs in the configured Linux Docker
+platform; Windows NSIS must run on Windows. Turbo marks the corresponding package operations as
+uncached, and the repository release commands run directly rather than through Turbo.
 
 ## Operational Evidence Record
 

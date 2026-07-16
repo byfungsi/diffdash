@@ -4,8 +4,10 @@ import test from "node:test"
 import {
   assertTagMatchesVersion,
   createLatestMetadata,
+  createStableMetadata,
   retainedReleasePrefixes,
   runWithRetries,
+  selectReleaseArtifacts,
   validateReleaseAssetNames,
 } from "./release-policy.mjs"
 
@@ -34,6 +36,20 @@ test("requires every stable platform asset and metadata file", () => {
     () => validateReleaseAssetNames(completeAssets.filter((name) => !name.endsWith(".deb"))),
     /Linux deb/u,
   )
+})
+
+test("selects platform artifacts deterministically without renaming them", () => {
+  assert.deepEqual(selectReleaseArtifacts(completeAssets.toReversed(), "v0.3.1"), {
+    macArm64Dmg: "DiffDash-0.3.1-mac-arm64.dmg",
+    macArm64Zip: "DiffDash-0.3.1-mac-arm64.zip",
+    macX64Dmg: "DiffDash-0.3.1-mac-x64.dmg",
+    macX64Zip: "DiffDash-0.3.1-mac-x64.zip",
+    macArm64Metadata: "latest-mac-arm64.yml",
+    macX64Metadata: "latest-mac-x64.yml",
+    linuxAppImage: "DiffDash-0.3.1-linux-x64.AppImage",
+    linuxMetadata: "latest-linux.yml",
+    linuxDeb: "DiffDash-0.3.1-linux-amd64.deb",
+  })
 })
 
 test("builds deterministic sorted metadata with encoded public URLs", () => {
@@ -65,6 +81,17 @@ test("builds deterministic sorted metadata with encoded public URLs", () => {
           url: "https://download.example.test/releases/v0.3.1/z%20file.zip",
         },
       ],
+    },
+  )
+})
+
+test("builds the stable worker pointer without changing its protocol", () => {
+  assert.deepEqual(
+    createStableMetadata({ tag: "v0.3.1", promotedAt: "2026-07-15T01:00:00.000Z" }),
+    {
+      version: "0.3.1",
+      tag: "v0.3.1",
+      promotedAt: "2026-07-15T01:00:00.000Z",
     },
   )
 })

@@ -448,4 +448,4 @@ jobs:
           exit "${missing}"
 
       - name: Stage GitHub draft and immutable R2 assets
-        run: node scripts/publish-release-assets.mjs --tag "${RELEASE_TAG}" --assets-dir release-assets
+        run: node scripts/release/publish-release-assets.mjs --tag "${RELEASE_TAG}" --assets-dir release-assets
