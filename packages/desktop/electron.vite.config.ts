@@ -16,8 +16,15 @@ const packageVersion =
     : "0.0.0"
 
 const internalPackages = [
+  "@diffdash/agent-provider",
+  "@diffdash/agent-provider-claude",
+  "@diffdash/agent-provider-codex",
+  "@diffdash/agent-provider-opencode",
   "@diffdash/app",
   "@diffdash/domain",
+  "@diffdash/git-provider",
+  "@diffdash/git-provider-fixture",
+  "@diffdash/git-provider-github",
   "@diffdash/local-git",
   "@diffdash/persistence",
   "@diffdash/process",

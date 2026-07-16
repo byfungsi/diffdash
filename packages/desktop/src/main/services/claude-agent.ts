@@ -1,61 +1,66 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Stream } from "effect"
 
-import { DEFAULT_BUILT_IN_MODELS } from "@diffdash/domain/ai-settings"
+import { AgentCapabilityReady, WalkthroughRequest } from "@diffdash/agent-provider"
 import {
-  AIAgent,
-  type AIAgentGenerateOptions,
-  type AIProviderAgent,
-  requireGeneratedText,
-} from "./ai-agent"
-import { CliService, type CliRunner } from "@diffdash/process/cli"
+  CLAUDE_DEFAULT_MODEL,
+  CLAUDE_WALKTHROUGH_POLICY,
+  claudeModelId,
+  makeClaudeProvider,
+} from "@diffdash/agent-provider-claude"
+import { CliError, CliService, type CliRunner } from "@diffdash/process/cli"
+import { AIAgent, type AIProviderAgent } from "./ai-agent"
 
-/** Creates a Claude-backed AI agent using the provided model ID. */
-export const makeClaudeAgent = (cli: CliRunner, model: string): AIProviderAgent =>
-  AIAgent.of({
+/** Creates the legacy walkthrough adapter over the Claude SDK provider. */
+export const makeClaudeAgent = (cli: CliRunner, model: string): AIProviderAgent => {
+  const registration = makeClaudeProvider({
+    cli,
+    cliStream: { stream: () => Stream.die(new Error("Review streaming is not used")) },
+  })
+  const walkthrough = registration.walkthrough
+  if (walkthrough === undefined) throw new Error("Claude walkthrough capability is not registered")
+
+  return AIAgent.of({
     generateText: Effect.fn("ClaudeAgent.generateText")(function (prompt, options = {}) {
-      const effortArgs = reasoningEffortArgs(options)
-      const cliOptions = {
-        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        stdin: prompt,
-      }
-      return cli
-        .run(
-          "claude",
-          [
-            "--print",
-            "--input-format",
-            "text",
-            "--output-format",
-            "text",
-            "--no-session-persistence",
-            "--model",
-            model,
-            ...effortArgs,
-          ],
-          cliOptions,
+      return walkthrough
+        .execute(
+          WalkthroughRequest.make({
+            prompt,
+            model: claudeModelId(model),
+            workingDirectory: options.cwd ?? process.cwd(),
+            timeoutMs: options.timeoutMs ?? 10 * 60 * 1_000,
+            reasoningEffort: options.reasoningEffort ?? "medium",
+            policy: CLAUDE_WALKTHROUGH_POLICY,
+          }),
         )
-        .pipe(Effect.flatMap((result) => requireGeneratedText(result, "Claude", result.stdout)))
+        .pipe(
+          Effect.map(({ text }) => text),
+          Effect.mapError((cause) => legacyCliError(cause.reason)),
+        )
     }),
-    isAvailable: cli.run("claude", ["--version"]).pipe(
-      Effect.as(true),
+    isAvailable: walkthrough.probe.pipe(
+      Effect.map((result) => result instanceof AgentCapabilityReady),
       Effect.catchAll(() => Effect.succeed(false)),
     ),
   })
+}
 
-/** AI agent implementation backed by the local `claude` CLI. */
+/** Legacy AI agent layer backed by the extracted Claude provider. */
 export const ClaudeAgent = {
   layer: Layer.effect(
     AIAgent,
     Effect.gen(function* () {
       const cli = yield* CliService
-      return makeClaudeAgent(cli, DEFAULT_BUILT_IN_MODELS.claude)
+      return makeClaudeAgent(cli, CLAUDE_DEFAULT_MODEL)
     }),
   ),
 }
 
-const reasoningEffortArgs = (options: AIAgentGenerateOptions): readonly string[] => {
-  if (options.reasoningEffort === undefined) return []
-  const effort = options.reasoningEffort === "minimal" ? "low" : options.reasoningEffort
-  return ["--effort", effort]
-}
+const legacyCliError = (stderr: string) =>
+  CliError.make({
+    command: "claude",
+    args: [],
+    cwd: null,
+    exitCode: null,
+    stderr,
+    cause: null,
+  })

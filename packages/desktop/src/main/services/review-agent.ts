@@ -4,7 +4,8 @@ import {
   ThreadMemorySummaryAlgorithm,
   UpsertThreadMemoryInput,
 } from "@diffdash/domain/agent-run"
-import { type AISettings, autoQualityProviderModels } from "@diffdash/domain/ai-settings"
+import type { AISettings } from "@diffdash/domain/ai-settings"
+import { CLAUDE_AUTO_MODELS } from "@diffdash/agent-provider-claude"
 import { CODEX_AUTO_MODELS } from "@diffdash/agent-provider-codex"
 import { OPENCODE_AUTO_MODELS } from "@diffdash/agent-provider-opencode"
 import {
@@ -383,8 +384,7 @@ const modelForProvider = (settings: AISettings, provider: ReviewAgentProviderId)
     if (model === undefined) throw new Error(`No model is configured for provider: ${provider}`)
     return model
   }
-  const models = autoQualityProviderModels(settings.autoQuality)
-  if (provider === "claude") return models.claude
+  if (provider === "claude") return CLAUDE_AUTO_MODELS[settings.autoQuality]
   if (provider === "codex") return CODEX_AUTO_MODELS[settings.autoQuality]
   return OPENCODE_AUTO_MODELS[settings.autoQuality][1]
 }

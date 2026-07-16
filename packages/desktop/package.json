@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/agent-provider-claude": "workspace:*",
     "@diffdash/agent-provider-codex": "workspace:*",
     "@diffdash/agent-provider-opencode": "workspace:*",
     "@diffdash/app": "workspace:*",
