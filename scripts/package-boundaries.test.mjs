@@ -93,7 +93,7 @@ test("concrete Git providers remain isolated leaf integrations", () => {
 })
 
 test("only desktop composition imports a concrete Git provider", () => {
-  const allowedComposition = resolve(root, "packages/desktop/electron/main/index.ts")
+  const allowedComposition = resolve(root, "packages/desktop/electron/main/composition.ts")
   for (const { directory, manifest } of manifests) {
     if (manifest.name.startsWith("@diffdash/git-provider-")) continue
     const source = join(directory, "src")

@@ -53,7 +53,7 @@ import type {
 
 const invoke = async <A>(channel: InvokeChannel, ...args: readonly unknown[]): Promise<A> => {
   try {
-    // SAFETY: Each channel is registered in `electron/main/index.ts` with the matching return type.
+    // SAFETY: Each channel is registered by `electron/main/ipc/controllers` with the matching return type.
     return (await ipcRenderer.invoke(channel, ...args)) as A
   } catch (cause) {
     throw new Error(`${channel} failed: ${ipcErrorMessage(cause)}`, { cause })

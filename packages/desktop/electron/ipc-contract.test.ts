@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { resolve } from "node:path"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import ts from "typescript"
@@ -65,11 +65,11 @@ const EXPECTED_PRELOAD_OPERATIONS = [
 
 describe("IPC contract", () => {
   const preload = parseSource("electron/preload/index.ts")
-  const main = parseSource("electron/main/index.ts")
+  const main = parseDirectory("electron/main")
 
   it("keeps every preload invocation paired with exactly one main handler", () => {
     const invokeChannels = collectCallChannels(preload, "invoke")
-    const handleChannels = collectCallChannels(main, "handle", "ipcMain")
+    const handleChannels = collectCallChannels(main, "define", "handlers")
 
     expect(new Set(invokeChannels)).toEqual(new Set(EXPECTED_INVOKE_CHANNELS))
     expect(new Set(handleChannels)).toEqual(new Set(EXPECTED_INVOKE_CHANNELS))
@@ -109,6 +109,15 @@ const parseSource = (path: string) => {
     true,
     ts.ScriptKind.TS,
   )
+}
+
+const parseDirectory = (path: string) => {
+  const directory = resolve(path)
+  const source = readdirSync(directory, { recursive: true })
+    .filter((entry): entry is string => typeof entry === "string" && entry.endsWith(".ts"))
+    .map((entry) => readFileSync(resolve(directory, entry), "utf8"))
+    .join("\n")
+  return ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 }
 
 const collectCallChannels = (source: ts.SourceFile, method: string, owner?: string) => {

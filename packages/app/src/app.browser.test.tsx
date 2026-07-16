@@ -860,11 +860,11 @@ describe("App browser interactions", () => {
     const unavailableReason = "Claude authentication is required."
     const catalog = AgentProviderCatalog.make({
       ...readyAgentProviderCatalog,
-      providers: readyAgentProviderCatalog.providers.map((provider) =>
-        provider.id === "claude"
+      providers: readyAgentProviderCatalog.providers.map((agentProvider) =>
+        agentProvider.id === "claude"
           ? AgentProviderStatus.make({
-              ...provider,
-              capabilities: provider.capabilities.map((capability) =>
+              ...agentProvider,
+              capabilities: agentProvider.capabilities.map((capability) =>
                 capability.capability === "walkthrough"
                   ? AgentProviderCapabilityStatus.make({
                       ...capability,
@@ -875,7 +875,7 @@ describe("App browser interactions", () => {
                   : capability,
               ),
             })
-          : provider,
+          : agentProvider,
       ),
     })
     installDiffDashApi({

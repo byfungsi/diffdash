@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { createAppLifecycle } from "./app-lifecycle"
+import { createShutdown } from "./shutdown"
 
-describe("createAppLifecycle", () => {
+describe("createShutdown", () => {
   it("disposes once before an ordinary quit", async () => {
     const dispose = vi.fn<() => Promise<void>>(async () => undefined)
     const quit = vi.fn<() => void>()
     const preventDefault = vi.fn<() => void>()
-    const lifecycle = createAppLifecycle({ dispose, quit })
+    const lifecycle = createShutdown({ dispose, quit })
 
     lifecycle.beforeQuit({ preventDefault })
     lifecycle.beforeQuit({ preventDefault })
@@ -23,7 +23,7 @@ describe("createAppLifecycle", () => {
     const quit = vi.fn<() => void>()
     const firstPreventDefault = vi.fn<() => void>()
     const secondPreventDefault = vi.fn<() => void>()
-    const lifecycle = createAppLifecycle({ dispose, quit })
+    const lifecycle = createShutdown({ dispose, quit })
 
     lifecycle.beforeQuit({ preventDefault: firstPreventDefault })
     lifecycle.beforeQuit({ preventDefault: secondPreventDefault })
@@ -41,7 +41,7 @@ describe("createAppLifecycle", () => {
   it("installs only after runtime disposal and allows the updater-managed quit", async () => {
     const order: string[] = []
     const quit = vi.fn<() => void>()
-    const lifecycle = createAppLifecycle({
+    const lifecycle = createShutdown({
       dispose: async () => {
         order.push("dispose")
       },
@@ -62,7 +62,7 @@ describe("createAppLifecycle", () => {
   it("keeps update installation blocked until disposal completes", async () => {
     const disposal = deferred<void>()
     const install = vi.fn<() => void>()
-    const lifecycle = createAppLifecycle({
+    const lifecycle = createShutdown({
       dispose: () => disposal.promise,
       quit: vi.fn<() => void>(),
     })

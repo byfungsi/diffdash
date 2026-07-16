@@ -1,5 +1,5 @@
 /** Coordinates one graceful runtime disposal before quitting or installing an update. */
-export const createAppLifecycle = ({
+export const createShutdown = ({
   dispose,
   quit,
 }: {
