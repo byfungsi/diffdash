@@ -78,6 +78,8 @@ const makeLayer = (input: {
         Effect.sync(() => makeDiff(nextValue(input.diffHeads, diffIndex++))),
       hasApprovedPullRequest: () => unavailable(),
       approvePullRequest: () => unavailable(),
+      hostedReviewCheckoutSpec: () => unavailable(),
+      bootstrapBareRepository: () => unavailable(),
       isAvailable: Effect.succeed(true),
     }),
   )

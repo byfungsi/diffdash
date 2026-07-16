@@ -1,6 +1,15 @@
 import { Effect, Layer, Schema } from "effect"
 
 import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
+import {
   PullRequestCommit,
   PullRequestDetail,
   PullRequestDiff,
@@ -368,6 +377,40 @@ export const GitHubProvider = {
               .pipe(Effect.asVoid)
           },
         ),
+        hostedReviewCheckoutSpec: (owner, name, number, revision) => {
+          const repository = HostedRepositoryLocator.make({
+            providerId: GitProviderId.make("github"),
+            namespace: RepositoryNamespace.make(owner),
+            name: HostedRepositoryName.make(name),
+          })
+          return Effect.succeed(
+            HostedReviewCheckoutSpec.make({
+              repository,
+              review: HostedReviewLocator.make({
+                repository,
+                number: HostedReviewNumber.make(number),
+              }),
+              remoteUrl: `https://github.com/${owner}/${name}.git`,
+              fetchRef: `refs/pull/${number}/head`,
+              revision,
+            }),
+          )
+        },
+        bootstrapBareRepository: (repository, destination) =>
+          cli
+            .run(
+              "gh",
+              [
+                "repo",
+                "clone",
+                `${repository.namespace}/${repository.name}`,
+                destination,
+                "--",
+                "--bare",
+              ],
+              { timeoutMs: 10 * 60 * 1_000 },
+            )
+            .pipe(Effect.asVoid),
       })
     }),
   ),

@@ -43,7 +43,7 @@ import { ReviewContextService } from "../../src/main/services/review-context"
 import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
 import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewWorktreePool } from "@diffdash/local-git/hosted-review-workspace-pool"
+import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughService } from "../../src/main/services/walkthrough"
@@ -185,7 +185,10 @@ const createAppLayer = () => {
     Layer.provideMerge(ReviewContextBuilder.layer),
     Layer.provideMerge(ThreadMemoryStore.layer),
     Layer.provideMerge(AgentRunStore.layer),
-    Layer.provideMerge(ReviewWorktreePool.layer({ remoteWorktreePoolPath, worktreePoolPath })),
+    Layer.provideMerge(
+      HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
+    ),
+    Layer.provideMerge(GitHubProvider.layer),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),

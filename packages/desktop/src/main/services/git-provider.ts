@@ -1,5 +1,7 @@
 import { Context, Effect, Schema } from "effect"
 
+import type { HostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import type {
   ProviderRepositoryReference,
   RepositorySearchRequest,
@@ -63,6 +65,16 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
       owner: string,
       name: string,
       number: number,
+    ) => Effect.Effect<void, unknown>
+    readonly hostedReviewCheckoutSpec: (
+      owner: string,
+      name: string,
+      number: number,
+      revision: string,
+    ) => Effect.Effect<HostedReviewCheckoutSpec, unknown>
+    readonly bootstrapBareRepository: (
+      repository: HostedRepositoryLocator,
+      destination: string,
     ) => Effect.Effect<void, unknown>
     readonly isAvailable: Effect.Effect<boolean>
   }

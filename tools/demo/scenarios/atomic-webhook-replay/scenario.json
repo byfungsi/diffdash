@@ -147,7 +147,7 @@
       "progress": [
         { "afterMs": 0, "stage": "preparing-context" },
         { "afterMs": 180, "stage": "reserving-workspace" },
-        { "afterMs": 420, "stage": "fetching-pr-head" },
+        { "afterMs": 420, "stage": "fetching-review-revision" },
         { "afterMs": 760, "stage": "checking-out-revision" },
         { "afterMs": 1040, "stage": "starting-agent" },
         { "afterMs": 1320, "stage": "reviewing" },

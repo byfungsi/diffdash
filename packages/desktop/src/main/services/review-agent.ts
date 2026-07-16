@@ -30,9 +30,10 @@ import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder, type SelectedReviewAgentArtifact } from "./review-context-builder"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import {
-  ReviewWorktreePool,
-  ReviewWorktreePoolError,
+  HostedReviewWorkspacePool,
+  HostedReviewWorkspacePoolError,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
+import { GitProvider } from "./git-provider"
 import { createFallbackThreadMemoryUpdate, selectThreadMemoryWindow } from "./thread-memory"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 
@@ -78,7 +79,8 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
       const memories = yield* ThreadMemoryStore
       const contextBuilder = yield* ReviewContextBuilder
       const mcp = yield* DiffDashMcpServer
-      const worktrees = yield* ReviewWorktreePool
+      const workspaces = yield* HostedReviewWorkspacePool
+      const gitProvider = yield* GitProvider
       const activeThreads = new Set<ReviewThreadId>()
 
       return ReviewAgentService.of({
@@ -201,19 +203,29 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                           return yield* Schema.decodeUnknown(ReviewAgentTurnResult)(providerResult)
                         }),
                       )
-                    const result =
-                      input.snapshot instanceof PullRequestReviewSnapshot
-                        ? yield* worktrees.use(
-                            {
-                              runId: run.id,
-                              threadId: input.threadId,
-                              snapshot: input.snapshot,
-                              sourcePath: input.cwd,
-                            },
-                            (lease) => runProvider(lease.localPath),
-                            input.onProgress,
-                          )
-                        : yield* runProvider(input.cwd)
+                    let result: ReviewAgentTurnResult
+                    if (input.snapshot instanceof PullRequestReviewSnapshot) {
+                      const checkout = yield* gitProvider.hostedReviewCheckoutSpec(
+                        input.snapshot.detail.repoOwner,
+                        input.snapshot.detail.repoName,
+                        input.snapshot.detail.number,
+                        input.snapshot.headRevision,
+                      )
+                      result = yield* workspaces.use(
+                        {
+                          runId: run.id,
+                          threadId: input.threadId,
+                          checkout,
+                          sourcePath: input.cwd,
+                          bootstrapBareRepository: (destination) =>
+                            gitProvider.bootstrapBareRepository(checkout.repository, destination),
+                        },
+                        (lease) => runProvider(lease.localPath),
+                        input.onProgress,
+                      )
+                    } else {
+                      result = yield* runProvider(input.cwd)
+                    }
                     const storedArtifacts = yield* Effect.forEach(
                       result.artifacts,
                       (artifact) =>
@@ -357,7 +369,7 @@ const modelForProvider = (settings: AISettings, provider: ReviewAgentProviderId)
 }
 
 const userSafeFailure = (provider: ReviewAgentProviderId, cause: unknown) =>
-  cause instanceof ReviewWorktreePoolError
+  cause instanceof HostedReviewWorkspacePoolError
     ? cause.reason
     : `The local ${provider} agent could not complete this response: ${executionFailureReason(cause)}. Retry to try again.`
 

@@ -151,6 +151,52 @@ describe("GitHubProvider", () => {
     }),
   )
 
+  it.effect("supplies GitHub checkout metadata for the exact requested revision", () =>
+    Effect.gen(function* () {
+      const github = yield* GitProvider
+      const checkout = yield* github.hostedReviewCheckoutSpec("fungsi", "diffdash", 42, "head-sha")
+
+      expect(checkout.repository).toMatchObject({
+        providerId: "github",
+        namespace: "fungsi",
+        name: "diffdash",
+      })
+      expect(checkout.review.number).toBe(42)
+      expect(checkout.remoteUrl).toBe("https://github.com/fungsi/diffdash.git")
+      expect(checkout.fetchRef).toBe("refs/pull/42/head")
+      expect(checkout.revision).toBe("head-sha")
+    }).pipe(Effect.provide(testLayer(""))),
+  )
+
+  it.effect("delegates authenticated bare repository bootstrap to gh", () => {
+    const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = []
+    const layer = GitHubProvider.layer.pipe(
+      Layer.provide(
+        Layer.succeed(
+          CliService,
+          CliService.of({
+            run: (command, args) =>
+              Effect.sync(() => {
+                calls.push({ command, args })
+                return makeCliResult("", args)
+              }),
+          }),
+        ),
+      ),
+    )
+
+    return Effect.gen(function* () {
+      const github = yield* GitProvider
+      const checkout = yield* github.hostedReviewCheckoutSpec("fungsi", "diffdash", 42, "head-sha")
+      yield* github.bootstrapBareRepository(checkout.repository, "/tmp/repository.git")
+
+      expect(calls.at(-1)).toEqual({
+        command: "gh",
+        args: ["repo", "clone", "fungsi/diffdash", "/tmp/repository.git", "--", "--bare"],
+      })
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("lists authenticated GitHub user and organization search scopes", () => {
     const calls: Array<{ readonly command: string; readonly args: readonly string[] }> = []
     const layer = GitHubProvider.layer.pipe(

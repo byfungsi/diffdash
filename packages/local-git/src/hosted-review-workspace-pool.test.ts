@@ -15,14 +15,22 @@ import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Fiber, Layer } from "effect"
 
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
 import { AgentRunId } from "@diffdash/domain/review-agent"
-import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
+import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import { CliStreamService } from "@diffdash/process/cli-stream"
-import { ReviewWorktreePool, ReviewWorktreePoolError } from "./hosted-review-workspace-pool"
+import {
+  HostedReviewWorkspacePool as ReviewWorktreePool,
+  HostedReviewWorkspacePoolError as ReviewWorktreePoolError,
+} from "./hosted-review-workspace-pool"
 
 interface GitFixture {
   readonly root: string
@@ -33,15 +41,15 @@ interface GitFixture {
   readonly baseSha: string
   readonly headSha: string
   readonly secondHeadSha: string
-  readonly snapshot: PullRequestReviewSnapshot
-  readonly secondSnapshot: PullRequestReviewSnapshot
+  readonly snapshot: HostedReviewCheckoutSpec
+  readonly secondSnapshot: HostedReviewCheckoutSpec
 }
 
 const fixture = Effect.acquireRelease(Effect.sync(makeGitFixture), (value) =>
   Effect.sync(() => rmSync(value.root, { recursive: true, force: true })),
 )
 
-describe("ReviewWorktreePool", () => {
+describe("HostedReviewWorkspacePool", () => {
   it.scoped(
     "leases the exact PR head without changing the user's checkout and rebuilds it clean",
     () =>
@@ -60,7 +68,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-worktree"),
               threadId: ReviewThreadId.make("thread-worktree"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             (lease) =>
@@ -102,7 +111,7 @@ describe("ReviewWorktreePool", () => {
         expect(firstUseProgress).toEqual([
           "reserving-workspace",
           "creating-repository",
-          "fetching-pr-head",
+          "fetching-review-revision",
           "checking-out-revision",
           "restoring-workspace",
         ])
@@ -114,7 +123,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-worktree-reused"),
               threadId: ReviewThreadId.make("thread-worktree-reused"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             () => Effect.void,
@@ -123,11 +133,91 @@ describe("ReviewWorktreePool", () => {
         }).pipe(Effect.provide(poolLayer(value)))
         expect(reusedProgress).toEqual([
           "reserving-workspace",
-          "fetching-pr-head",
+          "fetching-review-revision",
           "checking-out-revision",
           "restoring-workspace",
         ])
       }),
+  )
+
+  it.scoped("invalidates disposable version-1 cache state before preparing version 2", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const staleRepositoryPath = join(value.pool, "repositories", "stale")
+      const staleSentinel = join(staleRepositoryPath, "sentinel")
+      mkdirSync(staleRepositoryPath, { recursive: true })
+      writeFileSync(staleSentinel, "stale")
+      writeFileSync(
+        join(value.pool, "manifest.json"),
+        JSON.stringify({ version: 1, slots: [{ id: "legacy-slot" }] }),
+      )
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(
+          {
+            runId: AgentRunId.make("run-v1-invalidation"),
+            threadId: ReviewThreadId.make("thread-v1-invalidation"),
+            checkout: value.snapshot,
+            sourcePath: value.source,
+            bootstrapBareRepository: () => Effect.void,
+          },
+          () => Effect.void,
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly version: number
+        readonly slots: readonly unknown[]
+      }
+      expect(manifest.version).toBe(2)
+      expect(manifest.slots).toHaveLength(1)
+      expect(existsSync(staleSentinel)).toBe(false)
+    }),
+  )
+
+  it.scoped("separates nested repository keys across provider instances", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const nestedCheckout = makeCheckout({
+        providerId: "github-enterprise",
+        namespace: "Acme/Platform",
+        name: "Widget",
+        number: 1,
+        remoteUrl: value.remote,
+        fetchRef: value.snapshot.fetchRef,
+        revision: value.headSha,
+      })
+      const paths: string[] = []
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        for (const [checkout, suffix] of [
+          [value.snapshot, "default"],
+          [nestedCheckout, "enterprise"],
+        ] as const) {
+          yield* pool.use(
+            {
+              runId: AgentRunId.make(`run-${suffix}`),
+              threadId: ReviewThreadId.make(`thread-${suffix}`),
+              checkout,
+              sourcePath: value.source,
+              bootstrapBareRepository: () => Effect.void,
+            },
+            (lease) => Effect.sync(() => paths.push(lease.localPath)),
+          )
+        }
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(paths).toHaveLength(2)
+      expect(paths[0]).not.toBe(paths[1])
+      expect(paths[0]?.startsWith(repositoryPoolPath(value.pool, "github:Acme/Widget"))).toBe(true)
+      expect(
+        paths[1]?.startsWith(
+          repositoryPoolPath(value.pool, "github-enterprise:Acme/Platform/Widget"),
+        ),
+      ).toBe(true)
+    }),
   )
 
   it.scoped("rejects an eleventh lease while all ten global slots are active", () =>
@@ -139,14 +229,15 @@ describe("ReviewWorktreePool", () => {
         await writeFile(
           join(value.pool, "manifest.json"),
           JSON.stringify({
-            version: 1,
+            version: 2,
+            repositories: [],
             slots: Array.from({ length: 10 }, (_, index) => ({
               id: `slot-${index}`,
-              owner: "other",
-              repo: `repo-${index}`,
+              providerId: "other-provider",
+              repositoryKey: `other-provider:other/repo-${index}`,
               state: "leased",
               headSha: "head",
-              pullRequestNumber: index + 1,
+              reviewNumber: index + 1,
               lastThreadId: null,
               lease: {
                 id: `lease-${index}`,
@@ -171,7 +262,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-capacity"),
               threadId: ReviewThreadId.make("thread-capacity"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             () => Effect.void,
@@ -194,15 +286,16 @@ describe("ReviewWorktreePool", () => {
       writeFileSync(
         join(value.pool, "manifest.json"),
         JSON.stringify({
-          version: 1,
+          version: 2,
+          repositories: [],
           slots: [
             {
               id: "stale-slot",
-              owner: "Acme",
-              repo: "Widget",
+              providerId: "github",
+              repositoryKey: "github:Acme/Widget",
               state: "leased",
               headSha: value.baseSha,
-              pullRequestNumber: 1,
+              reviewNumber: 1,
               lastThreadId: "thread-stale",
               lease: {
                 id: "lease-stale",
@@ -231,7 +324,8 @@ describe("ReviewWorktreePool", () => {
           {
             runId: AgentRunId.make("run-recovered"),
             threadId: ReviewThreadId.make("thread-recovered"),
-            snapshot: value.snapshot,
+            checkout: value.snapshot,
+            bootstrapBareRepository: () => Effect.void,
             sourcePath: value.source,
           },
           (lease) => Effect.sync(() => (leasedSlot = lease.slotId)),
@@ -270,16 +364,20 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-cleanup-failure"),
               threadId: ReviewThreadId.make("thread-cleanup-failure"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             () =>
               Effect.sync(() => {
                 providerStarted = true
-                rmSync(join(repositoryPoolPath(value.pool, "Acme", "Widget"), "repository.git"), {
-                  recursive: true,
-                  force: true,
-                })
+                rmSync(
+                  join(repositoryPoolPath(value.pool, "github:Acme/Widget"), "repository.git"),
+                  {
+                    recursive: true,
+                    force: true,
+                  },
+                )
               }),
           )
           .pipe(Effect.flip)
@@ -309,19 +407,25 @@ describe("ReviewWorktreePool", () => {
       mkdirSync(value.pool, { recursive: true })
       const slots = Array.from({ length: 10 }, (_, index) => ({
         id: `idle-${index}`,
-        owner: "Other",
-        repo: `Repo-${index}`,
+        providerId: "other-provider",
+        repositoryKey: `other-provider:Other/Repo-${index}`,
         state: "available",
         headSha: null,
-        pullRequestNumber: null,
+        reviewNumber: null,
         lastThreadId: null,
         lease: null,
         createdAt: new Date(Date.UTC(2000, 0, index + 1)).toISOString(),
         lastUsedAt: new Date(Date.UTC(2000, 0, index + 1)).toISOString(),
         lastError: null,
       }))
-      writeFileSync(join(value.pool, "manifest.json"), JSON.stringify({ version: 1, slots }))
-      const oldestSlotPath = join(repositoryPoolPath(value.pool, "Other", "Repo-0"), "idle-0")
+      writeFileSync(
+        join(value.pool, "manifest.json"),
+        JSON.stringify({ version: 2, repositories: [], slots }),
+      )
+      const oldestSlotPath = join(
+        repositoryPoolPath(value.pool, "other-provider:Other/Repo-0"),
+        "idle-0",
+      )
       const oldestSentinel = join(oldestSlotPath, "sentinel")
       mkdirSync(oldestSlotPath, { recursive: true })
       writeFileSync(oldestSentinel, "remove me")
@@ -333,7 +437,8 @@ describe("ReviewWorktreePool", () => {
           {
             runId: AgentRunId.make("run-lru"),
             threadId: ReviewThreadId.make("thread-lru"),
-            snapshot: value.snapshot,
+            checkout: value.snapshot,
+            bootstrapBareRepository: () => Effect.void,
             sourcePath: value.source,
           },
           (lease) => Effect.sync(() => (leasedSlot = lease.slotId)),
@@ -343,20 +448,22 @@ describe("ReviewWorktreePool", () => {
       const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
         readonly slots: ReadonlyArray<{
           readonly id: string
-          readonly owner: string
-          readonly repo: string
+          readonly providerId: string
+          readonly repositoryKey: string
           readonly state: string
         }>
       }
       expect(leasedSlot).toBe("idle-0")
       expect(manifest.slots).toHaveLength(10)
       expect(manifest.slots.find(({ id }) => id === "idle-0")).toMatchObject({
-        owner: "Acme",
-        repo: "Widget",
+        providerId: "github",
+        repositoryKey: "github:Acme/Widget",
         state: "available",
       })
       expect(existsSync(oldestSentinel)).toBe(false)
-      expect(manifest.slots.slice(1).every(({ owner }) => owner === "Other")).toBe(true)
+      expect(
+        manifest.slots.slice(1).every(({ providerId }) => providerId === "other-provider"),
+      ).toBe(true)
     }),
   )
 
@@ -370,15 +477,16 @@ describe("ReviewWorktreePool", () => {
       writeFileSync(
         join(value.pool, "manifest.json"),
         JSON.stringify({
-          version: 1,
+          version: 2,
+          repositories: [],
           slots: [
             {
               id: "../../../outside-sentinel",
-              owner: "Acme",
-              repo: "Widget",
+              providerId: "github",
+              repositoryKey: "github:Acme/Widget",
               state: "available",
               headSha: value.headSha,
-              pullRequestNumber: 1,
+              reviewNumber: 1,
               lastThreadId: null,
               lease: null,
               createdAt: now,
@@ -397,7 +505,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-malicious-manifest"),
               threadId: ReviewThreadId.make("thread-malicious-manifest"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             () => Effect.sync(() => (providerStarted = true)),
@@ -416,9 +525,9 @@ describe("ReviewWorktreePool", () => {
   it.scoped("fails before provider use when the fetched PR head moved", () =>
     Effect.gen(function* () {
       const value = yield* fixture
-      const movedSnapshot = PullRequestReviewSnapshot.make({
+      const movedSnapshot = HostedReviewCheckoutSpec.make({
         ...value.snapshot,
-        headRevision: ReviewRevision.make("0000000000000000000000000000000000000000"),
+        revision: "0000000000000000000000000000000000000000",
       })
       let providerStarted = false
 
@@ -429,7 +538,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-moved"),
               threadId: ReviewThreadId.make("thread-moved"),
-              snapshot: movedSnapshot,
+              checkout: movedSnapshot,
+              bootstrapBareRepository: () => Effect.void,
               sourcePath: value.source,
             },
             () =>
@@ -454,7 +564,8 @@ describe("ReviewWorktreePool", () => {
           {
             runId: AgentRunId.make("run-rebuilt"),
             threadId: ReviewThreadId.make("thread-rebuilt"),
-            snapshot: value.snapshot,
+            checkout: value.snapshot,
+            bootstrapBareRepository: () => Effect.void,
             sourcePath: value.source,
           },
           () =>
@@ -472,7 +583,7 @@ describe("ReviewWorktreePool", () => {
     }),
   )
 
-  it.scoped("clones a remote repository with gh and reuses it across pull requests", () =>
+  it.scoped("uses authenticated remote bootstrap and reuses it across hosted reviews", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const binPath = join(value.root, "bin")
@@ -490,6 +601,7 @@ describe("ReviewWorktreePool", () => {
       process.env.PATH = `${binPath}:${inheritedPath ?? ""}`
       process.env.DIFFDASH_TEST_REMOTE = value.remote
       process.env.DIFFDASH_TEST_GH_LOG = ghLogPath
+      const bootstrapBareRepository = bootstrapWithGh
 
       yield* Effect.gen(function* () {
         const pool = yield* ReviewWorktreePool
@@ -497,7 +609,8 @@ describe("ReviewWorktreePool", () => {
           {
             runId: AgentRunId.make("run-unlinked"),
             threadId: ReviewThreadId.make("thread-unlinked"),
-            snapshot: value.snapshot,
+            checkout: value.snapshot,
+            bootstrapBareRepository,
             sourcePath: null,
           },
           (lease) =>
@@ -511,7 +624,8 @@ describe("ReviewWorktreePool", () => {
           {
             runId: AgentRunId.make("run-unlinked-second"),
             threadId: ReviewThreadId.make("thread-unlinked-second"),
-            snapshot: value.secondSnapshot,
+            checkout: value.secondSnapshot,
+            bootstrapBareRepository,
             sourcePath: null,
           },
           (lease) =>
@@ -529,7 +643,7 @@ describe("ReviewWorktreePool", () => {
           releaseConcurrentRuns = resolvePromise
         })
         const concurrentRun = (
-          snapshot: PullRequestReviewSnapshot,
+          snapshot: HostedReviewCheckoutSpec,
           runId: string,
           threadId: string,
         ) =>
@@ -537,7 +651,8 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make(runId),
               threadId: ReviewThreadId.make(threadId),
-              snapshot,
+              checkout: snapshot,
+              bootstrapBareRepository,
               sourcePath: null,
             },
             (lease) =>
@@ -575,15 +690,12 @@ describe("ReviewWorktreePool", () => {
       ) as {
         readonly version: number
         readonly repositories: ReadonlyArray<{
-          readonly owner: string
-          readonly repo: string
           readonly providerId: string
           readonly repositoryKey: string
           readonly clonedAt: string
           readonly lastUsedAt: string
         }>
         readonly slots: ReadonlyArray<{
-          readonly pullRequestNumber: number | null
           readonly reviewNumber: number | null
           readonly providerId: string
           readonly repositoryKey: string
@@ -593,8 +705,6 @@ describe("ReviewWorktreePool", () => {
       expect(manifest.repositories).toHaveLength(1)
       const repository = manifest.repositories[0]
       expect(repository).toMatchObject({
-        owner: "Acme",
-        repo: "Widget",
         providerId: "github",
         repositoryKey: "github:Acme/Widget",
       })
@@ -602,7 +712,6 @@ describe("ReviewWorktreePool", () => {
       expect(Date.parse(repository.clonedAt)).not.toBeNaN()
       expect(Date.parse(repository.lastUsedAt)).not.toBeNaN()
       expect(repository.lastUsedAt >= repository.clonedAt).toBe(true)
-      expect(new Set(manifest.slots.map((slot) => slot.pullRequestNumber))).toEqual(new Set([1, 2]))
       expect(new Set(manifest.slots.map((slot) => slot.reviewNumber))).toEqual(new Set([1, 2]))
       expect(manifest.slots.every((slot) => slot.providerId === "github")).toBe(true)
       expect(manifest.slots.every((slot) => slot.repositoryKey === "github:Acme/Widget")).toBe(true)
@@ -634,7 +743,11 @@ describe("ReviewWorktreePool", () => {
             {
               runId: AgentRunId.make("run-interrupted"),
               threadId: ReviewThreadId.make("thread-interrupted"),
-              snapshot: value.snapshot,
+              checkout: value.snapshot,
+              bootstrapBareRepository: () =>
+                Effect.sync(() => writeFileSync(startedPath, "started\n")).pipe(
+                  Effect.zipRight(Effect.never),
+                ),
               sourcePath: null,
             },
             () => Effect.void,
@@ -709,63 +822,31 @@ function makeGitFixture(): GitFixture {
   git(source, "reset", "--hard", baseSha)
   writeFileSync(join(source, "user-local.txt"), "preserve me\n")
 
-  const diff = `diff --git a/tracked.txt b/tracked.txt
-index 1111111..2222222 100644
---- a/tracked.txt
-+++ b/tracked.txt
-@@ -1 +1 @@
--base
-+feature`
-  const snapshot = PullRequestReviewSnapshot.make({
-    reviewKey: ReviewKey.make("github:acme/widget#1"),
-    baseRevision: ReviewRevision.make(baseSha),
-    headRevision: ReviewRevision.make(headSha),
-    detail: PullRequestDetail.make({
-      repoOwner: "Acme",
-      repoName: "Widget",
-      number: 1,
-      title: "Feature",
-      body: null,
-      author: ReviewActor.make({ login: "octocat" }),
-      state: "OPEN",
-      url: "https://github.com/acme/widget/pull/1",
-      isDraft: false,
-      baseRefName: "main",
-      baseRefOid: baseSha,
-      headRefName: "feature",
-      headRefOid: headSha,
-      createdAt: null,
-      updatedAt: null,
-      files: [],
-      commits: [],
+  const repository = HostedRepositoryLocator.make({
+    providerId: GitProviderId.make("github"),
+    namespace: RepositoryNamespace.make("Acme"),
+    name: HostedRepositoryName.make("Widget"),
+  })
+  const snapshot = HostedReviewCheckoutSpec.make({
+    repository,
+    review: HostedReviewLocator.make({
+      repository,
+      number: HostedReviewNumber.make(1),
     }),
-    diff: PullRequestDiff.make({
-      repoOwner: "Acme",
-      repoName: "Widget",
-      number: 1,
-      headRefOid: headSha,
-      diff,
-      fetchedAt: new Date().toISOString(),
-    }),
-    parsedDiff: parseUnifiedDiff(diff),
+    remoteUrl: remote,
+    fetchRef: "refs/pull/1/head",
+    revision: headSha,
   })
 
-  const secondSnapshot = PullRequestReviewSnapshot.make({
-    ...snapshot,
-    reviewKey: ReviewKey.make("github:acme/widget#2"),
-    headRevision: ReviewRevision.make(secondHeadSha),
-    detail: PullRequestDetail.make({
-      ...snapshot.detail,
-      number: 2,
-      title: "Feature two",
-      headRefName: "feature-two",
-      headRefOid: secondHeadSha,
+  const secondSnapshot = HostedReviewCheckoutSpec.make({
+    repository,
+    review: HostedReviewLocator.make({
+      repository,
+      number: HostedReviewNumber.make(2),
     }),
-    diff: PullRequestDiff.make({
-      ...snapshot.diff,
-      number: 2,
-      headRefOid: secondHeadSha,
-    }),
+    remoteUrl: remote,
+    fetchRef: "refs/pull/2/head",
+    revision: secondHeadSha,
   })
 
   return {
@@ -794,12 +875,42 @@ const commit = (cwd: string, message: string) =>
     message,
   )
 
-const repositoryPoolPath = (poolRoot: string, owner: string, repo: string) =>
-  join(
-    poolRoot,
-    "repositories",
-    createHash("sha256").update(`github:${owner}/${repo}`).digest("hex"),
-  )
+const repositoryPoolPath = (poolRoot: string, repositoryKey: string) =>
+  join(poolRoot, "repositories", createHash("sha256").update(repositoryKey).digest("hex"))
+
+const makeCheckout = (input: {
+  readonly providerId: string
+  readonly namespace: string
+  readonly name: string
+  readonly number: number
+  readonly remoteUrl: string
+  readonly fetchRef: string
+  readonly revision: string
+}) => {
+  const repository = HostedRepositoryLocator.make({
+    providerId: GitProviderId.make(input.providerId),
+    namespace: RepositoryNamespace.make(input.namespace),
+    name: HostedRepositoryName.make(input.name),
+  })
+  return HostedReviewCheckoutSpec.make({
+    repository,
+    review: HostedReviewLocator.make({
+      repository,
+      number: HostedReviewNumber.make(input.number),
+    }),
+    remoteUrl: input.remoteUrl,
+    fetchRef: input.fetchRef,
+    revision: input.revision,
+  })
+}
+
+const bootstrapWithGh = (destination: string) =>
+  Effect.sync(() => {
+    execFileSync("gh", ["repo", "clone", "Acme/Widget", destination, "--", "--bare"], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+  })
 
 const git = (cwd: string, ...args: readonly string[]) =>
   execFileSync("git", args, {

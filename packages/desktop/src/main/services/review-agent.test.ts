@@ -7,6 +7,14 @@ import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
 import {
@@ -39,8 +47,10 @@ import {
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder } from "./review-context-builder"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewWorktreePool } from "@diffdash/local-git/hosted-review-workspace-pool"
+import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
+import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
+import { GitProvider } from "./git-provider"
 
 const diff = `diff --git a/src/a.ts b/src/a.ts
 index 1111111..2222222 100644
@@ -174,15 +184,15 @@ const makeLayer = (
     }),
   )
   const worktrees = Layer.succeed(
-    ReviewWorktreePool,
-    ReviewWorktreePool.of({
+    HostedReviewWorkspacePool,
+    HostedReviewWorkspacePool.of({
       use: (_input, run, onProgress) =>
         Effect.acquireUseRelease(
           Effect.gen(function* () {
             yield* onProgress?.("reserving-workspace") ?? Effect.void
             released.events?.push("worktree.acquire")
             yield* onProgress?.("creating-repository") ?? Effect.void
-            yield* onProgress?.("fetching-pr-head") ?? Effect.void
+            yield* onProgress?.("fetching-review-revision") ?? Effect.void
             yield* onProgress?.("checking-out-revision") ?? Effect.void
             return { localPath: "/workspace/pool", headSha: "head-sha", slotId: "slot" }
           }),
@@ -193,6 +203,45 @@ const makeLayer = (
               released.events?.push("worktree.release")
             }),
         ),
+    }),
+  )
+  const gitProvider = Layer.succeed(
+    GitProvider,
+    GitProvider.of({
+      parseRemoteUrl: () => Effect.die("not used"),
+      repositoryUrl: () => "https://github.com/fungsi/diffdash",
+      fileUrl: () => "https://github.com/fungsi/diffdash/blob/head/file",
+      searchRepositories: () => Effect.succeed([]),
+      listSearchScopes: () => Effect.succeed([]),
+      listRepositories: () => Effect.succeed([]),
+      listPullRequests: () => Effect.succeed([]),
+      listReviewRequests: () => Effect.succeed([]),
+      getPullRequestDetail: () => Effect.die("not used"),
+      refreshPullRequestDetail: () => Effect.die("not used"),
+      getPullRequestDiff: () => Effect.die("not used"),
+      hasApprovedPullRequest: () => Effect.succeed(false),
+      approvePullRequest: () => Effect.void,
+      isAvailable: Effect.succeed(true),
+      hostedReviewCheckoutSpec: (owner, name, number, revision) => {
+        const repository = HostedRepositoryLocator.make({
+          providerId: GitProviderId.make("github"),
+          namespace: RepositoryNamespace.make(owner),
+          name: HostedRepositoryName.make(name),
+        })
+        return Effect.succeed(
+          HostedReviewCheckoutSpec.make({
+            repository,
+            review: HostedReviewLocator.make({
+              repository,
+              number: HostedReviewNumber.make(number),
+            }),
+            remoteUrl: `https://github.com/${owner}/${name}.git`,
+            fetchRef: `refs/pull/${number}/head`,
+            revision,
+          }),
+        )
+      },
+      bootstrapBareRepository: () => Effect.void,
     }),
   )
   return ReviewAgentService.layer.pipe(
@@ -209,6 +258,7 @@ const makeLayer = (
     Layer.provideMerge(registry),
     Layer.provideMerge(mcp),
     Layer.provideMerge(worktrees),
+    Layer.provideMerge(gitProvider),
     Layer.provideMerge(ReviewContextBuilder.layer),
   )
 }
@@ -269,7 +319,7 @@ describe("ReviewAgentService", () => {
         "progress.reserving-workspace",
         "worktree.acquire",
         "progress.creating-repository",
-        "progress.fetching-pr-head",
+        "progress.fetching-review-revision",
         "progress.checking-out-revision",
         "progress.starting-agent",
         "mcp.acquire",

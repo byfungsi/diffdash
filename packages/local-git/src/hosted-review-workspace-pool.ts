@@ -4,9 +4,10 @@ import { access, mkdir, open, readFile, rename, rm, stat, writeFile } from "node
 import { dirname, join, relative, resolve } from "node:path"
 import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 
+import { makeHostedRepositoryKey } from "@diffdash/domain/git-provider"
 import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
-import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
+import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import {
   type CliStreamResult,
   type CliStreamRunner,
@@ -18,7 +19,6 @@ const MAX_POOL_SLOTS = 10
 const LOCK_RETRY_MS = 50
 const LOCK_TIMEOUT_MS = 5_000
 const GIT_TIMEOUT_MS = 120_000
-const REMOTE_CLONE_TIMEOUT_MS = 10 * 60 * 1_000
 const REPOSITORY_LOCK_TIMEOUT_MS = 30 * 60 * 1_000
 const REPOSITORY_SCOPED_GIT_ENV = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -42,14 +42,11 @@ const WorktreeLease = Schema.Struct({
 
 const WorktreeSlot = Schema.Struct({
   id: Schema.String,
-  owner: Schema.String,
-  repo: Schema.String,
-  providerId: Schema.optional(Schema.String),
-  repositoryKey: Schema.optional(Schema.String),
+  providerId: Schema.String,
+  repositoryKey: Schema.String,
   state: Schema.Literal("preparing", "leased", "cleaning", "available", "quarantined"),
   headSha: Schema.NullOr(Schema.String),
-  pullRequestNumber: Schema.NullOr(Schema.Number),
-  reviewNumber: Schema.optional(Schema.NullOr(Schema.Number)),
+  reviewNumber: Schema.NullOr(Schema.Number),
   lastThreadId: Schema.NullOr(Schema.String),
   lease: Schema.NullOr(WorktreeLease),
   createdAt: Schema.String,
@@ -58,16 +55,14 @@ const WorktreeSlot = Schema.Struct({
 })
 
 const RemoteRepository = Schema.Struct({
-  owner: Schema.String,
-  repo: Schema.String,
-  providerId: Schema.optional(Schema.String),
-  repositoryKey: Schema.optional(Schema.String),
+  providerId: Schema.String,
+  repositoryKey: Schema.String,
   clonedAt: Schema.String,
   lastUsedAt: Schema.String,
 })
 
 const WorktreeManifest = Schema.Struct({
-  version: Schema.Literal(1, MANIFEST_VERSION),
+  version: Schema.Literal(MANIFEST_VERSION),
   repositories: Schema.Array(RemoteRepository),
   slots: Schema.Array(WorktreeSlot),
 })
@@ -75,24 +70,25 @@ const WorktreeManifest = Schema.Struct({
 type Manifest = typeof WorktreeManifest.Type
 type Slot = typeof WorktreeSlot.Type
 
-/** Input required to materialize one exact GitHub pull-request workspace. */
-export interface ReviewWorktreeInput {
+/** Input required to materialize one exact hosted-review workspace. */
+export interface HostedReviewWorkspaceInput {
   readonly runId: AgentRunId
   readonly threadId: ReviewThreadId
-  readonly snapshot: PullRequestReviewSnapshot
+  readonly checkout: HostedReviewCheckoutSpec
   readonly sourcePath: string | null
+  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
 }
 
 /** One exclusively leased, detached review worktree. */
-export interface ReviewWorktreeLease {
+export interface HostedReviewWorkspaceLease {
   readonly localPath: string
   readonly headSha: string
   readonly slotId: string
 }
 
 /** Recoverable failures preparing, leasing, or restoring an isolated review workspace. */
-export class ReviewWorktreePoolError extends Schema.TaggedError<ReviewWorktreePoolError>()(
-  "ReviewWorktreePoolError",
+export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedReviewWorkspacePoolError>()(
+  "HostedReviewWorkspacePoolError",
   {
     code: Schema.Literal(
       "link-required",
@@ -109,15 +105,15 @@ export class ReviewWorktreePoolError extends Schema.TaggedError<ReviewWorktreePo
   },
 ) {}
 
-/** Executes pull-request agent work inside an exclusively leased managed worktree. */
-export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePool")<
-  ReviewWorktreePool,
+/** Executes hosted-review agent work inside an exclusively leased managed worktree. */
+export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedReviewWorkspacePool")<
+  HostedReviewWorkspacePool,
   {
     readonly use: <A, E, R>(
-      input: ReviewWorktreeInput,
-      run: (lease: ReviewWorktreeLease) => Effect.Effect<A, E, R>,
+      input: HostedReviewWorkspaceInput,
+      run: (lease: HostedReviewWorkspaceLease) => Effect.Effect<A, E, R>,
       onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
-    ) => Effect.Effect<A, E | ReviewWorktreePoolError, R>
+    ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError, R>
   }
 >() {
   static readonly layer = (config: {
@@ -125,7 +121,7 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
     readonly remoteWorktreePoolPath: string
   }) =>
     Layer.effect(
-      ReviewWorktreePool,
+      HostedReviewWorkspacePool,
       Effect.gen(function* () {
         const cli = yield* CliStreamService
         const localPoolRoot = resolve(config.worktreePoolPath)
@@ -133,10 +129,10 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
         const instanceId = randomUUID()
 
         const use = <A, E, R>(
-          input: ReviewWorktreeInput,
-          run: (lease: ReviewWorktreeLease) => Effect.Effect<A, E, R>,
+          input: HostedReviewWorkspaceInput,
+          run: (lease: HostedReviewWorkspaceLease) => Effect.Effect<A, E, R>,
           onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
-        ): Effect.Effect<A, E | ReviewWorktreePoolError, R> => {
+        ): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> => {
           const poolRoot = input.sourcePath === null ? remotePoolRoot : localPoolRoot
 
           return Effect.uninterruptibleMask((restore) =>
@@ -155,7 +151,7 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
           )
         }
 
-        return ReviewWorktreePool.of({ use })
+        return HostedReviewWorkspacePool.of({ use })
       }),
     )
 }
@@ -169,7 +165,7 @@ const reserveAndPrepare = (
   poolRoot: string,
   instanceId: string,
   cli: CliStreamRunner,
-  input: ReviewWorktreeInput,
+  input: HostedReviewWorkspaceInput,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
@@ -181,9 +177,9 @@ const reserveAndPrepare = (
     const slotPath = pathForSlot(poolRoot, reservation.slot)
     const lease = {
       localPath: slotPath,
-      headSha: input.snapshot.headRevision,
+      headSha: input.checkout.revision,
       slotId: reservation.slot.id,
-    } satisfies ReviewWorktreeLease
+    } satisfies HostedReviewWorkspaceLease
 
     const prepared = prepareSlot(poolRoot, cli, input, reservation, onProgress).pipe(
       Effect.tap(() =>
@@ -191,8 +187,8 @@ const reserveAndPrepare = (
           manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
             ...slot,
             state: "leased",
-            headSha: input.snapshot.headRevision,
-            pullRequestNumber: input.snapshot.detail.number,
+            headSha: input.checkout.revision,
+            reviewNumber: input.checkout.review.number,
             lastError: null,
           })),
           value: undefined,
@@ -226,20 +222,19 @@ const reserveAndPrepare = (
 const prepareSlot = (
   poolRoot: string,
   cli: CliStreamRunner,
-  input: ReviewWorktreeInput,
+  input: HostedReviewWorkspaceInput,
   reservation: Reservation,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) => {
-  const owner = input.snapshot.detail.repoOwner
-  const repo = input.snapshot.detail.repoName
-  const repositoryRoot = pathForRepository(poolRoot, owner, repo)
+  const repositoryKey = makeHostedRepositoryKey(input.checkout.repository)
+  const repositoryRoot = pathForRepository(poolRoot, repositoryKey)
 
   const evicted = reservation.evicted
   const evict =
     evicted === null
       ? Effect.void
       : withFileLock(
-          join(pathForRepository(poolRoot, evicted.owner, evicted.repo), "repository.lock"),
+          join(pathForRepository(poolRoot, evicted.repositoryKey), "repository.lock"),
           () => evictSlot(poolRoot, cli, evicted),
           REPOSITORY_LOCK_TIMEOUT_MS,
         )
@@ -265,8 +260,19 @@ const prepareSlot = (
             if (!bareExists) {
               yield* reportProgress(onProgress, "creating-repository")
               if (sourcePath === null) {
-                yield* runGh(cli, ["repo", "clone", `${owner}/${repo}`, barePath, "--", "--bare"])
-                yield* recordRemoteRepositoryUse(poolRoot, owner, repo, true)
+                yield* input
+                  .bootstrapBareRepository(barePath)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      poolError(
+                        "git",
+                        "repository.bootstrap",
+                        "DiffDash could not create its authenticated repository cache.",
+                        cause,
+                      ),
+                    ),
+                  )
+                yield* recordRemoteRepositoryUse(poolRoot, input.checkout, true)
               } else {
                 yield* runGit(cli, [
                   "clone",
@@ -296,8 +302,8 @@ const prepareSlot = (
               ])
             }
 
-            const pullRef = `refs/diffdash/pull/${input.snapshot.detail.number}/head`
-            yield* reportProgress(onProgress, "fetching-pr-head")
+            const fetchedRef = `refs/diffdash/reviews/${input.checkout.review.number}/head`
+            yield* reportProgress(onProgress, "fetching-review-revision")
             yield* runGit(cli, [
               "--git-dir",
               barePath,
@@ -305,22 +311,22 @@ const prepareSlot = (
               "--no-tags",
               "--force",
               "origin",
-              `+refs/pull/${input.snapshot.detail.number}/head:${pullRef}`,
+              `+${input.checkout.fetchRef}:${fetchedRef}`,
             ])
             const fetched = yield* runGit(cli, [
               "--git-dir",
               barePath,
               "rev-parse",
               "--verify",
-              `${pullRef}^{commit}`,
+              `${fetchedRef}^{commit}`,
             ])
             const fetchedSha = fetched.stdout.trim()
-            if (fetchedSha !== input.snapshot.headRevision) {
+            if (fetchedSha !== input.checkout.revision) {
               return yield* poolError(
                 "revision-changed",
                 "prepare.verifyRevision",
-                "The pull request changed while its isolated workspace was being prepared. Refresh the review and retry.",
-                new Error(`Expected ${input.snapshot.headRevision}, fetched ${fetchedSha}`),
+                "The hosted review changed while its isolated workspace was being prepared. Refresh the review and retry.",
+                new Error(`Expected ${input.checkout.revision}, fetched ${fetchedSha}`),
               )
             }
 
@@ -331,7 +337,8 @@ const prepareSlot = (
               pathForSlot(poolRoot, reservation.slot),
               fetchedSha,
             )
-            if (sourcePath === null) yield* recordRemoteRepositoryUse(poolRoot, owner, repo, false)
+            if (sourcePath === null)
+              yield* recordRemoteRepositoryUse(poolRoot, input.checkout, false)
           }),
         REPOSITORY_LOCK_TIMEOUT_MS,
       ),
@@ -342,8 +349,8 @@ const prepareSlot = (
 const restoreAndRelease = (
   poolRoot: string,
   cli: CliStreamRunner,
-  input: ReviewWorktreeInput,
-  lease: ReviewWorktreeLease,
+  input: HostedReviewWorkspaceInput,
+  lease: HostedReviewWorkspaceLease,
 ) =>
   Effect.gen(function* () {
     yield* mutateManifest(poolRoot, (manifest) => ({
@@ -352,8 +359,7 @@ const restoreAndRelease = (
     }))
     const repositoryRoot = pathForRepository(
       poolRoot,
-      input.snapshot.detail.repoOwner,
-      input.snapshot.detail.repoName,
+      makeHostedRepositoryKey(input.checkout.repository),
     )
     const barePath = join(repositoryRoot, "repository.git")
 
@@ -458,7 +464,7 @@ const verifyWorktree = (cli: CliStreamRunner, worktreePath: string, headSha: str
   })
 
 const evictSlot = (poolRoot: string, cli: CliStreamRunner, slot: Slot) => {
-  const repositoryRoot = pathForRepository(poolRoot, slot.owner, slot.repo)
+  const repositoryRoot = pathForRepository(poolRoot, slot.repositoryKey)
   const barePath = join(repositoryRoot, "repository.git")
   const slotPath = pathForSlot(poolRoot, slot)
   return Effect.gen(function* () {
@@ -477,11 +483,11 @@ const evictSlot = (poolRoot: string, cli: CliStreamRunner, slot: Slot) => {
 const reserveSlot = (
   manifest: Manifest,
   instanceId: string,
-  input: ReviewWorktreeInput,
+  input: HostedReviewWorkspaceInput,
 ): { readonly manifest: Manifest; readonly value: Reservation } => {
   const now = new Date().toISOString()
-  const owner = input.snapshot.detail.repoOwner
-  const repo = input.snapshot.detail.repoName
+  const providerId = String(input.checkout.repository.providerId)
+  const repositoryKey = makeHostedRepositoryKey(input.checkout.repository)
   const recovered = manifest.slots.map((slot) =>
     slot.state !== "available" && slot.state !== "quarantined" && !isProcessAlive(slot.lease?.pid)
       ? { ...slot, state: "available" as const, lease: null }
@@ -490,13 +496,13 @@ const reserveSlot = (
   const available = recovered.filter(
     (slot) => slot.state === "available" || slot.state === "quarantined",
   )
-  const preferredCandidates = available.filter((slot) => sameRepository(slot, owner, repo))
+  const preferredCandidates = available.filter((slot) => slot.repositoryKey === repositoryKey)
   // oxlint-disable-next-line unicorn/no-array-sort -- Sort mutates only the new filtered array.
   preferredCandidates.sort((left, right) => {
     const leftThread = left.lastThreadId === String(input.threadId) ? 0 : 1
     const rightThread = right.lastThreadId === String(input.threadId) ? 0 : 1
-    const leftSha = left.headSha === input.snapshot.headRevision ? 0 : 1
-    const rightSha = right.headSha === input.snapshot.headRevision ? 0 : 1
+    const leftSha = left.headSha === input.checkout.revision ? 0 : 1
+    const rightSha = right.headSha === input.checkout.revision ? 0 : 1
     return (
       leftThread - rightThread ||
       leftSha - rightSha ||
@@ -530,14 +536,11 @@ const reserveSlot = (
   }
   const slot: Slot = {
     id,
-    owner,
-    repo,
-    providerId: "github",
-    repositoryKey: canonicalRepositoryKey(owner, repo),
+    providerId,
+    repositoryKey,
     state: "preparing",
-    headSha: input.snapshot.headRevision,
-    pullRequestNumber: input.snapshot.detail.number,
-    reviewNumber: input.snapshot.detail.number,
+    headSha: input.checkout.revision,
+    reviewNumber: input.checkout.review.number,
     lastThreadId: existing?.lastThreadId ?? null,
     lease,
     createdAt: existing?.createdAt ?? now,
@@ -552,7 +555,7 @@ const reserveSlot = (
     manifest: { ...manifest, slots },
     value: {
       slot,
-      evicted: existing !== undefined && !sameRepository(existing, owner, repo) ? existing : null,
+      evicted: existing !== undefined && existing.repositoryKey !== repositoryKey ? existing : null,
     },
   }
 }
@@ -560,7 +563,7 @@ const reserveSlot = (
 const mutateManifest = <A>(
   poolRoot: string,
   change: (manifest: Manifest) => { readonly manifest: Manifest; readonly value: A },
-): Effect.Effect<A, ReviewWorktreePoolError> =>
+): Effect.Effect<A, HostedReviewWorkspacePoolError> =>
   withFileLock(join(poolRoot, "manifest.lock"), () =>
     Effect.gen(function* () {
       const manifestPath = join(poolRoot, "manifest.json")
@@ -568,7 +571,7 @@ const mutateManifest = <A>(
       const changed = yield* Effect.try({
         try: () => change(manifest),
         catch: (cause) =>
-          cause instanceof ReviewWorktreePoolError
+          cause instanceof HostedReviewWorkspacePoolError
             ? cause
             : poolError(
                 "manifest",
@@ -582,14 +585,18 @@ const mutateManifest = <A>(
     }),
   )
 
-const readManifest = (manifestPath: string): Effect.Effect<Manifest, ReviewWorktreePoolError> =>
+const readManifest = (
+  manifestPath: string,
+): Effect.Effect<Manifest, HostedReviewWorkspacePoolError> =>
   Effect.tryPromise({
     try: async () => {
       try {
         const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
-        const json =
-          isRecord(parsed) && !("repositories" in parsed) ? { ...parsed, repositories: [] } : parsed
-        return await Effect.runPromise(Schema.decodeUnknown(WorktreeManifest)(json))
+        if (isRecord(parsed) && parsed.version === 1) {
+          await rm(join(dirname(manifestPath), "repositories"), { recursive: true, force: true })
+          return { version: MANIFEST_VERSION, repositories: [], slots: [] }
+        }
+        return await Effect.runPromise(Schema.decodeUnknown(WorktreeManifest)(parsed))
       } catch (cause) {
         if (isNodeError(cause, "ENOENT"))
           return { version: MANIFEST_VERSION, repositories: [], slots: [] }
@@ -616,7 +623,7 @@ const withFileLock = <A, E, R>(
   lockPath: string,
   use: () => Effect.Effect<A, E, R>,
   timeoutMs = LOCK_TIMEOUT_MS,
-): Effect.Effect<A, E | ReviewWorktreePoolError, R> =>
+): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> =>
   Effect.acquireUseRelease(acquireFileLock(lockPath, timeoutMs), use, (token) =>
     releaseFileLock(lockPath, token),
   )
@@ -734,7 +741,7 @@ const runGit = (cli: CliStreamRunner, args: readonly string[]) =>
         }),
       ),
       Effect.mapError((cause) =>
-        cause instanceof ReviewWorktreePoolError
+        cause instanceof HostedReviewWorkspacePoolError
           ? cause
           : poolError(
               "git",
@@ -743,74 +750,7 @@ const runGit = (cli: CliStreamRunner, args: readonly string[]) =>
               cause,
             ),
       ),
-    ) as Effect.Effect<CliStreamResult, ReviewWorktreePoolError>
-
-const runGh = (cli: CliStreamRunner, args: readonly string[]) =>
-  runCommand(
-    cli,
-    "gh",
-    args,
-    {
-      GH_PROMPT_DISABLED: "1",
-      GIT_TERMINAL_PROMPT: "0",
-    },
-    REMOTE_CLONE_TIMEOUT_MS,
-  )
-
-const runCommand = (
-  cli: CliStreamRunner,
-  command: string,
-  args: readonly string[],
-  env: Readonly<Record<string, string>>,
-  timeoutMs = GIT_TIMEOUT_MS,
-) =>
-  cli
-    .stream(command, args, {
-      timeoutMs,
-      killAfterMs: 1_000,
-      maxOutputBytes: 1024 * 1024,
-      env,
-      unsetEnv: REPOSITORY_SCOPED_GIT_ENV,
-    })
-    .pipe(
-      Stream.runLast,
-      Effect.flatMap(
-        Option.match({
-          onNone: () =>
-            Effect.fail(
-              poolError(
-                "git",
-                `${command}.run`,
-                `A ${command} command ended without a result.`,
-                new Error("No exit event"),
-              ),
-            ),
-          onSome: (event) => {
-            const { _tag: tag } = event
-            return tag === "CliExit"
-              ? Effect.succeed(event.result)
-              : Effect.fail(
-                  poolError(
-                    "git",
-                    `${command}.run`,
-                    `A ${command} command ended without an exit event.`,
-                    new Error(event.line),
-                  ),
-                )
-          },
-        }),
-      ),
-      Effect.mapError((cause) =>
-        cause instanceof ReviewWorktreePoolError
-          ? cause
-          : poolError(
-              "git",
-              `${command}.run`,
-              "DiffDash could not prepare its isolated Git workspace.",
-              cause,
-            ),
-      ),
-    ) as Effect.Effect<CliStreamResult, ReviewWorktreePoolError>
+    ) as Effect.Effect<CliStreamResult, HostedReviewWorkspacePoolError>
 
 const isBareRepository = (cli: CliStreamRunner, barePath: string) =>
   runGit(cli, ["--git-dir", barePath, "rev-parse", "--is-bare-repository"]).pipe(
@@ -820,18 +760,16 @@ const isBareRepository = (cli: CliStreamRunner, barePath: string) =>
 
 const recordRemoteRepositoryUse = (
   poolRoot: string,
-  owner: string,
-  repo: string,
+  checkout: HostedReviewCheckoutSpec,
   cloned: boolean,
 ) =>
   mutateManifest(poolRoot, (manifest) => {
     const now = new Date().toISOString()
-    const existing = manifest.repositories.find((item) => sameRepository(item, owner, repo))
+    const repositoryKey = makeHostedRepositoryKey(checkout.repository)
+    const existing = manifest.repositories.find((item) => item.repositoryKey === repositoryKey)
     const repository = {
-      owner,
-      repo,
-      providerId: "github",
-      repositoryKey: canonicalRepositoryKey(owner, repo),
+      providerId: String(checkout.repository.providerId),
+      repositoryKey,
       clonedAt: cloned || existing === undefined ? now : existing.clonedAt,
       lastUsedAt: now,
     }
@@ -842,7 +780,7 @@ const recordRemoteRepositoryUse = (
           existing === undefined
             ? [...manifest.repositories, repository]
             : manifest.repositories.map((item) =>
-                sameRepository(item, owner, repo) ? repository : item,
+                item.repositoryKey === repositoryKey ? repository : item,
               ),
       },
       value: undefined,
@@ -885,17 +823,15 @@ const updateSlot = (
   slots: manifest.slots.map((slot) => (slot.id === slotId ? update(slot) : slot)),
 })
 
-const pathForRepository = (poolRoot: string, owner: string, repo: string) => {
-  const digest = createHash("sha256").update(canonicalRepositoryKey(owner, repo)).digest("hex")
+const pathForRepository = (poolRoot: string, repositoryKey: string) => {
+  const digest = createHash("sha256").update(repositoryKey).digest("hex")
   const path = resolve(poolRoot, "repositories", digest)
   assertContained(poolRoot, path)
   return path
 }
 
-const canonicalRepositoryKey = (owner: string, repo: string) => `github:${owner}/${repo}`
-
-const pathForSlot = (poolRoot: string, slot: Pick<Slot, "owner" | "repo" | "id">) => {
-  const path = resolve(pathForRepository(poolRoot, slot.owner, slot.repo), safeSegment(slot.id))
+const pathForSlot = (poolRoot: string, slot: Pick<Slot, "repositoryKey" | "id">) => {
+  const path = resolve(pathForRepository(poolRoot, slot.repositoryKey), safeSegment(slot.id))
   assertContained(poolRoot, path)
   return path
 }
@@ -924,9 +860,6 @@ const assertContained = (root: string, path: string) => {
   }
 }
 
-const sameRepository = (slot: Pick<Slot, "owner" | "repo">, owner: string, repo: string) =>
-  slot.owner.toLowerCase() === owner.toLowerCase() && slot.repo.toLowerCase() === repo.toLowerCase()
-
 const isProcessAlive = (pid: number | undefined) => {
   if (pid === undefined) return false
   try {
@@ -944,8 +877,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
 const poolError = (
-  code: ReviewWorktreePoolError["code"],
+  code: HostedReviewWorkspacePoolError["code"],
   operation: string,
   reason: string,
   cause: unknown,
-) => ReviewWorktreePoolError.make({ code, operation, reason, cause })
+) => HostedReviewWorkspacePoolError.make({ code, operation, reason, cause })

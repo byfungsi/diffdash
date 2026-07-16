@@ -190,7 +190,7 @@ describe("review thread UI", () => {
   })
 
   it("updates the pending agent message to the latest preparation stage", () => {
-    const panel = (agentProgress: "fetching-pr-head" | "checking-out-revision") => (
+    const panel = (agentProgress: "fetching-review-revision" | "checking-out-revision") => (
       <ReviewThreadPanel
         agentRunning
         agentProgress={agentProgress}
@@ -199,12 +199,14 @@ describe("review thread UI", () => {
         onRefresh={threadActionMock()}
       />
     )
-    render(panel("fetching-pr-head"))
-    expect(document.querySelector("output")?.textContent).toContain("Fetching latest PR head...")
+    render(panel("fetching-review-revision"))
+    expect(document.querySelector("output")?.textContent).toContain(
+      "Fetching latest review revision...",
+    )
 
     flushSync(() => root?.render(panel("checking-out-revision")))
     expect(document.querySelector("output")?.textContent).toContain(
-      "Checking out and verifying PR revision...",
+      "Checking out and verifying review revision...",
     )
   })
 

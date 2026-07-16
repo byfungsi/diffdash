@@ -63,6 +63,8 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
             getPullRequestDiff: () => unavailable(),
             hasApprovedPullRequest: () => unavailable(),
             approvePullRequest: () => unavailable(),
+            hostedReviewCheckoutSpec: () => unavailable(),
+            bootstrapBareRepository: () => unavailable(),
             isAvailable: Effect.succeed(true),
           }),
         ),
