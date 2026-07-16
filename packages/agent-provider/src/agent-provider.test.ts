@@ -51,6 +51,7 @@ const policy = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [allowedTool],
 })
 

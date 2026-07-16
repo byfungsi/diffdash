@@ -62,6 +62,7 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
     updatedAt: null,
   })
   return {
+    publishingTools: [`${idValue}-cli`],
     descriptor: GitProviderDescriptor.make({
       id,
       kind: GitProviderKind.make("fake"),

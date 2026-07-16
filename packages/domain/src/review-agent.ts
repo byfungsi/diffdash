@@ -1,7 +1,6 @@
 import { Schema } from "effect"
 
 import { ReviewAnchor, ReviewThreadId } from "./review-thread"
-import { ReviewKey, ReviewRevision } from "./review-identity"
 
 /** Persistent identity for one review agent execution. */
 export const AgentRunId = Schema.String.pipe(Schema.minLength(1), Schema.brand("AgentRunId"))
@@ -65,36 +64,6 @@ export const REVIEW_AGENT_PROGRESS_LABELS: Readonly<Record<ReviewAgentProgressSt
   reviewing: "Agent is reviewing...",
   "restoring-workspace": "Restoring isolated workspace...",
 }
-
-/** Provider-neutral read-only permissions for one review agent turn. */
-export class ReviewAgentPermissions extends Schema.Class<ReviewAgentPermissions>(
-  "ReviewAgentPermissions",
-)({
-  filesystem: Schema.Literal("read-only"),
-  editTools: Schema.Literal("deny"),
-  gitMutation: Schema.Literal("deny"),
-  dependencyMutation: Schema.Literal("deny"),
-  formatting: Schema.Literal("deny"),
-  githubPublishing: Schema.Literal("deny"),
-  shell: Schema.Literal("provider-sandbox"),
-  fileRead: Schema.Literal("allow"),
-  search: Schema.Literal("allow"),
-  diffDashMcp: Schema.Literal("allow"),
-}) {}
-
-/** Default fail-closed permissions for local AI comment thread mode. */
-export const THREAD_MODE_REVIEW_AGENT_PERMISSIONS = ReviewAgentPermissions.make({
-  filesystem: "read-only",
-  editTools: "deny",
-  gitMutation: "deny",
-  dependencyMutation: "deny",
-  formatting: "deny",
-  githubPublishing: "deny",
-  shell: "provider-sandbox",
-  fileRead: "allow",
-  search: "allow",
-  diffDashMcp: "allow",
-})
 
 /** Validated product response returned by every review agent provider. */
 export class ReviewThreadAgentResponse extends Schema.Class<ReviewThreadAgentResponse>(
@@ -212,22 +181,6 @@ export class ReviewAgentUsage extends Schema.Class<ReviewAgentUsage>("ReviewAgen
   cacheReadTokens: Schema.NullOr(Schema.Number),
   cacheWriteTokens: Schema.NullOr(Schema.Number),
   costUsd: Schema.NullOr(Schema.Number),
-}) {}
-
-/** Complete provider-neutral input for one local review thread turn. */
-export class ReviewAgentTurnInput extends Schema.Class<ReviewAgentTurnInput>(
-  "ReviewAgentTurnInput",
-)({
-  threadId: ReviewThreadId,
-  reviewKey: ReviewKey,
-  baseRevision: ReviewRevision,
-  headRevision: ReviewRevision,
-  anchor: ReviewAnchor,
-  stablePromptPrefix: Schema.String.pipe(Schema.minLength(1)),
-  dynamicPromptSuffix: Schema.String.pipe(Schema.minLength(1)),
-  cwd: Schema.NullOr(Schema.String),
-  model: Schema.String.pipe(Schema.minLength(1)),
-  permissions: ReviewAgentPermissions,
 }) {}
 
 /** Complete normalized result from one local review thread provider turn. */

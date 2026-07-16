@@ -45,8 +45,7 @@ import { createGitHubProvider } from "@diffdash/git-provider-github"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
-import { ReviewAgentService } from "../../src/main/services/review-agent"
-import { ReviewAgentProviderRegistry } from "../../src/main/services/review-agent-provider-registry"
+import { ReviewAgentRouting, ReviewAgentService } from "../../src/main/services/review-agent"
 import { ReviewContextService } from "../../src/main/services/review-context"
 import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
 import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
@@ -283,26 +282,45 @@ const createAppLayer = () => {
   )
   const threadStoreLayer = ReviewThreadStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
-  const providerRegistryLayer = ReviewAgentProviderRegistry.layer.pipe(
-    Layer.provideMerge(cliLayer),
-    Layer.provideMerge(CliStreamService.layer),
-    Layer.provideMerge(AgentArtifactNormalizer.layer),
-  )
+  const reviewAgentRoutingLayer = Layer.effect(
+    ReviewAgentRouting,
+    Effect.gen(function* () {
+      const settings = yield* AppSettings
+      return ReviewAgentRouting.of({
+        get: settings.get.pipe(
+          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.map((current) => ({
+            route:
+              current.routes.reviewThread === "auto"
+                ? ({ mode: "auto" } as const)
+                : ({
+                    mode: "provider" as const,
+                    providerId: AgentProviderId.make(current.routes.reviewThread),
+                  } as const),
+            models: current.models,
+            autoQuality: current.autoQuality,
+          })),
+        ),
+      })
+    }),
+  ).pipe(Layer.provide(settingsLayer))
   const mcpLayer = DiffDashMcpServer.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
     Layer.provideMerge(artifactStoreLayer),
   )
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
     Layer.provideMerge(settingsLayer),
-    Layer.provideMerge(providerRegistryLayer),
+    Layer.provideMerge(reviewAgentRoutingLayer),
+    Layer.provideMerge(agentProviderRegistryLayer),
+    Layer.provideMerge(gitProviderRegistryLayer),
     Layer.provideMerge(mcpLayer),
     Layer.provideMerge(ReviewContextBuilder.layer),
+    Layer.provideMerge(AgentArtifactNormalizer.layer),
     Layer.provideMerge(ThreadMemoryStore.layer),
     Layer.provideMerge(AgentRunStore.layer),
     Layer.provideMerge(
       HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
     ),
-    Layer.provideMerge(gitProviderLayer),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),

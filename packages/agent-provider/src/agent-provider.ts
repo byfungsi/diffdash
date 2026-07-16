@@ -30,6 +30,24 @@ export const McpToolName = Schema.String.pipe(Schema.minLength(1), Schema.brand(
 /** Identity of an MCP tool exposed for one run. */
 export type McpToolName = typeof McpToolName.Type
 
+/** Canonical review-context tool names exposed by the DiffDash host. */
+export const DiffDashReviewMcpTool = {
+  getReviewContext: McpToolName.make("getReviewContext"),
+  getChangedFiles: McpToolName.make("getChangedFiles"),
+  searchReviewDiff: McpToolName.make("searchReviewDiff"),
+  getDiffHunk: McpToolName.make("getDiffHunk"),
+  getDiffFile: McpToolName.make("getDiffFile"),
+  searchRepository: McpToolName.make("searchRepository"),
+  readRepositoryFile: McpToolName.make("readRepositoryFile"),
+  getThreadContext: McpToolName.make("getThreadContext"),
+  getOlderThreadMessages: McpToolName.make("getOlderThreadMessages"),
+  getPriorArtifact: McpToolName.make("getPriorArtifact"),
+  getWalkthroughContext: McpToolName.make("getWalkthroughContext"),
+} as const
+
+/** Complete canonical review-context tool allowlist. */
+export const DIFFDASH_REVIEW_MCP_TOOLS = Object.values(DiffDashReviewMcpTool)
+
 /** Stable capabilities independently exposed by a provider. */
 export const AgentCapability = Schema.Literal("walkthrough", "review-thread")
 
@@ -160,6 +178,7 @@ export class AgentExecutionPolicy extends Schema.Class<AgentExecutionPolicy>(
   fileMutation: Schema.Literal("deny"),
   gitMutation: Schema.Literal("deny"),
   providerPublishing: Schema.Literal("deny"),
+  providerPublishingTools: Schema.Array(Schema.String.pipe(Schema.minLength(1))),
   allowedMcpTools: Schema.Array(McpToolName),
 }) {}
 
@@ -176,6 +195,10 @@ export const isAgentExecutionPolicyEnforced = (
   requested.fileMutation === enforced.fileMutation &&
   requested.gitMutation === enforced.gitMutation &&
   requested.providerPublishing === enforced.providerPublishing &&
+  (enforced.providerPublishingTools.length === 0 ||
+    requested.providerPublishingTools.every((tool) =>
+      enforced.providerPublishingTools.includes(tool),
+    )) &&
   enforced.allowedMcpTools.every((tool) => requested.allowedMcpTools.includes(tool))
 
 /** Input to one scoped MCP invocation. */
@@ -190,15 +213,19 @@ export class ScopedMcpResult extends Schema.Class<ScopedMcpResult>("ScopedMcpRes
   isError: Schema.Boolean,
 }) {}
 
+/** Bounded host failure from one scoped MCP call. */
+export class ScopedMcpAccessError extends Schema.TaggedError<ScopedMcpAccessError>()(
+  "ScopedMcpAccessError",
+  { reason: Schema.String },
+) {}
+
 /** Host-owned MCP access that is valid only for one provider execution. */
 export interface ScopedMcpAccess {
   readonly scopeId: string
   readonly endpoint: string
   readonly bearerToken: Redacted.Redacted<string>
   readonly allowedTools: readonly McpToolName[]
-  readonly call: (
-    input: ScopedMcpCall,
-  ) => Effect.Effect<ScopedMcpResult, AgentProviderOperationError>
+  readonly call: (input: ScopedMcpCall) => Effect.Effect<ScopedMcpResult, ScopedMcpAccessError>
 }
 
 /** Provider-neutral reasoning effort requested for a walkthrough. */

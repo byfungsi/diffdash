@@ -113,6 +113,7 @@ export const CODEX_WALKTHROUGH_POLICY = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [],
 })
 
@@ -125,6 +126,7 @@ export const CODEX_REVIEW_POLICY = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [],
 })
 

@@ -82,6 +82,7 @@ export const createFixtureGitProvider = (
         })
 
   return {
+    publishingTools: ["fixture-forge"],
     descriptor: GitProviderDescriptor.make({
       id,
       kind: GitProviderKind.make("fixture"),

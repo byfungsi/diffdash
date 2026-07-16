@@ -5,7 +5,6 @@ import {
   normalizeReviewThreadAgentResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   ReviewThreadAgentResponse,
-  THREAD_MODE_REVIEW_AGENT_PERMISSIONS,
 } from "./review-agent"
 
 describe("review agent contract", () => {
@@ -64,16 +63,5 @@ describe("review agent contract", () => {
         expect(property).toHaveProperty("type")
       }
     }
-  })
-
-  it("FUN-70 AC: explicitly denies mutation in thread mode", () => {
-    expect(THREAD_MODE_REVIEW_AGENT_PERMISSIONS).toMatchObject({
-      dependencyMutation: "deny",
-      editTools: "deny",
-      filesystem: "read-only",
-      formatting: "deny",
-      gitMutation: "deny",
-      githubPublishing: "deny",
-    })
   })
 })

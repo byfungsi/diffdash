@@ -574,6 +574,7 @@ export const createGitHubProvider = (
 
   const registration: GitHubProviderRegistration = {
     descriptor,
+    publishingTools: ["gh"],
     diagnose: inspectGitHubCli(cli, { host }).pipe(
       Effect.map((inspection) =>
         GitProviderDiagnostic.make({

@@ -102,6 +102,8 @@ export type GitProviderError =
 /** Complete leaf-provider contract implemented by hosted Git integrations. */
 export interface GitProviderRegistration {
   readonly descriptor: GitProviderDescriptor
+  /** Executables or agent tools capable of publishing provider-side review state. */
+  readonly publishingTools: readonly string[]
   readonly diagnose: Effect.Effect<GitProviderDiagnostic, GitProviderOperationError>
   readonly parseRemote: (
     remoteUrl: string,

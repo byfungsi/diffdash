@@ -137,4 +137,29 @@ describe("AgentArtifactNormalizer", () => {
       )
     }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
   )
+
+  it.effect("FUN-137 AC: redacts secrets and drops metadata outside the host allowlist", () =>
+    Effect.gen(function* () {
+      const normalizer = yield* AgentArtifactNormalizer
+      const artifact = yield* normalizer.normalize({
+        type: "shell_output",
+        provider: "fixture-provider",
+        title: "Bearer title-secret",
+        content: "DIFFDASH_MCP_BEARER_TOKEN=content-secret Bearer content-token",
+        metadata: {
+          command: "API_KEY=metadata-secret inspect",
+          rawEvent: { bearerToken: "must-not-persist" },
+        },
+      })
+
+      expect(artifact.provider).toBe("fixture-provider")
+      expect(artifact.title).toBe("Bearer [redacted]")
+      expect(artifact.content).toBe("DIFFDASH_MCP_BEARER_TOKEN=[redacted] Bearer [redacted]")
+      expect(artifact.metadata).toMatchObject({
+        command: "API_KEY=[redacted] inspect",
+        sourceProvider: "fixture-provider",
+      })
+      expect(artifact.metadata).not.toHaveProperty("rawEvent")
+    }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
+  )
 })

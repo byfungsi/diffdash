@@ -161,6 +161,27 @@ test("walkthrough orchestration is provider-neutral", () => {
   assert.doesNotMatch(source, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
 })
 
+test("review-agent owns provider-neutral host orchestration", () => {
+  const reviewAgent = manifests.find(({ manifest }) => manifest.name === "@diffdash/review-agent")
+  assert.ok(reviewAgent, "@diffdash/review-agent must exist")
+  for (const dependency of [
+    "@diffdash/agent-provider",
+    "@diffdash/git-provider",
+    "@diffdash/local-git",
+    "@diffdash/persistence",
+  ]) {
+    assert.ok(
+      Object.hasOwn(reviewAgent.manifest.dependencies, dependency),
+      `@diffdash/review-agent must own ${dependency} orchestration`,
+    )
+  }
+  const source = sourceFiles(join(reviewAgent.directory, "src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(source, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
+  assert.doesNotMatch(source, /["'](?:electron|@diffdash\/settings)(?:\/[^"']*)?["']/)
+})
+
 test("the OpenCode SDK is owned only by its leaf provider", () => {
   for (const { directory, manifest } of manifests) {
     const ownsSdk = Object.hasOwn(manifest.dependencies ?? {}, "@opencode-ai/sdk")

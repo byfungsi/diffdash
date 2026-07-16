@@ -30,6 +30,12 @@ const internalPackages = [
   "@diffdash/persistence",
   "@diffdash/process",
   "@diffdash/protocol",
+  "@diffdash/review-agent",
+  "@diffdash/review-agent/anchor-mapper",
+  "@diffdash/review-agent/artifact-normalizer",
+  "@diffdash/review-agent/context-builder",
+  "@diffdash/review-agent/mcp-server",
+  "@diffdash/review-agent/thread-memory",
   "@diffdash/settings",
   "@diffdash/walkthrough",
 ]

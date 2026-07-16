@@ -119,6 +119,7 @@ export const OPENCODE_WALKTHROUGH_POLICY = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [],
 })
 
@@ -131,6 +132,7 @@ export const OPENCODE_REVIEW_POLICY = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [],
 })
 

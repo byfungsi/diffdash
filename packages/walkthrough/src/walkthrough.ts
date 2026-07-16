@@ -56,6 +56,7 @@ export const WALKTHROUGH_EXECUTION_POLICY = AgentExecutionPolicy.make({
   fileMutation: "deny",
   gitMutation: "deny",
   providerPublishing: "deny",
+  providerPublishingTools: [],
   allowedMcpTools: [],
 })
 

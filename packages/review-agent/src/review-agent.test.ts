@@ -2,19 +2,34 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
+import { Deferred, Effect, Fiber, Layer, Redacted } from "effect"
+import {
+  AgentArtifactCandidate,
+  AgentCapabilityDeclaration,
+  AgentCapabilityManifest,
+  AgentCapabilityReady,
+  type AgentExecutionPolicy,
+  AgentModelDescriptor,
+  AgentModelId,
+  AgentProviderDefaults,
+  AgentProviderDescriptor,
+  AgentProviderId,
+  AgentProviderManifest,
+  AgentProviderOperationError,
+  AgentRuntimeRequirement,
+  AgentSessionId,
+  AgentSessionSupport,
+  AgentUsage,
+  ReviewThreadResponse,
+  ReviewThreadResult,
+} from "@diffdash/agent-provider"
+import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
-import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
-import {
-  ReviewAgentArtifact,
-  ReviewAgentTurnResult,
-  ReviewAgentUsage,
-  ReviewThreadAgentResponse,
-} from "@diffdash/domain/review-agent"
+import { ReviewAgentArtifact, ReviewAgentUsage } from "@diffdash/domain/review-agent"
 import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   ReviewFileId,
@@ -26,23 +41,27 @@ import {
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
-import { AppSettings } from "@diffdash/settings/app-settings"
 import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewAgentService } from "./review-agent"
-import {
-  ReviewAgentExecutionError,
-  ReviewAgentProvider,
-  type ReviewAgentProviderError,
-} from "./review-agent-provider"
-import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
+import { ReviewAgentRouting } from "./review-agent"
 import { ReviewContextBuilder } from "./review-context-builder"
+import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
+import { normalizeAgentArtifactType } from "./agent-artifact-normalizer"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
-import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
+import {
+  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderId,
+  GitProviderKind,
+  GitProviderRegistry,
+  GitProviderTerminology,
+  HostedReviewCheckoutSpec,
+  type GitProviderRegistration,
+} from "@diffdash/git-provider"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
-import { GitProvider } from "./git-provider"
 
 const diff = `diff --git a/src/a.ts b/src/a.ts
 index 1111111..2222222 100644
@@ -124,14 +143,70 @@ const lineAnchor = LineReviewAnchor.make({
   lineContent: "const value = 2",
 })
 
+const makeProviderResult = (input: {
+  readonly bodyMarkdown: string
+  readonly threadSummary?: string
+  readonly artifacts?: readonly ReviewAgentArtifact[]
+  readonly usage?: ReviewAgentUsage
+  readonly sessionId?: string
+}) =>
+  ReviewThreadResult.make({
+    response: ReviewThreadResponse.make({
+      bodyMarkdown: input.bodyMarkdown,
+      threadSummary: input.threadSummary ?? null,
+      referencedLocations: [],
+    }),
+    artifacts: (input.artifacts ?? []).map((artifact) =>
+      AgentArtifactCandidate.make({
+        type: providerArtifactType(artifact.type),
+        title: artifact.title,
+        content: artifact.content,
+        metadata: artifact.metadata,
+      }),
+    ),
+    usage:
+      input.usage === undefined
+        ? null
+        : AgentUsage.make({
+            inputTokens: input.usage.inputTokens,
+            outputTokens: input.usage.outputTokens,
+            cacheReadTokens: input.usage.cacheReadTokens,
+            cacheWriteTokens: input.usage.cacheWriteTokens,
+            costUsd: input.usage.costUsd,
+          }),
+    sessionId: input.sessionId === undefined ? null : AgentSessionId.make(input.sessionId),
+  })
+
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-agent-service-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
+const providerArtifactType = (
+  type: ReviewAgentArtifact["type"],
+): AgentArtifactCandidate["type"] => {
+  const candidateTypes = [
+    "file-read",
+    "search-result",
+    "shell-output",
+    "web-result",
+    "diff-context",
+    "mcp-tool-result",
+    "provider-message",
+    "unknown",
+  ] as const
+  const candidate = candidateTypes.find((value) => normalizeAgentArtifactType(value) === type)
+  if (candidate === undefined) throw new Error(`Missing provider artifact type for ${type}`)
+  return candidate
+}
+
 const makeLayer = (
   databasePath: string,
-  runTurn: Context.Tag.Service<ReviewAgentProvider>["runThreadTurn"],
+  runTurn: (request: {
+    readonly workingDirectory: string
+    readonly sessionId: AgentSessionId | null
+    readonly policy: AgentExecutionPolicy
+  }) => Effect.Effect<ReviewThreadResult, AgentProviderOperationError>,
   released: { count: number; events?: string[]; mcpPaths?: Array<string | null> },
 ) => {
   const database = DatabaseService.layer(databasePath)
@@ -142,19 +217,52 @@ const makeLayer = (
     AgentRunArtifactStore.layer,
     ThreadMemoryStore.layer,
   ).pipe(Layer.provide(database))
-  const provider = ReviewAgentProvider.of({
-    id: "opencode",
-    sessionMode: "resume",
-    isAvailable: Effect.succeed(true),
-    runThreadTurn: runTurn,
+  const providerId = AgentProviderId.make("opencode")
+  const modelId = AgentModelId.make("openai/gpt-5.3-codex-spark")
+  const registration = {
+    manifest: AgentProviderManifest.make({
+      descriptor: AgentProviderDescriptor.make({
+        id: providerId,
+        displayName: "OpenCode",
+        description: "Test provider",
+        homepage: null,
+      }),
+      models: [
+        AgentModelDescriptor.make({
+          id: modelId,
+          displayName: "Test model",
+          capabilities: ["review-thread"],
+          quality: "balanced",
+        }),
+      ],
+      defaults: AgentProviderDefaults.make({ walkthroughModel: null, reviewThreadModel: modelId }),
+      requirements: [
+        AgentRuntimeRequirement.make({ name: "opencode", versionRange: null, installHint: null }),
+      ],
+      capabilities: AgentCapabilityManifest.make({
+        walkthrough: AgentCapabilityDeclaration.make({ supported: false, autoPriority: null }),
+        reviewThread: AgentCapabilityDeclaration.make({ supported: true, autoPriority: 1 }),
+      }),
+      session: AgentSessionSupport.make({ mode: "resume" }),
+    }),
+    reviewThread: {
+      probe: Effect.succeed(
+        AgentCapabilityReady.make({ capability: "review-thread", runtimeVersion: "test" }),
+      ),
+      execute: runTurn,
+    },
+  }
+  const registry = AgentProviderRegistry.layer([registration], {
+    walkthrough: [],
+    reviewThread: [providerId],
   })
-  const registry = Layer.succeed(
-    ReviewAgentProviderRegistry,
-    ReviewAgentProviderRegistry.of({
-      get: () => Effect.succeed(provider),
-      resolve: () => Effect.succeed(provider),
+  const routing = Layer.succeed(
+    ReviewAgentRouting,
+    ReviewAgentRouting.of({
+      get: Effect.succeed({ route: { mode: "auto" }, models: {}, autoQuality: "balanced" }),
     }),
   )
+  const gitRegistry = GitProviderRegistry.layer([testGitProvider()])
   const mcp = Layer.succeed(
     DiffDashMcpServer,
     DiffDashMcpServer.of({
@@ -198,56 +306,68 @@ const makeLayer = (
         ),
     }),
   )
-  const gitProvider = Layer.succeed(
-    GitProvider,
-    GitProvider.of({
-      listProviders: Effect.succeed([]),
-      diagnoseProviders: Effect.succeed([]),
-      parseRemoteUrl: () => Effect.die("not used"),
-      repositoryUrl: () => Effect.succeed("https://github.com/fungsi/diffdash"),
-      fileUrl: () => Effect.succeed("https://github.com/fungsi/diffdash/blob/head/file"),
-      searchRepositories: () => Effect.succeed([]),
-      listSearchScopes: () => Effect.succeed([]),
-      listPullRequests: () => Effect.succeed([]),
-      listReviewRequests: () => Effect.succeed([]),
-      getPullRequestDetail: () => Effect.die("not used"),
-      refreshPullRequestDetail: () => Effect.die("not used"),
-      getPullRequestDiff: () => Effect.die("not used"),
-      hasApprovedPullRequest: () => Effect.succeed(false),
-      approvePullRequest: () => Effect.void,
-      isAvailable: () => Effect.succeed(true),
-      hostedReviewCheckoutSpec: (review, revision) => {
-        const repository = review.repository
-        return Effect.succeed(
-          HostedReviewCheckoutSpec.make({
-            repository,
-            review,
-            remoteUrl: `https://github.com/${repository.namespace}/${repository.name}.git`,
-            fetchRef: `refs/pull/${review.number}/head`,
-            revision,
-          }),
-        )
-      },
-      bootstrapBareRepository: () => Effect.void,
-    }),
-  )
   return ReviewAgentService.layer.pipe(
     Layer.provideMerge(persistence),
-    Layer.provideMerge(
-      Layer.succeed(
-        AppSettings,
-        AppSettings.of({
-          get: Effect.succeed(DEFAULT_AI_SETTINGS),
-          save: (settings) => Effect.succeed(settings),
-        }),
-      ),
-    ),
     Layer.provideMerge(registry),
+    Layer.provideMerge(routing),
+    Layer.provideMerge(gitRegistry),
     Layer.provideMerge(mcp),
     Layer.provideMerge(worktrees),
-    Layer.provideMerge(gitProvider),
     Layer.provideMerge(ReviewContextBuilder.layer),
+    Layer.provideMerge(AgentArtifactNormalizer.layer),
   )
+}
+
+const unavailableGitOperation = <A>() =>
+  Effect.dieMessage("Unused test Git provider operation") as Effect.Effect<A>
+
+const testGitProvider = (): GitProviderRegistration => {
+  const id = GitProviderId.make("github")
+  return {
+    descriptor: GitProviderDescriptor.make({
+      id,
+      kind: GitProviderKind.make("test"),
+      displayName: "Test Git",
+      host: "git.test",
+      capabilities: GitProviderCapabilities.make({
+        repositorySearch: false,
+        searchScopes: false,
+        assignedReviews: false,
+        reviewDecisions: false,
+        fileUrls: false,
+        remoteWorkspaceBootstrap: true,
+      }),
+      terminology: GitProviderTerminology.make({
+        repositorySingular: "repository",
+        repositoryPlural: "repositories",
+        reviewSingular: "review",
+        reviewPlural: "reviews",
+      }),
+    }),
+    publishingTools: ["gh", "glab"],
+    diagnose: unavailableGitOperation(),
+    parseRemote: () => unavailableGitOperation(),
+    searchRepositories: () => unavailableGitOperation(),
+    listReviews: () => unavailableGitOperation(),
+    getReview: () => unavailableGitOperation(),
+    getReviewDiff: () => unavailableGitOperation(),
+    getReviewDecision: () => unavailableGitOperation(),
+    submitReviewDecision: () => unavailableGitOperation(),
+    repositoryUrl: () => "https://git.test/repository",
+    fileUrl: () => "https://git.test/file",
+    bootstrapBareRepository: () => Effect.void,
+    checkoutSpec: () => unavailableGitOperation(),
+    checkoutSpecAtRevision: (review, revision) =>
+      Effect.succeed(
+        HostedReviewCheckoutSpec.make({
+          repository: review.repository,
+          review,
+          remoteUrl: `https://git.test/${review.repository.namespace}/${review.repository.name}.git`,
+          fetchRef: `refs/reviews/${review.number}/head`,
+          revision,
+        }),
+      ),
+  }
 }
 
 describe("ReviewAgentService", () => {
@@ -255,18 +375,14 @@ describe("ReviewAgentService", () => {
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0, events: [] as string[], mcpPaths: [] as Array<string | null> }
-      const providerResult = ReviewAgentTurnResult.make({
-        response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Reviewed exact head." }),
-        artifacts: [],
-        providerRunId: null,
-        usage: null,
-      })
+      const providerResult = makeProviderResult({ bodyMarkdown: "Reviewed exact head." })
       const layer = makeLayer(
         databasePath,
         (input) =>
           Effect.sync(() => {
             released.events.push("provider.run")
-            expect(input.cwd).toBe("/workspace/pool")
+            expect(input.workingDirectory).toBe("/workspace/pool")
+            expect(input.policy.providerPublishingTools).toEqual(["gh", "glab"])
           }).pipe(
             Effect.as(providerResult),
             Effect.ensuring(Effect.sync(() => released.events.push("provider.finalized"))),
@@ -335,11 +451,9 @@ describe("ReviewAgentService", () => {
         databasePath,
         () =>
           Effect.succeed(
-            ReviewAgentTurnResult.make({
-              response: ReviewThreadAgentResponse.make({
-                bodyMarkdown: "The change is safe.",
-                threadSummaryUpdate: "Reviewed the value update.",
-              }),
+            makeProviderResult({
+              bodyMarkdown: "The change is safe.",
+              threadSummary: "Reviewed the value update.",
               artifacts: [
                 ReviewAgentArtifact.make({
                   type: "mcp_tool_result",
@@ -352,7 +466,6 @@ describe("ReviewAgentService", () => {
                   originalSize: 13,
                 }),
               ],
-              providerRunId: null,
               usage,
             }),
           ),
@@ -396,7 +509,7 @@ describe("ReviewAgentService", () => {
         expect(artifacts).toHaveLength(1)
         expect(artifacts[0]?.artifact).toMatchObject({
           type: "mcp_tool_result",
-          contentDigest: "sha256:test-artifact",
+          contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         })
         expect(memory).toMatchObject({
           summary: "Reviewed the value update.",
@@ -417,9 +530,10 @@ describe("ReviewAgentService", () => {
         () =>
           Effect.sync(() => released.events.push("provider.run")).pipe(
             Effect.flatMap(() =>
-              Effect.fail<ReviewAgentProviderError>(
-                ReviewAgentExecutionError.make({
-                  provider: "opencode",
+              Effect.fail(
+                AgentProviderOperationError.make({
+                  providerId: AgentProviderId.make("opencode"),
+                  capability: "review-thread",
                   reason: "sanitized provider failure",
                   cause: new Error("sanitized provider failure"),
                 }),
@@ -484,10 +598,10 @@ describe("ReviewAgentService", () => {
           Effect.succeed({
             response: { bodyMarkdown: "" },
             artifacts: [],
-            providerRunId: null,
+            sessionId: null,
             usage: null,
             // SAFETY: This intentionally malformed fake crosses the provider boundary to test decoding.
-          } as unknown as ReviewAgentTurnResult),
+          } as unknown as ReviewThreadResult),
         released,
       )
 
@@ -532,15 +646,7 @@ describe("ReviewAgentService", () => {
       const released = { count: 0 }
       const layer = makeLayer(
         databasePath,
-        () =>
-          Effect.succeed(
-            ReviewAgentTurnResult.make({
-              response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Recovered response." }),
-              artifacts: [],
-              providerRunId: null,
-              usage: null,
-            }),
-          ),
+        () => Effect.succeed(makeProviderResult({ bodyMarkdown: "Recovered response." })),
         released,
       )
 
@@ -614,14 +720,7 @@ describe("ReviewAgentService", () => {
         () =>
           Deferred.succeed(providerStarted, undefined).pipe(
             Effect.zipRight(Deferred.await(releaseProvider)),
-            Effect.as(
-              ReviewAgentTurnResult.make({
-                response: ReviewThreadAgentResponse.make({ bodyMarkdown: "Only response." }),
-                artifacts: [],
-                providerRunId: null,
-                usage: null,
-              }),
-            ),
+            Effect.as(makeProviderResult({ bodyMarkdown: "Only response." })),
           ),
         released,
       )

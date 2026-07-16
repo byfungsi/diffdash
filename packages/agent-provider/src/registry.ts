@@ -55,6 +55,7 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
       ReviewThreadCapability,
       AgentProviderResolutionError | NoAgentProviderAvailableError
     >
+    readonly reviewThreadRoute: (route: AgentProviderRoute) => readonly AgentProviderId[]
   }
 >() {
   /** Builds a registry and rejects duplicate IDs before exposing any provider. */
@@ -99,6 +100,8 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
           walkthroughRoute: (route) =>
             route.mode === "provider" ? [route.providerId] : [...policies.walkthrough],
           resolveReviewThread: reviewThread,
+          reviewThreadRoute: (route) =>
+            route.mode === "provider" ? [route.providerId] : [...policies.reviewThread],
         })
       }),
     )
