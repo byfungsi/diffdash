@@ -21,6 +21,14 @@ const forbiddenBrowserImports = new Set([
   "electron",
   "electron-updater",
 ])
+const browserSafePackages = new Set([
+  "@diffdash/agent-provider",
+  "@diffdash/app",
+  "@diffdash/domain",
+  "@diffdash/git-provider",
+  "@diffdash/protocol",
+])
+const concreteProviderPattern = /^@diffdash\/(?:agent-provider|git-provider)-/
 
 const sourceFiles = (directory) =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -67,6 +75,33 @@ test("relative imports stay inside their package", () => {
       }
     }
   }
+})
+
+test("workspace package dependencies are acyclic", () => {
+  const graph = new Map(
+    manifests.map(({ manifest }) => [
+      manifest.name,
+      Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).filter((name) =>
+        name.startsWith("@diffdash/"),
+      ),
+    ]),
+  )
+  const visited = new Set()
+  const active = new Set()
+
+  const visit = (name, path) => {
+    if (active.has(name)) {
+      const cycleStart = path.indexOf(name)
+      assert.fail(`workspace dependency cycle: ${[...path.slice(cycleStart), name].join(" -> ")}`)
+    }
+    if (visited.has(name)) return
+    active.add(name)
+    for (const dependency of graph.get(name) ?? []) visit(dependency, [...path, name])
+    active.delete(name)
+    visited.add(name)
+  }
+
+  for (const name of graph.keys()) visit(name, [])
 })
 
 test("concrete Git providers remain isolated leaf integrations", () => {
@@ -138,6 +173,35 @@ test("agent providers remain isolated leaf integrations", () => {
       /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|domain|git-provider|persistence|protocol|settings)|@diffdash\/agent-provider-[^"']+)(?:\/[^"']*)?\1/,
       `${provider.manifest.name} crosses the agent provider leaf boundary`,
     )
+  }
+})
+
+test("provider manifests remain platform-neutral leaves", () => {
+  const forbiddenDependencies = new Set([
+    "@diffdash/app",
+    "@diffdash/desktop",
+    "@diffdash/persistence",
+    "@diffdash/settings",
+    "better-sqlite3",
+    "electron",
+    "electron-updater",
+    "react",
+    "react-dom",
+  ])
+
+  for (const { manifest } of manifests.filter(({ manifest: candidate }) =>
+    concreteProviderPattern.test(candidate.name),
+  )) {
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+      assert.ok(
+        !forbiddenDependencies.has(dependency),
+        `${manifest.name} cannot depend on ${dependency}`,
+      )
+      assert.ok(
+        !concreteProviderPattern.test(dependency),
+        `${manifest.name} cannot depend on concrete provider ${dependency}`,
+      )
+    }
   }
 })
 
@@ -234,15 +298,20 @@ test("the OpenCode SDK is owned only by its leaf provider", () => {
   }
 })
 
-test("browser packages bundle without platform dependencies", async () => {
+test("every browser-safe package export bundles without platform dependencies", async () => {
+  const entryPoints = manifests
+    .filter(({ manifest }) => browserSafePackages.has(manifest.name))
+    .flatMap(({ directory, manifest }) =>
+      Object.values(manifest.exports)
+        .filter((exportPath) => typeof exportPath === "string" && !exportPath.endsWith(".css"))
+        .map((exportPath) => ({
+          entryPoint: relative(root, resolve(directory, exportPath)),
+          packageName: manifest.name,
+        })),
+    )
+
   await Promise.all(
-    [
-      "packages/domain/src/repository.ts",
-      "packages/agent-provider/src/registry.ts",
-      "packages/git-provider/src/registry.ts",
-      "packages/protocol/src/api.ts",
-      "packages/app/src/index.ts",
-    ].map((entryPoint) =>
+    entryPoints.map(({ entryPoint, packageName }) =>
       build({
         absWorkingDir: root,
         bundle: true,
@@ -256,6 +325,14 @@ test("browser packages bundle without platform dependencies", async () => {
               buildApi.onResolve({ filter: /^[^.]/ }, (args) => {
                 const path = args.path.replace(/\?.*$/, "")
                 assert.ok(!forbiddenBrowserImports.has(path), `${entryPoint} imports ${path}`)
+                assert.ok(
+                  !concreteProviderPattern.test(path),
+                  `${entryPoint} imports concrete provider ${path}`,
+                )
+                assert.ok(
+                  !/^@diffdash\/(?:desktop|persistence|process)(?:\/|$)/.test(path),
+                  `${entryPoint} imports platform package ${path}`,
+                )
                 if (!path.startsWith("@diffdash/")) return { external: true }
                 return undefined
               })
@@ -263,6 +340,8 @@ test("browser packages bundle without platform dependencies", async () => {
           },
         ],
         write: false,
+      }).catch((error) => {
+        throw new Error(`${packageName} export ${entryPoint} is not browser-safe`, { cause: error })
       }),
     ),
   )

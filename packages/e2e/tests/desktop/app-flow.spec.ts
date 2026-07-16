@@ -215,11 +215,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .filter({ hasText: "1" })
       .first()
     await expect(addedLine).toBeVisible()
-    await gutterNumber.dispatchEvent("pointermove", {
-      bubbles: true,
-      composed: true,
-      pointerType: "mouse",
-    })
+    await gutterNumber.hover()
     const gutterUtility = window.locator("diffs-container [data-utility-button]")
     await expect(gutterUtility).toBeVisible()
     const utilityPointerEvent = {

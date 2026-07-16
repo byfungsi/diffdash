@@ -67,3 +67,10 @@ them.
 
 Root desktop development, unit, browser, Electron E2E, packaged E2E, web deployment, promo, and
 release commands are stable convenience wrappers around package-owned scripts.
+
+Pull-request CI uses Turbo's affected package graph for lint, typecheck, unit, and build tasks. It
+always runs architecture bundles, browser tests, download-worker tests, and Electron E2E; provider or
+protocol changes additionally rerun their dependent desktop, browser, and Electron integration. The
+root `check` gate regenerates committed icons and the versioned SQLite fixture and rejects drift
+before running format, lint, typecheck, and unit checks. `release:check` extends that deterministic
+gate with browser, development and packaged E2E, build, and release-infrastructure verification.

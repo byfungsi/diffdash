@@ -70,6 +70,60 @@
       }
     },
     {
+      "files": [
+        "packages/agent-provider/src/**/*.{ts,tsx}",
+        "packages/app/src/**/*.{ts,tsx}",
+        "packages/domain/src/**/*.{ts,tsx}",
+        "packages/git-provider/src/**/*.{ts,tsx}",
+        "packages/protocol/src/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "import/no-nodejs-modules": "error",
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:better-sqlite3|electron(?:-updater)?|@diffdash/(?:agent-provider-.+|desktop|git-provider-.+|persistence|process))(?:/|$)",
+                "message": "Browser-safe packages cannot import platform or concrete provider modules."
+              },
+              {
+                "regex": "(?:^|/)src/main(?:/|$)",
+                "message": "Browser-safe packages cannot import main-process modules."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/agent-provider-*/src/**/*.{ts,tsx}",
+        "packages/git-provider-*/src/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:electron(?:-updater)?|react(?:-dom)?|better-sqlite3|@diffdash/(?:app|desktop|persistence|settings))(?:/|$)",
+                "message": "Concrete providers are platform-neutral leaf integrations."
+              },
+              {
+                "regex": "^@diffdash/(?:agent-provider|git-provider)/registry$",
+                "message": "Concrete providers cannot depend on the registry implementation."
+              },
+              {
+                "regex": "^@diffdash/(?:agent-provider-|git-provider-)",
+                "message": "Concrete providers cannot import another concrete provider."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
         "no-console": "off",
