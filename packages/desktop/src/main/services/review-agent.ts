@@ -15,6 +15,13 @@ import {
 } from "@diffdash/domain/review-agent"
 import { PullRequestReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
 import {
+  HostedRepositoryLocator,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  HostedRepositoryName,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import {
   MarkdownBody,
   type ReviewThreadDetails,
   type ReviewThreadId,
@@ -206,9 +213,14 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                     let result: ReviewAgentTurnResult
                     if (input.snapshot instanceof PullRequestReviewSnapshot) {
                       const checkout = yield* gitProvider.hostedReviewCheckoutSpec(
-                        input.snapshot.detail.repoOwner,
-                        input.snapshot.detail.repoName,
-                        input.snapshot.detail.number,
+                        HostedReviewLocator.make({
+                          repository: HostedRepositoryLocator.make({
+                            providerId: input.snapshot.detail.providerId,
+                            namespace: RepositoryNamespace.make(input.snapshot.detail.repoOwner),
+                            name: HostedRepositoryName.make(input.snapshot.detail.repoName),
+                          }),
+                          number: HostedReviewNumber.make(input.snapshot.detail.number),
+                        }),
                         input.snapshot.headRevision,
                       )
                       result = yield* workspaces.use(

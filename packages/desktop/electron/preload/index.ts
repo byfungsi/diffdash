@@ -13,7 +13,6 @@ import type {
   PullRequestSummary,
 } from "@diffdash/domain/pull-request"
 import type {
-  RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
   Repo,
@@ -37,6 +36,19 @@ import type {
   CreateReviewThreadRequest,
   RunReviewThreadAgentRequest,
 } from "@diffdash/protocol/review-threads"
+import type { GitProviderDescriptor, ReviewDecision } from "@diffdash/domain/git-provider"
+import type {
+  GenerateHostedWalkthroughRequest,
+  HostedProviderRequest,
+  HostedRepositoryRequest,
+  HostedRepositorySearchRequest,
+  HostedReviewRequest,
+  HostedViewedFilesRequest,
+  HostedWalkthroughRequest,
+  OpenHostedReviewFileRequest,
+  SetHostedViewedFileRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "@diffdash/protocol/hosted-git"
 
 const invoke = async <A>(channel: InvokeChannel, ...args: readonly unknown[]): Promise<A> => {
   try {
@@ -82,21 +94,8 @@ const api: DiffDashApi = {
   diagnostics: () => invoke<AppPrerequisites>(InvokeChannel.appDiagnostics),
   installDiffDashCli: () => invoke<DiffDashCliInstallResult>(InvokeChannel.appInstallDiffDashCli),
   openExternalUrl: (url: string) => invoke<void>(InvokeChannel.appOpenExternalUrl, url),
-  openRepositoryFile: (
-    owner: string,
-    name: string,
-    filePath: string,
-    headRefName: string,
-    headRefOid: string | null,
-  ) =>
-    invoke<void>(
-      InvokeChannel.appOpenRepositoryFile,
-      owner,
-      name,
-      filePath,
-      headRefName,
-      headRefOid,
-    ),
+  openRepositoryFile: (request: OpenHostedReviewFileRequest) =>
+    invoke<void>(InvokeChannel.appOpenRepositoryFile, request),
   openLocalRepositoryFile: (rootPath: string, filePath: string) =>
     invoke<void>(InvokeChannel.appOpenLocalRepositoryFile, rootPath, filePath),
   repositories: {
@@ -139,25 +138,33 @@ const api: DiffDashApi = {
     get: () => invoke<AppState>(InvokeChannel.appStateGet),
     update: (state: AppState) => invoke<AppState>(InvokeChannel.appStateUpdate, state),
   },
-  gitProvider: {
-    searchRepositories: (request: RepositorySearchRequest) =>
-      invoke<readonly RepositorySearchResult[]>(InvokeChannel.searchRepositories, request),
-    listSearchScopes: () =>
-      invoke<readonly RepositorySearchScope[]>(InvokeChannel.listSearchScopes),
-    listPullRequests: (owner: string, name: string) =>
-      invoke<readonly PullRequestSummary[]>(InvokeChannel.listPullRequests, owner, name),
-    listReviewRequests: () =>
-      invoke<readonly PullRequestSummary[]>(InvokeChannel.listReviewRequests),
-    getPullRequestDetail: (owner: string, name: string, number: number) =>
-      invoke<PullRequestDetail>(InvokeChannel.getPullRequestDetail, owner, name, number),
-    refreshPullRequestDetail: (owner: string, name: string, number: number) =>
-      invoke<PullRequestDetail>(InvokeChannel.refreshPullRequestDetail, owner, name, number),
-    getPullRequestDiff: (owner: string, name: string, number: number) =>
-      invoke<PullRequestDiff>(InvokeChannel.getPullRequestDiff, owner, name, number),
-    hasApprovedPullRequest: (owner: string, name: string, number: number) =>
-      invoke<boolean>(InvokeChannel.hasApprovedPullRequest, owner, name, number),
-    approvePullRequest: (owner: string, name: string, number: number) =>
-      invoke<void>(InvokeChannel.approvePullRequest, owner, name, number),
+  providers: {
+    list: () => invoke<readonly GitProviderDescriptor[]>(InvokeChannel.listProviders),
+  },
+  hostedRepositories: {
+    searchRepositories: (request: HostedRepositorySearchRequest) =>
+      invoke<readonly RepositorySearchResult[]>(InvokeChannel.searchHostedRepositories, request),
+    listSearchScopes: (request: HostedProviderRequest) =>
+      invoke<readonly RepositorySearchScope[]>(
+        InvokeChannel.listHostedRepositorySearchScopes,
+        request,
+      ),
+  },
+  hostedReviews: {
+    list: (request: HostedRepositoryRequest) =>
+      invoke<readonly PullRequestSummary[]>(InvokeChannel.listHostedReviews, request),
+    listAssigned: (request: HostedProviderRequest) =>
+      invoke<readonly PullRequestSummary[]>(InvokeChannel.listAssignedHostedReviews, request),
+    get: (request: HostedReviewRequest) =>
+      invoke<PullRequestDetail>(InvokeChannel.getHostedReview, request),
+    refresh: (request: HostedReviewRequest) =>
+      invoke<PullRequestDetail>(InvokeChannel.refreshHostedReview, request),
+    getDiff: (request: HostedReviewRequest) =>
+      invoke<PullRequestDiff>(InvokeChannel.getHostedReviewDiff, request),
+    getDecision: (request: HostedReviewRequest) =>
+      invoke<ReviewDecision>(InvokeChannel.getHostedReviewDecision, request),
+    submitDecision: (request: SubmitHostedReviewDecisionRequest) =>
+      invoke<void>(InvokeChannel.submitHostedReviewDecision, request),
   },
   localReviews: {
     resolveBranch: (localPath: string, branchName: string | null) =>
@@ -170,27 +177,10 @@ const api: DiffDashApi = {
       invoke<LocalReviewSnapshot>(InvokeChannel.localReviewSnapshot, target),
   },
   viewedFiles: {
-    list: (owner: string, name: string, number: number, headSha: string) =>
-      invoke<readonly string[]>(InvokeChannel.listViewedFiles, owner, name, number, headSha),
-    set: (
-      owner: string,
-      name: string,
-      number: number,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ) =>
-      invoke<void>(
-        InvokeChannel.setViewedFile,
-        owner,
-        name,
-        number,
-        headSha,
-        reviewKey,
-        filePath,
-        viewed,
-      ),
+    list: (request: HostedViewedFilesRequest) =>
+      invoke<readonly string[]>(InvokeChannel.listViewedFiles, request),
+    set: (request: SetHostedViewedFileRequest) =>
+      invoke<void>(InvokeChannel.setViewedFile, request),
     listLocal: (rootPath: string, headSha: string) =>
       invoke<readonly string[]>(InvokeChannel.listLocalViewedFiles, rootPath, headSha),
     setLocal: (
@@ -210,19 +200,10 @@ const api: DiffDashApi = {
       ),
   },
   walkthroughs: {
-    get: (owner: string, name: string, number: number, baseSha: string, headSha: string) =>
-      invoke<StoredWalkthrough | null>(
-        InvokeChannel.getWalkthrough,
-        owner,
-        name,
-        number,
-        baseSha,
-        headSha,
-      ),
-    generate: (owner: string, name: string, number: number) =>
-      invoke<StoredWalkthrough>(InvokeChannel.generateWalkthrough, owner, name, number, false),
-    regenerate: (owner: string, name: string, number: number) =>
-      invoke<StoredWalkthrough>(InvokeChannel.generateWalkthrough, owner, name, number, true),
+    get: (request: HostedWalkthroughRequest) =>
+      invoke<StoredWalkthrough | null>(InvokeChannel.getWalkthrough, request),
+    generate: (request: GenerateHostedWalkthroughRequest) =>
+      invoke<StoredWalkthrough>(InvokeChannel.generateWalkthrough, request),
   },
   localWalkthroughs: {
     get: (target: LocalReviewTarget, baseSha: string, headSha: string) =>

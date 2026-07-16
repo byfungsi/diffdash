@@ -2,6 +2,12 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
 import { Repo } from "@diffdash/domain/repository"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
@@ -24,7 +30,10 @@ const linkedRepo = Repo.make({
 
 const unavailable = <A>() => Effect.die(new Error("Unused test method")) as Effect.Effect<A>
 
-const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
+const makeLayer = (
+  remoteUrl = linkedRepo.remoteUrl,
+  remoteUrls: readonly string[] = [remoteUrl],
+) => {
   const persisted: Array<{ readonly owner: string; readonly name: string; readonly path: string }> =
     []
   const layer = RepositoryLinker.layer.pipe(
@@ -33,10 +42,10 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
         Layer.succeed(
           GitService,
           GitService.of({
-            listRemotes: () => Effect.succeed([]),
+            listRemotes: () => Effect.succeed([{ name: "origin", fetchUrls: [...remoteUrls] }]),
             detectRepository: () =>
               Effect.succeed({ rootPath: linkedRepo.localPath ?? "", remoteUrl }),
-            detectRoot: () => unavailable(),
+            detectRoot: () => Effect.succeed(linkedRepo.localPath ?? ""),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
             getLocalReviewDetail: () => unavailable(),
@@ -47,15 +56,20 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
         Layer.succeed(
           GitProvider,
           GitProvider.of({
+            listProviders: Effect.succeed([]),
+            diagnoseProviders: Effect.succeed([]),
             parseRemoteUrl: (value) =>
               value.includes("github.com")
-                ? Effect.succeed({ provider: "github" as const, owner: "fungsi", name: "diffdash" })
+                ? Effect.succeed(
+                    value.includes("other/repository")
+                      ? repository("other", "repository")
+                      : repository("fungsi", "diffdash"),
+                  )
                 : GitProviderRemoteParseError.make({ remoteUrl: value }),
-            repositoryUrl: () => "",
-            fileUrl: () => "",
+            repositoryUrl: () => Effect.succeed(""),
+            fileUrl: () => Effect.succeed(""),
             searchRepositories: () => unavailable(),
             listSearchScopes: () => unavailable(),
-            listRepositories: () => unavailable(),
             listPullRequests: () => unavailable(),
             listReviewRequests: () => unavailable(),
             getPullRequestDetail: () => unavailable(),
@@ -65,7 +79,7 @@ const makeLayer = (remoteUrl = linkedRepo.remoteUrl) => {
             approvePullRequest: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
             bootstrapBareRepository: () => unavailable(),
-            isAvailable: Effect.succeed(true),
+            isAvailable: () => Effect.succeed(true),
           }),
         ),
         Layer.succeed(
@@ -98,8 +112,7 @@ describe("RepositoryLinker", () => {
       const linker = yield* RepositoryLinker
       const repo = yield* linker.link(
         LinkRepositoryCheckoutRequest.make({
-          owner: "FUNGSI",
-          name: "DiffDash",
+          repository: repository("FUNGSI", "DiffDash"),
           localPath: "/workspace/diffdash/src",
         }),
       )
@@ -118,8 +131,7 @@ describe("RepositoryLinker", () => {
       const result = yield* Effect.either(
         linker.link(
           LinkRepositoryCheckoutRequest.make({
-            owner: "other",
-            name: "repository",
+            repository: repository("other", "repository"),
             localPath: "/workspace/diffdash",
           }),
         ),
@@ -131,6 +143,23 @@ describe("RepositoryLinker", () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.effect("FUN-126 AC: links the expected provider identity from any configured remote", () => {
+    const { layer, persisted } = makeLayer(linkedRepo.remoteUrl, [
+      "https://github.com/other/repository.git",
+      linkedRepo.remoteUrl,
+    ])
+    return Effect.gen(function* () {
+      const linker = yield* RepositoryLinker
+      yield* linker.link(
+        LinkRepositoryCheckoutRequest.make({
+          repository: repository("fungsi", "diffdash"),
+          localPath: "/workspace/diffdash",
+        }),
+      )
+      expect(persisted).toHaveLength(1)
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("rejects a checkout without a supported GitHub origin", () => {
     const { layer } = makeLayer("https://gitlab.com/fungsi/diffdash.git")
     return Effect.gen(function* () {
@@ -139,8 +168,15 @@ describe("RepositoryLinker", () => {
 
       expect(Either.isLeft(result)).toBe(true)
       if (Either.isLeft(result)) {
-        expect(result.left.reason).toContain("supported GitHub remote")
+        expect(result.left.reason).toContain("configured provider")
       }
     }).pipe(Effect.provide(layer))
   })
 })
+
+const repository = (owner: string, name: string) =>
+  HostedRepositoryLocator.make({
+    providerId: GitProviderId.make("github"),
+    namespace: RepositoryNamespace.make(owner),
+    name: HostedRepositoryName.make(name),
+  })

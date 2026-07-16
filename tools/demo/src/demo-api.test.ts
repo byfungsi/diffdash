@@ -8,6 +8,28 @@ import {
 } from "@diffdash/protocol/review-threads"
 import { loadAtomicWebhookReplayScenario } from "./atomic-webhook-replay"
 import { createDemoRuntime } from "./demo-api"
+import {
+  HostedProviderRequest,
+  HostedReviewRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "@diffdash/protocol/hosted-git"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+
+const review = HostedReviewLocator.make({
+  repository: HostedRepositoryLocator.make({
+    providerId: GitProviderId.make("github"),
+    namespace: RepositoryNamespace.make("emberline"),
+    name: HostedRepositoryName.make("dispatch"),
+  }),
+  number: HostedReviewNumber.make(417),
+})
 
 describe("scenario-backed DiffDash API", () => {
   it.effect("serves the real renderer contract without external services", () =>
@@ -16,12 +38,16 @@ describe("scenario-backed DiffDash API", () => {
       const { api, timeline } = createDemoRuntime(scenario)
 
       const repositories = yield* Effect.promise(() => api.repositories.list())
-      const reviewRequests = yield* Effect.promise(() => api.gitProvider.listReviewRequests())
+      const reviewRequests = yield* Effect.promise(() =>
+        api.hostedReviews.listAssigned(
+          HostedProviderRequest.make({ providerId: GitProviderId.make("github") }),
+        ),
+      )
       const detail = yield* Effect.promise(() =>
-        api.gitProvider.getPullRequestDetail("emberline", "dispatch", 417),
+        api.hostedReviews.get(HostedReviewRequest.make({ review })),
       )
       const diff = yield* Effect.promise(() =>
-        api.gitProvider.getPullRequestDiff("emberline", "dispatch", 417),
+        api.hostedReviews.getDiff(HostedReviewRequest.make({ review })),
       )
 
       expect(repositories.map((repository) => repository.id)).toEqual(["github:emberline/dispatch"])
@@ -38,6 +64,7 @@ describe("scenario-backed DiffDash API", () => {
       const { api, timeline } = createDemoRuntime(scenario)
       const target = PullRequestReviewTarget.make({
         kind: "pullRequest",
+        providerId: GitProviderId.make("github"),
         owner: "emberline",
         name: "dispatch",
         number: 417,
@@ -99,7 +126,9 @@ describe("scenario-backed DiffDash API", () => {
         expect(timeline.getState().viewedFileKeys).toEqual([])
 
         yield* Effect.promise(() =>
-          api.gitProvider.approvePullRequest("emberline", "dispatch", 417),
+          api.hostedReviews.submitDecision(
+            SubmitHostedReviewDecisionRequest.make({ review, decision: "approved" }),
+          ),
         )
         expect(timeline.getState().approved).toBe(true)
 

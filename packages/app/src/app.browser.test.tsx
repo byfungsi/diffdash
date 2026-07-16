@@ -27,13 +27,15 @@ import {
   PullRequestSummary,
   ReviewActor,
 } from "@diffdash/domain/pull-request"
+import { Repo, RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
 import {
-  Repo,
-  type RepositorySearchRequest,
-  RepositorySearchResult,
-  RepositorySearchScope,
-} from "@diffdash/domain/repository"
-import { AppPrerequisites } from "@diffdash/protocol/prerequisites"
+  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderId,
+  GitProviderKind,
+  GitProviderTerminology,
+} from "@diffdash/domain/git-provider"
+import { AppPrerequisites, SetupRequirement } from "@diffdash/protocol/prerequisites"
 import {
   BranchComparison,
   LocalReviewTarget,
@@ -64,6 +66,27 @@ const repo = Repo.make({
   provider: "github",
   remoteUrl: "https://github.com/fungsi/diffdash",
   updatedAt: "2026-07-07T00:00:00Z",
+})
+
+const provider = GitProviderDescriptor.make({
+  id: GitProviderId.make("github"),
+  kind: GitProviderKind.make("github"),
+  displayName: "GitHub",
+  host: "github.com",
+  capabilities: GitProviderCapabilities.make({
+    repositorySearch: true,
+    searchScopes: true,
+    assignedReviews: true,
+    reviewDecisions: true,
+    fileUrls: true,
+    remoteWorkspaceBootstrap: true,
+  }),
+  terminology: GitProviderTerminology.make({
+    repositorySingular: "repository",
+    repositoryPlural: "repositories",
+    reviewSingular: "pull request",
+    reviewPlural: "pull requests",
+  }),
 })
 
 const staleLocalFavoriteRepo = Repo.make({
@@ -360,6 +383,18 @@ const missingPrerequisites = AppPrerequisites.make({
   ghSupported: false,
   ghVersion: null,
   installedCodingAgents: [],
+  setupRequirements: [
+    SetupRequirement.make({
+      key: "provider:github",
+      providerId: GitProviderId.make("github"),
+      title: "GitHub ready",
+      description: "Connect GitHub to search repositories and review pull requests.",
+      detail: "GitHub needs setup or authentication.",
+      ready: false,
+      requiredForLocalUse: false,
+      helpUrl: "https://cli.github.com/manual/gh_auth_login",
+    }),
+  ],
 })
 
 const noAgentPrerequisites = AppPrerequisites.make({
@@ -416,16 +451,18 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Set up DiffDash")
-      expect(document.body.textContent).toContain("GitHub CLI supported")
+      expect(document.body.textContent).toContain("GitHub ready")
       expect(document.body.textContent).toContain("Coding agent installed")
       expect(document.body.textContent).not.toContain("Bookmarked Repos")
     })
 
     const docsButton = [...document.querySelectorAll("button")].find(
-      (button) => button.textContent === "GitHub CLI docs",
+      (button) => button.textContent === "Setup docs",
     )
     docsButton?.click()
-    expect(calls.openExternalUrl).toHaveBeenCalledWith("https://cli.github.com/")
+    expect(calls.openExternalUrl).toHaveBeenCalledWith(
+      "https://cli.github.com/manual/gh_auth_login",
+    )
 
     const installButton = [...document.querySelectorAll("button")].find(
       (button) => button.textContent === "Install in PATH",
@@ -503,12 +540,12 @@ describe("App browser interactions", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Finish setup")
       expect(document.body.textContent).toContain("git was not found in PATH")
-      expect(document.body.textContent).toContain("gh was not found in PATH")
+      expect(document.body.textContent).toContain("GitHub needs setup or authentication")
       expect(document.body.textContent).toContain("Walkthroughs require Codex, Claude, or OpenCode")
     })
 
     const authDocsButton = [...document.querySelectorAll("button")].find(
-      (button) => button.textContent === "Auth docs",
+      (button) => button.textContent === "Setup docs",
     )
     authDocsButton?.click()
     expect(calls.openExternalUrl).toHaveBeenCalledWith(
@@ -520,15 +557,26 @@ describe("App browser interactions", () => {
     installDiffDashApi({
       diagnostics: AppPrerequisites.make({
         ...readyPrerequisites,
-        ghSupported: false,
-        ghVersion: "1.14.0",
+        setupRequirements: [
+          SetupRequirement.make({
+            key: "provider:github",
+            providerId: GitProviderId.make("github"),
+            title: "GitHub ready",
+            description: "Connect GitHub to search repositories and review pull requests.",
+            detail:
+              "GitHub CLI is unsupported. Update the provider tooling, then restart DiffDash.",
+            ready: false,
+            requiredForLocalUse: false,
+            helpUrl: null,
+          }),
+        ],
       }),
     })
     renderApp()
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain(
-        "GitHub CLI 2.7.0 or newer is required for repository search. Found 1.14.0. Update gh, then restart DiffDash.",
+        "GitHub CLI is unsupported. Update the provider tooling, then restart DiffDash.",
       )
     })
   })
@@ -608,7 +656,8 @@ describe("App browser interactions", () => {
       expect(calls.searchRepositories).toHaveBeenCalledTimes(1)
     })
     expect(calls.searchRepositories).toHaveBeenLastCalledWith({
-      owners: ["hanipcode", "fungsi"],
+      providerId: "github",
+      namespaces: ["hanipcode", "fungsi"],
       query: "owners",
     })
 
@@ -622,7 +671,8 @@ describe("App browser interactions", () => {
       expect(calls.searchRepositories).toHaveBeenCalledTimes(2)
     })
     expect(calls.searchRepositories).toHaveBeenLastCalledWith({
-      owners: ["fungsi"],
+      providerId: "github",
+      namespaces: ["fungsi"],
       query: "owners",
     })
   })
@@ -771,7 +821,13 @@ describe("App browser interactions", () => {
     repoButton?.click()
 
     await vi.waitFor(() => {
-      expect(calls.listPullRequests).toHaveBeenCalledWith("fungsi", "diffdash")
+      expect(calls.listPullRequests).toHaveBeenCalledWith({
+        repository: expect.objectContaining({
+          providerId: "github",
+          namespace: "fungsi",
+          name: "diffdash",
+        }),
+      })
     })
     expect(calls.listPullRequests).not.toHaveBeenCalledWith("local", "diffdash-fe11f30a1061")
   })
@@ -799,8 +855,11 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(calls.linkRepository).toHaveBeenCalledWith({
-        owner: "fungsi",
-        name: "diffdash",
+        repository: expect.objectContaining({
+          providerId: "github",
+          namespace: "fungsi",
+          name: "diffdash",
+        }),
         localPath: "/workspace/diffdash",
       })
       expect(document.body.textContent).not.toContain("Link a checkout for isolated agent review")
@@ -1157,7 +1216,13 @@ describe("App browser interactions", () => {
     repoPaletteButton?.click()
 
     await vi.waitFor(() => {
-      expect(calls.listPullRequests).toHaveBeenCalledWith("fungsi", "diffdash")
+      expect(calls.listPullRequests).toHaveBeenCalledWith({
+        repository: expect.objectContaining({
+          providerId: "github",
+          namespace: "fungsi",
+          name: "diffdash",
+        }),
+      })
       expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
     })
 
@@ -1288,8 +1353,8 @@ describe("App browser interactions", () => {
     reloadAction?.click()
 
     await vi.waitFor(() => {
-      expect(calls.getPullRequestDetail).toHaveBeenCalledWith("fungsi", "diffdash", 51)
-      expect(calls.getPullRequestDiff).toHaveBeenCalledWith("fungsi", "diffdash", 51)
+      expect(calls.getPullRequestDetail).toHaveBeenCalledWith({ review: expect.anything() })
+      expect(calls.getPullRequestDiff).toHaveBeenCalledWith({ review: expect.anything() })
       expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
     })
 
@@ -1368,7 +1433,10 @@ describe("App browser interactions", () => {
     approveButton?.click()
 
     await vi.waitFor(() => {
-      expect(calls.approvePullRequest).toHaveBeenCalledWith("fungsi", "diffdash", 51)
+      expect(calls.approvePullRequest).toHaveBeenCalledWith({
+        decision: "approved",
+        review: expect.anything(),
+      })
     })
     actionsButton?.click()
     await vi.waitFor(() => {
@@ -1388,13 +1456,11 @@ describe("App browser interactions", () => {
     walkthroughTab?.click()
 
     await vi.waitFor(() => {
-      expect(calls.getWalkthrough).toHaveBeenCalledWith(
-        "fungsi",
-        "diffdash",
-        51,
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      )
+      expect(calls.getWalkthrough).toHaveBeenCalledWith({
+        review: expect.anything(),
+        baseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        headRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      })
       expect(calls.generateWalkthrough).not.toHaveBeenCalled()
       expect(document.body.textContent).toContain("Review focus")
       expect(document.body.textContent).toContain("Diff-only")
@@ -1509,7 +1575,10 @@ describe("App browser interactions", () => {
     regenerateButton?.click()
 
     await vi.waitFor(() => {
-      expect(calls.regenerateWalkthrough).toHaveBeenCalledWith("fungsi", "diffdash", 51)
+      expect(calls.regenerateWalkthrough).toHaveBeenCalledWith({
+        regenerate: true,
+        review: expect.anything(),
+      })
       expect(document.body.textContent).toContain("Mark complete")
     })
 
@@ -1534,13 +1603,12 @@ describe("App browser interactions", () => {
     firstDiffOpenButton?.click()
 
     await vi.waitFor(() => {
-      expect(calls.openRepositoryFile).toHaveBeenCalledWith(
-        "fungsi",
-        "diffdash",
-        "src/app.tsx",
-        "feature/requested-review",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      )
+      expect(calls.openRepositoryFile).toHaveBeenCalledWith({
+        review: expect.anything(),
+        filePath: "src/app.tsx",
+        headRefName: "feature/requested-review",
+        headRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      })
     })
 
     const treeFileFilterInput = document.querySelector<HTMLInputElement>(
@@ -1767,27 +1835,19 @@ const installDiffDashApi = (
   const calls = {
     captureAnalytics: vi.fn<DiffDashApi["analytics"]["capture"]>(async () => undefined),
     startAnalytics: vi.fn<DiffDashApi["analytics"]["start"]>(async () => undefined),
-    generateWalkthrough: vi.fn<
-      (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
-    >(async () => options.walkthrough ?? walkthrough),
-    getWalkthrough: vi.fn<
-      (
-        owner: string,
-        name: string,
-        number: number,
-        baseSha: string,
-        headSha: string,
-      ) => Promise<StoredWalkthrough | null>
-    >(async () => options.walkthrough ?? walkthrough),
-    regenerateWalkthrough: vi.fn<
-      (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
-    >(async () => options.walkthrough ?? walkthrough),
+    generateWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["generate"]>(
+      async () => options.walkthrough ?? walkthrough,
+    ),
+    getWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["get"]>(
+      async () => options.walkthrough ?? walkthrough,
+    ),
+    regenerateWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["generate"]>(
+      async () => options.walkthrough ?? walkthrough,
+    ),
     updateSettings: vi.fn<DiffDashApi["settings"]["update"]>(
       options.updateSettings ?? (async (settings) => plainAISettings(settings)),
     ),
-    listPullRequests: vi.fn<
-      (owner: string, name: string) => Promise<readonly PullRequestSummary[]>
-    >(async () => [pullRequest]),
+    listPullRequests: vi.fn<DiffDashApi["hostedReviews"]["list"]>(async () => [pullRequest]),
     getLocalWalkthrough: vi.fn<
       (
         target: LocalReviewTarget,
@@ -1810,13 +1870,9 @@ const installDiffDashApi = (
     installRepository: vi.fn<(localPath: string) => Promise<Repo>>(async (localPath) =>
       Repo.make({ ...repo, localPath }),
     ),
-    linkRepository: vi.fn<
-      (input: {
-        readonly owner: string
-        readonly name: string
-        readonly localPath: string
-      }) => Promise<Repo>
-    >(async (input) => Repo.make({ ...repo, localPath: input.localPath })),
+    linkRepository: vi.fn<DiffDashApi["repositories"]["link"]>(async (input) =>
+      Repo.make({ ...repo, localPath: input.localPath }),
+    ),
     selectLocalFolder: vi.fn<() => Promise<string | null>>(async () => null),
     openExternalUrl: vi.fn<(url: string) => Promise<void>>(async () => undefined),
     updateAppState: vi.fn<(state: AppState) => Promise<AppState>>(async (state) => state),
@@ -1838,32 +1894,22 @@ const installDiffDashApi = (
           }),
         }),
     ),
-    getPullRequestDetail: vi.fn<
-      (owner: string, name: string, number: number) => Promise<PullRequestDetail>
-    >(async () => options.pullRequestDetail ?? detail),
-    getPullRequestDiff: vi.fn<
-      (owner: string, name: string, number: number) => Promise<PullRequestDiff>
-    >(async () => options.pullRequestDiff ?? diff),
-    searchRepositories: vi.fn<
-      (request: RepositorySearchRequest) => Promise<readonly RepositorySearchResult[]>
-    >(async () => [remoteSearchResult]),
+    getPullRequestDetail: vi.fn<DiffDashApi["hostedReviews"]["get"]>(
+      async () => options.pullRequestDetail ?? detail,
+    ),
+    getPullRequestDiff: vi.fn<DiffDashApi["hostedReviews"]["getDiff"]>(
+      async () => options.pullRequestDiff ?? diff,
+    ),
+    searchRepositories: vi.fn<DiffDashApi["hostedRepositories"]["searchRepositories"]>(async () => [
+      remoteSearchResult,
+    ]),
     openLocalRepositoryFile: vi.fn<(rootPath: string, filePath: string) => Promise<void>>(
       async () => undefined,
     ),
-    openRepositoryFile: vi.fn<
-      (
-        owner: string,
-        name: string,
-        filePath: string,
-        headRefName: string,
-        headRefOid: string | null,
-      ) => Promise<void>
-    >(async () => undefined),
-    approvePullRequest: vi.fn<(owner: string, name: string, number: number) => Promise<void>>(
-      async () => {
-        approved = true
-      },
-    ),
+    openRepositoryFile: vi.fn<DiffDashApi["openRepositoryFile"]>(async () => undefined),
+    approvePullRequest: vi.fn<DiffDashApi["hostedReviews"]["submitDecision"]>(async () => {
+      approved = true
+    }),
   }
   const api: DiffDashApi = {
     analytics: {
@@ -1900,19 +1946,22 @@ const installDiffDashApi = (
     openExternalUrl: calls.openExternalUrl,
     openLocalRepositoryFile: calls.openLocalRepositoryFile,
     openRepositoryFile: calls.openRepositoryFile,
-    gitProvider: {
-      approvePullRequest: calls.approvePullRequest,
-      getPullRequestDetail: calls.getPullRequestDetail,
-      getPullRequestDiff: calls.getPullRequestDiff,
-      hasApprovedPullRequest: async () => approved,
-      listPullRequests: calls.listPullRequests,
-      listReviewRequests: async () => options.reviewRequests ?? [pullRequest],
+    providers: { list: async () => [provider] },
+    hostedRepositories: {
       listSearchScopes: async () => [
         RepositorySearchScope.make({ kind: "user", login: "hanipcode" }),
         RepositorySearchScope.make({ kind: "organization", login: "fungsi" }),
       ],
-      refreshPullRequestDetail: calls.getPullRequestDetail,
       searchRepositories: calls.searchRepositories,
+    },
+    hostedReviews: {
+      submitDecision: calls.approvePullRequest,
+      get: calls.getPullRequestDetail,
+      getDiff: calls.getPullRequestDiff,
+      getDecision: async () => (approved ? "approved" : "none"),
+      list: calls.listPullRequests,
+      listAssigned: async () => options.reviewRequests ?? [pullRequest],
+      refresh: calls.getPullRequestDetail,
     },
     localReviews: {
       resolveBranch: calls.resolveBranch,
@@ -1963,19 +2012,11 @@ const installDiffDashApi = (
     viewedFiles: {
       list: async () => [...viewedFileKeys],
       listLocal: async () => [...localViewedFileKeys],
-      set: async (
-        _owner: string,
-        _name: string,
-        _number: number,
-        _headSha: string,
-        reviewKey: string,
-        _filePath: string,
-        viewed: boolean,
-      ) => {
-        if (viewed) {
-          viewedFileKeys.add(reviewKey)
+      set: async (request) => {
+        if (request.viewed) {
+          viewedFileKeys.add(request.reviewKey)
         } else {
-          viewedFileKeys.delete(reviewKey)
+          viewedFileKeys.delete(request.reviewKey)
         }
       },
       setLocal: async (
@@ -1993,9 +2034,11 @@ const installDiffDashApi = (
       },
     },
     walkthroughs: {
-      generate: calls.generateWalkthrough,
+      generate: (request) =>
+        request.regenerate
+          ? calls.regenerateWalkthrough(request)
+          : calls.generateWalkthrough(request),
       get: calls.getWalkthrough,
-      regenerate: calls.regenerateWalkthrough,
     },
     localWalkthroughs: {
       generate: calls.generateLocalWalkthrough,

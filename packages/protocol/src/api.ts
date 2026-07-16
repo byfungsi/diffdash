@@ -13,9 +13,9 @@ import type {
   PullRequestDiff,
   PullRequestSummary,
 } from "@diffdash/domain/pull-request"
+import type { GitProviderDescriptor, ReviewDecision } from "@diffdash/domain/git-provider"
 import type {
   Repo,
-  RepositorySearchRequest,
   RepositorySearchResult,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
@@ -35,6 +35,18 @@ import type {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type {
+  GenerateHostedWalkthroughRequest,
+  HostedProviderRequest,
+  HostedRepositoryRequest,
+  HostedRepositorySearchRequest,
+  HostedReviewRequest,
+  HostedViewedFilesRequest,
+  HostedWalkthroughRequest,
+  OpenHostedReviewFileRequest,
+  SetHostedViewedFileRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "./hosted-git"
 
 /** Complete renderer-facing platform contract implemented by preload and demo runtimes. */
 export interface DiffDashApi {
@@ -56,13 +68,7 @@ export interface DiffDashApi {
   readonly diagnostics: () => Promise<AppPrerequisites>
   readonly installDiffDashCli: () => Promise<DiffDashCliInstallResult>
   readonly openExternalUrl: (url: string) => Promise<void>
-  readonly openRepositoryFile: (
-    owner: string,
-    name: string,
-    filePath: string,
-    headRefName: string,
-    headRefOid: string | null,
-  ) => Promise<void>
+  readonly openRepositoryFile: (request: OpenHostedReviewFileRequest) => Promise<void>
   readonly openLocalRepositoryFile: (rootPath: string, filePath: string) => Promise<void>
   readonly repositories: {
     readonly list: (query?: string) => Promise<readonly Repo[]>
@@ -91,37 +97,27 @@ export interface DiffDashApi {
     readonly get: () => Promise<AppState>
     readonly update: (state: AppState) => Promise<AppState>
   }
-  readonly gitProvider: {
+  readonly providers: {
+    readonly list: () => Promise<readonly GitProviderDescriptor[]>
+  }
+  readonly hostedRepositories: {
     readonly searchRepositories: (
-      request: RepositorySearchRequest,
+      request: HostedRepositorySearchRequest,
     ) => Promise<readonly RepositorySearchResult[]>
-    readonly listSearchScopes: () => Promise<readonly RepositorySearchScope[]>
-    readonly listPullRequests: (
-      owner: string,
-      name: string,
+    readonly listSearchScopes: (
+      request: HostedProviderRequest,
+    ) => Promise<readonly RepositorySearchScope[]>
+  }
+  readonly hostedReviews: {
+    readonly list: (request: HostedRepositoryRequest) => Promise<readonly PullRequestSummary[]>
+    readonly listAssigned: (
+      request: HostedProviderRequest,
     ) => Promise<readonly PullRequestSummary[]>
-    readonly listReviewRequests: () => Promise<readonly PullRequestSummary[]>
-    readonly getPullRequestDetail: (
-      owner: string,
-      name: string,
-      number: number,
-    ) => Promise<PullRequestDetail>
-    readonly refreshPullRequestDetail: (
-      owner: string,
-      name: string,
-      number: number,
-    ) => Promise<PullRequestDetail>
-    readonly getPullRequestDiff: (
-      owner: string,
-      name: string,
-      number: number,
-    ) => Promise<PullRequestDiff>
-    readonly hasApprovedPullRequest: (
-      owner: string,
-      name: string,
-      number: number,
-    ) => Promise<boolean>
-    readonly approvePullRequest: (owner: string, name: string, number: number) => Promise<void>
+    readonly get: (request: HostedReviewRequest) => Promise<PullRequestDetail>
+    readonly refresh: (request: HostedReviewRequest) => Promise<PullRequestDetail>
+    readonly getDiff: (request: HostedReviewRequest) => Promise<PullRequestDiff>
+    readonly getDecision: (request: HostedReviewRequest) => Promise<ReviewDecision>
+    readonly submitDecision: (request: SubmitHostedReviewDecisionRequest) => Promise<void>
   }
   readonly localReviews: {
     readonly resolveBranch: (
@@ -133,21 +129,8 @@ export interface DiffDashApi {
     readonly getSnapshot: (target: LocalReviewTarget) => Promise<LocalReviewSnapshot>
   }
   readonly viewedFiles: {
-    readonly list: (
-      owner: string,
-      name: string,
-      number: number,
-      headSha: string,
-    ) => Promise<readonly string[]>
-    readonly set: (
-      owner: string,
-      name: string,
-      number: number,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ) => Promise<void>
+    readonly list: (request: HostedViewedFilesRequest) => Promise<readonly string[]>
+    readonly set: (request: SetHostedViewedFileRequest) => Promise<void>
     readonly listLocal: (rootPath: string, headSha: string) => Promise<readonly string[]>
     readonly setLocal: (
       rootPath: string,
@@ -158,15 +141,8 @@ export interface DiffDashApi {
     ) => Promise<void>
   }
   readonly walkthroughs: {
-    readonly get: (
-      owner: string,
-      name: string,
-      number: number,
-      baseSha: string,
-      headSha: string,
-    ) => Promise<StoredWalkthrough | null>
-    readonly generate: (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
-    readonly regenerate: (owner: string, name: string, number: number) => Promise<StoredWalkthrough>
+    readonly get: (request: HostedWalkthroughRequest) => Promise<StoredWalkthrough | null>
+    readonly generate: (request: GenerateHostedWalkthroughRequest) => Promise<StoredWalkthrough>
   }
   readonly localWalkthroughs: {
     readonly get: (

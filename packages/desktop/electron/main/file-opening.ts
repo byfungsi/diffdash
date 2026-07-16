@@ -18,16 +18,18 @@ export const openAllowedExternalUrl = async (openExternal: OpenExternal, url: st
 
 /** Opens a provider file URL at the immutable head SHA when available. */
 export const openProviderFile = async (
-  gitProvider: {
-    readonly fileUrl: (owner: string, name: string, filePath: string, ref: string) => string
-  },
+  fileUrl: (
+    repository: import("@diffdash/domain/git-provider").HostedRepositoryLocator,
+    filePath: string,
+    ref: string,
+  ) => Promise<string>,
   openExternal: OpenExternal,
-  owner: string,
-  name: string,
+  repository: import("@diffdash/domain/git-provider").HostedRepositoryLocator,
   filePath: string,
   headRefName: string,
   headRefOid: string | null,
 ) => {
   const ref = headRefOid ?? headRefName
-  await openExternal(gitProvider.fileUrl(owner, name, filePath, ref))
+  const url = await fileUrl(repository, filePath, ref)
+  await openExternal(url)
 }

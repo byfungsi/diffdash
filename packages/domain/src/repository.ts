@@ -35,6 +35,7 @@ export class Repo extends Schema.Class<Repo>("Repo")({
 export class RepositorySearchResult extends Schema.Class<RepositorySearchResult>(
   "RepositorySearchResult",
 )({
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   owner: Schema.String,
   name: Schema.String,
   nameWithOwner: Schema.String,
@@ -56,6 +57,7 @@ export class RepositorySearchScope extends Schema.Class<RepositorySearchScope>(
 export class RepositorySearchRequest extends Schema.Class<RepositorySearchRequest>(
   "RepositorySearchRequest",
 )({
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   query: Schema.String,
   owners: Schema.Array(Schema.String),
 }) {}

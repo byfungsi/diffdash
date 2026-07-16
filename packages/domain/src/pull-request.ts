@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { GitProviderId } from "./git-provider"
 
 /** A user reference returned by review metadata commands. */
 export class ReviewActor extends Schema.Class<ReviewActor>("ReviewActor")({
@@ -7,6 +8,7 @@ export class ReviewActor extends Schema.Class<ReviewActor>("ReviewActor")({
 
 /** A provider review summary suitable for repository review lists. */
 export class PullRequestSummary extends Schema.Class<PullRequestSummary>("PullRequestSummary")({
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   repoOwner: Schema.String,
   repoName: Schema.String,
   number: Schema.Number,
@@ -41,6 +43,7 @@ export class PullRequestCommit extends Schema.Class<PullRequestCommit>("PullRequ
 
 /** Detailed provider review metadata used by the review workspace. */
 export class PullRequestDetail extends Schema.Class<PullRequestDetail>("PullRequestDetail")({
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   repoOwner: Schema.String,
   repoName: Schema.String,
   number: Schema.Number,
@@ -62,6 +65,7 @@ export class PullRequestDetail extends Schema.Class<PullRequestDetail>("PullRequ
 
 /** Raw unified diff output and cache metadata for a provider review. */
 export class PullRequestDiff extends Schema.Class<PullRequestDiff>("PullRequestDiff")({
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   repoOwner: Schema.String,
   repoName: Schema.String,
   number: Schema.Number,

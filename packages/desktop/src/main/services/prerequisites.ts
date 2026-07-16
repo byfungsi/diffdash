@@ -20,15 +20,15 @@ import {
   AppPrerequisites,
   type CodingAgentName,
   DiffDashCliInstallResult,
+  ProviderDiagnostic,
+  SetupRequirement,
 } from "@diffdash/protocol/prerequisites"
 import { AppConfig } from "./app-config"
 import { CliService, type CliRunner } from "@diffdash/process/cli"
 import { resolveExecutableInPath } from "@diffdash/process/executable"
-import { inspectGitHubCli } from "@diffdash/git-provider-github"
+import { GitProvider } from "./git-provider"
 
 export { resolveExecutableInPath } from "@diffdash/process/executable"
-export { parseGitHubCliVersion } from "@diffdash/git-provider-github"
-
 /** A typed failure from installing the DiffDash CLI into PATH. */
 export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
   "PrerequisiteInstallError",
@@ -52,12 +52,19 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
     Effect.gen(function* () {
       const cli = yield* CliService
       const config = yield* AppConfig
+      const gitProvider = yield* GitProvider
       const get = Effect.fn("Prerequisites.get")(function* () {
         refreshAppImageCliLaunchers(config.diffDashCliPath, config.appImagePath)
-        const [gitInstalled, githubCli, installedCodingAgents] = yield* Effect.all(
-          [commandAvailable(cli, "git"), inspectGitHubCli(cli), installedCodingAgentNames(cli)],
-          { concurrency: "unbounded" },
-        )
+        const [gitInstalled, providerDescriptors, providerDiagnostics, installedCodingAgents] =
+          yield* Effect.all(
+            [
+              commandAvailable(cli, "git"),
+              gitProvider.listProviders,
+              gitProvider.diagnoseProviders,
+              installedCodingAgentNames(cli),
+            ],
+            { concurrency: "unbounded" },
+          )
         const diffDashCliInPath = resolveExecutableInPath("diffdash", {
           envPath: process.env.PATH ?? "",
         })
@@ -70,12 +77,36 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
           diffDashCliInPath: diffDashCliInPath !== null,
           diffDashCliPath,
           gitInstalled,
-          ghAuthenticated: githubCli.authenticated,
-          ghInstalled: githubCli.installed,
-          ghSearchRepositoriesAvailable: githubCli.searchRepositoriesAvailable,
-          ghSupported: githubCli.supported,
-          ghVersion: githubCli.version,
+          ghAuthenticated: providerDiagnostics[0]?.authenticated ?? false,
+          ghInstalled: providerDiagnostics[0]?.available ?? false,
+          ghSearchRepositoriesAvailable:
+            providerDescriptors[0]?.capabilities.repositorySearch ?? false,
+          ghSupported: providerDiagnostics[0]?.available ?? false,
+          ghVersion: null,
           installedCodingAgents,
+          providerDiagnostics: providerDescriptors.flatMap((descriptor) => {
+            const diagnostic = providerDiagnostics.find((item) => item.providerId === descriptor.id)
+            return diagnostic === undefined
+              ? []
+              : [ProviderDiagnostic.make({ descriptor, diagnostic })]
+          }),
+          setupRequirements: providerDescriptors.map((descriptor) => {
+            const diagnostic = providerDiagnostics.find((item) => item.providerId === descriptor.id)
+            const ready = diagnostic?.available === true && diagnostic.authenticated
+            return SetupRequirement.make({
+              key: `provider:${descriptor.id}`,
+              providerId: descriptor.id,
+              title: `${descriptor.displayName} ready`,
+              description: `Connect ${descriptor.displayName} to search ${descriptor.terminology.repositoryPlural} and review ${descriptor.terminology.reviewPlural}.`,
+              detail: ready
+                ? `${descriptor.displayName} is available and authenticated.`
+                : (diagnostic?.message ??
+                  `${descriptor.displayName} needs setup or authentication.`),
+              ready,
+              requiredForLocalUse: false,
+              helpUrl: null,
+            })
+          }),
         })
       })
       const install = Effect.fn("Prerequisites.installDiffDashCli")(function () {

@@ -1,10 +1,33 @@
 import { Schema } from "effect"
+import {
+  GitProviderDescriptor,
+  GitProviderDiagnostic,
+  GitProviderId,
+} from "@diffdash/domain/git-provider"
 
 /** CLI coding agents that can power walkthrough generation. */
 export const CodingAgentName = Schema.Literal("codex", "claude", "opencode")
 
 /** CLI coding agent name. */
 export type CodingAgentName = typeof CodingAgentName.Type
+
+/** One configured provider and its current health. */
+export class ProviderDiagnostic extends Schema.Class<ProviderDiagnostic>("ProviderDiagnostic")({
+  descriptor: GitProviderDescriptor,
+  diagnostic: GitProviderDiagnostic,
+}) {}
+
+/** One advisory setup item; hosted-provider items never block local-only use. */
+export class SetupRequirement extends Schema.Class<SetupRequirement>("SetupRequirement")({
+  key: Schema.String,
+  providerId: Schema.NullOr(GitProviderId),
+  title: Schema.String,
+  description: Schema.String,
+  detail: Schema.String,
+  ready: Schema.Boolean,
+  requiredForLocalUse: Schema.Boolean,
+  helpUrl: Schema.NullOr(Schema.String),
+}) {}
 
 /** Runtime checks for external tools DiffDash depends on. */
 export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequisites")({
@@ -16,6 +39,8 @@ export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequ
   ghAuthenticated: Schema.Boolean,
   codingAgentInstalled: Schema.Boolean,
   installedCodingAgents: Schema.Array(CodingAgentName),
+  providerDiagnostics: Schema.optionalWith(Schema.Array(ProviderDiagnostic), { default: () => [] }),
+  setupRequirements: Schema.optionalWith(Schema.Array(SetupRequirement), { default: () => [] }),
   diffDashCliInstalled: Schema.Boolean,
   diffDashCliInPath: Schema.Boolean,
   diffDashCliPath: Schema.NullOr(Schema.String),
@@ -44,4 +69,6 @@ export const EMPTY_APP_PREREQUISITES = AppPrerequisites.make({
   ghSupported: false,
   ghVersion: null,
   installedCodingAgents: [],
+  providerDiagnostics: [],
+  setupRequirements: [],
 })

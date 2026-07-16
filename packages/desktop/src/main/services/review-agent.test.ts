@@ -7,14 +7,6 @@ import { Context, Deferred, Effect, Fiber, Layer, Redacted } from "effect"
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import {
-  GitProviderId,
-  HostedRepositoryLocator,
-  HostedRepositoryName,
-  HostedReviewLocator,
-  HostedReviewNumber,
-  RepositoryNamespace,
-} from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
 import {
@@ -208,12 +200,13 @@ const makeLayer = (
   const gitProvider = Layer.succeed(
     GitProvider,
     GitProvider.of({
+      listProviders: Effect.succeed([]),
+      diagnoseProviders: Effect.succeed([]),
       parseRemoteUrl: () => Effect.die("not used"),
-      repositoryUrl: () => "https://github.com/fungsi/diffdash",
-      fileUrl: () => "https://github.com/fungsi/diffdash/blob/head/file",
+      repositoryUrl: () => Effect.succeed("https://github.com/fungsi/diffdash"),
+      fileUrl: () => Effect.succeed("https://github.com/fungsi/diffdash/blob/head/file"),
       searchRepositories: () => Effect.succeed([]),
       listSearchScopes: () => Effect.succeed([]),
-      listRepositories: () => Effect.succeed([]),
       listPullRequests: () => Effect.succeed([]),
       listReviewRequests: () => Effect.succeed([]),
       getPullRequestDetail: () => Effect.die("not used"),
@@ -221,22 +214,15 @@ const makeLayer = (
       getPullRequestDiff: () => Effect.die("not used"),
       hasApprovedPullRequest: () => Effect.succeed(false),
       approvePullRequest: () => Effect.void,
-      isAvailable: Effect.succeed(true),
-      hostedReviewCheckoutSpec: (owner, name, number, revision) => {
-        const repository = HostedRepositoryLocator.make({
-          providerId: GitProviderId.make("github"),
-          namespace: RepositoryNamespace.make(owner),
-          name: HostedRepositoryName.make(name),
-        })
+      isAvailable: () => Effect.succeed(true),
+      hostedReviewCheckoutSpec: (review, revision) => {
+        const repository = review.repository
         return Effect.succeed(
           HostedReviewCheckoutSpec.make({
             repository,
-            review: HostedReviewLocator.make({
-              repository,
-              number: HostedReviewNumber.make(number),
-            }),
-            remoteUrl: `https://github.com/${owner}/${name}.git`,
-            fetchRef: `refs/pull/${number}/head`,
+            review,
+            remoteUrl: `https://github.com/${repository.namespace}/${repository.name}.git`,
+            fetchRef: `refs/pull/${review.number}/head`,
             revision,
           }),
         )

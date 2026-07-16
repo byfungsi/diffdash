@@ -4,6 +4,7 @@ import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import { makePullRequestReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "./git-provider"
@@ -23,9 +24,7 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
   ReviewContextService,
   {
     readonly getPullRequestSnapshot: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
     ) => Effect.Effect<PullRequestReviewSnapshot, ReviewContextError>
     readonly getLocalReviewSnapshot: (
       target: LocalReviewTarget,
@@ -40,16 +39,16 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
 
       return ReviewContextService.of({
         getPullRequestSnapshot: Effect.fn("ReviewContextService.getPullRequestSnapshot")(
-          function* (owner, name, number) {
+          function* (review) {
             for (let attempt = 1; attempt <= 2; attempt += 1) {
               const detailBefore = yield* gitProvider
-                .getPullRequestDetail(owner, name, number)
+                .getPullRequestDetail(review)
                 .pipe(Effect.mapError(snapshotOperationError("pullRequest.detailBefore")))
               const diff = yield* gitProvider
-                .getPullRequestDiff(owner, name, number)
+                .getPullRequestDiff(review)
                 .pipe(Effect.mapError(snapshotOperationError("pullRequest.diff")))
               const detailAfter = yield* gitProvider
-                .refreshPullRequestDetail(owner, name, number)
+                .refreshPullRequestDetail(review)
                 .pipe(Effect.mapError(snapshotOperationError("pullRequest.detailAfter")))
               const baseRevision = detailAfter.baseRefOid
               const headRevision = detailAfter.headRefOid
@@ -62,7 +61,12 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
                 diff.headRefOid === headRevision
               ) {
                 return PullRequestReviewSnapshot.make({
-                  reviewKey: makePullRequestReviewKey("github", owner, name, number),
+                  reviewKey: makePullRequestReviewKey(
+                    review.repository.providerId,
+                    review.repository.namespace,
+                    review.repository.name,
+                    review.number,
+                  ),
                   baseRevision: ReviewRevision.make(baseRevision),
                   headRevision: ReviewRevision.make(headRevision),
                   detail: detailAfter,

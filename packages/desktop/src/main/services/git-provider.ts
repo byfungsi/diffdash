@@ -1,24 +1,24 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
 import {
-  GitProviderId,
-  HostedRepositoryLocator,
-  HostedRepositoryName,
-  HostedReviewLocator,
-  HostedReviewNumber,
-  RepositoryNamespace,
+  type GitProviderDescriptor,
+  type GitProviderDiagnostic,
+  type GitProviderId,
+  type HostedRepositoryLocator,
+  type HostedReviewLocator,
   type HostedReviewDetail,
   type HostedReviewDiff,
   type HostedReviewSummary,
 } from "@diffdash/domain/git-provider"
-import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
-import { createGitHubProvider } from "@diffdash/git-provider-github"
-import { CliService } from "@diffdash/process/cli"
 import {
-  RepositorySearchRequest,
+  GitProviderOperationError,
+  GitProviderRegistry,
+  type HostedReviewCheckoutSpec,
+} from "@diffdash/git-provider"
+import {
   RepositorySearchResult,
   RepositorySearchScope,
-  type ProviderRepositoryReference,
+  type RepositorySearchRequest,
 } from "@diffdash/domain/repository"
 import {
   PullRequestCommit,
@@ -32,153 +32,185 @@ import {
 /** A typed failure for unsupported or malformed provider remote URLs. */
 export class GitProviderRemoteParseError extends Schema.TaggedError<GitProviderRemoteParseError>()(
   "GitProviderRemoteParseError",
-  {
-    remoteUrl: Schema.String,
-  },
+  { remoteUrl: Schema.String },
 ) {}
 
-/** Provider-neutral source control and code-review operations used by the app. */
+/** Provider-neutral hosted Git orchestration backed only by the provider registry. */
 export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
   GitProvider,
   {
+    readonly listProviders: Effect.Effect<readonly GitProviderDescriptor[]>
+    readonly diagnoseProviders: Effect.Effect<readonly GitProviderDiagnostic[]>
     readonly parseRemoteUrl: (
       remoteUrl: string,
-    ) => Effect.Effect<ProviderRepositoryReference, GitProviderRemoteParseError>
-    readonly repositoryUrl: (owner: string, name: string) => string
-    readonly fileUrl: (owner: string, name: string, filePath: string, ref: string) => string
+    ) => Effect.Effect<HostedRepositoryLocator, GitProviderRemoteParseError>
+    readonly repositoryUrl: (repository: HostedRepositoryLocator) => Effect.Effect<string, unknown>
+    readonly fileUrl: (
+      repository: HostedRepositoryLocator,
+      filePath: string,
+      revision: string,
+    ) => Effect.Effect<string, unknown>
     readonly searchRepositories: (
       request: RepositorySearchRequest,
     ) => Effect.Effect<readonly RepositorySearchResult[], unknown>
-    readonly listSearchScopes: () => Effect.Effect<readonly RepositorySearchScope[], unknown>
-    readonly listRepositories: () => Effect.Effect<readonly RepositorySearchResult[], unknown>
+    readonly listSearchScopes: (
+      providerId: GitProviderId,
+    ) => Effect.Effect<readonly RepositorySearchScope[], unknown>
     readonly listPullRequests: (
-      owner: string,
-      name: string,
+      repository: HostedRepositoryLocator,
     ) => Effect.Effect<readonly PullRequestSummary[], unknown>
-    readonly listReviewRequests: () => Effect.Effect<readonly PullRequestSummary[], unknown>
+    readonly listReviewRequests: (
+      providerId: GitProviderId,
+    ) => Effect.Effect<readonly PullRequestSummary[], unknown>
     readonly getPullRequestDetail: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
     ) => Effect.Effect<PullRequestDetail, unknown>
     readonly refreshPullRequestDetail: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
     ) => Effect.Effect<PullRequestDetail, unknown>
     readonly getPullRequestDiff: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
     ) => Effect.Effect<PullRequestDiff, unknown>
     readonly hasApprovedPullRequest: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
     ) => Effect.Effect<boolean, unknown>
-    readonly approvePullRequest: (
-      owner: string,
-      name: string,
-      number: number,
-    ) => Effect.Effect<void, unknown>
+    readonly approvePullRequest: (review: HostedReviewLocator) => Effect.Effect<void, unknown>
     readonly hostedReviewCheckoutSpec: (
-      owner: string,
-      name: string,
-      number: number,
+      review: HostedReviewLocator,
       revision: string,
     ) => Effect.Effect<HostedReviewCheckoutSpec, unknown>
     readonly bootstrapBareRepository: (
       repository: HostedRepositoryLocator,
       destination: string,
     ) => Effect.Effect<void, unknown>
-    readonly isAvailable: Effect.Effect<boolean>
+    readonly isAvailable: (providerId: GitProviderId) => Effect.Effect<boolean>
   }
 >() {
-  /** GitHub.com compatibility layer while desktop transitions fully to the provider SDK. */
   static readonly layer = Layer.effect(
     GitProvider,
     Effect.gen(function* () {
-      const cli = yield* CliService
-      const github = createGitHubProvider({}, cli)
-
+      const registry = yield* GitProviderRegistry
+      const provider = (providerId: GitProviderId) => registry.get(providerId)
       return GitProvider.of({
+        listProviders: registry.list.pipe(
+          Effect.map((providers) => providers.map(({ descriptor }) => descriptor)),
+        ),
+        diagnoseProviders: registry.list.pipe(
+          Effect.flatMap((providers) =>
+            Effect.all(
+              providers.map((registration) =>
+                registration.diagnose.pipe(
+                  Effect.catchAll((error) =>
+                    Effect.succeed({
+                      providerId: registration.descriptor.id,
+                      available: false,
+                      authenticated: false,
+                      message: error.message,
+                    }),
+                  ),
+                ),
+              ),
+              { concurrency: "unbounded" },
+            ),
+          ),
+        ),
         parseRemoteUrl: (remoteUrl) =>
-          github.parseRemote(remoteUrl).pipe(
-            Effect.flatMap((parsed) =>
-              parsed === null
+          registry.resolveRemote(remoteUrl).pipe(
+            Effect.flatMap((locator) =>
+              locator === null
                 ? GitProviderRemoteParseError.make({ remoteUrl })
-                : Effect.succeed({
-                    provider: parsed.providerId,
-                    owner: parsed.namespace,
-                    name: parsed.name,
-                  }),
+                : Effect.succeed(locator),
             ),
             Effect.mapError(() => GitProviderRemoteParseError.make({ remoteUrl })),
           ),
-        repositoryUrl: (owner, name) => github.repositoryUrl(githubRepository(owner, name)),
-        fileUrl: (owner, name, filePath, ref) =>
-          github.fileUrl(githubRepository(owner, name), filePath, ref),
-        searchRepositories: (request) => {
-          if (request.query.trim().length === 0 || request.owners.length === 0)
-            return Effect.succeed([])
-          return github
-            .searchRepositories({ query: request.query, namespaces: request.owners })
-            .pipe(Effect.map((repositories) => repositories.map(toRepositorySearchResult)))
-        },
-        listSearchScopes: () =>
-          github
-            .listSearchScopes()
-            .pipe(Effect.map((scopes) => scopes.map((scope) => RepositorySearchScope.make(scope)))),
-        listRepositories: () =>
-          github
-            .listAccessibleRepositories()
-            .pipe(Effect.map((repositories) => repositories.map(toRepositorySearchResult))),
-        listPullRequests: (owner, name) =>
-          github
-            .listReviews(githubRepository(owner, name))
-            .pipe(Effect.map((reviews) => reviews.map(toPullRequestSummary))),
-        listReviewRequests: () =>
-          github
-            .listAssignedReviews()
-            .pipe(Effect.map((reviews) => reviews.map(toPullRequestSummary))),
-        getPullRequestDetail: (owner, name, number) =>
-          github.getReview(githubReview(owner, name, number)).pipe(Effect.map(toPullRequestDetail)),
-        refreshPullRequestDetail: (owner, name, number) =>
-          github.getReview(githubReview(owner, name, number)).pipe(Effect.map(toPullRequestDetail)),
-        getPullRequestDiff: (owner, name, number) =>
-          github
-            .getReviewDiff(githubReview(owner, name, number))
-            .pipe(Effect.map(toPullRequestDiff)),
-        hasApprovedPullRequest: (owner, name, number) =>
-          github
-            .getReviewDecision(githubReview(owner, name, number))
-            .pipe(Effect.map((decision) => decision === "approved")),
-        approvePullRequest: (owner, name, number) =>
-          github.submitReviewDecision(githubReview(owner, name, number), "approved"),
-        hostedReviewCheckoutSpec: (owner, name, number, revision) =>
-          github.checkoutSpecAtRevision(githubReview(owner, name, number), revision),
-        bootstrapBareRepository: github.bootstrapBareRepository,
-        isAvailable: github.diagnose.pipe(
-          Effect.map((diagnostic) => diagnostic.available),
-          Effect.catchAll(() => Effect.succeed(false)),
-        ),
+        repositoryUrl: (repository) =>
+          provider(repository.providerId).pipe(
+            Effect.map((registration) => registration.repositoryUrl(repository)),
+          ),
+        fileUrl: (repository, filePath, revision) =>
+          provider(repository.providerId).pipe(
+            Effect.map((registration) => registration.fileUrl(repository, filePath, revision)),
+          ),
+        searchRepositories: (request) =>
+          provider(request.providerId).pipe(
+            Effect.flatMap((registration) =>
+              registration.searchRepositories({
+                query: request.query,
+                namespaces: request.owners,
+              }),
+            ),
+            Effect.map((repositories) => repositories.map(toRepositorySearchResult)),
+          ),
+        listSearchScopes: (providerId) =>
+          provider(providerId).pipe(
+            Effect.flatMap(
+              (registration) =>
+                registration.listSearchScopes?.() ?? unsupported(providerId, "listSearchScopes"),
+            ),
+            Effect.map((scopes) => scopes.map((scope) => RepositorySearchScope.make(scope))),
+          ),
+        listPullRequests: (repository) =>
+          provider(repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.listReviews(repository)),
+            Effect.map((reviews) => reviews.map(toPullRequestSummary)),
+          ),
+        listReviewRequests: (providerId) =>
+          provider(providerId).pipe(
+            Effect.flatMap(
+              (registration) =>
+                registration.listAssignedReviews?.() ??
+                unsupported(providerId, "listAssignedReviews"),
+            ),
+            Effect.map((reviews) => reviews.map(toPullRequestSummary)),
+          ),
+        getPullRequestDetail: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.getReview(review)),
+            Effect.map(toPullRequestDetail),
+          ),
+        refreshPullRequestDetail: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.getReview(review)),
+            Effect.map(toPullRequestDetail),
+          ),
+        getPullRequestDiff: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.getReviewDiff(review)),
+            Effect.map(toPullRequestDiff),
+          ),
+        hasApprovedPullRequest: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.getReviewDecision(review)),
+            Effect.map((decision) => decision === "approved"),
+          ),
+        approvePullRequest: (review) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap((registration) => registration.submitReviewDecision(review, "approved")),
+          ),
+        hostedReviewCheckoutSpec: (review, revision) =>
+          provider(review.repository.providerId).pipe(
+            Effect.flatMap(
+              (registration) =>
+                registration.checkoutSpecAtRevision?.(review, revision) ??
+                registration.checkoutSpec(review),
+            ),
+          ),
+        bootstrapBareRepository: (repository, destination) =>
+          provider(repository.providerId).pipe(
+            Effect.flatMap((registration) =>
+              registration.bootstrapBareRepository(repository, destination),
+            ),
+          ),
+        isAvailable: (providerId) =>
+          provider(providerId).pipe(
+            Effect.flatMap((registration) => registration.diagnose),
+            Effect.map((diagnostic) => diagnostic.available),
+            Effect.catchAll(() => Effect.succeed(false)),
+          ),
       })
     }),
   )
 }
-
-const githubRepository = (owner: string, name: string) =>
-  HostedRepositoryLocator.make({
-    providerId: GitProviderId.make("github"),
-    namespace: RepositoryNamespace.make(owner),
-    name: HostedRepositoryName.make(name),
-  })
-
-const githubReview = (owner: string, name: string, number: number) =>
-  HostedReviewLocator.make({
-    repository: githubRepository(owner, name),
-    number: HostedReviewNumber.make(number),
-  })
 
 const toRepositorySearchResult = (repository: {
   readonly locator: HostedRepositoryLocator
@@ -188,6 +220,7 @@ const toRepositorySearchResult = (repository: {
   readonly updatedAt: string | null
 }) =>
   RepositorySearchResult.make({
+    providerId: repository.locator.providerId,
     owner: repository.locator.namespace,
     name: repository.locator.name,
     nameWithOwner: `${repository.locator.namespace}/${repository.locator.name}`,
@@ -197,8 +230,16 @@ const toRepositorySearchResult = (repository: {
     updatedAt: repository.updatedAt,
   })
 
+const unsupported = (providerId: GitProviderId, operation: string) =>
+  GitProviderOperationError.make({
+    providerId,
+    operation,
+    message: `${operation} is not supported by this provider`,
+  })
+
 const toPullRequestSummary = (review: HostedReviewSummary) =>
   PullRequestSummary.make({
+    providerId: review.locator.repository.providerId,
     repoOwner: review.locator.repository.namespace,
     repoName: review.locator.repository.name,
     number: review.locator.number,
@@ -233,6 +274,7 @@ const toPullRequestDetail = (review: HostedReviewDetail) => {
 
 const toPullRequestDiff = (review: HostedReviewDiff) =>
   PullRequestDiff.make({
+    providerId: review.locator.repository.providerId,
     repoOwner: review.locator.repository.namespace,
     repoName: review.locator.repository.name,
     number: review.locator.number,

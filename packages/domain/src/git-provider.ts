@@ -89,6 +89,39 @@ export class GitProviderCapabilities extends Schema.Class<GitProviderCapabilitie
   remoteWorkspaceBootstrap: Schema.Boolean,
 }) {}
 
+/** Human-readable provider vocabulary used by provider-neutral UI. */
+export class GitProviderTerminology extends Schema.Class<GitProviderTerminology>(
+  "GitProviderTerminology",
+)({
+  repositorySingular: Schema.String,
+  repositoryPlural: Schema.String,
+  reviewSingular: Schema.String,
+  reviewPlural: Schema.String,
+  reviewAbbreviation: Schema.optionalWith(Schema.String, { default: () => "PR" }),
+}) {}
+
+/** Serializable description of one configured provider instance. */
+export class GitProviderDescriptor extends Schema.Class<GitProviderDescriptor>(
+  "GitProviderDescriptor",
+)({
+  id: GitProviderId,
+  kind: GitProviderKind,
+  displayName: Schema.String,
+  host: Schema.String,
+  capabilities: GitProviderCapabilities,
+  terminology: GitProviderTerminology,
+}) {}
+
+/** Provider health exposed without leaking provider-specific command output. */
+export class GitProviderDiagnostic extends Schema.Class<GitProviderDiagnostic>(
+  "GitProviderDiagnostic",
+)({
+  providerId: GitProviderId,
+  available: Schema.Boolean,
+  authenticated: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+}) {}
+
 /** Provider-neutral review decision. */
 export const ReviewDecision = Schema.Literal("none", "approved", "changesRequested", "commented")
 

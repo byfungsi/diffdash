@@ -86,6 +86,31 @@ test("GitHub provider remains an isolated leaf integration", () => {
   )
 })
 
+test("only desktop composition imports a concrete Git provider", () => {
+  const allowedComposition = resolve(root, "packages/desktop/electron/main/index.ts")
+  for (const { directory, manifest } of manifests) {
+    if (manifest.name === "@diffdash/git-provider-github") continue
+    const source = join(directory, "src")
+    let files = []
+    try {
+      files = sourceFiles(source)
+    } catch {
+      continue
+    }
+    if (manifest.name === "@diffdash/desktop") {
+      files.push(...sourceFiles(join(directory, "electron")))
+    }
+    for (const file of files) {
+      if (resolve(file) === allowedComposition) continue
+      assert.doesNotMatch(
+        readFileSync(file, "utf8"),
+        /["']@diffdash\/git-provider-github(?:\/[^"']*)?["']/,
+        `${file} imports a concrete Git provider outside desktop composition`,
+      )
+    }
+  }
+})
+
 test("browser packages bundle without platform dependencies", async () => {
   await Promise.all(
     [

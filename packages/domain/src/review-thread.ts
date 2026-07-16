@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 
 import { LocalReviewTarget } from "./local-review"
+import { GitProviderId } from "./git-provider"
 
 export { LocalReviewTarget } from "./local-review"
 
@@ -200,6 +201,7 @@ export class PullRequestReviewTarget extends Schema.Class<PullRequestReviewTarge
   "PullRequestReviewTarget",
 )({
   kind: Schema.Literal("pullRequest"),
+  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
   owner: Schema.String,
   name: Schema.String,
   number: Schema.Number,

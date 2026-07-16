@@ -32,6 +32,8 @@ import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "../../src/main/services/git-provider"
+import { GitProviderRegistry } from "@diffdash/git-provider"
+import { createGitHubProvider } from "@diffdash/git-provider-github"
 import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
@@ -60,18 +62,34 @@ import type {
   PullRequestDiff,
   PullRequestSummary,
 } from "@diffdash/domain/pull-request"
-import type {
-  Repo,
-  RepositorySearchResult,
-  RepositorySearchScope,
-} from "@diffdash/domain/repository"
-import { RepositorySearchRequest } from "@diffdash/domain/repository"
+import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import { RepositorySearchRequest, RepositorySearchResult } from "@diffdash/domain/repository"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import { makePullRequestReviewKey } from "@diffdash/domain/review-identity"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import {
+  GenerateHostedWalkthroughRequest,
+  HostedProviderRequest,
+  HostedRepositoryRequest,
+  HostedRepositorySearchRequest,
+  HostedReviewRequest,
+  HostedViewedFilesRequest,
+  HostedWalkthroughRequest,
+  OpenHostedReviewFileRequest,
+  SetHostedViewedFileRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "@diffdash/protocol/hosted-git"
 import {
   isReviewAnchorInParsedDiff,
   type ReviewThread,
@@ -127,6 +145,8 @@ const debugMissingPrerequisites = () =>
     ghSupported: false,
     ghVersion: null,
     installedCodingAgents: [],
+    providerDiagnostics: [],
+    setupRequirements: [],
   })
 
 const createAppLayer = () => {
@@ -158,13 +178,26 @@ const createAppLayer = () => {
   })
   const configDirectory = join(xdgConfigHome, "diffdash")
   const settingsLayer = AppSettings.layer(join(configDirectory, "settings.json"))
+  const cliLayer = CliService.layer
+  const gitProviderRegistryLayer = Layer.effect(
+    GitProviderRegistry,
+    Effect.gen(function* () {
+      const cli = yield* CliService
+      const registry = yield* Effect.provide(
+        GitProviderRegistry,
+        GitProviderRegistry.layer([createGitHubProvider({}, cli)]),
+      )
+      return registry
+    }),
+  ).pipe(Layer.provide(cliLayer))
+  const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
   const appStateLayer = AppState.layer(join(configDirectory, "state.json"))
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
   const aiAgentLayer = ConfigurableAIAgent.layer.pipe(Layer.provideMerge(settingsLayer))
   const walkthroughLayer = WalkthroughService.layer.pipe(Layer.provideMerge(aiAgentLayer))
   const reviewContextLayer = ReviewContextService.layer.pipe(
     Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(GitProvider.layer),
+    Layer.provideMerge(gitProviderLayer),
   )
   const threadStoreLayer = ReviewThreadStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
@@ -187,7 +220,7 @@ const createAppLayer = () => {
     Layer.provideMerge(
       HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
     ),
-    Layer.provideMerge(GitProvider.layer),
+    Layer.provideMerge(gitProviderLayer),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
@@ -195,7 +228,7 @@ const createAppLayer = () => {
   const repositoryLinkerLayer = RepositoryLinker.layer.pipe(
     Layer.provideMerge(RepositoryStore.layer),
     Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(GitProvider.layer),
+    Layer.provideMerge(gitProviderLayer),
   )
   const updaterLayer = AppUpdater.layer({
     adapter: nativeUpdaterAdapter(),
@@ -211,7 +244,8 @@ const createAppLayer = () => {
     analyticsLayer,
     reviewContextLayer,
     appStateLayer,
-    Prerequisites.layer,
+    Prerequisites.layer.pipe(Layer.provideMerge(gitProviderLayer)),
+    gitProviderLayer,
     walkthroughLayer,
     ViewedFileStore.layer,
     WalkthroughStore.layer,
@@ -220,7 +254,7 @@ const createAppLayer = () => {
     updaterLayer,
   ).pipe(
     Layer.provideMerge(DatabaseService.layer(databasePath)),
-    Layer.provideMerge(CliService.layer),
+    Layer.provideMerge(cliLayer),
     Layer.provideMerge(CliStreamService.layer),
     Layer.provide(configLayer),
   )
@@ -333,15 +367,14 @@ const installIpcHandlers = (
     const repositories = await run(RepositoryStore)
     if (target.kind === "pullRequest") {
       const gitProvider = await run(GitProvider)
-      const snapshot = await run(
-        contexts.getPullRequestSnapshot(target.owner, target.name, target.number),
-      )
+      const review = hostedReview(target.providerId, target.owner, target.name, target.number)
+      const snapshot = await run(contexts.getPullRequestSnapshot(review))
       const repo = await run(
         repositories.upsertRepository({
-          provider: "github",
+          provider: target.providerId,
           owner: target.owner,
           name: target.name,
-          remoteUrl: gitProvider.repositoryUrl(target.owner, target.name),
+          remoteUrl: await run(gitProvider.repositoryUrl(review.repository)),
           localPath: null,
         }),
       )
@@ -505,11 +538,12 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     InvokeChannel.favoriteRemoteRepository,
-    async (_event, repo: RepositorySearchResult): Promise<Repo> => {
+    async (_event, input: unknown): Promise<Repo> => {
+      const repo = await run(Schema.decodeUnknown(RepositorySearchResult)(input))
       const store = await run(RepositoryStore)
       return run(
         store.upsertRepository({
-          provider: "github",
+          provider: repo.providerId,
           owner: repo.owner,
           name: repo.name,
           remoteUrl: repo.url,
@@ -532,8 +566,8 @@ const installIpcHandlers = (
         const detected = await run(gitProvider.parseRemoteUrl(checkout.remoteUrl))
         return run(
           store.upsertRepository({
-            provider: detected.provider,
-            owner: detected.owner,
+            provider: detected.providerId,
+            owner: detected.namespace,
             name: detected.name,
             remoteUrl: checkout.remoteUrl,
             localPath: checkout.rootPath,
@@ -579,12 +613,28 @@ const installIpcHandlers = (
   })
 
   ipcMain.handle(
-    InvokeChannel.searchRepositories,
+    InvokeChannel.listProviders,
+    async (): Promise<readonly import("@diffdash/domain/git-provider").GitProviderDescriptor[]> => {
+      const gitProvider = await run(GitProvider)
+      return run(gitProvider.listProviders)
+    },
+  )
+
+  ipcMain.handle(
+    InvokeChannel.searchHostedRepositories,
     async (_event, input: unknown): Promise<readonly RepositorySearchResult[]> => {
-      const request = await run(Schema.decodeUnknown(RepositorySearchRequest)(input))
+      const request = await run(Schema.decodeUnknown(HostedRepositorySearchRequest)(input))
       const gitProvider = await run(GitProvider)
       try {
-        return await run(gitProvider.searchRepositories(request))
+        return await run(
+          gitProvider.searchRepositories(
+            RepositorySearchRequest.make({
+              providerId: request.providerId,
+              query: request.query,
+              owners: request.namespaces,
+            }),
+          ),
+        )
       } catch (error) {
         if (error instanceof CliError) {
           const detail = error.stderr.trim() || error.stdout?.trim()
@@ -596,66 +646,78 @@ const installIpcHandlers = (
   )
 
   ipcMain.handle(
-    InvokeChannel.listSearchScopes,
-    async (): Promise<readonly RepositorySearchScope[]> => {
+    InvokeChannel.listHostedRepositorySearchScopes,
+    async (_event, input: unknown): Promise<readonly RepositorySearchScope[]> => {
+      const request = await run(Schema.decodeUnknown(HostedProviderRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.listSearchScopes())
+      return run(gitProvider.listSearchScopes(request.providerId))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.listPullRequests,
-    async (_event, owner: string, name: string): Promise<readonly PullRequestSummary[]> => {
+    InvokeChannel.listHostedReviews,
+    async (_event, input: unknown): Promise<readonly PullRequestSummary[]> => {
+      const request = await run(Schema.decodeUnknown(HostedRepositoryRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.listPullRequests(owner, name))
+      return run(gitProvider.listPullRequests(request.repository))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.listReviewRequests,
-    async (): Promise<readonly PullRequestSummary[]> => {
+    InvokeChannel.listAssignedHostedReviews,
+    async (_event, input: unknown): Promise<readonly PullRequestSummary[]> => {
+      const request = await run(Schema.decodeUnknown(HostedProviderRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.listReviewRequests())
+      return run(gitProvider.listReviewRequests(request.providerId))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.getPullRequestDetail,
-    async (_event, owner: string, name: string, number: number): Promise<PullRequestDetail> => {
+    InvokeChannel.getHostedReview,
+    async (_event, input: unknown): Promise<PullRequestDetail> => {
+      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.getPullRequestDetail(owner, name, number))
+      return run(gitProvider.getPullRequestDetail(request.review))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.refreshPullRequestDetail,
-    async (_event, owner: string, name: string, number: number): Promise<PullRequestDetail> => {
+    InvokeChannel.refreshHostedReview,
+    async (_event, input: unknown): Promise<PullRequestDetail> => {
+      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.refreshPullRequestDetail(owner, name, number))
+      return run(gitProvider.refreshPullRequestDetail(request.review))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.getPullRequestDiff,
-    async (_event, owner: string, name: string, number: number): Promise<PullRequestDiff> => {
+    InvokeChannel.getHostedReviewDiff,
+    async (_event, input: unknown): Promise<PullRequestDiff> => {
+      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.getPullRequestDiff(owner, name, number))
+      return run(gitProvider.getPullRequestDiff(request.review))
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.hasApprovedPullRequest,
-    async (_event, owner: string, name: string, number: number): Promise<boolean> => {
+    InvokeChannel.getHostedReviewDecision,
+    async (
+      _event,
+      input: unknown,
+    ): Promise<import("@diffdash/domain/git-provider").ReviewDecision> => {
+      const request = await run(Schema.decodeUnknown(HostedReviewRequest)(input))
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.hasApprovedPullRequest(owner, name, number))
+      return (await run(gitProvider.hasApprovedPullRequest(request.review))) ? "approved" : "none"
     },
   )
 
   ipcMain.handle(
-    InvokeChannel.approvePullRequest,
-    async (_event, owner: string, name: string, number: number): Promise<void> => {
+    InvokeChannel.submitHostedReviewDecision,
+    async (_event, input: unknown): Promise<void> => {
+      const request = await run(Schema.decodeUnknown(SubmitHostedReviewDecisionRequest)(input))
+      if (request.decision !== "approved") throw new Error("Only approval is currently supported")
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.approvePullRequest(owner, name, number))
+      return run(gitProvider.approvePullRequest(request.review))
     },
   )
 
@@ -712,32 +774,32 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     InvokeChannel.getWalkthrough,
-    async (
-      _event,
-      owner: string,
-      name: string,
-      number: number,
-      baseSha: string,
-      headSha: string,
-    ): Promise<StoredWalkthrough | null> => {
+    async (_event, input: unknown): Promise<StoredWalkthrough | null> => {
+      const request = await run(Schema.decodeUnknown(HostedWalkthroughRequest)(input))
+      const hostedRepository = request.review.repository
       const store = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
       const walkthroughStore = await run(WalkthroughStore)
       const repo = await run(
         store.upsertRepository({
-          provider: "github",
-          owner,
-          name,
-          remoteUrl: gitProvider.repositoryUrl(owner, name),
+          provider: hostedRepository.providerId,
+          owner: hostedRepository.namespace,
+          name: hostedRepository.name,
+          remoteUrl: await run(gitProvider.repositoryUrl(hostedRepository)),
           localPath: null,
         }),
       )
       return run(
         walkthroughStore.get({
           repoId: repo.id,
-          reviewKey: pullRequestReviewKey(repo.provider, owner, name, number),
-          baseSha,
-          headSha,
+          reviewKey: pullRequestReviewKey(
+            hostedRepository.providerId,
+            hostedRepository.namespace,
+            hostedRepository.name,
+            request.review.number,
+          ),
+          baseSha: request.baseRevision,
+          headSha: request.headRevision,
           promptVersion: WALKTHROUGH_PROMPT_VERSION,
         }),
       )
@@ -772,65 +834,57 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     InvokeChannel.listViewedFiles,
-    async (
-      _event,
-      owner: string,
-      name: string,
-      number: number,
-      headSha: string,
-    ): Promise<readonly string[]> => {
+    async (_event, input: unknown): Promise<readonly string[]> => {
+      const request = await run(Schema.decodeUnknown(HostedViewedFilesRequest)(input))
+      const hostedRepository = request.review.repository
       const store = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
       const viewedFiles = await run(ViewedFileStore)
       const repo = await run(
         store.upsertRepository({
-          provider: "github",
-          owner,
-          name,
-          remoteUrl: gitProvider.repositoryUrl(owner, name),
-          localPath: null,
-        }),
-      )
-      return run(viewedFiles.list({ repoId: repo.id, prNumber: number, headSha }))
-    },
-  )
-
-  ipcMain.handle(
-    InvokeChannel.setViewedFile,
-    async (
-      _event,
-      owner: string,
-      name: string,
-      number: number,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ): Promise<void> => {
-      const store = await run(RepositoryStore)
-      const gitProvider = await run(GitProvider)
-      const viewedFiles = await run(ViewedFileStore)
-      const repo = await run(
-        store.upsertRepository({
-          provider: "github",
-          owner,
-          name,
-          remoteUrl: gitProvider.repositoryUrl(owner, name),
+          provider: hostedRepository.providerId,
+          owner: hostedRepository.namespace,
+          name: hostedRepository.name,
+          remoteUrl: await run(gitProvider.repositoryUrl(hostedRepository)),
           localPath: null,
         }),
       )
       return run(
-        viewedFiles.set({
+        viewedFiles.list({
           repoId: repo.id,
-          prNumber: number,
-          headSha,
-          reviewKey,
-          filePath,
-          viewed,
+          prNumber: request.review.number,
+          headSha: request.headRevision,
         }),
       )
     },
   )
+
+  ipcMain.handle(InvokeChannel.setViewedFile, async (_event, input: unknown): Promise<void> => {
+    const request = await run(Schema.decodeUnknown(SetHostedViewedFileRequest)(input))
+    const hostedRepository = request.review.repository
+    const store = await run(RepositoryStore)
+    const gitProvider = await run(GitProvider)
+    const viewedFiles = await run(ViewedFileStore)
+    const repo = await run(
+      store.upsertRepository({
+        provider: hostedRepository.providerId,
+        owner: hostedRepository.namespace,
+        name: hostedRepository.name,
+        remoteUrl: await run(gitProvider.repositoryUrl(hostedRepository)),
+        localPath: null,
+      }),
+    )
+    return run(
+      viewedFiles.set({
+        repoId: repo.id,
+        prNumber: request.review.number,
+        headSha: request.headRevision,
+        reviewKey: request.reviewKey,
+        filePath: request.filePath,
+        viewed: request.viewed,
+      }),
+    )
+  })
 
   ipcMain.handle(
     InvokeChannel.listLocalViewedFiles,
@@ -874,13 +928,9 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     InvokeChannel.generateWalkthrough,
-    async (
-      _event,
-      owner: string,
-      name: string,
-      number: number,
-      regenerate: boolean,
-    ): Promise<StoredWalkthrough> => {
+    async (_event, input: unknown): Promise<StoredWalkthrough> => {
+      const request = await run(Schema.decodeUnknown(GenerateHostedWalkthroughRequest)(input))
+      const { repository } = request.review
       const repositoryStore = await run(RepositoryStore)
       const gitProvider = await run(GitProvider)
       const walkthroughStore = await run(WalkthroughStore)
@@ -888,14 +938,14 @@ const installIpcHandlers = (
 
       const repo = await run(
         repositoryStore.upsertRepository({
-          provider: "github",
-          owner,
-          name,
-          remoteUrl: gitProvider.repositoryUrl(owner, name),
+          provider: repository.providerId,
+          owner: repository.namespace,
+          name: repository.name,
+          remoteUrl: await run(gitProvider.repositoryUrl(repository)),
           localPath: null,
         }),
       )
-      const pullRequest = await run(gitProvider.getPullRequestDetail(owner, name, number))
+      const pullRequest = await run(gitProvider.getPullRequestDetail(request.review))
       const baseSha = pullRequest.baseRefOid
       if (baseSha === null) {
         throw new Error("Cannot generate a walkthrough without a PR base SHA")
@@ -904,14 +954,19 @@ const installIpcHandlers = (
       let diff: PullRequestDiff | null = null
       let headSha = pullRequest.headRefOid
       if (headSha === null) {
-        diff = await run(gitProvider.getPullRequestDiff(owner, name, number))
+        diff = await run(gitProvider.getPullRequestDiff(request.review))
         headSha = diff.headRefOid
       }
       if (headSha === null) {
         throw new Error("Cannot generate a walkthrough without a PR head SHA")
       }
 
-      const reviewKey = pullRequestReviewKey(repo.provider, owner, name, number)
+      const reviewKey = pullRequestReviewKey(
+        repository.providerId,
+        repository.namespace,
+        repository.name,
+        request.review.number,
+      )
       const cacheKey = {
         repoId: repo.id,
         reviewKey,
@@ -920,15 +975,18 @@ const installIpcHandlers = (
         promptVersion: WALKTHROUGH_PROMPT_VERSION,
       }
 
-      if (!regenerate) {
+      if (!request.regenerate) {
         const cached = await run(walkthroughStore.get(cacheKey))
         if (cached !== null) return cached
       }
 
-      diff ??= await run(gitProvider.getPullRequestDiff(owner, name, number))
+      diff ??= await run(gitProvider.getPullRequestDiff(request.review))
       const parsedDiff = parseUnifiedDiff(diff.diff)
       const promptInput = await run(
-        prepareWalkthroughPromptInput(parsedDiff.files, walkthroughPullRequestScope(number)),
+        prepareWalkthroughPromptInput(
+          parsedDiff.files,
+          walkthroughPullRequestScope(request.review.number),
+        ),
       )
       const walkthrough = await run(
         walkthroughService.generate({
@@ -944,7 +1002,7 @@ const installIpcHandlers = (
       return run(
         walkthroughStore.save({
           ...cacheKey,
-          prNumber: number,
+          prNumber: request.review.number,
           walkthrough,
         }),
       )
@@ -1023,72 +1081,70 @@ const installIpcHandlers = (
 
   ipcMain.handle(
     InvokeChannel.appOpenRepositoryFile,
-    async (
-      _event,
-      owner: string,
-      name: string,
-      filePath: string,
-      headRefName: string,
-      headRefOid: string | null,
-    ): Promise<void> => {
+    async (_event, input: unknown): Promise<void> => {
+      const request = await run(Schema.decodeUnknown(OpenHostedReviewFileRequest)(input))
+      const hostedRepository = request.review.repository
       const store = await run(RepositoryStore)
       const git = await run(GitService)
       const gitProvider = await run(GitProvider)
-      const repositories = await run(store.list(`${owner}/${name}`))
-      const repository = repositories.find(
+      const repositories = await run(
+        store.list(`${hostedRepository.namespace}/${hostedRepository.name}`),
+      )
+      const linkedRepository = repositories.find(
         (repo) =>
-          repo.owner.toLowerCase() === owner.toLowerCase() &&
-          repo.name.toLowerCase() === name.toLowerCase(),
+          repo.provider === request.review.repository.providerId &&
+          repo.owner.toLowerCase() === request.review.repository.namespace.toLowerCase() &&
+          repo.name.toLowerCase() === request.review.repository.name.toLowerCase(),
       )
 
-      if (isAbsolute(filePath)) {
+      if (isAbsolute(request.filePath)) {
         throw new Error("Cannot open an absolute file path from a review")
       }
 
-      const normalizedFilePath = normalizeReviewFilePath(filePath)
+      const normalizedFilePath = normalizeReviewFilePath(request.filePath)
 
-      if (repository?.localPath === null || repository?.localPath === undefined) {
+      if (linkedRepository?.localPath === null || linkedRepository?.localPath === undefined) {
         await openProviderFile(
-          gitProvider,
+          (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
           (targetUrl) => shell.openExternal(targetUrl),
-          owner,
-          name,
+          request.review.repository,
           normalizedFilePath,
-          headRefName,
-          headRefOid,
+          request.headRefName,
+          request.headRevision,
         )
         return
       }
 
       let currentBranch: string
       try {
-        currentBranch = await run(git.currentBranch(repository.localPath))
+        currentBranch = await run(git.currentBranch(linkedRepository.localPath))
       } catch {
         await openProviderFile(
-          gitProvider,
+          (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
           (targetUrl) => shell.openExternal(targetUrl),
-          owner,
-          name,
+          request.review.repository,
           normalizedFilePath,
-          headRefName,
-          headRefOid,
+          request.headRefName,
+          request.headRevision,
         )
         return
       }
-      if (currentBranch !== headRefName) {
+      if (currentBranch !== request.headRefName) {
         await openProviderFile(
-          gitProvider,
+          (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
           (targetUrl) => shell.openExternal(targetUrl),
-          owner,
-          name,
+          request.review.repository,
           normalizedFilePath,
-          headRefName,
-          headRefOid,
+          request.headRefName,
+          request.headRevision,
         )
         return
       }
 
-      const targetPath = resolveContainedRepositoryPath(repository.localPath, normalizedFilePath)
+      const targetPath = resolveContainedRepositoryPath(
+        linkedRepository.localPath,
+        normalizedFilePath,
+      )
 
       await openLocalPath((path) => shell.openPath(path), targetPath)
     },
@@ -1113,6 +1169,16 @@ const pullRequestReviewKey = (
   name: string,
   number: number,
 ) => makePullRequestReviewKey(provider, owner, name, number)
+
+const hostedReview = (providerId: string, owner: string, name: string, number: number) =>
+  HostedReviewLocator.make({
+    repository: HostedRepositoryLocator.make({
+      providerId: GitProviderId.make(providerId),
+      namespace: RepositoryNamespace.make(owner),
+      name: HostedRepositoryName.make(name),
+    }),
+    number: HostedReviewNumber.make(number),
+  })
 
 const localRepositoryInput = (rootPath: string) => {
   const resolvedRootPath = resolve(rootPath)

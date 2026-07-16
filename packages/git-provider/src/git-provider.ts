@@ -1,9 +1,9 @@
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 
 import {
-  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderDiagnostic,
   GitProviderId,
-  GitProviderKind,
   HostedRepository,
   HostedRepositoryLocator,
   HostedReviewDetail,
@@ -16,6 +16,8 @@ import {
 export {
   BranchRevision,
   GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderDiagnostic,
   GitProviderId,
   GitProviderKind,
   HostedRepository,
@@ -31,39 +33,8 @@ export {
   ReviewChangedFile,
   ReviewCommit,
   ReviewDecision,
+  GitProviderTerminology,
 } from "@diffdash/domain/git-provider"
-
-/** Human-readable provider vocabulary used by provider-neutral UI. */
-export class GitProviderTerminology extends Schema.Class<GitProviderTerminology>(
-  "GitProviderTerminology",
-)({
-  repositorySingular: Schema.String,
-  repositoryPlural: Schema.String,
-  reviewSingular: Schema.String,
-  reviewPlural: Schema.String,
-}) {}
-
-/** Serializable description of one configured provider instance. */
-export class GitProviderDescriptor extends Schema.Class<GitProviderDescriptor>(
-  "GitProviderDescriptor",
-)({
-  id: GitProviderId,
-  kind: GitProviderKind,
-  displayName: Schema.String,
-  host: Schema.String,
-  capabilities: GitProviderCapabilities,
-  terminology: GitProviderTerminology,
-}) {}
-
-/** Provider health exposed without leaking provider-specific command output. */
-export class GitProviderDiagnostic extends Schema.Class<GitProviderDiagnostic>(
-  "GitProviderDiagnostic",
-)({
-  providerId: GitProviderId,
-  available: Schema.Boolean,
-  authenticated: Schema.Boolean,
-  message: Schema.NullOr(Schema.String),
-}) {}
 
 /** Provider-owned checkout instructions consumed by local workspace management. */
 export class HostedReviewCheckoutSpec extends Schema.Class<HostedReviewCheckoutSpec>(
@@ -82,6 +53,14 @@ export class GitRepositorySearchInput extends Schema.Class<GitRepositorySearchIn
 )({
   query: Schema.String,
   namespaces: Schema.Array(Schema.String),
+}) {}
+
+/** Provider-neutral account or organization available as a repository search scope. */
+export class GitRepositorySearchScope extends Schema.Class<GitRepositorySearchScope>(
+  "GitRepositorySearchScope",
+)({
+  login: Schema.String,
+  kind: Schema.Literal("user", "organization"),
 }) {}
 
 /** Unknown configured provider ID. */
@@ -130,6 +109,14 @@ export interface GitProviderRegistration {
   readonly searchRepositories: (
     input: GitRepositorySearchInput,
   ) => Effect.Effect<readonly HostedRepository[], GitProviderOperationError>
+  readonly listSearchScopes?: () => Effect.Effect<
+    readonly GitRepositorySearchScope[],
+    GitProviderOperationError
+  >
+  readonly listAssignedReviews?: () => Effect.Effect<
+    readonly HostedReviewSummary[],
+    GitProviderOperationError
+  >
   readonly listReviews: (
     repository: HostedRepositoryLocator,
   ) => Effect.Effect<readonly HostedReviewSummary[], GitProviderOperationError>
@@ -155,4 +142,63 @@ export interface GitProviderRegistration {
   readonly checkoutSpec: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>
+  readonly checkoutSpecAtRevision?: (
+    review: HostedReviewLocator,
+    revision: string,
+  ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>
+}
+
+/** Registry of configured hosted Git provider instances. */
+export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegistry")<
+  GitProviderRegistry,
+  {
+    readonly list: Effect.Effect<readonly GitProviderRegistration[]>
+    readonly get: (
+      providerId: GitProviderId,
+    ) => Effect.Effect<GitProviderRegistration, UnknownGitProviderError>
+    readonly resolveRemote: (
+      remoteUrl: string,
+    ) => Effect.Effect<
+      HostedRepositoryLocator | null,
+      AmbiguousGitRemoteError | GitProviderOperationError
+    >
+  }
+>() {
+  /** Builds a registry and fails immediately when instance IDs collide. */
+  static readonly layer = (registrations: readonly GitProviderRegistration[]) =>
+    Layer.effect(
+      GitProviderRegistry,
+      Effect.gen(function* () {
+        const providers = new Map<GitProviderId, GitProviderRegistration>()
+        for (const registration of registrations) {
+          if (providers.has(registration.descriptor.id)) {
+            return yield* DuplicateGitProviderError.make({
+              providerId: registration.descriptor.id,
+            })
+          }
+          providers.set(registration.descriptor.id, registration)
+        }
+
+        return GitProviderRegistry.of({
+          list: Effect.succeed([...providers.values()]),
+          get: (providerId) =>
+            Effect.fromNullable(providers.get(providerId)).pipe(
+              Effect.orElseFail(() => UnknownGitProviderError.make({ providerId })),
+            ),
+          resolveRemote: Effect.fn("GitProviderRegistry.resolveRemote")(function* (remoteUrl) {
+            const matches = (yield* Effect.all(
+              [...providers.values()].map((provider) => provider.parseRemote(remoteUrl)),
+              { concurrency: "unbounded" },
+            )).filter((match): match is HostedRepositoryLocator => match !== null)
+            if (matches.length > 1) {
+              return yield* AmbiguousGitRemoteError.make({
+                remoteUrl,
+                providerIds: matches.map(({ providerId }) => providerId),
+              })
+            }
+            return matches[0] ?? null
+          }),
+        })
+      }),
+    )
 }

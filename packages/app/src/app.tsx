@@ -88,7 +88,28 @@ import type { LocalReviewDetail } from "@diffdash/domain/local-review"
 import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
 import type { PullRequestDetail, PullRequestSummary } from "@diffdash/domain/pull-request"
 import type { RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
-import { Repo, RepositorySearchRequest } from "@diffdash/domain/repository"
+import { Repo } from "@diffdash/domain/repository"
+import {
+  type GitProviderDescriptor,
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import {
+  GenerateHostedWalkthroughRequest,
+  HostedProviderRequest,
+  HostedRepositoryRequest,
+  HostedRepositorySearchRequest,
+  HostedReviewRequest,
+  HostedViewedFilesRequest,
+  HostedWalkthroughRequest,
+  OpenHostedReviewFileRequest,
+  SetHostedViewedFileRequest,
+  SubmitHostedReviewDecisionRequest,
+} from "@diffdash/protocol/hosted-git"
 import { buildReviewFileTreeInput } from "@diffdash/app/file-tree-adapter"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import {
@@ -134,6 +155,7 @@ type RepositoryLinkState = "checking" | "linked" | "unlinked" | "not-applicable"
 type SelectedReviewTarget =
   | {
       readonly kind: "pullRequest"
+      readonly providerId: GitProviderId
       readonly number: number
       readonly repoName: string
       readonly repoOwner: string
@@ -191,8 +213,6 @@ type AppNavigationRoute = {
 
 const MOUSE_BUTTON_BACK = 3
 const MOUSE_BUTTON_FORWARD = 4
-const GH_CLI_DOCS_URL = "https://cli.github.com/"
-const GH_AUTH_DOCS_URL = "https://cli.github.com/manual/gh_auth_login"
 const GIT_DOCS_URL = "https://git-scm.com/downloads"
 const CODING_AGENT_SETUP_MESSAGE =
   "Walkthroughs require Codex, Claude, or OpenCode. Install one of them to enable guided review."
@@ -217,6 +237,7 @@ const sameSelectedReviewTarget = (
     )
   if (right.kind !== "pullRequest") return false
   return (
+    left.providerId === right.providerId &&
     left.repoOwner === right.repoOwner &&
     left.repoName === right.repoName &&
     left.number === right.number
@@ -382,6 +403,13 @@ const repositoriesAtom = Atom.make(
   },
 ).pipe(Atom.keepAlive)
 
+const providersAtom = Atom.make(
+  fetchEffect(() => window.diffDash.providers.list()),
+  {
+    initialValue: [] as readonly GitProviderDescriptor[],
+  },
+).pipe(Atom.keepAlive)
+
 const isBookmarkedPullRequestRepo = (repo: Repo) => repo.provider !== "local" && repo.isFavorite
 
 const repositorySearchAtom = Atom.family((query: string) =>
@@ -399,19 +427,29 @@ const remoteRepositorySearchAtom = Atom.family((key: string) =>
   Atom.make(
     Effect.gen(function* () {
       const request = parseRemoteSearchAtomKey(key)
-      if (request.query.length === 0 || request.owners.length === 0)
+      if (request === null || request.query.length === 0 || request.namespaces.length === 0)
         return [] as readonly RepositorySearchResult[]
 
-      return yield* fetchEffect(() => window.diffDash.gitProvider.searchRepositories(request))
+      return yield* fetchEffect(() =>
+        window.diffDash.hostedRepositories.searchRepositories(request),
+      )
     }),
     { initialValue: [] as readonly RepositorySearchResult[] },
   ),
 )
 
-const searchScopesAtom = Atom.make(
-  fetchEffect(() => window.diffDash.gitProvider.listSearchScopes()),
-  { initialValue: [] as readonly RepositorySearchScope[] },
-).pipe(Atom.keepAlive)
+const searchScopesAtom = Atom.family((providerId: string) =>
+  Atom.make(
+    providerId.length === 0
+      ? Effect.succeed([] as readonly RepositorySearchScope[])
+      : fetchEffect(() =>
+          window.diffDash.hostedRepositories.listSearchScopes(
+            HostedProviderRequest.make({ providerId: GitProviderId.make(providerId) }),
+          ),
+        ),
+    { initialValue: [] as readonly RepositorySearchScope[] },
+  ),
+)
 
 const diagnosticsAtom = Atom.make(
   fetchEffect(() => window.diffDash.diagnostics()),
@@ -423,15 +461,15 @@ const diagnosticsAtom = Atom.make(
 const scopedLocalSearchQuery = (query: string, scope: string | null) =>
   scope === null ? query : `${scope}/${query}`
 
-const remoteSearchAtomKey = (query: string, owners: readonly string[]) =>
-  `${owners.join(",")}\u0000${query}`
+const remoteSearchAtomKey = (providerId: GitProviderId, query: string, owners: readonly string[]) =>
+  JSON.stringify({ providerId, query, namespaces: owners })
 
 const parseRemoteSearchAtomKey = (key: string) => {
-  const [owners = "", query = ""] = key.split("\u0000", 2)
-  return RepositorySearchRequest.make({
-    owners: owners.length === 0 ? [] : owners.split(","),
-    query,
-  })
+  try {
+    return Schema.decodeUnknownSync(HostedRepositorySearchRequest)(JSON.parse(key))
+  } catch {
+    return null
+  }
 }
 
 const serializeLocalReviewAtomKey = (target: LocalReviewTarget) => JSON.stringify(target)
@@ -446,10 +484,23 @@ const parseLocalReviewAtomKey = (key: string) => {
 }
 
 const reviewRequestsAtom = Atom.make(
-  fetchEffect(() => window.diffDash.gitProvider.listReviewRequests()),
-  {
-    initialValue: [] as readonly PullRequestSummary[],
-  },
+  Effect.fnUntraced(function* (get: Atom.Context) {
+    const providers = yield* get.result(providersAtom)
+    const reviews = yield* Effect.all(
+      providers
+        .filter((provider) => provider.capabilities.assignedReviews)
+        .map((provider) =>
+          fetchEffect(() =>
+            window.diffDash.hostedReviews.listAssigned(
+              HostedProviderRequest.make({ providerId: provider.id }),
+            ),
+          ),
+        ),
+      { concurrency: "unbounded" },
+    )
+    return reviews.flat()
+  }),
+  { initialValue: [] as readonly PullRequestSummary[] },
 ).pipe(Atom.keepAlive)
 
 const pullRequestsAtom = Atom.family((key: string) =>
@@ -458,7 +509,11 @@ const pullRequestsAtom = Atom.family((key: string) =>
       const parsedKey = parseRepoAtomKey(key)
       if (parsedKey === null) return [] as readonly PullRequestSummary[]
       return yield* fetchEffect(() =>
-        window.diffDash.gitProvider.listPullRequests(parsedKey.owner, parsedKey.name),
+        window.diffDash.hostedReviews.list(
+          HostedRepositoryRequest.make({
+            repository: hostedRepository(parsedKey.providerId, parsedKey.owner, parsedKey.name),
+          }),
+        ),
       )
     }),
     { initialValue: [] as readonly PullRequestSummary[] },
@@ -470,7 +525,7 @@ const repoPrCountsAtom = Atom.make(
     const repos = yield* get.result(repositoriesAtom)
     const entries = yield* Effect.all(
       repos.filter(isBookmarkedPullRequestRepo).map((repo) =>
-        get.result(pullRequestsAtom(repoKey(repo.owner, repo.name))).pipe(
+        get.result(pullRequestsAtom(repoKey(repo.provider, repo.owner, repo.name))).pipe(
           Effect.map((pullRequests) => [repo.id, pullRequests.length] as const),
           Effect.catchAll(() => Effect.succeed(null)),
         ),
@@ -487,10 +542,15 @@ const pullRequestDetailAtom = Atom.family((key: string) =>
       const parsedKey = parsePullRequestAtomKey(key)
       if (parsedKey === null) return null
       return yield* fetchEffect(() =>
-        window.diffDash.gitProvider.getPullRequestDetail(
-          parsedKey.owner,
-          parsedKey.name,
-          parsedKey.number,
+        window.diffDash.hostedReviews.get(
+          HostedReviewRequest.make({
+            review: hostedReview(
+              parsedKey.providerId,
+              parsedKey.owner,
+              parsedKey.name,
+              parsedKey.number,
+            ),
+          }),
         ),
       )
     }),
@@ -504,10 +564,15 @@ const pullRequestDiffAtom = Atom.family((key: string) =>
       const parsedKey = parsePullRequestAtomKey(key)
       if (parsedKey === null) return null
       const diff = yield* fetchEffect(() =>
-        window.diffDash.gitProvider.getPullRequestDiff(
-          parsedKey.owner,
-          parsedKey.name,
-          parsedKey.number,
+        window.diffDash.hostedReviews.getDiff(
+          HostedReviewRequest.make({
+            review: hostedReview(
+              parsedKey.providerId,
+              parsedKey.owner,
+              parsedKey.name,
+              parsedKey.number,
+            ),
+          }),
         ),
       )
       return parseUnifiedDiff(diff.diff)
@@ -564,6 +629,7 @@ export function App() {
   const handledMouseNavigationButtonRef = useRef<number | null>(null)
   const [query, setQuery] = useState("")
   const [selectedSearchScope, setSelectedSearchScope] = useState<string | null>(null)
+  const [selectedProviderId, setSelectedProviderId] = useState<GitProviderId | null>(null)
   const [actionStatus, setActionStatus] = useState("Search a repo or open a bookmark.")
   const [cliNavigationError, setCliNavigationError] = useState<string | null>(null)
   const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
@@ -611,22 +677,50 @@ export function App() {
   }, [query])
 
   const selectedRepoKey =
-    selectedRepo === null ? "" : repoKey(selectedRepo.owner, selectedRepo.name)
+    selectedRepo === null
+      ? ""
+      : repoKey(selectedRepo.provider, selectedRepo.owner, selectedRepo.name)
   const selectedPullRequestReviewKey =
     selectedReview === null || selectedReview.kind !== "pullRequest"
       ? ""
-      : pullRequestAtomKey(selectedReview.repoOwner, selectedReview.repoName, selectedReview.number)
+      : pullRequestAtomKey(
+          selectedReview.providerId,
+          selectedReview.repoOwner,
+          selectedReview.repoName,
+          selectedReview.number,
+        )
   const selectedLocalReviewKey =
     selectedReview === null || selectedReview.kind !== "localDiff"
       ? ""
       : serializeLocalReviewAtomKey(selectedReview.target)
   const repositoriesResult = useAtomValue(repositoriesAtom)
+  const providersResult = useAtomValue(providersAtom)
+  const availableProviders = resultValue(providersResult, [] as readonly GitProviderDescriptor[])
+  const activeProviderId = selectedProviderId ?? availableProviders[0]?.id ?? null
+  const selectedProvider =
+    availableProviders.find((provider) => provider.id === activeProviderId) ??
+    availableProviders[0] ??
+    null
+  const selectedRepoProvider =
+    selectedRepo === null
+      ? null
+      : (availableProviders.find((provider) => provider.id === selectedRepo.provider) ?? null)
   const diagnosticsResult = useAtomValue(diagnosticsAtom)
-  const searchScopesResult = useAtomValue(searchScopesAtom)
+  const selectedProviderSearchScopesAtom = searchScopesAtom(
+    selectedProvider?.capabilities.searchScopes === true ? (activeProviderId ?? "") : "",
+  )
+  const searchScopesResult = useAtomValue(selectedProviderSearchScopesAtom)
   const searchScopes = resultValue(searchScopesResult, [] as readonly RepositorySearchScope[])
   const remoteSearchOwners =
-    selectedSearchScope === null ? searchScopes.map((scope) => scope.login) : [selectedSearchScope]
-  const remoteSearchKey = remoteSearchAtomKey(debouncedRemoteSearchQuery, remoteSearchOwners)
+    selectedProvider?.capabilities.repositorySearch !== true
+      ? []
+      : selectedSearchScope === null
+        ? searchScopes.map((scope) => scope.login)
+        : [selectedSearchScope]
+  const remoteSearchKey =
+    activeProviderId === null
+      ? ""
+      : remoteSearchAtomKey(activeProviderId, debouncedRemoteSearchQuery, remoteSearchOwners)
   const localSearchAtom = repositorySearchAtom(localSearchQuery)
   const remoteSearchAtom = remoteRepositorySearchAtom(remoteSearchKey)
   const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
@@ -646,10 +740,11 @@ export function App() {
   const unbookmarkFavoriteRepo = useAtomSet(unbookmarkRepoAtom, { mode: "promise" })
   const refreshPullRequestsForRepo = useAtomSet(refreshPullRequestsAtom)
   const refreshRepositories = useAtomRefresh(repositoriesAtom)
+  const refreshProviders = useAtomRefresh(providersAtom)
   const refreshLocalSearch = useAtomRefresh(localSearchAtom)
   const refreshRemoteSearch = useAtomRefresh(remoteSearchAtom)
   const refreshDiagnostics = useAtomRefresh(diagnosticsAtom)
-  const refreshSearchScopes = useAtomRefresh(searchScopesAtom)
+  const refreshSearchScopes = useAtomRefresh(selectedProviderSearchScopesAtom)
   const refreshReviewRequests = useAtomRefresh(reviewRequestsAtom)
   const refreshRepoPrCounts = useAtomRefresh(repoPrCountsAtom)
   const refreshSelectedPullRequests = useAtomRefresh(selectedRepoPullRequestsAtom)
@@ -658,6 +753,7 @@ export function App() {
   const refreshSelectedLocalReview = useAtomRefresh(selectedLocalReviewSnapshotAtom)
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
+  const providers = availableProviders
   const bookmarkedRepos = repos.filter(isBookmarkedPullRequestRepo)
   const hasQuery = query.trim().length > 0
   const localResults = hasQuery ? resultValue(localResultsResult, [] as readonly Repo[]) : []
@@ -680,6 +776,12 @@ export function App() {
     selectedPullRequest,
     selectedLocalReview,
   )
+  const reviewProvider =
+    selectedReviewSubject?.kind === "pullRequest"
+      ? (providers.find(
+          (provider) => provider.id === selectedReviewSubject.pullRequest.providerId,
+        ) ?? null)
+      : null
   const selectedDiff =
     selectedReview?.kind === "localDiff" ? selectedLocalDiff : selectedPullRequestDiff
   const selectedReviewKind = selectedReview?.kind ?? null
@@ -690,16 +792,22 @@ export function App() {
         ? "checking"
         : repos.some(
               (candidate) =>
-                candidate.provider === "github" &&
+                candidate.provider === selectedReview.providerId &&
                 candidate.localPath !== null &&
-                repoKey(candidate.owner, candidate.name) ===
-                  repoKey(selectedReview.repoOwner, selectedReview.repoName),
+                repoKey(candidate.provider, candidate.owner, candidate.name) ===
+                  repoKey(
+                    selectedReview.providerId,
+                    selectedReview.repoOwner,
+                    selectedReview.repoName,
+                  ),
             )
           ? "linked"
           : "unlinked"
-  const bookmarkedRepoKeys = new Set(bookmarkedRepos.map((repo) => repoKey(repo.owner, repo.name)))
+  const bookmarkedRepoKeys = new Set(
+    bookmarkedRepos.map((repo) => repoKey(repo.provider, repo.owner, repo.name)),
+  )
   const uniqueRemoteResults = remoteResults.filter(
-    (repo) => !bookmarkedRepoKeys.has(repoKey(repo.owner, repo.name)),
+    (repo) => !bookmarkedRepoKeys.has(repoKey(repo.providerId, repo.owner, repo.name)),
   )
   const previewPullRequests = pullRequests.slice(0, 3)
   const reviewRequestsStatus = Result.isFailure(reviewRequestsResult)
@@ -711,12 +819,12 @@ export function App() {
         : `${reviewRequests.length} review request${reviewRequests.length === 1 ? "" : "s"} need attention.`
   const selectedRepoStatus =
     selectedRepo === null
-      ? "Select a repo to preview its first 3 open PRs."
+      ? `Select a repo to preview its first 3 open ${selectedProvider?.terminology.reviewAbbreviation ?? "reviews"}s.`
       : Result.isFailure(pullRequestsResult)
         ? resultErrorMessage(pullRequestsResult, "Could not load pull requests")
         : Result.isWaiting(pullRequestsResult)
-          ? `Loading open PRs for ${selectedRepo.owner}/${selectedRepo.name}...`
-          : `${pullRequests.length} open PR${pullRequests.length === 1 ? "" : "s"} in ${selectedRepo.owner}/${selectedRepo.name}`
+          ? `Loading open ${selectedRepoProvider?.terminology.reviewAbbreviation ?? "review"}s for ${selectedRepo.owner}/${selectedRepo.name}...`
+          : `${pullRequests.length} open ${selectedRepoProvider?.terminology.reviewAbbreviation ?? "review"}${pullRequests.length === 1 ? "" : "s"} in ${selectedRepo.owner}/${selectedRepo.name}`
   const reviewStatus =
     selectedReview === null
       ? actionStatus
@@ -739,10 +847,10 @@ export function App() {
               "Could not open pull request",
             )
           : selectedPullRequest === null
-            ? `Opening PR #${selectedReview.number}...`
+            ? `Opening ${reviewProvider?.terminology.reviewAbbreviation ?? "review"} #${selectedReview.number}...`
             : Result.isWaiting(selectedPullRequestDiffResult)
-              ? `Loading diff for PR #${selectedPullRequest.number}...`
-              : `Opened PR #${selectedPullRequest.number}: ${selectedPullRequest.title}`
+              ? `Loading diff for ${reviewProvider?.terminology.reviewAbbreviation ?? "review"} #${selectedPullRequest.number}...`
+              : `Opened ${reviewProvider?.terminology.reviewAbbreviation ?? "review"} #${selectedPullRequest.number}: ${selectedPullRequest.title}`
   const isSearching =
     hasQuery &&
     (query.trim() !== debouncedRemoteSearchQuery ||
@@ -753,7 +861,10 @@ export function App() {
   const searchError = Result.isFailure(searchScopesResult)
     ? resultErrorMessage(searchScopesResult, "Could not load repository owners")
     : Result.isFailure(remoteResultsResult)
-      ? resultErrorMessage(remoteResultsResult, "Could not search GitHub repositories")
+      ? resultErrorMessage(
+          remoteResultsResult,
+          `Could not search ${selectedProvider?.displayName ?? "hosted"} repositories`,
+        )
       : null
   const isLoadingPullRequests = selectedRepo !== null && Result.isWaiting(pullRequestsResult)
   const isLoadingReview =
@@ -815,6 +926,7 @@ export function App() {
 
   useEffect(() => {
     refreshRepositories()
+    refreshProviders()
     refreshDiagnostics()
     refreshSearchScopes()
     refreshReviewRequests()
@@ -823,9 +935,24 @@ export function App() {
     refreshDiagnostics,
     refreshRepoPrCounts,
     refreshRepositories,
+    refreshProviders,
     refreshReviewRequests,
     refreshSearchScopes,
   ])
+
+  useEffect(() => {
+    if (
+      providers.length === 0 ||
+      (selectedProviderId !== null &&
+        providers.some((provider) => provider.id === selectedProviderId))
+    )
+      return
+    const firstProvider = providers[0]
+    if (firstProvider !== undefined) {
+      setSelectedProviderId(firstProvider.id)
+      setSelectedSearchScope(null)
+    }
+  }, [providers, selectedProviderId])
 
   useEffect(() => {
     let cancelled = false
@@ -954,10 +1081,10 @@ export function App() {
         ? selectedPullRequest?.headRefOid === null || selectedPullRequest === null
           ? Promise.resolve([] as readonly string[])
           : window.diffDash.viewedFiles.list(
-              selectedPullRequest.repoOwner,
-              selectedPullRequest.repoName,
-              selectedPullRequest.number,
-              selectedPullRequest.headRefOid,
+              HostedViewedFilesRequest.make({
+                review: pullRequestLocator(selectedPullRequest),
+                headRevision: selectedPullRequest.headRefOid,
+              }),
             )
         : selectedLocalReview === null
           ? Promise.resolve([] as readonly string[])
@@ -1068,13 +1195,13 @@ export function App() {
     if (selectedReviewSubject?.kind === "pullRequest" && changedFile !== undefined) {
       if (selectedReviewSubject.pullRequest.headRefOid === null) return
       void window.diffDash.viewedFiles.set(
-        selectedReviewSubject.pullRequest.repoOwner,
-        selectedReviewSubject.pullRequest.repoName,
-        selectedReviewSubject.pullRequest.number,
-        selectedReviewSubject.pullRequest.headRefOid,
-        reviewKey,
-        changedFile.path,
-        viewed,
+        SetHostedViewedFileRequest.make({
+          review: pullRequestLocator(selectedReviewSubject.pullRequest),
+          headRevision: selectedReviewSubject.pullRequest.headRefOid,
+          reviewKey,
+          filePath: changedFile.path,
+          viewed,
+        }),
       )
       return
     }
@@ -1105,7 +1232,9 @@ export function App() {
 
     refreshSelectedPullRequestDetail()
     refreshSelectedPullRequestDiff()
-    refreshPullRequestsForRepo(repoKey(selectedReview.repoOwner, selectedReview.repoName))
+    refreshPullRequestsForRepo(
+      repoKey(selectedReview.providerId, selectedReview.repoOwner, selectedReview.repoName),
+    )
     refreshReviewRequests()
   }
 
@@ -1142,14 +1271,14 @@ export function App() {
     selectRepository(
       Repo.make({
         createdAt: now,
-        id: repoKey(repo.owner, repo.name),
+        id: repoKey(repo.providerId, repo.owner, repo.name),
         isFavorite: false,
         lastOpenedAt: null,
         lastSyncedAt: null,
         localPath: null,
         name: repo.name,
         owner: repo.owner,
-        provider: "github",
+        provider: repo.providerId,
         remoteUrl: repo.url,
         updatedAt: repo.updatedAt ?? now,
       }),
@@ -1178,7 +1307,7 @@ export function App() {
     setViewedFileKeys(new Set())
     navigateTo({ screen: nextScreen, selectedRepo: repo, selectedReview: null })
     setActionStatus(`Loading open PRs for ${repo.owner}/${repo.name}...`)
-    refreshPullRequestsForRepo(repoKey(repo.owner, repo.name))
+    refreshPullRequestsForRepo(repoKey(repo.provider, repo.owner, repo.name))
   }
 
   const rememberRecentReview = (entry: Omit<RecentReviewEntry, "lastReviewedAt">) => {
@@ -1194,6 +1323,7 @@ export function App() {
   const openReview = (pullRequest: PullRequestSummary, sourceRepo: Repo | null = selectedRepo) => {
     const review: PullRequestReviewTarget = {
       kind: "pullRequest",
+      providerId: pullRequest.providerId,
       number: pullRequest.number,
       repoName: pullRequest.repoName,
       repoOwner: pullRequest.repoOwner,
@@ -1248,6 +1378,7 @@ export function App() {
   const openPullRequestNumber = (repo: Repo, number: number) => {
     const review: PullRequestReviewTarget = {
       kind: "pullRequest",
+      providerId: GitProviderId.make(repo.provider),
       number,
       repoName: repo.name,
       repoOwner: repo.owner,
@@ -1335,8 +1466,11 @@ export function App() {
     if (localPath === null) return false
 
     const linked = await window.diffDash.repositories.link({
-      owner: selectedReview.repoOwner,
-      name: selectedReview.repoName,
+      repository: hostedRepository(
+        selectedReview.providerId,
+        selectedReview.repoOwner,
+        selectedReview.repoName,
+      ),
       localPath,
     })
     refreshRepositories()
@@ -1344,7 +1478,8 @@ export function App() {
     refreshRepoPrCounts()
     if (
       selectedRepo !== null &&
-      repoKey(selectedRepo.owner, selectedRepo.name) === repoKey(linked.owner, linked.name)
+      repoKey(selectedRepo.provider, selectedRepo.owner, selectedRepo.name) ===
+        repoKey(linked.provider, linked.owner, linked.name)
     ) {
       setSelectedRepo(linked)
     }
@@ -1494,6 +1629,7 @@ export function App() {
             aiSettings={aiSettings}
             parsedDiff={selectedDiff}
             repositoryLinkState={reviewRepositoryLinkState}
+            provider={reviewProvider}
             reviewSubject={selectedReviewSubject}
             expandedFileKeys={expandedFileKeys}
             isReloading={isReloadingReview || isLoadingReview}
@@ -1578,6 +1714,28 @@ export function App() {
                       <Loader2 className="text-muted-foreground absolute top-1/2 right-3 size-3.5 -translate-y-1/2 animate-spin" />
                     ) : null}
                   </div>
+                  {providers.length > 1 ? (
+                    <div className="border-t px-3 py-2">
+                      <label className="text-muted-foreground flex items-center gap-2 text-xs">
+                        Provider
+                        <select
+                          aria-label="Hosted provider"
+                          value={activeProviderId ?? ""}
+                          className="bg-background rounded-md border px-2 py-1"
+                          onChange={(event) => {
+                            setSelectedProviderId(GitProviderId.make(event.currentTarget.value))
+                            setSelectedSearchScope(null)
+                          }}
+                        >
+                          {providers.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.displayName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
                   {hasQuery ? (
                     <SearchResults
                       localResults={localResults}
@@ -1961,6 +2119,7 @@ const ReviewScreen = ({
   aiSettings,
   parsedDiff,
   repositoryLinkState,
+  provider,
   reviewSubject,
   expandedFileKeys,
   isReloading,
@@ -1980,6 +2139,7 @@ const ReviewScreen = ({
   readonly aiSettings: AISettings
   readonly parsedDiff: ParsedDiff | null
   readonly repositoryLinkState: RepositoryLinkState
+  readonly provider: GitProviderDescriptor | null
   readonly reviewSubject: ReviewSubject
   readonly expandedFileKeys: ReadonlySet<string>
   readonly isReloading: boolean
@@ -2000,6 +2160,7 @@ const ReviewScreen = ({
     aiSettings={aiSettings}
     parsedDiff={parsedDiff}
     repositoryLinkState={repositoryLinkState}
+    provider={provider}
     reviewSubject={reviewSubject}
     expandedFileKeys={expandedFileKeys}
     isReloading={isReloading}
@@ -2309,7 +2470,7 @@ const EmptyState = ({
   </div>
 )
 
-type SetupRequirementKey = "git-cli" | "gh-cli" | "gh-auth" | "coding-agent" | "diffdash-cli"
+type SetupRequirementKey = string
 
 type SetupRequirement = {
   readonly key: SetupRequirementKey
@@ -2317,6 +2478,7 @@ type SetupRequirement = {
   readonly description: string
   readonly detail: string
   readonly done: boolean
+  readonly helpUrl?: string | null
 }
 
 const OnboardingScreen = ({
@@ -2350,8 +2512,8 @@ const OnboardingScreen = ({
         <div className="space-y-2">
           <h1 className="max-w-3xl text-4xl font-semibold tracking-tight">Set up DiffDash</h1>
           <p className="text-muted-foreground max-w-3xl text-sm leading-6">
-            DiffDash needs GitHub CLI auth for repositories, one coding agent for walkthroughs, and
-            the diffdash terminal command for local review shortcuts.
+            Local reviews only require Git. Hosted providers and coding agents are optional and can
+            be configured now or later.
           </p>
         </div>
       </div>
@@ -2521,15 +2683,15 @@ const PrerequisiteAction = ({
     )
   }
 
-  if (requirement.key === "gh-cli") {
+  if (requirement.helpUrl !== undefined && requirement.helpUrl !== null) {
     return (
       <Button
         variant="outline"
         size="sm"
         className="self-start"
-        onClick={() => onOpenDocs(GH_CLI_DOCS_URL)}
+        onClick={() => onOpenDocs(requirement.helpUrl ?? "")}
       >
-        GitHub CLI docs
+        Setup docs
       </Button>
     )
   }
@@ -2543,19 +2705,6 @@ const PrerequisiteAction = ({
         onClick={() => onOpenDocs(GIT_DOCS_URL)}
       >
         Git docs
-      </Button>
-    )
-  }
-
-  if (requirement.key === "gh-auth") {
-    return (
-      <Button
-        variant="outline"
-        size="sm"
-        className="self-start"
-        onClick={() => onOpenDocs(GH_AUTH_DOCS_URL)}
-      >
-        Auth docs
       </Button>
     )
   }
@@ -2579,22 +2728,14 @@ const prerequisiteRows = (diagnostics: AppDiagnostics): readonly SetupRequiremen
     detail: diagnostics.gitInstalled ? "git is available in PATH." : "git was not found in PATH.",
     done: diagnostics.gitInstalled,
   },
-  {
-    key: "gh-cli",
-    title: "GitHub CLI supported",
-    description: "DiffDash uses gh to search repositories, load PRs, and submit reviews.",
-    detail: githubCliPrerequisiteDetail(diagnostics),
-    done: diagnostics.ghSupported,
-  },
-  {
-    key: "gh-auth",
-    title: "GitHub CLI authenticated",
-    description: "Sign in with gh so DiffDash can access repositories and review requests.",
-    detail: diagnostics.ghAuthenticated
-      ? "GitHub CLI auth is ready."
-      : "Run gh auth login or follow the auth docs.",
-    done: diagnostics.ghAuthenticated,
-  },
+  ...diagnostics.setupRequirements.map((requirement) => ({
+    key: requirement.key,
+    title: requirement.title,
+    description: requirement.description,
+    detail: requirement.detail,
+    done: requirement.ready,
+    helpUrl: requirement.helpUrl,
+  })),
   {
     key: "coding-agent",
     title: "Coding agent installed",
@@ -2623,18 +2764,6 @@ const installedCodingAgentDetail = (agents: readonly string[]) => {
   return `Detected ${agents.map(codingAgentLabel).join(", ")}.`
 }
 
-const githubCliPrerequisiteDetail = (diagnostics: AppDiagnostics) => {
-  if (!diagnostics.ghInstalled) return "gh was not found in PATH."
-  if (diagnostics.ghSupported)
-    return `GitHub CLI ${diagnostics.ghVersion ?? "unknown"} supports repository search.`
-
-  const foundVersion = diagnostics.ghVersion ?? "an unknown version"
-  if (!diagnostics.ghSearchRepositoriesAvailable) {
-    return `GitHub CLI 2.7.0 or newer is required for repository search. Found ${foundVersion} without gh search repos support. Update gh, then restart DiffDash.`
-  }
-  return `GitHub CLI 2.7.0 or newer is required for repository search. Found ${foundVersion}. Update gh, then restart DiffDash.`
-}
-
 const codingAgentLabel = (agent: string) => {
   if (agent === "codex") return "Codex"
   if (agent === "claude") return "Claude"
@@ -2647,6 +2776,7 @@ const PullRequestDetailView = ({
   aiSettings,
   parsedDiff,
   repositoryLinkState,
+  provider,
   reviewSubject,
   expandedFileKeys,
   isReloading,
@@ -2666,6 +2796,7 @@ const PullRequestDetailView = ({
   readonly aiSettings: AISettings
   readonly parsedDiff: ParsedDiff | null
   readonly repositoryLinkState: RepositoryLinkState
+  readonly provider: GitProviderDescriptor | null
   readonly reviewSubject: ReviewSubject
   readonly expandedFileKeys: ReadonlySet<string>
   readonly isReloading: boolean
@@ -2736,7 +2867,9 @@ const PullRequestDetailView = ({
   const reviewIdentity = reviewSubjectIdentity(reviewSubject)
   const reviewThreads = useReviewThreads(reviewThreadScope(reviewSubject))
   const approvalPullRequest =
-    reviewSubject.kind === "pullRequest" ? reviewSubject.pullRequest : null
+    reviewSubject.kind === "pullRequest" && provider?.capabilities.reviewDecisions === true
+      ? reviewSubject.pullRequest
+      : null
   const changedFiles = parsedDiff?.files ?? []
   const hiddenFileCount = changedFiles.filter(
     (file) => getHiddenDiffFileReason(file) !== null,
@@ -2825,14 +2958,10 @@ const PullRequestDetailView = ({
 
     let cancelled = false
     setApprovalState("checking")
-    window.diffDash.gitProvider
-      .hasApprovedPullRequest(
-        approvalPullRequest.repoOwner,
-        approvalPullRequest.repoName,
-        approvalPullRequest.number,
-      )
-      .then((approved) => {
-        if (!cancelled) setApprovalState(approved ? "approved" : "unapproved")
+    window.diffDash.hostedReviews
+      .getDecision(HostedReviewRequest.make({ review: pullRequestLocator(approvalPullRequest) }))
+      .then((decision) => {
+        if (!cancelled) setApprovalState(decision === "approved" ? "approved" : "unapproved")
         return undefined
       })
       .catch(() => {
@@ -2916,11 +3045,11 @@ const PullRequestDetailView = ({
         const cached =
           reviewSubject.kind === "pullRequest"
             ? await window.diffDash.walkthroughs.get(
-                reviewSubject.pullRequest.repoOwner,
-                reviewSubject.pullRequest.repoName,
-                reviewSubject.pullRequest.number,
-                reviewBaseSha,
-                reviewHeadSha,
+                HostedWalkthroughRequest.make({
+                  review: pullRequestLocator(reviewSubject.pullRequest),
+                  baseRevision: reviewBaseSha,
+                  headRevision: reviewHeadSha,
+                }),
               )
             : await window.diffDash.localWalkthroughs.get(
                 localReviewTargetFromDetail(reviewSubject.localReview),
@@ -2956,17 +3085,12 @@ const PullRequestDetailView = ({
     try {
       const stored =
         reviewSubject.kind === "pullRequest"
-          ? regenerate
-            ? await window.diffDash.walkthroughs.regenerate(
-                reviewSubject.pullRequest.repoOwner,
-                reviewSubject.pullRequest.repoName,
-                reviewSubject.pullRequest.number,
-              )
-            : await window.diffDash.walkthroughs.generate(
-                reviewSubject.pullRequest.repoOwner,
-                reviewSubject.pullRequest.repoName,
-                reviewSubject.pullRequest.number,
-              )
+          ? await window.diffDash.walkthroughs.generate(
+              GenerateHostedWalkthroughRequest.make({
+                review: pullRequestLocator(reviewSubject.pullRequest),
+                regenerate,
+              }),
+            )
           : regenerate
             ? await window.diffDash.localWalkthroughs.regenerate(
                 localReviewTargetFromDetail(reviewSubject.localReview),
@@ -3149,11 +3273,12 @@ const PullRequestDetailView = ({
     try {
       if (reviewSubject.kind === "pullRequest") {
         await window.diffDash.openRepositoryFile(
-          reviewSubject.pullRequest.repoOwner,
-          reviewSubject.pullRequest.repoName,
-          path,
-          reviewSubject.pullRequest.headRefName,
-          reviewSubject.pullRequest.headRefOid,
+          OpenHostedReviewFileRequest.make({
+            review: pullRequestLocator(reviewSubject.pullRequest),
+            filePath: path,
+            headRefName: reviewSubject.pullRequest.headRefName,
+            headRevision: reviewSubject.pullRequest.headRefOid,
+          }),
         )
       } else {
         await window.diffDash.openLocalRepositoryFile(reviewSubject.localReview.rootPath, path)
@@ -3171,10 +3296,11 @@ const PullRequestDetailView = ({
     setApprovalState("approving")
     setFileOpenStatus(`Approving PR #${pullRequest.number}...`)
     try {
-      await window.diffDash.gitProvider.approvePullRequest(
-        pullRequest.repoOwner,
-        pullRequest.repoName,
-        pullRequest.number,
+      await window.diffDash.hostedReviews.submitDecision(
+        SubmitHostedReviewDecisionRequest.make({
+          review: pullRequestLocator(pullRequest),
+          decision: "approved",
+        }),
       )
       setApprovalState("approved")
       captureAnalytics({ event: "pull_request_approved" })
@@ -4926,6 +5052,7 @@ const reviewThreadScope = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"
     ? ({
         kind: "pullRequest",
+        providerId: reviewSubject.pullRequest.providerId,
         owner: reviewSubject.pullRequest.repoOwner,
         name: reviewSubject.pullRequest.repoName,
         number: reviewSubject.pullRequest.number,
@@ -4959,7 +5086,7 @@ const reviewSubjectHeadSha = (reviewSubject: ReviewSubject) =>
 
 const reviewSubjectIdentity = (reviewSubject: ReviewSubject) =>
   reviewSubject.kind === "pullRequest"
-    ? `pr:${reviewSubject.pullRequest.repoOwner}/${reviewSubject.pullRequest.repoName}#${reviewSubject.pullRequest.number}`
+    ? `pr:${reviewSubject.pullRequest.providerId}:${reviewSubject.pullRequest.repoOwner}/${reviewSubject.pullRequest.repoName}#${reviewSubject.pullRequest.number}`
     : `local:${localReviewTargetKey(localReviewTargetFromDetail(reviewSubject.localReview))}`
 
 const localReviewTargetFromDetail = (detail: LocalReviewDetail) =>
@@ -4979,7 +5106,8 @@ const reviewSubjectTitle = (reviewSubject: ReviewSubject) =>
     ? reviewSubject.pullRequest.title
     : reviewSubject.localReview.title
 
-const repoKey = (owner: string, name: string) => `${owner.toLowerCase()}/${name.toLowerCase()}`
+const repoKey = (providerId: string, owner: string, name: string) =>
+  `${providerId.toLowerCase()}\u0000${owner.toLowerCase()}\u0000${name.toLowerCase()}`
 
 const matchesReviewFileFilter = (file: ParsedDiffFile, normalizedFilter: string) =>
   file.path.toLowerCase().includes(normalizedFilter) ||
@@ -5003,7 +5131,7 @@ const isEditableTarget = (target: EventTarget | null) => {
 }
 
 const pullRequestReviewKey = (target: PullRequestReviewTarget) =>
-  `${repoKey(target.repoOwner, target.repoName)}#${target.number}`
+  `${repoKey(target.providerId, target.repoOwner, target.repoName)}#${target.number}`
 
 const goToPaletteItems = ({
   bookmarkedRepos,
@@ -5195,8 +5323,8 @@ const scrollIntoDiffPane = (
   container.scrollTo({ behavior: "smooth", top: scrollTop })
 }
 
-const pullRequestAtomKey = (owner: string, name: string, number: number) =>
-  `${repoKey(owner, name)}#${number}`
+const pullRequestAtomKey = (providerId: string, owner: string, name: string, number: number) =>
+  `${repoKey(providerId, owner, name)}#${number}`
 
 function fetchEffect<A>(tryPromise: () => Promise<A>) {
   return Effect.tryPromise({
@@ -5215,13 +5343,35 @@ function normalizeError(error: unknown) {
 const isNonNull = <A,>(value: A | null): value is A => value !== null
 
 const parseRepoAtomKey = (key: string) => {
-  const separatorIndex = key.indexOf("/")
-  if (separatorIndex < 1 || separatorIndex === key.length - 1) return null
+  const [providerId, owner, name] = key.split("\u0000")
+  if (providerId === undefined || owner === undefined || name === undefined) return null
   return {
-    owner: key.slice(0, separatorIndex),
-    name: key.slice(separatorIndex + 1),
+    providerId: GitProviderId.make(providerId),
+    owner,
+    name,
   }
 }
+
+const hostedRepository = (providerId: string, owner: string, name: string) =>
+  HostedRepositoryLocator.make({
+    providerId: GitProviderId.make(providerId),
+    namespace: RepositoryNamespace.make(owner),
+    name: HostedRepositoryName.make(name),
+  })
+
+const hostedReview = (providerId: string, owner: string, name: string, number: number) =>
+  HostedReviewLocator.make({
+    repository: hostedRepository(providerId, owner, name),
+    number: HostedReviewNumber.make(number),
+  })
+
+const pullRequestLocator = (pullRequest: PullRequestSummary | PullRequestDetail) =>
+  hostedReview(
+    pullRequest.providerId,
+    pullRequest.repoOwner,
+    pullRequest.repoName,
+    pullRequest.number,
+  )
 
 const parsePullRequestAtomKey = (key: string) => {
   const pullRequestSeparatorIndex = key.lastIndexOf("#")

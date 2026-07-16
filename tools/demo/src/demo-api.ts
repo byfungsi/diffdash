@@ -26,6 +26,13 @@ import {
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import {
+  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderId,
+  GitProviderKind,
+  GitProviderTerminology,
+} from "@diffdash/domain/git-provider"
 import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
 
 /** One deterministic renderer action recorded by the demo runtime. */
@@ -88,6 +95,26 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   let threadDetails = new Map<ReviewThreadId, ReviewThreadDetails>()
   let createdThreadCounter = 0
   let createdMessageCounter = 0
+  const provider = GitProviderDescriptor.make({
+    id: GitProviderId.make("github"),
+    kind: GitProviderKind.make("github"),
+    displayName: "GitHub",
+    host: "github.com",
+    capabilities: GitProviderCapabilities.make({
+      repositorySearch: true,
+      searchScopes: true,
+      assignedReviews: true,
+      reviewDecisions: true,
+      fileUrls: true,
+      remoteWorkspaceBootstrap: true,
+    }),
+    terminology: GitProviderTerminology.make({
+      repositorySingular: "repository",
+      repositoryPlural: "repositories",
+      reviewSingular: "pull request",
+      reviewPlural: "pull requests",
+    }),
+  })
 
   const record = (
     type: string,
@@ -323,9 +350,17 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       })
     },
     openExternalUrl: async (url) => record("app.openExternalUrl", { url }),
-    openRepositoryFile: async (owner, name, filePath, headRefName, headRefOid) => {
-      requireReview(owner, name, scenario.manifest.pullRequest.number)
-      record("app.openRepositoryFile", { filePath, headRefName, headRefOid })
+    openRepositoryFile: async (request) => {
+      requireReview(
+        request.review.repository.namespace,
+        request.review.repository.name,
+        request.review.number,
+      )
+      record("app.openRepositoryFile", {
+        filePath: request.filePath,
+        headRefName: request.headRefName,
+        headRefOid: request.headRevision,
+      })
     },
     openLocalRepositoryFile: async (rootPath, filePath) =>
       record("app.openLocalRepositoryFile", { rootPath, filePath }),
@@ -349,7 +384,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       favoriteRemote: async (remote) => {
         const favorite = Repo.make({
           id: `github:${remote.owner}/${remote.name}`,
-          provider: "github",
+          provider: remote.providerId,
           owner: remote.owner,
           name: remote.name,
           remoteUrl: remote.url,
@@ -367,7 +402,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       addLocal: async (localPath) => linkLocalPath(localPath),
       install: async (localPath) => linkLocalPath(localPath),
       link: async (input) => {
-        requireReview(input.owner, input.name, scenario.manifest.pullRequest.number)
+        requireReview(
+          input.repository.namespace,
+          input.repository.name,
+          scenario.manifest.pullRequest.number,
+        )
         return linkLocalPath(input.localPath)
       },
       selectLocalFolder: async () => null,
@@ -513,17 +552,19 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return appState
       },
     },
-    gitProvider: {
+    providers: { list: async () => [provider] },
+    hostedRepositories: {
       searchRepositories: async (request) => {
         const matchesQuery = `${scenario.repository.owner}/${scenario.repository.name}`
           .toLowerCase()
           .includes(request.query.trim().toLowerCase())
         const matchesOwner =
-          request.owners.length === 0 || request.owners.includes(scenario.repository.owner)
+          request.namespaces.length === 0 || request.namespaces.includes(scenario.repository.owner)
         return matchesQuery && matchesOwner
           ? [
               RepositorySearchResult.make({
                 owner: scenario.repository.owner,
+                providerId: provider.id,
                 name: scenario.repository.name,
                 nameWithOwner: `${scenario.repository.owner}/${scenario.repository.name}`,
                 url: scenario.repository.remoteUrl,
@@ -535,29 +576,51 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           : []
       },
       listSearchScopes: async () => scenario.searchScopes,
-      listPullRequests: async (owner, name) => {
-        requireReview(owner, name, scenario.manifest.pullRequest.number)
+    },
+    hostedReviews: {
+      list: async (request) => {
+        requireReview(
+          request.repository.namespace,
+          request.repository.name,
+          scenario.manifest.pullRequest.number,
+        )
         return [pullRequestSummary(currentRevision)]
       },
-      listReviewRequests: async () => [pullRequestSummary(currentRevision)],
-      getPullRequestDetail: async (owner, name, number) => {
-        requireReview(owner, name, number)
+      listAssigned: async () => [pullRequestSummary(currentRevision)],
+      get: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
         return currentRevision.detail
       },
-      refreshPullRequestDetail: async (owner, name, number) => {
+      refresh: async (request) => {
+        const { namespace: owner, name } = request.review.repository
+        const { number } = request.review
         requireReview(owner, name, number)
         record("gitProvider.refreshPullRequestDetail", { owner, name, number })
         return currentRevision.detail
       },
-      getPullRequestDiff: async (owner, name, number) => {
-        requireReview(owner, name, number)
+      getDiff: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
         return currentRevision.diff
       },
-      hasApprovedPullRequest: async (owner, name, number) => {
-        requireReview(owner, name, number)
-        return approved
+      getDecision: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        return approved ? "approved" : "none"
       },
-      approvePullRequest: async (owner, name, number) => {
+      submitDecision: async (request) => {
+        const { namespace: owner, name } = request.review.repository
+        const { number } = request.review
         requireReview(owner, name, number)
         approved = true
         record("gitProvider.approvePullRequest", { owner, name, number })
@@ -596,19 +659,31 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
     },
     viewedFiles: {
-      list: async (owner, name, number, headSha) => {
-        requireReview(owner, name, number)
-        if (headSha !== currentRevision.snapshot.headRevision) return []
+      list: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        if (request.headRevision !== currentRevision.snapshot.headRevision) return []
         return [...viewedFileKeys]
       },
-      set: async (owner, name, number, headSha, reviewKey, filePath, viewed) => {
-        requireReview(owner, name, number)
-        if (headSha !== currentRevision.snapshot.headRevision) {
-          throw new Error(`Viewed-file head ${headSha} is not current`)
+      set: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        if (request.headRevision !== currentRevision.snapshot.headRevision) {
+          throw new Error(`Viewed-file head ${request.headRevision} is not current`)
         }
-        if (viewed) viewedFileKeys.add(reviewKey)
-        else viewedFileKeys.delete(reviewKey)
-        record("viewedFiles.set", { reviewKey, filePath, viewed })
+        if (request.viewed) viewedFileKeys.add(request.reviewKey)
+        else viewedFileKeys.delete(request.reviewKey)
+        record("viewedFiles.set", {
+          reviewKey: request.reviewKey,
+          filePath: request.filePath,
+          viewed: request.viewed,
+        })
       },
       listLocal: async (_rootPath, headSha) =>
         headSha === currentRevision.snapshot.headRevision ? [...viewedFileKeys] : [],
@@ -622,21 +697,21 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
     },
     walkthroughs: {
-      get: async (owner, name, number, baseSha, headSha) => {
-        requireReview(owner, name, number)
-        return baseSha === currentRevision.snapshot.baseRevision &&
-          headSha === currentRevision.snapshot.headRevision
+      get: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        return request.baseRevision === currentRevision.snapshot.baseRevision &&
+          request.headRevision === currentRevision.snapshot.headRevision
           ? currentRevision.walkthrough
           : null
       },
-      generate: async (owner, name, number) => {
-        requireReview(owner, name, number)
-        record("walkthroughs.generate", { number })
-        return currentRevision.walkthrough
-      },
-      regenerate: async (owner, name, number) => {
-        requireReview(owner, name, number)
-        record("walkthroughs.regenerate", { number })
+      generate: async (request) => {
+        const { number } = request.review
+        requireReview(request.review.repository.namespace, request.review.repository.name, number)
+        record(request.regenerate ? "walkthroughs.regenerate" : "walkthroughs.generate", { number })
         return currentRevision.walkthrough
       },
     },

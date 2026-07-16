@@ -7,6 +7,14 @@ import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "./git-provider"
 import { ReviewContextError, ReviewContextService } from "./review-context"
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
 
 const patch = `diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
@@ -62,12 +70,13 @@ const makeLayer = (input: {
   const gitProviderLayer = Layer.succeed(
     GitProvider,
     GitProvider.of({
+      listProviders: Effect.succeed([]),
+      diagnoseProviders: Effect.succeed([]),
       parseRemoteUrl: () => unavailable(),
-      repositoryUrl: () => "",
-      fileUrl: () => "",
+      repositoryUrl: () => Effect.succeed(""),
+      fileUrl: () => Effect.succeed(""),
       searchRepositories: () => unavailable(),
       listSearchScopes: () => unavailable(),
-      listRepositories: () => unavailable(),
       listPullRequests: () => unavailable(),
       listReviewRequests: () => unavailable(),
       getPullRequestDetail: () =>
@@ -80,7 +89,7 @@ const makeLayer = (input: {
       approvePullRequest: () => unavailable(),
       hostedReviewCheckoutSpec: () => unavailable(),
       bootstrapBareRepository: () => unavailable(),
-      isAvailable: Effect.succeed(true),
+      isAvailable: () => Effect.succeed(true),
     }),
   )
   const gitLayer = Layer.succeed(
@@ -104,7 +113,7 @@ describe("ReviewContextService", () => {
   it.effect("FUN-80 AC: captures one stable pull request snapshot", () =>
     Effect.gen(function* () {
       const service = yield* ReviewContextService
-      const snapshot = yield* service.getPullRequestSnapshot("fungsi", "diffdash", 51)
+      const snapshot = yield* service.getPullRequestSnapshot(review)
 
       expect(snapshot.reviewKey).toBe("github:fungsi/diffdash#51")
       expect(snapshot.baseRevision).toBe("base")
@@ -120,7 +129,7 @@ describe("ReviewContextService", () => {
   it.effect("FUN-80 AC: retries when the pull request changes during acquisition", () =>
     Effect.gen(function* () {
       const service = yield* ReviewContextService
-      const snapshot = yield* service.getPullRequestSnapshot("fungsi", "diffdash", 51)
+      const snapshot = yield* service.getPullRequestSnapshot(review)
 
       expect(snapshot.headRevision).toBe("head-b")
     }).pipe(
@@ -137,7 +146,7 @@ describe("ReviewContextService", () => {
   it.effect("FUN-80 AC: rejects a snapshot that remains inconsistent", () =>
     Effect.gen(function* () {
       const service = yield* ReviewContextService
-      const result = yield* Effect.either(service.getPullRequestSnapshot("fungsi", "diffdash", 51))
+      const result = yield* Effect.either(service.getPullRequestSnapshot(review))
 
       expect(Either.isLeft(result)).toBe(true)
       if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewContextError)
@@ -151,4 +160,13 @@ describe("ReviewContextService", () => {
       ),
     ),
   )
+})
+
+const review = HostedReviewLocator.make({
+  repository: HostedRepositoryLocator.make({
+    providerId: GitProviderId.make("github"),
+    namespace: RepositoryNamespace.make("fungsi"),
+    name: HostedRepositoryName.make("diffdash"),
+  }),
+  number: HostedReviewNumber.make(51),
 })

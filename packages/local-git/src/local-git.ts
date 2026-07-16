@@ -92,7 +92,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
             .map((name) => name.trim())
             .filter((name) => name.length > 0),
           (name) =>
-            cli.run("git", ["-C", rootPath, "remote", "get-url", "--all", name]).pipe(
+            cli.run("git", ["-C", rootPath, "config", "--get-all", `remote.${name}.url`]).pipe(
               Effect.map((result) =>
                 LocalGitRemote.make({
                   name,

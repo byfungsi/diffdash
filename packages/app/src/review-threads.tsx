@@ -40,6 +40,7 @@ const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.cap
   void window.diffDash.analytics.capture(event).catch(() => undefined)
 }
 import { ReviewRevision } from "@diffdash/domain/review-identity"
+import type { GitProviderId } from "@diffdash/domain/git-provider"
 import {
   ReviewAgentProgress,
   type ReviewAgentProgressStage,
@@ -50,6 +51,7 @@ import {
 export type ReviewThreadScope =
   | {
       readonly kind: "pullRequest"
+      readonly providerId: GitProviderId
       readonly owner: string
       readonly name: string
       readonly number: number
@@ -96,6 +98,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const baseRevision = scope.baseRevision
   const headRevision = scope.headRevision
   const owner = scope.kind === "pullRequest" ? scope.owner : null
+  const providerId = scope.kind === "pullRequest" ? scope.providerId : null
   const name = scope.kind === "pullRequest" ? scope.name : null
   const number = scope.kind === "pullRequest" ? scope.number : null
   const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
@@ -147,7 +150,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setError(null)
     try {
       const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(owner, name, number, localTarget),
+        reviewThreadTarget(providerId, owner, name, number, localTarget),
       )
       const loaded = await Promise.all(
         threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
@@ -184,7 +187,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     window.diffDash.reviewThreads
-      .list(reviewThreadTarget(owner, name, number, localTarget))
+      .list(reviewThreadTarget(providerId, owner, name, number, localTarget))
       .then((threads) =>
         Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
       )
@@ -202,7 +205,17 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     return () => {
       cancelled = true
     }
-  }, [available, baseRevision, headRevision, localTarget, localTargetKey, name, number, owner])
+  }, [
+    available,
+    baseRevision,
+    headRevision,
+    localTarget,
+    localTargetKey,
+    name,
+    number,
+    owner,
+    providerId,
+  ])
 
   const refreshThread = async (threadId: ReviewThreadId) => {
     try {
@@ -229,7 +242,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const pending = window.diffDash.reviewThreads.runAgent(
         RunReviewThreadAgentRequest.make({
           threadId,
-          target: reviewThreadTarget(owner, name, number, localTarget),
+          target: reviewThreadTarget(providerId, owner, name, number, localTarget),
         }),
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
@@ -258,7 +271,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     try {
       const created = await window.diffDash.reviewThreads.create(
         CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(owner, name, number, localTarget),
+          target: reviewThreadTarget(providerId, owner, name, number, localTarget),
           expectedBaseRevision: ReviewRevision.make(baseRevision),
           expectedHeadRevision: ReviewRevision.make(headRevision),
           anchor,
@@ -778,13 +791,14 @@ const sortThreadDetails = (details: readonly ReviewThreadDetails[]) => {
 }
 
 const reviewThreadTarget = (
+  providerId: GitProviderId | null,
   owner: string | null,
   name: string | null,
   number: number | null,
   localTarget: LocalReviewTarget | null,
 ): ReviewThreadTarget => {
-  if (owner !== null && name !== null && number !== null) {
-    return PullRequestReviewTarget.make({ kind: "pullRequest", owner, name, number })
+  if (providerId !== null && owner !== null && name !== null && number !== null) {
+    return PullRequestReviewTarget.make({ kind: "pullRequest", providerId, owner, name, number })
   }
   if (localTarget === null) throw new Error("Local review target is unavailable")
   return localTarget

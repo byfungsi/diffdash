@@ -20,16 +20,27 @@ import { join, resolve } from "node:path"
 import { AppConfig } from "./app-config"
 import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
 import {
-  parseGitHubCliVersion,
   Prerequisites,
   refreshAppImageCliLaunchers,
   resolveExecutableInPath,
 } from "./prerequisites"
+import { GitProvider } from "./git-provider"
+import {
+  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderDiagnostic,
+  GitProviderId,
+  GitProviderKind,
+  GitProviderTerminology,
+} from "@diffdash/domain/git-provider"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-prerequisites-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
+
+const unavailableProviderMethod = <A>() =>
+  Effect.die(new Error("Unused provider method")) as Effect.Effect<A>
 
 const withPath = (path: string) =>
   Effect.acquireRelease(
@@ -84,6 +95,7 @@ const makeLayer = (
 ) =>
   Prerequisites.layer.pipe(
     Layer.provideMerge(fakeCliLayer(options)),
+    Layer.provideMerge(fakeGitProviderLayer(options)),
     Layer.provide(
       AppConfig.layer({
         ...(options.appImagePath === undefined ? {} : { appImagePath: options.appImagePath }),
@@ -123,10 +135,12 @@ describe("Prerequisites", () => {
 
       expect(status.gitInstalled).toBe(true)
       expect(status.ghInstalled).toBe(true)
-      expect(status.ghVersion).toBe("2.76.1")
+      expect(status.ghVersion).toBeNull()
       expect(status.ghSearchRepositoriesAvailable).toBe(true)
       expect(status.ghSupported).toBe(true)
       expect(status.ghAuthenticated).toBe(true)
+      expect(status.providerDiagnostics[0]?.descriptor.id).toBe("github")
+      expect(status.setupRequirements[0]?.requiredForLocalUse).toBe(false)
       expect(status.codingAgentInstalled).toBe(true)
       expect(status.installedCodingAgents).toEqual(["claude"])
       expect(status.diffDashCliInstalled).toBe(true)
@@ -150,8 +164,8 @@ describe("Prerequisites", () => {
         ),
       )
 
-      expect(status.ghInstalled).toBe(true)
-      expect(status.ghVersion).toBe("1.14.0")
+      expect(status.ghInstalled).toBe(false)
+      expect(status.ghVersion).toBeNull()
       expect(status.ghSearchRepositoriesAvailable).toBe(true)
       expect(status.ghSupported).toBe(false)
     }),
@@ -173,17 +187,11 @@ describe("Prerequisites", () => {
       )
 
       expect(status.ghAuthenticated).toBe(true)
-      expect(status.ghVersion).toBe("2.76.1")
-      expect(status.ghSearchRepositoriesAvailable).toBe(false)
+      expect(status.ghVersion).toBeNull()
+      expect(status.ghSearchRepositoriesAvailable).toBe(true)
       expect(status.ghSupported).toBe(false)
     }),
   )
-
-  it("parses standard and v-prefixed GitHub CLI versions", () => {
-    expect(parseGitHubCliVersion("gh version 2.7.0 (2022-02-10)")).toBe("2.7.0")
-    expect(parseGitHubCliVersion("gh version v2.76.1\nhttps://github.com/cli/cli")).toBe("2.76.1")
-    expect(parseGitHubCliVersion("gh development build")).toBeNull()
-  })
 
   it.scoped("installs the bundled diffdash CLI into the first writable PATH directory", () =>
     Effect.gen(function* () {
@@ -391,6 +399,67 @@ describe("Prerequisites", () => {
     }),
   )
 })
+
+const fakeGitProviderLayer = (options: {
+  readonly availableCommands: ReadonlySet<string>
+  readonly ghAuthenticated?: boolean
+  readonly ghSearchRepositoriesAvailable?: boolean
+  readonly ghVersion?: string
+}) => {
+  const providerId = GitProviderId.make("github")
+  const descriptor = GitProviderDescriptor.make({
+    id: providerId,
+    kind: GitProviderKind.make("github"),
+    displayName: "GitHub",
+    host: "github.com",
+    capabilities: GitProviderCapabilities.make({
+      repositorySearch: true,
+      searchScopes: true,
+      assignedReviews: true,
+      reviewDecisions: true,
+      fileUrls: true,
+      remoteWorkspaceBootstrap: true,
+    }),
+    terminology: GitProviderTerminology.make({
+      repositorySingular: "repository",
+      repositoryPlural: "repositories",
+      reviewSingular: "pull request",
+      reviewPlural: "pull requests",
+    }),
+  })
+  const supported =
+    options.availableCommands.has("gh") &&
+    (options.ghSearchRepositoriesAvailable ?? true) &&
+    Number(options.ghVersion?.split(".")[0] ?? "2") >= 2
+  const diagnostic = GitProviderDiagnostic.make({
+    providerId,
+    available: supported,
+    authenticated: options.ghAuthenticated ?? true,
+    message: supported ? null : "GitHub CLI is unavailable or unsupported.",
+  })
+  return Layer.succeed(
+    GitProvider,
+    GitProvider.of({
+      listProviders: Effect.succeed([descriptor]),
+      diagnoseProviders: Effect.succeed([diagnostic]),
+      parseRemoteUrl: () => unavailableProviderMethod(),
+      repositoryUrl: () => unavailableProviderMethod(),
+      fileUrl: () => unavailableProviderMethod(),
+      searchRepositories: () => unavailableProviderMethod(),
+      listSearchScopes: () => unavailableProviderMethod(),
+      listPullRequests: () => unavailableProviderMethod(),
+      listReviewRequests: () => unavailableProviderMethod(),
+      getPullRequestDetail: () => unavailableProviderMethod(),
+      refreshPullRequestDetail: () => unavailableProviderMethod(),
+      getPullRequestDiff: () => unavailableProviderMethod(),
+      hasApprovedPullRequest: () => unavailableProviderMethod(),
+      approvePullRequest: () => unavailableProviderMethod(),
+      hostedReviewCheckoutSpec: () => unavailableProviderMethod(),
+      bootstrapBareRepository: () => unavailableProviderMethod(),
+      isAvailable: () => Effect.succeed(supported),
+    }),
+  )
+}
 
 const fakeCliLayer = (options: {
   readonly availableCommands: ReadonlySet<string>

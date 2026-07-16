@@ -4,15 +4,16 @@ import { Either, Schema } from "effect"
 import { EventChannel, InvokeChannel } from "./channels"
 import { AddReviewThreadUserMessageRequest } from "./review-threads"
 import { toTransportError, TransportError } from "./transport-error"
+import { HostedReviewRequest, HostedRepositorySearchRequest } from "./hosted-git"
 
 describe("protocol boundaries", () => {
   it("owns unique invoke and event channel names", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(49)
+    expect(new Set(invokeChannels).size).toBe(50)
     expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(52)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(53)
   })
 
   it("rejects malformed review-thread requests", () => {
@@ -22,6 +23,22 @@ describe("protocol boundaries", () => {
     })
 
     expect(Either.isLeft(result)).toBe(true)
+  })
+
+  it("FUN-126 AC: rejects hosted requests without complete provider identity", () => {
+    const search = Schema.decodeUnknownEither(HostedRepositorySearchRequest)({
+      query: "diffdash",
+      namespaces: ["fungsi"],
+    })
+    const review = Schema.decodeUnknownEither(HostedReviewRequest)({
+      review: {
+        repository: { namespace: "fungsi", name: "diffdash" },
+        number: 126,
+      },
+    })
+
+    expect(Either.isLeft(search)).toBe(true)
+    expect(Either.isLeft(review)).toBe(true)
   })
 
   it("serializes failures without stack or cause data", () => {
