@@ -32,6 +32,7 @@ import {
   AgentSessionSupport,
   AgentUsage,
   InvalidAgentProviderResponseError,
+  isAgentExecutionPolicyEnforced,
   McpToolName,
   type AgentCapability,
   type AgentCapabilityProbe,
@@ -774,13 +775,10 @@ const requirePolicy = (
   policy: AgentExecutionPolicy,
   repository: AgentExecutionPolicy["repository"],
 ) => {
-  const valid =
-    policy.sensitiveFiles === "deny" &&
-    policy.repository === repository &&
-    policy.shell === "deny" &&
-    policy.fileMutation === "deny" &&
-    policy.gitMutation === "deny" &&
-    policy.providerPublishing === "deny"
+  const valid = isAgentExecutionPolicyEnforced(
+    policy,
+    AgentExecutionPolicy.make({ ...OPENCODE_WALKTHROUGH_POLICY, repository }),
+  )
   return valid
     ? Effect.void
     : operationErrorValue(capability, "OpenCode requires the explicit non-mutating policy")

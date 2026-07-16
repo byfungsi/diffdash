@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -17,9 +18,16 @@ import { createNavigationCommandQueue } from "./navigation-command-queue"
 import { revealAppWindow } from "./window-activation"
 import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { electronErrorPageDataUrl } from "../error-page"
+import { AgentProviderId, type AgentProviderRegistration } from "@diffdash/agent-provider"
+import {
+  type AgentAutoRoutingPolicies,
+  AgentProviderRegistry,
+} from "@diffdash/agent-provider/registry"
+import { CLAUDE_PROVIDER_ID, makeClaudeProvider } from "@diffdash/agent-provider-claude"
+import { CODEX_PROVIDER_ID, makeCodexProvider } from "@diffdash/agent-provider-codex"
+import { OPENCODE_PROVIDER_ID, makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
-import { AIAgent } from "../../src/main/services/ai-agent"
 import { Analytics } from "../../src/main/services/analytics"
 import { AppConfig } from "../../src/main/services/app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
@@ -27,7 +35,6 @@ import { AppState } from "@diffdash/settings/app-state"
 import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
 import { CliError, CliService } from "@diffdash/process/cli"
 import { CliStreamService } from "@diffdash/process/cli-stream"
-import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
 import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitService } from "@diffdash/local-git/local-git"
@@ -47,9 +54,9 @@ import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
-import { WalkthroughService } from "../../src/main/services/walkthrough"
+import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
-import { AISettings } from "@diffdash/domain/ai-settings"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { DEFAULT_APP_STATE, AppState as SharedAppState } from "@diffdash/domain/app-state"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
@@ -152,6 +159,8 @@ const debugMissingPrerequisites = () =>
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
   const databasePath = join(app.getPath("userData"), "diffdash.sqlite")
+  const agentWorkingDirectory = join(app.getPath("temp"), "diffdash")
+  mkdirSync(agentWorkingDirectory, { recursive: true, mode: 0o700 })
   const remoteWorktreePoolPath =
     process.env.DIFFDASH_REMOTE_WORKTREE_POOL_PATH ??
     join(homedir(), ".diffdash", "remote-worktree-pool")
@@ -172,7 +181,7 @@ const createAppLayer = () => {
       ? {}
       : { posthogKey: process.env.VITE_POSTHOG_KEY }),
     settingsPath: join(xdgConfigHome, "diffdash", "settings.json"),
-    tempDir: join(app.getPath("temp"), "diffdash"),
+    tempDir: agentWorkingDirectory,
     remoteWorktreePoolPath,
     worktreePoolPath,
   })
@@ -216,8 +225,58 @@ const createAppLayer = () => {
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
   const appStateLayer = AppState.layer(join(configDirectory, "state.json"))
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
-  const aiAgentLayer = ConfigurableAIAgent.layer.pipe(Layer.provideMerge(settingsLayer))
-  const walkthroughLayer = WalkthroughService.layer.pipe(Layer.provideMerge(aiAgentLayer))
+  const agentAutoRoutingPolicies: AgentAutoRoutingPolicies = {
+    walkthrough: [CLAUDE_PROVIDER_ID, CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID],
+    reviewThread: [CLAUDE_PROVIDER_ID, CODEX_PROVIDER_ID, OPENCODE_PROVIDER_ID],
+  }
+  const agentProviderRegistryLayer = Layer.effect(
+    AgentProviderRegistry,
+    Effect.gen(function* () {
+      const cli = yield* CliService
+      const cliStream = yield* CliStreamService
+      const registrations: readonly AgentProviderRegistration[] = [
+        makeClaudeProvider({
+          cli,
+          cliStream,
+          tempDirectory: agentWorkingDirectory,
+        }),
+        makeCodexProvider({ cli, cliStream, tempDirectory: agentWorkingDirectory }),
+        makeOpenCodeProvider({
+          cli,
+          cliStream,
+          tempDirectory: agentWorkingDirectory,
+        }),
+      ]
+      return yield* AgentProviderRegistry.pipe(
+        Effect.provide(AgentProviderRegistry.layer(registrations, agentAutoRoutingPolicies)),
+      )
+    }),
+  ).pipe(Layer.provide(cliLayer), Layer.provide(CliStreamService.layer))
+  const walkthroughRoutingLayer = Layer.effect(
+    WalkthroughRouting,
+    Effect.gen(function* () {
+      const settings = yield* AppSettings
+      return WalkthroughRouting.of({
+        get: settings.get.pipe(
+          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.map((current) => ({
+            route:
+              current.routes.walkthrough === "auto"
+                ? ({ mode: "auto" } as const)
+                : ({
+                    mode: "provider" as const,
+                    providerId: AgentProviderId.make(current.routes.walkthrough),
+                  } as const),
+            models: current.models,
+            autoQuality: current.autoQuality,
+          })),
+        ),
+      })
+    }),
+  ).pipe(Layer.provide(settingsLayer))
+  const walkthroughLayer = WalkthroughService.layer({
+    remoteWorkingDirectory: agentWorkingDirectory,
+  }).pipe(Layer.provide(agentProviderRegistryLayer), Layer.provide(walkthroughRoutingLayer))
   const reviewContextLayer = ReviewContextService.layer.pipe(
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
@@ -301,7 +360,6 @@ const installIpcHandlers = (
     | AppState
     | AppUpdater
     | AppSettings
-    | AIAgent
     | Prerequisites
     | ReviewContextService
     | ReviewAgentService
@@ -327,7 +385,6 @@ const installIpcHandlers = (
       | AppState
       | AppUpdater
       | AppSettings
-      | AIAgent
       | Prerequisites
       | ReviewContextService
       | ReviewAgentService

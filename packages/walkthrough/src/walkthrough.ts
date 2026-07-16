@@ -1,5 +1,21 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
+import {
+  AgentExecutionPolicy,
+  AgentModelId,
+  type AgentModelQuality,
+  AgentProviderId,
+  type AgentProviderManifest,
+  AgentProviderOperationError,
+  type AgentProviderResolutionError,
+  InvalidAgentProviderResponseError,
+  WalkthroughRequest,
+} from "@diffdash/agent-provider"
+import {
+  AgentProviderRegistry,
+  type AgentProviderRoute,
+  NoAgentProviderAvailableError,
+} from "@diffdash/agent-provider/registry"
 import type { LocalReviewDetail } from "@diffdash/domain/local-review"
 import type { PullRequestDetail } from "@diffdash/domain/pull-request"
 import {
@@ -10,10 +26,38 @@ import {
   validateWalkthrough,
   type WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
-import { AIAgent, type AIAgentGenerateOptions } from "./ai-agent"
-import type { CliError } from "@diffdash/process/cli"
-
 const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
+
+/** Settings needed to route one walkthrough without knowing concrete providers. */
+export interface WalkthroughRouteSelection {
+  readonly route: AgentProviderRoute
+  readonly models: Readonly<Record<string, string>>
+  readonly autoQuality: AgentModelQuality
+}
+
+/** Supplies the current user-selected walkthrough route and model preferences. */
+export class WalkthroughRouting extends Context.Tag("@diffdash/WalkthroughRouting")<
+  WalkthroughRouting,
+  { readonly get: Effect.Effect<WalkthroughRouteSelection> }
+>() {}
+
+/** The selected provider has no compatible model in its manifest catalog. */
+export class WalkthroughModelUnavailableError extends Schema.TaggedError<WalkthroughModelUnavailableError>()(
+  "WalkthroughModelUnavailableError",
+  { providerId: AgentProviderId, modelId: Schema.NullOr(Schema.String) },
+) {}
+
+/** Explicit non-mutating policy required for every walkthrough execution. */
+export const WALKTHROUGH_EXECUTION_POLICY = AgentExecutionPolicy.make({
+  network: "allow",
+  sensitiveFiles: "deny",
+  repository: "local-working-copy",
+  shell: "read-only",
+  fileMutation: "deny",
+  gitMutation: "deny",
+  providerPublishing: "deny",
+  allowedMcpTools: [],
+})
 
 /** Input required to generate a reviewer-oriented walkthrough for a review diff. */
 export interface WalkthroughGenerationInput {
@@ -40,7 +84,7 @@ export class WalkthroughGenerationError extends Schema.TaggedError<WalkthroughGe
   },
 ) {}
 
-/** Domain service for generating validated walkthrough artifacts through an AI agent. */
+/** Domain service for generating validated walkthrough artifacts through registered providers. */
 export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughService")<
   WalkthroughService,
   {
@@ -48,50 +92,167 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
       input: WalkthroughGenerationInput,
     ) => Effect.Effect<
       Walkthrough,
-      WalkthroughGenerationError | WalkthroughValidationError | CliError
+      | WalkthroughGenerationError
+      | WalkthroughValidationError
+      | WalkthroughModelUnavailableError
+      | AgentProviderResolutionError
+      | NoAgentProviderAvailableError
+      | AgentProviderOperationError
+      | InvalidAgentProviderResponseError
     >
   }
 >() {
-  static readonly layer = Layer.effect(
-    WalkthroughService,
+  static readonly layer = (options: { readonly remoteWorkingDirectory: string }) =>
+    Layer.effect(
+      WalkthroughService,
+      Effect.gen(function* () {
+        const registry = yield* AgentProviderRegistry
+        const routing = yield* WalkthroughRouting
+
+        const runAttempt = (input: WalkthroughGenerationInput) => {
+          const promptContext = buildWalkthroughPromptContext(input)
+          return routing.get.pipe(
+            Effect.flatMap((selection) =>
+              executeWalkthroughRoute(registry, selection, {
+                prompt: promptContext.prompt,
+                workingDirectory: walkthroughWorkingDirectory(
+                  input.review,
+                  options.remoteWorkingDirectory,
+                ),
+                reasoningEffort: "low",
+                timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
+                policy: WALKTHROUGH_EXECUTION_POLICY,
+              }),
+            ),
+            Effect.flatMap((output) => parseModelJson(output)),
+            Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
+            Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
+            Effect.map((walkthrough) =>
+              Walkthrough.make({ ...walkthrough, generation: input.generation }),
+            ),
+          )
+        }
+
+        return WalkthroughService.of({
+          generate: Effect.fn("WalkthroughService.generate")(function (input) {
+            return runAttempt(input).pipe(
+              Effect.catchTags({
+                WalkthroughGenerationError: () => runAttempt(input),
+                WalkthroughValidationError: () => runAttempt(input),
+              }),
+            )
+          }),
+        })
+      }),
+    )
+}
+
+const walkthroughWorkingDirectory = (
+  review: WalkthroughReviewContext,
+  remoteWorkingDirectory: string,
+): string => (review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory)
+
+type Registry = Context.Tag.Service<AgentProviderRegistry>
+type WalkthroughRouteError =
+  | WalkthroughModelUnavailableError
+  | AgentProviderResolutionError
+  | NoAgentProviderAvailableError
+  | AgentProviderOperationError
+  | InvalidAgentProviderResponseError
+
+const executeWalkthroughRoute = (
+  registry: Registry,
+  selection: WalkthroughRouteSelection,
+  request: Omit<WalkthroughRequest, "model">,
+): Effect.Effect<string, WalkthroughRouteError> => {
+  const providerIds = registry.walkthroughRoute(selection.route)
+
+  const executeProvider = (providerId: AgentProviderId) =>
     Effect.gen(function* () {
-      const aiAgent = yield* AIAgent
+      const registration = yield* registry.get(providerId)
+      const capability = yield* registry.resolveWalkthrough({ mode: "provider", providerId })
+      const models = walkthroughModels(registration.manifest, selection, providerId)
+      if (models.length === 0) {
+        return yield* WalkthroughModelUnavailableError.make({
+          providerId,
+          modelId:
+            selection.route.mode === "provider" ? (selection.models[providerId] ?? null) : null,
+        })
+      }
 
-      const runAttempt = (input: WalkthroughGenerationInput) => {
-        const promptContext = buildWalkthroughPromptContext(input)
-        const options = walkthroughGenerationOptions(input.review)
-
-        return aiAgent.generateText(promptContext.prompt, options).pipe(
-          Effect.flatMap((output) => parseModelJson(output)),
-          Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
-          Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
-          Effect.map((walkthrough) =>
-            Walkthrough.make({ ...walkthrough, generation: input.generation }),
+      const executeModel = (
+        remaining: readonly AgentModelId[],
+      ): Effect.Effect<
+        string,
+        | WalkthroughModelUnavailableError
+        | AgentProviderOperationError
+        | InvalidAgentProviderResponseError
+      > => {
+        const [model, ...rest] = remaining
+        if (model === undefined) {
+          return WalkthroughModelUnavailableError.make({ providerId, modelId: null })
+        }
+        return capability.execute(WalkthroughRequest.make({ ...request, model })).pipe(
+          Effect.map((result) => result.text),
+          Effect.catchAll((error) =>
+            selection.route.mode === "auto" && rest.length > 0
+              ? executeModel(rest)
+              : Effect.fail(error),
           ),
         )
       }
 
-      return WalkthroughService.of({
-        generate: Effect.fn("WalkthroughService.generate")(function (input) {
-          return runAttempt(input).pipe(
-            Effect.catchTags({
-              WalkthroughGenerationError: () => runAttempt(input),
-              WalkthroughValidationError: () => runAttempt(input),
-            }),
-          )
-        }),
-      })
-    }),
-  )
+      return yield* executeModel(models)
+    })
+
+  if (selection.route.mode === "provider") return executeProvider(selection.route.providerId)
+
+  const executeAutomatic = (
+    remaining: readonly AgentProviderId[],
+    lastExecutionError:
+      | AgentProviderOperationError
+      | InvalidAgentProviderResponseError
+      | WalkthroughModelUnavailableError
+      | undefined,
+  ): Effect.Effect<string, WalkthroughRouteError> => {
+    const [providerId, ...rest] = remaining
+    if (providerId === undefined) {
+      return lastExecutionError ?? NoAgentProviderAvailableError.make({ capability: "walkthrough" })
+    }
+    return executeProvider(providerId).pipe(
+      Effect.catchAll((error) =>
+        executeAutomatic(
+          rest,
+          error instanceof AgentProviderOperationError ||
+            error instanceof InvalidAgentProviderResponseError ||
+            error instanceof WalkthroughModelUnavailableError
+            ? error
+            : lastExecutionError,
+        ),
+      ),
+    )
+  }
+
+  return executeAutomatic(providerIds, undefined)
 }
 
-const walkthroughGenerationOptions = (
-  review: WalkthroughReviewContext,
-): AIAgentGenerateOptions => ({
-  ...(review.kind === "localDiff" ? { cwd: review.localReview.rootPath } : {}),
-  reasoningEffort: "low",
-  timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
-})
+const walkthroughModels = (
+  manifest: AgentProviderManifest,
+  selection: WalkthroughRouteSelection,
+  providerId: AgentProviderId,
+): readonly AgentModelId[] => {
+  const compatible = manifest.models.filter((model) => model.capabilities.includes("walkthrough"))
+  if (selection.route.mode === "auto") {
+    return compatible
+      .filter((model) => model.quality === selection.autoQuality)
+      .map((model) => model.id)
+  }
+
+  const selected = selection.models[providerId]
+  const modelId =
+    selected === undefined ? manifest.defaults.walkthroughModel : AgentModelId.make(selected)
+  return modelId !== null && compatible.some((model) => model.id === modelId) ? [modelId] : []
+}
 
 const parseModelJson = (output: string): Effect.Effect<unknown, WalkthroughGenerationError> =>
   Effect.try({

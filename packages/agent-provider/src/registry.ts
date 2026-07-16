@@ -48,6 +48,7 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
       WalkthroughCapability,
       AgentProviderResolutionError | NoAgentProviderAvailableError
     >
+    readonly walkthroughRoute: (route: AgentProviderRoute) => readonly AgentProviderId[]
     readonly resolveReviewThread: (
       route: AgentProviderRoute,
     ) => Effect.Effect<
@@ -95,6 +96,8 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
           list: Effect.succeed([...providers.values()]),
           get,
           resolveWalkthrough: walkthrough,
+          walkthroughRoute: (route) =>
+            route.mode === "provider" ? [route.providerId] : [...policies.walkthrough],
           resolveReviewThread: reviewThread,
         })
       }),

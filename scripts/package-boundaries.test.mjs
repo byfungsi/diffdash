@@ -148,6 +148,19 @@ test("agent provider SDK and registry import no concrete provider", () => {
   assert.doesNotMatch(sdkSource, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
 })
 
+test("walkthrough orchestration is provider-neutral", () => {
+  const walkthrough = manifests.find(({ manifest }) => manifest.name === "@diffdash/walkthrough")
+  assert.ok(walkthrough, "@diffdash/walkthrough must exist")
+  assert.ok(
+    Object.hasOwn(walkthrough.manifest.dependencies, "@diffdash/agent-provider"),
+    "@diffdash/walkthrough must depend on the agent provider SDK",
+  )
+  const source = sourceFiles(join(walkthrough.directory, "src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(source, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
+})
+
 test("the OpenCode SDK is owned only by its leaf provider", () => {
   for (const { directory, manifest } of manifests) {
     const ownsSdk = Object.hasOwn(manifest.dependencies ?? {}, "@opencode-ai/sdk")

@@ -1,5 +1,27 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
+
+import {
+  AgentCapabilityDeclaration,
+  AgentCapabilityManifest,
+  AgentCapabilityPolicyUnsupported,
+  AgentCapabilityReady,
+  AgentModelDescriptor,
+  AgentModelId,
+  AgentProviderDefaults,
+  AgentProviderDescriptor,
+  AgentProviderId,
+  AgentProviderManifest,
+  AgentProviderOperationError,
+  AgentRuntimeRequirement,
+  AgentSessionSupport,
+  type AgentProviderRegistration,
+  AgentPolicyEnforcementError,
+  UnsupportedAgentCapabilityError,
+  type WalkthroughRequest,
+  WalkthroughResult,
+} from "@diffdash/agent-provider"
+import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 
 import { LocalReviewDetail } from "@diffdash/domain/local-review"
 import {
@@ -12,8 +34,7 @@ import {
   WalkthroughGenerationDetails,
   type WalkthroughHunkDigest,
 } from "@diffdash/domain/walkthrough"
-import { AIAgent, type AIAgentReasoningEffort } from "./ai-agent"
-import { WalkthroughService } from "./walkthrough"
+import { WalkthroughRouting, WalkthroughService } from "./walkthrough"
 
 const pullRequest = PullRequestDetail.make({
   author: ReviewActor.make({ login: "octocat" }),
@@ -150,39 +171,95 @@ const invalidCoverageOutput = JSON.stringify({
   support: [],
 })
 
+const primaryProviderId = AgentProviderId.make("primary")
+const fallbackProviderId = AgentProviderId.make("fallback")
+
+const providerManifest = (providerId: AgentProviderId) =>
+  AgentProviderManifest.make({
+    descriptor: AgentProviderDescriptor.make({
+      id: providerId,
+      displayName: providerId,
+      description: "Walkthrough fixture",
+      homepage: null,
+    }),
+    models: [
+      AgentModelDescriptor.make({
+        id: AgentModelId.make(`${providerId}-balanced`),
+        displayName: "Balanced",
+        capabilities: ["walkthrough"],
+        quality: "balanced",
+      }),
+    ],
+    defaults: AgentProviderDefaults.make({
+      walkthroughModel: AgentModelId.make(`${providerId}-balanced`),
+      reviewThreadModel: null,
+    }),
+    requirements: [
+      AgentRuntimeRequirement.make({ name: providerId, versionRange: null, installHint: null }),
+    ],
+    capabilities: AgentCapabilityManifest.make({
+      walkthrough: AgentCapabilityDeclaration.make({ supported: true, autoPriority: 10 }),
+      reviewThread: AgentCapabilityDeclaration.make({ supported: false, autoPriority: null }),
+    }),
+    session: AgentSessionSupport.make({ mode: "none" }),
+  })
+
 const makeLayer = (outputs: readonly string[]) => {
-  const calls: Array<{
-    readonly cwd: string | undefined
-    readonly prompt: string
-    readonly reasoningEffort: AIAgentReasoningEffort | undefined
-    readonly timeoutMs: number | undefined
-  }> = []
+  const calls: WalkthroughRequest[] = []
   let index = 0
-  const layer = WalkthroughService.layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        AIAgent,
-        AIAgent.of({
-          generateText: (prompt, options) =>
-            Effect.sync(() => {
-              calls.push({
-                cwd: options?.cwd,
-                prompt,
-                reasoningEffort: options?.reasoningEffort,
-                timeoutMs: options?.timeoutMs,
-              })
-              const stdout = outputs[Math.min(index, outputs.length - 1)] ?? ""
-              index += 1
-              return stdout
-            }),
-          isAvailable: Effect.succeed(true),
-        }),
+  const registration: AgentProviderRegistration = {
+    manifest: providerManifest(primaryProviderId),
+    walkthrough: {
+      probe: Effect.succeed(
+        AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
       ),
-    ),
+      execute: (request) =>
+        Effect.sync(() => {
+          calls.push(request)
+          const text = outputs[Math.min(index, outputs.length - 1)] ?? ""
+          index += 1
+          return WalkthroughResult.make({ text })
+        }),
+    },
+  }
+  const registryLayer = AgentProviderRegistry.layer([registration], {
+    walkthrough: [primaryProviderId],
+    reviewThread: [],
+  })
+  const routingLayer = Layer.succeed(
+    WalkthroughRouting,
+    WalkthroughRouting.of({
+      get: Effect.succeed({ route: { mode: "auto" }, models: {}, autoQuality: "balanced" }),
+    }),
+  )
+  const layer = WalkthroughService.layer({ remoteWorkingDirectory: "/app/remote" }).pipe(
+    Layer.provide(registryLayer),
+    Layer.provide(routingLayer),
   )
 
   return { calls, layer }
 }
+
+const serviceLayer = (
+  registrations: readonly AgentProviderRegistration[],
+  route:
+    | { readonly mode: "auto" }
+    | { readonly mode: "provider"; readonly providerId: AgentProviderId },
+  order: readonly AgentProviderId[],
+) =>
+  WalkthroughService.layer({ remoteWorkingDirectory: "/app/remote" }).pipe(
+    Layer.provide(
+      AgentProviderRegistry.layer(registrations, { walkthrough: order, reviewThread: [] }),
+    ),
+    Layer.provide(
+      Layer.succeed(
+        WalkthroughRouting,
+        WalkthroughRouting.of({
+          get: Effect.succeed({ route, models: {}, autoQuality: "balanced" }),
+        }),
+      ),
+    ),
+  )
 
 describe("WalkthroughService", () => {
   it.effect("FUN-48 AC: returns validated walkthrough data from valid generation", () =>
@@ -200,7 +277,8 @@ describe("WalkthroughService", () => {
       expect(walkthrough.support[0]?.hunkIds).toEqual(["src/service.ts:pull-request:51:h1"])
       expect(walkthrough.generation?.mode).toBe("standard")
       expect(calls).toHaveLength(1)
-      expect(calls[0]?.cwd).toBeUndefined()
+      expect(calls[0]?.workingDirectory).toBe("/app/remote")
+      expect(calls[0]?.model).toBe("primary-balanced")
       expect(calls[0]?.prompt).toContain("Return JSON only")
       expect(calls[0]?.prompt).toContain('"h":"h1"')
       expect(calls[0]?.prompt).toContain('"context":"diff-only"')
@@ -249,6 +327,13 @@ describe("WalkthroughService", () => {
 
       expect(calls[0]?.reasoningEffort).toBe("low")
       expect(calls[0]?.timeoutMs).toBe(10 * 60 * 1_000)
+      expect(calls[0]?.policy).toMatchObject({
+        sensitiveFiles: "deny",
+        shell: "read-only",
+        fileMutation: "deny",
+        gitMutation: "deny",
+        providerPublishing: "deny",
+      })
     }),
   )
 
@@ -261,7 +346,7 @@ describe("WalkthroughService", () => {
         return yield* service.generate(localGenerationInput)
       }).pipe(Effect.provide(layer))
 
-      expect(calls[0]?.cwd).toBe("/workspace/repo")
+      expect(calls[0]?.workingDirectory).toBe("/workspace/repo")
       expect(calls[0]?.prompt).toContain('"type":"local-diff"')
     }),
   )
@@ -338,6 +423,156 @@ describe("WalkthroughService", () => {
       expect(calls[0]?.prompt).toContain("src/auth (60 files")
       expect(calls[0]?.prompt).toContain("representative samples")
       expect(result.generation).toEqual(generation)
+    }),
+  )
+
+  it.effect("FUN-136 AC: reports a missing walkthrough capability for an explicit route", () =>
+    Effect.gen(function* () {
+      const registration: AgentProviderRegistration = {
+        manifest: providerManifest(primaryProviderId),
+      }
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(
+        Effect.provide(
+          serviceLayer([registration], { mode: "provider", providerId: primaryProviderId }, [
+            primaryProviderId,
+          ]),
+        ),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(UnsupportedAgentCapabilityError)
+    }),
+  )
+
+  it.effect(
+    "FUN-136 AC: follows explicit automatic order and falls back after execution failure",
+    () =>
+      Effect.gen(function* () {
+        const calls: AgentProviderId[] = []
+        const registration = (
+          providerId: AgentProviderId,
+          execute: NonNullable<AgentProviderRegistration["walkthrough"]>,
+        ): AgentProviderRegistration => ({
+          manifest: providerManifest(providerId),
+          walkthrough: execute,
+        })
+        const primary = registration(primaryProviderId, {
+          probe: Effect.succeed(
+            AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
+          ),
+          execute: () =>
+            Effect.sync(() => calls.push(primaryProviderId)).pipe(
+              Effect.flatMap(() =>
+                Effect.fail(
+                  AgentProviderOperationError.make({
+                    providerId: primaryProviderId,
+                    capability: "walkthrough",
+                    reason: "primary failed",
+                  }),
+                ),
+              ),
+            ),
+        })
+        const fallback = registration(fallbackProviderId, {
+          probe: Effect.succeed(
+            AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
+          ),
+          execute: () =>
+            Effect.sync(() => calls.push(fallbackProviderId)).pipe(
+              Effect.as(WalkthroughResult.make({ text: validOutput })),
+            ),
+        })
+
+        const result = yield* Effect.gen(function* () {
+          const service = yield* WalkthroughService
+          return yield* service.generate(generationInput)
+        }).pipe(
+          Effect.provide(
+            serviceLayer([fallback, primary], { mode: "auto" }, [
+              primaryProviderId,
+              fallbackProviderId,
+            ]),
+          ),
+        )
+
+        expect(result.title).toBe("Review path")
+        expect(calls).toEqual([primaryProviderId, fallbackProviderId])
+      }),
+  )
+
+  it.effect("FUN-136 AC: interruption does not trigger automatic fallback", () =>
+    Effect.gen(function* () {
+      let interrupted = false
+      let fallbackCalls = 0
+      const primary: AgentProviderRegistration = {
+        manifest: providerManifest(primaryProviderId),
+        walkthrough: {
+          probe: Effect.succeed(
+            AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
+          ),
+          execute: () =>
+            Effect.never.pipe(Effect.ensuring(Effect.sync(() => void (interrupted = true)))),
+        },
+      }
+      const fallback: AgentProviderRegistration = {
+        manifest: providerManifest(fallbackProviderId),
+        walkthrough: {
+          probe: Effect.succeed(
+            AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
+          ),
+          execute: () =>
+            Effect.sync(() => {
+              fallbackCalls += 1
+              return WalkthroughResult.make({ text: validOutput })
+            }),
+        },
+      }
+      const layer = serviceLayer([primary, fallback], { mode: "auto" }, [
+        primaryProviderId,
+        fallbackProviderId,
+      ])
+      const fiber = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(Effect.provide(layer), Effect.fork)
+
+      yield* Effect.yieldNow()
+      yield* Fiber.interrupt(fiber)
+      expect(interrupted).toBe(true)
+      expect(fallbackCalls).toBe(0)
+    }),
+  )
+
+  it.effect("FUN-136 AC: rejects a provider that cannot enforce walkthrough policy", () =>
+    Effect.gen(function* () {
+      const registration: AgentProviderRegistration = {
+        manifest: providerManifest(primaryProviderId),
+        walkthrough: {
+          probe: Effect.succeed(
+            AgentCapabilityPolicyUnsupported.make({
+              capability: "walkthrough",
+              reason: "sandbox is unavailable",
+            }),
+          ),
+          execute: () => Effect.succeed(WalkthroughResult.make({ text: validOutput })),
+        },
+      }
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(
+        Effect.provide(
+          serviceLayer([registration], { mode: "provider", providerId: primaryProviderId }, [
+            primaryProviderId,
+          ]),
+        ),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(AgentPolicyEnforcementError)
     }),
   )
 })

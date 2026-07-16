@@ -24,6 +24,7 @@ import {
   AgentSessionSupport,
   AgentUsage,
   InvalidAgentProviderResponseError,
+  isAgentExecutionPolicyEnforced,
   McpToolName,
   type AgentCapability,
   type AgentCapabilityProbe,
@@ -637,14 +638,7 @@ const requirePolicy = (
   policy: AgentExecutionPolicy,
   expected: AgentExecutionPolicy,
 ) => {
-  const valid =
-    policy.network === expected.network &&
-    policy.sensitiveFiles === expected.sensitiveFiles &&
-    policy.repository === expected.repository &&
-    policy.shell === expected.shell &&
-    policy.fileMutation === expected.fileMutation &&
-    policy.gitMutation === expected.gitMutation &&
-    policy.providerPublishing === expected.providerPublishing
+  const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
     : operationErrorValue(capability, "Claude requires the explicit non-mutating policy")

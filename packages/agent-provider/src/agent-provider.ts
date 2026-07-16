@@ -46,6 +46,12 @@ export class AgentProviderDescriptor extends Schema.Class<AgentProviderDescripto
   homepage: Schema.NullOr(Schema.String),
 }) {}
 
+/** Provider-neutral model quality used by automatic capability routing. */
+export const AgentModelQuality = Schema.Literal("fast", "balanced", "best")
+
+/** Provider-neutral model quality used by automatic capability routing. */
+export type AgentModelQuality = typeof AgentModelQuality.Type
+
 /** One provider-owned model and the capabilities for which it is valid. */
 export class AgentModelDescriptor extends Schema.Class<AgentModelDescriptor>(
   "AgentModelDescriptor",
@@ -53,7 +59,7 @@ export class AgentModelDescriptor extends Schema.Class<AgentModelDescriptor>(
   id: AgentModelId,
   displayName: Schema.String.pipe(Schema.minLength(1)),
   capabilities: Schema.Array(AgentCapability),
-  quality: Schema.Literal("fast", "balanced", "best"),
+  quality: AgentModelQuality,
 }) {}
 
 /** Default models selected for each independently optional capability. */
@@ -156,6 +162,21 @@ export class AgentExecutionPolicy extends Schema.Class<AgentExecutionPolicy>(
   providerPublishing: Schema.Literal("deny"),
   allowedMcpTools: Schema.Array(McpToolName),
 }) {}
+
+/** Returns whether an enforced policy is equal to or stricter than the requested policy. */
+export const isAgentExecutionPolicyEnforced = (
+  requested: AgentExecutionPolicy,
+  enforced: AgentExecutionPolicy,
+): boolean =>
+  requested.network === enforced.network &&
+  requested.sensitiveFiles === enforced.sensitiveFiles &&
+  requested.repository === enforced.repository &&
+  (requested.shell === enforced.shell ||
+    (requested.shell === "read-only" && enforced.shell === "deny")) &&
+  requested.fileMutation === enforced.fileMutation &&
+  requested.gitMutation === enforced.gitMutation &&
+  requested.providerPublishing === enforced.providerPublishing &&
+  enforced.allowedMcpTools.every((tool) => requested.allowedMcpTools.includes(tool))
 
 /** Input to one scoped MCP invocation. */
 export class ScopedMcpCall extends Schema.Class<ScopedMcpCall>("ScopedMcpCall")({

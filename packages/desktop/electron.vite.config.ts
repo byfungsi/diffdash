@@ -17,6 +17,7 @@ const packageVersion =
 
 const internalPackages = [
   "@diffdash/agent-provider",
+  "@diffdash/agent-provider/registry",
   "@diffdash/agent-provider-claude",
   "@diffdash/agent-provider-codex",
   "@diffdash/agent-provider-opencode",
@@ -30,6 +31,7 @@ const internalPackages = [
   "@diffdash/process",
   "@diffdash/protocol",
   "@diffdash/settings",
+  "@diffdash/walkthrough",
 ]
 
 const appVersion = (() => {

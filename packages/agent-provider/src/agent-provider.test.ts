@@ -28,6 +28,7 @@ import {
   ScopedMcpResult,
   WalkthroughRequest,
   WalkthroughResult,
+  isAgentExecutionPolicyEnforced,
 } from "./agent-provider"
 import {
   agentCancellationConformance,
@@ -221,5 +222,12 @@ describe("capability policy probes", () => {
 
   it("keeps session IDs open", () => {
     expect(AgentSessionId.make("vendor-session-1")).toBe("vendor-session-1")
+  })
+
+  it("accepts an enforced policy that is stricter than the requested policy", () => {
+    const enforced = AgentExecutionPolicy.make({ ...policy, shell: "deny", allowedMcpTools: [] })
+    const requested = AgentExecutionPolicy.make({ ...policy, shell: "read-only" })
+    expect(isAgentExecutionPolicyEnforced(requested, enforced)).toBe(true)
+    expect(isAgentExecutionPolicyEnforced(enforced, requested)).toBe(false)
   })
 })

@@ -48,6 +48,7 @@
     "@diffdash/protocol": "workspace:*",
     "@diffdash/process": "workspace:*",
     "@diffdash/settings": "workspace:*",
+    "@diffdash/walkthrough": "workspace:*",
     "@effect-atom/atom-react": "^0.5.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@pierre/diffs": "^1.2.12",
