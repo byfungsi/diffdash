@@ -35,7 +35,6 @@ import { GitProvider } from "../../src/main/services/git-provider"
 import { GitProviderRegistry, type GitProviderRegistration } from "@diffdash/git-provider"
 import { createFixtureGitProvider } from "@diffdash/git-provider-fixture"
 import { createGitHubProvider } from "@diffdash/git-provider-github"
-import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
@@ -226,7 +225,6 @@ const createAppLayer = () => {
   const threadStoreLayer = ReviewThreadStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
   const providerRegistryLayer = ReviewAgentProviderRegistry.layer.pipe(
-    Layer.provideMerge(OpenCodeSdkClient.layer),
     Layer.provideMerge(cliLayer),
     Layer.provideMerge(CliStreamService.layer),
     Layer.provideMerge(AgentArtifactNormalizer.layer),

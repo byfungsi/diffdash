@@ -1,101 +1,74 @@
-import { Effect, Layer } from "effect"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { randomUUID } from "node:crypto"
-import { join } from "node:path"
+import { Effect, Layer, Stream } from "effect"
 
-import { DEFAULT_BUILT_IN_MODELS } from "@diffdash/domain/ai-settings"
+import { AgentCapabilityReady, WalkthroughRequest } from "@diffdash/agent-provider"
 import {
-  AIAgent,
-  type AIAgentGenerateOptions,
-  type AIProviderAgent,
-  requireGeneratedText,
-} from "./ai-agent"
-import { AppConfig } from "./app-config"
+  makeOpenCodeProvider,
+  OPENCODE_DEFAULT_MODEL,
+  OPENCODE_WALKTHROUGH_POLICY,
+  openCodeModelId,
+} from "@diffdash/agent-provider-opencode"
 import { CliError, CliService, type CliRunner } from "@diffdash/process/cli"
+import { AIAgent, type AIProviderAgent } from "./ai-agent"
+import { AppConfig } from "./app-config"
 
-const OPENCODE_PROMPT_MESSAGE =
-  "Generate a DiffDash walkthrough from the attached prompt file. Return JSON only."
-
-/** Creates an OpenCode-backed AI agent using the provided provider/model ID. */
+/** Creates the legacy walkthrough adapter over the OpenCode SDK provider. */
 export const makeOpenCodeAgent = (
   cli: CliRunner,
   model: string,
   tempDir: string,
-): AIProviderAgent =>
-  AIAgent.of({
+): AIProviderAgent => {
+  const registration = makeOpenCodeProvider({
+    cli,
+    cliStream: { stream: () => Stream.die(new Error("Review streaming is not used")) },
+    tempDirectory: tempDir,
+  })
+  const walkthrough = registration.walkthrough
+  if (walkthrough === undefined)
+    throw new Error("OpenCode walkthrough capability is not registered")
+
+  return AIAgent.of({
     generateText: Effect.fn("OpenCodeAgent.generateText")(function (prompt, options = {}) {
-      return writePromptFile(tempDir, prompt).pipe(
-        Effect.flatMap((promptPath) =>
-          cli
-            .run(
-              "opencode",
-              [
-                "run",
-                "--model",
-                model,
-                "--file",
-                promptPath,
-                ...variantArgs(options),
-                OPENCODE_PROMPT_MESSAGE,
-              ],
-              cliOptions(options),
-            )
-            .pipe(
-              Effect.flatMap((result) => requireGeneratedText(result, "OpenCode", result.stdout)),
-              Effect.ensuring(removePromptFile(promptPath)),
-            ),
-        ),
-      )
+      return walkthrough
+        .execute(
+          WalkthroughRequest.make({
+            prompt,
+            model: openCodeModelId(model),
+            workingDirectory: options.cwd ?? tempDir,
+            timeoutMs: options.timeoutMs ?? 10 * 60 * 1_000,
+            reasoningEffort: options.reasoningEffort ?? "medium",
+            policy: OPENCODE_WALKTHROUGH_POLICY,
+          }),
+        )
+        .pipe(
+          Effect.map(({ text }) => text),
+          Effect.mapError((cause) => legacyCliError(cause.reason)),
+        )
     }),
-    isAvailable: cli.run("opencode", ["--version"]).pipe(
-      Effect.as(true),
+    isAvailable: walkthrough.probe.pipe(
+      Effect.map((result) => result instanceof AgentCapabilityReady),
       Effect.catchAll(() => Effect.succeed(false)),
     ),
   })
+}
 
-/** AI agent implementation backed by the local `opencode` CLI. */
+/** Legacy AI agent layer backed by the extracted OpenCode provider. */
 export const OpenCodeAgent = {
   layer: Layer.effect(
     AIAgent,
     Effect.gen(function* () {
       const cli = yield* CliService
       const config = yield* AppConfig
-      return makeOpenCodeAgent(cli, DEFAULT_BUILT_IN_MODELS.opencode, config.tempDir)
+      return makeOpenCodeAgent(cli, OPENCODE_DEFAULT_MODEL, config.tempDir)
     }),
   ),
 }
 
-const variantArgs = (options: AIAgentGenerateOptions): readonly string[] => {
-  if (options.reasoningEffort === undefined) return []
-  const variant = options.reasoningEffort === "low" ? "minimal" : options.reasoningEffort
-  return ["--variant", variant]
-}
-
-const cliOptions = (options: AIAgentGenerateOptions) => ({
-  ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-  ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-})
-
-const writePromptFile = (tempDir: string, prompt: string): Effect.Effect<string, CliError> =>
-  Effect.try({
-    try: () => {
-      mkdirSync(tempDir, { recursive: true })
-      const promptPath = join(tempDir, `opencode-prompt-${randomUUID()}.txt`)
-      writeFileSync(promptPath, prompt, "utf8")
-      return promptPath
-    },
-    catch: (cause) =>
-      CliError.make({
-        command: "opencode",
-        args: [],
-        cwd: null,
-        exitCode: null,
-        stderr: "Could not write temporary OpenCode prompt file.",
-        cause,
-      }),
-  })
-
-const removePromptFile = (path: string): Effect.Effect<void> =>
-  Effect.sync(() => {
-    rmSync(path, { force: true })
+const legacyCliError = (stderr: string) =>
+  CliError.make({
+    command: "opencode",
+    args: [],
+    cwd: null,
+    exitCode: null,
+    stderr,
+    cause: null,
   })

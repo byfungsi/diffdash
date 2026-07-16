@@ -77,30 +77,11 @@ const CLAUDE_DENIED_TOOLS = [
   "Bash(gh pr review*)",
 ] as const
 
-type OpenCodePermissionAction = "allow" | "deny"
-
-type OpenCodePermissionRule =
-  | OpenCodePermissionAction
-  | Readonly<Record<string, OpenCodePermissionAction>>
-
 /** Provider-native controls detected for the selected provider executable or SDK. */
-export type ReviewAgentPermissionCapabilities =
-  | {
-      readonly provider: "opencode"
-      readonly toolPermissions: boolean
-    }
-  | {
-      readonly provider: "claude"
-      readonly exactToolAllowlist: boolean
-      readonly nonInteractivePermissionMode: boolean
-    }
-
-/** Provider-native OpenCode SDK configuration for a read-only thread turn. */
-export interface OpenCodeReviewPermissionConfig {
-  readonly provider: "opencode"
-  readonly sdkConfig: {
-    readonly permission: Readonly<Record<string, OpenCodePermissionRule>>
-  }
+export type ReviewAgentPermissionCapabilities = {
+  readonly provider: "claude"
+  readonly exactToolAllowlist: boolean
+  readonly nonInteractivePermissionMode: boolean
 }
 
 /** Provider-native Claude CLI arguments for a read-only, noninteractive thread turn. */
@@ -113,9 +94,7 @@ export interface ClaudeReviewPermissionConfig {
 }
 
 /** Concrete provider configuration that enforces the provider-neutral thread policy. */
-export type ReviewAgentPermissionConfig =
-  | OpenCodeReviewPermissionConfig
-  | ClaudeReviewPermissionConfig
+export type ReviewAgentPermissionConfig = ClaudeReviewPermissionConfig
 
 /** Fail-closed result of translating the thread policy into provider-native controls. */
 export type ReviewAgentPermissionCapabilityResult =
@@ -137,32 +116,6 @@ export const resolveReviewAgentPermissionConfig = (
   capabilities: ReviewAgentPermissionCapabilities,
 ): ReviewAgentPermissionCapabilityResult => {
   switch (capabilities.provider) {
-    case "opencode":
-      if (!capabilities.toolPermissions) {
-        return disabled("opencode", "OpenCode tool permissions are unavailable")
-      }
-      return enabled(permissions, {
-        provider: "opencode",
-        sdkConfig: {
-          permission: {
-            "*": "deny",
-            read: {
-              "*": "allow",
-              "*.env": "deny",
-              "*.env.*": "deny",
-              "*.env.example": "allow",
-            },
-            glob: "allow",
-            grep: "allow",
-            webfetch: "allow",
-            websearch: "allow",
-            "diffdash_*": "allow",
-            edit: "deny",
-            bash: "deny",
-            external_directory: "deny",
-          },
-        },
-      })
     case "claude": {
       if (!capabilities.exactToolAllowlist || !capabilities.nonInteractivePermissionMode) {
         return disabled(

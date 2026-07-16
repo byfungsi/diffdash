@@ -146,6 +146,37 @@ importers:
         specifier: 'catalog:'
         version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.0)(@vitest/browser@3.2.7)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0)
 
+  packages/agent-provider-opencode:
+    dependencies:
+      '@diffdash/agent-provider':
+        specifier: workspace:*
+        version: link:../agent-provider
+      '@diffdash/process':
+        specifier: workspace:*
+        version: link:../process
+      '@opencode-ai/sdk':
+        specifier: 1.17.16
+        version: 1.17.16
+      effect:
+        specifier: 'catalog:'
+        version: 3.21.4
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 0.29.0(effect@3.21.4)(vitest@3.2.7)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.1.0
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.73.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.0)(@vitest/browser@3.2.7)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0)
+
   packages/app:
     dependencies:
       '@diffdash/domain':
@@ -242,6 +273,9 @@ importers:
       '@diffdash/agent-provider-codex':
         specifier: workspace:*
         version: link:../agent-provider-codex
+      '@diffdash/agent-provider-opencode':
+        specifier: workspace:*
+        version: link:../agent-provider-opencode
       '@diffdash/app':
         specifier: workspace:*
         version: link:../app
@@ -278,9 +312,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@3.25.76)
-      '@opencode-ai/sdk':
-        specifier: 1.17.16
-        version: 1.17.16
       '@pierre/diffs':
         specifier: ^1.2.12
         version: 1.2.12(@shikijs/themes@4.3.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

@@ -4,7 +4,6 @@ import { Effect, Layer, Stream } from "effect"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { CliError, CliService } from "@diffdash/process/cli"
 import { CliStreamError, CliStreamService } from "@diffdash/process/cli-stream"
-import { OpenCodeSdkClient } from "./opencode-sdk-client"
 import {
   ReviewAgentProviderRegistry,
   ReviewAgentProviderUnavailableError,
@@ -30,13 +29,6 @@ const unavailable = (command: string) =>
 const layer = ReviewAgentProviderRegistry.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
-      Layer.succeed(
-        OpenCodeSdkClient,
-        OpenCodeSdkClient.of({
-          isAvailable: Effect.succeed(false),
-          runTurn: () => Effect.die(new Error("OpenCode turn is not used")),
-        }),
-      ),
       Layer.succeed(
         CliService,
         CliService.of({

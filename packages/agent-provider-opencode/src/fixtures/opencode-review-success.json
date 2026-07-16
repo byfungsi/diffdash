@@ -1,0 +1,53 @@
+{
+  "info": {
+    "id": "assistant-message-1",
+    "modelID": "claude-sonnet-5",
+    "providerID": "anthropic",
+    "structured": {
+      "bodyMarkdown": "The changed hunk is correct.",
+      "threadSummaryUpdate": null,
+      "referencedAnchors": null
+    },
+    "tokens": {
+      "input": 240,
+      "output": 42,
+      "cache": { "read": 120, "write": 8 }
+    },
+    "cost": 0.004
+  },
+  "parts": [
+    {
+      "type": "tool",
+      "id": "tool-read-1",
+      "messageID": "assistant-message-1",
+      "tool": "read",
+      "state": {
+        "status": "completed",
+        "title": "Read src/main.ts",
+        "output": "const main = true",
+        "metadata": {
+          "path": "src/main.ts",
+          "privateSdkPayload": "must-not-cross-boundary"
+        }
+      }
+    },
+    {
+      "type": "tool",
+      "id": "tool-mcp-1",
+      "messageID": "assistant-message-1",
+      "tool": "diffdash_getDiffHunk",
+      "state": {
+        "status": "completed",
+        "title": "Get diff hunk",
+        "output": "@@ -1 +1 @@",
+        "metadata": { "tool": "getDiffHunk", "secret": "must-not-cross-boundary" }
+      }
+    },
+    {
+      "type": "text",
+      "id": "text-1",
+      "messageID": "assistant-message-1",
+      "text": "{\"bodyMarkdown\":\"The changed hunk is correct.\"}"
+    }
+  ]
+}

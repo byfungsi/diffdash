@@ -148,6 +148,30 @@ test("agent provider SDK and registry import no concrete provider", () => {
   assert.doesNotMatch(sdkSource, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
 })
 
+test("the OpenCode SDK is owned only by its leaf provider", () => {
+  for (const { directory, manifest } of manifests) {
+    const ownsSdk = Object.hasOwn(manifest.dependencies ?? {}, "@opencode-ai/sdk")
+    assert.equal(
+      ownsSdk,
+      manifest.name === "@diffdash/agent-provider-opencode",
+      `${manifest.name} must not own the OpenCode SDK dependency`,
+    )
+    if (manifest.name === "@diffdash/agent-provider-opencode") continue
+    const source = join(directory, "src")
+    let files = []
+    try {
+      files = sourceFiles(source)
+    } catch {
+      continue
+    }
+    assert.doesNotMatch(
+      files.map((file) => readFileSync(file, "utf8")).join("\n"),
+      /["']@opencode-ai\/sdk(?:\/[^"']*)?["']/,
+      `${manifest.name} imports the OpenCode SDK outside its provider package`,
+    )
+  }
+})
+
 test("browser packages bundle without platform dependencies", async () => {
   await Promise.all(
     [

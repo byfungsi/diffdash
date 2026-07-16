@@ -4,34 +4,6 @@ import { THREAD_MODE_REVIEW_AGENT_PERMISSIONS } from "@diffdash/domain/review-ag
 import { resolveReviewAgentPermissionConfig } from "./review-agent-permissions"
 
 describe("review agent permission configuration", () => {
-  it("FUN-75 AC: OpenCode denies mutation and shell while allowing native reads", () => {
-    const result = resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
-      provider: "opencode",
-      toolPermissions: true,
-    })
-
-    expect(result.enabled).toBe(true)
-    if (!result.enabled || result.config.provider !== "opencode") return
-    expect(result.config.sdkConfig.permission).toMatchObject({
-      "*": "deny",
-      read: {
-        "*": "allow",
-        "*.env": "deny",
-        "*.env.*": "deny",
-        "*.env.example": "allow",
-      },
-      glob: "allow",
-      grep: "allow",
-      edit: "deny",
-      bash: "deny",
-      external_directory: "deny",
-    })
-    expect(result.config.sdkConfig.permission).not.toHaveProperty("github")
-    expect(result.config.sdkConfig.permission.edit).toBe("deny")
-    expect(result.config.sdkConfig.permission.bash).toBe("deny")
-    expect(JSON.stringify(result.config)).not.toContain("git status")
-  })
-
   it("FUN-75 AC: Claude uses an exact read-only tool allowlist and explicit denials", () => {
     const result = resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
       provider: "claude",
@@ -65,10 +37,6 @@ describe("review agent permission configuration", () => {
 
   it("FUN-75 AC: fails closed when any provider-native control is insufficient", () => {
     const results = [
-      resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
-        provider: "opencode",
-        toolPermissions: false,
-      }),
       resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
         provider: "claude",
         exactToolAllowlist: false,

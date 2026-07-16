@@ -6,6 +6,7 @@ import {
 } from "@diffdash/domain/agent-run"
 import { type AISettings, autoQualityProviderModels } from "@diffdash/domain/ai-settings"
 import { CODEX_AUTO_MODELS } from "@diffdash/agent-provider-codex"
+import { OPENCODE_AUTO_MODELS } from "@diffdash/agent-provider-opencode"
 import {
   AgentRunId,
   type ReviewAgentProgressStage,
@@ -385,7 +386,7 @@ const modelForProvider = (settings: AISettings, provider: ReviewAgentProviderId)
   const models = autoQualityProviderModels(settings.autoQuality)
   if (provider === "claude") return models.claude
   if (provider === "codex") return CODEX_AUTO_MODELS[settings.autoQuality]
-  return models.opencodeCodex
+  return OPENCODE_AUTO_MODELS[settings.autoQuality][1]
 }
 
 const userSafeFailure = (provider: ReviewAgentProviderId, cause: unknown) =>

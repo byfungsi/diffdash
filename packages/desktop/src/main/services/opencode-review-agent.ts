@@ -1,190 +1,215 @@
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Either, Layer, Schema } from "effect"
 
 import {
-  type ReviewAgentArtifactType,
-  normalizeReviewThreadAgentResponse,
+  AgentExecutionPolicy,
+  AgentProviderId,
+  AgentProviderOperationError,
+  AgentSessionId,
+  InvalidAgentProviderResponseError,
+  ReviewRevision,
+  type ReviewThreadRequest,
+  type ScopedMcpCall,
+} from "@diffdash/agent-provider"
+import {
+  makeOpenCodeProvider,
+  OPENCODE_REVIEW_POLICY,
+  openCodeMcpToolNames,
+  openCodeModelId,
+} from "@diffdash/agent-provider-opencode"
+import {
   ReviewAgentProviderRunId,
   type ReviewAgentTurnInput,
   ReviewAgentTurnResult,
   ReviewAgentUsage,
   ReviewThreadAgentResponse,
 } from "@diffdash/domain/review-agent"
+import { ReviewAnchor } from "@diffdash/domain/review-thread"
+import { CliService } from "@diffdash/process/cli"
+import { CliStreamService } from "@diffdash/process/cli-stream"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
+import type { DiffDashMcpRunAccess } from "./diffdash-mcp-server"
 import {
-  OpenCodeSdkClient,
-  type OpenCodeSdkPart,
-  type OpenCodeSdkToolPart,
-  type OpenCodeSdkTurnOutput,
-} from "./opencode-sdk-client"
-import { resolveReviewAgentPermissionConfig } from "./review-agent-permissions"
-import {
-  mapReviewAgentExecutionError,
+  ReviewAgentExecutionError,
   ReviewAgentInvalidResponseError,
   ReviewAgentPermissionError,
   ReviewAgentProtocolError,
-  ReviewAgentProvider,
   type ReviewAgentExecutionContext,
+  ReviewAgentProvider,
 } from "./review-agent-provider"
 
 const providerId = "opencode" as const
+const turnTimeoutMs = 10 * 60 * 1_000
+const diffDashMcpTools = openCodeMcpToolNames([
+  "getReviewContext",
+  "getChangedFiles",
+  "searchReviewDiff",
+  "getDiffHunk",
+  "getDiffFile",
+  "searchRepository",
+  "readRepositoryFile",
+  "getThreadContext",
+  "getOlderThreadMessages",
+  "getPriorArtifact",
+  "getWalkthroughContext",
+])
 
-/** Layer implementing the provider-neutral review agent contract through the OpenCode SDK. */
+/** Legacy review-provider layer backed by the extracted OpenCode SDK provider. */
 export const openCodeReviewAgentLayer = Layer.effect(
   ReviewAgentProvider,
   Effect.gen(function* () {
-    const sdk = yield* OpenCodeSdkClient
+    const cli = yield* CliService
+    const cliStream = yield* CliStreamService
     const normalizer = yield* AgentArtifactNormalizer
+    const registration = makeOpenCodeProvider({ cli, cliStream })
+    const review = registration.reviewThread
+    if (review === undefined) throw new Error("OpenCode review capability is not registered")
 
     const runThreadTurn = Effect.fn("OpenCodeReviewAgent.runThreadTurn")(function* (
       input: ReviewAgentTurnInput,
       execution: ReviewAgentExecutionContext,
     ) {
-      const permissionResult = resolveReviewAgentPermissionConfig(input.permissions, {
-        provider: providerId,
-        toolPermissions: true,
-      })
-      if (!permissionResult.enabled || permissionResult.config.provider !== providerId) {
+      if (input.cwd === null) {
         return yield* ReviewAgentPermissionError.make({
           provider: providerId,
-          reason: permissionResult.enabled
-            ? "OpenCode permission configuration was not produced"
-            : permissionResult.reason,
+          reason: "OpenCode review execution requires an isolated working directory",
         })
       }
-
-      const output = yield* sdk
-        .runTurn({
-          cwd: input.cwd,
-          model: input.model,
-          stablePromptPrefix: input.stablePromptPrefix,
-          dynamicPromptSuffix: input.dynamicPromptSuffix,
-          threadId: input.threadId,
-          reviewKey: input.reviewKey,
-          providerRunId: execution.providerRunId,
-          permissionConfig: permissionResult.config.sdkConfig,
-          mcp: execution.mcp,
-        })
-        .pipe(Effect.mapError((error) => mapReviewAgentExecutionError(providerId, error)))
-
-      if (output.parts.some((part) => part.type === "patch")) {
-        return yield* ReviewAgentPermissionError.make({
-          provider: providerId,
-          reason: "OpenCode emitted a patch despite read-only thread permissions",
-        })
-      }
-
-      const response = yield* decodeResponse(output)
+      const result = yield* review
+        .execute(makeReviewRequest(input, input.cwd, execution.mcp, execution.providerRunId))
+        .pipe(Effect.mapError(mapProviderError))
       const artifacts = yield* Effect.forEach(
-        output.parts.filter((part) => part.type !== "patch"),
-        (part) =>
+        result.artifacts,
+        (artifact) =>
           normalizer
-            .normalize(toArtifactInput(part, output))
+            .normalize({
+              provider: providerId,
+              type: legacyArtifactType(artifact.type),
+              title: artifact.title,
+              content: artifact.content,
+              metadata: artifact.metadata,
+            })
             .pipe(
-              Effect.mapError((error) =>
-                ReviewAgentProtocolError.make({ provider: providerId, reason: error.reason }),
+              Effect.mapError((cause) =>
+                ReviewAgentProtocolError.make({ provider: providerId, reason: cause.reason }),
               ),
             ),
         { concurrency: 1 },
       )
-
+      const referencedAnchors = decodeReferencedAnchors(result.response.referencedLocations)
       return ReviewAgentTurnResult.make({
-        response,
-        artifacts,
-        providerRunId: ReviewAgentProviderRunId.make(output.sessionId),
-        usage: ReviewAgentUsage.make({
-          inputTokens: output.usage.inputTokens,
-          outputTokens: output.usage.outputTokens,
-          cacheReadTokens: output.usage.cacheReadTokens,
-          cacheWriteTokens: output.usage.cacheWriteTokens,
-          costUsd: output.usage.costUsd,
+        response: ReviewThreadAgentResponse.make({
+          bodyMarkdown: result.response.bodyMarkdown,
+          ...(result.response.threadSummary === null
+            ? {}
+            : { threadSummaryUpdate: result.response.threadSummary }),
+          ...(referencedAnchors.length === 0 ? {} : { referencedAnchors }),
         }),
+        artifacts,
+        providerRunId:
+          result.sessionId === null ? null : ReviewAgentProviderRunId.make(result.sessionId),
+        usage:
+          result.usage === null
+            ? null
+            : ReviewAgentUsage.make({
+                inputTokens: result.usage.inputTokens,
+                outputTokens: result.usage.outputTokens,
+                cacheReadTokens: result.usage.cacheReadTokens,
+                cacheWriteTokens: result.usage.cacheWriteTokens,
+                costUsd: result.usage.costUsd,
+              }),
       })
     })
 
     return ReviewAgentProvider.of({
       id: providerId,
       sessionMode: "resume",
-      isAvailable: sdk.isAvailable.pipe(
-        Effect.mapError((error) => mapReviewAgentExecutionError(providerId, error)),
+      isAvailable: review.probe.pipe(
+        Effect.map(({ _tag: tag }) => tag === "AgentCapabilityReady"),
+        Effect.mapError((cause) =>
+          ReviewAgentExecutionError.make({
+            provider: providerId,
+            reason: cause.reason,
+            cause,
+          }),
+        ),
       ),
       runThreadTurn,
     })
   }),
 )
 
-const decodeResponse = (
-  output: OpenCodeSdkTurnOutput,
-): Effect.Effect<ReviewThreadAgentResponse, ReviewAgentInvalidResponseError> => {
-  const candidate =
-    output.structured === undefined ? parseTextResponse(output.parts) : output.structured
-  return Schema.decodeUnknown(ReviewThreadAgentResponse)(
-    normalizeReviewThreadAgentResponse(candidate),
-  ).pipe(
-    Effect.mapError((cause) =>
-      ReviewAgentInvalidResponseError.make({
-        provider: providerId,
-        reason: `OpenCode returned an invalid review response: ${String(cause)}`,
+const makeReviewRequest = (
+  input: ReviewAgentTurnInput,
+  cwd: string,
+  mcp: DiffDashMcpRunAccess,
+  providerRunId: ReviewAgentProviderRunId | null,
+): ReviewThreadRequest => ({
+  stablePrompt: input.stablePromptPrefix,
+  dynamicPrompt: input.dynamicPromptSuffix,
+  model: openCodeModelId(input.model),
+  workingDirectory: cwd,
+  revision: ReviewRevision.make(input.headRevision),
+  timeoutMs: turnTimeoutMs,
+  sessionId: providerRunId === null ? null : AgentSessionId.make(providerRunId),
+  mcp: {
+    scopeId: input.threadId,
+    endpoint: mcp.url,
+    bearerToken: mcp.bearerToken,
+    allowedTools: diffDashMcpTools,
+    call: (_call: ScopedMcpCall) =>
+      AgentProviderOperationError.make({
+        providerId: registrationProviderId,
+        capability: "review-thread",
+        reason: "OpenCode accesses MCP through its scoped transport",
       }),
-    ),
-  )
-}
+  },
+  policy: AgentExecutionPolicy.make({
+    ...OPENCODE_REVIEW_POLICY,
+    allowedMcpTools: diffDashMcpTools,
+  }),
+})
 
-const parseTextResponse = (parts: readonly OpenCodeSdkPart[]): unknown => {
-  const text = parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim()
-  const json = text.startsWith("```")
-    ? text.replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "")
-    : text
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return text
-  }
-}
+const registrationProviderId = AgentProviderId.make(providerId)
 
-const toArtifactInput = (
-  part: Exclude<OpenCodeSdkPart, { readonly type: "patch" }>,
-  output: OpenCodeSdkTurnOutput,
+const mapProviderError = (
+  cause: AgentProviderOperationError | InvalidAgentProviderResponseError,
 ) => {
-  const commonMetadata = {
-    sessionId: output.sessionId,
-    messageId: part.messageId,
-    partId: part.id,
-    modelId: output.modelId,
-    providerId: output.providerId,
+  if (cause instanceof InvalidAgentProviderResponseError) {
+    return ReviewAgentInvalidResponseError.make({ provider: providerId, reason: cause.reason })
   }
-  if (part.type === "text") {
-    return {
-      type: "provider_message" as const,
-      provider: providerId,
-      title: "OpenCode assistant message",
-      content: part.text,
-      metadata: commonMetadata,
-    }
+  if (/patch|non-mutating policy|MCP access includes tools/iu.test(cause.reason)) {
+    return ReviewAgentPermissionError.make({ provider: providerId, reason: cause.reason })
   }
-  return {
-    type: artifactTypeForTool(part),
-    provider: providerId,
-    title: part.title,
-    content: part.content,
-    metadata: {
-      ...commonMetadata,
-      tool: part.tool,
-      status: part.status,
-      providerMetadata: part.metadata,
-    },
-  }
+  return ReviewAgentExecutionError.make({ provider: providerId, reason: cause.reason, cause })
 }
 
-const artifactTypeForTool = (part: OpenCodeSdkToolPart): ReviewAgentArtifactType => {
-  const tool = part.tool.toLowerCase()
-  if (tool.startsWith("diffdash_")) return "mcp_tool_result"
-  if (tool === "read") return "file_read"
-  if (tool === "glob" || tool === "grep" || tool === "list") return "search_result"
-  if (tool === "bash" || tool === "shell") return "shell_output"
-  if (tool === "webfetch" || tool === "websearch") return "web_result"
-  return "unknown"
-}
+const legacyArtifactType = (
+  type:
+    | "file-read"
+    | "search-result"
+    | "shell-output"
+    | "web-result"
+    | "diff-context"
+    | "mcp-tool-result"
+    | "provider-message"
+    | "unknown",
+) =>
+  type.replaceAll("-", "_") as
+    | "file_read"
+    | "search_result"
+    | "shell_output"
+    | "web_result"
+    | "diff_context"
+    | "mcp_tool_result"
+    | "provider_message"
+    | "unknown"
+
+const decodeReferencedAnchors = (locations: readonly string[]): ReviewAnchor[] =>
+  locations.flatMap((location) => {
+    try {
+      const result = Schema.decodeUnknownEither(ReviewAnchor)(JSON.parse(location) as unknown)
+      return Either.isRight(result) ? [result.right] : []
+    } catch {
+      return []
+    }
+  })
