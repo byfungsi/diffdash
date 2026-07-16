@@ -36,6 +36,8 @@
   "dependencies": {
     "@diffdash/app": "workspace:*",
     "@diffdash/domain": "workspace:*",
+    "@diffdash/git-provider": "workspace:*",
+    "@diffdash/local-git": "workspace:*",
     "@diffdash/persistence": "workspace:*",
     "@diffdash/protocol": "workspace:*",
     "@diffdash/process": "workspace:*",

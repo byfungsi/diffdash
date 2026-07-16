@@ -7,7 +7,6 @@ import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
-import { AppConfig } from "./app-config"
 import {
   type CliStreamResult,
   type CliStreamRunner,
@@ -116,41 +115,44 @@ export class ReviewWorktreePool extends Context.Tag("@diffdash/ReviewWorktreePoo
     ) => Effect.Effect<A, E | ReviewWorktreePoolError, R>
   }
 >() {
-  static readonly layer = Layer.effect(
-    ReviewWorktreePool,
-    Effect.gen(function* () {
-      const config = yield* AppConfig
-      const cli = yield* CliStreamService
-      const localPoolRoot = resolve(config.worktreePoolPath)
-      const remotePoolRoot = resolve(config.remoteWorktreePoolPath)
-      const instanceId = randomUUID()
+  static readonly layer = (config: {
+    readonly worktreePoolPath: string
+    readonly remoteWorktreePoolPath: string
+  }) =>
+    Layer.effect(
+      ReviewWorktreePool,
+      Effect.gen(function* () {
+        const cli = yield* CliStreamService
+        const localPoolRoot = resolve(config.worktreePoolPath)
+        const remotePoolRoot = resolve(config.remoteWorktreePoolPath)
+        const instanceId = randomUUID()
 
-      const use = <A, E, R>(
-        input: ReviewWorktreeInput,
-        run: (lease: ReviewWorktreeLease) => Effect.Effect<A, E, R>,
-        onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
-      ): Effect.Effect<A, E | ReviewWorktreePoolError, R> => {
-        const poolRoot = input.sourcePath === null ? remotePoolRoot : localPoolRoot
+        const use = <A, E, R>(
+          input: ReviewWorktreeInput,
+          run: (lease: ReviewWorktreeLease) => Effect.Effect<A, E, R>,
+          onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
+        ): Effect.Effect<A, E | ReviewWorktreePoolError, R> => {
+          const poolRoot = input.sourcePath === null ? remotePoolRoot : localPoolRoot
 
-        return Effect.uninterruptibleMask((restore) =>
-          Effect.gen(function* () {
-            yield* reportProgress(onProgress, "reserving-workspace")
-            const lease = yield* reserveAndPrepare(poolRoot, instanceId, cli, input, onProgress)
-            const runExit = yield* restore(run(lease)).pipe(Effect.exit)
-            yield* reportProgress(onProgress, "restoring-workspace")
-            const cleanupExit = yield* restoreAndRelease(poolRoot, cli, input, lease).pipe(
-              Effect.exit,
-            )
-            if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause)
-            if (Exit.isFailure(runExit)) return yield* Effect.failCause(runExit.cause)
-            return runExit.value
-          }),
-        )
-      }
+          return Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              yield* reportProgress(onProgress, "reserving-workspace")
+              const lease = yield* reserveAndPrepare(poolRoot, instanceId, cli, input, onProgress)
+              const runExit = yield* restore(run(lease)).pipe(Effect.exit)
+              yield* reportProgress(onProgress, "restoring-workspace")
+              const cleanupExit = yield* restoreAndRelease(poolRoot, cli, input, lease).pipe(
+                Effect.exit,
+              )
+              if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause)
+              if (Exit.isFailure(runExit)) return yield* Effect.failCause(runExit.cause)
+              return runExit.value
+            }),
+          )
+        }
 
-      return ReviewWorktreePool.of({ use })
-    }),
-  )
+        return ReviewWorktreePool.of({ use })
+      }),
+    )
 }
 
 interface Reservation {

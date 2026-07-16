@@ -29,7 +29,10 @@ import { executionFailureReason } from "./review-agent-provider"
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder, type SelectedReviewAgentArtifact } from "./review-context-builder"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewWorktreePool, ReviewWorktreePoolError } from "./review-worktree-pool"
+import {
+  ReviewWorktreePool,
+  ReviewWorktreePoolError,
+} from "@diffdash/local-git/hosted-review-workspace-pool"
 import { createFallbackThreadMemoryUpdate, selectThreadMemoryWindow } from "./thread-memory"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 

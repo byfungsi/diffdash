@@ -5,7 +5,7 @@ import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import { makePullRequestReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
-import { GitService } from "./git"
+import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "./git-provider"
 
 /** A typed failure to acquire one coherent review metadata and diff snapshot. */

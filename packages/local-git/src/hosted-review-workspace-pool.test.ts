@@ -20,9 +20,8 @@ import { AgentRunId } from "@diffdash/domain/review-agent"
 import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
-import { AppConfig } from "./app-config"
 import { CliStreamService } from "@diffdash/process/cli-stream"
-import { ReviewWorktreePool, ReviewWorktreePoolError } from "./review-worktree-pool"
+import { ReviewWorktreePool, ReviewWorktreePoolError } from "./hosted-review-workspace-pool"
 
 interface GitFixture {
   readonly root: string
@@ -656,18 +655,10 @@ describe("ReviewWorktreePool", () => {
 })
 
 const poolLayer = (value: GitFixture) =>
-  ReviewWorktreePool.layer.pipe(
-    Layer.provideMerge(CliStreamService.layer),
-    Layer.provide(
-      AppConfig.layer({
-        databasePath: join(value.root, "test.sqlite"),
-        settingsPath: join(value.root, "settings.json"),
-        tempDir: join(value.root, "temp"),
-        remoteWorktreePoolPath: value.remotePool,
-        worktreePoolPath: value.pool,
-      }),
-    ),
-  )
+  ReviewWorktreePool.layer({
+    remoteWorktreePoolPath: value.remotePool,
+    worktreePoolPath: value.pool,
+  }).pipe(Layer.provideMerge(CliStreamService.layer))
 
 function makeGitFixture(): GitFixture {
   const root = mkdtempSync(join(tmpdir(), "diffdash-worktree-pool-"))

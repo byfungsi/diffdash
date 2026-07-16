@@ -4,7 +4,7 @@ import { Effect, Either, Layer } from "effect"
 import type { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { PullRequestDetail, PullRequestDiff, ReviewActor } from "@diffdash/domain/pull-request"
 import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
-import { GitService } from "./git"
+import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "./git-provider"
 import { ReviewContextError, ReviewContextService } from "./review-context"
 

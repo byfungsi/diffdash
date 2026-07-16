@@ -39,7 +39,7 @@ import {
 import { ReviewAgentProviderRegistry } from "./review-agent-provider-registry"
 import { ReviewContextBuilder } from "./review-context-builder"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewWorktreePool } from "./review-worktree-pool"
+import { ReviewWorktreePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 
 const diff = `diff --git a/src/a.ts b/src/a.ts

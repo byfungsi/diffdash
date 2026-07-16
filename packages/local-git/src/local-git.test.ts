@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { Effect, Either, Layer } from "effect"
 
 import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
-import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./git"
+import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./local-git"
 
 const makeCliResult = (stdout: string, args: readonly string[]): CliResult => ({
   args,

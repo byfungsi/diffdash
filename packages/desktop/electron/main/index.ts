@@ -30,7 +30,7 @@ import { CliStreamService } from "@diffdash/process/cli-stream"
 import { ConfigurableAIAgent } from "../../src/main/services/configurable-ai-agent"
 import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
-import { GitService } from "../../src/main/services/git"
+import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "../../src/main/services/git-provider"
 import { GitHubProvider } from "../../src/main/services/github"
 import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
@@ -43,7 +43,7 @@ import { ReviewContextService } from "../../src/main/services/review-context"
 import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
 import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewWorktreePool } from "../../src/main/services/review-worktree-pool"
+import { ReviewWorktreePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughService } from "../../src/main/services/walkthrough"
@@ -133,6 +133,11 @@ const debugMissingPrerequisites = () =>
 const createAppLayer = () => {
   const xdgConfigHome = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
   const databasePath = join(app.getPath("userData"), "diffdash.sqlite")
+  const remoteWorktreePoolPath =
+    process.env.DIFFDASH_REMOTE_WORKTREE_POOL_PATH ??
+    join(homedir(), ".diffdash", "remote-worktree-pool")
+  const worktreePoolPath =
+    process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool")
   const configLayer = AppConfig.layer({
     appVersion: app.getVersion(),
     ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
@@ -149,11 +154,8 @@ const createAppLayer = () => {
       : { posthogKey: process.env.VITE_POSTHOG_KEY }),
     settingsPath: join(xdgConfigHome, "diffdash", "settings.json"),
     tempDir: join(app.getPath("temp"), "diffdash"),
-    remoteWorktreePoolPath:
-      process.env.DIFFDASH_REMOTE_WORKTREE_POOL_PATH ??
-      join(homedir(), ".diffdash", "remote-worktree-pool"),
-    worktreePoolPath:
-      process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool"),
+    remoteWorktreePoolPath,
+    worktreePoolPath,
   })
   const configDirectory = join(xdgConfigHome, "diffdash")
   const settingsLayer = AppSettings.layer(join(configDirectory, "settings.json"))
@@ -183,7 +185,7 @@ const createAppLayer = () => {
     Layer.provideMerge(ReviewContextBuilder.layer),
     Layer.provideMerge(ThreadMemoryStore.layer),
     Layer.provideMerge(AgentRunStore.layer),
-    Layer.provideMerge(ReviewWorktreePool.layer),
+    Layer.provideMerge(ReviewWorktreePool.layer({ remoteWorktreePoolPath, worktreePoolPath })),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),

@@ -3,7 +3,7 @@ import { Effect, Either, Layer } from "effect"
 
 import { Repo } from "@diffdash/domain/repository"
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
-import { GitService } from "./git"
+import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { RepositoryLinkError, RepositoryLinker } from "./repository-linker"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"

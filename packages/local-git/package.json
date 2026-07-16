@@ -1,0 +1,29 @@
+{
+  "name": "@diffdash/local-git",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./hosted-review-workspace-pool": "./src/hosted-review-workspace-pool.ts",
+    "./local-git": "./src/local-git.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/git-provider": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
