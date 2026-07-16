@@ -32,7 +32,6 @@ import { DatabaseService } from "@diffdash/persistence/database"
 import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider } from "../../src/main/services/git-provider"
-import { GitHubProvider } from "../../src/main/services/github"
 import { OpenCodeSdkClient } from "../../src/main/services/opencode-sdk-client"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinkError, RepositoryLinker } from "../../src/main/services/repository-linker"
@@ -165,7 +164,7 @@ const createAppLayer = () => {
   const walkthroughLayer = WalkthroughService.layer.pipe(Layer.provideMerge(aiAgentLayer))
   const reviewContextLayer = ReviewContextService.layer.pipe(
     Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(GitHubProvider.layer),
+    Layer.provideMerge(GitProvider.layer),
   )
   const threadStoreLayer = ReviewThreadStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
@@ -188,7 +187,7 @@ const createAppLayer = () => {
     Layer.provideMerge(
       HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
     ),
-    Layer.provideMerge(GitHubProvider.layer),
+    Layer.provideMerge(GitProvider.layer),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
@@ -196,7 +195,7 @@ const createAppLayer = () => {
   const repositoryLinkerLayer = RepositoryLinker.layer.pipe(
     Layer.provideMerge(RepositoryStore.layer),
     Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(GitHubProvider.layer),
+    Layer.provideMerge(GitProvider.layer),
   )
   const updaterLayer = AppUpdater.layer({
     adapter: nativeUpdaterAdapter(),

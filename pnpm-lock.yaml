@@ -198,6 +198,9 @@ importers:
       '@diffdash/git-provider':
         specifier: workspace:*
         version: link:../git-provider
+      '@diffdash/git-provider-github':
+        specifier: workspace:*
+        version: link:../git-provider-github
       '@diffdash/local-git':
         specifier: workspace:*
         version: link:../local-git
@@ -377,6 +380,31 @@ importers:
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain
+      effect:
+        specifier: 'catalog:'
+        version: 3.21.4
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 0.29.0(effect@3.21.4)(vitest@3.2.7)
+      oxlint:
+        specifier: 'catalog:'
+        version: 1.73.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@26.1.0)(@vitest/browser@3.2.7)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.0)(yaml@2.9.0)
+
+  packages/git-provider-github:
+    dependencies:
+      '@diffdash/git-provider':
+        specifier: workspace:*
+        version: link:../git-provider
+      '@diffdash/process':
+        specifier: workspace:*
+        version: link:../process
       effect:
         specifier: 'catalog:'
         version: 3.21.4

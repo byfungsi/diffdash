@@ -69,6 +69,23 @@ test("relative imports stay inside their package", () => {
   }
 })
 
+test("GitHub provider remains an isolated leaf integration", () => {
+  const github = manifests.find(({ manifest }) => manifest.name === "@diffdash/git-provider-github")
+  assert.ok(github, "GitHub provider package must exist")
+  assert.deepEqual(Object.keys(github.manifest.dependencies).toSorted(), [
+    "@diffdash/git-provider",
+    "@diffdash/process",
+    "effect",
+  ])
+  const source = sourceFiles(join(github.directory, "src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(
+    source,
+    /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|persistence|settings))(?:\/[^"']*)?\1/,
+  )
+})
+
 test("browser packages bundle without platform dependencies", async () => {
   await Promise.all(
     [

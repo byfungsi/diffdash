@@ -32,6 +32,9 @@
     "@diffdash/git-provider#build": {
       "outputs": []
     },
+    "@diffdash/git-provider-github#build": {
+      "outputs": []
+    },
     "@diffdash/local-git#build": {
       "outputs": []
     },

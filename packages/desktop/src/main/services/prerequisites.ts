@@ -24,8 +24,10 @@ import {
 import { AppConfig } from "./app-config"
 import { CliService, type CliRunner } from "@diffdash/process/cli"
 import { resolveExecutableInPath } from "@diffdash/process/executable"
+import { inspectGitHubCli } from "@diffdash/git-provider-github"
 
 export { resolveExecutableInPath } from "@diffdash/process/executable"
+export { parseGitHubCliVersion } from "@diffdash/git-provider-github"
 
 /** A typed failure from installing the DiffDash CLI into PATH. */
 export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
@@ -52,13 +54,8 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
       const config = yield* AppConfig
       const get = Effect.fn("Prerequisites.get")(function* () {
         refreshAppImageCliLaunchers(config.diffDashCliPath, config.appImagePath)
-        const [gitInstalled, githubCli, ghAuthenticated, installedCodingAgents] = yield* Effect.all(
-          [
-            commandAvailable(cli, "git"),
-            githubCliCheck(cli),
-            ghAuthenticatedCheck(cli),
-            installedCodingAgentNames(cli),
-          ],
+        const [gitInstalled, githubCli, installedCodingAgents] = yield* Effect.all(
+          [commandAvailable(cli, "git"), inspectGitHubCli(cli), installedCodingAgentNames(cli)],
           { concurrency: "unbounded" },
         )
         const diffDashCliInPath = resolveExecutableInPath("diffdash", {
@@ -73,7 +70,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
           diffDashCliInPath: diffDashCliInPath !== null,
           diffDashCliPath,
           gitInstalled,
-          ghAuthenticated,
+          ghAuthenticated: githubCli.authenticated,
           ghInstalled: githubCli.installed,
           ghSearchRepositoriesAvailable: githubCli.searchRepositoriesAvailable,
           ghSupported: githubCli.supported,
@@ -97,64 +94,6 @@ const CODING_AGENT_NAMES: readonly CodingAgentName[] = ["codex", "claude", "open
 
 const commandAvailable = (cli: CliRunner, command: string) =>
   cli.run(command, ["--version"], { timeoutMs: 5_000 }).pipe(
-    Effect.as(true),
-    Effect.catchAll(() => Effect.succeed(false)),
-  )
-
-const githubCliCheck = (cli: CliRunner) =>
-  cli.run("gh", ["--version"], { timeoutMs: 5_000 }).pipe(
-    Effect.flatMap((result) => {
-      const version = parseGitHubCliVersion(result.stdout)
-      return cli.run("gh", ["search", "repos", "--help"], { timeoutMs: 5_000 }).pipe(
-        Effect.as(true),
-        Effect.catchAll(() => Effect.succeed(false)),
-        Effect.map((searchRepositoriesAvailable) => ({
-          installed: true,
-          searchRepositoriesAvailable,
-          supported:
-            version !== null &&
-            isVersionAtLeast(version, MINIMUM_GITHUB_CLI_VERSION) &&
-            searchRepositoriesAvailable,
-          version,
-        })),
-      )
-    }),
-    Effect.catchAll(() =>
-      Effect.succeed({
-        installed: false,
-        searchRepositoriesAvailable: false,
-        supported: false,
-        version: null,
-      }),
-    ),
-  )
-
-const MINIMUM_GITHUB_CLI_VERSION = [2, 7, 0] as const
-
-/** Parses the semantic version reported by `gh --version`. */
-export const parseGitHubCliVersion = (output: string) => {
-  const match = /\bgh version v?(\d+)\.(\d+)\.(\d+)\b/i.exec(output)
-  if (match === null) return null
-
-  const major = Number(match[1])
-  const minor = Number(match[2])
-  const patch = Number(match[3])
-  if (![major, minor, patch].every(Number.isSafeInteger)) return null
-
-  return `${major}.${minor}.${patch}`
-}
-
-const isVersionAtLeast = (version: string, minimum: readonly [number, number, number]) => {
-  const parts = version.split(".").map(Number)
-  for (const [index, minimumPart] of minimum.entries()) {
-    const part = parts[index] ?? 0
-    if (part !== minimumPart) return part > minimumPart
-  }
-  return true
-}
-
-const ghAuthenticatedCheck = (cli: CliRunner) =>
-  cli.run("gh", ["auth", "status", "--hostname", "github.com"], { timeoutMs: 10_000 }).pipe(
     Effect.as(true),
     Effect.catchAll(() => Effect.succeed(false)),
   )

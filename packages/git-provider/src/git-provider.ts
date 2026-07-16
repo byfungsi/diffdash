@@ -13,6 +13,26 @@ import {
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 
+export {
+  BranchRevision,
+  GitProviderCapabilities,
+  GitProviderId,
+  GitProviderKind,
+  HostedRepository,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewDetail,
+  HostedReviewDiff,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  HostedReviewSummary,
+  ProviderActor,
+  RepositoryNamespace,
+  ReviewChangedFile,
+  ReviewCommit,
+  ReviewDecision,
+} from "@diffdash/domain/git-provider"
+
 /** Human-readable provider vocabulary used by provider-neutral UI. */
 export class GitProviderTerminology extends Schema.Class<GitProviderTerminology>(
   "GitProviderTerminology",
