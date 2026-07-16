@@ -7,6 +7,7 @@ import { sendProtocolEvent } from "./ipc/transport"
 
 /** Starts desktop-owned update checks and publishes updater state to renderer windows. */
 export const startUpdaterLifecycle = (runtime: ApplicationRuntime) => {
+  if (process.env.DIFFDASH_E2E_DISABLE_UPDATES === "1") return
   void runtime.runPromise(
     Effect.gen(function* () {
       const updater = yield* AppUpdater

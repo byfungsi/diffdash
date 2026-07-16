@@ -20,7 +20,8 @@ cannot be made reliable in local automation.
 - Unit: parsers, schemas, policies, stores, service orchestration, and adapters.
 - Browser: composed renderer behavior in real Chromium with a deterministic platform fake.
 - Electron E2E: compiled main, preload, renderer, IPC, SQLite, CLI fakes, Git fixtures, and restart.
-- Packaged E2E: unsigned electron-builder output, ASAR, resources, native modules, and packaged paths.
+- Packaged E2E: unsigned electron-builder output, ASAR, resources, native modules, packaged paths,
+  and final provider composition.
 - Operational: signing, notarization, installers, draft publication, stable promotion, and public
   download/update checks.
 
@@ -34,7 +35,7 @@ cannot be made reliable in local automation.
 | Unit/service | `pnpm test` | Effect services, SQLite, Git/CLI/providers, and shared logic |
 | Browser | `pnpm test:browser` | Composed renderer interaction and state transitions |
 | Electron | `pnpm test:e2e` | Full shell, IPC, CLI navigation, worktrees, and restart |
-| Packaged Electron | `pnpm test:e2e:packaged` | ASAR, updater/CLI resources, native SQLite, preload isolation, and restart |
+| Packaged Electron | `pnpm test:e2e:packaged` | ASAR, updater/CLI resources, native SQLite, provider composition, preload isolation, and restart |
 | Download worker | `pnpm --filter @diffdash/download-worker test` | Stable release routing and artifact selection |
 | Full test gate | `pnpm test:all` | Unit, browser, Electron, and worker suites |
 | Landing build | `pnpm --filter @diffdash/web build` | Landing TypeScript and production bundle |
@@ -99,6 +100,9 @@ The following requirement IDs are covered by
 | `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
 | `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon in addition to ASAR, updater, CLI, and native SQLite resources. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
+| `PACKAGE-PROVIDER-001` | `[T]` | The final packaged app discovers fixture Git and agent registrations, routes a hosted review through the host composition, and executes the selected fixture agent. |
+| `PACKAGE-PROVIDER-002` | `[T]` | Fake Git/CLI binaries and local provider fixtures prove packaged workspace bootstrap without credentials or network access. |
+| `PERSIST-PACKAGED-002` | `[T]` | Fixture provider settings, hosted bookmark identity, and completed review response survive a packaged restart. |
 
 ## Classified Product Surface
 
