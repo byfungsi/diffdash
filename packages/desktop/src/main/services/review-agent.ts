@@ -5,6 +5,7 @@ import {
   UpsertThreadMemoryInput,
 } from "@diffdash/domain/agent-run"
 import { type AISettings, autoQualityProviderModels } from "@diffdash/domain/ai-settings"
+import { CODEX_AUTO_MODELS } from "@diffdash/agent-provider-codex"
 import {
   AgentRunId,
   type ReviewAgentProgressStage,
@@ -383,7 +384,7 @@ const modelForProvider = (settings: AISettings, provider: ReviewAgentProviderId)
   }
   const models = autoQualityProviderModels(settings.autoQuality)
   if (provider === "claude") return models.claude
-  if (provider === "codex") return models.codex
+  if (provider === "codex") return CODEX_AUTO_MODELS[settings.autoQuality]
   return models.opencodeCodex
 }
 

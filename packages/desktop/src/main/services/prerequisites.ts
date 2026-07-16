@@ -23,6 +23,7 @@ import {
   ProviderDiagnostic,
   SetupRequirement,
 } from "@diffdash/protocol/prerequisites"
+import { probeCodexCapability } from "@diffdash/agent-provider-codex"
 import { AppConfig } from "./app-config"
 import { CliService, type CliRunner } from "@diffdash/process/cli"
 import { resolveExecutableInPath } from "@diffdash/process/executable"
@@ -132,7 +133,13 @@ const commandAvailable = (cli: CliRunner, command: string) =>
 const installedCodingAgentNames = (cli: CliRunner) =>
   Effect.all(
     CODING_AGENT_NAMES.map((agent) =>
-      commandAvailable(cli, agent).pipe(Effect.map((installed) => (installed ? agent : null))),
+      (agent === "codex"
+        ? probeCodexCapability(cli, "walkthrough").pipe(
+            Effect.map(({ _tag: tag }) => tag === "AgentCapabilityReady"),
+            Effect.catchAll(() => Effect.succeed(false)),
+          )
+        : commandAvailable(cli, agent)
+      ).pipe(Effect.map((installed) => (installed ? agent : null))),
     ),
     { concurrency: "unbounded" },
   ).pipe(Effect.map((agents) => agents.filter(isNonNull)))

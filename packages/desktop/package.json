@@ -34,6 +34,8 @@
     "native:node": "node scripts/rebuild-better-sqlite3.mjs"
   },
   "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/agent-provider-codex": "workspace:*",
     "@diffdash/app": "workspace:*",
     "@diffdash/domain": "workspace:*",
     "@diffdash/git-provider": "workspace:*",

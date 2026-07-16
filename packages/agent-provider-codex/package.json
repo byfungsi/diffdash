@@ -1,0 +1,27 @@
+{
+  "name": "@diffdash/agent-provider-codex",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/codex.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

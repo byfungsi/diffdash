@@ -8,6 +8,7 @@ import {
 import type { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
 import { claudeReviewAgentLayer } from "./claude-review-agent"
+import { CliService } from "@diffdash/process/cli"
 import { CliStreamService } from "@diffdash/process/cli-stream"
 import { codexReviewAgentLayer } from "./codex-review-agent"
 import { openCodeReviewAgentLayer } from "./opencode-review-agent"
@@ -43,10 +44,12 @@ export class ReviewAgentProviderRegistry extends Context.Tag(
     ReviewAgentProviderRegistry,
     Effect.gen(function* () {
       const sdk = yield* OpenCodeSdkClient
+      const cliRunner = yield* CliService
       const cli = yield* CliStreamService
       const normalizer = yield* AgentArtifactNormalizer
       const shared = Layer.mergeAll(
         Layer.succeed(OpenCodeSdkClient, sdk),
+        Layer.succeed(CliService, cliRunner),
         Layer.succeed(CliStreamService, cli),
         Layer.succeed(AgentArtifactNormalizer, normalizer),
       )

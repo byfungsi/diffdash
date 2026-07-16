@@ -8,6 +8,7 @@ import {
   DEFAULT_AI_SETTINGS,
   type AISettings,
 } from "@diffdash/domain/ai-settings"
+import { CODEX_AUTO_MODELS, CODEX_DEFAULT_MODEL } from "@diffdash/agent-provider-codex"
 import { AIAgent, type AIAgentGenerateOptions, type AIProviderAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
@@ -33,7 +34,9 @@ export const ConfigurableAIAgent = {
         provider: BuiltInAIProvider,
         settings: AISettings,
       ): AIProviderAgent => {
-        const model = settings.models[provider] ?? DEFAULT_BUILT_IN_MODELS[provider]
+        const model =
+          settings.models[provider] ??
+          (provider === "codex" ? CODEX_DEFAULT_MODEL : DEFAULT_BUILT_IN_MODELS[provider])
         if (provider === "claude") return makeClaudeAgent(cli, model)
         if (provider === "opencode") {
           return makeOpenCodeAgent(cli, model, appConfig.tempDir)
@@ -59,7 +62,7 @@ export const ConfigurableAIAgent = {
         if (agent === undefined)
           return makeCodexAgent(
             cli,
-            settings.models.codex ?? DEFAULT_BUILT_IN_MODELS.codex,
+            settings.models.codex ?? CODEX_DEFAULT_MODEL,
             appConfig.tempDir,
           ).generateText(prompt, options)
 
@@ -75,7 +78,7 @@ export const ConfigurableAIAgent = {
         const models = autoQualityProviderModels(settings.autoQuality)
         return [
           makeClaudeAgent(cli, models.claude),
-          makeCodexAgent(cli, models.codex, appConfig.tempDir),
+          makeCodexAgent(cli, CODEX_AUTO_MODELS[settings.autoQuality], appConfig.tempDir),
           makeOpenCodeAgent(cli, models.opencodeClaude, appConfig.tempDir),
           makeOpenCodeAgent(cli, models.opencodeCodex, appConfig.tempDir),
         ]

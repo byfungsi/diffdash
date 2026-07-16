@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Stream } from "effect"
 
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
+import { CliError, CliService } from "@diffdash/process/cli"
 import { CliStreamError, CliStreamService } from "@diffdash/process/cli-stream"
 import { OpenCodeSdkClient } from "./opencode-sdk-client"
 import {
@@ -34,6 +35,31 @@ const layer = ReviewAgentProviderRegistry.layer.pipe(
         OpenCodeSdkClient.of({
           isAvailable: Effect.succeed(false),
           runTurn: () => Effect.die(new Error("OpenCode turn is not used")),
+        }),
+      ),
+      Layer.succeed(
+        CliService,
+        CliService.of({
+          run: (command, args) =>
+            command === "codex"
+              ? Effect.succeed({
+                  command,
+                  args,
+                  cwd: null,
+                  exitCode: 0,
+                  stdout: "codex 0.1.0",
+                  stderr: "",
+                })
+              : Effect.fail(
+                  CliError.make({
+                    command,
+                    args: [...args],
+                    cwd: null,
+                    exitCode: 1,
+                    stderr: `${command} unavailable`,
+                    cause: null,
+                  }),
+                ),
         }),
       ),
       Layer.succeed(

@@ -63,33 +63,6 @@ describe("review agent permission configuration", () => {
     expect(result.config.cliArgs).toContain("--strict-mcp-config")
   })
 
-  it("FUN-75 AC: Codex uses read-only sandboxing with noninteractive denial", () => {
-    const result = resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
-      provider: "codex",
-      readOnlySandbox: true,
-      nonInteractiveApprovalPolicy: true,
-    })
-
-    expect(result.enabled).toBe(true)
-    if (!result.enabled || result.config.provider !== "codex") return
-    expect(result.config.cliArgs).toEqual([
-      "--ask-for-approval",
-      "never",
-      "--sandbox",
-      "read-only",
-      "exec",
-      "--json",
-      "--ephemeral",
-      "--ignore-user-config",
-      "--ignore-rules",
-      "--strict-config",
-    ])
-    expect(result.config.cliArgs.indexOf("--ask-for-approval")).toBeLessThan(
-      result.config.cliArgs.indexOf("exec"),
-    )
-    expect(result.config.cliArgs).not.toContain("--dangerously-bypass-approvals-and-sandbox")
-  })
-
   it("FUN-75 AC: fails closed when any provider-native control is insufficient", () => {
     const results = [
       resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
@@ -100,11 +73,6 @@ describe("review agent permission configuration", () => {
         provider: "claude",
         exactToolAllowlist: false,
         nonInteractivePermissionMode: true,
-      }),
-      resolveReviewAgentPermissionConfig(THREAD_MODE_REVIEW_AGENT_PERMISSIONS, {
-        provider: "codex",
-        readOnlySandbox: true,
-        nonInteractiveApprovalPolicy: false,
       }),
     ]
 

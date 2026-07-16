@@ -94,11 +94,6 @@ export type ReviewAgentPermissionCapabilities =
       readonly exactToolAllowlist: boolean
       readonly nonInteractivePermissionMode: boolean
     }
-  | {
-      readonly provider: "codex"
-      readonly readOnlySandbox: boolean
-      readonly nonInteractiveApprovalPolicy: boolean
-    }
 
 /** Provider-native OpenCode SDK configuration for a read-only thread turn. */
 export interface OpenCodeReviewPermissionConfig {
@@ -117,17 +112,10 @@ export interface ClaudeReviewPermissionConfig {
   readonly deniedTools: readonly string[]
 }
 
-/** Provider-native Codex CLI arguments for a read-only, noninteractive thread turn. */
-export interface CodexReviewPermissionConfig {
-  readonly provider: "codex"
-  readonly cliArgs: readonly string[]
-}
-
 /** Concrete provider configuration that enforces the provider-neutral thread policy. */
 export type ReviewAgentPermissionConfig =
   | OpenCodeReviewPermissionConfig
   | ClaudeReviewPermissionConfig
-  | CodexReviewPermissionConfig
 
 /** Fail-closed result of translating the thread policy into provider-native controls. */
 export type ReviewAgentPermissionCapabilityResult =
@@ -214,28 +202,6 @@ export const resolveReviewAgentPermissionConfig = (
         ],
       })
     }
-    case "codex":
-      if (!capabilities.readOnlySandbox || !capabilities.nonInteractiveApprovalPolicy) {
-        return disabled(
-          "codex",
-          "Codex read-only sandbox and noninteractive approval controls are required",
-        )
-      }
-      return enabled(permissions, {
-        provider: "codex",
-        cliArgs: [
-          "--ask-for-approval",
-          "never",
-          "--sandbox",
-          "read-only",
-          "exec",
-          "--json",
-          "--ephemeral",
-          "--ignore-user-config",
-          "--ignore-rules",
-          "--strict-config",
-        ],
-      })
   }
 }
 

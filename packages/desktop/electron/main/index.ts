@@ -227,6 +227,7 @@ const createAppLayer = () => {
   const artifactStoreLayer = AgentRunArtifactStore.layer
   const providerRegistryLayer = ReviewAgentProviderRegistry.layer.pipe(
     Layer.provideMerge(OpenCodeSdkClient.layer),
+    Layer.provideMerge(cliLayer),
     Layer.provideMerge(CliStreamService.layer),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
   )
