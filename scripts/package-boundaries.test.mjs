@@ -117,10 +117,42 @@ test("only desktop composition imports a concrete Git provider", () => {
   }
 })
 
+test("agent providers remain isolated leaf integrations", () => {
+  const sdk = manifests.find(({ manifest }) => manifest.name === "@diffdash/agent-provider")
+  assert.ok(sdk, "@diffdash/agent-provider must exist")
+  assert.deepEqual(Object.keys(sdk.manifest.dependencies), ["effect"])
+
+  const providers = manifests.filter(({ manifest }) =>
+    manifest.name.startsWith("@diffdash/agent-provider-"),
+  )
+  for (const provider of providers) {
+    assert.ok(
+      Object.keys(provider.manifest.dependencies).includes("@diffdash/agent-provider"),
+      `${provider.manifest.name} must depend on the agent provider SDK`,
+    )
+    const source = sourceFiles(join(provider.directory, "src"))
+      .map((file) => readFileSync(file, "utf8"))
+      .join("\n")
+    assert.doesNotMatch(
+      source,
+      /(?:from\s*|import\s*\()(["'])(?:electron|react|better-sqlite3|@diffdash\/(?:app|desktop|domain|git-provider|persistence|protocol|settings)|@diffdash\/agent-provider-[^"']+)(?:\/[^"']*)?\1/,
+      `${provider.manifest.name} crosses the agent provider leaf boundary`,
+    )
+  }
+})
+
+test("agent provider SDK and registry import no concrete provider", () => {
+  const sdkSource = sourceFiles(join(root, "packages/agent-provider/src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(sdkSource, /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/)
+})
+
 test("browser packages bundle without platform dependencies", async () => {
   await Promise.all(
     [
       "packages/domain/src/repository.ts",
+      "packages/agent-provider/src/registry.ts",
       "packages/git-provider/src/registry.ts",
       "packages/protocol/src/api.ts",
       "packages/app/src/index.ts",

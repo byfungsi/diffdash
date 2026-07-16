@@ -56,3 +56,36 @@ v1 manifest, it removes the old repository cache, discards the v1 slots, and wri
 manifest before preparing the requested review. The source checkout and the SQLite database are not
 modified. This invalidation is intentional because old slots cannot be assigned a trustworthy
 provider instance; repositories are cloned or copied again on demand at the exact review revision.
+
+## Agent Providers
+
+Agent integrations are leaf packages built against `@diffdash/agent-provider`. The SDK owns open
+branded provider, model, session, revision, and MCP tool IDs; static manifests; capability-specific
+probes; non-mutating execution policies; usage and artifact candidates; scoped MCP access; and the
+provider-neutral registry. A provider registration may implement walkthrough generation,
+review-thread execution, or both. Availability and enforceable policy status are probed separately
+for each implemented capability.
+
+An agent provider package may depend only on `@diffdash/agent-provider`, `@diffdash/process`, Effect,
+and its official provider integration dependency. It must not import Electron, React, domain or
+protocol models, settings or persistence implementations, a concrete MCP server, host orchestration,
+the registry implementation as a host service, or another concrete provider. Only the future desktop
+composition root may import concrete agent provider packages.
+
+Each package contributes exactly one `AgentProviderRegistration`. Its manifest owns display metadata,
+models, defaults, runtime/version requirements, capability-specific auto candidacy, and session
+support. Its optional capabilities own provider-native probing, policy translation, execution,
+protocol parsing, and usage normalization. Provider output remains a candidate: the host is still
+responsible for bounding, allowlisting, redacting, and persisting artifacts.
+
+Concrete packages must invoke the relevant exports from `@diffdash/agent-provider/testing`:
+`agentManifestConformance`, `walkthroughConformance`, `reviewConformance`,
+`agentSecurityConformance`, and `agentCancellationConformance`. Host registry tests use
+`agentRegistryConformance`. These suites cover manifest coherence, independent probes, structured
+responses, non-mutation, MCP tool and token isolation, artifact restrictions, usage/session behavior,
+cleanup, duplicate IDs, separate automatic routes, and explicit fail-closed selection.
+
+Adding a provider requires one leaf package, its conformance fixtures, one registration in desktop
+composition, lockfile changes, and documentation. It must not require provider branches in the
+renderer, a settings schema shape change, a persistence constraint, orchestration changes, registry
+changes, or edits to an existing provider.

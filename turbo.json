@@ -29,6 +29,9 @@
     "@diffdash/domain#build": {
       "outputs": []
     },
+    "@diffdash/agent-provider#build": {
+      "outputs": []
+    },
     "@diffdash/git-provider#build": {
       "outputs": []
     },

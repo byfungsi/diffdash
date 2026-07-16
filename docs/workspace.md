@@ -43,6 +43,11 @@ unpacked for Electron.
 errors, and reusable provider conformance suite. Concrete providers are leaf packages imported only
 by desktop composition; contributor dependency rules are documented in `docs/providers.md`.
 
+`@diffdash/agent-provider` defines open agent identities, manifests, capability-specific probes and
+policies, walkthrough and review-thread contracts, scoped MCP access, a provider-neutral registry,
+and reusable conformance suites. It is browser-safe and imports no concrete provider. Concrete agent
+providers are leaf packages composed once by desktop; contribution rules are in `docs/providers.md`.
+
 ## Task Policy
 
 Turbo defines shared `build`, `typecheck`, `test`, `lint`, and `dev` tasks. Build outputs are cached;
