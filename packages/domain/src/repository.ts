@@ -1,9 +1,19 @@
 import { Schema } from "effect"
 
-/** Supported source providers for repositories tracked by DiffDash. */
-export const RepoProvider = Schema.Literal("github", "local")
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedRepositorySource,
+  LocalRepositorySource,
+  RepositoryNamespace,
+  type RepositorySource,
+} from "./git-provider"
 
-/** Supported source providers for repositories tracked by DiffDash. */
+/** Persisted provider instance ID, or the reserved legacy local-source marker. */
+export const RepoProvider = Schema.String.pipe(Schema.minLength(1))
+
+/** Persisted provider instance ID, or the reserved legacy local-source marker. */
 export type RepoProvider = typeof RepoProvider.Type
 
 /** A local or remote-only repository saved in the DiffDash workspace. */
@@ -72,3 +82,17 @@ export interface ProviderRepositoryReference {
   readonly owner: string
   readonly name: string
 }
+
+/** Interprets the compatibility persistence shape as a local or hosted source. */
+export const repositorySource = (
+  repo: Pick<Repo, "provider" | "owner" | "name">,
+): RepositorySource =>
+  repo.provider === "local"
+    ? LocalRepositorySource.make()
+    : HostedRepositorySource.make({
+        locator: HostedRepositoryLocator.make({
+          providerId: GitProviderId.make(repo.provider),
+          namespace: RepositoryNamespace.make(repo.owner),
+          name: HostedRepositoryName.make(repo.name),
+        }),
+      })

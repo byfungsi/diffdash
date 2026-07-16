@@ -1,5 +1,15 @@
 import { Schema } from "effect"
 
+import {
+  GitProviderId,
+  HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedReviewLocator,
+  HostedReviewNumber,
+  makeHostedReviewKey,
+  RepositoryNamespace,
+} from "./git-provider"
+
 /** Canonical identity for one repository review across revisions. */
 export const ReviewKey = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewKey"))
 
@@ -42,7 +52,19 @@ export const makePullRequestReviewKey = (
   owner: string,
   name: string,
   number: number,
-) => ReviewKey.make(`${provider}:${owner}/${name}#${number}`)
+) =>
+  ReviewKey.make(
+    makeHostedReviewKey(
+      HostedReviewLocator.make({
+        repository: HostedRepositoryLocator.make({
+          providerId: GitProviderId.make(provider),
+          namespace: RepositoryNamespace.make(owner),
+          name: HostedRepositoryName.make(name),
+        }),
+        number: HostedReviewNumber.make(number),
+      }),
+    ),
+  )
 
 /** Creates a deterministic identity for a changed file, including rename metadata. */
 export const makeReviewFileId = (path: string, oldPath: string | null) =>

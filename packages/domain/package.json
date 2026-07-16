@@ -11,6 +11,7 @@
     "./diff-file-filters": "./src/diff-file-filters.ts",
     "./diff-parser": "./src/diff-parser.ts",
     "./large-diff-policy": "./src/large-diff-policy.ts",
+    "./git-provider": "./src/git-provider.ts",
     "./local-review": "./src/local-review.ts",
     "./pull-request": "./src/pull-request.ts",
     "./repository": "./src/repository.ts",

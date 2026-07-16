@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { repositorySource } from "@diffdash/domain/repository"
+import { HostedRepositorySource, LocalRepositorySource } from "@diffdash/domain/git-provider"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 
@@ -109,6 +111,43 @@ describe("RepositoryStore", () => {
         expect(linked.createdAt).toBe(hosted.createdAt)
         expect(linked.localPath).toBe("/tmp/diffdash")
         expect(linked.isFavorite).toBe(true)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("isolates nested repositories across configured provider instances", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const github = yield* store.upsertRepository({
+          localPath: null,
+          name: "service",
+          owner: "platform/backend",
+          provider: "github",
+          remoteUrl: "https://github.com/platform/backend/service",
+        })
+        const enterprise = yield* store.upsertRepository({
+          localPath: null,
+          name: "service",
+          owner: "platform/backend",
+          provider: "github-enterprise",
+          remoteUrl: "https://git.example.com/platform/backend/service",
+        })
+        const legacyLocal = yield* store.upsertRepository({
+          localPath: "/tmp/service",
+          name: "service-local-id",
+          owner: "local",
+          provider: "local",
+          remoteUrl: "",
+        })
+
+        expect(github.id).toBe("github:platform/backend/service")
+        expect(enterprise.id).toBe("github-enterprise:platform/backend/service")
+        expect(repositorySource(github)).toBeInstanceOf(HostedRepositorySource)
+        expect(repositorySource(legacyLocal)).toBeInstanceOf(LocalRepositorySource)
+        expect(yield* store.list()).toHaveLength(3)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

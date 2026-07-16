@@ -70,33 +70,35 @@ test("relative imports stay inside their package", () => {
 })
 
 test("browser packages bundle without platform dependencies", async () => {
-  for (const entryPoint of [
-    "packages/domain/src/repository.ts",
-    "packages/protocol/src/api.ts",
-    "packages/app/src/index.ts",
-  ]) {
-    await build({
-      absWorkingDir: root,
-      bundle: true,
-      entryPoints: [entryPoint],
-      logLevel: "silent",
-      platform: "browser",
-      plugins: [
-        {
-          name: "browser-boundary",
-          setup(buildApi) {
-            buildApi.onResolve({ filter: /^[^.]/ }, (args) => {
-              const path = args.path.replace(/\?.*$/, "")
-              assert.ok(!forbiddenBrowserImports.has(path), `${entryPoint} imports ${path}`)
-              if (!path.startsWith("@diffdash/")) return { external: true }
-              return undefined
-            })
+  await Promise.all(
+    [
+      "packages/domain/src/repository.ts",
+      "packages/protocol/src/api.ts",
+      "packages/app/src/index.ts",
+    ].map((entryPoint) =>
+      build({
+        absWorkingDir: root,
+        bundle: true,
+        entryPoints: [entryPoint],
+        logLevel: "silent",
+        platform: "browser",
+        plugins: [
+          {
+            name: "browser-boundary",
+            setup(buildApi) {
+              buildApi.onResolve({ filter: /^[^.]/ }, (args) => {
+                const path = args.path.replace(/\?.*$/, "")
+                assert.ok(!forbiddenBrowserImports.has(path), `${entryPoint} imports ${path}`)
+                if (!path.startsWith("@diffdash/")) return { external: true }
+                return undefined
+              })
+            },
           },
-        },
-      ],
-      write: false,
-    })
-  }
+        ],
+        write: false,
+      }),
+    ),
+  )
 })
 
 test("the workspace resolves one Effect runtime", () => {
