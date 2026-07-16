@@ -17,7 +17,7 @@ export const AnalyticsEvent = Schema.Union(
     event: Schema.Literal("walkthrough_generated"),
     reviewType: ReviewType,
     regenerated: Schema.Boolean,
-    provider: Schema.Literal("auto", "codex", "claude", "opencode"),
+    provider: Schema.String.pipe(Schema.minLength(1)),
   }),
   Schema.Struct({ event: Schema.Literal("review_thread_created"), reviewType: ReviewType }),
   Schema.Struct({ event: Schema.Literal("review_agent_completed"), reviewType: ReviewType }),

@@ -167,7 +167,12 @@ export const claudeReviewAgentLayer = Layer.effect(
         Effect.catchAll(() => Effect.succeed(false)),
       )
 
-    return ReviewAgentProvider.of({ id: providerId, isAvailable, runThreadTurn })
+    return ReviewAgentProvider.of({
+      id: providerId,
+      sessionMode: "resume",
+      isAvailable,
+      runThreadTurn,
+    })
   }),
 )
 

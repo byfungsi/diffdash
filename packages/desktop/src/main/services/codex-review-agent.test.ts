@@ -108,10 +108,14 @@ describe("Codex review agent", () => {
     let outputSchema = ""
     return Effect.gen(function* () {
       const provider = yield* ReviewAgentProvider
-      const result = yield* provider.runThreadTurn(baseInput, execution())
+      const result = yield* provider.runThreadTurn(
+        baseInput,
+        execution(ReviewAgentProviderRunId.make("prior-codex-thread")),
+      )
 
       expect(provider.id).toBe("codex")
-      expect(result.providerRunId).toBe("codex-thread-sanitized-74")
+      expect(provider.sessionMode).toBe("none")
+      expect(result.providerRunId).toBeNull()
       expect(result.response.bodyMarkdown).toBe("The changed hunk is correct.")
       expect(result.response.threadSummaryUpdate).toBeUndefined()
       expect(result.response.referencedAnchors).toBeUndefined()
@@ -128,6 +132,8 @@ describe("Codex review agent", () => {
       expect(call?.args).toContain("exec")
       expect(call?.args).toContain("--json")
       expect(call?.args).toContain("--ephemeral")
+      expect(call?.args).not.toContain("resume")
+      expect(call?.args).not.toContain("prior-codex-thread")
       expect(call?.args).toContain("read-only")
       expect(call?.args).toContain("--output-schema")
       expect(call?.args).toContain('mcp_servers.diffdash.url="http://127.0.0.1:9000/mcp"')

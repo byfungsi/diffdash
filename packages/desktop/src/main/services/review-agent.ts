@@ -4,7 +4,7 @@ import {
   ThreadMemorySummaryAlgorithm,
   UpsertThreadMemoryInput,
 } from "@diffdash/domain/agent-run"
-import { type AISettings, autoModelProviderModels } from "@diffdash/domain/ai-settings"
+import { type AISettings, autoQualityProviderModels } from "@diffdash/domain/ai-settings"
 import {
   AgentRunId,
   type ReviewAgentProgressStage,
@@ -137,15 +137,18 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                   validateReviewSnapshot(details, input.snapshot)
                   const latestUserMessage = requireUnansweredUserMessage(details.messages)
                   const settings = yield* settingsStore.get
-                  const provider = yield* providers.resolve(settings.provider)
+                  const provider = yield* providers.resolve(settings.routes.reviewThread)
                   const model = modelForProvider(settings, provider.id)
                   const priorRuns = yield* runs.listForThread(input.threadId)
-                  const providerRunId = priorRuns.find(
-                    (run) =>
-                      run.provider === provider.id &&
-                      run.status === "completed" &&
-                      run.providerRunId !== null,
-                  )?.providerRunId
+                  const providerRunId =
+                    provider.sessionMode === "resume"
+                      ? priorRuns.find(
+                          (run) =>
+                            run.provider === provider.id &&
+                            run.status === "completed" &&
+                            run.providerRunId !== null,
+                        )?.providerRunId
+                      : undefined
                   const memory = yield* memories.get(input.threadId)
                   const memoryWindow = selectThreadMemoryWindow({
                     threadId: input.threadId,
@@ -373,8 +376,12 @@ const loadSelectedArtifacts = (
   )
 
 const modelForProvider = (settings: AISettings, provider: ReviewAgentProviderId) => {
-  if (settings.provider !== "auto") return settings.models[provider]
-  const models = autoModelProviderModels(settings.models.auto)
+  if (settings.routes.reviewThread !== "auto") {
+    const model = settings.models[provider]
+    if (model === undefined) throw new Error(`No model is configured for provider: ${provider}`)
+    return model
+  }
+  const models = autoQualityProviderModels(settings.autoQuality)
   if (provider === "claude") return models.claude
   if (provider === "codex") return models.codex
   return models.opencodeCodex

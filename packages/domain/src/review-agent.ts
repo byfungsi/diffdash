@@ -27,10 +27,10 @@ export const ReviewAgentProviderRunId = Schema.String.pipe(
 /** Provider-owned identity for an agent run or session. */
 export type ReviewAgentProviderRunId = typeof ReviewAgentProviderRunId.Type
 
-/** Concrete AI providers supported by local review threads. */
-export const ReviewAgentProviderId = Schema.Literal("opencode", "codex", "claude")
+/** Open identity of the provider that produced a review run or artifact. */
+export const ReviewAgentProviderId = Schema.String.pipe(Schema.minLength(1))
 
-/** Concrete AI providers supported by local review threads. */
+/** Open identity of the provider that produced a review run or artifact. */
 export type ReviewAgentProviderId = typeof ReviewAgentProviderId.Type
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */

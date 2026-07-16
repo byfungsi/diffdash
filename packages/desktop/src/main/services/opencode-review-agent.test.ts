@@ -105,6 +105,7 @@ describe("OpenCode review agent", () => {
       const provider = yield* ReviewAgentProvider
       const result = yield* provider.runThreadTurn(baseInput, execution(priorSession))
 
+      expect(provider.sessionMode).toBe("resume")
       expect(result.providerRunId).toBe("opencode-session-73")
       expect(result.response.bodyMarkdown).toBe("The hunk is correct.")
       expect(result.response.threadSummaryUpdate).toBeUndefined()

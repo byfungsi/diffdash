@@ -110,6 +110,7 @@ describe("Claude review agent", () => {
       const result = yield* provider.runThreadTurn(baseInput, execution(priorRunId))
 
       expect(provider.id).toBe("claude")
+      expect(provider.sessionMode).toBe("resume")
       expect(result.providerRunId).toBe("claude-session-sanitized-78")
       expect(result.response.bodyMarkdown).toContain("preserves the expected behavior")
       expect(result.response.threadSummaryUpdate).toBeUndefined()

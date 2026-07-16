@@ -854,7 +854,9 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(calls.updateSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "claude" }),
+        expect.objectContaining({
+          routes: expect.objectContaining({ walkthrough: "claude" }),
+        }),
       )
       const autoButton = [
         ...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
@@ -1588,7 +1590,9 @@ describe("App browser interactions", () => {
 
     await vi.waitFor(() => {
       expect(calls.updateSettings).toHaveBeenLastCalledWith(
-        expect.objectContaining({ provider: "claude" }),
+        expect.objectContaining({
+          routes: expect.objectContaining({ walkthrough: "claude" }),
+        }),
       )
       expect(document.body.textContent).toContain("Sonnet 5.0")
     })
@@ -2167,13 +2171,13 @@ const installDiffDashApi = (
 }
 
 const plainAISettings = (settings: AISettings): AISettings => ({
+  version: settings.version,
   appearance: settings.appearance,
-  provider: settings.provider,
-  telemetryEnabled: settings.telemetryEnabled,
-  models: {
-    auto: settings.models.auto,
-    claude: settings.models.claude,
-    codex: settings.models.codex,
-    opencode: settings.models.opencode,
+  routes: {
+    walkthrough: settings.routes.walkthrough,
+    reviewThread: settings.routes.reviewThread,
   },
+  telemetryEnabled: settings.telemetryEnabled,
+  autoQuality: settings.autoQuality,
+  models: { ...settings.models },
 })

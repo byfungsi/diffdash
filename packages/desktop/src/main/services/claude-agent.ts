@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect"
 
-import { DEFAULT_AI_SETTINGS, type ClaudeModel } from "@diffdash/domain/ai-settings"
+import { DEFAULT_BUILT_IN_MODELS } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,
@@ -10,7 +10,7 @@ import {
 import { CliService, type CliRunner } from "@diffdash/process/cli"
 
 /** Creates a Claude-backed AI agent using the provided model ID. */
-export const makeClaudeAgent = (cli: CliRunner, model: ClaudeModel): AIProviderAgent =>
+export const makeClaudeAgent = (cli: CliRunner, model: string): AIProviderAgent =>
   AIAgent.of({
     generateText: Effect.fn("ClaudeAgent.generateText")(function (prompt, options = {}) {
       const effortArgs = reasoningEffortArgs(options)
@@ -49,7 +49,7 @@ export const ClaudeAgent = {
     AIAgent,
     Effect.gen(function* () {
       const cli = yield* CliService
-      return makeClaudeAgent(cli, DEFAULT_AI_SETTINGS.models.claude)
+      return makeClaudeAgent(cli, DEFAULT_BUILT_IN_MODELS.claude)
     }),
   ),
 }

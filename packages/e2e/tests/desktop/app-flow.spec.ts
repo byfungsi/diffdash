@@ -308,7 +308,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
         const settings = await globalThis.window.diffDash.settings.get()
         return {
           appearance: settings.appearance,
-          provider: settings.provider,
+          provider: settings.routes.walkthrough,
           telemetryEnabled: settings.telemetryEnabled,
         }
       }),

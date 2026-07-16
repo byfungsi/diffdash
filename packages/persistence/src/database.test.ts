@@ -118,7 +118,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
       sqlite.close()
     }),
   )
@@ -222,7 +222,7 @@ describe("DatabaseService", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.pragma("user_version = 9")
+      sqlite.pragma("user_version = 10")
       sqlite.close()
 
       const result = yield* Effect.either(
@@ -236,12 +236,12 @@ describe("DatabaseService", () => {
       )
       if (Either.isLeft(result)) {
         expect(String(result.left.cause)).toContain(
-          "Database schema version 9 is newer than supported version 8",
+          "Database schema version 10 is newer than supported version 9",
         )
       }
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(9)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(10)
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -249,7 +249,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-130 AC: opens and preserves the populated GitHub version-8 graph", () =>
+  it.scoped("FUN-131 AC: migrates and preserves the populated version-8 agent graph", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
@@ -262,7 +262,27 @@ describe("DatabaseService", () => {
       )
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
+      const agentRunsSql = sqlite
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'")
+        .pluck()
+        .get()
+      expect(agentRunsSql).not.toContain("provider IN")
+      sqlite
+        .prepare(
+          `INSERT INTO agent_runs (
+            id, thread_id, provider, model, prompt_version, status, provider_run_id, error,
+            started_at, completed_at, usage_json
+          ) VALUES (?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL, NULL)`,
+        )
+        .run(
+          "run-future-provider",
+          "thread-v8",
+          "future-provider",
+          "future-model",
+          "thread-v1",
+          "2026-07-16T00:00:00.000Z",
+        )
       expect(sqlite.pragma("integrity_check", { simple: true })).toBe("ok")
       expect(sqlite.pragma("foreign_key_check")).toEqual([])
       sqlite.close()
@@ -383,7 +403,7 @@ describe("DatabaseService", () => {
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(8)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(9)
       reopened.close()
     }),
   )
@@ -405,7 +425,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
       sqlite.close()
     }),
   )
@@ -426,7 +446,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
       sqlite.close()
     }),
   )

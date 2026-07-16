@@ -108,7 +108,7 @@ describe("Analytics", () => {
           AISettings.make({
             ...DEFAULT_AI_SETTINGS,
             appearance: "dark",
-            provider: "claude",
+            routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
           }),
         )
         const analytics = yield* Analytics
@@ -117,7 +117,7 @@ describe("Analytics", () => {
           AISettings.make({
             ...DEFAULT_AI_SETTINGS,
             appearance: "dark",
-            provider: "claude",
+            routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
             telemetryEnabled: false,
           }),
         )
@@ -125,7 +125,7 @@ describe("Analytics", () => {
 
         const persisted = yield* settings.get
         expect(persisted.appearance).toBe("dark")
-        expect(persisted.provider).toBe("claude")
+        expect(persisted.routes.walkthrough).toBe("claude")
         expect(persisted.telemetryEnabled).toBe(false)
       }).pipe(Effect.provide(makeLayer(directory, events)))
 

@@ -137,8 +137,7 @@ export const codexReviewAgentLayer = Layer.effect(
           return ReviewAgentTurnResult.make({
             response,
             artifacts,
-            providerRunId:
-              state.threadId === null ? null : ReviewAgentProviderRunId.make(state.threadId),
+            providerRunId: null,
             usage: state.usage,
           })
         }),
@@ -153,7 +152,12 @@ export const codexReviewAgentLayer = Layer.effect(
         Effect.catchAll(() => Effect.succeed(false)),
       )
 
-    return ReviewAgentProvider.of({ id: providerId, isAvailable, runThreadTurn })
+    return ReviewAgentProvider.of({
+      id: providerId,
+      sessionMode: "none",
+      isAvailable,
+      runThreadTurn,
+    })
   }),
 )
 

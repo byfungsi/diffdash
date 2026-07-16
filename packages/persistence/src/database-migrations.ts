@@ -109,7 +109,7 @@ const SINGLE_LINE_THREAD_SCHEMA_SQL = `
   CREATE TABLE agent_runs (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL CHECK (provider IN ('opencode', 'codex', 'claude')),
+    provider TEXT NOT NULL,
     model TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
@@ -351,6 +351,84 @@ const migrations: readonly DatabaseMigration[] = [
     migrate: (database) => {
       if (!tableExists(database, "review_threads")) return
       database.exec("UPDATE review_threads SET status = 'open', closed_at = NULL")
+    },
+  },
+  {
+    version: 9,
+    migrate: (database) => {
+      if (!tableExists(database, "agent_runs")) return
+      database.exec(`
+        DROP TABLE IF EXISTS agent_run_artifacts_v9;
+        DROP TABLE IF EXISTS agent_runs_v9;
+
+        CREATE TABLE agent_runs_v9 (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          provider_run_id TEXT,
+          error TEXT,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          usage_json TEXT,
+          UNIQUE(id, thread_id),
+          CHECK (
+            (status = 'running' AND completed_at IS NULL AND error IS NULL) OR
+            (status = 'completed' AND completed_at IS NOT NULL AND error IS NULL) OR
+            (status = 'failed' AND completed_at IS NOT NULL AND error IS NOT NULL)
+          )
+        );
+
+        INSERT INTO agent_runs_v9 (
+          id, thread_id, provider, model, prompt_version, status, provider_run_id, error,
+          started_at, completed_at, usage_json
+        )
+        SELECT
+          id, thread_id, provider, model, prompt_version, status, provider_run_id, error,
+          started_at, completed_at, usage_json
+        FROM agent_runs;
+
+        CREATE TABLE agent_run_artifacts_v9 (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN (
+            'file_read', 'search_result', 'shell_output', 'web_result',
+            'diff_context', 'mcp_tool_result', 'provider_message', 'unknown'
+          )),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          content_digest TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+          original_size INTEGER NOT NULL CHECK (original_size >= 0),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(run_id, thread_id) REFERENCES agent_runs_v9(id, thread_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO agent_run_artifacts_v9 (
+          id, run_id, thread_id, type, title, content, content_digest, metadata_json,
+          truncated, original_size, created_at
+        )
+        SELECT
+          id, run_id, thread_id, type, title, content, content_digest, metadata_json,
+          truncated, original_size, created_at
+        FROM agent_run_artifacts;
+
+        DROP TABLE agent_run_artifacts;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v9 RENAME TO agent_runs;
+        ALTER TABLE agent_run_artifacts_v9 RENAME TO agent_run_artifacts;
+
+        CREATE INDEX agent_runs_thread_idx
+          ON agent_runs(thread_id, started_at DESC, id);
+        CREATE INDEX agent_run_artifacts_run_idx
+          ON agent_run_artifacts(run_id, created_at ASC, id);
+        CREATE INDEX agent_run_artifacts_thread_idx
+          ON agent_run_artifacts(thread_id, created_at ASC, id);
+      `)
     },
   },
 ]

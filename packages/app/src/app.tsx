@@ -63,20 +63,13 @@ import {
 import { UpdateBanner } from "@/update-banner"
 import {
   type Appearance,
+  type AICapabilityRoute,
   AI_PROVIDER_OPTIONS,
-  type AIProvider,
-  AIProviderModels,
   AISettings,
   AUTO_MODEL_OPTIONS,
-  type AutoModel,
-  CLAUDE_MODEL_OPTIONS,
-  type ClaudeModel,
-  CODEX_MODEL_OPTIONS,
-  type CodexModel,
+  type AutoQuality,
   DEFAULT_AI_SETTINGS,
   modelOptionsForProvider,
-  OPENCODE_MODEL_OPTIONS,
-  type OpenCodeModel,
   selectedModelForProvider,
 } from "@diffdash/domain/ai-settings"
 import { type AppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
@@ -1559,9 +1552,7 @@ export function App() {
     try {
       const savedSettings = await window.diffDash.settings.update(
         AISettings.make({
-          appearance: aiSettings.appearance,
-          provider: aiSettings.provider,
-          models: aiProviderModelsFromSettings(aiSettings),
+          ...aiSettings,
           telemetryEnabled,
         }),
       )
@@ -3118,7 +3109,7 @@ const PullRequestDetailView = ({
         event: "walkthrough_generated",
         reviewType: reviewSubject.kind === "pullRequest" ? "pull_request" : "local_diff",
         regenerated: regenerate,
-        provider: aiSettings.provider,
+        provider: aiSettings.routes.walkthrough,
       })
     } catch (error) {
       setWalkthroughState({ status: "error", message: formatError(error, "Walkthrough failed") })
@@ -3403,7 +3394,8 @@ const PullRequestDetailView = ({
             {sidebarTab === "walkthrough" ? (
               <div className="flex items-center justify-between gap-2 pt-1">
                 <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
-                  {aiProviderLabel(aiSettings.provider)} / {selectedAIModelLabel(aiSettings)}
+                  {aiProviderLabel(aiSettings.routes.walkthrough)} /{" "}
+                  {selectedAIModelLabel(aiSettings)}
                 </div>
                 <WalkthroughSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
               </div>
@@ -4009,8 +4001,9 @@ const WalkthroughSettingsMenu = ({
 }) => {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const selectedModel = selectedModelForProvider(settings, settings.provider)
-  const modelOptions = modelOptionsForProvider(settings.provider)
+  const route = settings.routes.walkthrough
+  const selectedModel = selectedModelForProvider(settings, route)
+  const modelOptions = modelOptionsForProvider(route)
 
   useEffect(() => {
     if (!open) return undefined
@@ -4058,7 +4051,7 @@ const WalkthroughSettingsMenu = ({
               <WalkthroughSettingsMenuItem
                 key={option.provider}
                 label={option.label}
-                selected={settings.provider === option.provider}
+                selected={route === option.provider}
                 onSelect={() => onChange(aiSettingsWithProvider(settings, option.provider))}
               />
             ))}
@@ -4108,111 +4101,45 @@ const WalkthroughSettingsMenuItem = ({
   </button>
 )
 
-const aiSettingsWithProvider = (settings: AISettings, provider: AIProvider) =>
+const aiSettingsWithProvider = (settings: AISettings, provider: AICapabilityRoute) =>
   AISettings.make({
-    appearance: settings.appearance,
-    provider,
-    models: aiProviderModelsFromSettings(settings),
-    telemetryEnabled: settings.telemetryEnabled,
+    ...settings,
+    routes: { ...settings.routes, walkthrough: provider },
   })
 
-const aiSettingsWithModel = (
-  settings: AISettings,
-  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
-) => {
-  if (settings.provider === "auto" && isAutoModel(model)) {
+const aiSettingsWithModel = (settings: AISettings, model: string) => {
+  const route = settings.routes.walkthrough
+  if (route === "auto" && isAutoQuality(model)) {
     return AISettings.make({
-      appearance: settings.appearance,
-      provider: settings.provider,
-      telemetryEnabled: settings.telemetryEnabled,
-      models: AIProviderModels.make({
-        auto: model,
-        codex: settings.models.codex,
-        claude: settings.models.claude,
-        opencode: settings.models.opencode,
-      }),
+      ...settings,
+      autoQuality: model,
     })
   }
 
-  if (settings.provider === "claude" && isClaudeModel(model)) {
+  if (route !== "auto" && modelOptionsForProvider(route).some((option) => option.model === model)) {
     return AISettings.make({
-      appearance: settings.appearance,
-      provider: settings.provider,
-      telemetryEnabled: settings.telemetryEnabled,
-      models: AIProviderModels.make({
-        auto: settings.models.auto,
-        codex: settings.models.codex,
-        claude: model,
-        opencode: settings.models.opencode,
-      }),
-    })
-  }
-
-  if (settings.provider === "opencode" && isOpenCodeModel(model)) {
-    return AISettings.make({
-      appearance: settings.appearance,
-      provider: settings.provider,
-      telemetryEnabled: settings.telemetryEnabled,
-      models: AIProviderModels.make({
-        auto: settings.models.auto,
-        codex: settings.models.codex,
-        claude: settings.models.claude,
-        opencode: model,
-      }),
-    })
-  }
-
-  if (isCodexModel(model)) {
-    return AISettings.make({
-      appearance: settings.appearance,
-      provider: settings.provider,
-      telemetryEnabled: settings.telemetryEnabled,
-      models: AIProviderModels.make({
-        auto: settings.models.auto,
-        codex: model,
-        claude: settings.models.claude,
-        opencode: settings.models.opencode,
-      }),
+      ...settings,
+      models: { ...settings.models, [route]: model },
     })
   }
 
   return settings
 }
 
-const aiProviderLabel = (provider: AIProvider) =>
+const aiProviderLabel = (provider: AICapabilityRoute) =>
   AI_PROVIDER_OPTIONS.find((option) => option.provider === provider)?.label ?? provider
 
-const aiProviderModelsFromSettings = (settings: AISettings) =>
-  AIProviderModels.make({
-    auto: settings.models.auto,
-    codex: settings.models.codex,
-    claude: settings.models.claude,
-    opencode: settings.models.opencode,
-  })
-
 const selectedAIModelLabel = (settings: AISettings) => {
-  const selectedModel = selectedModelForProvider(settings, settings.provider)
+  const route = settings.routes.walkthrough
+  const selectedModel = selectedModelForProvider(settings, route)
   return (
-    modelOptionsForProvider(settings.provider).find((option) => option.model === selectedModel)
-      ?.label ?? selectedModel
+    modelOptionsForProvider(route).find((option) => option.model === selectedModel)?.label ??
+    selectedModel
   )
 }
 
-const isAutoModel = (
-  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
-): model is AutoModel => AUTO_MODEL_OPTIONS.some((option) => option.model === model)
-
-const isCodexModel = (
-  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
-): model is CodexModel => CODEX_MODEL_OPTIONS.some((option) => option.model === model)
-
-const isClaudeModel = (
-  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
-): model is ClaudeModel => CLAUDE_MODEL_OPTIONS.some((option) => option.model === model)
-
-const isOpenCodeModel = (
-  model: AutoModel | CodexModel | ClaudeModel | OpenCodeModel,
-): model is OpenCodeModel => OPENCODE_MODEL_OPTIONS.some((option) => option.model === model)
+const isAutoQuality = (model: string): model is AutoQuality =>
+  AUTO_MODEL_OPTIONS.some((option) => option.model === model)
 
 const SidebarMessage = ({
   action,

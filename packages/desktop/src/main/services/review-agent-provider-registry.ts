@@ -2,8 +2,8 @@ import { Context, Effect, Layer, Schema } from "effect"
 
 import {
   AUTO_AI_PROVIDER_ORDER,
-  type AIProvider,
-  type ConcreteAIProvider,
+  type AICapabilityRoute,
+  type BuiltInAIProvider,
 } from "@diffdash/domain/ai-settings"
 import type { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { AgentArtifactNormalizer } from "./agent-artifact-normalizer"
@@ -35,7 +35,7 @@ export class ReviewAgentProviderRegistry extends Context.Tag(
       provider: ReviewAgentProviderId,
     ) => Effect.Effect<ProviderService, ReviewAgentProviderUnavailableError>
     readonly resolve: (
-      provider: AIProvider,
+      provider: AICapabilityRoute,
     ) => Effect.Effect<ProviderService, ReviewAgentProviderUnavailableError>
   }
 >() {
@@ -74,7 +74,7 @@ export class ReviewAgentProviderRegistry extends Context.Tag(
             )
           : Effect.succeed(service)
       }
-      const requireAvailable = (provider: ConcreteAIProvider) =>
+      const requireAvailable = (provider: ReviewAgentProviderId) =>
         get(provider).pipe(
           Effect.flatMap((service) =>
             service.isAvailable.pipe(
@@ -110,9 +110,9 @@ export class ReviewAgentProviderRegistry extends Context.Tag(
 }
 
 const resolveFirstAvailable = (
-  providers: readonly ConcreteAIProvider[],
+  providers: readonly BuiltInAIProvider[],
   resolve: (
-    provider: ConcreteAIProvider,
+    provider: ReviewAgentProviderId,
   ) => Effect.Effect<ProviderService, ReviewAgentProviderUnavailableError>,
 ): Effect.Effect<ProviderService, ReviewAgentProviderUnavailableError> => {
   const [provider, ...remaining] = providers

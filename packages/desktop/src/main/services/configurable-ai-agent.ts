@@ -2,10 +2,11 @@ import { Effect, Layer } from "effect"
 
 import {
   AUTO_AI_PROVIDER_ORDER,
-  autoModelProviderModels,
+  autoQualityProviderModels,
+  type BuiltInAIProvider,
+  DEFAULT_BUILT_IN_MODELS,
   DEFAULT_AI_SETTINGS,
   type AISettings,
-  type ConcreteAIProvider,
 } from "@diffdash/domain/ai-settings"
 import { AIAgent, type AIAgentGenerateOptions, type AIProviderAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
@@ -29,18 +30,19 @@ export const ConfigurableAIAgent = {
       )
 
       const providerAgent = (
-        provider: ConcreteAIProvider,
+        provider: BuiltInAIProvider,
         settings: AISettings,
       ): AIProviderAgent => {
-        if (provider === "claude") return makeClaudeAgent(cli, settings.models.claude)
+        const model = settings.models[provider] ?? DEFAULT_BUILT_IN_MODELS[provider]
+        if (provider === "claude") return makeClaudeAgent(cli, model)
         if (provider === "opencode") {
-          return makeOpenCodeAgent(cli, settings.models.opencode, appConfig.tempDir)
+          return makeOpenCodeAgent(cli, model, appConfig.tempDir)
         }
-        return makeCodexAgent(cli, settings.models.codex, appConfig.tempDir)
+        return makeCodexAgent(cli, model, appConfig.tempDir)
       }
 
       const generateWithProvider = (
-        provider: ConcreteAIProvider,
+        provider: BuiltInAIProvider,
         settings: AISettings,
         prompt: string,
         options: AIAgentGenerateOptions | undefined,
@@ -55,10 +57,11 @@ export const ConfigurableAIAgent = {
       ): Effect.Effect<string, CliError> => {
         const agent = autoProviderAgents(settings)[agentIndex]
         if (agent === undefined)
-          return makeCodexAgent(cli, settings.models.codex, appConfig.tempDir).generateText(
-            prompt,
-            options,
-          )
+          return makeCodexAgent(
+            cli,
+            settings.models.codex ?? DEFAULT_BUILT_IN_MODELS.codex,
+            appConfig.tempDir,
+          ).generateText(prompt, options)
 
         return agent.generateText(prompt, options).pipe(
           Effect.catchAll((error) => {
@@ -69,7 +72,7 @@ export const ConfigurableAIAgent = {
       }
 
       const autoProviderAgents = (settings: AISettings): readonly AIProviderAgent[] => {
-        const models = autoModelProviderModels(settings.models.auto)
+        const models = autoQualityProviderModels(settings.autoQuality)
         return [
           makeClaudeAgent(cli, models.claude),
           makeCodexAgent(cli, models.codex, appConfig.tempDir),
@@ -79,7 +82,7 @@ export const ConfigurableAIAgent = {
       }
 
       const isProviderAvailable = (
-        provider: ConcreteAIProvider,
+        provider: BuiltInAIProvider,
         settings: AISettings,
       ): Effect.Effect<boolean> => providerAgent(provider, settings).isAvailable
 
@@ -102,19 +105,36 @@ export const ConfigurableAIAgent = {
         generateText: Effect.fn("ConfigurableAIAgent.generateText")(function (prompt, options) {
           return getSettings.pipe(
             Effect.flatMap((settings) => {
-              if (settings.provider === "auto")
-                return generateWithFallback(settings, prompt, options)
-              return generateWithProvider(settings.provider, settings, prompt, options)
+              const route = settings.routes.walkthrough
+              if (route === "auto") return generateWithFallback(settings, prompt, options)
+              if (!isBuiltInProvider(route)) return Effect.fail(unknownProviderError(route))
+              return generateWithProvider(route, settings, prompt, options)
             }),
           )
         }),
         isAvailable: getSettings.pipe(
           Effect.flatMap((settings) => {
-            if (settings.provider === "auto") return anyProviderAvailable(settings)
-            return isProviderAvailable(settings.provider, settings)
+            const route = settings.routes.walkthrough
+            if (route === "auto") return anyProviderAvailable(settings)
+            return isBuiltInProvider(route)
+              ? isProviderAvailable(route, settings)
+              : Effect.succeed(false)
           }),
         ),
       })
     }),
   ),
 }
+
+const isBuiltInProvider = (provider: string): provider is BuiltInAIProvider =>
+  provider === "claude" || provider === "codex" || provider === "opencode"
+
+const unknownProviderError = (provider: string) =>
+  CliError.make({
+    command: provider,
+    args: [],
+    cwd: null,
+    exitCode: null,
+    stderr: "",
+    cause: null,
+  })

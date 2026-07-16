@@ -103,6 +103,7 @@ export const openCodeReviewAgentLayer = Layer.effect(
 
     return ReviewAgentProvider.of({
       id: providerId,
+      sessionMode: "resume",
       isAvailable: sdk.isAvailable.pipe(
         Effect.mapError((error) => mapReviewAgentExecutionError(providerId, error)),
       ),

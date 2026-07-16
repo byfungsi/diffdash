@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 
-import { DEFAULT_AI_SETTINGS, type CodexModel } from "@diffdash/domain/ai-settings"
+import { DEFAULT_BUILT_IN_MODELS } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,
@@ -14,11 +14,7 @@ import { AppConfig } from "./app-config"
 import { CliError, CliService, type CliResult, type CliRunner } from "@diffdash/process/cli"
 
 /** Creates a Codex-backed AI agent using the provided model ID. */
-export const makeCodexAgent = (
-  cli: CliRunner,
-  model: CodexModel,
-  tempDir: string,
-): AIProviderAgent =>
+export const makeCodexAgent = (cli: CliRunner, model: string, tempDir: string): AIProviderAgent =>
   AIAgent.of({
     generateText: Effect.fn("CodexAgent.generateText")(function (prompt, options = {}) {
       const configArgs = reasoningConfigArgs(options)
@@ -66,7 +62,7 @@ export const CodexAgent = {
     Effect.gen(function* () {
       const cli = yield* CliService
       const config = yield* AppConfig
-      return makeCodexAgent(cli, DEFAULT_AI_SETTINGS.models.codex, config.tempDir)
+      return makeCodexAgent(cli, DEFAULT_BUILT_IN_MODELS.codex, config.tempDir)
     }),
   ),
 }

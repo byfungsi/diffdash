@@ -3,7 +3,7 @@ import { Effect, Layer } from "effect"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AIAgent } from "./ai-agent"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
@@ -95,8 +95,8 @@ describe("ConfigurableAIAgent", () => {
       }).pipe(Effect.provide(layer))
 
       expect(output).toBe("claude generated")
-      expect(DEFAULT_AI_SETTINGS.provider).toBe("auto")
-      expect(DEFAULT_AI_SETTINGS.models.auto).toBe("balance")
+      expect(DEFAULT_AI_SETTINGS.routes.walkthrough).toBe("auto")
+      expect(DEFAULT_AI_SETTINGS.autoQuality).toBe("balanced")
       expect(calls.map((call) => call.command)).toEqual(["claude"])
       expect(calls[0]?.args).toContain("claude-sonnet-5")
     }),
@@ -108,11 +108,8 @@ describe("ConfigurableAIAgent", () => {
         fail: (command) => command === "claude",
       })
       const settings = AISettings.make({
-        provider: "auto",
-        models: AIProviderModels.make({
-          ...DEFAULT_AI_SETTINGS.models,
-          auto: "fast",
-        }),
+        ...DEFAULT_AI_SETTINGS,
+        autoQuality: "fast",
       })
       const layer = ConfigurableAIAgent.layer.pipe(
         Layer.provide(cliLayer),
@@ -141,11 +138,8 @@ describe("ConfigurableAIAgent", () => {
           (command === "opencode" && args.includes("anthropic/claude-opus-4-8")),
       })
       const settings = AISettings.make({
-        provider: "auto",
-        models: AIProviderModels.make({
-          ...DEFAULT_AI_SETTINGS.models,
-          auto: "best",
-        }),
+        ...DEFAULT_AI_SETTINGS,
+        autoQuality: "best",
       })
       const layer = ConfigurableAIAgent.layer.pipe(
         Layer.provide(cliLayer),
@@ -171,11 +165,9 @@ describe("ConfigurableAIAgent", () => {
     Effect.gen(function* () {
       const { calls, layer: cliLayer } = makeCliLayer()
       const settings = AISettings.make({
-        provider: "claude",
-        models: AIProviderModels.make({
-          ...DEFAULT_AI_SETTINGS.models,
-          claude: "claude-opus-4-8",
-        }),
+        ...DEFAULT_AI_SETTINGS,
+        routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+        models: { ...DEFAULT_AI_SETTINGS.models, claude: "claude-opus-4-8" },
       })
       const layer = ConfigurableAIAgent.layer.pipe(
         Layer.provide(cliLayer),

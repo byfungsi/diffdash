@@ -144,6 +144,7 @@ const makeLayer = (
   ).pipe(Layer.provide(database))
   const provider = ReviewAgentProvider.of({
     id: "opencode",
+    sessionMode: "resume",
     isAvailable: Effect.succeed(true),
     runThreadTurn: runTurn,
   })

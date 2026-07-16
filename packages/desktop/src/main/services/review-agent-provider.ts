@@ -74,6 +74,7 @@ export class ReviewAgentProvider extends Context.Tag("@diffdash/ReviewAgentProvi
   ReviewAgentProvider,
   {
     readonly id: ReviewAgentProviderId
+    readonly sessionMode: "none" | "resume"
     readonly isAvailable: Effect.Effect<boolean, ReviewAgentProviderError>
     readonly runThreadTurn: (
       input: ReviewAgentTurnInput,

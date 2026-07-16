@@ -1,4 +1,4 @@
-import { AIProviderModels, AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AppState } from "@diffdash/domain/app-state"
 import {
   AppUpdateAvailable,
@@ -540,7 +540,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       get: async () => settings,
       update: async (next) => {
         settings = cloneSettings(next)
-        record("settings.update", { provider: next.provider })
+        record("settings.update", { provider: next.routes.walkthrough })
         return settings
       },
     },
@@ -747,15 +747,9 @@ const listenerSubscription = <A>(
 
 const cloneSettings = (settings: AISettings) =>
   AISettings.make({
-    appearance: settings.appearance,
-    provider: settings.provider,
-    telemetryEnabled: settings.telemetryEnabled,
-    models: AIProviderModels.make({
-      auto: settings.models.auto,
-      codex: settings.models.codex,
-      claude: settings.models.claude,
-      opencode: settings.models.opencode,
-    }),
+    ...settings,
+    routes: { ...settings.routes },
+    models: { ...settings.models },
   })
 
 const pullRequestSummary = (revision: MaterializedDemoRevision) => {

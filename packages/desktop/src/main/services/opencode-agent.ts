@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 
-import { DEFAULT_AI_SETTINGS, type OpenCodeModel } from "@diffdash/domain/ai-settings"
+import { DEFAULT_BUILT_IN_MODELS } from "@diffdash/domain/ai-settings"
 import {
   AIAgent,
   type AIAgentGenerateOptions,
@@ -19,7 +19,7 @@ const OPENCODE_PROMPT_MESSAGE =
 /** Creates an OpenCode-backed AI agent using the provided provider/model ID. */
 export const makeOpenCodeAgent = (
   cli: CliRunner,
-  model: OpenCodeModel,
+  model: string,
   tempDir: string,
 ): AIProviderAgent =>
   AIAgent.of({
@@ -60,7 +60,7 @@ export const OpenCodeAgent = {
     Effect.gen(function* () {
       const cli = yield* CliService
       const config = yield* AppConfig
-      return makeOpenCodeAgent(cli, DEFAULT_AI_SETTINGS.models.opencode, config.tempDir)
+      return makeOpenCodeAgent(cli, DEFAULT_BUILT_IN_MODELS.opencode, config.tempDir)
     }),
   ),
 }
