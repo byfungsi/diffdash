@@ -1,7 +1,8 @@
 import { Schema } from "effect"
 
 import { LocalReviewTarget } from "./local-review"
-import { GitProviderId } from "./git-provider"
+import { HostedReviewLocator } from "./git-provider"
+import { findProjectedDiffHunkLine, projectDiffHunkLines } from "./diff-hunk-lines"
 
 export { LocalReviewTarget } from "./local-review"
 
@@ -165,14 +166,6 @@ export class CreateReviewThreadInput extends Schema.Class<CreateReviewThreadInpu
   bodyMarkdown: MarkdownBody,
 }) {}
 
-/** Input for creating the one pending agent response belonging to a new line thread. */
-export class CreatePendingReviewThreadAgentMessageInput extends Schema.Class<CreatePendingReviewThreadAgentMessageInput>(
-  "CreatePendingReviewThreadAgentMessageInput",
-)({
-  threadId: ReviewThreadId,
-  agentRunId: Schema.NullOr(Schema.String),
-}) {}
-
 /** Input to append a follow-up user message to an existing local line thread. */
 export class AddReviewThreadUserMessageInput extends Schema.Class<AddReviewThreadUserMessageInput>(
   "AddReviewThreadUserMessageInput",
@@ -196,19 +189,14 @@ export class ReviewThreadRevisionKey extends Schema.Class<ReviewThreadRevisionKe
   headRevision: ReviewRevision,
 }) {}
 
-/** Renderer-safe locator for one GitHub pull request review. */
-export class PullRequestReviewTarget extends Schema.Class<PullRequestReviewTarget>(
-  "PullRequestReviewTarget",
-)({
-  kind: Schema.Literal("pullRequest"),
-  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
-  owner: Schema.String,
-  name: Schema.String,
-  number: Schema.Number,
+/** Renderer-safe locator for one hosted review. */
+export class HostedReviewTarget extends Schema.Class<HostedReviewTarget>("HostedReviewTarget")({
+  kind: Schema.Literal("hosted"),
+  review: HostedReviewLocator,
 }) {}
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
-export const ReviewThreadTarget = Schema.Union(PullRequestReviewTarget, LocalReviewTarget)
+export const ReviewThreadTarget = Schema.Union(HostedReviewTarget, LocalReviewTarget)
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
 export type ReviewThreadTarget = typeof ReviewThreadTarget.Type
@@ -233,43 +221,9 @@ export const isReviewAnchorInParsedDiff = (anchor: ReviewThreadAnchor, diff: Par
 const hunkContainsLine = (
   hunk: ParsedDiff["files"][number]["hunks"][number],
   anchor: LineReviewAnchor,
-) => {
-  let oldLine = hunk.oldStart
-  let newLine = hunk.newStart
-  for (const line of hunk.lines) {
-    if (line.startsWith(" ")) {
-      if (
-        ((anchor.side === "old" && anchor.lineNumber === oldLine) ||
-          (anchor.side === "new" && anchor.lineNumber === newLine)) &&
-        anchor.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      oldLine += 1
-      newLine += 1
-      continue
-    }
-    if (line.startsWith("-")) {
-      if (
-        anchor.side === "old" &&
-        anchor.lineNumber === oldLine &&
-        anchor.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      oldLine += 1
-      continue
-    }
-    if (line.startsWith("+")) {
-      if (
-        anchor.side === "new" &&
-        anchor.lineNumber === newLine &&
-        anchor.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      newLine += 1
-    }
-  }
-  return false
-}
+) =>
+  findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
+    side: anchor.side,
+    lineNumber: anchor.lineNumber,
+    content: anchor.lineContent,
+  }) !== null

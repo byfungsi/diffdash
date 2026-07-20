@@ -4,18 +4,26 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+import { AgentPromptVersion } from "@diffdash/domain/agent-run"
+import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import {
-  makePullRequestReviewKey,
+  makeReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { LineReviewAnchor, MarkdownBody, ReviewThreadId } from "@diffdash/domain/review-thread"
+import {
+  HostedReviewTarget,
+  LineReviewAnchor,
+  MarkdownBody,
+  ReviewThreadId,
+} from "@diffdash/domain/review-thread"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
+import { ReviewTurnStore } from "./review-turn-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-thread-test-"))),
@@ -23,11 +31,12 @@ const makeTempDatabasePath = Effect.acquireRelease(
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
 const makeLayer = (databasePath: string) =>
-  Layer.mergeAll(RepositoryStore.layer, ReviewThreadStore.layer).pipe(
+  Layer.mergeAll(RepositoryStore.layer, ReviewThreadStore.layer, ReviewTurnStore.layer).pipe(
     Layer.provideMerge(DatabaseService.layer(databasePath)),
   )
 
-const reviewKey = makePullRequestReviewKey("github", "fungsi", "diffdash", 51)
+const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 51)
+const reviewKey = makeReviewKey(review)
 const baseRevision = ReviewRevision.make("base-sha")
 const headRevision = ReviewRevision.make("head-sha")
 const lineAnchor = LineReviewAnchor.make({
@@ -112,38 +121,6 @@ describe("ReviewThreadStore", () => {
     }),
   )
 
-  it.scoped("FUN-67 AC: creates one pending agent response after the initial line comment", () =>
-    Effect.gen(function* () {
-      const databasePath = yield* makeTempDatabasePath
-
-      yield* Effect.gen(function* () {
-        const repo = yield* createRepo
-        const store = yield* ReviewThreadStore
-        const created = yield* store.create({
-          repoId: repo.id,
-          reviewKey,
-          prNumber: 51,
-          baseRevision,
-          headRevision,
-          anchor: lineAnchor,
-          bodyMarkdown: MarkdownBody.make("Initial question"),
-        })
-
-        yield* store.createPendingAgentMessage({
-          threadId: created.thread.id,
-          agentRunId: "run-1",
-        })
-        const details = yield* store.get(created.thread.id)
-
-        expect(details.messages.map(({ author, sequence }) => ({ author, sequence }))).toEqual([
-          { author: "user", sequence: 1 },
-          { author: "agent", sequence: 2 },
-        ])
-        expect(details.messages[1]).toMatchObject({ bodyMarkdown: "", status: "pending" })
-      }).pipe(Effect.provide(makeLayer(databasePath)))
-    }),
-  )
-
   it.scoped("FUN-67 AC: persists a line-only anchor", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
@@ -193,6 +170,7 @@ index 1111111..2222222 100644
       yield* Effect.gen(function* () {
         const repo = yield* createRepo
         const store = yield* ReviewThreadStore
+        const turns = yield* ReviewTurnStore
         const created = yield* store.create({
           repoId: repo.id,
           reviewKey,
@@ -209,15 +187,31 @@ index 1111111..2222222 100644
             bodyMarkdown: MarkdownBody.make("Too soon"),
           }),
         )
-        yield* store.createPendingAgentMessage({ threadId: created.thread.id, agentRunId: "run-1" })
-        const pendingDetails = yield* store.get(created.thread.id)
-        const pendingMessage = pendingDetails.messages[1]
-        if (pendingMessage === undefined) throw new Error("Expected pending agent message")
-        yield* store.completeAgentMessage({
-          messageId: pendingMessage.id,
+        const targetInput = {
           threadId: created.thread.id,
+          target: HostedReviewTarget.make({ kind: "hosted", review }),
+          repoId: repo.id,
+          reviewKey,
+          baseRevision,
+          headRevision,
+        }
+        const mapping = yield* turns.validateTarget(targetInput)
+        const begun = yield* turns.beginTurn({
+          ...targetInput,
+          mapping,
+          provider: "opencode",
+          model: "test-model",
+          promptVersion: AgentPromptVersion.make("review-thread-v3"),
+        })
+        yield* turns.completeTurn({
+          threadId: created.thread.id,
+          runId: begun.run.id,
+          messageId: begun.pendingMessage.id,
           bodyMarkdown: MarkdownBody.make("Initial response"),
-          status: "complete",
+          artifacts: [],
+          providerRunId: null,
+          usage: null,
+          memoryUpdate: null,
         })
         const updated = yield* store.addUserMessage({
           threadId: created.thread.id,
@@ -300,6 +294,51 @@ index 1111111..2222222 100644
         expect(Either.isLeft(listResult)).toBe(true)
         if (Either.isLeft(listResult))
           expect(listResult.left.operation).toBe("listForReview.decode")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("rejects corrupt ignored columns and message rows", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const repo = yield* createRepo
+        const store = yield* ReviewThreadStore
+        const database = yield* DatabaseService
+        const created = yield* store.create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: 51,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Corrupt persisted columns"),
+        })
+
+        yield* database.run("UPDATE review_threads SET closed_at = x'01' WHERE id = ?", [
+          created.thread.id,
+        ])
+        const corruptThread = yield* Effect.either(store.get(created.thread.id))
+        expect(Either.isLeft(corruptThread)).toBe(true)
+        if (Either.isLeft(corruptThread)) {
+          expect(corruptThread.left).toBeInstanceOf(ReviewThreadStoreError)
+          expect(corruptThread.left.operation).toBe("get")
+        }
+
+        yield* database.run("UPDATE review_threads SET closed_at = NULL WHERE id = ?", [
+          created.thread.id,
+        ])
+        yield* database.run(
+          "UPDATE review_thread_messages SET sequence = 1.5 WHERE thread_id = ?",
+          [created.thread.id],
+        )
+        const corruptMessage = yield* Effect.either(store.get(created.thread.id))
+        expect(Either.isLeft(corruptMessage)).toBe(true)
+        if (Either.isLeft(corruptMessage)) {
+          expect(corruptMessage.left).toBeInstanceOf(ReviewThreadStoreError)
+          expect(corruptMessage.left.operation).toBe("get")
+        }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

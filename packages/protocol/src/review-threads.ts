@@ -4,7 +4,7 @@ import {
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
 /** Request to append a follow-up user message to an existing local review thread. */
@@ -32,6 +32,10 @@ export class RunReviewThreadAgentRequest extends Schema.Class<RunReviewThreadAge
 )({
   threadId: ReviewThreadId,
   target: ReviewThreadTarget,
+  repoId: Schema.NonEmptyString,
+  reviewKey: ReviewKey,
+  expectedBaseRevision: ReviewRevision,
+  expectedHeadRevision: ReviewRevision,
 }) {}
 
 /** Request carrying one validated review thread identity. */

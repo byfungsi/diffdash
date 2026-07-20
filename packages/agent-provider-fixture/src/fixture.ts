@@ -17,11 +17,17 @@ import {
   ReviewThreadResult,
   WalkthroughResult,
 } from "@diffdash/agent-provider"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
+import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
 
 /** Stable identity used by the fourth-provider composition proof. */
 export const FIXTURE_AGENT_PROVIDER_ID = AgentProviderId.make("fixture-agent")
 
 const fixtureModel = AgentModelId.make("fixture-model")
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: FIXTURE_AGENT_PROVIDER_ID,
+  fallbackReason: "Fixture agent execution failed",
+})
 
 /** Creates a deterministic provider used only when desktop E2E composition requests it. */
 export const makeFixtureAgentProvider = (): AgentProviderRegistration => ({
@@ -67,18 +73,23 @@ export const makeFixtureAgentProvider = (): AgentProviderRegistration => ({
     probe: Effect.succeed(
       AgentCapabilityReady.make({ capability: "review-thread", runtimeVersion: "1.0.0" }),
     ),
-    execute: () =>
-      Effect.succeed(
-        ReviewThreadResult.make({
-          response: ReviewThreadResponse.make({
-            bodyMarkdown: "Fixture review response",
-            threadSummary: null,
-            referencedLocations: [],
-          }),
-          usage: null,
-          artifacts: [],
-          sessionId: null,
-        }),
-      ),
+    execute: (request) =>
+      isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)
+        ? Effect.succeed(
+            ReviewThreadResult.make({
+              response: ReviewThreadResponse.make({
+                bodyMarkdown: "Fixture review response",
+                threadSummary: null,
+                referencedLocations: [],
+              }),
+              usage: null,
+              artifacts: [],
+              sessionId: null,
+            }),
+          )
+        : operationErrors.fromReason(
+            "review-thread",
+            "Scoped MCP access includes tools outside the execution policy",
+          ),
   },
 })

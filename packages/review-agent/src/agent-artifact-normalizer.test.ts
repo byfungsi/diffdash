@@ -123,6 +123,7 @@ describe("AgentArtifactNormalizer", () => {
       })
 
       expect(Buffer.byteLength(artifact.content, "utf8")).toBeLessThanOrEqual(80)
+      expect(artifact.content.endsWith("\n\n[DiffDash truncated artifact content]")).toBe(true)
       expect(artifact.truncated).toBe(true)
       expect(artifact.originalSize).toBe(Buffer.byteLength(content, "utf8"))
       expect(artifact.metadata).toEqual(
@@ -145,21 +146,51 @@ describe("AgentArtifactNormalizer", () => {
         type: "shell_output",
         provider: "fixture-provider",
         title: "Bearer title-secret",
-        content: "DIFFDASH_MCP_BEARER_TOKEN=content-secret Bearer content-token",
+        content: `DIFFDASH_MCP_BEARER_TOKEN=content-secret Bearer content-token
+{"Authorization":"Basic json-secret"}
+refresh_token='refresh-secret'`,
         metadata: {
           command: "API_KEY=metadata-secret inspect",
+          nested: {
+            headers: { Authorization: "Bearer nested-authorization-secret" },
+            accessToken: "nested-access-secret",
+            values: ["Bearer nested-array-secret; next", { ID_TOKEN: "nested-id-secret" }],
+          },
           rawEvent: { bearerToken: "must-not-persist" },
         },
       })
 
       expect(artifact.provider).toBe("fixture-provider")
       expect(artifact.title).toBe("Bearer [redacted]")
-      expect(artifact.content).toBe("DIFFDASH_MCP_BEARER_TOKEN=[redacted] Bearer [redacted]")
+      expect(artifact.content).toBe(`DIFFDASH_MCP_BEARER_TOKEN=[redacted] Bearer [redacted]
+{"Authorization":"[redacted]"}
+refresh_token='[redacted]'`)
       expect(artifact.metadata).toMatchObject({
         command: "API_KEY=[redacted] inspect",
+        nested: {
+          headers: { Authorization: "[redacted]" },
+          accessToken: "[redacted]",
+          values: ["Bearer [redacted]; next", { ID_TOKEN: "[redacted]" }],
+        },
         sourceProvider: "fixture-provider",
       })
       expect(artifact.metadata).not.toHaveProperty("rawEvent")
+      const persisted = JSON.stringify(artifact)
+      for (const secret of [
+        "title-secret",
+        "content-secret",
+        "content-token",
+        "json-secret",
+        "refresh-secret",
+        "metadata-secret",
+        "nested-authorization-secret",
+        "nested-access-secret",
+        "nested-array-secret",
+        "nested-id-secret",
+        "must-not-persist",
+      ]) {
+        expect(persisted).not.toContain(secret)
+      }
     }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
   )
 })

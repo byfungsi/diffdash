@@ -1,29 +1,36 @@
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AppState } from "@diffdash/domain/app-state"
-import {
-  AppUpdateAvailable,
-  AppUpdateDownloaded,
-  AppUpdateDownloading,
-  AppUpdateUnsupported,
-  type AppUpdateState,
-} from "@diffdash/protocol/app-update"
-import type { DiffDashApi } from "@diffdash/protocol/api"
-import {
-  AgentProviderAutoCandidates,
-  AgentProviderCapabilityStatus,
-  AgentProviderCatalog,
-  AgentProviderDefaults,
-  AgentProviderModel,
-  AgentProviderStatus,
-} from "@diffdash/protocol/agent-providers"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
-import { Repo, RepositorySearchResult } from "@diffdash/domain/repository"
-import { BranchComparison, LocalReviewTarget } from "@diffdash/domain/local-review"
-import { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
+import {
+  GitProviderCapabilities,
+  GitProviderDescriptor,
+  GitProviderId,
+  GitProviderKind,
+  GitProviderTerminology,
+  HostedRepository,
+  makeHostedRepositoryLocator,
+} from "@diffdash/domain/git-provider"
+import {
+  BranchComparison,
+  LocalReviewDetail,
+  LocalReviewDiff,
+  LocalReviewTarget,
+} from "@diffdash/domain/local-review"
+import { Repo } from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import {
+  LocalReviewSnapshot,
+  makeReviewSnapshotManifest,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
+import {
+  makeReviewSnapshotId,
+  type ReviewFilePatchHash,
+  ReviewDiffIdentity,
+  ReviewKey,
+  ReviewRevision,
+} from "@diffdash/domain/review-identity"
 import {
   MarkdownBody,
   ReviewThread,
@@ -35,12 +42,32 @@ import {
 } from "@diffdash/domain/review-thread"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import {
-  GitProviderCapabilities,
-  GitProviderDescriptor,
-  GitProviderId,
-  GitProviderKind,
-  GitProviderTerminology,
-} from "@diffdash/domain/git-provider"
+  AgentProviderAutoCandidates,
+  AgentProviderCapabilityStatus,
+  AgentProviderCatalog,
+  AgentProviderDefaults,
+  AgentProviderId,
+  AgentModelId,
+  AgentProviderModel,
+  AgentProviderStatus,
+} from "@diffdash/protocol/agent-providers"
+import type { DiffDashApi } from "@diffdash/protocol/api"
+import {
+  AppUpdateAvailable,
+  AppUpdateDownloaded,
+  AppUpdateDownloading,
+  type AppUpdateState,
+  AppUpdateUnsupported,
+} from "@diffdash/protocol/app-update"
+import { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import {
+  REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
+  ReviewSnapshotExpired,
+  ReviewSnapshotPageAvailable,
+  ReviewSnapshotPageCursor,
+  ReviewSnapshotSearchAvailable,
+  ReviewSnapshotSearchMatch,
+} from "@diffdash/protocol/review-snapshot"
 import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
 
 /** One deterministic renderer action recorded by the demo runtime. */
@@ -90,10 +117,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const updateListeners = new Set<(state: AppUpdateState) => void>()
   const actions: DemoAction[] = []
   const pendingRuns = new Map<string, PendingAgentRun>()
+  const snapshotCache = new Map<string, ReviewSnapshot>()
   let repositories: Repo[] = []
   let currentRevision = firstRevision
   let approved = false
-  let viewedFileKeys = new Set<string>()
+  let viewedFiles = new Map<string, ReviewFilePatchHash>()
   let settings = cloneSettings(DEFAULT_AI_SETTINGS)
   let appState = AppState.make({ onboardingCompleted: true })
   let updateState: AppUpdateState = AppUpdateUnsupported.make({
@@ -137,6 +165,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     }
     pendingRuns.clear()
     currentRevision = firstRevision
+    snapshotCache.clear()
+    snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
     repositories = [scenario.repository]
     approved = false
     settings = cloneSettings(DEFAULT_AI_SETTINGS)
@@ -145,10 +175,10 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       currentVersion: scenario.manifest.appVersion.replace(/^v/, ""),
       reason: "development",
     })
-    viewedFileKeys = new Set(
+    viewedFiles = new Map(
       currentRevision.parsedDiff.files
         .filter((file) => scenario.manifest.initiallyViewedFilePaths.includes(file.path))
-        .map((file) => file.reviewKey),
+        .map((file) => [file.reviewKey, file.patchHash]),
     )
     threadDetails = new Map(
       scenario.threads.map((details) => {
@@ -190,7 +220,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
 
   const requireTarget = (target: ReviewThreadTarget) => {
     if (target.kind === "local") return
-    requireReview(target.owner, target.name, target.number)
+    requireReview(
+      target.review.repository.namespace,
+      target.review.repository.name,
+      target.review.number,
+    )
   }
 
   const requireThread = (threadId: ReviewThreadId) => {
@@ -216,7 +250,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       record("timeline.release", { checkpointId })
       if (checkpointId === "revision-updated") {
         currentRevision = scenario.currentRevision
-        viewedFileKeys.clear()
+        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
         for (const sourceDetails of scenario.threads) {
           const current = threadDetails.get(sourceDetails.thread.id)
           if (current === undefined) continue
@@ -303,7 +337,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       scenarioId: scenario.manifest.id,
       revisionId: currentRevision.id,
       approved,
-      viewedFileKeys: [...viewedFileKeys],
+      viewedFileKeys: currentRevision.parsedDiff.files
+        .filter((file) => viewedFiles.get(file.reviewKey) === file.patchHash)
+        .map((file) => file.reviewKey),
       pendingAgentTurnIds: [...pendingRuns.keys()],
       updateState: updateState["_tag"],
     }),
@@ -355,7 +391,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         AgentProviderCatalog.make({
           providers: [
             AgentProviderStatus.make({
-              id: "codex",
+              id: AgentProviderId.make("codex"),
               displayName: "Codex",
               description: "Demo agent provider",
               homepage: null,
@@ -375,22 +411,22 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
               ],
               models: [
                 AgentProviderModel.make({
-                  id: "gpt-5.3-codex-spark",
+                  id: AgentModelId.make("gpt-5.3-codex-spark"),
                   displayName: "GPT 5.3 Codex Spark",
                   capabilities: ["walkthrough", "review-thread"],
                   quality: "balanced",
                 }),
               ],
               defaults: AgentProviderDefaults.make({
-                walkthroughModel: "gpt-5.3-codex-spark",
-                reviewThreadModel: "gpt-5.3-codex-spark",
+                walkthroughModel: AgentModelId.make("gpt-5.3-codex-spark"),
+                reviewThreadModel: AgentModelId.make("gpt-5.3-codex-spark"),
               }),
               setup: [],
             }),
           ],
           autoCandidates: AgentProviderAutoCandidates.make({
-            walkthrough: ["codex"],
-            reviewThread: ["codex"],
+            walkthrough: [AgentProviderId.make("codex")],
+            reviewThread: [AgentProviderId.make("codex")],
           }),
         }),
     },
@@ -435,10 +471,10 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
       favoriteRemote: async (remote) => {
         const favorite = Repo.make({
-          id: `github:${remote.owner}/${remote.name}`,
-          provider: remote.providerId,
-          owner: remote.owner,
-          name: remote.name,
+          id: `${remote.locator.providerId}:${remote.locator.namespace}/${remote.locator.name}`,
+          provider: remote.locator.providerId,
+          owner: remote.locator.namespace,
+          name: remote.locator.name,
           remoteUrl: remote.url,
           localPath: null,
           isFavorite: true,
@@ -451,7 +487,6 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         record("repositories.favoriteRemote", { id: favorite.id })
         return favorite
       },
-      addLocal: async (localPath) => linkLocalPath(localPath),
       install: async (localPath) => linkLocalPath(localPath),
       link: async (input) => {
         requireReview(
@@ -478,7 +513,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
             id,
             repoId: scenario.repository.id,
             reviewKey: scenario.reviewKey,
-            prNumber: input.target.kind === "pullRequest" ? input.target.number : null,
+            prNumber: input.target.kind === "hosted" ? input.target.review.number : null,
             baseRevision: input.expectedBaseRevision,
             headRevision: input.expectedHeadRevision,
             currentBaseRevision: input.expectedBaseRevision,
@@ -614,15 +649,16 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.namespaces.length === 0 || request.namespaces.includes(scenario.repository.owner)
         return matchesQuery && matchesOwner
           ? [
-              RepositorySearchResult.make({
-                owner: scenario.repository.owner,
-                providerId: provider.id,
-                name: scenario.repository.name,
-                nameWithOwner: `${scenario.repository.owner}/${scenario.repository.name}`,
+              HostedRepository.make({
+                locator: makeHostedRepositoryLocator(
+                  provider.id,
+                  scenario.repository.owner,
+                  scenario.repository.name,
+                ),
                 url: scenario.repository.remoteUrl,
                 description: scenario.manifest.repository.description,
                 isPrivate: false,
-                updatedAt: currentRevision.detail.updatedAt,
+                updatedAt: currentRevision.detail.summary.updatedAt,
               }),
             ]
           : []
@@ -639,37 +675,6 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return [pullRequestSummary(currentRevision)]
       },
       listAssigned: async () => [pullRequestSummary(currentRevision)],
-      get: async (request) => {
-        requireReview(
-          request.review.repository.namespace,
-          request.review.repository.name,
-          request.review.number,
-        )
-        return currentRevision.detail
-      },
-      refresh: async (request) => {
-        const { namespace: owner, name } = request.review.repository
-        const { number } = request.review
-        requireReview(owner, name, number)
-        record("gitProvider.refreshPullRequestDetail", { owner, name, number })
-        return currentRevision.detail
-      },
-      getDiff: async (request) => {
-        requireReview(
-          request.review.repository.namespace,
-          request.review.repository.name,
-          request.review.number,
-        )
-        return currentRevision.diff
-      },
-      getSnapshot: async (request) => {
-        requireReview(
-          request.review.repository.namespace,
-          request.review.repository.name,
-          request.review.number,
-        )
-        return currentRevision.snapshot
-      },
       getDecision: async (request) => {
         requireReview(
           request.review.repository.namespace,
@@ -683,7 +688,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const { number } = request.review
         requireReview(owner, name, number)
         approved = true
-        record("gitProvider.approvePullRequest", { owner, name, number })
+        record("gitProvider.submitReviewDecision", { owner, name, number })
       },
     },
     localReviews: {
@@ -697,9 +702,18 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
             baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           }),
         }),
-      getDetail: async (target) => localReviewDetail(target.rootPath, currentRevision),
-      getDiff: async (target) => localReviewDiff(target.rootPath, currentRevision),
-      getSnapshot: async (target) => {
+    },
+    reviewSnapshots: {
+      acquireHosted: async (request) => {
+        requireReview(
+          request.review.repository.namespace,
+          request.review.repository.name,
+          request.review.number,
+        )
+        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
+        return makeReviewSnapshotManifest(currentRevision.snapshot)
+      },
+      acquireLocal: async (target) => {
         const detail = LocalReviewDetail.make({
           ...localReviewDetail(target.rootPath, currentRevision),
           comparison: target.comparison,
@@ -708,13 +722,88 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           ...localReviewDiff(target.rootPath, currentRevision),
           comparison: target.comparison,
         })
-        return LocalReviewSnapshot.make({
-          reviewKey: ReviewKey.make(`local:${target.rootPath}`),
-          baseRevision: ReviewRevision.make(diff.baseSha),
-          headRevision: ReviewRevision.make(diff.headSha),
+        const reviewKey = ReviewKey.make(`local:${target.rootPath}`)
+        const baseRevision = ReviewRevision.make(diff.baseSha)
+        const headRevision = ReviewRevision.make(diff.headSha)
+        const snapshot = LocalReviewSnapshot.make({
+          snapshotId: makeReviewSnapshotId({
+            reviewKey,
+            baseRevision,
+            headRevision,
+            diffIdentity: ReviewDiffIdentity.make(diff.diffHash),
+          }),
+          reviewKey,
+          baseRevision,
+          headRevision,
           detail,
           diff,
           parsedDiff: parseUnifiedDiff(diff.diff),
+        })
+        snapshotCache.set(snapshot.snapshotId, snapshot)
+        return makeReviewSnapshotManifest(snapshot)
+      },
+      getPage: async (request) => {
+        const snapshot = snapshotCache.get(request.snapshotId)
+        if (snapshot === undefined) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "evicted",
+          })
+        }
+        const files =
+          request.fileIds.length === 0
+            ? snapshot.parsedDiff.files
+            : request.fileIds.flatMap((fileId) => {
+                const file = snapshot.parsedDiff.files.find(
+                  (candidate) => candidate.fileId === fileId,
+                )
+                return file === undefined ? [] : [file]
+              })
+        if (request.fileIds.length > 0 && files.length !== request.fileIds.length) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "mismatched",
+          })
+        }
+        const cursorMatch =
+          request.cursor === null ? null : /^page:v1:([0-9]+):00000000$/.exec(request.cursor)
+        if (request.cursor !== null && cursorMatch === null) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "mismatched",
+          })
+        }
+        const offset = cursorMatch === null ? 0 : Number(cursorMatch[1])
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset > files.length) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "mismatched",
+          })
+        }
+        const nextOffset = Math.min(files.length, offset + REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)
+        return ReviewSnapshotPageAvailable.make({
+          snapshotId: request.snapshotId,
+          files: files.slice(offset, nextOffset),
+          nextCursor:
+            nextOffset < files.length
+              ? ReviewSnapshotPageCursor.make(`page:v1:${nextOffset}:00000000`)
+              : null,
+        })
+      },
+      search: async (request) => {
+        const snapshot = snapshotCache.get(request.snapshotId)
+        if (snapshot === undefined || request.cursor !== null) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: snapshot === undefined ? "evicted" : "mismatched",
+          })
+        }
+        const matches = searchSnapshot(snapshot, request.query)
+        return ReviewSnapshotSearchAvailable.make({
+          snapshotId: request.snapshotId,
+          matches: matches.slice(0, request.limit),
+          totalMatches: matches.length,
+          nextCursor: null,
         })
       },
     },
@@ -725,8 +814,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        if (request.headRevision !== currentRevision.snapshot.headRevision) return []
-        return [...viewedFileKeys]
+        if (request.baseRefName !== currentRevision.detail.summary.base.name) return []
+        return [...viewedFiles].map(([reviewKey, patchHash]) => ({ reviewKey, patchHash }))
       },
       set: async (request) => {
         requireReview(
@@ -734,26 +823,25 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        if (request.headRevision !== currentRevision.snapshot.headRevision) {
-          throw new Error(`Viewed-file head ${request.headRevision} is not current`)
+        if (request.baseRefName !== currentRevision.detail.summary.base.name) {
+          throw new Error(`Viewed-file base ${request.baseRefName} is not current`)
         }
-        if (request.viewed) viewedFileKeys.add(request.reviewKey)
-        else viewedFileKeys.delete(request.reviewKey)
+        if (request.viewed) viewedFiles.set(request.reviewKey, request.patchHash)
+        else viewedFiles.delete(request.reviewKey)
         record("viewedFiles.set", {
           reviewKey: request.reviewKey,
-          filePath: request.filePath,
           viewed: request.viewed,
         })
       },
-      listLocal: async (_rootPath, headSha) =>
-        headSha === currentRevision.snapshot.headRevision ? [...viewedFileKeys] : [],
-      setLocal: async (_rootPath, headSha, reviewKey, filePath, viewed) => {
-        if (headSha !== currentRevision.snapshot.headRevision) {
-          throw new Error(`Viewed-file head ${headSha} is not current`)
-        }
-        if (viewed) viewedFileKeys.add(reviewKey)
-        else viewedFileKeys.delete(reviewKey)
-        record("viewedFiles.setLocal", { reviewKey, filePath, viewed })
+      listLocal: async () =>
+        [...viewedFiles].map(([reviewKey, patchHash]) => ({ reviewKey, patchHash })),
+      setLocal: async (request) => {
+        if (request.viewed) viewedFiles.set(request.reviewKey, request.patchHash)
+        else viewedFiles.delete(request.reviewKey)
+        record("viewedFiles.setLocal", {
+          reviewKey: request.reviewKey,
+          viewed: request.viewed,
+        })
       },
     },
     walkthroughs: {
@@ -812,16 +900,13 @@ const cloneSettings = (settings: AISettings) =>
     models: { ...settings.models },
   })
 
-const pullRequestSummary = (revision: MaterializedDemoRevision) => {
-  const { files: _files, commits: _commits, ...summary } = revision.detail
-  return summary
-}
+const pullRequestSummary = (revision: MaterializedDemoRevision) => revision.detail.summary
 
 const localReviewDetail = (rootPath: string, revision: MaterializedDemoRevision) =>
   LocalReviewDetail.make({
     rootPath,
-    repoName: revision.detail.repoName,
-    branchName: revision.detail.headRefName,
+    repoName: revision.detail.summary.locator.repository.name,
+    branchName: revision.detail.summary.head.name,
     baseSha: revision.snapshot.baseRevision,
     headSha: revision.snapshot.headRevision,
     diffHash: revision.snapshot.headRevision,
@@ -843,7 +928,48 @@ const localReviewDiff = (rootPath: string, revision: MaterializedDemoRevision) =
 const localStoredWalkthrough = (revision: MaterializedDemoRevision) =>
   StoredWalkthrough.make({
     ...revision.walkthrough,
-    repoId: `local:${revision.detail.repoName}`,
+    repoId: `local:${revision.detail.summary.locator.repository.name}`,
     prNumber: null,
-    reviewKey: `local:${revision.detail.repoName}`,
+    reviewKey: `local:${revision.detail.summary.locator.repository.name}`,
   })
+
+const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
+  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
+  const matches: ReviewSnapshotSearchMatch[] = []
+  for (const file of snapshot.parsedDiff.files) {
+    for (const hunk of file.hunks) {
+      for (const line of projectDiffHunkLines(hunk)) {
+        if (line.kind === "metadata") continue
+        expression.lastIndex = 0
+        for (
+          let match = expression.exec(line.content);
+          match !== null;
+          match = expression.exec(line.content)
+        ) {
+          matches.push(
+            ReviewSnapshotSearchMatch.make({
+              id: `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
+              fileId: file.fileId,
+              filePath: file.path,
+              reviewKey: file.reviewKey,
+              hunkId: hunk.id,
+              hunkLineIndex: line.index,
+              newLineNumber: line.newLineNumber,
+              oldLineNumber: line.oldLineNumber,
+              side:
+                line.kind === "context"
+                  ? "context"
+                  : line.kind === "deletion"
+                    ? "deletions"
+                    : "additions",
+              text: line.content,
+              start: match.index,
+              end: match.index + match[0].length,
+            }),
+          )
+        }
+      }
+    }
+  }
+  return matches
+}

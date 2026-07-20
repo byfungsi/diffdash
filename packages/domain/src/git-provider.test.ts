@@ -10,10 +10,14 @@ import {
   HostedReviewSummary,
   HostedReviewLocator,
   HostedReviewNumber,
+  makeHostedRepositoryLocator,
   makeHostedRepositoryKey,
+  makeHostedReviewLocator,
   makeHostedReviewKey,
   RepositoryNamespace,
   ProviderActor,
+  sameHostedRepository,
+  sameHostedReview,
 } from "./git-provider"
 
 const locator = (providerId: string, namespace = "fungsi", name = "diffdash") =>
@@ -25,11 +29,8 @@ const locator = (providerId: string, namespace = "fungsi", name = "diffdash") =>
 
 describe("hosted Git provider identities", () => {
   it("preserves existing GitHub repository and review keys", () => {
-    const repository = locator("github")
-    const review = HostedReviewLocator.make({
-      repository,
-      number: HostedReviewNumber.make(51),
-    })
+    const repository = makeHostedRepositoryLocator("github", "fungsi", "diffdash")
+    const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 51)
 
     expect(makeHostedRepositoryKey(repository)).toBe("github:fungsi/diffdash")
     expect(makeHostedReviewKey(review)).toBe("github:fungsi/diffdash#51")
@@ -41,6 +42,25 @@ describe("hosted Git provider identities", () => {
     )
 
     expect(new Set(keys)).toHaveLength(keys.length)
+  })
+
+  it("compares complete repository and review identity", () => {
+    const repository = makeHostedRepositoryLocator("github", "fungsi", "diffdash")
+    const sameRepository = makeHostedRepositoryLocator("github", "fungsi", "diffdash")
+    const otherRepository = makeHostedRepositoryLocator("github", "fungsi", "dashboard")
+    const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 51)
+
+    expect(sameHostedRepository(repository, sameRepository)).toBe(true)
+    expect(
+      sameHostedRepository(repository, makeHostedRepositoryLocator("github", "FUNGSI", "DiffDash")),
+    ).toBe(true)
+    expect(sameHostedRepository(repository, otherRepository)).toBe(false)
+    expect(
+      sameHostedReview(review, makeHostedReviewLocator("github", "fungsi", "diffdash", 51)),
+    ).toBe(true)
+    expect(
+      sameHostedReview(review, makeHostedReviewLocator("github", "fungsi", "diffdash", 52)),
+    ).toBe(false)
   })
 
   it("supports nested namespaces and self-hosted instance IDs", () => {

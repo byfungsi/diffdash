@@ -9,8 +9,8 @@ type SqlParams = readonly unknown[] | Record<string, unknown>
 
 /** Synchronous statements available inside one SQLite transaction callback. */
 export interface DatabaseTransaction {
-  readonly get: <A>(sql: string, params?: SqlParams) => A | undefined
-  readonly all: <A>(sql: string, params?: SqlParams) => readonly A[]
+  readonly get: (sql: string, params?: SqlParams) => unknown
+  readonly all: (sql: string, params?: SqlParams) => readonly unknown[]
   readonly run: (sql: string, params?: SqlParams) => void
 }
 
@@ -24,11 +24,11 @@ export class DatabaseError extends Schema.TaggedError<DatabaseError>()("Database
 export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
   DatabaseService,
   {
-    readonly get: <A>(
+    readonly get: (sql: string, params?: SqlParams) => Effect.Effect<unknown, DatabaseError>
+    readonly all: (
       sql: string,
       params?: SqlParams,
-    ) => Effect.Effect<A | undefined, DatabaseError>
-    readonly all: <A>(sql: string, params?: SqlParams) => Effect.Effect<readonly A[], DatabaseError>
+    ) => Effect.Effect<readonly unknown[], DatabaseError>
     readonly run: (sql: string, params?: SqlParams) => Effect.Effect<void, DatabaseError>
     readonly transaction: <A>(
       operation: string,
@@ -61,16 +61,10 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
         )
 
         return DatabaseService.of({
-          get: <A>(sql: string, params: SqlParams = []) =>
-            runStatement(db, "get", () => {
-              // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
-              return db.prepare(sql).get(params) as A | undefined
-            }),
-          all: <A>(sql: string, params: SqlParams = []) =>
-            runStatement(db, "all", () => {
-              // SAFETY: Callers choose `A` at repository boundaries immediately before parsing rows into domain types.
-              return db.prepare(sql).all(params) as readonly A[]
-            }),
+          get: (sql: string, params: SqlParams = []) =>
+            runStatement(db, "get", () => db.prepare(sql).get(params)),
+          all: (sql: string, params: SqlParams = []) =>
+            runStatement(db, "all", () => db.prepare(sql).all(params)),
           run: (sql: string, params: SqlParams = []) =>
             runStatement(db, "run", () => {
               db.prepare(sql).run(params)
@@ -112,15 +106,13 @@ const makeTransaction = (
   database: BetterSqliteDatabase,
   isActive: () => boolean,
 ): DatabaseTransaction => ({
-  get: <A>(sql: string, params: SqlParams = []) => {
+  get: (sql: string, params: SqlParams = []) => {
     assertTransactionActive(isActive)
-    // SAFETY: Transaction callers parse rows at their repository boundary before returning domain values.
-    return database.prepare(sql).get(params) as A | undefined
+    return database.prepare(sql).get(params)
   },
-  all: <A>(sql: string, params: SqlParams = []) => {
+  all: (sql: string, params: SqlParams = []) => {
     assertTransactionActive(isActive)
-    // SAFETY: Transaction callers parse rows at their repository boundary before returning domain values.
-    return database.prepare(sql).all(params) as readonly A[]
+    return database.prepare(sql).all(params)
   },
   run: (sql: string, params: SqlParams = []) => {
     assertTransactionActive(isActive)

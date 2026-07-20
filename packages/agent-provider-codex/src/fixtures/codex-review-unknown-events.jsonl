@@ -1,0 +1,7 @@
+{"type":"session.telemetry","version":2}
+{"type":"thread.started","thread_id":"codex-thread-unknown-events"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"future-1","type":"future_completed_item","status":"completed","payload":{"summary":"Retain this future payload","count":2}}}
+{"type":"turn.progress","percent":80}
+{"type":"item.completed","item":{"id":"message-unknown","type":"agent_message","text":"{\"bodyMarkdown\":\"The changed hunk is correct.\",\"threadSummaryUpdate\":null,\"referencedAnchors\":null}"}}
+{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":8}}

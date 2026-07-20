@@ -1,15 +1,11 @@
-import { Effect, Redacted, Schema, Stream } from "effect"
-import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { Effect, Predicate, Redacted, Schema, Stream } from "effect"
+import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
 
 import {
   AgentArtifactCandidate,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
-  AgentCapabilityReady,
-  AgentCapabilityUnavailable,
   AgentExecutionPolicy,
   AgentModelDescriptor,
   AgentModelId,
@@ -35,12 +31,37 @@ import {
   WalkthroughResult,
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
-import type { CliResult, CliRunner } from "@diffdash/process/cli"
-import type { CliStreamRunner } from "@diffdash/process/cli-stream"
+import {
+  nonNegativeNumberAt,
+  parseProviderJsonlObject,
+  parseProviderJsonText as parseJsonText,
+  providerJsonContent as jsonContent,
+  providerMetadata as metadata,
+  recordAt,
+  stringAt,
+} from "@diffdash/agent-provider/provider-json"
+import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
+import {
+  normalizeProviderReviewThreadResponse as normalizeResponse,
+  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
+} from "@diffdash/agent-provider/review-output"
+import {
+  boundedProviderDiagnostic,
+  makeAgentProviderOperationErrorFactory,
+  probeAgentRuntime,
+  projectAgentCapabilityProbe,
+} from "@diffdash/agent-provider/runtime"
+import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
+import { processRequest, type ProcessResult, type ProcessRunner } from "@diffdash/process"
+import { makeTempFileScoped, makeTempOutputPathScoped } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("codex")
 const executable = "codex"
 const mcpTokenEnvironmentVariable = "DIFFDASH_MCP_BEARER_TOKEN"
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId,
+  fallbackReason: "Codex execution failed",
+})
 
 /** Stable Codex provider identity. */
 export const CODEX_PROVIDER_ID = providerId
@@ -105,35 +126,22 @@ export const CODEX_MANIFEST = AgentProviderManifest.make({
 })
 
 /** Explicit policy accepted by Codex walkthrough execution. */
-export const CODEX_WALKTHROUGH_POLICY = AgentExecutionPolicy.make({
-  network: "allow",
-  sensitiveFiles: "deny",
-  repository: "local-working-copy",
-  shell: "read-only",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
-})
+export const CODEX_WALKTHROUGH_POLICY = makeCodexExecutionPolicy("local-working-copy")
 
 /** Explicit base policy accepted by Codex review execution. */
-export const CODEX_REVIEW_POLICY = AgentExecutionPolicy.make({
-  network: "allow",
-  sensitiveFiles: "deny",
-  repository: "reviewed-revision",
-  shell: "read-only",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
-})
+export const CODEX_REVIEW_POLICY = makeCodexExecutionPolicy("reviewed-revision")
+
+function makeCodexExecutionPolicy(repository: AgentExecutionPolicy["repository"]) {
+  return makeNonMutatingAgentExecutionPolicy({
+    network: "allow",
+    repository,
+    shell: "read-only",
+  })
+}
 
 /** Host dependencies required to construct the Codex leaf provider. */
 export interface CodexProviderDependencies {
-  readonly cli: CliRunner
-  readonly cliStream: CliStreamRunner
+  readonly processes: ProcessRunner
   readonly tempDirectory?: string
 }
 
@@ -141,61 +149,34 @@ export interface CodexProviderDependencies {
 export const makeCodexProvider = (
   dependencies: CodexProviderDependencies,
 ): AgentProviderRegistration => {
+  const runtimeProbe = probeRuntime(dependencies.processes)
   return {
     manifest: CODEX_MANIFEST,
     walkthrough: {
-      probe: probeCodexCapability(dependencies.cli, "walkthrough"),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "walkthrough"),
       execute: (request) => executeWalkthrough(dependencies, request),
     },
     reviewThread: {
-      probe: probeCodexCapability(dependencies.cli, "review-thread"),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "review-thread"),
       execute: (request) => executeReview(dependencies, request),
     },
   }
 }
 
-interface RuntimeProbeResult {
-  readonly ready: boolean
-  readonly version: string | null
-  readonly reason: string
-}
-
-const probeRuntime = (cli: CliRunner): Effect.Effect<RuntimeProbeResult, AgentProviderProbeError> =>
-  cli.run(executable, ["--version"], { timeoutMs: 5_000 }).pipe(
-    Effect.map((result) => ({
-      ready: true,
-      version: parseVersion(result.stdout),
-      reason: "",
-    })),
-    Effect.catchAll((cause) =>
-      Effect.succeed({
-        ready: false,
-        version: null,
-        reason: boundedReason(cause, "Codex is not installed or available"),
-      }),
-    ),
-  )
+const probeRuntime = (processes: ProcessRunner) =>
+  probeAgentRuntime({
+    versionOutput: processes
+      .run(processRequest(executable, ["--version"], { timeoutMs: 5_000 }))
+      .pipe(Effect.map((result) => result.stdout)),
+    unavailableReason: "Codex is not installed or available",
+  })
 
 /** Probes the Codex runtime once for prerequisites and either declared capability. */
 export const probeCodexCapability = (
-  cli: CliRunner,
+  processes: ProcessRunner,
   capability: AgentCapability,
 ): Effect.Effect<AgentCapabilityProbe, AgentProviderProbeError> =>
-  probeRuntime(cli).pipe(
-    Effect.map(
-      (result): AgentCapabilityProbe =>
-        result.ready
-          ? AgentCapabilityReady.make({ capability, runtimeVersion: result.version })
-          : AgentCapabilityUnavailable.make({ capability, reason: result.reason }),
-    ),
-  )
-
-const parseVersion = (output: string) => {
-  const value = output.trim()
-  if (value.length === 0) return null
-  const match = /(?:^|\s)v?(\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?)(?:\s|$)/u.exec(value)
-  return match?.[1] ?? value.slice(0, 100)
-}
+  projectAgentCapabilityProbe(probeRuntime(processes), capability)
 
 const executeWalkthrough = (
   dependencies: CodexProviderDependencies,
@@ -205,14 +186,18 @@ const executeWalkthrough = (
   AgentProviderOperationError | InvalidAgentProviderResponseError
 > =>
   Effect.gen(function* () {
-    yield* requirePolicy("walkthrough", request.policy, "local-working-copy")
+    yield* requirePolicy("walkthrough", request.policy, CODEX_WALKTHROUGH_POLICY)
     const tempDirectory = dependencies.tempDirectory ?? tmpdir()
-    return yield* Effect.acquireUseRelease(
-      createWalkthroughOutputPath(tempDirectory),
-      (outputPath) =>
-        Effect.gen(function* () {
-          const result = yield* dependencies.cli
-            .run(
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const outputPath = yield* makeTempOutputPathScoped({
+          parentDirectory: tempDirectory,
+          prefix: "codex-output-",
+          fileName: "output.txt",
+        }).pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
+        const result = yield* dependencies.processes
+          .run(
+            processRequest(
               executable,
               makeWalkthroughArgs(request, outputPath, request.workingDirectory === tempDirectory),
               {
@@ -220,29 +205,20 @@ const executeWalkthrough = (
                 timeoutMs: request.timeoutMs,
                 stdin: request.prompt,
               },
-            )
-            .pipe(Effect.mapError(operationError("walkthrough")))
-          const output = yield* readWalkthroughOutput(outputPath, result)
-          if (output.trim().length === 0) {
-            return yield* InvalidAgentProviderResponseError.make({
-              providerId,
-              capability: "walkthrough",
-              reason: "Codex completed without generated text",
-            })
-          }
-          return WalkthroughResult.make({ text: output })
-        }),
-      (outputPath) => Effect.promise(() => rm(outputPath, { force: true })),
+            ),
+          )
+          .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
+        const output = yield* readWalkthroughOutput(outputPath, result)
+        if (output.trim().length === 0) {
+          return yield* InvalidAgentProviderResponseError.make({
+            providerId,
+            capability: "walkthrough",
+            reason: "Codex completed without generated text",
+          })
+        }
+        return WalkthroughResult.make({ text: output })
+      }),
     )
-  })
-
-const createWalkthroughOutputPath = (directory: string) =>
-  Effect.tryPromise({
-    try: async () => {
-      await mkdir(directory, { recursive: true })
-      return join(directory, `codex-output-${randomUUID()}.txt`)
-    },
-    catch: operationError("walkthrough"),
   })
 
 const makeWalkthroughArgs = (
@@ -269,7 +245,7 @@ const makeWalkthroughArgs = (
   "-",
 ]
 
-const readWalkthroughOutput = (path: string, result: CliResult) =>
+const readWalkthroughOutput = (path: string, result: ProcessResult) =>
   Effect.tryPromise({
     try: async () => {
       try {
@@ -279,7 +255,7 @@ const readWalkthroughOutput = (path: string, result: CliResult) =>
         return result.stdout
       }
     },
-    catch: operationError("walkthrough"),
+    catch: operationErrors.fromCause("walkthrough"),
   })
 
 interface PendingArtifact {
@@ -289,11 +265,22 @@ interface PendingArtifact {
   readonly metadata: Readonly<Record<string, unknown>>
 }
 
+type CodexTurnLifecycle =
+  | { readonly stage: "AwaitingThreadStart" }
+  | { readonly stage: "AwaitingTurnStart"; readonly threadId: string }
+  | { readonly stage: "TurnInProgress"; readonly threadId: string }
+  | { readonly stage: "TurnCompleted"; readonly threadId: string }
+
+interface CompletedAgentMessage {
+  readonly sequence: number
+  readonly text: string
+}
+
 interface CodexTurnState {
-  turnStarted: boolean
-  turnCompleted: boolean
-  finalMessage: string | null
+  lifecycle: CodexTurnLifecycle
+  nextAgentMessageSequence: number
   usage: AgentUsage | null
+  readonly agentMessages: CompletedAgentMessage[]
   readonly artifacts: PendingArtifact[]
 }
 
@@ -305,47 +292,49 @@ const executeReview = (
   AgentProviderOperationError | InvalidAgentProviderResponseError
 > =>
   Effect.gen(function* () {
-    yield* requirePolicy("review-thread", request.policy, "reviewed-revision")
-    if (!request.mcp.allowedTools.every((tool) => request.policy.allowedMcpTools.includes(tool))) {
-      return yield* operationErrorValue(
+    yield* requirePolicy("review-thread", request.policy, CODEX_REVIEW_POLICY)
+    if (!isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)) {
+      return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
       )
     }
 
-    return yield* withOutputSchemaPath(dependencies.tempDirectory ?? tmpdir(), (outputSchemaPath) =>
+    return yield* withOutputSchemaPath(dependencies.tempDirectory, (outputSchemaPath) =>
       Effect.gen(function* () {
         const state: CodexTurnState = {
-          turnStarted: false,
-          turnCompleted: false,
-          finalMessage: null,
+          lifecycle: { stage: "AwaitingThreadStart" },
+          nextAgentMessageSequence: 0,
           usage: null,
+          agentMessages: [],
           artifacts: [],
         }
-        yield* dependencies.cliStream
-          .stream(executable, makeReviewArgs(request, outputSchemaPath), {
-            cwd: request.workingDirectory,
-            env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
-            stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
-            timeoutMs: request.timeoutMs,
-          })
+        yield* dependencies.processes
+          .streamLines(
+            processRequest(executable, makeReviewArgs(request, outputSchemaPath), {
+              cwd: request.workingDirectory,
+              env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
+              stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
+              timeoutMs: request.timeoutMs,
+            }),
+          )
           .pipe(
-            Stream.mapError(operationError("review-thread")),
+            Stream.mapError(operationErrors.fromCause("review-thread")),
             Stream.runForEach((event) => {
               const { _tag: tag } = event
-              return tag === "CliLine" && event.source === "stdout"
+              return tag === "ProcessLine" && event.source === "stdout"
                 ? consumeCodexLine(state, event.line)
                 : Effect.void
             }),
           )
 
-        if (!state.turnStarted || !state.turnCompleted) {
-          return yield* operationErrorValue(
+        if (state.lifecycle.stage !== "TurnCompleted") {
+          return yield* operationErrors.fromReason(
             "review-thread",
-            "Codex stream ended without a complete turn lifecycle",
+            `Codex stream ended without a complete turn lifecycle (stopped at ${state.lifecycle.stage})`,
           )
         }
-        const response = yield* decodeReviewResponse(state.finalMessage)
+        const response = yield* decodeReviewResponse(selectFinalAgentMessage(state.agentMessages))
         return ReviewThreadResult.make({
           response,
           usage: state.usage,
@@ -388,36 +377,81 @@ const consumeCodexLine = (
     if (line.trim().length === 0) return
     const event = yield* parseJsonLine(line)
     const type = stringAt(event, "type")
-    if (type === null) return yield* protocolError("Codex emitted an event without a type")
+    if (type === null) {
+      return yield* operationErrors.fromReason(
+        "review-thread",
+        "Codex emitted an event without a type",
+      )
+    }
 
     switch (type) {
-      case "thread.started":
-        if (!stringAt(event, "thread_id")) {
-          return yield* protocolError("Codex thread.started event omitted thread_id")
+      case "thread.started": {
+        if (state.lifecycle.stage !== "AwaitingThreadStart") {
+          return yield* invalidLifecycleEvent(state, type, "thread.started as the first event")
         }
+        const threadId = nonBlankStringAt(event, "thread_id")
+        if (threadId === null) {
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            "Codex thread.started event omitted thread_id",
+          )
+        }
+        state.lifecycle = { stage: "AwaitingTurnStart", threadId }
         return
+      }
       case "turn.started":
-        state.turnStarted = true
+        if (state.lifecycle.stage !== "AwaitingTurnStart") {
+          return yield* invalidLifecycleEvent(state, type, "thread.started")
+        }
+        state.lifecycle = { stage: "TurnInProgress", threadId: state.lifecycle.threadId }
         return
       case "turn.completed":
-        state.turnCompleted = true
+        if (state.lifecycle.stage !== "TurnInProgress") {
+          return yield* invalidLifecycleEvent(state, type, "turn.started")
+        }
+        state.lifecycle = { stage: "TurnCompleted", threadId: state.lifecycle.threadId }
         state.usage = parseCodexUsage(recordAt(event, "usage"))
         return
       case "turn.failed":
+        if (state.lifecycle.stage !== "TurnInProgress") {
+          return yield* invalidLifecycleEvent(state, type, "turn.started")
+        }
+        return yield* operationErrors.fromReason(
+          "review-thread",
+          errorMessage(event) ?? `Codex emitted ${type}`,
+        )
       case "error":
-        return yield* operationErrorValue(
+        return yield* operationErrors.fromReason(
           "review-thread",
           errorMessage(event) ?? `Codex emitted ${type}`,
         )
       case "item.completed": {
+        if (state.lifecycle.stage !== "TurnInProgress") {
+          return yield* invalidLifecycleEvent(state, type, "turn.started")
+        }
         const item = recordAt(event, "item")
-        if (item === null) return yield* protocolError("Codex item.completed omitted item")
+        if (item === null) {
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            "Codex item.completed omitted item",
+          )
+        }
         return yield* consumeCompletedItem(state, item)
       }
-      case "item.started": {
+      case "item.started":
+      case "item.updated": {
+        if (state.lifecycle.stage !== "TurnInProgress") {
+          return yield* invalidLifecycleEvent(state, type, "turn.started")
+        }
         const item = recordAt(event, "item")
-        if (item !== null && stringAt(item, "type") === "file_change") {
-          return yield* protocolError("Codex attempted a file change despite the read-only sandbox")
+        if (item === null) {
+          return yield* operationErrors.fromReason("review-thread", `Codex ${type} omitted item`)
+        }
+        if (stringAt(item, "type") === "file_change") {
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            `Codex emitted a file change in ${type} despite the read-only sandbox`,
+          )
         }
         return
       }
@@ -425,73 +459,476 @@ const consumeCodexLine = (
         return
     }
   })
+
+interface CodexCompletedItemBase {
+  readonly item: Readonly<Record<string, unknown>>
+  readonly itemId: string | null
+  readonly itemType: string
+}
+
+interface CodexAgentMessageItem extends CodexCompletedItemBase {
+  readonly _tag: "AgentMessage"
+}
+
+interface CodexCommandExecutionItem extends CodexCompletedItemBase {
+  readonly _tag: "CommandExecution"
+}
+
+interface CodexMcpToolCallItem extends CodexCompletedItemBase {
+  readonly _tag: "McpToolCall"
+}
+
+interface CodexFileChangeItem extends CodexCompletedItemBase {
+  readonly _tag: "FileChange"
+}
+
+interface CodexWebSearchItem extends CodexCompletedItemBase {
+  readonly _tag: "WebSearch"
+}
+
+interface CodexRepositorySearchItem extends CodexCompletedItemBase {
+  readonly _tag: "RepositorySearch"
+}
+
+interface CodexUnknownCompletedItem extends CodexCompletedItemBase {
+  readonly _tag: "Unknown"
+}
+
+type CodexCompletedItem =
+  | CodexAgentMessageItem
+  | CodexCommandExecutionItem
+  | CodexMcpToolCallItem
+  | CodexFileChangeItem
+  | CodexWebSearchItem
+  | CodexRepositorySearchItem
+  | CodexUnknownCompletedItem
+
+const codexWebSearchItemTypes = new Set(["web_search", "web_search_call", "web_search_result"])
+const codexRepositorySearchItemTypes = new Set([
+  "local_search",
+  "repository_search",
+  "workspace_search",
+])
+const codexGenericSearchItemTypes = new Set([
+  "code_search",
+  "file_search",
+  "search",
+  "search_result",
+])
+const codexWebSearchSemanticValues = new Set(["browser", "internet", "remote", "web"])
+const codexRepositorySearchSemanticValues = new Set([
+  "code",
+  "file",
+  "filesystem",
+  "local",
+  "repository",
+  "workspace",
+])
 
 const consumeCompletedItem = (
   state: CodexTurnState,
   item: Readonly<Record<string, unknown>>,
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
-    const itemType = stringAt(item, "type")
-    const itemId = stringAt(item, "id")
-    switch (itemType) {
-      case "agent_message": {
-        const text = stringAt(item, "text")
-        if (text === null) return yield* protocolError("Codex agent message omitted text")
-        state.finalMessage = text
-        state.artifacts.push({
-          type: "provider-message",
-          title: "Codex assistant message",
-          content: text,
-          metadata: metadata({ itemId, status: stringAt(item, "status") }),
+    const completedItem = discriminateCompletedItem(item)
+    const { _tag: itemTag } = completedItem
+    switch (itemTag) {
+      case "AgentMessage": {
+        const adapted = yield* adaptAgentMessageItem(completedItem)
+        state.agentMessages.push({
+          sequence: state.nextAgentMessageSequence,
+          text: adapted.text,
         })
+        state.nextAgentMessageSequence += 1
+        state.artifacts.push(adapted.artifact)
         return
       }
-      case "command_execution": {
-        const command = stringAt(item, "command") ?? "command"
-        state.artifacts.push({
-          type: "shell-output",
-          title: `Codex command: ${command}`,
-          content: stringAt(item, "aggregated_output") ?? stringAt(item, "output") ?? "",
-          metadata: metadata({
-            itemId,
-            command,
-            status: stringAt(item, "status"),
-            exitCode: numberAt(item, "exit_code"),
-          }),
-        })
+      case "CommandExecution":
+        state.artifacts.push(adaptCommandExecutionItem(completedItem))
         return
-      }
-      case "mcp_tool_call": {
-        const server = stringAt(item, "server") ?? "unknown"
-        const tool = stringAt(item, "tool") ?? "unknown"
-        state.artifacts.push({
-          type: server === "diffdash" ? "mcp-tool-result" : "unknown",
-          title: `Codex MCP: ${server}/${tool}`,
-          content: jsonContent(item.result ?? item.output ?? item.error ?? null),
-          metadata: metadata({ itemId, server, tool, status: stringAt(item, "status") }),
-        })
+      case "McpToolCall":
+        state.artifacts.push(adaptMcpToolCallItem(completedItem))
         return
-      }
-      case "file_change":
-        return yield* protocolError("Codex emitted a file change despite the read-only sandbox")
-      default:
+      case "FileChange":
+        return yield* adaptFileChangeItem()
+      case "WebSearch":
+        state.artifacts.push(adaptWebSearchItem(completedItem))
+        return
+      case "RepositorySearch":
+        state.artifacts.push(adaptRepositorySearchItem(completedItem))
+        return
+      case "Unknown":
+        state.artifacts.push(adaptUnknownCompletedItem(completedItem))
         return
     }
   })
 
-const parseJsonLine = (line: string) =>
-  Effect.try({
-    try: () => {
-      const parsed: unknown = JSON.parse(line)
-      if (!isRecord(parsed)) throw new Error("event is not a JSON object")
-      return parsed
+const discriminateCompletedItem = (item: Readonly<Record<string, unknown>>): CodexCompletedItem => {
+  const itemId = nonBlankStringAt(item, "id")
+  const itemType = nonBlankStringAt(item, "type") ?? "unknown"
+  const common = { item, itemId, itemType }
+  switch (itemType) {
+    case "agent_message":
+      return { _tag: "AgentMessage", ...common }
+    case "command_execution":
+      return { _tag: "CommandExecution", ...common }
+    case "mcp_tool_call":
+      return { _tag: "McpToolCall", ...common }
+    case "file_change":
+      return { _tag: "FileChange", ...common }
+    default:
+      if (isWebSearchItem(itemType, item)) return { _tag: "WebSearch", ...common }
+      if (isRepositorySearchItem(itemType, item)) {
+        return { _tag: "RepositorySearch", ...common }
+      }
+      return { _tag: "Unknown", ...common }
+  }
+}
+
+const adaptAgentMessageItem = (
+  completedItem: CodexAgentMessageItem,
+): Effect.Effect<
+  { readonly text: string; readonly artifact: PendingArtifact },
+  AgentProviderOperationError
+> => {
+  const text = firstNonBlankStringAtPaths(completedItem.item, [
+    ["text"],
+    ["message", "text"],
+    ["content", "text"],
+    ["output", "text"],
+  ])
+  if (text === null) {
+    return operationErrors.fromReason("review-thread", "Codex agent message omitted text")
+  }
+  return Effect.succeed({
+    text,
+    artifact: {
+      type: "provider-message",
+      title: "Codex assistant message",
+      content: text,
+      metadata: metadata({
+        itemId: completedItem.itemId,
+        status: extractItemStatus(completedItem.item),
+      }),
     },
-    catch: (cause) =>
-      operationErrorValue(
-        "review-thread",
-        `Codex emitted invalid JSONL: ${cause instanceof Error ? cause.message : String(cause)}`,
-      ),
   })
+}
+
+const adaptCommandExecutionItem = (completedItem: CodexCommandExecutionItem): PendingArtifact => {
+  const command =
+    firstNonBlankStringAtPaths(completedItem.item, [
+      ["command"],
+      ["command", "text"],
+      ["details", "command"],
+    ]) ?? "command"
+  const status = extractItemStatus(completedItem.item)
+  const content =
+    firstContentAtPaths(completedItem.item, [
+      ["aggregated_output"],
+      ["aggregatedOutput"],
+      ["output"],
+      ["result", "output"],
+      ["result", "content"],
+      ["error"],
+    ]) ?? usefulItemFallback({ command, status }, completedItem.item)
+  return {
+    type: "shell-output",
+    title: boundedArtifactTitle("Codex command", command),
+    content,
+    metadata: metadata({
+      itemId: completedItem.itemId,
+      command,
+      status,
+      exitCode: firstNumberAtPaths(completedItem.item, [
+        ["exit_code"],
+        ["exitCode"],
+        ["result", "exit_code"],
+        ["result", "exitCode"],
+      ]),
+    }),
+  }
+}
+
+const adaptMcpToolCallItem = (completedItem: CodexMcpToolCallItem): PendingArtifact => {
+  const server =
+    firstNonBlankStringAtPaths(completedItem.item, [
+      ["server"],
+      ["mcp", "server"],
+      ["details", "server"],
+    ]) ?? "unknown"
+  const tool =
+    firstNonBlankStringAtPaths(completedItem.item, [
+      ["tool"],
+      ["mcp", "tool"],
+      ["details", "tool"],
+    ]) ?? "unknown"
+  const status = extractItemStatus(completedItem.item)
+  const content =
+    firstContentAtPaths(completedItem.item, [
+      ["result", "content"],
+      ["result", "structured_content"],
+      ["result", "structuredContent"],
+      ["result"],
+      ["output"],
+      ["error", "message"],
+      ["error"],
+    ]) ?? usefulItemFallback({ status }, completedItem.item)
+  return {
+    type: server === "diffdash" ? "mcp-tool-result" : "unknown",
+    title: boundedArtifactTitle("Codex MCP", `${server}/${tool}`),
+    content,
+    metadata: metadata({ itemId: completedItem.itemId, server, tool, status }),
+  }
+}
+
+const adaptFileChangeItem = (): Effect.Effect<never, AgentProviderOperationError> =>
+  operationErrors.fromReason(
+    "review-thread",
+    "Codex emitted a file change in item.completed despite the read-only sandbox",
+  )
+
+const adaptWebSearchItem = (completedItem: CodexWebSearchItem): PendingArtifact =>
+  adaptSearchItem(completedItem, "web-result", "Codex web search")
+
+const adaptRepositorySearchItem = (completedItem: CodexRepositorySearchItem): PendingArtifact =>
+  adaptSearchItem(completedItem, "search-result", "Codex repository search")
+
+const adaptSearchItem = (
+  completedItem: CodexWebSearchItem | CodexRepositorySearchItem,
+  type: "web-result" | "search-result",
+  title: string,
+): PendingArtifact => {
+  const query = extractSearchQuery(completedItem.item)
+  const url = extractSearchUrl(completedItem.item)
+  const status = extractItemStatus(completedItem.item)
+  const content =
+    firstContentAtPaths(completedItem.item, [
+      ["content"],
+      ["result", "content"],
+      ["response", "content"],
+      ["data", "content"],
+      ["results"],
+      ["result", "results"],
+      ["response", "results"],
+      ["output"],
+      ["result", "output"],
+      ["error", "message"],
+      ["error"],
+    ]) ?? usefulItemFallback({ query, url, status }, completedItem.item)
+  return {
+    type,
+    title: boundedArtifactTitle(title, query ?? url ?? status),
+    content,
+    metadata: metadata({
+      itemId: completedItem.itemId,
+      eventType: completedItem.itemType,
+      query,
+      url,
+      status,
+    }),
+  }
+}
+
+const adaptUnknownCompletedItem = (completedItem: CodexUnknownCompletedItem): PendingArtifact => {
+  const status = extractItemStatus(completedItem.item)
+  return {
+    type: "unknown",
+    title: boundedArtifactTitle("Unknown Codex completed item", completedItem.itemType),
+    content: jsonContent(completedItem.item),
+    metadata: metadata({
+      itemId: completedItem.itemId,
+      eventType: completedItem.itemType,
+      status,
+    }),
+  }
+}
+
+const isWebSearchItem = (itemType: string, item: Readonly<Record<string, unknown>>) =>
+  codexWebSearchItemTypes.has(itemType) ||
+  (codexGenericSearchItemTypes.has(itemType) &&
+    searchSemanticValues(item).some((value) => codexWebSearchSemanticValues.has(value)))
+
+const isRepositorySearchItem = (itemType: string, item: Readonly<Record<string, unknown>>) =>
+  codexRepositorySearchItemTypes.has(itemType) ||
+  (codexGenericSearchItemTypes.has(itemType) &&
+    searchSemanticValues(item).some((value) => codexRepositorySearchSemanticValues.has(value)))
+
+const searchSemanticValues = (item: Readonly<Record<string, unknown>>) =>
+  [
+    ["scope"],
+    ["source"],
+    ["kind"],
+    ["search_type"],
+    ["searchType"],
+    ["search", "scope"],
+    ["search", "source"],
+    ["details", "scope"],
+    ["details", "source"],
+    ["action", "scope"],
+  ]
+    .map((path) => stringAtPath(item, path))
+    .filter((value): value is string => value !== null)
+    .map((value) => value.trim().toLowerCase())
+
+const extractSearchQuery = (item: Readonly<Record<string, unknown>>) => {
+  const query = firstNonBlankStringAtPaths(item, [
+    ["query"],
+    ["search_query"],
+    ["searchQuery"],
+    ["action", "query"],
+    ["action", "search_query"],
+    ["search", "query"],
+    ["request", "query"],
+    ["details", "query"],
+    ["data", "query"],
+    ["result", "query"],
+    ["response", "query"],
+  ])
+  if (query !== null) return query
+  const queries = firstStringArrayAtPaths(item, [
+    ["queries"],
+    ["action", "queries"],
+    ["request", "queries"],
+    ["details", "queries"],
+  ])
+  return queries.length === 0 ? null : queries.join("\n")
+}
+
+const extractSearchUrl = (item: Readonly<Record<string, unknown>>) =>
+  firstNonBlankStringAtPaths(item, [
+    ["url"],
+    ["action", "url"],
+    ["page", "url"],
+    ["result", "url"],
+    ["response", "url"],
+    ["details", "url"],
+    ["data", "url"],
+  ])
+
+const extractItemStatus = (item: Readonly<Record<string, unknown>>) =>
+  firstNonBlankStringAtPaths(item, [
+    ["status"],
+    ["state", "status"],
+    ["result", "status"],
+    ["response", "status"],
+    ["details", "status"],
+    ["data", "status"],
+  ])
+
+const usefulItemFallback = (
+  details: {
+    readonly command?: string | null
+    readonly query?: string | null
+    readonly url?: string | null
+    readonly status?: string | null
+  },
+  item: Readonly<Record<string, unknown>>,
+) => {
+  const summary = [
+    details.command === null || details.command === undefined
+      ? null
+      : `Command: ${details.command}`,
+    details.query === null || details.query === undefined ? null : `Query: ${details.query}`,
+    details.url === null || details.url === undefined ? null : `URL: ${details.url}`,
+    details.status === null || details.status === undefined ? null : `Status: ${details.status}`,
+  ].filter((value): value is string => value !== null)
+  return summary.length > 0 ? summary.join("\n") : jsonContent(item)
+}
+
+const firstContentAtPaths = (
+  item: Readonly<Record<string, unknown>>,
+  paths: readonly (readonly string[])[],
+) => {
+  for (const path of paths) {
+    const value = valueAtPath(item, path)
+    if (value === null || value === undefined) continue
+    const content = jsonContent(value)
+    if (content.trim().length > 0 && content !== "[]" && content !== "{}") return content
+  }
+  return null
+}
+
+const firstNonBlankStringAtPaths = (
+  item: Readonly<Record<string, unknown>>,
+  paths: readonly (readonly string[])[],
+) => {
+  for (const path of paths) {
+    const value = stringAtPath(item, path)
+    if (value !== null && value.trim().length > 0) return value
+  }
+  return null
+}
+
+const firstNumberAtPaths = (
+  item: Readonly<Record<string, unknown>>,
+  paths: readonly (readonly string[])[],
+) => {
+  for (const path of paths) {
+    const value = valueAtPath(item, path)
+    if (typeof value === "number" && Number.isFinite(value)) return value
+  }
+  return null
+}
+
+const firstStringArrayAtPaths = (
+  item: Readonly<Record<string, unknown>>,
+  paths: readonly (readonly string[])[],
+) => {
+  for (const path of paths) {
+    const value = valueAtPath(item, path)
+    if (!Array.isArray(value)) continue
+    const strings = value.filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    )
+    if (strings.length > 0) return strings
+  }
+  return []
+}
+
+const stringAtPath = (item: Readonly<Record<string, unknown>>, path: readonly string[]) => {
+  const value = valueAtPath(item, path)
+  return typeof value === "string" ? value : null
+}
+
+const valueAtPath = (item: Readonly<Record<string, unknown>>, path: readonly string[]): unknown => {
+  let value: unknown = item
+  for (const key of path) {
+    if (!Predicate.isReadonlyRecord(value)) return undefined
+    value = value[key]
+  }
+  return value
+}
+
+const nonBlankStringAt = (item: Readonly<Record<string, unknown>>, key: string) => {
+  const value = stringAt(item, key)
+  return value !== null && value.trim().length > 0 ? value : null
+}
+
+const boundedArtifactTitle = (prefix: string, detail: string | null) => {
+  const title = detail === null ? prefix : `${prefix}: ${detail.replace(/\s+/gu, " ").trim()}`
+  return title.length <= 200 ? title : `${title.slice(0, 197)}...`
+}
+
+const selectFinalAgentMessage = (messages: readonly CompletedAgentMessage[]) => {
+  let selected: CompletedAgentMessage | null = null
+  for (const message of messages) {
+    if (selected === null || message.sequence > selected.sequence) selected = message
+  }
+  return selected?.text ?? null
+}
+
+const invalidLifecycleEvent = (state: CodexTurnState, eventType: string, expected: string) =>
+  operationErrors.fromReason(
+    "review-thread",
+    `Codex emitted ${eventType} while lifecycle was ${state.lifecycle.stage}; expected ${expected}`,
+  )
+
+const parseJsonLine = (line: string) =>
+  parseProviderJsonlObject(line).pipe(
+    Effect.mapError((cause) =>
+      operationErrors.fromReason("review-thread", `Codex emitted invalid JSONL: ${cause.reason}`),
+    ),
+  )
 
 const decodeReviewResponse = (
   finalMessage: string | null,
@@ -503,26 +940,12 @@ const decodeReviewResponse = (
       InvalidAgentProviderResponseError.make({
         providerId,
         capability: "review-thread",
-        reason: `Codex returned an invalid review response: ${String(cause)}`,
+        reason: boundedProviderDiagnostic(
+          `Codex returned an invalid review response: ${String(cause)}`,
+        ),
       }),
     ),
   )
-}
-
-const normalizeResponse = (value: unknown): unknown => {
-  if (!isRecord(value)) return value
-  const bodyMarkdown = value.bodyMarkdown
-  const threadSummary = value.threadSummary ?? value.threadSummaryUpdate ?? null
-  const locations = value.referencedLocations ?? value.referencedAnchors ?? []
-  return {
-    bodyMarkdown,
-    threadSummary,
-    referencedLocations: Array.isArray(locations)
-      ? locations.map((location) =>
-          typeof location === "string" ? location : JSON.stringify(location),
-        )
-      : locations,
-  }
 }
 
 const parseCodexUsage = (usage: Readonly<Record<string, unknown>> | null): AgentUsage | null =>
@@ -536,124 +959,28 @@ const parseCodexUsage = (usage: Readonly<Record<string, unknown>> | null): Agent
         costUsd: null,
       })
 
-const reviewAnchorJsonSchema = (
-  tag: "review" | "file" | "hunk" | "line",
-  properties: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
-) => ({
-  type: "object",
-  additionalProperties: false,
-  required: ["_tag", ...Object.keys(properties)],
-  properties: { _tag: { type: "string", enum: [tag] }, ...properties },
-})
-
-const reviewResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["bodyMarkdown", "threadSummaryUpdate", "referencedAnchors"],
-  properties: {
-    bodyMarkdown: { type: "string", minLength: 1 },
-    threadSummaryUpdate: { type: ["string", "null"], minLength: 1 },
-    referencedAnchors: {
-      type: ["array", "null"],
-      items: {
-        anyOf: [
-          reviewAnchorJsonSchema("review", {}),
-          reviewAnchorJsonSchema("file", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-          }),
-          reviewAnchorJsonSchema("hunk", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            header: { type: "string" },
-            oldStart: { type: "number" },
-            oldLines: { type: "number" },
-            newStart: { type: "number" },
-            newLines: { type: "number" },
-          }),
-          reviewAnchorJsonSchema("line", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            hunkHeader: { type: "string" },
-            side: { type: "string", enum: ["old", "new"] },
-            lineNumber: { type: "number" },
-            lineContent: { type: "string" },
-          }),
-        ],
-      },
-    },
-  },
-} as const
-
 const withOutputSchemaPath = <A, E, R>(
-  tempDirectory: string,
+  tempDirectory: string | undefined,
   use: (path: string) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
-  Effect.acquireUseRelease(
-    Effect.tryPromise({
-      try: async () => {
-        await mkdir(tempDirectory, { recursive: true })
-        const directory = await mkdtemp(join(tempDirectory, "diffdash-codex-"))
-        const path = join(directory, "review-thread-response.schema.json")
-        await writeFile(path, JSON.stringify(reviewResponseJsonSchema), { mode: 0o600 })
-        return { directory, path }
-      },
-      catch: operationError("review-thread"),
-    }),
-    ({ path }) => use(path),
-    ({ directory }) => Effect.promise(() => rm(directory, { force: true, recursive: true })),
+  Effect.scoped(
+    makeTempFileScoped(JSON.stringify(reviewResponseJsonSchema), {
+      ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
+      prefix: "diffdash-codex-",
+      fileName: "review-thread-response.schema.json",
+    }).pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 
 const requirePolicy = (
   capability: AgentCapability,
   policy: AgentExecutionPolicy,
-  repository: AgentExecutionPolicy["repository"],
+  expected: AgentExecutionPolicy,
 ) => {
-  const valid = isAgentExecutionPolicyEnforced(
-    policy,
-    AgentExecutionPolicy.make({ ...CODEX_WALKTHROUGH_POLICY, repository }),
-  )
+  const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrorValue(capability, "Codex requires the explicit non-mutating policy")
+    : operationErrors.fromReason(capability, "Codex requires the explicit non-mutating policy")
 }
-
-const operationError = (capability: AgentCapability) => (cause: unknown) =>
-  AgentProviderOperationError.make({
-    providerId,
-    capability,
-    reason: boundedReason(cause, "Codex execution failed"),
-    cause,
-  })
-
-const operationErrorValue = (capability: AgentCapability, reason: string) =>
-  AgentProviderOperationError.make({ providerId, capability, reason })
-
-const protocolError = (reason: string) => operationErrorValue("review-thread", reason)
-
-const boundedReason = (cause: unknown, fallback: string) => {
-  if (isRecord(cause) && typeof cause.stderr === "string" && cause.stderr.trim().length > 0) {
-    return redactDiagnostic(cause.stderr)
-  }
-  return cause instanceof Error && cause.message.trim().length > 0
-    ? redactDiagnostic(cause.message)
-    : fallback
-}
-
-const redactDiagnostic = (value: string) =>
-  value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/giu, "Bearer [redacted]")
-    .replace(/DIFFDASH_MCP_BEARER_TOKEN=[^\s]+/giu, "DIFFDASH_MCP_BEARER_TOKEN=[redacted]")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(-600)
 
 const errorMessage = (event: Readonly<Record<string, unknown>>) => {
   const direct = stringAt(event, "message")
@@ -661,43 +988,6 @@ const errorMessage = (event: Readonly<Record<string, unknown>>) => {
   const error = recordAt(event, "error")
   return error === null ? null : stringAt(error, "message")
 }
-
-const parseJsonText = (text: string): unknown => {
-  const trimmed = text.trim()
-  const json = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "")
-    : trimmed
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return text
-  }
-}
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const stringAt = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "string" ? record[key] : null
-
-const numberAt = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "number" && Number.isFinite(record[key]) ? record[key] : null
-
-const nonNegativeNumberAt = (record: Readonly<Record<string, unknown>>, key: string) => {
-  const value = numberAt(record, key)
-  return value !== null && value >= 0 ? value : null
-}
-
-const recordAt = (record: Readonly<Record<string, unknown>>, key: string) => {
-  const value = record[key]
-  return isRecord(value) ? value : null
-}
-
-const metadata = (values: Readonly<Record<string, string | number | null>>) =>
-  Object.fromEntries(Object.entries(values).filter((entry) => entry[1] !== null))
-
-const jsonContent = (value: unknown) =>
-  typeof value === "string" ? value : (JSON.stringify(value) ?? String(value))
 
 /** Converts a provider-owned model to its SDK identity. */
 export const codexModelId = (model: string) => AgentModelId.make(model)

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process"
 import {
   copyFileSync,
   existsSync,
@@ -11,18 +10,19 @@ import {
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { parseMacReleaseArguments } from "./release-arguments.mjs"
+import { runSyncCommand } from "./release-command.mjs"
+import { requiredEnvironment } from "./release-environment.mjs"
 
-const args = process.argv.slice(2)
+const cli = parseMacReleaseArguments()
 const desktopRoot = path.resolve("packages/desktop")
 const packageJson = JSON.parse(readFileSync(path.join(desktopRoot, "package.json"), "utf8"))
 const version = packageJson.version
 const productName = packageJson.productName ?? packageJson.name
-const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
-const requestedArch = readOption("--arch") ?? process.env.RELEASE_MAC_ARCH ?? nativeArch()
+const releaseAssetsDir = path.resolve(cli.assetsDir ?? "release-assets")
+const requestedArch = cli.arch ?? process.env.RELEASE_MAC_ARCH ?? nativeArch()
 const archs = requestedArch === "all" ? ["arm64", "x64"] : [requestedArch]
-const packageExisting = hasFlag("--package-existing")
-const skipNotarize = hasFlag("--skip-notarize")
-const submissionId = readOption("--submission-id")
+const { packageExisting, skipNotarize, submissionId } = cli
 
 if (process.platform !== "darwin") {
   throw new Error("Local macOS release builds must run on macOS.")
@@ -34,13 +34,13 @@ for (const arch of archs) {
   }
 }
 
-requiredEnv("APPLE_API_KEY")
-requiredEnv("APPLE_API_KEY_ID")
-requiredEnv("APPLE_API_ISSUER")
+requiredEnvironment("APPLE_API_KEY")
+requiredEnvironment("APPLE_API_KEY_ID")
+requiredEnvironment("APPLE_API_ISSUER")
 normalizeCscName()
 
 if (process.env.CSC_LINK !== undefined) {
-  requiredEnv("CSC_KEY_PASSWORD")
+  requiredEnvironment("CSC_KEY_PASSWORD")
 }
 
 const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-local-release-"))
@@ -61,9 +61,9 @@ if (!packageExisting) {
 mkdirSync(releaseAssetsDir, { recursive: true })
 
 if (!packageExisting) {
-  run("pnpm", ["assets:icons"])
-  run("pnpm", ["native:electron"])
-  run("pnpm", ["build"])
+  runSyncCommand("pnpm", ["assets:icons"])
+  runSyncCommand("pnpm", ["native:electron"])
+  runSyncCommand("pnpm", ["build"])
 }
 
 for (const arch of archs) {
@@ -80,7 +80,7 @@ for (const arch of archs) {
     console.log(`Packaging existing macOS ${arch} app`)
   } else {
     console.log(`Building signed macOS ${arch} app`)
-    run(
+    runSyncCommand(
       "pnpm",
       [
         "exec",
@@ -92,7 +92,7 @@ for (const arch of archs) {
         `--${arch}`,
         "--publish=never",
       ],
-      desktopRoot,
+      { cwd: desktopRoot },
     )
   }
 
@@ -106,12 +106,12 @@ for (const arch of archs) {
     if (submissionId !== undefined) {
       notarizeArgs.push("--submission-id", submissionId)
     }
-    run("node", notarizeArgs)
+    runSyncCommand("node", notarizeArgs)
   }
 
   console.log(`Packaging macOS ${arch} DMG`)
   rmSync(artifactPath, { force: true })
-  run(
+  runSyncCommand(
     "pnpm",
     [
       "exec",
@@ -125,14 +125,14 @@ for (const arch of archs) {
       `--${arch}`,
       "--publish=never",
     ],
-    desktopRoot,
+    { cwd: desktopRoot },
   )
 
   console.log(`Packaging macOS ${arch} updater ZIP`)
   rmSync(zipPath, { force: true })
   rmSync(blockmapPath, { force: true })
   rmSync(metadataPath, { force: true })
-  run(
+  runSyncCommand(
     "pnpm",
     [
       "exec",
@@ -146,7 +146,7 @@ for (const arch of archs) {
       `--${arch}`,
       "--publish=never",
     ],
-    desktopRoot,
+    { cwd: desktopRoot },
   )
 
   verifyApp(appPath)
@@ -175,21 +175,6 @@ for (const arch of archs) {
 
 console.log(`Local macOS release assets are ready in ${releaseAssetsDir}`)
 
-function readOption(name) {
-  const index = args.indexOf(name)
-  if (index === -1) return undefined
-
-  const value = args[index + 1]
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`Missing value for ${name}`)
-  }
-  return value
-}
-
-function hasFlag(name) {
-  return args.includes(name)
-}
-
 function nativeArch() {
   if (process.arch === "arm64") return "arm64"
   if (process.arch === "x64") return "x64"
@@ -205,14 +190,6 @@ function macAppPath(arch) {
   )
 }
 
-function requiredEnv(name) {
-  const value = process.env[name]
-  if (value === undefined || value.trim().length === 0) {
-    throw new Error(`Missing required environment variable: ${name}`)
-  }
-  return value
-}
-
 function normalizeCscName() {
   const name = process.env.CSC_NAME
   if (name === undefined) return
@@ -226,9 +203,9 @@ function normalizeCscName() {
 
 function verifyApp(appPath) {
   console.log(`Verifying signed and notarized app: ${appPath}`)
-  run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath])
-  run("spctl", ["-a", "-vv", "--type", "exec", appPath])
-  run("xcrun", ["stapler", "validate", appPath])
+  runSyncCommand("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath])
+  runSyncCommand("spctl", ["-a", "-vv", "--type", "exec", appPath])
+  runSyncCommand("xcrun", ["stapler", "validate", appPath])
 }
 
 function verifyAppUpdateConfig(appPath) {
@@ -245,13 +222,4 @@ function verifyAppUpdateConfig(appPath) {
     throw new Error("Packaged macOS updater configuration is missing updaterCacheDirName.")
   }
   console.log(`Verified updater configuration: ${updateConfigPath}`)
-}
-
-function run(command, commandArgs, cwd) {
-  console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
-  execFileSync(command, commandArgs, { cwd, env: process.env, stdio: "inherit" })
-}
-
-function shellQuote(value) {
-  return /[^A-Za-z0-9_./:=@-]/.test(value) ? JSON.stringify(value) : value
 }

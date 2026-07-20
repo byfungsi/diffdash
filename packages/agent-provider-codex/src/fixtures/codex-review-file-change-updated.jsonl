@@ -1,0 +1,3 @@
+{"type":"thread.started","thread_id":"codex-thread-file-change-updated"}
+{"type":"turn.started"}
+{"type":"item.updated","item":{"id":"mutation-updated","type":"file_change","changes":[{"path":"src/example.ts","kind":"update"}],"status":"in_progress"}}

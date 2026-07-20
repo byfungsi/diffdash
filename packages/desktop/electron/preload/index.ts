@@ -1,33 +1,41 @@
-import { contextBridge, ipcRenderer } from "electron"
+import type { AISettings } from "@diffdash/domain/ai-settings"
 
 import type { AppState } from "@diffdash/domain/app-state"
-import type { AppUpdateState } from "@diffdash/protocol/app-update"
-import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
-import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import type { RepositorySearchResult } from "@diffdash/domain/repository"
-import type { AISettings } from "@diffdash/domain/ai-settings"
-import type { DiffDashApi } from "@diffdash/protocol/api"
-import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
+import type { HostedRepository } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type { ReviewThreadId, ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import type {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  RunReviewThreadAgentRequest,
-} from "@diffdash/protocol/review-threads"
+import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
+import type { DiffDashApi } from "@diffdash/protocol/api"
+import type { AppUpdateState } from "@diffdash/protocol/app-update"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import type {
   GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedViewedFilesRequest,
   HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
-  SetHostedViewedFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "@diffdash/protocol/hosted-git"
+import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
+import type {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  RunReviewThreadAgentRequest,
+} from "@diffdash/protocol/review-threads"
+import type {
+  ReviewSnapshotPageRequest,
+  ReviewSnapshotSearchRequest,
+} from "@diffdash/protocol/review-snapshot"
+import type {
+  HostedViewedFilesRequest,
+  LocalViewedFilesRequest,
+  SetHostedViewedFileRequest,
+  SetLocalViewedFileRequest,
+} from "@diffdash/protocol/viewed-files"
+import { contextBridge, ipcRenderer } from "electron"
 import { createRendererTransport } from "./transport"
 
 const transport = createRendererTransport({
@@ -69,10 +77,8 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.listRepositories, { query: query ?? null }),
     setFavorite: (id: string, isFavorite: boolean) =>
       transport.invoke(InvokeChannel.setRepositoryFavorite, { id, isFavorite }),
-    favoriteRemote: (repo: RepositorySearchResult) =>
+    favoriteRemote: (repo: HostedRepository) =>
       transport.invoke(InvokeChannel.favoriteRemoteRepository, { repository: repo }),
-    addLocal: (localPath: string) =>
-      transport.invoke(InvokeChannel.addLocalRepository, { localPath }),
     install: (localPath: string) =>
       transport.invoke(InvokeChannel.installRepository, { localPath }),
     link: (input: LinkRepositoryCheckoutRequest) =>
@@ -115,13 +121,6 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.listHostedReviews, request),
     listAssigned: (request: HostedProviderRequest) =>
       transport.invoke(InvokeChannel.listAssignedHostedReviews, request),
-    get: (request: HostedReviewRequest) => transport.invoke(InvokeChannel.getHostedReview, request),
-    refresh: (request: HostedReviewRequest) =>
-      transport.invoke(InvokeChannel.refreshHostedReview, request),
-    getDiff: (request: HostedReviewRequest) =>
-      transport.invoke(InvokeChannel.getHostedReviewDiff, request),
-    getSnapshot: (request: HostedReviewRequest) =>
-      transport.invoke(InvokeChannel.getHostedReviewSnapshot, request),
     getDecision: (request: HostedReviewRequest) =>
       transport.invoke(InvokeChannel.getHostedReviewDecision, request),
     submitDecision: (request: SubmitHostedReviewDecisionRequest) =>
@@ -130,34 +129,26 @@ const api: DiffDashApi = {
   localReviews: {
     resolveBranch: (localPath: string, branchName: string | null) =>
       transport.invoke(InvokeChannel.resolveLocalBranch, { localPath, branchName }),
-    getDetail: (target: LocalReviewTarget) =>
-      transport.invoke(InvokeChannel.localReviewDetail, { target }),
-    getDiff: (target: LocalReviewTarget) =>
-      transport.invoke(InvokeChannel.localReviewDiff, { target }),
-    getSnapshot: (target: LocalReviewTarget) =>
-      transport.invoke(InvokeChannel.localReviewSnapshot, { target }),
+  },
+  reviewSnapshots: {
+    acquireHosted: (request: HostedReviewRequest) =>
+      transport.invoke(InvokeChannel.acquireHostedReviewSnapshot, request),
+    acquireLocal: (target: LocalReviewTarget) =>
+      transport.invoke(InvokeChannel.acquireLocalReviewSnapshot, { target }),
+    getPage: (request: ReviewSnapshotPageRequest) =>
+      transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
+    search: (request: ReviewSnapshotSearchRequest) =>
+      transport.invoke(InvokeChannel.searchReviewSnapshot, request),
   },
   viewedFiles: {
     list: (request: HostedViewedFilesRequest) =>
       transport.invoke(InvokeChannel.listViewedFiles, request),
     set: (request: SetHostedViewedFileRequest) =>
       transport.invoke(InvokeChannel.setViewedFile, request),
-    listLocal: (rootPath: string, headSha: string) =>
-      transport.invoke(InvokeChannel.listLocalViewedFiles, { rootPath, headSha }),
-    setLocal: (
-      rootPath: string,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ) =>
-      transport.invoke(InvokeChannel.setLocalViewedFile, {
-        rootPath,
-        headSha,
-        reviewKey,
-        filePath,
-        viewed,
-      }),
+    listLocal: (request: LocalViewedFilesRequest) =>
+      transport.invoke(InvokeChannel.listLocalViewedFiles, request),
+    setLocal: (request: SetLocalViewedFileRequest) =>
+      transport.invoke(InvokeChannel.setLocalViewedFile, request),
   },
   walkthroughs: {
     get: (request: HostedWalkthroughRequest) =>
@@ -176,6 +167,3 @@ const api: DiffDashApi = {
 }
 
 contextBridge.exposeInMainWorld("diffDash", api)
-
-/** Typed renderer API exposed through Electron preload. */
-export type { DiffDashApi } from "@diffdash/protocol/api"

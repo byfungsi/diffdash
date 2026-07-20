@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { _electron as electron, expect, type Page, test } from "@playwright/test"
+import { _electron as electron, expect, type Locator, type Page, test } from "@playwright/test"
 
 const desktopRoot = join(process.cwd(), "../desktop")
 
@@ -151,9 +151,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
         Reflect.apply(globalThis.window.diffDash.hostedRepositories.searchRepositories, undefined, [
           null,
         ]),
-        Reflect.apply(globalThis.window.diffDash.localReviews.getDetail, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.localReviews.getDiff, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.localReviews.getSnapshot, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.acquireHosted, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.acquireLocal, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.getPage, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.search, undefined, [null]),
         Reflect.apply(globalThis.window.diffDash.localWalkthroughs.get, undefined, [null]),
         Reflect.apply(globalThis.window.diffDash.localWalkthroughs.generate, undefined, [null]),
       ]
@@ -179,9 +180,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       "appState:update",
       "repositories:link",
       "hostedRepositories:search",
-      "localReviews:getDetail",
-      "localReviews:getDiff",
-      "localReviews:getSnapshot",
+      "reviewSnapshots:acquireHosted",
+      "reviewSnapshots:acquireLocal",
+      "reviewSnapshots:getPage",
+      "reviewSnapshots:search",
       "localWalkthroughs:get",
       "localWalkthroughs:generate",
     ]
@@ -194,7 +196,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       window.getByRole("button", { name: /Use (?:light|dark|system) theme/ }),
     ).toHaveCount(0)
     await expect(window.getByRole("button", { name: "Home" })).toBeVisible()
-    const openPullRequest = window.getByRole("button", { name: /Open (?:requested review|PR) #51/ })
+    const openPullRequest = window.getByRole("button", { name: /Open review #51/ })
     await expect(openPullRequest).toBeVisible()
     await openPullRequest.click()
 
@@ -210,30 +212,20 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .locator("diffs-container [data-line]")
       .filter({ hasText: "new" })
       .first()
+    await expect(addedLine).toBeVisible()
     const gutterNumber = window
-      .locator("diffs-container [data-column-number]")
+      .locator("diffs-container [data-column-number]:visible")
       .filter({ hasText: "1" })
       .first()
-    await expect(addedLine).toBeVisible()
-    await gutterNumber.hover()
-    const gutterUtility = window.locator("diffs-container [data-utility-button]")
-    await expect(gutterUtility).toBeVisible()
-    const utilityPointerEvent = {
-      bubbles: true,
-      button: 0,
-      composed: true,
-      pointerId: 1,
-      pointerType: "mouse",
-    }
-    await gutterUtility.dispatchEvent("pointerdown", utilityPointerEvent)
-    await gutterUtility.dispatchEvent("pointerup", utilityPointerEvent)
-    const initialComposer = window.getByRole("textbox", { name: "Thread message" })
-    await expect(initialComposer).toBeVisible()
+    const initialComposer = await openGutterThreadComposer(window, gutterNumber)
     await initialComposer.fill("Why was this line changed?")
     await window.getByRole("button", { name: "Comment" }).click()
 
     await expect(window.getByText("Why was this line changed?")).toBeVisible()
     await expect(window.getByText("Agent is reviewing...")).toBeVisible()
+    await expect(
+      window.getByText("The agent response did not start. Retry to try again."),
+    ).toHaveCount(0)
     await expect(window.getByText("The line check is complete.")).toBeVisible()
     const reviewDisclosure = window.getByRole("button", { name: "Review on L1" })
     const reviewContainer = window.locator("[data-review-thread-annotation]")
@@ -262,11 +254,14 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     const viewedCheckbox = diffCard.getByRole("checkbox")
     await viewedCheckbox.check({ force: true })
     await expect(viewedCheckbox).toBeChecked()
+    expect(await window.evaluate(() => globalThis.scrollY)).toBe(0)
 
     await window.getByRole("button", { name: "Actions" }).click()
     await window.getByRole("menuitem", { name: /Approve/ }).click()
     await window.getByRole("button", { name: "Actions" }).click()
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeVisible()
+    await window.keyboard.press("Escape")
+    await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeHidden()
 
     await window.getByRole("button", { name: "Walkthrough" }).click()
 
@@ -279,6 +274,11 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     expect(beforeRestart.runs).toHaveLength(2)
     expect(beforeRestart.runs.map(({ status }) => status)).toEqual(["completed", "completed"])
     expect(beforeRestart.runs.map(({ provider }) => provider)).toEqual(["codex", "codex"])
+    for (const run of beforeRestart.runs) {
+      expect(run.reviewKey).toBe(run.threadReviewKey)
+      expect(run.baseRevision).toBe(run.threadBaseRevision)
+      expect(run.headRevision).toBe(run.threadHeadRevision)
+    }
     expect(beforeRestart.runs.map(({ usage }) => usage)).toEqual([
       expect.objectContaining({ inputTokens: 10, outputTokens: 10 }),
       expect.objectContaining({ inputTokens: 10, outputTokens: 10 }),
@@ -454,26 +454,11 @@ for (const fixture of [
       await dismissOnboardingIfPresent(window)
       await expect(window.getByRole("heading", { name: "Local changes" })).toBeVisible()
       const gutterNumber = window
-        .locator("diffs-container [data-column-number]")
+        .locator("diffs-container [data-column-number]:visible")
         .filter({ hasText: "1" })
         .first()
-      await gutterNumber.dispatchEvent("pointermove", {
-        bubbles: true,
-        composed: true,
-        pointerType: "mouse",
-      })
-      const utility = window.locator("diffs-container [data-utility-button]")
-      await expect(utility).toBeVisible()
-      const pointerEvent = {
-        bubbles: true,
-        button: 0,
-        composed: true,
-        pointerId: 1,
-        pointerType: "mouse",
-      }
-      await utility.dispatchEvent("pointerdown", pointerEvent)
-      await utility.dispatchEvent("pointerup", pointerEvent)
-      await window.getByRole("textbox", { name: "Thread message" }).fill("Review this line")
+      const composer = await openGutterThreadComposer(window, gutterNumber)
+      await composer.fill("Review this line")
       await window.getByRole("button", { name: "Comment" }).click()
       await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
     } finally {
@@ -563,6 +548,9 @@ test("forwards a CLI command to the running DiffDash instance", async ({
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
     await expect(window.getByRole("heading", { name: "DiffDash" })).toBeVisible()
+    expect(await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"))).toBe(
+      userData,
+    )
 
     const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
       cwd: desktopRoot,
@@ -612,7 +600,7 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
     await expect(window.getByRole("alert")).toContainText("Renderer failed to load")
     await expect(window.getByRole("link", { name: "Reload DiffDash" })).toHaveAttribute(
       "href",
-      unavailableRendererUrl,
+      `${unavailableRendererUrl}/`,
     )
   } finally {
     await app.close()
@@ -672,7 +660,7 @@ const installCodexSettings = async (xdgConfigHome: string) => {
 }
 
 const installAgentSettings = async (xdgConfigHome: string, provider: string) => {
-  const settingsDirectory = join(xdgConfigHome, "diffdash")
+  const settingsDirectory = join(xdgConfigHome, "diffdash-development")
   await mkdir(settingsDirectory, { recursive: true })
   await writeFile(
     join(settingsDirectory, "settings.json"),
@@ -706,6 +694,38 @@ const dismissOnboardingIfPresent = async (
   }
 }
 
+const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
+  const utility = window.locator("diffs-container [data-utility-button]").first()
+  const composer = window.getByRole("textbox", { name: "Thread message" })
+  await expect
+    .poll(
+      async () => {
+        if (await composer.isVisible()) return true
+        try {
+          await gutterNumber.hover({ force: true, timeout: 1_000 })
+          if (!(await utility.isVisible())) return false
+          await utility.evaluate((button) => {
+            const init = {
+              bubbles: true,
+              button: 0,
+              composed: true,
+              pointerId: 1,
+              pointerType: "mouse",
+            }
+            button.dispatchEvent(new PointerEvent("pointerdown", init))
+            button.dispatchEvent(new PointerEvent("pointerup", init))
+          })
+          return composer.isVisible()
+        } catch {
+          return false
+        }
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true)
+  return composer
+}
+
 const writeExecutable = async (path: string, content: string) => {
   await writeFile(path, content, "utf8")
   await chmod(path, 0o755)
@@ -725,14 +745,26 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
     const runs = records(
       database
         .prepare(
-          `SELECT id, thread_id, provider, model, prompt_version, status, provider_run_id,
-             usage_json, error, started_at, completed_at
-           FROM agent_runs ORDER BY started_at, id`,
+          `SELECT run.id, run.thread_id, run.review_key, run.base_sha, run.head_sha,
+             run.provider, run.model, run.prompt_version, run.status, run.provider_run_id,
+             run.usage_json, run.error, run.started_at, run.completed_at,
+             thread.review_key AS thread_review_key,
+             thread.current_base_sha AS thread_base_sha,
+             thread.current_head_sha AS thread_head_sha
+           FROM agent_runs AS run
+           INNER JOIN review_threads AS thread ON thread.id = run.thread_id
+           ORDER BY run.started_at, run.id`,
         )
         .all(),
     ).map((row) => ({
       id: stringField(row, "id"),
       threadId: stringField(row, "thread_id"),
+      reviewKey: stringField(row, "review_key"),
+      baseRevision: stringField(row, "base_sha"),
+      headRevision: stringField(row, "head_sha"),
+      threadReviewKey: stringField(row, "thread_review_key"),
+      threadBaseRevision: stringField(row, "thread_base_sha"),
+      threadHeadRevision: stringField(row, "thread_head_sha"),
       provider: stringField(row, "provider"),
       model: stringField(row, "model"),
       promptVersion: stringField(row, "prompt_version"),

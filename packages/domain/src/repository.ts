@@ -2,11 +2,9 @@ import { Schema } from "effect"
 
 import {
   GitProviderId,
-  HostedRepositoryLocator,
-  HostedRepositoryName,
   HostedRepositorySource,
   LocalRepositorySource,
-  RepositoryNamespace,
+  makeHostedRepositoryLocator,
   type RepositorySource,
 } from "./git-provider"
 
@@ -31,20 +29,6 @@ export class Repo extends Schema.Class<Repo>("Repo")({
   updatedAt: Schema.String,
 }) {}
 
-/** A repository result returned by the configured Git provider. */
-export class RepositorySearchResult extends Schema.Class<RepositorySearchResult>(
-  "RepositorySearchResult",
-)({
-  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
-  owner: Schema.String,
-  name: Schema.String,
-  nameWithOwner: Schema.String,
-  url: Schema.String,
-  description: Schema.NullOr(Schema.String),
-  isPrivate: Schema.Boolean,
-  updatedAt: Schema.NullOr(Schema.String),
-}) {}
-
 /** A provider account or organization that can scope repository search. */
 export class RepositorySearchScope extends Schema.Class<RepositorySearchScope>(
   "RepositorySearchScope",
@@ -57,7 +41,7 @@ export class RepositorySearchScope extends Schema.Class<RepositorySearchScope>(
 export class RepositorySearchRequest extends Schema.Class<RepositorySearchRequest>(
   "RepositorySearchRequest",
 )({
-  providerId: Schema.optionalWith(GitProviderId, { default: () => GitProviderId.make("github") }),
+  providerId: GitProviderId,
   query: Schema.String,
   owners: Schema.Array(Schema.String),
 }) {}
@@ -92,9 +76,5 @@ export const repositorySource = (
   repo.provider === "local"
     ? LocalRepositorySource.make()
     : HostedRepositorySource.make({
-        locator: HostedRepositoryLocator.make({
-          providerId: GitProviderId.make(repo.provider),
-          namespace: RepositoryNamespace.make(repo.owner),
-          name: HostedRepositoryName.make(repo.name),
-        }),
+        locator: makeHostedRepositoryLocator(repo.provider, repo.owner, repo.name),
       })

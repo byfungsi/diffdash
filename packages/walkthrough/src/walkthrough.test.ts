@@ -25,54 +25,69 @@ import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 
 import { LocalReviewDetail } from "@diffdash/domain/local-review"
 import {
-  PullRequestCommit,
-  PullRequestDetail,
-  PullRequestFile,
-  ReviewActor,
-} from "@diffdash/domain/pull-request"
+  BranchRevision,
+  ChangedFile,
+  HostedReviewDetail,
+  HostedReviewSummary,
+  ProviderActor,
+  ReviewCommit,
+  makeHostedReviewLocator,
+} from "@diffdash/domain/git-provider"
 import {
   WalkthroughGenerationDetails,
   type WalkthroughHunkDigest,
 } from "@diffdash/domain/walkthrough"
 import { WalkthroughRouting, WalkthroughService } from "./walkthrough"
 
-const pullRequest = PullRequestDetail.make({
-  author: ReviewActor.make({ login: "octocat" }),
-  baseRefName: "main",
-  baseRefOid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+const summary = HostedReviewSummary.make({
+  locator: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
+  author: ProviderActor.make({
+    id: null,
+    username: "octocat",
+    displayName: null,
+    avatarUrl: null,
+  }),
+  base: BranchRevision.make({
+    name: "main",
+    revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  }),
   body: "Adds a walkthrough mode.",
+  createdAt: "2026-07-08T00:00:00Z",
+  decision: "none",
+  draft: false,
+  head: BranchRevision.make({
+    name: "feature/walkthrough",
+    revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  }),
+  state: "OPEN",
+  title: "Add walkthrough mode",
+  updatedAt: "2026-07-08T01:00:00Z",
+  url: "https://github.com/fungsi/diffdash/pull/51",
+})
+
+const hostedReview = HostedReviewDetail.make({
+  summary,
   commits: [
-    PullRequestCommit.make({
-      authoredDate: "2026-07-08T00:00:00Z",
-      messageHeadline: "Add walkthrough mode",
-      oid: "cccccccccccccccccccccccccccccccccccccccc",
+    ReviewCommit.make({
+      authoredAt: "2026-07-08T00:00:00Z",
+      title: "Add walkthrough mode",
+      revision: "cccccccccccccccccccccccccccccccccccccccc",
     }),
   ],
-  createdAt: "2026-07-08T00:00:00Z",
   files: [
-    PullRequestFile.make({
+    ChangedFile.make({
       additions: 10,
       changeType: "modified",
       deletions: 2,
       path: "src/app.tsx",
     }),
-    PullRequestFile.make({
+    ChangedFile.make({
       additions: 5,
       changeType: "modified",
       deletions: 1,
       path: "src/service.ts",
     }),
   ],
-  headRefName: "feature/walkthrough",
-  headRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  isDraft: false,
-  number: 51,
-  repoName: "diffdash",
-  repoOwner: "fungsi",
-  state: "OPEN",
-  title: "Add walkthrough mode",
-  updatedAt: "2026-07-08T01:00:00Z",
-  url: "https://github.com/fungsi/diffdash/pull/51",
 })
 
 const generationInput = {
@@ -88,7 +103,7 @@ const generationInput = {
       additions: 1,
       deletions: 1,
       header: "@@ -1,1 +1,1 @@",
-      id: "src/app.tsx:pull-request:51:h1",
+      id: "src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1",
       path: "src/app.tsx",
       synthetic: false,
     },
@@ -96,7 +111,7 @@ const generationInput = {
       additions: 1,
       deletions: 0,
       header: "@@ -10,0 +10,1 @@",
-      id: "src/service.ts:pull-request:51:h1",
+      id: "src/service.ts:hosted-review:github:fungsi/diffdash#51:h1",
       path: "src/service.ts",
       synthetic: false,
     },
@@ -108,7 +123,7 @@ const generationInput = {
     totalFolders: 1,
     analyzedFolders: 1,
   }),
-  review: { kind: "pullRequest" as const, pullRequest },
+  review: { kind: "hosted" as const, hostedReview },
 }
 
 const localReview = LocalReviewDetail.make({
@@ -116,7 +131,7 @@ const localReview = LocalReviewDetail.make({
   branchName: "feature/walkthrough",
   diffHash: "local-diff-hash",
   fetchedAt: "2026-07-08T01:00:00Z",
-  files: pullRequest.files,
+  files: hostedReview.files,
   headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   repoName: "diffdash",
   rootPath: "/workspace/repo",
@@ -272,9 +287,13 @@ describe("WalkthroughService", () => {
       }).pipe(Effect.provide(layer))
 
       expect(walkthrough.chapters[0]?.stops.map((stop) => stop.title)).toEqual(["Entry point"])
-      expect(walkthrough.chapters[0]?.stops[0]?.hunkIds).toEqual(["src/app.tsx:pull-request:51:h1"])
+      expect(walkthrough.chapters[0]?.stops[0]?.hunkIds).toEqual([
+        "src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1",
+      ])
       expect(walkthrough.support.map((item) => item.title)).toEqual(["Other changes"])
-      expect(walkthrough.support[0]?.hunkIds).toEqual(["src/service.ts:pull-request:51:h1"])
+      expect(walkthrough.support[0]?.hunkIds).toEqual([
+        "src/service.ts:hosted-review:github:fungsi/diffdash#51:h1",
+      ])
       expect(walkthrough.generation?.mode).toBe("standard")
       expect(calls).toHaveLength(1)
       expect(calls[0]?.workingDirectory).toBe("/app/remote")
@@ -284,7 +303,9 @@ describe("WalkthroughService", () => {
       expect(calls[0]?.prompt).toContain('"context":"diff-only"')
       expect(calls[0]?.prompt).toContain('"baseSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"')
       expect(calls[0]?.prompt).toContain('"headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"')
-      expect(calls[0]?.prompt).not.toContain("src/app.tsx:pull-request:51:h1")
+      expect(calls[0]?.prompt).not.toContain(
+        "src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1",
+      )
     }),
   )
 
@@ -356,11 +377,11 @@ describe("WalkthroughService", () => {
       const { calls, layer } = makeLayer([validOutput])
       const firstHunk = generationInput.hunkDigest[0]
       if (firstHunk === undefined) throw new Error("Expected hunk fixture")
-      const noisyPullRequest = PullRequestDetail.make({
-        ...pullRequest,
+      const noisyHostedReview = HostedReviewDetail.make({
+        ...hostedReview,
         files: [
-          ...pullRequest.files,
-          PullRequestFile.make({
+          ...hostedReview.files,
+          ChangedFile.make({
             additions: 1_000,
             changeType: "modified",
             deletions: 1_000,
@@ -375,7 +396,7 @@ describe("WalkthroughService", () => {
           ...generationInput,
           diff: "### h1 src/app.tsx\n+new bounded excerpt",
           hunkDigest: [firstHunk],
-          review: { kind: "pullRequest", pullRequest: noisyPullRequest },
+          review: { kind: "hosted", hostedReview: noisyHostedReview },
           promptStats: {
             hiddenFiles: 1,
             omittedFiles: 2,

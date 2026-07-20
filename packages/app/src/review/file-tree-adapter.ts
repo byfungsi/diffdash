@@ -1,26 +1,31 @@
 import { filterVisibleDiffFiles } from "@diffdash/domain/diff-file-filters"
-import type { ParsedDiffFile } from "@diffdash/domain/diff"
+import type { DiffFileSummary } from "@diffdash/domain/diff-file-filters"
 
 /** Git-style status values supported by @pierre/trees. */
-export type FileTreeGitStatus = "added" | "deleted" | "modified" | "renamed" | "untracked"
+type FileTreeGitStatus = "added" | "deleted" | "modified" | "renamed" | "untracked"
 
 /** Git status entry consumed by file-tree navigation. */
-export interface ReviewFileTreeGitStatusEntry {
+interface ReviewFileTreeGitStatusEntry {
   readonly path: string
   readonly status: FileTreeGitStatus
 }
 
 /** Prepared tree source data derived from parsed diff files. */
-export interface ReviewFileTreeInput {
+interface ReviewFileTreeInput {
   readonly gitStatus: readonly ReviewFileTreeGitStatusEntry[]
   readonly hiddenCount: number
   readonly paths: readonly string[]
-  readonly visibleFiles: readonly ParsedDiffFile[]
+  readonly visibleFiles: readonly ReviewFileTreeFile[]
+}
+
+/** File metadata consumed by the review tree before parsed pages are loaded. */
+type ReviewFileTreeFile = DiffFileSummary & {
+  readonly path: string
 }
 
 /** Builds path-first tree input from parsed diff files and hidden-file preference. */
 export const buildReviewFileTreeInput = (
-  files: readonly ParsedDiffFile[],
+  files: readonly ReviewFileTreeFile[],
   showHidden: boolean,
 ): ReviewFileTreeInput => {
   const visibleFiles = filterVisibleDiffFiles(files, showHidden)
@@ -38,7 +43,7 @@ export const buildReviewFileTreeInput = (
   }
 }
 
-const toTreeGitStatus = (file: ParsedDiffFile): FileTreeGitStatus => {
+const toTreeGitStatus = (file: ReviewFileTreeFile): FileTreeGitStatus => {
   if (file.status === "binary") return "modified"
   return file.status
 }

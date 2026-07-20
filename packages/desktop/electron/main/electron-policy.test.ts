@@ -1,14 +1,25 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   createDiffDashBrowserWindowOptions,
-  isExternalUrlAllowed,
-  isInternalNavigationAllowed,
+  createRendererNavigationHandlers,
+  createRendererSecurityPolicy,
   normalizeReviewFilePath,
   resolveContainedRepositoryPath,
 } from "./electron-policy"
+import type { RendererFrameIdentity, RendererWebContentsIdentity } from "./electron-policy"
+
+const packagedRendererUrl = "file:///Applications/DiffDash.app/renderer/index.html"
 
 describe("Electron policy", () => {
   it("locks the BrowserWindow security boundary", () => {
@@ -43,24 +54,116 @@ describe("Electron policy", () => {
     ).not.toHaveProperty("icon")
   })
 
-  it("allows only the current lowercase HTTP external URL policy", () => {
-    expect(isExternalUrlAllowed("https://example.com/review")).toBe(true)
-    expect(isExternalUrlAllowed("http://example.com/review")).toBe(true)
-    expect(isExternalUrlAllowed("HTTPS://example.com/review")).toBe(false)
-    expect(isExternalUrlAllowed("file:///tmp/review")).toBe(false)
-    expect(isExternalUrlAllowed("javascript:alert(1)")).toBe(false)
-    expect(isExternalUrlAllowed("diffdash://review/1")).toBe(false)
+  it("ignores the development URL in packaged mode and trusts only the exact document", () => {
+    const policy = securityPolicy({
+      developmentRendererUrl: "http://localhost:5173",
+      isPackaged: true,
+    })
+
+    expect(policy.rendererEntryUrl).toBe(packagedRendererUrl)
+    expect(policy.isRendererNavigationAllowed(packagedRendererUrl)).toBe(true)
+    expect(policy.isRendererNavigationAllowed(`${packagedRendererUrl}#review`)).toBe(false)
+    expect(policy.isRendererNavigationAllowed(`${packagedRendererUrl}?review=1`)).toBe(false)
+    expect(policy.isRendererNavigationAllowed("file:///tmp/renderer/index.html")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("file:///tmp/index.html")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("http://localhost:5173")).toBe(false)
   })
 
-  it("preserves the current renderer navigation allowlist", () => {
-    const currentUrl = "file:///app/index.html"
-    expect(isInternalNavigationAllowed(currentUrl, currentUrl)).toBe(true)
-    expect(isInternalNavigationAllowed("file:///another/location.html", currentUrl)).toBe(true)
-    expect(isInternalNavigationAllowed("http://localhost:5173/review", currentUrl)).toBe(true)
-    expect(isInternalNavigationAllowed("http://localhost/review", currentUrl)).toBe(false)
-    expect(isInternalNavigationAllowed("https://localhost:5173/review", currentUrl)).toBe(false)
-    expect(isInternalNavigationAllowed("http://127.0.0.1:5173/review", currentUrl)).toBe(false)
-    expect(isInternalNavigationAllowed("https://example.com/review", currentUrl)).toBe(false)
+  it("trusts only the configured development origin while unpackaged", () => {
+    const policy = securityPolicy({
+      developmentRendererUrl: "http://localhost:5173/app",
+      isPackaged: false,
+    })
+
+    expect(policy.rendererEntryUrl).toBe("http://localhost:5173/app")
+    expect(policy.isRendererNavigationAllowed("http://localhost:5173/review?number=1")).toBe(true)
+    expect(policy.isRendererNavigationAllowed("http://localhost:4173/review")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("https://localhost:5173/review")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("http://127.0.0.1:5173/review")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("http://review.localhost:5173/review")).toBe(false)
+    expect(policy.isRendererNavigationAllowed("blob:http://localhost:5173/review")).toBe(false)
+    expect(policy.isRendererNavigationAllowed(packagedRendererUrl)).toBe(false)
+  })
+
+  it("requires valid mode-specific renderer protocols", () => {
+    expect(() => securityPolicy({ packagedRendererUrl: "https://example.com/index.html" })).toThrow(
+      "Packaged renderer URL must use the file protocol",
+    )
+    expect(() =>
+      securityPolicy({ developmentRendererUrl: "file:///tmp/index.html", isPackaged: false }),
+    ).toThrow("Development renderer URL must use HTTP or HTTPS")
+    expect(() => securityPolicy({ packagedRendererUrl: "not a URL" })).toThrow(
+      "Invalid packaged renderer URL",
+    )
+  })
+
+  it("requires the trusted top frame, exact sender URL, and canonical renderer URL for IPC", () => {
+    expect(senderIsTrusted()).toBe(true)
+    expect(senderIsTrusted({ senderFrame: "subframe" })).toBe(false)
+    expect(senderIsTrusted({ senderFrame: "missing" })).toBe(false)
+    expect(senderIsTrusted({ senderUrl: `${packagedRendererUrl}#changed` })).toBe(false)
+    expect(senderIsTrusted({ destroyed: true })).toBe(false)
+    expect(senderIsTrusted({ trustedIdentity: false })).toBe(false)
+    expect(senderIsTrusted({ frameUrl: "file:///tmp/renderer/index.html" })).toBe(false)
+    expect(senderIsTrusted({ frameUrl: "http://localhost:5173" })).toBe(false)
+    expect(
+      senderIsTrusted({
+        developmentRendererUrl: "http://localhost:5173",
+        frameUrl: "http://localhost:5173/review",
+        isPackaged: false,
+      }),
+    ).toBe(true)
+    expect(
+      senderIsTrusted({
+        developmentRendererUrl: "http://localhost:5173",
+        frameUrl: "http://127.0.0.1:5173/review",
+        isPackaged: false,
+      }),
+    ).toBe(false)
+  })
+
+  it("parses and delegates only HTTP(S) external URLs", async () => {
+    const openExternal = vi.fn<(url: string) => Promise<void>>(async () => undefined)
+    const policy = securityPolicy({ openExternal })
+
+    await expect(policy.openExternalUrl("HTTPS://Example.COM/review?q=1")).resolves.toBe(true)
+    await expect(policy.openExternalUrl("http://example.com/review")).resolves.toBe(true)
+    await expect(policy.openExternalUrl("file:///tmp/review")).resolves.toBe(false)
+    await expect(policy.openExternalUrl("javascript:alert(1)")).resolves.toBe(false)
+    await expect(policy.openExternalUrl("not a URL")).resolves.toBe(false)
+
+    expect(openExternal.mock.calls).toEqual([
+      ["https://example.com/review?q=1"],
+      ["http://example.com/review"],
+    ])
+  })
+
+  it("denies new windows, externalizes blocked navigations, and handles opener rejection", async () => {
+    const openExternal = vi.fn<(url: string) => Promise<void>>()
+    openExternal.mockRejectedValue(new Error("Browser unavailable"))
+    const handlers = createRendererNavigationHandlers(securityPolicy({ openExternal }))
+    const allowedNavigation = { preventDefault: vi.fn<() => void>() }
+    const blockedNavigation = { preventDefault: vi.fn<() => void>() }
+
+    handlers.handleNavigation(allowedNavigation, packagedRendererUrl)
+    handlers.handleNavigation(blockedNavigation, "https://example.com/review")
+    expect(handlers.handleWindowOpen("https://example.com/new")).toEqual({ action: "deny" })
+    expect(handlers.handleWindowOpen(packagedRendererUrl)).toEqual({ action: "deny" })
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 0))
+
+    expect(allowedNavigation.preventDefault).not.toHaveBeenCalled()
+    expect(blockedNavigation.preventDefault).toHaveBeenCalledOnce()
+    expect(openExternal.mock.calls).toEqual([
+      ["https://example.com/review"],
+      ["https://example.com/new"],
+    ])
+  })
+
+  it("keeps renderer connections same-origin without localhost CSP grants", () => {
+    const rendererHtml = readFileSync(resolve(__dirname, "../../src/renderer/index.html"), "utf8")
+
+    expect(rendererHtml).toContain("connect-src 'self'")
+    expect(rendererHtml).not.toMatch(/(?:localhost|127\.0\.0\.1|ws:\/\/)/)
   })
 
   it("normalizes separators and rejects explicit traversal", () => {
@@ -113,3 +216,57 @@ describe("Electron policy", () => {
     }
   })
 })
+
+const securityPolicy = ({
+  developmentRendererUrl,
+  isPackaged = true,
+  isTrustedWebContents = () => true,
+  openExternal = async () => undefined,
+  packagedRendererUrl: packagedUrl = packagedRendererUrl,
+}: {
+  readonly developmentRendererUrl?: string
+  readonly isPackaged?: boolean
+  readonly isTrustedWebContents?: (webContents: RendererWebContentsIdentity) => boolean
+  readonly openExternal?: (url: string) => Promise<void>
+  readonly packagedRendererUrl?: string
+} = {}) =>
+  createRendererSecurityPolicy({
+    developmentRendererUrl,
+    isPackaged,
+    isTrustedWebContents,
+    openExternal,
+    packagedRendererUrl: packagedUrl,
+  })
+
+const senderIsTrusted = ({
+  developmentRendererUrl,
+  destroyed = false,
+  frameUrl = packagedRendererUrl,
+  isPackaged = true,
+  senderFrame = "main",
+  senderUrl = frameUrl,
+  trustedIdentity = true,
+}: {
+  readonly developmentRendererUrl?: string
+  readonly destroyed?: boolean
+  readonly frameUrl?: string
+  readonly isPackaged?: boolean
+  readonly senderFrame?: "main" | "missing" | "subframe"
+  readonly senderUrl?: string
+  readonly trustedIdentity?: boolean
+} = {}) => {
+  const mainFrame: RendererFrameIdentity = { url: frameUrl }
+  const sender: RendererWebContentsIdentity = {
+    getURL: () => senderUrl,
+    isDestroyed: () => destroyed,
+    mainFrame,
+  }
+  const policy = securityPolicy({
+    ...(developmentRendererUrl === undefined ? {} : { developmentRendererUrl }),
+    isPackaged,
+    isTrustedWebContents: (candidate) => trustedIdentity && candidate === sender,
+  })
+  const invokedFrame =
+    senderFrame === "missing" ? null : senderFrame === "main" ? mainFrame : { url: frameUrl }
+  return policy.isTrustedIpcSender({ sender, senderFrame: invokedFrame })
+}

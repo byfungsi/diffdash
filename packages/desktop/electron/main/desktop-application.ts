@@ -1,5 +1,12 @@
-import { app, BrowserWindow, type BrowserWindow as BrowserWindowType } from "electron"
+import { join } from "node:path"
+import { pathToFileURL } from "node:url"
+import { app, BrowserWindow, type BrowserWindow as BrowserWindowType, shell } from "electron"
+import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
+import { Effect } from "effect"
+import { resolveApplicationIdentity } from "./application-identity"
 import { createApplicationRuntime } from "./application-runtime"
+import { createRendererSecurityPolicy } from "./electron-policy"
+import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
 import { createNavigation } from "./navigation"
 import { applicationPaths } from "./paths"
@@ -23,21 +30,31 @@ let mainWindow: BrowserWindowType | null = null
 const getWindow = () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
 const navigation = createNavigation({ getWindow, revealWindow })
 
-const createWindow = () => {
+const configureApplicationIdentity = () => {
+  const identity = resolveApplicationIdentity({
+    appDataPath: app.getPath("appData"),
+    explicitUserDataDirectory: app.commandLine.hasSwitch("user-data-dir"),
+    packaged: app.isPackaged,
+  })
+  app.setAppUserModelId(identity.appUserModelId)
+  app.setName(identity.appName)
+  if (identity.userDataPath !== null) app.setPath("userData", identity.userDataPath)
+}
+
+const createWindow = (rendererSecurityPolicy: RendererSecurityPolicy) => {
   mainWindow = createMainWindow({
     logStartupStage,
     navigationCommands: navigation.commands,
     onClosed: () => {
       mainWindow = null
     },
+    rendererSecurityPolicy,
     revealWindow,
   })
 }
 
 const start = async () => {
-  app.setAppUserModelId("dev.diffdash.app")
   if (process.platform === "darwin") {
-    app.setName("DiffDash")
     app.setActivationPolicy(isHiddenE2EWindow() ? "accessory" : "regular")
   }
 
@@ -49,15 +66,27 @@ const start = async () => {
     app.dock?.show()
   }
 
-  installIpcControllers(createApplicationRuntime(), navigation.commands)
-  createWindow()
+  const rendererSecurityPolicy = createRendererSecurityPolicy({
+    developmentRendererUrl: app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL,
+    isPackaged: app.isPackaged,
+    isTrustedWebContents: (webContents) => webContents === mainWindow?.webContents,
+    openExternal: (url) => shell.openExternal(url),
+    packagedRendererUrl: pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+  })
+  const applicationRuntime = createApplicationRuntime()
+  await applicationRuntime.runPromise(
+    Effect.flatMap(ReviewTurnStore, (turns) => turns.recoverInterruptedTurns),
+  )
+  installIpcControllers(applicationRuntime, navigation.commands, rendererSecurityPolicy)
+  createWindow(rendererSecurityPolicy)
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(rendererSecurityPolicy)
   })
 }
 
 /** Starts Electron startup and top-level lifecycle handling. */
 export const startDesktopApplication = () => {
+  configureApplicationIdentity()
   const acquired = installSingleInstanceHandling({
     enqueue: navigation.enqueue,
     revealExistingWindow: () => {

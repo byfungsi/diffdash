@@ -23,8 +23,14 @@ import {
   reviewConformance,
   walkthroughConformance,
 } from "@diffdash/agent-provider/testing"
-import type { CliResult, CliRunOptions } from "@diffdash/process/cli"
-import type { CliStreamEvent, CliStreamOptions } from "@diffdash/process/cli-stream"
+import {
+  ProcessExit,
+  ProcessLine,
+  ProcessResult,
+  type ProcessEvent,
+  type ProcessRequest,
+  type ProcessRunner,
+} from "@diffdash/process"
 import {
   CLAUDE_AUTO_MODELS,
   CLAUDE_DEFAULT_MODEL,
@@ -41,15 +47,14 @@ interface Call {
   readonly env: Readonly<Record<string, string>> | undefined
 }
 
-const fixtureEvents = (name: string): readonly CliStreamEvent[] => {
+const fixtureEvents = (name: string): readonly ProcessEvent[] => {
   const lines = readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8")
     .trim()
     .split("\n")
   return [
-    ...lines.map((line): CliStreamEvent => ({ _tag: "CliLine", source: "stdout", line })),
-    {
-      _tag: "CliExit",
-      result: {
+    ...lines.map((line) => ProcessLine.make({ source: "stdout", line })),
+    ProcessExit.make({
+      result: ProcessResult.make({
         command: "claude",
         args: [],
         cwd: "/workspace/project",
@@ -60,8 +65,8 @@ const fixtureEvents = (name: string): readonly CliStreamEvent[] => {
         outputTruncated: false,
         exitCode: 0,
         signal: null,
-      },
-    },
+      }),
+    }),
   ]
 }
 
@@ -73,53 +78,55 @@ const makeHarness = (
   } = {},
 ) => {
   const calls: Call[] = []
-  const cli = {
-    run: (command: string, args: readonly string[], runOptions: CliRunOptions = {}) =>
+  const processes: ProcessRunner = {
+    run: (request) =>
       Effect.sync(() => {
         calls.push({
-          command,
-          args: [...args],
-          cwd: runOptions.cwd,
-          stdin: runOptions.stdin,
-          env: runOptions.env,
+          command: request.command,
+          args: request.args,
+          cwd: request.cwd ?? undefined,
+          stdin: request.stdin ?? undefined,
+          env: Object.keys(request.env).length === 0 ? undefined : request.env,
         })
         return result(
-          command,
-          args,
-          args[0] === "--version"
+          request,
+          request.args[0] === "--version"
             ? "2.1.205 (Claude Code)"
             : (options.walkthroughOutput ?? "generated walkthrough"),
         )
       }),
-  }
-  const cliStream = {
-    stream: (command: string, args: readonly string[], runOptions: CliStreamOptions = {}) => {
+    streamLines: (request) => {
       calls.push({
-        command,
-        args: [...args],
-        cwd: runOptions.cwd,
-        stdin: runOptions.stdin,
-        env: runOptions.env,
+        command: request.command,
+        args: request.args,
+        cwd: request.cwd ?? undefined,
+        stdin: request.stdin ?? undefined,
+        env: Object.keys(request.env).length === 0 ? undefined : request.env,
       })
-      const configIndex = args.indexOf("--mcp-config")
-      const configPath = configIndex < 0 ? undefined : args[configIndex + 1]
+      const configIndex = request.args.indexOf("--mcp-config")
+      const configPath = configIndex < 0 ? undefined : request.args[configIndex + 1]
       if (configPath !== undefined) options.captureMcpConfig?.(readFileSync(configPath, "utf8"))
       return Stream.fromIterable(
         fixtureEvents(options.reviewFixture ?? "claude-review-success.jsonl"),
       )
     },
   }
-  return { calls, registration: makeClaudeProvider({ cli, cliStream }) }
+  return { calls, registration: makeClaudeProvider({ processes }) }
 }
 
-const result = (command: string, args: readonly string[], stdout: string): CliResult => ({
-  command,
-  args,
-  cwd: null,
-  exitCode: 0,
-  stdout,
-  stderr: "",
-})
+const result = (request: ProcessRequest, stdout: string): ProcessResult =>
+  ProcessResult.make({
+    command: request.command,
+    args: request.args,
+    cwd: request.cwd,
+    exitCode: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    outputTruncated: false,
+  })
 
 const walkthroughRequest = () =>
   WalkthroughRequest.make({
@@ -212,9 +219,9 @@ agentCancellationConformance("Claude", {
     let released = false
     const root = mkdtempSync(join(tmpdir(), "diffdash-claude-test-"))
     const registration = makeClaudeProvider({
-      cli: { run: (command, args) => Effect.succeed(result(command, args, "2.1.205")) },
-      cliStream: {
-        stream: () =>
+      processes: {
+        run: (request) => Effect.succeed(result(request, "2.1.205")),
+        streamLines: () =>
           Stream.acquireRelease(
             Effect.sync(() => void (acquired = true)),
             () => Effect.sync(() => void (released = true)),
@@ -261,10 +268,10 @@ describe("Claude provider", () => {
     Effect.gen(function* () {
       const harness = makeHarness()
       const registration = makeClaudeProvider({
-        cli: {
-          run: (command, args) => Effect.succeed(result(command, args, "2.1.205")),
+        processes: {
+          run: (request) => Effect.succeed(result(request, "2.1.205")),
+          streamLines: () => Stream.empty,
         },
-        cliStream: { stream: () => Stream.empty },
         permissionControls: {
           exactToolAllowlist: true,
           networkToolAllowlist: true,
@@ -346,6 +353,14 @@ describe("Claude provider", () => {
       best: "claude-opus-4-8",
       balanced: "claude-sonnet-5",
       fast: "claude-haiku-4-5",
+    })
+    expect(CLAUDE_WALKTHROUGH_POLICY).toMatchObject({
+      repository: "local-working-copy",
+      shell: "deny",
+    })
+    expect(CLAUDE_REVIEW_POLICY).toMatchObject({
+      repository: "reviewed-revision",
+      shell: "deny",
     })
   })
 })

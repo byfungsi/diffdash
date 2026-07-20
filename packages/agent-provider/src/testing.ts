@@ -10,6 +10,7 @@ import {
   type AgentProviderRegistration,
   DuplicateAgentProviderError,
   InvalidAgentProviderResponseError,
+  McpToolName,
   MissingAgentProviderError,
   type ReviewThreadRequest,
   ReviewThreadResult,
@@ -22,6 +23,8 @@ import {
   AgentProviderRegistry,
   type AgentProviderRoute,
 } from "./registry"
+import { isNonMutatingAgentExecutionPolicy } from "./policy"
+import { isScopedMcpToolSubset } from "./security"
 
 /** Fixtures required by the static manifest conformance suite. */
 export interface AgentManifestConformanceFixtures {
@@ -123,10 +126,33 @@ export const reviewConformance = (name: string, fixtures: ReviewConformanceFixtu
           expect(result.sessionId).not.toBeNull()
         }
         expect(
-          request.mcp.allowedTools.every((tool) => request.policy.allowedMcpTools.includes(tool)),
+          isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools),
         ).toBe(true)
         for (const value of usageValues(result)) {
           if (value !== null) expect(value).toBeGreaterThanOrEqual(0)
+        }
+      }),
+    )
+
+    it.effect("rejects scoped MCP tools outside the execution policy", () =>
+      Effect.gen(function* () {
+        const capability = requireReview(fixtures.create())
+        const request = fixtures.request()
+        const outOfPolicyTool = McpToolName.make("diffdashConformanceOutOfPolicyTool")
+        const result = yield* capability
+          .execute({
+            ...request,
+            mcp: {
+              ...request.mcp,
+              allowedTools: [...request.mcp.allowedTools, outOfPolicyTool],
+            },
+          })
+          .pipe(Effect.either)
+
+        expect(Either.isLeft(result)).toBe(true)
+        if (Either.isLeft(result)) {
+          expect(result.left).toBeInstanceOf(AgentProviderOperationError)
+          expect(result.left.reason).toContain("outside the execution policy")
         }
       }),
     )
@@ -156,9 +182,7 @@ export const agentSecurityConformance = (
         const result = yield* fixtures.run()
         const after = yield* fixtures.repositoryState()
         expect(after).toBe(before)
-        expect(fixtures.observedTools().every((tool) => fixtures.allowedTools.includes(tool))).toBe(
-          true,
-        )
+        expect(isScopedMcpToolSubset(fixtures.observedTools(), fixtures.allowedTools)).toBe(true)
         const serialized = JSON.stringify(result)
         expect(serialized).not.toContain(fixtures.mcpToken)
         for (const sensitive of fixtures.sensitiveValues)
@@ -300,10 +324,7 @@ const requireReview = (registration: AgentProviderRegistration) => {
 }
 
 const assertNonMutatingPolicy = (policy: AgentExecutionPolicy) => {
-  expect(policy.sensitiveFiles).toBe("deny")
-  expect(policy.fileMutation).toBe("deny")
-  expect(policy.gitMutation).toBe("deny")
-  expect(policy.providerPublishing).toBe("deny")
+  expect(isNonMutatingAgentExecutionPolicy(policy)).toBe(true)
   expect(["deny", "read-only"]).toContain(policy.shell)
 }
 

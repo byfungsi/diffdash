@@ -1,11 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { Effect, Either } from "effect"
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
-import { AppState } from "./app-state"
+import { AppState, AppStateError } from "./app-state"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-app-state-test-"))),
@@ -45,6 +45,44 @@ describe("AppState", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(state).toEqual(DEFAULT_APP_STATE)
+    }),
+  )
+
+  it.scoped("maps non-ENOENT filesystem failures to read errors", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      mkdirSync(join(directory, "diffdash", "state.json"), { recursive: true })
+
+      const result = yield* Effect.gen(function* () {
+        const appState = yield* AppState
+        return yield* Effect.either(appState.get)
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(AppStateError)
+        expect(result.left.operation).toBe("read")
+      }
+    }),
+  )
+
+  it.scoped("maps atomic replacement failures to write errors and removes temporary files", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const stateDirectory = join(directory, "diffdash")
+      mkdirSync(join(stateDirectory, "state.json"), { recursive: true })
+
+      const result = yield* Effect.gen(function* () {
+        const appState = yield* AppState
+        return yield* Effect.either(appState.save({ onboardingCompleted: true }))
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(AppStateError)
+        expect(result.left.operation).toBe("write")
+      }
+      expect(readdirSync(stateDirectory)).toEqual(["state.json"])
     }),
   )
 

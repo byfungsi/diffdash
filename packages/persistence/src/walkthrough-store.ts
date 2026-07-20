@@ -8,16 +8,18 @@ import {
 } from "@diffdash/domain/walkthrough"
 import { DatabaseService } from "./database"
 
-interface WalkthroughRow {
-  readonly repo_id: string
-  readonly pr_number: number | null
-  readonly review_key: string
-  readonly base_sha: string
-  readonly head_sha: string
-  readonly prompt_version: string
-  readonly content_json: string
-  readonly created_at: string
-}
+const WalkthroughRow = Schema.Struct({
+  repo_id: Schema.String,
+  pr_number: Schema.NullOr(Schema.Int),
+  review_key: Schema.String,
+  base_sha: Schema.String,
+  head_sha: Schema.String,
+  prompt_version: Schema.String,
+  content_json: Schema.String,
+  created_at: Schema.String,
+})
+
+const WalkthroughJson = Schema.parseJson(Walkthrough)
 
 /** A typed failure from walkthrough persistence operations. */
 export class WalkthroughStoreError extends Schema.TaggedError<WalkthroughStoreError>()(
@@ -47,7 +49,7 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
 
       const get = Effect.fn("WalkthroughStore.get")(function (key: WalkthroughCacheKey) {
         return database
-          .get<WalkthroughRow>(
+          .get(
             `SELECT * FROM walkthroughs
              WHERE repo_id = ?
                AND review_key = ?
@@ -59,8 +61,16 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
             [key.repoId, key.reviewKey, key.headSha, key.promptVersion, key.baseSha, key.baseSha],
           )
           .pipe(
-            Effect.mapError((cause) => WalkthroughStoreError.make({ operation: "get", cause })),
-            Effect.flatMap((row) => (row === undefined ? Effect.succeed(null) : toStored(row))),
+            Effect.mapError((cause) =>
+              WalkthroughStoreError.make({ operation: "get.query", cause }),
+            ),
+            Effect.flatMap((row) =>
+              row === undefined
+                ? Effect.succeed(null)
+                : decodeWalkthroughRow("get.decodeRow", row).pipe(
+                    Effect.flatMap((decoded) => toStored("get.decodeContent", decoded)),
+                  ),
+            ),
           )
       })
 
@@ -68,48 +78,64 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
         get,
         save: Effect.fn("WalkthroughStore.save")(function (input) {
           const createdAt = new Date().toISOString()
-          const contentJson = JSON.stringify(input.walkthrough)
-
-          return database
-            .run(
-              `INSERT INTO walkthroughs (
-                 repo_id, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(repo_id, review_key, base_sha, head_sha, prompt_version) DO UPDATE SET
-                 pr_number = excluded.pr_number,
-                 content_json = excluded.content_json,
-                 created_at = excluded.created_at`,
-              [
-                input.repoId,
-                input.prNumber,
-                input.reviewKey,
-                input.baseSha,
-                input.headSha,
-                input.promptVersion,
-                contentJson,
-                createdAt,
-              ],
-            )
-            .pipe(
-              Effect.mapError((cause) => WalkthroughStoreError.make({ operation: "save", cause })),
-              Effect.flatMap(() => get(input)),
-              Effect.flatMap((stored) =>
-                stored === null
-                  ? WalkthroughStoreError.make({
-                      operation: "save.get",
-                      cause: new Error("Walkthrough cache row was not found after save."),
-                    })
-                  : Effect.succeed(stored),
-              ),
-            )
+          return Schema.encode(WalkthroughJson)(input.walkthrough).pipe(
+            Effect.mapError((cause) =>
+              WalkthroughStoreError.make({ operation: "save.encodeContent", cause }),
+            ),
+            Effect.flatMap((contentJson) =>
+              database
+                .run(
+                  `INSERT INTO walkthroughs (
+                  repo_id, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(repo_id, review_key, base_sha, head_sha, prompt_version) DO UPDATE SET
+                  pr_number = excluded.pr_number,
+                  content_json = excluded.content_json,
+                  created_at = excluded.created_at`,
+                  [
+                    input.repoId,
+                    input.prNumber,
+                    input.reviewKey,
+                    input.baseSha,
+                    input.headSha,
+                    input.promptVersion,
+                    contentJson,
+                    createdAt,
+                  ],
+                )
+                .pipe(
+                  Effect.mapError((cause) =>
+                    WalkthroughStoreError.make({ operation: "save.query", cause }),
+                  ),
+                ),
+            ),
+            Effect.flatMap(() => get(input)),
+            Effect.flatMap((stored) =>
+              stored === null
+                ? WalkthroughStoreError.make({
+                    operation: "save.get",
+                    cause: new Error("Walkthrough cache row was not found after save."),
+                  })
+                : Effect.succeed(stored),
+            ),
+          )
         }),
       })
     }),
   )
 }
 
-const toStored = (row: WalkthroughRow): Effect.Effect<StoredWalkthrough, WalkthroughStoreError> =>
-  decodeContentJson(row.content_json).pipe(
+const decodeWalkthroughRow = (operation: string, input: unknown) =>
+  Schema.decodeUnknown(WalkthroughRow)(input).pipe(
+    Effect.mapError((cause) => WalkthroughStoreError.make({ operation, cause })),
+  )
+
+const toStored = (
+  operation: string,
+  row: typeof WalkthroughRow.Type,
+): Effect.Effect<StoredWalkthrough, WalkthroughStoreError> =>
+  Schema.decodeUnknown(WalkthroughJson)(row.content_json).pipe(
+    Effect.mapError((cause) => WalkthroughStoreError.make({ operation, cause })),
     Effect.map((walkthrough) =>
       StoredWalkthrough.make({
         repoId: row.repo_id,
@@ -121,21 +147,5 @@ const toStored = (row: WalkthroughRow): Effect.Effect<StoredWalkthrough, Walkthr
         walkthrough,
         createdAt: row.created_at,
       }),
-    ),
-  )
-
-const decodeContentJson = (
-  contentJson: string,
-): Effect.Effect<Walkthrough, WalkthroughStoreError> =>
-  Effect.try({
-    try: () => JSON.parse(contentJson) as unknown,
-    catch: (cause) => WalkthroughStoreError.make({ operation: "decodeContentJson.parse", cause }),
-  }).pipe(
-    Effect.flatMap((content) =>
-      Schema.decodeUnknown(Walkthrough)(content).pipe(
-        Effect.mapError((cause) =>
-          WalkthroughStoreError.make({ operation: "decodeContentJson.schema", cause }),
-        ),
-      ),
     ),
   )

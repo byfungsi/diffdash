@@ -157,11 +157,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       .locator("diffs-container [data-column-number]")
       .filter({ hasText: "1" })
       .first()
-    await gutterNumber.dispatchEvent("pointermove", {
-      bubbles: true,
-      composed: true,
-      pointerType: "mouse",
-    })
+    await gutterNumber.hover()
     const utility = window.locator("diffs-container [data-utility-button]")
     await expect(utility).toBeVisible()
     const pointerEvent = {

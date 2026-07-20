@@ -6,14 +6,16 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer } from "effect"
+import { Cause, Effect, Fiber, Layer, TestLive } from "effect"
 
 import {
   GitProviderId,
@@ -26,11 +28,12 @@ import {
 import { AgentRunId } from "@diffdash/domain/review-agent"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
-import { CliStreamService } from "@diffdash/process/cli-stream"
+import { ProcessService } from "@diffdash/process"
 import {
   HostedReviewWorkspacePool as ReviewWorktreePool,
   HostedReviewWorkspacePoolError as ReviewWorktreePoolError,
 } from "./hosted-review-workspace-pool"
+import { sanitizedGitEnvironment } from "./git-environment"
 
 interface GitFixture {
   readonly root: string
@@ -75,7 +78,7 @@ describe("HostedReviewWorkspacePool", () => {
             (lease) =>
               Effect.promise(async () => {
                 leasedPath = lease.localPath
-                expect(lease.localPath.startsWith(value.pool)).toBe(true)
+                expect(lease.localPath.startsWith(realpathSync(value.pool))).toBe(true)
                 expect(git(lease.localPath, "rev-parse", "HEAD")).toBe(value.headSha)
                 expect(git(lease.localPath, "branch", "--show-current")).toBe("")
                 expect(await readFile(join(lease.localPath, "tracked.txt"), "utf8")).toBe(
@@ -138,6 +141,169 @@ describe("HostedReviewWorkspacePool", () => {
           "restoring-workspace",
         ])
       }),
+  )
+
+  it.scoped("allows a configured pool root symlink and returns canonical lease paths", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const canonicalPool = join(value.root, "canonical-pool")
+      mkdirSync(canonicalPool)
+      symlinkSync(canonicalPool, value.pool, "dir")
+
+      let leasedPath = ""
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(workspaceInput(value, "root-symlink"), (lease) =>
+          Effect.sync(() => {
+            leasedPath = lease.localPath
+          }),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(leasedPath.startsWith(realpathSync(canonicalPool))).toBe(true)
+      expect(git(leasedPath, "rev-parse", "HEAD")).toBe(value.headSha)
+    }),
+  )
+
+  it.scoped("rejects symlinked manifest and lock files without touching their targets", () =>
+    Effect.gen(function* () {
+      for (const name of ["manifest.json", "manifest.lock"] as const) {
+        const value = yield* fixture
+        mkdirSync(value.pool)
+        const outside = join(value.root, `outside-${name}`)
+        writeFileSync(outside, "preserve me")
+        symlinkSync(outside, join(value.pool, name))
+        let providerStarted = false
+
+        const error = yield* Effect.gen(function* () {
+          const pool = yield* ReviewWorktreePool
+          return yield* pool
+            .use(workspaceInput(value, `symlink-${name}`), () =>
+              Effect.sync(() => {
+                providerStarted = true
+              }),
+            )
+            .pipe(Effect.flip)
+        }).pipe(Effect.provide(poolLayer(value)))
+
+        expect(providerStarted).toBe(false)
+        expect(error).toMatchObject({ code: "filesystem" })
+        expect(readFileSync(outside, "utf8")).toBe("preserve me")
+      }
+    }),
+  )
+
+  it.scoped("rejects symlinked repository ancestors before locking or Git mutation", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const outside = join(value.root, "outside-repositories")
+      const sentinel = join(outside, "sentinel")
+      mkdirSync(value.pool)
+      mkdirSync(outside)
+      writeFileSync(sentinel, "preserve me")
+      symlinkSync(outside, join(value.pool, "repositories"), "dir")
+      let providerStarted = false
+
+      const error = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .use(workspaceInput(value, "repository-ancestor-symlink"), () =>
+            Effect.sync(() => {
+              providerStarted = true
+            }),
+          )
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(providerStarted).toBe(false)
+      expect(error).toMatchObject({ code: "filesystem" })
+      expect(readFileSync(sentinel, "utf8")).toBe("preserve me")
+    }),
+  )
+
+  it.scoped("rejects symlinked repository.git and repository lock paths", () =>
+    Effect.gen(function* () {
+      for (const name of ["repository.git", "repository.lock"] as const) {
+        const value = yield* fixture
+        const repositoryRoot = repositoryPoolPath(value.pool, "github:Acme/Widget")
+        const outside = join(value.root, `outside-${name}`)
+        const sentinel = join(outside, "sentinel")
+        mkdirSync(repositoryRoot, { recursive: true })
+        mkdirSync(outside)
+        writeFileSync(sentinel, "preserve me")
+        symlinkSync(outside, join(repositoryRoot, name), "dir")
+        let providerStarted = false
+
+        const error = yield* Effect.gen(function* () {
+          const pool = yield* ReviewWorktreePool
+          return yield* pool
+            .use(workspaceInput(value, `repository-${name}-symlink`), () =>
+              Effect.sync(() => {
+                providerStarted = true
+              }),
+            )
+            .pipe(Effect.flip)
+        }).pipe(Effect.provide(poolLayer(value)))
+
+        expect(providerStarted).toBe(false)
+        expect(error).toMatchObject({ code: "filesystem" })
+        expect(readFileSync(sentinel, "utf8")).toBe("preserve me")
+      }
+    }),
+  )
+
+  it.scoped("rejects a symlinked manifest slot before reserving it", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const repositoryRoot = repositoryPoolPath(value.pool, "github:Acme/Widget")
+      const outside = join(value.root, "outside-slot")
+      const sentinel = join(outside, "sentinel")
+      mkdirSync(repositoryRoot, { recursive: true })
+      mkdirSync(outside)
+      writeFileSync(sentinel, "preserve me")
+      symlinkSync(outside, join(repositoryRoot, "linked-slot"), "dir")
+      const now = new Date().toISOString()
+      writeFileSync(
+        join(value.pool, "manifest.json"),
+        JSON.stringify({
+          version: 2,
+          repositories: [],
+          slots: [
+            {
+              id: "linked-slot",
+              providerId: "github",
+              repositoryKey: "github:Acme/Widget",
+              state: "available",
+              headSha: value.headSha,
+              reviewNumber: 1,
+              lastThreadId: null,
+              lease: null,
+              createdAt: now,
+              lastUsedAt: now,
+              lastError: null,
+            },
+          ],
+        }),
+      )
+      const beforeManifest = readFileSync(join(value.pool, "manifest.json"), "utf8")
+      let providerStarted = false
+
+      const error = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .use(workspaceInput(value, "slot-symlink"), () =>
+            Effect.sync(() => {
+              providerStarted = true
+            }),
+          )
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(providerStarted).toBe(false)
+      expect(error).toMatchObject({ code: "filesystem", operation: "manifest.slot.path" })
+      expect(readFileSync(join(value.pool, "manifest.json"), "utf8")).toBe(beforeManifest)
+      expect(readFileSync(sentinel, "utf8")).toBe("preserve me")
+    }),
   )
 
   it.scoped("invalidates disposable version-1 cache state before preparing version 2", () =>
@@ -211,10 +377,12 @@ describe("HostedReviewWorkspacePool", () => {
 
       expect(paths).toHaveLength(2)
       expect(paths[0]).not.toBe(paths[1])
-      expect(paths[0]?.startsWith(repositoryPoolPath(value.pool, "github:Acme/Widget"))).toBe(true)
+      expect(
+        paths[0]?.startsWith(repositoryPoolPath(realpathSync(value.pool), "github:Acme/Widget")),
+      ).toBe(true)
       expect(
         paths[1]?.startsWith(
-          repositoryPoolPath(value.pool, "github-enterprise:Acme/Platform/Widget"),
+          repositoryPoolPath(realpathSync(value.pool), "github-enterprise:Acme/Platform/Widget"),
         ),
       ).toBe(true)
     }),
@@ -517,7 +685,7 @@ describe("HostedReviewWorkspacePool", () => {
 
       expect(providerStarted).toBe(false)
       expect(error).toBeInstanceOf(ReviewWorktreePoolError)
-      expect(error).toMatchObject({ code: "manifest", operation: "path.segment" })
+      expect(error).toMatchObject({ code: "filesystem", operation: "path.segment" })
       expect(readFileSync(outsideSentinel, "utf8")).toBe("preserve me")
     }),
   )
@@ -605,6 +773,7 @@ describe("HostedReviewWorkspacePool", () => {
 
       yield* Effect.gen(function* () {
         const pool = yield* ReviewWorktreePool
+        const live = yield* TestLive.TestLive
         yield* pool.use(
           {
             runId: AgentRunId.make("run-unlinked"),
@@ -615,7 +784,7 @@ describe("HostedReviewWorkspacePool", () => {
           },
           (lease) =>
             Effect.sync(() => {
-              expect(lease.localPath.startsWith(value.remotePool)).toBe(true)
+              expect(lease.localPath.startsWith(realpathSync(value.remotePool))).toBe(true)
               expect(git(lease.localPath, "rev-parse", "HEAD")).toBe(value.headSha)
             }),
         )
@@ -662,12 +831,14 @@ describe("HostedReviewWorkspacePool", () => {
                 await concurrentGate
               }),
           )
-        yield* Effect.all(
-          [
-            concurrentRun(value.snapshot, "run-concurrent-one", "thread-concurrent-one"),
-            concurrentRun(value.secondSnapshot, "run-concurrent-two", "thread-concurrent-two"),
-          ],
-          { concurrency: "unbounded" },
+        yield* live.provide(
+          Effect.all(
+            [
+              concurrentRun(value.snapshot, "run-concurrent-one", "thread-concurrent-one"),
+              concurrentRun(value.secondSnapshot, "run-concurrent-two", "thread-concurrent-two"),
+            ],
+            { concurrency: "unbounded" },
+          ),
         )
         expect(new Set(leasedPaths).size).toBe(2)
       }).pipe(
@@ -790,7 +961,15 @@ const poolLayer = (value: GitFixture) =>
   ReviewWorktreePool.layer({
     remoteWorktreePoolPath: value.remotePool,
     worktreePoolPath: value.pool,
-  }).pipe(Layer.provideMerge(CliStreamService.layer))
+  }).pipe(Layer.provideMerge(ProcessService.layer))
+
+const workspaceInput = (value: GitFixture, suffix: string) => ({
+  runId: AgentRunId.make(`run-${suffix}`),
+  threadId: ReviewThreadId.make(`thread-${suffix}`),
+  checkout: value.snapshot,
+  sourcePath: value.source,
+  bootstrapBareRepository: () => Effect.void,
+})
 
 function makeGitFixture(): GitFixture {
   const root = mkdtempSync(join(tmpdir(), "diffdash-worktree-pool-"))
@@ -916,26 +1095,9 @@ const git = (cwd: string, ...args: readonly string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: sanitizedGitEnvironment(),
+    env: sanitizedGitEnvironment(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim()
-
-const sanitizedGitEnvironment = () => {
-  const env = { ...process.env }
-  for (const key of [
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_PREFIX",
-    "GIT_QUARANTINE_PATH",
-    "GIT_WORK_TREE",
-  ]) {
-    delete env[key]
-  }
-  return env
-}
 
 const waitForFile = async (path: string, attemptsRemaining = 100): Promise<void> => {
   if (existsSync(path)) return

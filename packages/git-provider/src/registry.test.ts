@@ -21,14 +21,15 @@ import {
 import {
   AmbiguousGitRemoteError,
   DuplicateGitProviderError,
+  GitProviderOperationError,
   GitProviderDescriptor,
   GitProviderDiagnostic,
+  GitProviderRegistry,
   GitProviderTerminology,
   HostedReviewCheckoutSpec,
   UnknownGitProviderError,
   type GitProviderRegistration,
 } from "./git-provider"
-import { GitProviderRegistry } from "./registry"
 import { gitProviderConformance } from "./testing"
 
 const makeProvider = (idValue: string, host = "git.example.com"): GitProviderRegistration => {
@@ -115,9 +116,9 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       ),
     getReviewDecision: () => Effect.succeed("none" as const),
     submitReviewDecision: () => Effect.void,
-    repositoryUrl: () => `https://${host}/platform/backend/service`,
+    repositoryUrl: () => Effect.succeed(`https://${host}/platform/backend/service`),
     fileUrl: (_repository, path, revision) =>
-      `https://${host}/platform/backend/service/blob/${revision}/${path}`,
+      Effect.succeed(`https://${host}/platform/backend/service/blob/${revision}/${path}`),
     bootstrapBareRepository: () => Effect.void,
     checkoutSpec: () =>
       Effect.succeed(
@@ -220,4 +221,210 @@ describe("GitProviderRegistry", () => {
       if (Either.isLeft(exit)) expect(exit.left).toBeInstanceOf(DuplicateGitProviderError)
     }),
   )
+
+  it.effect("rejects malformed dynamic provider results with a bounded operation error", () => {
+    const registration = makeProvider("fake")
+    Object.defineProperty(registration, "searchRepositories", {
+      value: () => Effect.succeed([{ locator: { providerId: "fake" } }]),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const result = yield* Effect.either(
+        provider.searchRepositories({ query: "", namespaces: [] }),
+      )
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(GitProviderOperationError)
+        expect(result.left.operation).toBe("searchRepositories")
+        expect(result.left.message).toBe("Provider returned malformed data")
+        expect(result.left.message.length).toBeLessThanOrEqual(500)
+      }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
+  it.effect("rejects a malformed registration descriptor before exposing the provider", () => {
+    const registration = makeProvider("fake")
+    Object.defineProperty(registration, "descriptor", {
+      value: { id: "local", kind: "fake" },
+    })
+
+    return Effect.gen(function* () {
+      const result = yield* GitProviderRegistry.pipe(
+        Effect.provide(GitProviderRegistry.layer([registration])),
+        Effect.either,
+      )
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(GitProviderOperationError)
+        if (result.left instanceof GitProviderOperationError) {
+          expect(result.left.providerId).toBe("invalid-provider")
+          expect(result.left.operation).toBe("register.descriptor")
+        }
+      }
+    })
+  })
+
+  it.effect("rejects same-provider cross-target review and checkout results", () => {
+    const registration = makeProvider("fake")
+    const requested = HostedReviewLocator.make({
+      repository: HostedRepositoryLocator.make({
+        providerId: GitProviderId.make("fake"),
+        namespace: RepositoryNamespace.make("platform/backend"),
+        name: HostedRepositoryName.make("service"),
+      }),
+      number: HostedReviewNumber.make(42),
+    })
+    const other = HostedReviewLocator.make({
+      repository: requested.repository,
+      number: HostedReviewNumber.make(43),
+    })
+    Object.defineProperty(registration, "getReviewDiff", {
+      value: () =>
+        Effect.succeed(
+          HostedReviewDiff.make({
+            locator: other,
+            headRevision: "head",
+            diff: "",
+            fetchedAt: "2026-07-16T00:00:00.000Z",
+          }),
+        ),
+    })
+    Object.defineProperty(registration, "checkoutSpec", {
+      value: () =>
+        Effect.succeed(
+          HostedReviewCheckoutSpec.make({
+            repository: other.repository,
+            review: other,
+            remoteUrl: "https://git.example.com/platform/backend/service.git",
+            fetchRef: "refs/reviews/43/head",
+            revision: "head",
+          }),
+        ),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const diff = yield* Effect.either(provider.getReviewDiff(requested))
+      const checkout = yield* Effect.either(provider.checkoutSpec(requested))
+
+      expect(Either.isLeft(diff)).toBe(true)
+      expect(Either.isLeft(checkout)).toBe(true)
+      if (Either.isLeft(diff))
+        expect(diff.left.message).toBe("Provider returned data for another target")
+      if (Either.isLeft(checkout)) {
+        expect(checkout.left.message).toBe("Provider returned data for another target")
+      }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
+  it.effect("rejects repository and review methods that drift within one provider", () => {
+    const registration = makeProvider("fake")
+    const requestedRepository = HostedRepositoryLocator.make({
+      providerId: GitProviderId.make("fake"),
+      namespace: RepositoryNamespace.make("platform/backend"),
+      name: HostedRepositoryName.make("service"),
+    })
+    const otherRepository = HostedRepositoryLocator.make({
+      ...requestedRepository,
+      name: HostedRepositoryName.make("other-service"),
+    })
+    const requestedReview = HostedReviewLocator.make({
+      repository: requestedRepository,
+      number: HostedReviewNumber.make(42),
+    })
+    const otherReview = HostedReviewLocator.make({
+      repository: requestedRepository,
+      number: HostedReviewNumber.make(43),
+    })
+    const otherSummary = HostedReviewSummary.make({
+      locator: otherReview,
+      title: "Other review",
+      body: null,
+      author: ProviderActor.make({
+        id: null,
+        username: "reviewer",
+        displayName: null,
+        avatarUrl: null,
+      }),
+      state: "open",
+      decision: "none",
+      url: "https://git.example.com/platform/backend/service/reviews/43",
+      draft: false,
+      base: BranchRevision.make({ name: "main", revision: "base" }),
+      head: BranchRevision.make({ name: "feature", revision: "head" }),
+      createdAt: null,
+      updatedAt: null,
+    })
+    const otherRepositorySummary = HostedReviewSummary.make({
+      ...otherSummary,
+      locator: HostedReviewLocator.make({
+        repository: otherRepository,
+        number: HostedReviewNumber.make(42),
+      }),
+    })
+    Object.defineProperty(registration, "listReviews", {
+      value: () => Effect.succeed([otherRepositorySummary]),
+    })
+    Object.defineProperty(registration, "getReview", {
+      value: () =>
+        Effect.succeed(HostedReviewDetail.make({ summary: otherSummary, files: [], commits: [] })),
+    })
+    Object.defineProperty(registration, "checkoutSpecAtRevision", {
+      value: () =>
+        Effect.succeed(
+          HostedReviewCheckoutSpec.make({
+            repository: otherRepository,
+            review: otherReview,
+            remoteUrl: "https://git.example.com/platform/backend/other-service.git",
+            fetchRef: "refs/reviews/43/head",
+            revision: "other-head",
+          }),
+        ),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const listed = yield* Effect.either(provider.listReviews(requestedRepository))
+      const detail = yield* Effect.either(provider.getReview(requestedReview))
+      const checkout = yield* Effect.either(
+        provider.checkoutSpecAtRevision?.(requestedReview, "head") ?? Effect.void,
+      )
+
+      expect(Either.isLeft(listed)).toBe(true)
+      expect(Either.isLeft(detail)).toBe(true)
+      expect(Either.isLeft(checkout)).toBe(true)
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
+  it.effect("preserves typed failures returned by a provider", () => {
+    const registration = makeProvider("fake")
+    const expected = GitProviderOperationError.make({
+      providerId: GitProviderId.make("fake"),
+      operation: "listReviews",
+      message: "Provider is temporarily unavailable",
+    })
+    Object.defineProperty(registration, "listReviews", {
+      value: () => expected,
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const repository = HostedRepositoryLocator.make({
+        providerId: GitProviderId.make("fake"),
+        namespace: RepositoryNamespace.make("platform/backend"),
+        name: HostedRepositoryName.make("service"),
+      })
+      const result = yield* Effect.either(provider.listReviews(repository))
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) expect(result.left).toBe(expected)
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
 })

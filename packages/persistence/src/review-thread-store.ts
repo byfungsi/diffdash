@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto"
 
 import {
   type AddReviewThreadUserMessageInput,
-  type CreatePendingReviewThreadAgentMessageInput,
   type CreateReviewThreadInput,
   MarkdownBody,
   type ReviewThreadAnchor,
@@ -32,26 +31,22 @@ export interface ReviewThreadCurrentMapping {
   readonly anchorStatus: ReviewAnchorStatusType
 }
 
-/** Final state for one pending agent message owned by a persisted run. */
-export interface CompleteReviewThreadAgentMessageInput {
-  readonly messageId: ReviewThreadMessageId
-  readonly threadId: ReviewThreadId
-  readonly bodyMarkdown: MarkdownBody
-  readonly status: "complete" | "failed"
-}
+const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchorSchema)
 
 const ReviewThreadRow = Schema.Struct({
   id: ReviewThreadId,
   repo_id: Schema.String,
   review_key: ReviewKey,
-  pr_number: Schema.NullOr(Schema.Number),
+  pr_number: Schema.NullOr(Schema.Int),
   base_sha: ReviewRevision,
   head_sha: ReviewRevision,
   current_base_sha: ReviewRevision,
   current_head_sha: ReviewRevision,
-  original_anchor_json: Schema.String,
-  current_anchor_json: Schema.NullOr(Schema.String),
+  original_anchor_json: ReviewThreadAnchorJson,
+  current_anchor_json: Schema.NullOr(ReviewThreadAnchorJson),
   anchor_status: ReviewAnchorStatus,
+  status: Schema.Literal("open", "closed"),
+  closed_at: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
 })
@@ -59,7 +54,7 @@ const ReviewThreadRow = Schema.Struct({
 const ReviewThreadMessageRow = Schema.Struct({
   id: ReviewThreadMessageId,
   thread_id: ReviewThreadId,
-  sequence: Schema.Number,
+  sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
   author: ReviewThreadMessageAuthor,
   body_markdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
@@ -68,9 +63,9 @@ const ReviewThreadMessageRow = Schema.Struct({
   updated_at: Schema.String,
 })
 
-interface NextSequenceRow {
-  readonly next_sequence: number
-}
+const NextSequenceRow = Schema.Struct({
+  next_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+})
 
 /** A typed failure from local review thread persistence operations. */
 export class ReviewThreadStoreError extends Schema.TaggedError<ReviewThreadStoreError>()(
@@ -100,15 +95,9 @@ export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore"
     readonly updateCurrentMappings: (
       mappings: readonly ReviewThreadCurrentMapping[],
     ) => Effect.Effect<readonly ReviewThread[], ReviewThreadStoreError>
-    readonly createPendingAgentMessage: (
-      input: CreatePendingReviewThreadAgentMessageInput,
-    ) => Effect.Effect<ReviewThreadMessage, ReviewThreadStoreError>
     readonly addUserMessage: (
       input: AddReviewThreadUserMessageInput,
     ) => Effect.Effect<ReviewThreadDetails, ReviewThreadStoreError>
-    readonly completeAgentMessage: (
-      input: CompleteReviewThreadAgentMessageInput,
-    ) => Effect.Effect<ReviewThreadMessage, ReviewThreadStoreError>
   }
 >() {
   static readonly layer = Layer.effect(
@@ -229,40 +218,6 @@ export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore"
               .pipe(mapStoreError("updateCurrentMappings"))
           },
         ),
-        createPendingAgentMessage: Effect.fn("ReviewThreadStore.createPendingAgentMessage")(
-          function (input) {
-            return database
-              .transaction("reviewThreads.createPendingAgentMessage", (transaction) => {
-                getThread(transaction, input.threadId)
-                const sequence = nextMessageSequence(transaction, input.threadId)
-                const id = ReviewThreadMessageId.make(randomUUID())
-                const now = new Date().toISOString()
-                transaction.run(
-                  `INSERT INTO review_thread_messages (
-                  id, thread_id, sequence, author, body_markdown, status,
-                  agent_run_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    id,
-                    input.threadId,
-                    sequence,
-                    "agent",
-                    MarkdownBody.make(""),
-                    "pending",
-                    input.agentRunId,
-                    now,
-                    now,
-                  ],
-                )
-                transaction.run("UPDATE review_threads SET updated_at = ? WHERE id = ?", [
-                  now,
-                  input.threadId,
-                ])
-                return getMessage(transaction, id)
-              })
-              .pipe(mapStoreError("createPendingAgentMessage"))
-          },
-        ),
         addUserMessage: Effect.fn("ReviewThreadStore.addUserMessage")(function (input) {
           return database
             .transaction("reviewThreads.addUserMessage", (transaction) => {
@@ -297,31 +252,6 @@ export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore"
             })
             .pipe(mapStoreError("addUserMessage"))
         }),
-        completeAgentMessage: Effect.fn("ReviewThreadStore.completeAgentMessage")(function (input) {
-          return database
-            .transaction("reviewThreads.completeAgentMessage", (transaction) => {
-              const current = getMessage(transaction, input.messageId)
-              if (current.threadId !== input.threadId || current.author !== "agent") {
-                throw new Error("Agent message does not belong to the requested thread")
-              }
-              if (current.status !== "pending") {
-                throw new Error(`Agent message is already ${current.status}`)
-              }
-              const now = new Date().toISOString()
-              transaction.run(
-                `UPDATE review_thread_messages
-                 SET body_markdown = ?, status = ?, updated_at = ?
-                 WHERE id = ? AND thread_id = ?`,
-                [input.bodyMarkdown, input.status, now, input.messageId, input.threadId],
-              )
-              transaction.run("UPDATE review_threads SET updated_at = ? WHERE id = ?", [
-                now,
-                input.threadId,
-              ])
-              return getMessage(transaction, input.messageId)
-            })
-            .pipe(mapStoreError("completeAgentMessage"))
-        }),
       })
     }),
   )
@@ -343,12 +273,6 @@ const getThread = (transaction: DatabaseTransaction, threadId: ReviewThreadId) =
   return decodeThreadRow(row)
 }
 
-const getMessage = (transaction: DatabaseTransaction, messageId: ReviewThreadMessageId) => {
-  const row = transaction.get("SELECT * FROM review_thread_messages WHERE id = ?", [messageId])
-  if (row === undefined) throw new Error(`Review thread message not found: ${messageId}`)
-  return decodeMessageRow(row)
-}
-
 const decodeThreadRow = (input: unknown) => {
   const row = Schema.decodeUnknownSync(ReviewThreadRow)(input)
   return ReviewThread.make({
@@ -360,8 +284,8 @@ const decodeThreadRow = (input: unknown) => {
     headRevision: row.head_sha,
     currentBaseRevision: row.current_base_sha,
     currentHeadRevision: row.current_head_sha,
-    originalAnchor: decodeAnchor(row.original_anchor_json),
-    currentAnchor: row.current_anchor_json === null ? null : decodeAnchor(row.current_anchor_json),
+    originalAnchor: row.original_anchor_json,
+    currentAnchor: row.current_anchor_json,
     anchorStatus: row.anchor_status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -390,12 +314,13 @@ const decodeThreadRows = (operation: string, rows: readonly unknown[]) =>
   })
 
 const nextMessageSequence = (transaction: DatabaseTransaction, threadId: ReviewThreadId) => {
-  const row = transaction.get<NextSequenceRow>(
+  const input = transaction.get(
     `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
      FROM review_thread_messages WHERE thread_id = ?`,
     [threadId],
   )
-  if (row === undefined) throw new Error("Unable to allocate message sequence")
+  if (input === undefined) throw new Error("Unable to allocate message sequence")
+  const row = Schema.decodeUnknownSync(NextSequenceRow)(input)
   return row.next_sequence
 }
 
@@ -407,9 +332,7 @@ const latestMessage = (transaction: DatabaseTransaction, threadId: ReviewThreadI
   return row === undefined ? undefined : decodeMessageRow(row)
 }
 
-const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchorSchema)
 const encodeAnchor = Schema.encodeSync(ReviewThreadAnchorJson)
-const decodeAnchor = Schema.decodeUnknownSync(ReviewThreadAnchorJson)
 
 const mapStoreError = (operation: string) =>
   Effect.mapError((cause: unknown) => ReviewThreadStoreError.make({ operation, cause }))

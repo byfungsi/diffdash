@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Predicate, Schema } from "effect"
 
 import {
   AgentExecutionPolicy,
@@ -17,12 +17,13 @@ import {
   NoAgentProviderAvailableError,
 } from "@diffdash/agent-provider/registry"
 import type { LocalReviewDetail } from "@diffdash/domain/local-review"
-import type { PullRequestDetail } from "@diffdash/domain/pull-request"
+import type { HostedReviewDetail } from "@diffdash/domain/git-provider"
 import {
   Walkthrough,
-  type WalkthroughGenerationDetails,
+  WalkthroughGenerationDetails,
   type WalkthroughHunkDigest,
   type WalkthroughPromptStats,
+  makeWalkthroughHunkAlias,
   validateWalkthrough,
   type WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
@@ -72,7 +73,7 @@ export interface WalkthroughGenerationInput {
 
 /** Review metadata variants supported by walkthrough generation. */
 export type WalkthroughReviewContext =
-  | { readonly kind: "pullRequest"; readonly pullRequest: PullRequestDetail }
+  | { readonly kind: "hosted"; readonly hostedReview: HostedReviewDetail }
   | { readonly kind: "localDiff"; readonly localReview: LocalReviewDetail }
 
 /** A typed failure for walkthrough generation and model-output parsing. */
@@ -285,7 +286,7 @@ const buildWalkthroughPromptContext = ({
   promptStats,
 }: WalkthroughGenerationInput) => {
   const promptHunks = hunkDigest.map((hunk, index) => ({
-    h: hunkAlias(index),
+    h: makeWalkthroughHunkAlias(index),
     p: hunk.path,
     r: hunk.header,
     a: hunk.additions,
@@ -293,14 +294,14 @@ const buildWalkthroughPromptContext = ({
     s: hunk.synthetic ? 1 : 0,
   }))
   const aliasToHunkId = new Map(
-    hunkDigest.map((hunk, index) => [hunkAlias(index), hunk.id] as const),
+    hunkDigest.map((hunk, index) => [makeWalkthroughHunkAlias(index), hunk.id] as const),
   )
-  const payload = {
+  const payload = Schema.decodeUnknownSync(WalkthroughPromptPayload)({
     review: walkthroughReviewPayload(review, hunkDigest),
     hunks: promptHunks,
     generation,
     prompt: promptStatsPayload(promptStats),
-  }
+  })
   const sampledTreeGuidance =
     generation.mode === "sampled-tree"
       ? `
@@ -330,7 +331,7 @@ Required JSON shape:
 
 Rules:
 - Use hunk aliases from data.hunks[].h only. Do not use paths or full hunk IDs in hunkIds.
-- Pull request context is diff-only unless data.review.context says otherwise; do not assume repository filesystem access.
+- Hosted review context is diff-only unless data.review.context says otherwise; do not assume repository filesystem access.
 - Put only the main review path in chapters/stops. Omit lower-priority hunks; DiffDash adds support locally.
 - Prefer 3-6 stops. Never return more than 8 stops unless unrelated critical changes require it.
 - Every referenced alias should appear at most once.
@@ -389,26 +390,59 @@ const walkthroughReviewPayload = (
     }
   }
 
-  const pullRequest = review.pullRequest
+  const hostedReview = review.hostedReview
+  const summary = hostedReview.summary
   return {
-    type: "pull-request",
+    type: "hosted-review",
     context: "diff-only",
-    n: pullRequest.number,
-    title: pullRequest.title,
-    body: pullRequest.body,
-    author: pullRequest.author.login,
-    base: pullRequest.baseRefName,
-    baseSha: pullRequest.baseRefOid,
-    head: pullRequest.headRefName,
-    headSha: pullRequest.headRefOid,
-    commits: pullRequest.commits.map((commit) => ({
-      oid: commit.oid,
-      msg: commit.messageHeadline,
-      date: commit.authoredDate,
+    provider: summary.locator.repository.providerId,
+    namespace: summary.locator.repository.namespace,
+    repository: summary.locator.repository.name,
+    n: summary.locator.number,
+    title: summary.title,
+    body: summary.body,
+    author: summary.author.username,
+    base: summary.base.name,
+    baseSha: summary.base.revision,
+    head: summary.head.name,
+    headSha: summary.head.revision,
+    commits: hostedReview.commits.map((commit) => ({
+      oid: commit.revision,
+      msg: commit.title,
+      date: commit.authoredAt,
     })),
-    files: compactReviewFiles(pullRequest.files, hunkDigest),
+    files: compactReviewFiles(hostedReview.files, hunkDigest),
   }
 }
+
+const WalkthroughPromptHunk = Schema.Struct({
+  h: Schema.String,
+  p: Schema.String,
+  r: Schema.String,
+  a: Schema.Number,
+  d: Schema.Number,
+  s: Schema.Number,
+})
+
+const WalkthroughPromptStatsPayload = Schema.Struct({
+  hiddenFiles: Schema.Number,
+  omittedFiles: Schema.Number,
+  omittedHunks: Schema.Number,
+  selectedFiles: Schema.Number,
+  selectedHunks: Schema.Number,
+  totalFiles: Schema.Number,
+  totalHunks: Schema.Number,
+  truncatedByCharBudget: Schema.Boolean,
+  truncatedHunks: Schema.Number,
+  usedHiddenFallback: Schema.Boolean,
+})
+
+const WalkthroughPromptPayload = Schema.Struct({
+  review: Schema.Unknown,
+  hunks: Schema.Array(WalkthroughPromptHunk),
+  generation: WalkthroughGenerationDetails,
+  prompt: Schema.NullOr(WalkthroughPromptStatsPayload),
+})
 
 const compactReviewFiles = (
   files: readonly {
@@ -453,11 +487,11 @@ const expandWalkthroughHunkAliases = (
   input: unknown,
   aliasToHunkId: ReadonlyMap<string, string>,
 ): unknown => {
-  if (!isRecord(input)) return input
+  if (!Predicate.isReadonlyRecord(input)) return input
 
   const chapters = Array.isArray(input.chapters)
     ? input.chapters.map((chapter) => {
-        if (!isRecord(chapter)) return chapter
+        if (!Predicate.isReadonlyRecord(chapter)) return chapter
         return {
           ...chapter,
           stops: Array.isArray(chapter.stops)
@@ -474,7 +508,7 @@ const expandWalkthroughHunkAliases = (
 }
 
 const expandHunkIds = (input: unknown, aliasToHunkId: ReadonlyMap<string, string>): unknown => {
-  if (!isRecord(input) || !Array.isArray(input.hunkIds)) return input
+  if (!Predicate.isReadonlyRecord(input) || !Array.isArray(input.hunkIds)) return input
   return {
     ...input,
     hunkIds: input.hunkIds.map((hunkId) =>
@@ -482,8 +516,3 @@ const expandHunkIds = (input: unknown, aliasToHunkId: ReadonlyMap<string, string
     ),
   }
 }
-
-const hunkAlias = (index: number) => `h${index + 1}`
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)

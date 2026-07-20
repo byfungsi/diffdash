@@ -1,49 +1,38 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import {
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { parsePublishReleaseArguments } from "./release-arguments.mjs"
+import {
+  assertCommandAvailable,
+  commandSucceeds,
+  runSyncCommand as run,
+} from "./release-command.mjs"
+import { createR2ClientConfiguration, requiredEnvironment } from "./release-environment.mjs"
 import {
   assertTagMatchesVersion,
   createLatestMetadata,
+  releaseTagForVersion,
+  releaseVersionFromTag,
   runWithRetries,
   selectReleaseArtifacts,
 } from "./release-policy.mjs"
 
-const args = process.argv.slice(2)
+const cli = parsePublishReleaseArguments()
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
-const tag = readOption("--tag") ?? `v${packageJson.version}`
-const version = tag.startsWith("v") ? tag.slice(1) : tag
+const tag = cli.tag ?? releaseTagForVersion(packageJson.version)
 assertTagMatchesVersion(tag, packageJson.version)
-const assetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
-const baseUrl = normalizePublicBaseUrl(requiredEnv("R2_PUBLIC_BASE_URL"))
-const r2Bucket = requiredEnv("R2_BUCKET")
-const r2Endpoint = `https://${requiredEnv("CLOUDFLARE_ACCOUNT_ID")}.r2.cloudflarestorage.com`
-const metadataOnly = hasFlag("--metadata-only")
-const homebrewExpatLib = "/opt/homebrew/opt/expat/lib"
-const awsEnv = {
-  ...process.env,
-  AWS_ACCESS_KEY_ID: requiredEnv("R2_ACCESS_KEY_ID"),
-  AWS_SECRET_ACCESS_KEY: requiredEnv("R2_SECRET_ACCESS_KEY"),
-  AWS_DEFAULT_REGION: "auto",
-  AWS_EC2_METADATA_DISABLED: "true",
-}
-
-if (
-  process.platform === "darwin" &&
-  awsEnv.DYLD_LIBRARY_PATH === undefined &&
-  existsSync(homebrewExpatLib)
-) {
-  awsEnv.DYLD_LIBRARY_PATH = homebrewExpatLib
-}
+const version = releaseVersionFromTag(tag)
+const assetsDir = path.resolve(cli.assetsDir ?? "release-assets")
+const baseUrl = normalizePublicBaseUrl(requiredEnvironment("R2_PUBLIC_BASE_URL"))
+const {
+  bucket: r2Bucket,
+  endpoint: r2Endpoint,
+  awsEnvironment: awsEnv,
+} = createR2ClientConfiguration()
+const { metadataOnly } = cli
 
 const assetFiles = readdirSync(assetsDir)
   .filter((file) => file !== "latest.json" && file !== "SHA256SUMS")
@@ -56,8 +45,8 @@ if (assetFiles.length === 0) {
 }
 validateUpdaterAssets(assetFiles)
 
-assertCommand("gh", ["--version"])
-assertCommand("aws", ["--version"], { env: awsEnv })
+assertCommandAvailable("gh", ["--version"])
+assertCommandAvailable("aws", ["--version"], { env: awsEnv })
 
 writeChecksums(assetFiles)
 writeLatestJson()
@@ -73,33 +62,10 @@ publishR2()
 console.log(`Staged ${tag} assets from ${assetsDir}`)
 console.log(`Publish the GitHub draft, then run: pnpm release:promote -- --tag ${tag}`)
 
-function readOption(name) {
-  const index = args.indexOf(name)
-  if (index === -1) return undefined
-
-  const value = args[index + 1]
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`Missing value for ${name}`)
-  }
-  return value
-}
-
-function hasFlag(name) {
-  return args.includes(name)
-}
-
 function normalizePublicBaseUrl(value) {
   const trimmed = value.trim().replace(/\/+$/, "")
   if (/^https?:\/\//.test(trimmed)) return trimmed
   return `https://${trimmed}`
-}
-
-function requiredEnv(name) {
-  const value = process.env[name]
-  if (value === undefined || value.trim().length === 0) {
-    throw new Error(`Missing required environment variable: ${name}`)
-  }
-  return value
 }
 
 function writeChecksums(files) {
@@ -223,30 +189,4 @@ function allAssetPaths() {
   return readdirSync(assetsDir)
     .toSorted((left, right) => left.localeCompare(right))
     .map((file) => path.join(assetsDir, file))
-}
-
-function assertCommand(command, commandArgs, options = {}) {
-  try {
-    execFileSync(command, commandArgs, { env: options.env ?? process.env, stdio: "ignore" })
-  } catch {
-    throw new Error(`Required command is not available or failed: ${command}`)
-  }
-}
-
-function commandSucceeds(command, commandArgs) {
-  try {
-    execFileSync(command, commandArgs, { stdio: "ignore" })
-    return true
-  } catch {
-    return false
-  }
-}
-
-function run(command, commandArgs, options = {}) {
-  console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
-  execFileSync(command, commandArgs, { env: options.env ?? process.env, stdio: "inherit" })
-}
-
-function shellQuote(value) {
-  return /[^A-Za-z0-9_./:=@-]/.test(value) ? JSON.stringify(value) : value
 }

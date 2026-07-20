@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { makePullRequestReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { makeReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { DatabaseService } from "@diffdash/persistence/database"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
@@ -24,7 +25,7 @@ const makeLayer = (databasePath: string) =>
     Layer.provideMerge(DatabaseService.layer(databasePath)),
   )
 
-const reviewKey = makePullRequestReviewKey("github", "fungsi", "diffdash", 66)
+const reviewKey = makeReviewKey(makeHostedReviewLocator("github", "fungsi", "diffdash", 66))
 const originalBaseRevision = ReviewRevision.make("base-original")
 const originalHeadRevision = ReviewRevision.make("head-original")
 const currentBaseRevision = ReviewRevision.make("base-current")

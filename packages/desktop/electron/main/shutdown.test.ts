@@ -75,6 +75,41 @@ describe("createShutdown", () => {
     await restart
     expect(install).toHaveBeenCalledTimes(1)
   })
+
+  it("reports disposal failures and still permits an ordinary quit", async () => {
+    const failure = new Error("dispose failed")
+    const onDisposalError = vi.fn<(cause: unknown) => void>()
+    const quit = vi.fn<() => void>()
+    const lifecycle = createShutdown({
+      dispose: () => Promise.reject(failure),
+      quit,
+      onDisposalError,
+    })
+
+    lifecycle.beforeQuit({ preventDefault: vi.fn<() => void>() })
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledTimes(1))
+
+    expect(onDisposalError).toHaveBeenCalledWith(failure)
+  })
+
+  it("bounds a hung disposal before reporting and quitting", async () => {
+    const onDisposalError = vi.fn<(cause: unknown) => void>()
+    const quit = vi.fn<() => void>()
+    const lifecycle = createShutdown({
+      dispose: () => new Promise<void>(() => undefined),
+      quit,
+      disposalTimeoutMs: 5,
+      onDisposalError,
+    })
+
+    lifecycle.beforeQuit({ preventDefault: vi.fn<() => void>() })
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledTimes(1))
+
+    expect(onDisposalError).toHaveBeenCalledTimes(1)
+    expect(onDisposalError.mock.calls[0]?.[0]).toMatchObject({
+      message: "Application runtime disposal exceeded 5ms",
+    })
+  })
 })
 
 const deferred = <A>() => {

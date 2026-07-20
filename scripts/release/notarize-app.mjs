@@ -4,22 +4,14 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { parseNotarizeArguments } from "./release-arguments.mjs"
+import { requiredEnvironment } from "./release-environment.mjs"
 
-const args = process.argv.slice(2)
-const appPathArg = args.find((arg) => !arg.startsWith("--"))
-
-if (appPathArg === undefined) {
-  throw new Error(
-    "Usage: node scripts/release/notarize-app.mjs <path-to-app> [--submission-id ID] [--timeout-minutes N] [--poll-seconds N]",
-  )
-}
-
+const cli = parseNotarizeArguments()
 const timeoutMinutes = Number(
-  readOption("--timeout-minutes") ?? process.env.NOTARIZATION_TIMEOUT_MINUTES ?? "240",
+  cli.timeoutMinutes ?? process.env.NOTARIZATION_TIMEOUT_MINUTES ?? "240",
 )
-const pollSeconds = Number(
-  readOption("--poll-seconds") ?? process.env.NOTARIZATION_POLL_SECONDS ?? "120",
-)
+const pollSeconds = Number(cli.pollSeconds ?? process.env.NOTARIZATION_POLL_SECONDS ?? "120")
 
 if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) {
   throw new Error(`Invalid notarization timeout: ${timeoutMinutes}`)
@@ -29,18 +21,18 @@ if (!Number.isFinite(pollSeconds) || pollSeconds <= 0) {
   throw new Error(`Invalid notarization poll interval: ${pollSeconds}`)
 }
 
-const appPath = path.resolve(appPathArg)
+const appPath = path.resolve(cli.appPath)
 const authArgs = [
   "--key",
-  requiredEnv("APPLE_API_KEY"),
+  requiredEnvironment("APPLE_API_KEY"),
   "--key-id",
-  requiredEnv("APPLE_API_KEY_ID"),
+  requiredEnvironment("APPLE_API_KEY_ID"),
   "--issuer",
-  requiredEnv("APPLE_API_ISSUER"),
+  requiredEnvironment("APPLE_API_ISSUER"),
 ]
 const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-notarize-"))
 const zipPath = path.join(tempDir, "DiffDash.zip")
-let submissionId = readOption("--submission-id")
+let submissionId = cli.submissionId
 
 if (typeof submissionId !== "string" || submissionId.length === 0) {
   console.log(`Creating notarization archive for ${appPath}`)
@@ -132,25 +124,6 @@ async function stapleTicket(attempt = 1) {
 
   await sleep(30_000)
   return stapleTicket(attempt + 1)
-}
-
-function readOption(name) {
-  const index = args.indexOf(name)
-  if (index === -1) return undefined
-
-  const value = args[index + 1]
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`Missing value for ${name}`)
-  }
-  return value
-}
-
-function requiredEnv(name) {
-  const value = process.env[name]
-  if (value === undefined || value.trim().length === 0) {
-    throw new Error(`Missing required environment variable: ${name}`)
-  }
-  return value
 }
 
 async function run(command, commandArgs, options = {}) {

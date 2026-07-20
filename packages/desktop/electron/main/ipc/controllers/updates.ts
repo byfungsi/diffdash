@@ -34,12 +34,3 @@ export const defineUpdateHandlers = (
     await shutdown.restartAndInstall(() => Effect.runPromise(updater.quitAndInstall))
   })
 }
-
-/** Registers update handlers with Electron. */
-export const installUpdatesController = (registry: IpcControllerRegistry) =>
-  registry.install([
-    InvokeChannel.updatesGetState,
-    InvokeChannel.updatesCheck,
-    InvokeChannel.updatesDownload,
-    InvokeChannel.updatesRestartAndInstall,
-  ])

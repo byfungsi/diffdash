@@ -21,8 +21,15 @@ import {
   reviewConformance,
   walkthroughConformance,
 } from "@diffdash/agent-provider/testing"
-import { CliError, type CliResult, type CliRunOptions } from "@diffdash/process/cli"
-import type { CliStreamEvent, CliStreamOptions } from "@diffdash/process/cli-stream"
+import {
+  ProcessExit,
+  ProcessLine,
+  ProcessResult,
+  ProcessSpawnError,
+  type ProcessEvent,
+  type ProcessRequest,
+  type ProcessRunner,
+} from "@diffdash/process"
 import {
   CODEX_AUTO_MODELS,
   CODEX_DEFAULT_MODEL,
@@ -39,15 +46,14 @@ interface Call {
   readonly env: Readonly<Record<string, string>> | undefined
 }
 
-const fixtureEvents = async (name: string): Promise<readonly CliStreamEvent[]> => {
+const fixtureEvents = async (name: string): Promise<readonly ProcessEvent[]> => {
   const lines = (await readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))
     .trim()
     .split("\n")
   return [
-    ...lines.map((line): CliStreamEvent => ({ _tag: "CliLine", source: "stdout", line })),
-    {
-      _tag: "CliExit",
-      result: {
+    ...lines.map((line) => ProcessLine.make({ source: "stdout", line })),
+    ProcessExit.make({
+      result: ProcessResult.make({
         command: "codex",
         args: [],
         cwd: "/workspace/project",
@@ -58,8 +64,8 @@ const fixtureEvents = async (name: string): Promise<readonly CliStreamEvent[]> =
         outputTruncated: false,
         exitCode: 0,
         signal: null,
-      },
-    },
+      }),
+    }),
   ]
 }
 
@@ -67,63 +73,72 @@ const makeHarness = (
   options: { readonly reviewFixture?: string; readonly walkthroughOutput?: string } = {},
 ) => {
   const calls: Call[] = []
-  const cli = {
-    run: (command: string, args: readonly string[], runOptions: CliRunOptions = {}) =>
+  const processes: ProcessRunner = {
+    run: (request) =>
       Effect.tryPromise({
         try: async () => {
           calls.push({
-            command,
-            args: [...args],
-            cwd: runOptions.cwd,
-            stdin: runOptions.stdin,
-            env: runOptions.env,
+            command: request.command,
+            args: request.args,
+            cwd: request.cwd ?? undefined,
+            stdin: request.stdin ?? undefined,
+            env: Object.keys(request.env).length === 0 ? undefined : request.env,
           })
-          if (args[0] === "--version") {
-            return result(command, args, "codex-cli 1.2.3")
+          if (request.args[0] === "--version") {
+            return result(request, "codex-cli 1.2.3")
           }
-          const outputIndex = args.indexOf("--output-last-message")
-          const outputPath = outputIndex < 0 ? undefined : args[outputIndex + 1]
+          const outputIndex = request.args.indexOf("--output-last-message")
+          const outputPath = outputIndex < 0 ? undefined : request.args[outputIndex + 1]
           if (outputPath !== undefined) {
             await writeFile(outputPath, options.walkthroughOutput ?? "generated walkthrough")
           }
-          return result(command, args, "")
+          return result(request, "")
         },
-        catch: (cause) => cliError(command, args, cause),
+        catch: (cause) => processSpawnError(request, cause),
       }),
-  }
-  const cliStream = {
-    stream: (command: string, args: readonly string[], runOptions: CliStreamOptions = {}) => {
+    streamLines: (request) => {
       calls.push({
-        command,
-        args: [...args],
-        cwd: runOptions.cwd,
-        stdin: runOptions.stdin,
-        env: runOptions.env,
+        command: request.command,
+        args: request.args,
+        cwd: request.cwd ?? undefined,
+        stdin: request.stdin ?? undefined,
+        env: Object.keys(request.env).length === 0 ? undefined : request.env,
       })
       return Stream.fromIterableEffect(
         Effect.promise(() => fixtureEvents(options.reviewFixture ?? "codex-review-success.jsonl")),
       )
     },
   }
-  return { calls, registration: makeCodexProvider({ cli, cliStream, tempDirectory: tmpdir() }) }
+  return { calls, registration: makeCodexProvider({ processes, tempDirectory: tmpdir() }) }
 }
 
-const result = (command: string, args: readonly string[], stdout: string): CliResult => ({
-  command,
-  args,
-  cwd: null,
-  exitCode: 0,
-  stdout,
-  stderr: "",
-})
+const result = (request: ProcessRequest, stdout: string): ProcessResult =>
+  ProcessResult.make({
+    command: request.command,
+    args: request.args,
+    cwd: request.cwd,
+    exitCode: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    outputTruncated: false,
+  })
 
-const cliError = (command: string, args: readonly string[], cause: unknown) =>
-  CliError.make({
-    command,
-    args: [...args],
-    cwd: null,
+const processSpawnError = (request: ProcessRequest, cause: unknown) =>
+  ProcessSpawnError.make({
+    command: request.command,
+    args: request.args,
+    cwd: request.cwd,
     exitCode: null,
-    stderr: cause instanceof Error ? cause.message : String(cause),
+    signal: null,
+    stdout: "",
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    outputTruncated: false,
+    message: cause instanceof Error ? cause.message : String(cause),
     cause,
   })
 
@@ -226,14 +241,12 @@ agentCancellationConformance("Codex", {
     const cancellationTempDirectory = mkdtempSync(join(tmpdir(), "diffdash-codex-test-"))
     const harness = makeHarness()
     const registration = makeCodexProvider({
-      cli: {
+      processes: {
         run:
           harness.registration.walkthrough === undefined
             ? () => Effect.die(new Error("unreachable"))
-            : (command, args) => Effect.succeed(result(command, args, "codex-cli 1.2.3")),
-      },
-      cliStream: {
-        stream: () =>
+            : (request) => Effect.succeed(result(request, "codex-cli 1.2.3")),
+        streamLines: () =>
           Stream.acquireRelease(
             Effect.sync(() => void (acquired = true)),
             () => Effect.sync(() => void (released = true)),
@@ -315,13 +328,140 @@ describe("Codex provider", () => {
     }),
   )
 
+  it.effect("adapts current, sparse, and nested Codex web and repository search items", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ reviewFixture: "codex-review-search-variants.jsonl" })
+      const output = yield* requireReview(harness.registration).execute(reviewRequest())
+
+      expect(output.response.bodyMarkdown).toBe("The changed hunk is correct.")
+      expect(output.artifacts.map(({ type }) => type)).toEqual([
+        "web-result",
+        "web-result",
+        "web-result",
+        "web-result",
+        "search-result",
+        "unknown",
+        "provider-message",
+      ])
+
+      const fullWeb = output.artifacts.find(({ metadata }) => metadata.itemId === "web-full")
+      expect(fullWeb).toMatchObject({
+        type: "web-result",
+        metadata: {
+          eventType: "web_search",
+          itemId: "web-full",
+          query: "Codex JSONL protocol",
+          status: "completed",
+          url: "https://developers.openai.com/codex/non-interactive-mode",
+        },
+      })
+      expect(fullWeb?.content).toContain("JSONL event documentation")
+
+      const queryOnly = output.artifacts.find(
+        ({ metadata }) => metadata.itemId === "web-query-only",
+      )
+      expect(queryOnly?.content).toBe("Query: Codex item variants")
+      const statusOnly = output.artifacts.find(
+        ({ metadata }) => metadata.itemId === "web-status-only",
+      )
+      expect(statusOnly?.content).toBe("Status: completed")
+
+      const nested = output.artifacts.find(({ metadata }) => metadata.itemId === "web-nested")
+      expect(nested).toMatchObject({
+        type: "web-result",
+        content: '{"summary":"Nested web result"}',
+        metadata: {
+          eventType: "web_search_call",
+          itemId: "web-nested",
+          query: "Codex exec JSONL\nCodex web search item",
+          status: "completed",
+          url: "https://example.com/codex",
+        },
+      })
+
+      const repository = output.artifacts.find(
+        ({ metadata }) => metadata.itemId === "repository-search",
+      )
+      expect(repository).toMatchObject({
+        type: "search-result",
+        metadata: {
+          eventType: "search",
+          itemId: "repository-search",
+          query: "provider-result-adapter",
+          status: "completed",
+        },
+      })
+      expect(repository?.content).toContain("provider-result-adapter.ts")
+
+      const ambiguous = output.artifacts.find(
+        ({ metadata }) => metadata.itemId === "ambiguous-search",
+      )
+      expect(ambiguous).toMatchObject({
+        type: "unknown",
+        metadata: { eventType: "search", itemId: "ambiguous-search", status: "completed" },
+      })
+      expect(ambiguous?.content).toContain("Must remain unknown")
+    }),
+  )
+
+  it.effect("preserves unknown completed items while tolerating additive top-level events", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ reviewFixture: "codex-review-unknown-events.jsonl" })
+      const output = yield* requireReview(harness.registration).execute(reviewRequest())
+
+      expect(output.response.bodyMarkdown).toBe("The changed hunk is correct.")
+      expect(output.artifacts.map(({ type }) => type)).toEqual(["unknown", "provider-message"])
+      expect(output.artifacts[0]).toMatchObject({
+        title: "Unknown Codex completed item: future_completed_item",
+        metadata: {
+          eventType: "future_completed_item",
+          itemId: "future-1",
+          status: "completed",
+        },
+      })
+      expect(output.artifacts[0]?.content).toContain("Retain this future payload")
+    }),
+  )
+
+  it.effect("selects the last completed agent message as the deterministic final response", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ reviewFixture: "codex-review-multiple-messages.jsonl" })
+      const output = yield* requireReview(harness.registration).execute(reviewRequest())
+
+      expect(output.response.bodyMarkdown).toBe("The final structured response wins.")
+      expect(output.artifacts.map(({ content }) => content)).toEqual([
+        "I am checking the changed hunk.",
+        '{"bodyMarkdown":"The final structured response wins.","threadSummaryUpdate":null,"referencedAnchors":null}',
+      ])
+    }),
+  )
+
+  it.effect("rejects missing and reordered Codex lifecycle events", () =>
+    Effect.gen(function* () {
+      for (const [fixture, reason] of [
+        ["codex-review-lifecycle-missing.jsonl", "without a complete turn lifecycle"],
+        ["codex-review-lifecycle-reordered.jsonl", "expected thread.started"],
+      ] as const) {
+        const harness = makeHarness({ reviewFixture: fixture })
+        const error = yield* requireReview(harness.registration)
+          .execute(reviewRequest())
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(AgentProviderOperationError)
+        expect(error.reason).toContain(reason)
+      }
+    }),
+  )
+
   it.effect("rejects malformed JSONL, invalid responses, provider errors, and file changes", () =>
     Effect.gen(function* () {
       for (const [fixture, reason] of [
         ["codex-review-malformed.jsonl", "invalid JSONL"],
+        ["codex-review-non-object.jsonl", "event is not a JSON object"],
         ["codex-review-invalid-response.jsonl", "invalid review response"],
         ["codex-review-error.jsonl", "model request failed"],
         ["codex-review-file-change.jsonl", "file change"],
+        ["codex-review-file-change-updated.jsonl", "file change"],
+        ["codex-review-file-change-completed.jsonl", "file change"],
       ] as const) {
         const harness = makeHarness({ reviewFixture: fixture })
         const error = yield* requireReview(harness.registration)
@@ -338,6 +478,14 @@ describe("Codex provider", () => {
       best: "gpt-5.5",
       balanced: "gpt-5.3-codex-spark",
       fast: "gpt-5.4-mini",
+    })
+    expect(CODEX_WALKTHROUGH_POLICY).toMatchObject({
+      repository: "local-working-copy",
+      shell: "read-only",
+    })
+    expect(CODEX_REVIEW_POLICY).toMatchObject({
+      repository: "reviewed-revision",
+      shell: "read-only",
     })
   })
 })

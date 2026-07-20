@@ -1,13 +1,12 @@
-import { describe, expect, it } from "@effect/vitest"
-import BetterSqlite3 from "better-sqlite3"
-import { Effect, Either, Layer } from "effect"
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-
 import { AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
+import { describe, expect, it } from "@effect/vitest"
+import BetterSqlite3 from "better-sqlite3"
+import { Effect, Either, Layer, Schema } from "effect"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
 import { DatabaseError, DatabaseService } from "./database"
@@ -35,49 +34,54 @@ const makeCompatibilityLayer = (databasePath: string) =>
     ThreadMemoryStore.layer,
   ).pipe(Layer.provideMerge(makeLayer(databasePath)))
 
-interface CountRow {
-  readonly count: number
-}
+const ColumnNameRows = Schema.Array(Schema.Struct({ name: Schema.String }))
+const CountRow = Schema.Struct({ count: Schema.Number })
+const WalkthroughMigrationRow = Schema.Struct({
+  base_sha: Schema.String,
+  content_json: Schema.String,
+  head_sha: Schema.String,
+})
+const JournalModeRow = Schema.Struct({ journal_mode: Schema.String })
+const ForeignKeysRow = Schema.Struct({ foreign_keys: Schema.Number })
+const ThreadIdRows = Schema.Array(Schema.Struct({ id: Schema.String }))
+const ThreadLifecycleMigrationRow = Schema.Struct({
+  closed_at: Schema.NullOr(Schema.String),
+  status: Schema.String,
+})
+const PullRequestFixtureRow = Schema.Struct({
+  author: Schema.String,
+  base_ref: Schema.String,
+  head_ref: Schema.String,
+  head_sha: Schema.String,
+  id: Schema.String,
+  last_fetched_at: Schema.String,
+  number: Schema.Number,
+  repo_id: Schema.String,
+  state: Schema.String,
+  title: Schema.String,
+})
+const CompatibilityCountsRow = Schema.Struct({
+  agent_run_artifacts: Schema.Number,
+  agent_runs: Schema.Number,
+  pull_requests: Schema.Number,
+  repos: Schema.Number,
+  review_thread_messages: Schema.Number,
+  review_threads: Schema.Number,
+  thread_memory: Schema.Number,
+  hosted_viewed_files: Schema.Number,
+  local_viewed_files: Schema.Number,
+  walkthroughs: Schema.Number,
+})
 
-interface WalkthroughRow {
-  readonly base_sha: string
-  readonly content_json: string
-  readonly head_sha: string
-}
-
-interface ThreadMemoryMigrationRow {
-  readonly summary: string
-  readonly summarized_through_sequence: number
-  readonly summary_algorithm: string
-  readonly summary_version: number
-}
-
-interface AgentRunUsageMigrationRow {
-  readonly id: string
-  readonly usage_json: string | null
-}
-
-interface ThreadMigrationCountRow {
-  readonly count: number
-}
-
-interface ThreadLifecycleMigrationRow {
-  readonly closed_at: string | null
-  readonly status: string
-}
-
-interface PullRequestFixtureRow {
-  readonly author: string
-  readonly base_ref: string
-  readonly head_ref: string
-  readonly head_sha: string
-  readonly id: string
-  readonly last_fetched_at: string
-  readonly number: number
-  readonly repo_id: string
-  readonly state: string
-  readonly title: string
-}
+const decodeColumnNameRows = Schema.decodeUnknownSync(ColumnNameRows)
+const decodeCountRow = Schema.decodeUnknownSync(CountRow)
+const decodeWalkthroughMigrationRow = Schema.decodeUnknownSync(WalkthroughMigrationRow)
+const decodeJournalModeRow = Schema.decodeUnknownSync(JournalModeRow)
+const decodeForeignKeysRow = Schema.decodeUnknownSync(ForeignKeysRow)
+const decodeThreadIdRows = Schema.decodeUnknownSync(ThreadIdRows)
+const decodeThreadLifecycleMigrationRow = Schema.decodeUnknownSync(ThreadLifecycleMigrationRow)
+const decodePullRequestFixtureRow = Schema.decodeUnknownSync(PullRequestFixtureRow)
+const decodeCompatibilityCountsRow = Schema.decodeUnknownSync(CompatibilityCountsRow)
 
 describe("DatabaseService", () => {
   it.scoped("FUN-82 AC: creates and versions a fresh database", () =>
@@ -86,23 +90,24 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const tables = yield* database.all<{ readonly name: string }>(
-          "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+        const tables = decodeColumnNameRows(
+          yield* database.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"),
         )
 
         expect(tables.map(({ name }) => name)).toEqual([
           "agent_run_artifacts",
           "agent_runs",
+          "hosted_viewed_files",
+          "local_viewed_files",
           "pull_requests",
           "repos",
           "review_thread_messages",
           "review_threads",
           "thread_memory",
-          "viewed_files",
           "walkthroughs",
         ])
-        const memoryColumns = yield* database.all<{ readonly name: string }>(
-          "PRAGMA table_info(thread_memory)",
+        const memoryColumns = decodeColumnNameRows(
+          yield* database.all("PRAGMA table_info(thread_memory)"),
         )
         expect(memoryColumns.map(({ name }) => name)).toEqual(
           expect.arrayContaining([
@@ -111,14 +116,26 @@ describe("DatabaseService", () => {
             "summary_version",
           ]),
         )
-        const agentRunColumns = yield* database.all<{ readonly name: string }>(
-          "PRAGMA table_info(agent_runs)",
+        const agentRunColumns = decodeColumnNameRows(
+          yield* database.all("PRAGMA table_info(agent_runs)"),
         )
-        expect(agentRunColumns.map(({ name }) => name)).toContain("usage_json")
+        expect(agentRunColumns.map(({ name }) => name)).toEqual(
+          expect.arrayContaining(["usage_json", "review_key", "base_sha", "head_sha"]),
+        )
+        const turnIndexes = decodeColumnNameRows(
+          yield* database.all(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'index' AND name LIKE '%one_%_per_thread_idx' ORDER BY name`,
+          ),
+        )
+        expect(turnIndexes.map(({ name }) => name)).toEqual([
+          "agent_runs_one_running_per_thread_idx",
+          "review_thread_messages_one_pending_agent_per_thread_idx",
+        ])
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
       sqlite.close()
     }),
   )
@@ -129,22 +146,18 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const journalMode = yield* database.get<{ readonly journal_mode: string }>(
-          "PRAGMA journal_mode",
-        )
-        const foreignKeys = yield* database.get<{ readonly foreign_keys: number }>(
-          "PRAGMA foreign_keys",
-        )
+        const journalMode = decodeJournalModeRow(yield* database.get("PRAGMA journal_mode"))
+        const foreignKeys = decodeForeignKeysRow(yield* database.get("PRAGMA foreign_keys"))
         const orphan = yield* Effect.either(
           database.run(
-            `INSERT INTO viewed_files (
-              repo_id, pr_number, review_key, file_path, head_sha, viewed_at
-            ) VALUES ('missing-repo', 1, 'missing#1', 'src/orphan.ts', 'head', '2026-07-15T00:00:00.000Z')`,
+            `INSERT INTO hosted_viewed_files (
+              repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
+            ) VALUES ('missing-repo', 1, 'main', 'src/orphan.ts', 'patch', '2026-07-15T00:00:00.000Z')`,
           ),
         )
 
-        expect(journalMode?.journal_mode).toBe("wal")
-        expect(foreignKeys?.foreign_keys).toBe(1)
+        expect(journalMode.journal_mode).toBe("wal")
+        expect(foreignKeys.foreign_keys).toBe(1)
         expect(Either.isLeft(orphan)).toBe(true)
         if (Either.isLeft(orphan)) expect(orphan.left.operation).toBe("run")
       }).pipe(Effect.provide(makeLayer(databasePath)))
@@ -158,6 +171,15 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
+        yield* database.run(
+          `INSERT INTO hosted_viewed_files
+           VALUES ('github:byfungsi/diffdash', 147, 'main', 'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
+        )
+        yield* database.run(
+          `INSERT INTO local_viewed_files
+           VALUES ('github:byfungsi/diffdash', 'branch:feature', 'branch', 'main',
+             'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
+        )
         const duplicateStatements = [
           `INSERT INTO repos
            SELECT 'github:duplicate/diffdash', provider, owner, name, remote_url, local_path,
@@ -165,7 +187,8 @@ describe("DatabaseService", () => {
           `INSERT INTO pull_requests
            SELECT 'pr-v8-duplicate', repo_id, number, title, author, head_sha, base_ref, head_ref,
              state, last_fetched_at FROM pull_requests`,
-          "INSERT INTO viewed_files SELECT * FROM viewed_files",
+          "INSERT INTO hosted_viewed_files SELECT * FROM hosted_viewed_files",
+          "INSERT INTO local_viewed_files SELECT * FROM local_viewed_files",
           "INSERT INTO walkthroughs SELECT * FROM walkthroughs",
           `INSERT INTO review_threads
            SELECT 'thread-v8-duplicate', repo_id, review_key, pr_number, base_sha, head_sha,
@@ -195,12 +218,22 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
+        yield* database.run(
+          `INSERT INTO hosted_viewed_files
+           VALUES ('github:byfungsi/diffdash', 147, 'main', 'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
+        )
+        yield* database.run(
+          `INSERT INTO local_viewed_files
+           VALUES ('github:byfungsi/diffdash', 'branch:feature', 'branch', 'main',
+             'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
+        )
         yield* database.run("DELETE FROM repos WHERE id = ?", ["github:byfungsi/diffdash"])
 
         for (const table of [
           "repos",
           "pull_requests",
-          "viewed_files",
+          "hosted_viewed_files",
+          "local_viewed_files",
           "walkthroughs",
           "review_threads",
           "review_thread_messages",
@@ -208,8 +241,8 @@ describe("DatabaseService", () => {
           "agent_run_artifacts",
           "thread_memory",
         ]) {
-          const row = yield* database.get<CountRow>(`SELECT COUNT(*) AS count FROM ${table}`)
-          expect(row?.count).toBe(0)
+          const row = decodeCountRow(yield* database.get(`SELECT COUNT(*) AS count FROM ${table}`))
+          expect(row.count).toBe(0)
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -222,7 +255,7 @@ describe("DatabaseService", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.pragma("user_version = 10")
+      sqlite.pragma("user_version = 12")
       sqlite.close()
 
       const result = yield* Effect.either(
@@ -236,12 +269,12 @@ describe("DatabaseService", () => {
       )
       if (Either.isLeft(result)) {
         expect(String(result.left.cause)).toContain(
-          "Database schema version 10 is newer than supported version 9",
+          "Database schema version 12 is newer than supported version 11",
         )
       }
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(10)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(12)
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -262,22 +295,34 @@ describe("DatabaseService", () => {
       )
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
       const agentRunsSql = sqlite
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'")
         .pluck()
         .get()
       expect(agentRunsSql).not.toContain("provider IN")
+      expect(agentRunsSql).toContain("review_key TEXT NOT NULL")
+      const messagesSql = sqlite
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_thread_messages'",
+        )
+        .pluck()
+        .get()
+      expect(messagesSql).toContain("FOREIGN KEY(agent_run_id, thread_id)")
       sqlite
         .prepare(
           `INSERT INTO agent_runs (
-            id, thread_id, provider, model, prompt_version, status, provider_run_id, error,
+            id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+            status, provider_run_id, error,
             started_at, completed_at, usage_json
-          ) VALUES (?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL, NULL)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL, NULL)`,
         )
         .run(
           "run-future-provider",
           "thread-v8",
+          "github:byfungsi/diffdash#147",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "future-provider",
           "future-model",
           "thread-v1",
@@ -342,7 +387,7 @@ describe("DatabaseService", () => {
       expect(Either.isLeft(results.walkthrough) && results.walkthrough.left).toEqual(
         expect.objectContaining<Partial<WalkthroughStoreError>>({
           _tag: "WalkthroughStoreError",
-          operation: "decodeContentJson.parse",
+          operation: "get.decodeContent",
         }),
       )
       expect(Either.isLeft(results.thread) && results.thread.left).toEqual(
@@ -379,8 +424,8 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const row = yield* database.get<WalkthroughRow>(
-          "SELECT base_sha, head_sha, content_json FROM walkthroughs",
+        const row = decodeWalkthroughMigrationRow(
+          yield* database.get("SELECT base_sha, head_sha, content_json FROM walkthroughs"),
         )
 
         expect(row).toEqual({
@@ -403,7 +448,7 @@ describe("DatabaseService", () => {
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(9)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(11)
       reopened.close()
     }),
   )
@@ -415,7 +460,7 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const memory = yield* database.get<ThreadMemoryMigrationRow>(
+        const memory = yield* database.get(
           `SELECT summary, summarized_through_sequence, summary_algorithm, summary_version
            FROM thread_memory WHERE thread_id = ?`,
           ["thread-76"],
@@ -425,7 +470,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
       sqlite.close()
     }),
   )
@@ -437,16 +482,15 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const row = yield* database.get<AgentRunUsageMigrationRow>(
-          "SELECT id, usage_json FROM agent_runs WHERE id = ?",
-          ["run-72"],
-        )
+        const row = yield* database.get("SELECT id, usage_json FROM agent_runs WHERE id = ?", [
+          "run-72",
+        ])
 
         expect(row).toBeUndefined()
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(9)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
       sqlite.close()
     }),
   )
@@ -528,11 +572,21 @@ describe("DatabaseService", () => {
       sqlite
         .prepare(
           `INSERT INTO agent_runs (
-          id, thread_id, provider, model, prompt_version, status, provider_run_id, error,
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          status, provider_run_id, error,
           started_at, completed_at, usage_json
-        ) VALUES (?, ?, 'codex', 'gpt-5', 'thread-v1', 'completed', NULL, NULL, ?, ?, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, 'codex', 'gpt-5', 'thread-v1',
+          'completed', NULL, NULL, ?, ?, NULL)`,
         )
-        .run("run-review", "thread-review", "2026-07-12T00:00:00.000Z", "2026-07-12T00:00:01.000Z")
+        .run(
+          "run-review",
+          "thread-review",
+          "github:fungsi/diffdash#67",
+          "base-sha",
+          "head-sha",
+          "2026-07-12T00:00:00.000Z",
+          "2026-07-12T00:00:01.000Z",
+        )
       sqlite
         .prepare(
           `INSERT INTO agent_run_artifacts (
@@ -554,27 +608,25 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const threads = yield* database.all<{ readonly id: string }>(
-          "SELECT id FROM review_threads ORDER BY id",
+        const threads = decodeThreadIdRows(
+          yield* database.all("SELECT id FROM review_threads ORDER BY id"),
         )
-        const messages = yield* database.get<ThreadMigrationCountRow>(
-          "SELECT COUNT(*) AS count FROM review_thread_messages",
+        const messages = decodeCountRow(
+          yield* database.get("SELECT COUNT(*) AS count FROM review_thread_messages"),
         )
-        const runs = yield* database.get<ThreadMigrationCountRow>(
-          "SELECT COUNT(*) AS count FROM agent_runs",
+        const runs = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM agent_runs"))
+        const artifacts = decodeCountRow(
+          yield* database.get("SELECT COUNT(*) AS count FROM agent_run_artifacts"),
         )
-        const artifacts = yield* database.get<ThreadMigrationCountRow>(
-          "SELECT COUNT(*) AS count FROM agent_run_artifacts",
-        )
-        const memory = yield* database.get<ThreadMigrationCountRow>(
-          "SELECT COUNT(*) AS count FROM thread_memory",
+        const memory = decodeCountRow(
+          yield* database.get("SELECT COUNT(*) AS count FROM thread_memory"),
         )
 
         expect(threads).toEqual([])
-        expect(messages?.count).toBe(0)
-        expect(runs?.count).toBe(0)
-        expect(artifacts?.count).toBe(0)
-        expect(memory?.count).toBe(0)
+        expect(messages.count).toBe(0)
+        expect(runs.count).toBe(0)
+        expect(artifacts.count).toBe(0)
+        expect(memory.count).toBe(0)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -633,9 +685,10 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const thread = yield* database.get<ThreadLifecycleMigrationRow>(
-          "SELECT status, closed_at FROM review_threads WHERE id = ?",
-          ["thread-closed"],
+        const thread = decodeThreadLifecycleMigrationRow(
+          yield* database.get("SELECT status, closed_at FROM review_threads WHERE id = ?", [
+            "thread-closed",
+          ]),
         )
 
         expect(thread).toEqual({ status: "open", closed_at: null })
@@ -650,8 +703,8 @@ describe("DatabaseService", () => {
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const row = yield* database.get<WalkthroughRow>(
-          "SELECT base_sha, head_sha, content_json FROM walkthroughs",
+        const row = decodeWalkthroughMigrationRow(
+          yield* database.get("SELECT base_sha, head_sha, content_json FROM walkthroughs"),
         )
 
         expect(row).toEqual({
@@ -685,8 +738,8 @@ describe("DatabaseService", () => {
           ])
         })
 
-        const row = yield* database.get<CountRow>("SELECT COUNT(*) AS count FROM repos")
-        expect(row?.count).toBe(1)
+        const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
+        expect(row.count).toBe(1)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -716,8 +769,8 @@ describe("DatabaseService", () => {
           })
           .pipe(Effect.catchAll(() => Effect.void))
 
-        const row = yield* database.get<CountRow>("SELECT COUNT(*) AS count FROM repos")
-        expect(row?.count).toBe(0)
+        const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
+        expect(row.count).toBe(0)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -746,10 +799,10 @@ describe("DatabaseService", () => {
             return Promise.resolve()
           }),
         )
-        const row = yield* database.get<CountRow>("SELECT COUNT(*) AS count FROM repos")
+        const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
 
         expect(Either.isLeft(result)).toBe(true)
-        expect(row?.count).toBe(0)
+        expect(row.count).toBe(0)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -758,37 +811,30 @@ describe("DatabaseService", () => {
 const assertPopulatedVersion8Fixture = Effect.gen(function* () {
   const database = yield* DatabaseService
   const repositories = yield* RepositoryStore
-  const viewedFiles = yield* ViewedFileStore
   const walkthroughs = yield* WalkthroughStore
   const threads = yield* ReviewThreadStore
   const runs = yield* AgentRunStore
   const artifacts = yield* AgentRunArtifactStore
   const memory = yield* ThreadMemoryStore
 
-  const counts = yield* database.get<{
-    readonly agent_run_artifacts: number
-    readonly agent_runs: number
-    readonly pull_requests: number
-    readonly repos: number
-    readonly review_thread_messages: number
-    readonly review_threads: number
-    readonly thread_memory: number
-    readonly viewed_files: number
-    readonly walkthroughs: number
-  }>(`SELECT
+  const counts = decodeCompatibilityCountsRow(
+    yield* database.get(`SELECT
     (SELECT COUNT(*) FROM repos) AS repos,
     (SELECT COUNT(*) FROM pull_requests) AS pull_requests,
-    (SELECT COUNT(*) FROM viewed_files) AS viewed_files,
+    (SELECT COUNT(*) FROM hosted_viewed_files) AS hosted_viewed_files,
+    (SELECT COUNT(*) FROM local_viewed_files) AS local_viewed_files,
     (SELECT COUNT(*) FROM walkthroughs) AS walkthroughs,
     (SELECT COUNT(*) FROM review_threads) AS review_threads,
     (SELECT COUNT(*) FROM review_thread_messages) AS review_thread_messages,
     (SELECT COUNT(*) FROM agent_runs) AS agent_runs,
     (SELECT COUNT(*) FROM agent_run_artifacts) AS agent_run_artifacts,
-    (SELECT COUNT(*) FROM thread_memory) AS thread_memory`)
+    (SELECT COUNT(*) FROM thread_memory) AS thread_memory`),
+  )
   expect(counts).toEqual({
     repos: 1,
     pull_requests: 1,
-    viewed_files: 1,
+    hosted_viewed_files: 0,
+    local_viewed_files: 0,
     walkthroughs: 1,
     review_threads: 1,
     review_thread_messages: 3,
@@ -810,9 +856,8 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     }),
   ])
 
-  const pullRequest = yield* database.get<PullRequestFixtureRow>(
-    "SELECT * FROM pull_requests WHERE id = ?",
-    ["pr-v8"],
+  const pullRequest = decodePullRequestFixtureRow(
+    yield* database.get("SELECT * FROM pull_requests WHERE id = ?", ["pr-v8"]),
   )
   expect(pullRequest).toEqual({
     id: "pr-v8",
@@ -826,21 +871,6 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     state: "OPEN",
     last_fetched_at: "2026-07-15T12:00:02.000Z",
   })
-
-  expect(
-    yield* viewedFiles.list({
-      repoId: "github:byfungsi/diffdash",
-      prNumber: 147,
-      headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    }),
-  ).toEqual(["src/main/services/database.ts"])
-  expect(
-    yield* viewedFiles.list({
-      repoId: "github:byfungsi/diffdash",
-      prNumber: 147,
-      headSha: "cccccccccccccccccccccccccccccccccccccccc",
-    }),
-  ).toEqual([])
 
   const walkthrough = yield* walkthroughs.get({
     repoId: "github:byfungsi/diffdash",
@@ -943,6 +973,9 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
       provider: "claude",
       model: "claude-sonnet-4",
       promptVersion: "thread-v1",
+      reviewKey,
+      baseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      headRevision,
       status: "completed",
       providerRunId: "claude-session-v8",
       usage: {

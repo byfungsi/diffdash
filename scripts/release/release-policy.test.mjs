@@ -2,9 +2,19 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  assertReleaseTag,
+  assertReleaseVersion,
   assertTagMatchesVersion,
   createLatestMetadata,
   createStableMetadata,
+  isReleaseTag,
+  isReleaseVersion,
+  isStableReleasePrefix,
+  parseStableReleasePrefix,
+  releaseTagForVersion,
+  releaseVersionFromChangelogHeading,
+  releaseVersionFromTag,
+  releaseVersionFromVersionOrTag,
   retainedReleasePrefixes,
   runWithRetries,
   selectReleaseArtifacts,
@@ -24,6 +34,45 @@ const completeAssets = [
   "latest.json",
   "SHA256SUMS",
 ]
+
+test("preserves the release version and tag grammar used by existing scripts", () => {
+  const acceptedVersions = ["0.3.1", "01.002.0003", "1.2.3-alpha.1", "1.2.3+build.7", "1.2.3-..."]
+  const rejectedVersions = ["v0.3.1", "1.2", "1.2.3-alpha+build", "1.2.3 ", 3]
+
+  for (const version of acceptedVersions) {
+    assert.equal(isReleaseVersion(version), true)
+    assert.doesNotThrow(() => assertReleaseVersion(version))
+    assert.equal(releaseTagForVersion(version), `v${version}`)
+    assert.equal(isReleaseTag(`v${version}`), true)
+    assert.equal(releaseVersionFromTag(`v${version}`), version)
+    assert.equal(releaseVersionFromVersionOrTag(version), version)
+    assert.equal(releaseVersionFromVersionOrTag(`v${version}`), version)
+  }
+
+  for (const version of rejectedVersions) {
+    assert.equal(isReleaseVersion(version), false)
+    assert.throws(() => assertReleaseVersion(version), /SemVer-like/u)
+  }
+  assert.equal(isReleaseTag("0.3.1"), false)
+  assert.throws(() => assertReleaseTag("0.3.1"), /v<semver>/u)
+  assert.throws(() => releaseVersionFromVersionOrTag("not-a-version"), /invalid/u)
+})
+
+test("uses the shared version grammar for changelog headings", () => {
+  assert.equal(releaseVersionFromChangelogHeading("@diffdash/desktop@0.3.1"), "0.3.1")
+  assert.equal(releaseVersionFromChangelogHeading("[v1.2.3-alpha.1] - 2026-07-17"), "1.2.3-alpha.1")
+  assert.equal(releaseVersionFromChangelogHeading("not a release"), null)
+})
+
+test("recognizes only stable numeric R2 release prefixes", () => {
+  assert.deepEqual(parseStableReleasePrefix("releases/v1.2.3/"), {
+    prefix: "releases/v1.2.3/",
+    version: [1, 2, 3],
+  })
+  assert.equal(isStableReleasePrefix("releases/1.2.3/"), true)
+  assert.equal(isStableReleasePrefix("releases/v1.2.3-beta.1/"), false)
+  assert.equal(isStableReleasePrefix("releases/v1.2.3/assets/"), false)
+})
 
 test("requires the release tag to match the package version", () => {
   assert.doesNotThrow(() => assertTagMatchesVersion("v0.3.1", "0.3.1"))

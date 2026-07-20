@@ -6,19 +6,19 @@ import {
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import { WALKTHROUGH_PROMPT_VERSION } from "@diffdash/domain/walkthrough"
-import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
+import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+import { transportError } from "@diffdash/protocol/transport-error"
+import { ReviewAgentService } from "@diffdash/review-agent"
+import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
 import { Effect } from "effect"
-import { GitProvider } from "../../../../src/main/services/git-provider"
-import { ReviewAgentService } from "../../../../src/main/services/review-agent"
-import { ReviewContextService } from "../../../../src/main/services/review-context"
-import { ReviewThreadAnchorMapper } from "../../../../src/main/services/review-thread-anchor-mapper"
+import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
+import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { sendProtocolEvent } from "../transport"
 import { IpcControllerRegistry } from "./controller-registry"
-import { hostedReview, localRepositoryInput } from "./helpers"
 
 /** Defines threads IPC handler implementations. */
 export const defineThreadHandlers = (
@@ -27,28 +27,16 @@ export const defineThreadHandlers = (
 ) => {
   const run = runtime.runPromise
   const resolveThreadReview = async (target: ReviewThreadTarget) => {
-    const contexts = await run(ReviewContextService)
-    const repositories = await run(RepositoryStore)
-    if (target.kind === "pullRequest") {
-      const gitProvider = await run(GitProvider)
-      const review = hostedReview(target.providerId, target.owner, target.name, target.number)
-      const snapshot = await run(contexts.getPullRequestSnapshot(review))
-      const repo = await run(
-        repositories.upsertRepository({
-          provider: target.providerId,
-          owner: target.owner,
-          name: target.name,
-          remoteUrl: await run(gitProvider.repositoryUrl(review.repository)),
-          localPath: null,
-        }),
-      )
-      return { repo, snapshot, prNumber: target.number } as const
+    const snapshots = await run(ReviewSnapshotService)
+    const repositories = await run(RepositoryLinker)
+    if (target.kind === "hosted") {
+      const snapshot = await run(snapshots.acquireHosted(target.review))
+      const repo = await run(repositories.ensureHosted(target.review.repository))
+      return { repo, snapshot, prNumber: target.review.number } as const
     }
 
-    const snapshot = await run(contexts.getLocalReviewSnapshot(target))
-    const repo = await run(
-      repositories.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)),
-    )
+    const snapshot = await run(snapshots.acquireLocal(target))
+    const repo = await run(repositories.ensureLocal(snapshot.detail.rootPath))
     return { repo, snapshot, prNumber: null } as const
   }
 
@@ -85,10 +73,16 @@ export const defineThreadHandlers = (
         snapshot.baseRevision !== request.expectedBaseRevision ||
         snapshot.headRevision !== request.expectedHeadRevision
       ) {
-        throw new Error("Review changed before the local thread was created")
+        throw transportError(
+          "REVIEW_CHANGED",
+          "Review changed before the local thread was created.",
+        )
       }
       if (!isReviewAnchorInParsedDiff(request.anchor, snapshot.parsedDiff)) {
-        throw new Error("Review thread anchor does not exist in the expected review revision")
+        throw transportError(
+          "INVALID_REVIEW_ANCHOR",
+          "Review thread anchor does not exist in the expected review revision.",
+        )
       }
       const threads = await run(ReviewThreadStore)
       return run(
@@ -116,6 +110,17 @@ export const defineThreadHandlers = (
   handlers.define(
     InvokeChannel.runReviewThreadAgent,
     async (event, request): Promise<ReviewThreadDetails> => {
+      const turns = await run(ReviewTurnStore)
+      const mapping = await run(
+        turns.validateTarget({
+          threadId: request.threadId,
+          target: request.target,
+          repoId: request.repoId,
+          reviewKey: request.reviewKey,
+          baseRevision: request.expectedBaseRevision,
+          headRevision: request.expectedHeadRevision,
+        }),
+      )
       const { repo, snapshot } = await resolveThreadReview(request.target)
       const walkthroughs = await run(WalkthroughStore)
       const walkthrough = await run(
@@ -131,6 +136,9 @@ export const defineThreadHandlers = (
       return run(
         agents.runThreadTurn({
           threadId: request.threadId,
+          repoId: repo.id,
+          target: request.target,
+          mapping,
           snapshot,
           cwd: repo.localPath,
           walkthrough,
@@ -148,13 +156,3 @@ export const defineThreadHandlers = (
     },
   )
 }
-
-/** Registers review-thread handlers with Electron. */
-export const installThreadsController = (registry: IpcControllerRegistry) =>
-  registry.install([
-    InvokeChannel.listReviewThreads,
-    InvokeChannel.addReviewThreadUserMessage,
-    InvokeChannel.createReviewThread,
-    InvokeChannel.getReviewThread,
-    InvokeChannel.runReviewThreadAgent,
-  ])

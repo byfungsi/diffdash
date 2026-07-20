@@ -1,8 +1,10 @@
-import { Effect, Schema } from "effect"
-
-import { getHiddenDiffFileReason } from "./diff-file-filters"
+import { Effect, Predicate, Schema } from "effect"
 import { ParsedDiffFile } from "./diff"
+import { getHiddenDiffFileReason } from "./diff-file-filters"
+import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
 import { changedLineCount, isVeryLargeDiff } from "./large-diff-policy"
+import { makeReviewFilePatchHash } from "./review-identity"
+import { reviewPathDirectory } from "./review-path"
 
 /** Prompt/cache version for the bounded hunk-backed walkthrough contract. */
 export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v4"
@@ -144,8 +146,9 @@ export interface WalkthroughPromptStats {
   readonly usedHiddenFallback: boolean
 }
 
-/** Review scope segment used in deterministic hunk IDs for GitHub pull requests. */
-export const walkthroughPullRequestScope = (number: number) => `pull-request:${number}`
+/** Review scope segment used in deterministic hunk IDs for one exact hosted review. */
+export const walkthroughHostedReviewScope = (review: HostedReviewLocator) =>
+  `hosted-review:${makeHostedReviewKey(review)}`
 
 /** Review scope segment used in deterministic hunk IDs for local working tree changes. */
 export const walkthroughLocalDiffScope = (headSha: string) => `local-diff:${headSha}`
@@ -310,14 +313,21 @@ export const focusFilesForWalkthroughHunks = (
     const hunkLines = selectedHunks.flatMap((entry) => [entry.hunk.header, ...entry.hunk.lines])
     const patch = [...headerLines, ...hunkLines].join("\n")
     const { additions, deletions } = countHunkLines(hunkLines)
+    const hunks = selectedHunks.map((entry) => entry.hunk)
 
     return [
       ParsedDiffFile.make({
         ...file,
+        patchHash: makeReviewFilePatchHash({
+          hunks,
+          oldPath: file.oldPath,
+          path: file.path,
+          status: file.status,
+        }),
         reviewKey: `${file.reviewKey}:${selectedHunks.map((entry) => entry.id).join(",")}`,
         additions,
         deletions,
-        hunks: selectedHunks.map((entry) => entry.hunk),
+        hunks,
         patch,
       }),
     ]
@@ -396,7 +406,7 @@ const preparePromptCandidates = (
     for (const entry of entries) {
       if (hunkDigest.length >= budget.maxHunks) break
 
-      const alias = hunkAlias(hunkDigest.length)
+      const alias = makeWalkthroughHunkAlias(hunkDigest.length)
       const excerpt = promptExcerptForEntry(file, entry, alias, budget.maxLinesPerHunk)
       const nextDiff = appendPromptChunk(chunks, excerpt)
       if (nextDiff.length > budget.maxDiffChars) {
@@ -469,10 +479,7 @@ const isSupportingRepresentative = (path: string) =>
     path,
   )
 
-const folderPath = (path: string) => {
-  const separatorIndex = path.lastIndexOf("/")
-  return separatorIndex < 0 ? "(root)" : path.slice(0, separatorIndex)
-}
+const folderPath = (path: string) => reviewPathDirectory(path) ?? "(root)"
 
 const countFolders = (files: readonly ParsedDiffFile[]) =>
   new Set(files.map((file) => folderPath(file.path))).size
@@ -676,7 +683,7 @@ const validateWalkthroughHunkCoverage = (
 }
 
 const normalizeWalkthroughInput = (input: unknown): unknown => {
-  if (!isRecord(input)) return input
+  if (!Predicate.isReadonlyRecord(input)) return input
   if ("support" in input && input.support !== undefined) return input
   return { ...input, support: [] }
 }
@@ -712,7 +719,8 @@ const validateHunkIdList = (
 const walkthroughHunkId = (path: string, scope: string, ordinal: number) =>
   `${path}:${scope}:h${ordinal}`
 
-const hunkAlias = (index: number) => `h${index + 1}`
+/** Builds the compact hunk alias used by walkthrough prompts and provider responses. */
+export const makeWalkthroughHunkAlias = (index: number) => `h${index + 1}`
 
 const countHunkLines = (lines: readonly string[]) =>
   lines.reduce(
@@ -730,6 +738,3 @@ const fileHeader = (file: ParsedDiffFile) => {
 }
 
 const isDefined = <A>(value: A | undefined): value is A => value !== undefined
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)

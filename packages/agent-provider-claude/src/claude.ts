@@ -1,15 +1,9 @@
-import { Effect, Redacted, Schema, Stream } from "effect"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { Effect, Predicate, Redacted, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
-  AgentCapabilityPolicyUnsupported,
-  AgentCapabilityReady,
-  AgentCapabilityUnavailable,
   AgentExecutionPolicy,
   AgentModelDescriptor,
   AgentModelId,
@@ -36,12 +30,39 @@ import {
   WalkthroughResult,
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
-import type { CliRunner } from "@diffdash/process/cli"
-import type { CliStreamRunner } from "@diffdash/process/cli-stream"
+import {
+  arrayAt,
+  nonNegativeNumberAt,
+  numberAt,
+  parseProviderJsonlObject,
+  parseProviderJsonText as parseResult,
+  providerJsonContent as jsonContent,
+  providerMetadata as metadata,
+  recordAt,
+  stringAt,
+} from "@diffdash/agent-provider/provider-json"
+import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
+import {
+  normalizeProviderReviewThreadResponse as normalizeResponse,
+  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
+} from "@diffdash/agent-provider/review-output"
+import {
+  boundedProviderDiagnostic,
+  makeAgentProviderOperationErrorFactory,
+  probeAgentRuntime,
+  projectAgentCapabilityProbe,
+} from "@diffdash/agent-provider/runtime"
+import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
+import { processRequest, type ProcessRunner } from "@diffdash/process"
+import { makeTempFileScoped } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("claude")
 const executable = "claude"
 const mcpTokenEnvironmentVariable = "DIFFDASH_MCP_BEARER_TOKEN"
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId,
+  fallbackReason: "Claude execution failed",
+})
 const builtInTools = ["Read", "Glob", "Grep", "WebFetch", "WebSearch"] as const
 const sensitiveReadRules = [
   "Read(./.env)",
@@ -102,29 +123,17 @@ export const CLAUDE_MANIFEST = AgentProviderManifest.make({
 })
 
 /** Explicit non-mutating policy accepted by Claude walkthrough execution. */
-export const CLAUDE_WALKTHROUGH_POLICY = AgentExecutionPolicy.make({
+export const CLAUDE_WALKTHROUGH_POLICY = makeNonMutatingAgentExecutionPolicy({
   network: "allow",
-  sensitiveFiles: "deny",
   repository: "local-working-copy",
   shell: "deny",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
 })
 
 /** Explicit non-mutating policy accepted by Claude review execution. */
-export const CLAUDE_REVIEW_POLICY = AgentExecutionPolicy.make({
+export const CLAUDE_REVIEW_POLICY = makeNonMutatingAgentExecutionPolicy({
   network: "allow",
-  sensitiveFiles: "deny",
   repository: "reviewed-revision",
   shell: "deny",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
 })
 
 /** Provider-native permission controls used for fail-closed Claude execution. */
@@ -148,8 +157,7 @@ const defaultPermissionControls: ClaudePermissionControls = {
 
 /** Host dependencies required to construct the Claude leaf provider. */
 export interface ClaudeProviderDependencies {
-  readonly cli: CliRunner
-  readonly cliStream: CliStreamRunner
+  readonly processes: ProcessRunner
   readonly tempDirectory?: string
   readonly permissionControls?: ClaudePermissionControls
 }
@@ -158,65 +166,42 @@ export interface ClaudeProviderDependencies {
 export const makeClaudeProvider = (
   dependencies: ClaudeProviderDependencies,
 ): AgentProviderRegistration => {
-  const runtimeProbe = probeClaudeRuntime(dependencies.cli)
+  const runtimeProbe = probeClaudeRuntime(dependencies.processes)
   const controls = dependencies.permissionControls ?? defaultPermissionControls
   return {
     manifest: CLAUDE_MANIFEST,
     walkthrough: {
-      probe: capabilityProbe(runtimeProbe, "walkthrough", controls),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "walkthrough", () =>
+        policyEnforcementFailure(controls),
+      ),
       execute: (request) => executeWalkthrough(dependencies, request),
     },
     reviewThread: {
-      probe: capabilityProbe(runtimeProbe, "review-thread", controls),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "review-thread", () =>
+        policyEnforcementFailure(controls),
+      ),
       execute: (request) => executeReview(dependencies, request),
     },
   }
 }
 
-interface RuntimeProbeResult {
-  readonly ready: boolean
-  readonly version: string | null
-  readonly reason: string
-}
-
-const probeClaudeRuntime = (
-  cli: CliRunner,
-): Effect.Effect<RuntimeProbeResult, AgentProviderProbeError> =>
-  cli.run(executable, ["--version"], { timeoutMs: 5_000 }).pipe(
-    Effect.map((result) => ({ ready: true, version: parseVersion(result.stdout), reason: "" })),
-    Effect.catchAll((cause) =>
-      Effect.succeed({
-        ready: false,
-        version: null,
-        reason: boundedReason(cause, "Claude is not installed or available"),
-      }),
-    ),
-  )
-
-const capabilityProbe = (
-  runtimeProbe: Effect.Effect<RuntimeProbeResult, AgentProviderProbeError>,
-  capability: AgentCapability,
-  controls: ClaudePermissionControls,
-): Effect.Effect<AgentCapabilityProbe, AgentProviderProbeError> =>
-  runtimeProbe.pipe(
-    Effect.map((result): AgentCapabilityProbe => {
-      if (!result.ready) {
-        return AgentCapabilityUnavailable.make({ capability, reason: result.reason })
-      }
-      const unsupported = policyEnforcementFailure(controls)
-      return unsupported === null
-        ? AgentCapabilityReady.make({ capability, runtimeVersion: result.version })
-        : AgentCapabilityPolicyUnsupported.make({ capability, reason: unsupported })
-    }),
-  )
+const probeClaudeRuntime = (processes: ProcessRunner) =>
+  probeAgentRuntime({
+    versionOutput: processes
+      .run(processRequest(executable, ["--version"], { timeoutMs: 5_000 }))
+      .pipe(Effect.map((result) => result.stdout)),
+    unavailableReason: "Claude is not installed or available",
+  })
 
 /** Probes Claude prerequisites and policy enforcement for one declared capability. */
 export const probeClaudeCapability = (
-  cli: CliRunner,
+  processes: ProcessRunner,
   capability: AgentCapability,
   controls: ClaudePermissionControls = defaultPermissionControls,
 ): Effect.Effect<AgentCapabilityProbe, AgentProviderProbeError> =>
-  capabilityProbe(probeClaudeRuntime(cli), capability, controls)
+  projectAgentCapabilityProbe(probeClaudeRuntime(processes), capability, () =>
+    policyEnforcementFailure(controls),
+  )
 
 const policyEnforcementFailure = (controls: ClaudePermissionControls): string | null => {
   if (!controls.nonInteractivePermissionMode)
@@ -239,13 +224,15 @@ const executeWalkthrough = (
   Effect.gen(function* () {
     yield* requirePolicy("walkthrough", request.policy, CLAUDE_WALKTHROUGH_POLICY)
     yield* requireControls("walkthrough", dependencies.permissionControls)
-    const result = yield* dependencies.cli
-      .run(executable, makeWalkthroughArgs(request), {
-        cwd: request.workingDirectory,
-        timeoutMs: request.timeoutMs,
-        stdin: request.prompt,
-      })
-      .pipe(Effect.mapError(operationError("walkthrough")))
+    const result = yield* dependencies.processes
+      .run(
+        processRequest(executable, makeWalkthroughArgs(request), {
+          cwd: request.workingDirectory,
+          timeoutMs: request.timeoutMs,
+          stdin: request.prompt,
+        }),
+      )
+      .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
     const text = result.stdout.trim()
     if (text.length === 0) {
       return yield* InvalidAgentProviderResponseError.make({
@@ -301,55 +288,54 @@ const executeReview = (
   Effect.gen(function* () {
     yield* requirePolicy("review-thread", request.policy, CLAUDE_REVIEW_POLICY)
     yield* requireControls("review-thread", dependencies.permissionControls)
-    if (!request.mcp.allowedTools.every((tool) => request.policy.allowedMcpTools.includes(tool))) {
-      return yield* operationErrorValue(
+    if (!isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)) {
+      return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
       )
     }
-    return yield* withMcpConfigPath(
-      dependencies.tempDirectory ?? tmpdir(),
-      request,
-      (mcpConfigPath) =>
-        Effect.gen(function* () {
-          const state: ClaudeTurnState = {
-            sessionId: null,
-            finalResponse: null,
-            sawResult: false,
-            usage: null,
-            toolUses: new Map(),
-            artifacts: [],
-          }
-          yield* dependencies.cliStream
-            .stream(executable, makeReviewArgs(request, mcpConfigPath), {
+    return yield* withMcpConfigPath(dependencies.tempDirectory, request, (mcpConfigPath) =>
+      Effect.gen(function* () {
+        const state: ClaudeTurnState = {
+          sessionId: null,
+          finalResponse: null,
+          sawResult: false,
+          usage: null,
+          toolUses: new Map(),
+          artifacts: [],
+        }
+        yield* dependencies.processes
+          .streamLines(
+            processRequest(executable, makeReviewArgs(request, mcpConfigPath), {
               cwd: request.workingDirectory,
               env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
               stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
               timeoutMs: request.timeoutMs,
-            })
-            .pipe(
-              Stream.mapError(operationError("review-thread")),
-              Stream.runForEach((event) => {
-                const { _tag: tag } = event
-                return tag === "CliLine" && event.source === "stdout"
-                  ? consumeClaudeLine(state, event.line)
-                  : Effect.void
-              }),
-            )
-          if (!state.sawResult) {
-            return yield* operationErrorValue(
-              "review-thread",
-              "Claude stream ended without a result event",
-            )
-          }
-          const response = yield* decodeReviewResponse(state.finalResponse)
-          return ReviewThreadResult.make({
-            response,
-            usage: state.usage,
-            artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
-            sessionId: state.sessionId === null ? null : AgentSessionId.make(state.sessionId),
-          })
-        }),
+            }),
+          )
+          .pipe(
+            Stream.mapError(operationErrors.fromCause("review-thread")),
+            Stream.runForEach((event) => {
+              const { _tag: tag } = event
+              return tag === "ProcessLine" && event.source === "stdout"
+                ? consumeClaudeLine(state, event.line)
+                : Effect.void
+            }),
+          )
+        if (!state.sawResult) {
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            "Claude stream ended without a result event",
+          )
+        }
+        const response = yield* decodeReviewResponse(state.finalResponse)
+        return ReviewThreadResult.make({
+          response,
+          usage: state.usage,
+          artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
+          sessionId: state.sessionId === null ? null : AgentSessionId.make(state.sessionId),
+        })
+      }),
     )
   })
 
@@ -394,7 +380,12 @@ const consumeClaudeLine = (
     if (line.trim().length === 0) return
     const event = yield* parseJsonLine(line)
     const type = stringAt(event, "type")
-    if (type === null) return yield* protocolError("Claude emitted an event without a type")
+    if (type === null) {
+      return yield* operationErrors.fromReason(
+        "review-thread",
+        "Claude emitted an event without a type",
+      )
+    }
     const sessionId = stringAt(event, "session_id")
     if (sessionId !== null) state.sessionId = sessionId
     switch (type) {
@@ -408,7 +399,7 @@ const consumeClaudeLine = (
       case "result":
         state.sawResult = true
         if (event.is_error === true || stringAt(event, "subtype") === "error") {
-          return yield* operationErrorValue(
+          return yield* operationErrors.fromReason(
             "review-thread",
             stringAt(event, "result") ?? "Claude result reported an error",
           )
@@ -417,13 +408,13 @@ const consumeClaudeLine = (
         state.usage = parseClaudeUsage(recordAt(event, "usage"), numberAt(event, "total_cost_usd"))
         return
       case "error":
-        return yield* operationErrorValue(
+        return yield* operationErrors.fromReason(
           "review-thread",
           errorMessage(event) ?? "Claude emitted an error event",
         )
       case "system":
         if (stringAt(event, "subtype") === "error") {
-          return yield* operationErrorValue(
+          return yield* operationErrors.fromReason(
             "review-thread",
             errorMessage(event) ?? "Claude system error",
           )
@@ -440,11 +431,16 @@ const consumeAssistant = (
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
     const message = recordAt(event, "message")
-    if (message === null) return yield* protocolError("Claude assistant event omitted message")
+    if (message === null) {
+      return yield* operationErrors.fromReason(
+        "review-thread",
+        "Claude assistant event omitted message",
+      )
+    }
     const usage = recordAt(message, "usage")
     if (usage !== null) state.usage = parseClaudeUsage(usage, state.usage?.costUsd ?? null)
     for (const block of arrayAt(message, "content")) {
-      if (!isRecord(block)) continue
+      if (!Predicate.isReadonlyRecord(block)) continue
       const blockType = stringAt(block, "type")
       if (blockType === "text") {
         const text = stringAt(block, "text")
@@ -463,7 +459,10 @@ const consumeAssistant = (
         const id = stringAt(block, "id")
         const name = stringAt(block, "name")
         if (id === null || name === null) {
-          return yield* protocolError("Claude tool_use block omitted id or name")
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            "Claude tool_use block omitted id or name",
+          )
         }
         state.toolUses.set(id, { name, input: recordAt(block, "input") ?? {} })
       }
@@ -474,7 +473,7 @@ const consumeToolResults = (state: ClaudeTurnState, event: Readonly<Record<strin
   const message = recordAt(event, "message")
   const blocks = message === null ? [event] : arrayAt(message, "content")
   for (const block of blocks) {
-    if (!isRecord(block) || stringAt(block, "type") !== "tool_result") continue
+    if (!Predicate.isReadonlyRecord(block) || stringAt(block, "type") !== "tool_result") continue
     const toolUseId = stringAt(block, "tool_use_id")
     const toolUse = toolUseId === null ? undefined : state.toolUses.get(toolUseId)
     const name = toolUse?.name ?? stringAt(block, "name") ?? "unknown"
@@ -523,23 +522,16 @@ const parseClaudeUsage = (
       })
 
 const withMcpConfigPath = <A, E, R>(
-  tempDirectory: string,
+  tempDirectory: string | undefined,
   request: ReviewThreadRequest,
   use: (path: string) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
-  Effect.acquireUseRelease(
-    Effect.tryPromise({
-      try: async () => {
-        await mkdir(tempDirectory, { recursive: true })
-        const directory = await mkdtemp(join(tempDirectory, "diffdash-claude-"))
-        const path = join(directory, "mcp.json")
-        await writeFile(path, JSON.stringify(makeMcpConfig(request)), { mode: 0o600 })
-        return { directory, path }
-      },
-      catch: operationError("review-thread"),
-    }),
-    ({ path }) => use(path),
-    ({ directory }) => Effect.promise(() => rm(directory, { force: true, recursive: true })),
+  Effect.scoped(
+    makeTempFileScoped(JSON.stringify(makeMcpConfig(request)), {
+      ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
+      prefix: "diffdash-claude-",
+      fileName: "mcp.json",
+    }).pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 
 const makeMcpConfig = (request: ReviewThreadRequest) => ({
@@ -560,80 +552,12 @@ const decodeReviewResponse = (
       InvalidAgentProviderResponseError.make({
         providerId,
         capability: "review-thread",
-        reason: `Claude returned an invalid review response: ${String(cause)}`,
+        reason: boundedProviderDiagnostic(
+          `Claude returned an invalid review response: ${String(cause)}`,
+        ),
       }),
     ),
   )
-
-const normalizeResponse = (value: unknown): unknown => {
-  if (!isRecord(value)) return value
-  const locations = value.referencedLocations ?? value.referencedAnchors ?? []
-  return {
-    bodyMarkdown: value.bodyMarkdown,
-    threadSummary: value.threadSummary ?? value.threadSummaryUpdate ?? null,
-    referencedLocations: Array.isArray(locations)
-      ? locations.map((location) =>
-          typeof location === "string" ? location : JSON.stringify(location),
-        )
-      : locations,
-  }
-}
-
-const reviewAnchorJsonSchema = (
-  tag: "review" | "file" | "hunk" | "line",
-  properties: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
-) => ({
-  type: "object",
-  additionalProperties: false,
-  required: ["_tag", ...Object.keys(properties)],
-  properties: { _tag: { type: "string", enum: [tag] }, ...properties },
-})
-
-const reviewResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["bodyMarkdown", "threadSummaryUpdate", "referencedAnchors"],
-  properties: {
-    bodyMarkdown: { type: "string", minLength: 1 },
-    threadSummaryUpdate: { type: ["string", "null"], minLength: 1 },
-    referencedAnchors: {
-      type: ["array", "null"],
-      items: {
-        anyOf: [
-          reviewAnchorJsonSchema("review", {}),
-          reviewAnchorJsonSchema("file", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-          }),
-          reviewAnchorJsonSchema("hunk", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            header: { type: "string" },
-            oldStart: { type: "number" },
-            oldLines: { type: "number" },
-            newStart: { type: "number" },
-            newLines: { type: "number" },
-          }),
-          reviewAnchorJsonSchema("line", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            hunkHeader: { type: "string" },
-            side: { type: "string", enum: ["old", "new"] },
-            lineNumber: { type: "number" },
-            lineContent: { type: "string" },
-          }),
-        ],
-      },
-    },
-  },
-} as const
 
 const requirePolicy = (
   capability: AgentCapability,
@@ -643,7 +567,7 @@ const requirePolicy = (
   const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrorValue(capability, "Claude requires the explicit non-mutating policy")
+    : operationErrors.fromReason(capability, "Claude requires the explicit non-mutating policy")
 }
 
 const requireControls = (
@@ -651,7 +575,7 @@ const requireControls = (
   controls: ClaudePermissionControls | undefined,
 ) => {
   const reason = policyEnforcementFailure(controls ?? defaultPermissionControls)
-  return reason === null ? Effect.void : operationErrorValue(capability, reason)
+  return reason === null ? Effect.void : operationErrors.fromReason(capability, reason)
 }
 
 const reasoningEffortArgs = (effort: WalkthroughRequest["reasoningEffort"]) => [
@@ -660,68 +584,14 @@ const reasoningEffortArgs = (effort: WalkthroughRequest["reasoningEffort"]) => [
 ]
 
 const parseJsonLine = (line: string) =>
-  Effect.try({
-    try: () => {
-      const parsed: unknown = JSON.parse(line)
-      if (!isRecord(parsed)) throw new Error("event is not a JSON object")
-      return parsed
-    },
-    catch: (cause) =>
-      operationErrorValue(
+  parseProviderJsonlObject(line).pipe(
+    Effect.mapError((cause) =>
+      operationErrors.fromReason(
         "review-thread",
-        `Claude emitted invalid stream-json: ${cause instanceof Error ? cause.message : String(cause)}`,
+        `Claude emitted invalid stream-json: ${cause.reason}`,
       ),
-  })
-
-const operationError = (capability: AgentCapability) => (cause: unknown) =>
-  AgentProviderOperationError.make({
-    providerId,
-    capability,
-    reason: boundedReason(cause, "Claude execution failed"),
-    cause,
-  })
-
-const operationErrorValue = (capability: AgentCapability, reason: string) =>
-  AgentProviderOperationError.make({ providerId, capability, reason })
-
-const protocolError = (reason: string) => operationErrorValue("review-thread", reason)
-
-const boundedReason = (cause: unknown, fallback: string) => {
-  if (isRecord(cause) && typeof cause.stderr === "string" && cause.stderr.trim().length > 0) {
-    return redactDiagnostic(cause.stderr)
-  }
-  return cause instanceof Error && cause.message.trim().length > 0
-    ? redactDiagnostic(cause.message)
-    : fallback
-}
-
-const redactDiagnostic = (value: string) =>
-  value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/giu, "Bearer [redacted]")
-    .replace(/DIFFDASH_MCP_BEARER_TOKEN=[^\s]+/giu, "DIFFDASH_MCP_BEARER_TOKEN=[redacted]")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(-600)
-
-const parseVersion = (output: string) => {
-  const value = output.trim()
-  if (value.length === 0) return null
-  const match = /(?:^|\s)v?(\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?)(?:\s|$)/u.exec(value)
-  return match?.[1] ?? value.slice(0, 100)
-}
-
-const parseResult = (value: unknown): unknown => {
-  if (typeof value !== "string") return value
-  const trimmed = value.trim()
-  const json = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "")
-    : trimmed
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return value
-  }
-}
+    ),
+  )
 
 const toolTitle = (name: string, input: Readonly<Record<string, unknown>> | undefined) => {
   if (input === undefined) return name
@@ -734,7 +604,7 @@ const claudeToolContent = (content: unknown): string => {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return jsonContent(content)
   const text = content.flatMap((part) => {
-    if (!isRecord(part)) return []
+    if (!Predicate.isReadonlyRecord(part)) return []
     const value = stringAt(part, "text")
     return value === null ? [] : [value]
   })
@@ -756,36 +626,6 @@ function modelDescriptor(id: string, displayName: string, quality: "fast" | "bal
     quality,
   })
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const stringAt = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "string" ? record[key] : null
-
-const numberAt = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "number" && Number.isFinite(record[key]) ? record[key] : null
-
-const nonNegativeNumberAt = (record: Readonly<Record<string, unknown>>, key: string) => {
-  const value = numberAt(record, key)
-  return value !== null && value >= 0 ? value : null
-}
-
-const recordAt = (record: Readonly<Record<string, unknown>>, key: string) => {
-  const value = record[key]
-  return isRecord(value) ? value : null
-}
-
-const arrayAt = (record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] => {
-  const value = record[key]
-  return Array.isArray(value) ? value : []
-}
-
-const metadata = (values: Readonly<Record<string, string | number | null>>) =>
-  Object.fromEntries(Object.entries(values).filter((entry) => entry[1] !== null))
-
-const jsonContent = (value: unknown) =>
-  typeof value === "string" ? value : (JSON.stringify(value) ?? String(value))
 
 /** Converts a provider-owned model to its SDK identity. */
 export const claudeModelId = (model: string) => AgentModelId.make(model)

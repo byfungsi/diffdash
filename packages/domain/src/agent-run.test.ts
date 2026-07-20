@@ -2,17 +2,17 @@ import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 
 import { AgentRunId, ReviewAgentUsage } from "./review-agent"
+import { ReviewKey, ReviewRevision } from "./review-identity"
 import { ReviewThreadId } from "./review-thread"
 import {
   AgentPromptVersion,
   AgentRun,
-  CompleteAgentRunInput,
   ThreadMemory,
   ThreadMemorySummaryAlgorithm,
 } from "./agent-run"
 
 describe("AgentRun", () => {
-  it("FUN-72 AC: models nullable normalized usage on runs and completion input", () => {
+  it("FUN-72 AC: models nullable normalized usage on runs", () => {
     const usage = ReviewAgentUsage.make({
       inputTokens: 120,
       outputTokens: 40,
@@ -24,6 +24,9 @@ describe("AgentRun", () => {
     const completed = AgentRun.make({
       id: runId,
       threadId: ReviewThreadId.make("thread-72"),
+      reviewKey: ReviewKey.make("github:fungsi/diffdash#72"),
+      baseRevision: ReviewRevision.make("base-72"),
+      headRevision: ReviewRevision.make("head-72"),
       provider: "claude",
       model: "claude-sonnet-4",
       promptVersion: AgentPromptVersion.make("thread-v1"),
@@ -34,10 +37,7 @@ describe("AgentRun", () => {
       startedAt: "2026-07-12T00:00:00.000Z",
       completedAt: "2026-07-12T00:00:01.000Z",
     })
-    const completion = CompleteAgentRunInput.make({ runId, usage })
-
     expect(completed.usage).toEqual(usage)
-    expect(completion.usage).toEqual(usage)
     expect(AgentRun.make({ ...completed, status: "running", usage: null }).usage).toBeNull()
   })
 })

@@ -22,7 +22,7 @@ const INITIAL_CHECK_DELAY_MS = 10_000
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000
 
 /** A recoverable automatic-update operation failure. */
-export class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
+class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
   operation: Schema.String,
   message: Schema.String,
   cause: Schema.NullOr(Schema.Defect),

@@ -1,11 +1,18 @@
 import { Atom } from "@effect-atom/atom-react"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 
-import { type GitProviderDescriptor, GitProviderId } from "@diffdash/domain/git-provider"
-import type { RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
+import {
+  type GitProviderDescriptor,
+  GitProviderId,
+  type HostedRepository,
+} from "@diffdash/domain/git-provider"
+import type { RepositorySearchScope } from "@diffdash/domain/repository"
 import { type Repo } from "@diffdash/domain/repository"
 import { HostedProviderRequest, HostedRepositorySearchRequest } from "@diffdash/protocol/hosted-git"
 import { fetchEffect } from "@/shared/effect-api"
+import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
+
+const remoteSearchAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositorySearchRequest)
 
 /** All repositories known to the renderer. */
 export const repositoriesAtom = Atom.make(
@@ -45,13 +52,13 @@ export const remoteRepositorySearchAtom = Atom.family((key: string) =>
     Effect.gen(function* () {
       const request = parseRemoteSearchAtomKey(key)
       if (request === null || request.query.length === 0 || request.namespaces.length === 0) {
-        return [] as readonly RepositorySearchResult[]
+        return [] as readonly HostedRepository[]
       }
       return yield* fetchEffect(() =>
         window.diffDash.hostedRepositories.searchRepositories(request),
       )
     }),
-    { initialValue: [] as readonly RepositorySearchResult[] },
+    { initialValue: [] as readonly HostedRepository[] },
   ),
 )
 
@@ -69,20 +76,6 @@ export const searchScopesAtom = Atom.family((providerId: string) =>
   ),
 )
 
-/** Persists a remote repository bookmark. */
-export const bookmarkRemoteAtom = Atom.fn(
-  Effect.fnUntraced(function* (repo: RepositorySearchResult) {
-    return yield* fetchEffect(() => window.diffDash.repositories.favoriteRemote(repo))
-  }),
-)
-
-/** Removes a persisted repository bookmark. */
-export const unbookmarkRepoAtom = Atom.fn(
-  Effect.fnUntraced(function* (repo: Repo) {
-    return yield* fetchEffect(() => window.diffDash.repositories.setFavorite(repo.id, false))
-  }),
-)
-
 /** Applies the selected owner scope to local bookmark search. */
 export const scopedLocalSearchQuery = (query: string, scope: string | null) =>
   scope === null ? query : `${scope}/${query}`
@@ -92,12 +85,6 @@ export const remoteSearchAtomKey = (
   providerId: GitProviderId,
   query: string,
   owners: readonly string[],
-) => JSON.stringify({ providerId, query, namespaces: owners })
+) => remoteSearchAtomKeyCodec.encode({ providerId, query, namespaces: owners })
 
-const parseRemoteSearchAtomKey = (key: string) => {
-  try {
-    return Schema.decodeUnknownSync(HostedRepositorySearchRequest)(JSON.parse(key))
-  } catch {
-    return null
-  }
-}
+const parseRemoteSearchAtomKey = remoteSearchAtomKeyCodec.decode

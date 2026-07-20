@@ -1,51 +1,53 @@
 import { GitService } from "@diffdash/local-git/local-git"
-import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
+import { transportError } from "@diffdash/protocol/transport-error"
 import { shell } from "electron"
 import { isAbsolute } from "node:path"
 import { GitProvider } from "../../../../src/main/services/git-provider"
+import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { normalizeReviewFilePath, resolveContainedRepositoryPath } from "../../electron-policy"
-import { openAllowedExternalUrl, openLocalPath, openProviderFile } from "../../file-opening"
+import type { RendererSecurityPolicy } from "../../electron-policy"
+import { openLocalPath, openProviderFile } from "../../file-opening"
 import { IpcControllerRegistry } from "./controller-registry"
 
 /** Defines navigation IPC handler implementations. */
 export const defineNavigationHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
-  navigationCommands: { readonly drain: () => readonly CliNavigationCommand[] },
+  navigationCommands: {
+    readonly peek: () => readonly CliNavigationCommand[]
+    readonly acknowledge: (count: number) => void
+  },
+  rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
   const run = runtime.runPromise
 
-  handlers.define(
-    InvokeChannel.drainNavigationCommands,
-    async (): Promise<readonly CliNavigationCommand[]> => {
-      return navigationCommands.drain()
-    },
-  )
+  handlers.defineTransactional(InvokeChannel.drainNavigationCommands, async () => {
+    const commands = navigationCommands.peek()
+    return {
+      response: commands,
+      commit: () => navigationCommands.acknowledge(commands.length),
+    }
+  })
 
   handlers.define(InvokeChannel.appOpenExternalUrl, async (_event, { url }): Promise<void> => {
-    await openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
+    await rendererSecurityPolicy.openExternalUrl(url)
   })
 
   handlers.define(InvokeChannel.appOpenRepositoryFile, async (_event, request): Promise<void> => {
     const hostedRepository = request.review.repository
-    const store = await run(RepositoryStore)
     const git = await run(GitService)
     const gitProvider = await run(GitProvider)
-    const repositories = await run(
-      store.list(`${hostedRepository.namespace}/${hostedRepository.name}`),
-    )
-    const linkedRepository = repositories.find(
-      (repo) =>
-        repo.provider === request.review.repository.providerId &&
-        repo.owner.toLowerCase() === request.review.repository.namespace.toLowerCase() &&
-        repo.name.toLowerCase() === request.review.repository.name.toLowerCase(),
-    )
+    const repositories = await run(RepositoryLinker)
+    const linkedRepository = await run(repositories.findHosted(hostedRepository))
 
     if (isAbsolute(request.filePath)) {
-      throw new Error("Cannot open an absolute file path from a review")
+      throw transportError(
+        "INVALID_REVIEW_FILE_PATH",
+        "Cannot open an absolute file path from a review.",
+      )
     }
 
     const normalizedFilePath = normalizeReviewFilePath(request.filePath)
@@ -53,7 +55,7 @@ export const defineNavigationHandlers = (
     if (linkedRepository?.localPath === null || linkedRepository?.localPath === undefined) {
       await openProviderFile(
         (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        (targetUrl) => shell.openExternal(targetUrl),
+        rendererSecurityPolicy.openExternalUrl,
         request.review.repository,
         normalizedFilePath,
         request.headRefName,
@@ -68,7 +70,7 @@ export const defineNavigationHandlers = (
     } catch {
       await openProviderFile(
         (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        (targetUrl) => shell.openExternal(targetUrl),
+        rendererSecurityPolicy.openExternalUrl,
         request.review.repository,
         normalizedFilePath,
         request.headRefName,
@@ -79,7 +81,7 @@ export const defineNavigationHandlers = (
     if (currentBranch !== request.headRefName) {
       await openProviderFile(
         (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        (targetUrl) => shell.openExternal(targetUrl),
+        rendererSecurityPolicy.openExternalUrl,
         request.review.repository,
         normalizedFilePath,
         request.headRefName,
@@ -108,12 +110,3 @@ export const defineNavigationHandlers = (
     },
   )
 }
-
-/** Registers navigation and shell handlers with Electron. */
-export const installNavigationController = (registry: IpcControllerRegistry) =>
-  registry.install([
-    InvokeChannel.drainNavigationCommands,
-    InvokeChannel.appOpenExternalUrl,
-    InvokeChannel.appOpenRepositoryFile,
-    InvokeChannel.appOpenLocalRepositoryFile,
-  ])

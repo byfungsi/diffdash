@@ -1,56 +1,59 @@
 import type { AISettings } from "@diffdash/domain/ai-settings"
-import type { AgentProviderCatalog } from "./agent-providers"
-import type { AnalyticsEvent } from "./analytics"
 import type { AppState } from "@diffdash/domain/app-state"
-import type { AppUpdateState } from "./app-update"
-import type { CliNavigationCommand } from "./cli-navigation"
 import type {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  LocalReviewTarget,
-} from "@diffdash/domain/local-review"
-import type {
-  PullRequestDetail,
-  PullRequestDiff,
-  PullRequestSummary,
-} from "@diffdash/domain/pull-request"
-import type { GitProviderDescriptor, ReviewDecision } from "@diffdash/domain/git-provider"
-import type {
-  Repo,
-  RepositorySearchResult,
-  RepositorySearchScope,
-} from "@diffdash/domain/repository"
+  GitProviderDescriptor,
+  HostedRepository,
+  HostedReviewSummary,
+  ReviewDecision,
+} from "@diffdash/domain/git-provider"
+import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type {
-  LocalReviewSnapshot,
-  PullRequestReviewSnapshot,
+  HostedReviewSnapshotManifest,
+  LocalReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
-import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
-import type { LinkRepositoryCheckoutRequest } from "./repository-link"
 import type {
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import type {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  RunReviewThreadAgentRequest,
-} from "./review-threads"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type { AgentProviderCatalog } from "./agent-providers"
+import type { AnalyticsEvent } from "./analytics"
+import type { AppUpdateState } from "./app-update"
+import type { CliNavigationCommand } from "./cli-navigation"
 import type {
   GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedViewedFilesRequest,
   HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
-  SetHostedViewedFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
+import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
+import type { LinkRepositoryCheckoutRequest } from "./repository-link"
+import type {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  RunReviewThreadAgentRequest,
+} from "./review-threads"
+import type {
+  ReviewSnapshotPageRequest,
+  ReviewSnapshotPageResponse,
+  ReviewSnapshotSearchRequest,
+  ReviewSnapshotSearchResponse,
+} from "./review-snapshot"
+import type {
+  HostedViewedFilesRequest,
+  LocalViewedFilesRequest,
+  SetHostedViewedFileRequest,
+  SetLocalViewedFileRequest,
+  ViewedFileRecord,
+} from "./viewed-files"
 
 /** Complete renderer-facing platform contract implemented by preload and demo runtimes. */
 export interface DiffDashApi {
@@ -80,8 +83,7 @@ export interface DiffDashApi {
   readonly repositories: {
     readonly list: (query?: string) => Promise<readonly Repo[]>
     readonly setFavorite: (id: string, isFavorite: boolean) => Promise<Repo>
-    readonly favoriteRemote: (repo: RepositorySearchResult) => Promise<Repo>
-    readonly addLocal: (localPath: string) => Promise<Repo>
+    readonly favoriteRemote: (repo: HostedRepository) => Promise<Repo>
     readonly install: (localPath: string) => Promise<Repo>
     readonly link: (input: LinkRepositoryCheckoutRequest) => Promise<Repo>
     readonly selectLocalFolder: () => Promise<string | null>
@@ -110,20 +112,16 @@ export interface DiffDashApi {
   readonly hostedRepositories: {
     readonly searchRepositories: (
       request: HostedRepositorySearchRequest,
-    ) => Promise<readonly RepositorySearchResult[]>
+    ) => Promise<readonly HostedRepository[]>
     readonly listSearchScopes: (
       request: HostedProviderRequest,
     ) => Promise<readonly RepositorySearchScope[]>
   }
   readonly hostedReviews: {
-    readonly list: (request: HostedRepositoryRequest) => Promise<readonly PullRequestSummary[]>
+    readonly list: (request: HostedRepositoryRequest) => Promise<readonly HostedReviewSummary[]>
     readonly listAssigned: (
       request: HostedProviderRequest,
-    ) => Promise<readonly PullRequestSummary[]>
-    readonly get: (request: HostedReviewRequest) => Promise<PullRequestDetail>
-    readonly refresh: (request: HostedReviewRequest) => Promise<PullRequestDetail>
-    readonly getDiff: (request: HostedReviewRequest) => Promise<PullRequestDiff>
-    readonly getSnapshot: (request: HostedReviewRequest) => Promise<PullRequestReviewSnapshot>
+    ) => Promise<readonly HostedReviewSummary[]>
     readonly getDecision: (request: HostedReviewRequest) => Promise<ReviewDecision>
     readonly submitDecision: (request: SubmitHostedReviewDecisionRequest) => Promise<void>
   }
@@ -132,21 +130,18 @@ export interface DiffDashApi {
       localPath: string,
       branchName: string | null,
     ) => Promise<LocalReviewTarget>
-    readonly getDetail: (target: LocalReviewTarget) => Promise<LocalReviewDetail>
-    readonly getDiff: (target: LocalReviewTarget) => Promise<LocalReviewDiff>
-    readonly getSnapshot: (target: LocalReviewTarget) => Promise<LocalReviewSnapshot>
+  }
+  readonly reviewSnapshots: {
+    readonly acquireHosted: (request: HostedReviewRequest) => Promise<HostedReviewSnapshotManifest>
+    readonly acquireLocal: (target: LocalReviewTarget) => Promise<LocalReviewSnapshotManifest>
+    readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
+    readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
   }
   readonly viewedFiles: {
-    readonly list: (request: HostedViewedFilesRequest) => Promise<readonly string[]>
+    readonly list: (request: HostedViewedFilesRequest) => Promise<readonly ViewedFileRecord[]>
     readonly set: (request: SetHostedViewedFileRequest) => Promise<void>
-    readonly listLocal: (rootPath: string, headSha: string) => Promise<readonly string[]>
-    readonly setLocal: (
-      rootPath: string,
-      headSha: string,
-      reviewKey: string,
-      filePath: string,
-      viewed: boolean,
-    ) => Promise<void>
+    readonly listLocal: (request: LocalViewedFilesRequest) => Promise<readonly ViewedFileRecord[]>
+    readonly setLocal: (request: SetLocalViewedFileRequest) => Promise<void>
   }
   readonly walkthroughs: {
     readonly get: (request: HostedWalkthroughRequest) => Promise<StoredWalkthrough | null>

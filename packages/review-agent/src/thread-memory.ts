@@ -5,12 +5,13 @@ import {
 } from "@diffdash/domain/agent-run"
 import type { ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import type { ReviewThreadId, ReviewThreadMessage } from "@diffdash/domain/review-thread"
+import { compareStrings } from "./ordering"
 
 /** Number of recent completed messages retained beside compact thread memory. */
-export const DEFAULT_THREAD_MEMORY_MESSAGE_LIMIT = 10
+const DEFAULT_THREAD_MEMORY_MESSAGE_LIMIT = 10
 
 /** Maximum UTF-16 code units retained by the deterministic fallback summary. */
-export const DEFAULT_THREAD_MEMORY_SUMMARY_CHARACTER_LIMIT = 4_000
+const DEFAULT_THREAD_MEMORY_SUMMARY_CHARACTER_LIMIT = 4_000
 
 /** Stable metadata for summaries generated without a provider-authored summary. */
 export const FALLBACK_THREAD_MEMORY_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgorithm.make(
@@ -21,7 +22,7 @@ export const FALLBACK_THREAD_MEMORY_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgor
 export const FALLBACK_THREAD_MEMORY_SUMMARY_VERSION = 1
 
 /** Inputs for selecting bounded prompt memory for one review thread. */
-export interface SelectThreadMemoryWindowInput {
+interface SelectThreadMemoryWindowInput {
   readonly threadId: ReviewThreadId
   readonly memory: ThreadMemory | null
   readonly messages: readonly ReviewThreadMessage[]
@@ -29,13 +30,13 @@ export interface SelectThreadMemoryWindowInput {
 }
 
 /** Compact memory plus the latest completed messages in deterministic sequence order. */
-export interface ThreadMemoryWindow {
+interface ThreadMemoryWindow {
   readonly memory: ThreadMemory | null
   readonly messages: readonly ReviewThreadMessage[]
 }
 
 /** Inputs for deriving a bounded fallback memory update after a completed agent reply. */
-export interface CreateFallbackThreadMemoryUpdateInput {
+interface CreateFallbackThreadMemoryUpdateInput {
   readonly threadId: ReviewThreadId
   readonly memory: ThreadMemory | null
   readonly messages: readonly ReviewThreadMessage[]
@@ -144,5 +145,3 @@ const normalizePositiveLimit = (value: number | undefined, fallback: number) => 
   const normalized = normalizeLimit(value, fallback)
   return normalized > 0 ? normalized : fallback
 }
-
-const compareStrings = (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1)

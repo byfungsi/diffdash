@@ -14,6 +14,11 @@ DiffDash uses one pnpm workspace and Turborepo task graph.
 The root manifest owns only repository-wide tooling and convenience commands. Shipped products own
 their versions and runtime dependencies under `packages/*`.
 
+Shared code stays with the package that owns its contract. Before adding a helper, prefer an existing
+platform or dependency primitive; otherwise place it in the closest domain, provider SDK, product,
+or infrastructure package. Add a new package only for a cohesive runtime-neutral API needed across
+multiple owners. Do not create catch-all utility packages.
+
 Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime,
 `@diffdash/promo-capture` for browser capture and recording, and `@diffdash/promo-media` for
 Remotion, audio, storyboard, and verification work. Capture and render ordering is declared in
@@ -26,12 +31,15 @@ uncached, ABI-safe Turbo tasks.
 `@diffdash/domain` owns browser-safe schemas, identities, diff decisions, review models, and
 walkthrough models through explicit subpath exports. `@diffdash/protocol` owns the renderer-facing
 API, canonical IPC channels, request contracts, and serializable transport errors while depending
-only on domain and Effect. `@diffdash/app` owns the reusable React application, theme, UI primitives,
-renderer adapters, and browser tests. Electron and promotional capture are thin hosts that consume
-its explicit package exports.
+only on domain, the browser-safe agent-provider manifest schemas, and Effect. It reuses manifest
+model, defaults, and runtime-requirement schemas rather than copying their structures. `@diffdash/app`
+owns the reusable React application, theme, UI primitives, renderer adapters, and browser tests.
+Electron and promotional capture are thin hosts that consume its explicit package exports.
 
-`@diffdash/process` owns captured and streaming subprocess execution plus generic executable
-discovery. `@diffdash/settings` owns path-parameterized JSON settings and app-state stores while
+`@diffdash/process` owns one Effect service for captured and line-streaming subprocess execution,
+generic executable discovery, and scoped private temporary resources. Node callbacks and process
+signals are confined to a private adapter; command interpretation remains with Git and agent
+providers. `@diffdash/settings` owns path-parameterized JSON settings and app-state stores while
 preserving unknown provider fields. Neither package depends on Electron or concrete providers.
 
 `@diffdash/persistence` is the sole owner of SQLite lifecycle, migrations, durable stores, and

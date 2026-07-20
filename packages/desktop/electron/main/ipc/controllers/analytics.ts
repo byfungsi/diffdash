@@ -20,7 +20,3 @@ export const defineAnalyticsHandlers = (
     return run(analytics.capture(event))
   })
 }
-
-/** Registers analytics handlers with Electron. */
-export const installAnalyticsController = (registry: IpcControllerRegistry) =>
-  registry.install([InvokeChannel.analyticsStart, InvokeChannel.analyticsCapture])

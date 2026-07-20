@@ -431,6 +431,166 @@ const migrations: readonly DatabaseMigration[] = [
       `)
     },
   },
+  {
+    version: 10,
+    migrate: (database) => {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS hosted_viewed_files (
+          repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          pr_number INTEGER NOT NULL,
+          base_ref_name TEXT NOT NULL,
+          review_key TEXT NOT NULL,
+          patch_hash TEXT NOT NULL,
+          viewed_at TEXT NOT NULL,
+          PRIMARY KEY (repo_id, pr_number, base_ref_name, review_key, patch_hash)
+        );
+
+        CREATE TABLE IF NOT EXISTS local_viewed_files (
+          repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          source_identity TEXT NOT NULL,
+          comparison_kind TEXT NOT NULL CHECK (comparison_kind IN ('workingTree', 'branch')),
+          comparison_target TEXT NOT NULL,
+          review_key TEXT NOT NULL,
+          patch_hash TEXT NOT NULL,
+          viewed_at TEXT NOT NULL,
+          PRIMARY KEY (
+            repo_id, source_identity, comparison_kind, comparison_target, review_key, patch_hash
+          )
+        );
+
+        DROP TABLE IF EXISTS viewed_files;
+      `)
+    },
+  },
+  {
+    version: 11,
+    migrate: (database) => {
+      if (!tableExists(database, "agent_runs")) return
+      const interrupted = "The previous local agent run was interrupted."
+      database
+        .prepare(
+          `UPDATE review_thread_messages
+           SET body_markdown = ?, status = 'failed', updated_at = ?
+           WHERE author = 'agent' AND status = 'pending'`,
+        )
+        .run(interrupted, new Date().toISOString())
+      database
+        .prepare(
+          `UPDATE agent_runs
+           SET status = 'failed', error = ?, completed_at = ?
+           WHERE status = 'running'`,
+        )
+        .run(interrupted, new Date().toISOString())
+      database.exec(`
+        UPDATE review_thread_messages
+        SET agent_run_id = NULL
+        WHERE agent_run_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM agent_runs
+            WHERE agent_runs.id = review_thread_messages.agent_run_id
+              AND agent_runs.thread_id = review_thread_messages.thread_id
+          );
+      `)
+      database.exec(`
+        DROP TABLE IF EXISTS agent_run_artifacts_v11;
+        DROP TABLE IF EXISTS agent_runs_v11;
+        DROP TABLE IF EXISTS review_thread_messages_v11;
+
+        CREATE TABLE agent_runs_v11 (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+          review_key TEXT NOT NULL,
+          base_sha TEXT NOT NULL,
+          head_sha TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          provider_run_id TEXT,
+          error TEXT,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          usage_json TEXT,
+          UNIQUE(id, thread_id),
+          CHECK (
+            (status = 'running' AND completed_at IS NULL AND error IS NULL) OR
+            (status = 'completed' AND completed_at IS NOT NULL AND error IS NULL) OR
+            (status = 'failed' AND completed_at IS NOT NULL AND error IS NOT NULL)
+          )
+        );
+
+        INSERT INTO agent_runs_v11 (
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          status, provider_run_id, error, started_at, completed_at, usage_json
+        )
+        SELECT
+          run.id, run.thread_id, thread.review_key, thread.current_base_sha,
+          thread.current_head_sha, run.provider, run.model, run.prompt_version, run.status,
+          run.provider_run_id, run.error, run.started_at, run.completed_at, run.usage_json
+        FROM agent_runs AS run
+        INNER JOIN review_threads AS thread ON thread.id = run.thread_id;
+
+        CREATE TABLE agent_run_artifacts_v11 (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN (
+            'file_read', 'search_result', 'shell_output', 'web_result',
+            'diff_context', 'mcp_tool_result', 'provider_message', 'unknown'
+          )),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          content_digest TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+          original_size INTEGER NOT NULL CHECK (original_size >= 0),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(run_id, thread_id) REFERENCES agent_runs_v11(id, thread_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO agent_run_artifacts_v11
+        SELECT * FROM agent_run_artifacts;
+
+        DROP TABLE agent_run_artifacts;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v11 RENAME TO agent_runs;
+        ALTER TABLE agent_run_artifacts_v11 RENAME TO agent_run_artifacts;
+
+        CREATE TABLE review_thread_messages_v11 (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+          sequence INTEGER NOT NULL,
+          author TEXT NOT NULL CHECK (author IN ('user', 'agent')),
+          body_markdown TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'complete', 'failed')),
+          agent_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(thread_id, sequence),
+          CHECK (author = 'agent' OR agent_run_id IS NULL),
+          FOREIGN KEY(agent_run_id, thread_id) REFERENCES agent_runs(id, thread_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO review_thread_messages_v11
+        SELECT * FROM review_thread_messages;
+        DROP TABLE review_thread_messages;
+        ALTER TABLE review_thread_messages_v11 RENAME TO review_thread_messages;
+
+        CREATE INDEX agent_runs_thread_idx
+          ON agent_runs(thread_id, started_at DESC, id);
+        CREATE UNIQUE INDEX agent_runs_one_running_per_thread_idx
+          ON agent_runs(thread_id) WHERE status = 'running';
+        CREATE INDEX agent_run_artifacts_run_idx
+          ON agent_run_artifacts(run_id, created_at ASC, id);
+        CREATE INDEX agent_run_artifacts_thread_idx
+          ON agent_run_artifacts(thread_id, created_at ASC, id);
+        CREATE INDEX review_thread_messages_thread_idx
+          ON review_thread_messages(thread_id, sequence);
+        CREATE UNIQUE INDEX review_thread_messages_one_pending_agent_per_thread_idx
+          ON review_thread_messages(thread_id) WHERE author = 'agent' AND status = 'pending';
+      `)
+    },
+  },
 ]
 
 /** Runs pending SQLite schema migrations atomically in ascending version order. */

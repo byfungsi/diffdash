@@ -1,6 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 
 import type { ParsedDiff, ParsedDiffFile, ParsedDiffHunk } from "@diffdash/domain/diff"
+import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import type { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
@@ -15,7 +16,7 @@ import {
 } from "@diffdash/persistence/review-thread-store"
 
 /** A coherent target revision used to remap every local thread for one review. */
-export interface MapReviewThreadAnchorsInput {
+interface MapReviewThreadAnchorsInput {
   readonly repoId: string
   readonly reviewKey: ReviewKey
   readonly baseRevision: ReviewRevision
@@ -111,10 +112,12 @@ const mapLineAnchor = (anchor: LineReviewAnchor, file: ParsedDiffFile): AnchorMa
     return { currentAnchor: null, anchorStatus: "unresolved_anchor" }
   }
 
-  const lineIndex = findAnchoredLineIndex(anchor, hunkMatch.value.lines)
-  if (lineIndex === null) return { currentAnchor: null, anchorStatus: "unresolved_anchor" }
-  const lineNumber = lineNumberAtIndex(hunkMatch.value, anchor.side, lineIndex)
+  const sourceLine = findAnchoredLine(anchor, hunkMatch.value)
+  if (sourceLine === null) return { currentAnchor: null, anchorStatus: "unresolved_anchor" }
+  const currentLine = projectDiffHunkLines(hunkMatch.value)[sourceLine.index]
+  const lineNumber = anchor.side === "old" ? currentLine?.oldLineNumber : currentLine?.newLineNumber
   if (lineNumber === null) return { currentAnchor: null, anchorStatus: "unresolved_anchor" }
+  if (lineNumber === undefined) return { currentAnchor: null, anchorStatus: "unresolved_anchor" }
 
   return {
     currentAnchor: LineReviewAnchor.make({
@@ -147,48 +150,14 @@ const findHunk = (
   return { kind: "missing" }
 }
 
-const findAnchoredLineIndex = (anchor: LineReviewAnchor, lines: readonly string[]) => {
+const findAnchoredLine = (anchor: LineReviewAnchor, hunk: ParsedDiffHunk) => {
   const starts = parseHunkStarts(anchor.hunkHeader)
   if (starts === null) return null
-  let oldLine = starts.oldStart
-  let newLine = starts.newStart
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line === undefined) continue
-    const hasOldSide = line.startsWith(" ") || line.startsWith("-")
-    const hasNewSide = line.startsWith(" ") || line.startsWith("+")
-    const sourceLine = anchor.side === "old" ? oldLine : newLine
-    const hasSide = anchor.side === "old" ? hasOldSide : hasNewSide
-    if (hasSide && sourceLine === anchor.lineNumber && line.slice(1) === anchor.lineContent) {
-      return index
-    }
-    if (hasOldSide) oldLine += 1
-    if (hasNewSide) newLine += 1
-  }
-  return null
-}
-
-const lineNumberAtIndex = (
-  hunk: ParsedDiffHunk,
-  side: LineReviewAnchor["side"],
-  targetIndex: number,
-) => {
-  let oldLine = hunk.oldStart
-  let newLine = hunk.newStart
-  for (let index = 0; index < hunk.lines.length; index += 1) {
-    const line = hunk.lines[index]
-    if (line === undefined) continue
-    const hasOldSide = line.startsWith(" ") || line.startsWith("-")
-    const hasNewSide = line.startsWith(" ") || line.startsWith("+")
-    if (index === targetIndex) {
-      if (side === "old") return hasOldSide ? oldLine : null
-      return hasNewSide ? newLine : null
-    }
-    if (hasOldSide) oldLine += 1
-    if (hasNewSide) newLine += 1
-  }
-  return null
+  return findProjectedDiffHunkLine(projectDiffHunkLines(hunk, starts), {
+    side: anchor.side,
+    lineNumber: anchor.lineNumber,
+    content: anchor.lineContent,
+  })
 }
 
 const parseHunkStarts = (header: string) => {

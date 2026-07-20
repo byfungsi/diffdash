@@ -58,7 +58,9 @@ demo and promotional output but is never shipped in the desktop application.
 - `@diffdash/app` is browser-safe. Renderer code reaches privileged capabilities only through the
   typed protocol implemented by preload.
 - `@diffdash/process`, `@diffdash/settings`, and `@diffdash/persistence` own subprocess, JSON, and
-  SQLite infrastructure respectively. Electron supplies paths and layers at the application edge.
+  SQLite infrastructure respectively. Process execution is exposed as one scoped Effect service;
+  concrete command protocols remain outside the package. Electron supplies paths and layers at the
+  application edge.
 - `@diffdash/git-provider` and `@diffdash/agent-provider` own provider-neutral contracts,
   registries, errors, and conformance suites. They never import concrete providers.
 - Concrete provider packages are inward-facing leaves. They may depend on their SDK, Effect,

@@ -91,15 +91,3 @@ export const defineSettingsHandlers = (
     },
   )
 }
-
-/** Registers settings and setup handlers with Electron. */
-export const installSettingsController = (registry: IpcControllerRegistry) =>
-  registry.install([
-    InvokeChannel.agentProvidersGetCatalog,
-    InvokeChannel.settingsGet,
-    InvokeChannel.settingsUpdate,
-    InvokeChannel.appStateGet,
-    InvokeChannel.appStateUpdate,
-    InvokeChannel.appDiagnostics,
-    InvokeChannel.appInstallDiffDashCli,
-  ])

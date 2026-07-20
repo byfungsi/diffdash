@@ -1,4 +1,9 @@
-import { Schema } from "effect"
+import { Either, Schema } from "effect"
+
+const MAX_PUBLIC_ERROR_MESSAGE_LENGTH = 500
+
+/** Stable renderer-facing message for failures that are not explicitly safe to disclose. */
+export const UNKNOWN_TRANSPORT_ERROR_MESSAGE = "DiffDash could not complete the request."
 
 /** User-safe, serializable failure that may cross a process boundary. */
 export class TransportError extends Schema.TaggedError<TransportError>()("TransportError", {
@@ -12,12 +17,12 @@ export const toTransportError = (error: unknown, operation?: string) =>
   error instanceof TransportError
     ? TransportError.make({
         code: error.code,
-        message: error.message,
+        message: sanitizeTransportErrorMessage(error.message),
         operation: error.operation ?? operation,
       })
     : TransportError.make({
-        code: recoverableErrorCode(error),
-        message: recoverableErrorMessage(error),
+        code: "INTERNAL_ERROR",
+        message: UNKNOWN_TRANSPORT_ERROR_MESSAGE,
         ...(operation === undefined ? {} : { operation }),
       })
 
@@ -25,33 +30,28 @@ export const toTransportError = (error: unknown, operation?: string) =>
 export const transportError = (code: string, message: string, operation?: string) =>
   TransportError.make({
     code,
-    message,
+    message: sanitizeTransportErrorMessage(message),
     ...(operation === undefined ? {} : { operation }),
   })
 
-const recoverableErrorCode = (error: unknown) => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    typeof error["_tag"] === "string" &&
-    error["_tag"].length > 0
-  ) {
-    return error["_tag"]
-  }
-  return "INTERNAL_ERROR"
+/** Returns a bounded single-line message from a protocol error, or the safe fallback. */
+export const safeTransportErrorMessage = (error: unknown) => {
+  const decoded = Schema.decodeUnknownEither(TransportError)(error)
+  return Either.isRight(decoded)
+    ? sanitizeTransportErrorMessage(decoded.right.message)
+    : UNKNOWN_TRANSPORT_ERROR_MESSAGE
 }
 
-const recoverableErrorMessage = (error: unknown) => {
-  if (error instanceof Error && error.message.length > 0) return error.message
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "reason" in error &&
-    typeof error.reason === "string" &&
-    error.reason.length > 0
-  ) {
-    return error.reason
-  }
-  return "Unknown error"
+/** Removes control characters and bounds an explicitly public transport message. */
+export const sanitizeTransportErrorMessage = (message: string) => {
+  const sanitized = [...message]
+    .map((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || (code >= 127 && code <= 159) ? " " : character
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (sanitized.length === 0) return UNKNOWN_TRANSPORT_ERROR_MESSAGE
+  return sanitized.slice(0, MAX_PUBLIC_ERROR_MESSAGE_LENGTH)
 }

@@ -1,5 +1,4 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 
 import {
@@ -8,9 +7,12 @@ import {
   type ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
 import type { AgentArtifactCandidate } from "@diffdash/agent-provider"
+import { boundedProviderReason } from "@diffdash/agent-provider/runtime"
+import { redactProviderSecrets } from "@diffdash/agent-provider/security"
+import { truncateUtf8, utf8ByteLength } from "./utf8-budget"
 
 /** Default maximum UTF-8 byte size retained for one normalized artifact body. */
-export const DEFAULT_AGENT_ARTIFACT_CONTENT_LIMIT_BYTES = 64 * 1024
+const DEFAULT_AGENT_ARTIFACT_CONTENT_LIMIT_BYTES = 64 * 1024
 const ALLOWED_ARTIFACT_METADATA_KEYS = new Set([
   "command",
   "eventType",
@@ -35,7 +37,7 @@ const ALLOWED_ARTIFACT_METADATA_KEYS = new Set([
 ])
 
 /** Provider-boundary input after event classification but before product normalization. */
-export interface NormalizeAgentArtifactInput {
+interface NormalizeAgentArtifactInput {
   readonly type: ReviewAgentArtifactType
   readonly provider: ReviewAgentProviderId
   readonly title: string
@@ -45,7 +47,7 @@ export interface NormalizeAgentArtifactInput {
 }
 
 /** A provider artifact could not be converted to bounded, JSON-safe product data. */
-export class AgentArtifactNormalizationError extends Schema.TaggedError<AgentArtifactNormalizationError>()(
+class AgentArtifactNormalizationError extends Schema.TaggedError<AgentArtifactNormalizationError>()(
   "AgentArtifactNormalizationError",
   {
     reason: Schema.String,
@@ -87,7 +89,7 @@ export const normalizeAgentArtifactType = (
 ): ReviewAgentArtifactType => artifactTypeByCandidate[type]
 
 /** Normalizes one classified provider event without retaining its raw protocol shape. */
-export function normalizeAgentArtifact(
+function normalizeAgentArtifact(
   input: NormalizeAgentArtifactInput,
 ): Effect.Effect<ReviewAgentArtifact, AgentArtifactNormalizationError> {
   return Effect.try({
@@ -104,11 +106,13 @@ export function normalizeAgentArtifact(
         ...allowlistedMetadata(input.metadata),
         sourceProvider: input.provider,
       })
-      const redactedContent = redactSensitiveText(input.content)
-      const originalSize = Buffer.byteLength(redactedContent, "utf8")
+      const redactedContent = redactProviderSecrets(input.content)
+      const originalSize = utf8ByteLength(redactedContent)
       const truncated = originalSize > limit
-      const content = truncated ? truncateUtf8(redactedContent, limit) : redactedContent
-      const retainedSize = Buffer.byteLength(content, "utf8")
+      const content = truncated
+        ? truncateUtf8(redactedContent, limit, "\n\n[DiffDash truncated artifact content]")
+        : redactedContent
+      const retainedSize = utf8ByteLength(content)
       const contentDigest = `sha256:${createHash("sha256")
         .update(canonicalJson({ content: redactedContent, metadata: canonicalMetadata }))
         .digest("hex")}`
@@ -116,7 +120,7 @@ export function normalizeAgentArtifact(
       return ReviewAgentArtifact.make({
         type: input.type,
         provider: input.provider,
-        title: redactSensitiveText(input.title),
+        title: redactProviderSecrets(input.title),
         content,
         contentDigest,
         metadata: {
@@ -134,7 +138,7 @@ export function normalizeAgentArtifact(
     },
     catch: (cause) =>
       AgentArtifactNormalizationError.make({
-        reason: cause instanceof Error ? cause.message : "Artifact normalization failed",
+        reason: boundedProviderReason(cause, "Artifact normalization failed"),
         cause,
       }),
   })
@@ -154,25 +158,24 @@ const allowlistedMetadata = (metadata: Readonly<Record<string, unknown>>) =>
   Object.fromEntries(
     Object.entries(metadata)
       .filter(([key]) => ALLOWED_ARTIFACT_METADATA_KEYS.has(key))
-      .map(([key, value]) => [key, redactMetadataValue(value)]),
+      .map(([key, value]) => [key, redactMetadataValue(value, key)]),
   )
 
-const redactMetadataValue = (value: unknown): unknown => {
-  if (typeof value === "string") return redactSensitiveText(value)
-  if (Array.isArray(value)) return value.map(redactMetadataValue)
+const redactMetadataValue = (value: unknown, key?: string): unknown => {
+  if (key !== undefined && isProviderSecretMetadataKey(key)) return "[redacted]"
+  if (typeof value === "string") return redactProviderSecrets(value)
+  if (Array.isArray(value)) return value.map((item) => redactMetadataValue(item))
   if (value === null || typeof value !== "object") return value
   return Object.fromEntries(
-    Object.entries(value).map(([key, nested]) => [key, redactMetadataValue(nested)]),
+    Object.entries(value).map(([nestedKey, nested]) => [
+      nestedKey,
+      redactMetadataValue(nested, nestedKey),
+    ]),
   )
 }
 
-const redactSensitiveText = (value: string) =>
-  value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/giu, "Bearer [redacted]")
-    .replace(
-      /(?:DIFFDASH_MCP_BEARER_TOKEN|API_KEY|ACCESS_TOKEN|AUTH_TOKEN)=[^\s]+/giu,
-      (match) => `${match.slice(0, match.indexOf("=") + 1)}[redacted]`,
-    )
+const isProviderSecretMetadataKey = (key: string) =>
+  redactProviderSecrets(`${key}=credential`) !== `${key}=credential`
 
 const toJsonValue = (value: unknown, ancestors: WeakSet<object>): JsonValue => {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -215,23 +218,4 @@ const sortedObjectKeys = (value: object) => {
     sorted.splice(index, 0, key)
   }
   return sorted
-}
-
-const truncateUtf8 = (value: string, limitBytes: number) => {
-  const marker = "\n\n[DiffDash truncated artifact content]"
-  const markerBytes = Buffer.byteLength(marker, "utf8")
-  if (markerBytes >= limitBytes) return utf8Prefix(value, limitBytes)
-  return `${utf8Prefix(value, limitBytes - markerBytes)}${marker}`
-}
-
-const utf8Prefix = (value: string, limitBytes: number) => {
-  const output: string[] = []
-  let size = 0
-  for (const character of value) {
-    const characterSize = Buffer.byteLength(character, "utf8")
-    if (size + characterSize > limitBytes) break
-    output.push(character)
-    size += characterSize
-  }
-  return output.join("")
 }

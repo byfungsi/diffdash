@@ -9,6 +9,7 @@
     "./database": "./src/database.ts",
     "./repository-store": "./src/repository-store.ts",
     "./review-thread-store": "./src/review-thread-store.ts",
+    "./review-turn-store": "./src/review-turn-store.ts",
     "./thread-memory-store": "./src/thread-memory-store.ts",
     "./viewed-file-store": "./src/viewed-file-store.ts",
     "./walkthrough-store": "./src/walkthrough-store.ts"

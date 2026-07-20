@@ -1,19 +1,18 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
 import { AppState } from "@diffdash/domain/app-state"
-import { GitProviderDescriptor, ReviewDecision } from "@diffdash/domain/git-provider"
 import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  LocalReviewTarget,
-} from "@diffdash/domain/local-review"
-import {
-  PullRequestDetail,
-  PullRequestDiff,
-  PullRequestSummary,
-} from "@diffdash/domain/pull-request"
-import { Repo, RepositorySearchResult, RepositorySearchScope } from "@diffdash/domain/repository"
+  GitProviderDescriptor,
+  HostedRepository,
+  HostedReviewSummary,
+  ReviewDecision,
+} from "@diffdash/domain/git-provider"
+import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import { LocalReviewSnapshot, PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshotManifest,
+  LocalReviewSnapshotManifest,
+} from "@diffdash/domain/review-context"
 import {
   ReviewThread,
   ReviewThreadDetails,
@@ -25,21 +24,30 @@ import { AgentProviderCatalog } from "./agent-providers"
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
-import { CliNavigationCommand } from "./cli-navigation"
+import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
   GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedViewedFilesRequest,
   HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
-  SetHostedViewedFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
+import { assertJsonPayloadWithinBudget, jsonSafeUtf8ByteLength } from "./payload-budget"
 import { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import { LinkRepositoryCheckoutRequest } from "./repository-link"
+import {
+  AcquireHostedReviewSnapshotRequest,
+  AcquireLocalReviewSnapshotRequest,
+  REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
+  REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
+  ReviewSnapshotPageRequest,
+  ReviewSnapshotPageResponse,
+  ReviewSnapshotSearchRequest,
+  ReviewSnapshotSearchResponse,
+} from "./review-snapshot"
 import {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
@@ -47,20 +55,63 @@ import {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import { TransportError, transportError } from "./transport-error"
+import {
+  HostedViewedFilesRequest,
+  LocalViewedFilesRequest,
+  SetHostedViewedFileRequest,
+  SetLocalViewedFileRequest,
+  ViewedFileRecord,
+} from "./viewed-files"
 
 const EmptyRequest = Schema.Struct({})
-const EmptyResponse = Schema.Void
+const EmptyResponse = Schema.transform(Schema.Null, Schema.Void, {
+  decode: () => undefined,
+  encode: () => null,
+})
+/** Serializable failure envelope returned for every invoke operation. */
+export const FailureEnvelope = Schema.TaggedStruct("Failure", {
+  error: TransportError,
+})
+const BOUNDED_FAILURE_ENVELOPE = Schema.encodeSync(FailureEnvelope)({
+  _tag: "Failure",
+  error: transportError("PAYLOAD_TOO_LARGE", "IPC response exceeded its byte limit."),
+})
+/** Smallest response budget accepted by a protocol invoke contract. */
+export const MINIMUM_FAILURE_ENVELOPE_BYTES = jsonSafeUtf8ByteLength(BOUNDED_FAILURE_ENVELOPE)
 const NullableString = Schema.NullOr(Schema.String)
+const KIB = 1_024
+const DEFAULT_MAX_REQUEST_BYTES = 256 * KIB
+const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1_024 * KIB
+const DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * KIB
 
 const defineInvoke = <
   Channel extends InvokeChannel,
-  Request extends Schema.Schema.Any,
-  Response extends Schema.Schema.Any,
+  Request extends Schema.Schema.AnyNoContext,
+  Response extends Schema.Schema.AnyNoContext,
 >(
   channel: Channel,
   request: Request,
   response: Response,
-) => ({ channel, request, response })
+  limits: {
+    readonly maxRequestBytes?: number
+    readonly maxResponseBytes?: number
+  } = {},
+) => {
+  const maxRequestBytes = positiveSafeInteger(
+    limits.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES,
+    `${channel}.maxRequestBytes`,
+  )
+  const maxResponseBytes = positiveSafeInteger(
+    limits.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
+    `${channel}.maxResponseBytes`,
+  )
+  if (maxResponseBytes < MINIMUM_FAILURE_ENVELOPE_BYTES) {
+    throw new Error(
+      `${channel}.maxResponseBytes must fit the bounded failure envelope (${MINIMUM_FAILURE_ENVELOPE_BYTES} bytes)`,
+    )
+  }
+  return { channel, request, response, maxRequestBytes, maxResponseBytes }
+}
 
 /** Complete schema registry for renderer-to-host request/response operations. */
 export const InvokeContract = {
@@ -120,21 +171,6 @@ export const InvokeContract = {
     SubmitHostedReviewDecisionRequest,
     EmptyResponse,
   ),
-  [InvokeChannel.getHostedReview]: defineInvoke(
-    InvokeChannel.getHostedReview,
-    HostedReviewRequest,
-    PullRequestDetail,
-  ),
-  [InvokeChannel.getHostedReviewDiff]: defineInvoke(
-    InvokeChannel.getHostedReviewDiff,
-    HostedReviewRequest,
-    PullRequestDiff,
-  ),
-  [InvokeChannel.getHostedReviewSnapshot]: defineInvoke(
-    InvokeChannel.getHostedReviewSnapshot,
-    HostedReviewRequest,
-    PullRequestReviewSnapshot,
-  ),
   [InvokeChannel.getHostedReviewDecision]: defineInvoke(
     InvokeChannel.getHostedReviewDecision,
     HostedReviewRequest,
@@ -143,47 +179,57 @@ export const InvokeContract = {
   [InvokeChannel.listHostedReviews]: defineInvoke(
     InvokeChannel.listHostedReviews,
     HostedRepositoryRequest,
-    Schema.Array(PullRequestSummary),
+    Schema.Array(HostedReviewSummary),
   ),
   [InvokeChannel.listAssignedHostedReviews]: defineInvoke(
     InvokeChannel.listAssignedHostedReviews,
     HostedProviderRequest,
-    Schema.Array(PullRequestSummary),
+    Schema.Array(HostedReviewSummary),
   ),
   [InvokeChannel.listHostedRepositorySearchScopes]: defineInvoke(
     InvokeChannel.listHostedRepositorySearchScopes,
     HostedProviderRequest,
     Schema.Array(RepositorySearchScope),
   ),
-  [InvokeChannel.refreshHostedReview]: defineInvoke(
-    InvokeChannel.refreshHostedReview,
-    HostedReviewRequest,
-    PullRequestDetail,
-  ),
   [InvokeChannel.searchHostedRepositories]: defineInvoke(
     InvokeChannel.searchHostedRepositories,
     HostedRepositorySearchRequest,
-    Schema.Array(RepositorySearchResult),
-  ),
-  [InvokeChannel.localReviewDetail]: defineInvoke(
-    InvokeChannel.localReviewDetail,
-    Schema.Struct({ target: LocalReviewTarget }),
-    LocalReviewDetail,
-  ),
-  [InvokeChannel.localReviewDiff]: defineInvoke(
-    InvokeChannel.localReviewDiff,
-    Schema.Struct({ target: LocalReviewTarget }),
-    LocalReviewDiff,
-  ),
-  [InvokeChannel.localReviewSnapshot]: defineInvoke(
-    InvokeChannel.localReviewSnapshot,
-    Schema.Struct({ target: LocalReviewTarget }),
-    LocalReviewSnapshot,
+    Schema.Array(HostedRepository),
   ),
   [InvokeChannel.resolveLocalBranch]: defineInvoke(
     InvokeChannel.resolveLocalBranch,
     Schema.Struct({ localPath: Schema.String, branchName: NullableString }),
     LocalReviewTarget,
+  ),
+  [InvokeChannel.acquireHostedReviewSnapshot]: defineInvoke(
+    InvokeChannel.acquireHostedReviewSnapshot,
+    AcquireHostedReviewSnapshotRequest,
+    HostedReviewSnapshotManifest,
+    { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
+  ),
+  [InvokeChannel.acquireLocalReviewSnapshot]: defineInvoke(
+    InvokeChannel.acquireLocalReviewSnapshot,
+    AcquireLocalReviewSnapshotRequest,
+    LocalReviewSnapshotManifest,
+    { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
+  ),
+  [InvokeChannel.getReviewSnapshotPage]: defineInvoke(
+    InvokeChannel.getReviewSnapshotPage,
+    ReviewSnapshotPageRequest,
+    ReviewSnapshotPageResponse,
+    {
+      maxRequestBytes: 64 * KIB,
+      maxResponseBytes: REVIEW_SNAPSHOT_PAGE_MAX_BYTES + KIB,
+    },
+  ),
+  [InvokeChannel.searchReviewSnapshot]: defineInvoke(
+    InvokeChannel.searchReviewSnapshot,
+    ReviewSnapshotSearchRequest,
+    ReviewSnapshotSearchResponse,
+    {
+      maxRequestBytes: 64 * KIB,
+      maxResponseBytes: REVIEW_SNAPSHOT_SEARCH_MAX_BYTES + KIB,
+    },
   ),
   [InvokeChannel.generateLocalWalkthrough]: defineInvoke(
     InvokeChannel.generateLocalWalkthrough,
@@ -198,16 +244,11 @@ export const InvokeContract = {
   [InvokeChannel.drainNavigationCommands]: defineInvoke(
     InvokeChannel.drainNavigationCommands,
     EmptyRequest,
-    Schema.Array(CliNavigationCommand),
-  ),
-  [InvokeChannel.addLocalRepository]: defineInvoke(
-    InvokeChannel.addLocalRepository,
-    Schema.Struct({ localPath: Schema.String }),
-    Repo,
+    Schema.Array(CliNavigationCommand).pipe(Schema.maxItems(NAVIGATION_COMMAND_DRAIN_LIMIT)),
   ),
   [InvokeChannel.favoriteRemoteRepository]: defineInvoke(
     InvokeChannel.favoriteRemoteRepository,
-    Schema.Struct({ repository: RepositorySearchResult }),
+    Schema.Struct({ repository: HostedRepository }),
     Repo,
   ),
   [InvokeChannel.installRepository]: defineInvoke(
@@ -289,12 +330,12 @@ export const InvokeContract = {
   [InvokeChannel.listViewedFiles]: defineInvoke(
     InvokeChannel.listViewedFiles,
     HostedViewedFilesRequest,
-    Schema.Array(Schema.String),
+    Schema.Array(ViewedFileRecord),
   ),
   [InvokeChannel.listLocalViewedFiles]: defineInvoke(
     InvokeChannel.listLocalViewedFiles,
-    Schema.Struct({ rootPath: Schema.String, headSha: Schema.String }),
-    Schema.Array(Schema.String),
+    LocalViewedFilesRequest,
+    Schema.Array(ViewedFileRecord),
   ),
   [InvokeChannel.setViewedFile]: defineInvoke(
     InvokeChannel.setViewedFile,
@@ -303,13 +344,7 @@ export const InvokeContract = {
   ),
   [InvokeChannel.setLocalViewedFile]: defineInvoke(
     InvokeChannel.setLocalViewedFile,
-    Schema.Struct({
-      rootPath: Schema.String,
-      headSha: Schema.String,
-      reviewKey: Schema.String,
-      filePath: Schema.String,
-      viewed: Schema.Boolean,
-    }),
+    SetLocalViewedFileRequest,
     EmptyResponse,
   ),
   [InvokeChannel.generateWalkthrough]: defineInvoke(
@@ -324,10 +359,15 @@ export const InvokeContract = {
   ),
 } as const
 
-const defineEvent = <Channel extends EventChannel, Payload extends Schema.Schema.Any>(
+const defineEvent = <Channel extends EventChannel, Payload extends Schema.Schema.AnyNoContext>(
   channel: Channel,
   payload: Payload,
-) => ({ channel, payload })
+  maxPayloadBytes = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+) => ({
+  channel,
+  payload,
+  maxPayloadBytes: positiveSafeInteger(maxPayloadBytes, `${channel}.maxPayloadBytes`),
+})
 
 /** Complete schema registry for host-to-renderer events. */
 export const EventContract = {
@@ -354,45 +394,84 @@ export type InvokeResponse<Channel extends InvokeChannel> =
 export type EventPayload<Channel extends EventChannel> =
   (typeof EventContract)[Channel]["payload"]["Type"]
 
+const createInvokeRegistry = <
+  const Registry extends Record<InvokeChannel, ReturnType<typeof defineInvoke>>,
+>(
+  contracts: Registry,
+) => ({
+  contracts,
+  request: <Channel extends InvokeChannel>(channel: Channel) => contracts[channel].request,
+  response: <Channel extends InvokeChannel>(channel: Channel) => contracts[channel].response,
+})
+
+const createEventRegistry = <
+  const Registry extends Record<EventChannel, ReturnType<typeof defineEvent>>,
+>(
+  contracts: Registry,
+) => ({
+  contracts,
+  payload: <Channel extends EventChannel>(channel: Channel) => contracts[channel].payload,
+})
+
+const invokeRegistry = createInvokeRegistry(InvokeContract)
+const eventRegistry = createEventRegistry(EventContract)
+
 /** Returns the request schema associated with one channel. */
 export const invokeRequestSchema = <Channel extends InvokeChannel>(channel: Channel) => {
-  // SAFETY: InvokeContract is keyed by each channel and defineInvoke retains its request schema.
-  return InvokeContract[channel].request as Schema.Schema<InvokeRequest<Channel>, unknown>
+  return invokeRegistry.request(channel)
 }
 
 /** Returns the response schema associated with one channel. */
 export const invokeResponseSchema = <Channel extends InvokeChannel>(channel: Channel) => {
-  // SAFETY: InvokeContract is keyed by each channel and defineInvoke retains its response schema.
-  return InvokeContract[channel].response as Schema.Schema<InvokeResponse<Channel>, unknown>
+  return invokeRegistry.response(channel)
 }
 
 /** Returns the payload schema associated with one event channel. */
 export const eventPayloadSchema = <Channel extends EventChannel>(channel: Channel) => {
-  // SAFETY: EventContract is keyed by each channel and defineEvent retains its payload schema.
-  return EventContract[channel].payload as Schema.Schema<EventPayload<Channel>, unknown>
+  return eventRegistry.payload(channel)
 }
 
 /** Serializable success envelope returned for every invoke operation. */
-export const successEnvelope = <Value extends Schema.Schema.Any>(value: Value) =>
+export const successEnvelope = <Value extends Schema.Schema.AnyNoContext>(value: Value) =>
   Schema.TaggedStruct("Success", { value })
 
-/** Serializable failure envelope returned for every invoke operation. */
-export const FailureEnvelope = Schema.TaggedStruct("Failure", {
+/** Encodes one failure under a contract response budget, falling back to a fixed bounded error. */
+export const encodeFailureEnvelopeWithinBudget = (
   error: TransportError,
-})
+  maxResponseBytes: number,
+) => {
+  try {
+    const encoded = Schema.encodeSync(FailureEnvelope)({ _tag: "Failure", error })
+    assertJsonPayloadWithinBudget(encoded, maxResponseBytes)
+    return encoded
+  } catch {
+    assertJsonPayloadWithinBudget(BOUNDED_FAILURE_ENVELOPE, maxResponseBytes)
+    return BOUNDED_FAILURE_ENVELOPE
+  }
+}
+
+const hasOwn = <Value extends object>(value: Value, key: PropertyKey): key is keyof Value =>
+  Object.hasOwn(value, key)
+
+function positiveSafeInteger(value: number, name: string) {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer`)
+  }
+  return value
+}
 
 /** Looks up a known invoke contract while rejecting unknown channels deterministically. */
 export const getInvokeContract = (channel: unknown) => {
-  if (typeof channel === "string" && channel in InvokeContract) {
-    return InvokeContract[channel as keyof typeof InvokeContract]
+  if (typeof channel === "string" && hasOwn(InvokeContract, channel)) {
+    return InvokeContract[channel]
   }
   throw transportError("UNKNOWN_CHANNEL", `Unknown IPC invoke channel: ${String(channel)}`)
 }
 
 /** Looks up a known event contract while rejecting unknown channels deterministically. */
 export const getEventContract = (channel: unknown) => {
-  if (typeof channel === "string" && channel in EventContract) {
-    return EventContract[channel as keyof typeof EventContract]
+  if (typeof channel === "string" && hasOwn(EventContract, channel)) {
+    return EventContract[channel]
   }
   throw transportError("UNKNOWN_CHANNEL", `Unknown IPC event channel: ${String(channel)}`)
 }

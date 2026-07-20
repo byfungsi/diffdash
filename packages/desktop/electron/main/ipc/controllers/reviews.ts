@@ -1,21 +1,33 @@
-import type { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import type { HostedReviewSummary, ReviewDecision } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
-import type {
-  PullRequestDetail,
-  PullRequestDiff,
-  PullRequestSummary,
-} from "@diffdash/domain/pull-request"
-import type { LocalReviewSnapshot } from "@diffdash/domain/review-context"
-import type { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  type HostedReviewSnapshotManifest,
+  type LocalReviewSnapshotManifest,
+  makeReviewSnapshotManifest,
+} from "@diffdash/domain/review-context"
 import { GitService } from "@diffdash/local-git/local-git"
-import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
+import {
+  REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
+  REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
+  ReviewSnapshotExpired,
+  type ReviewSnapshotPageResponse,
+  type ReviewSnapshotSearchResponse,
+} from "@diffdash/protocol/review-snapshot"
+import type { ViewedFileRecord } from "@diffdash/protocol/viewed-files"
 import { GitProvider } from "../../../../src/main/services/git-provider"
-import { ReviewContextService } from "../../../../src/main/services/review-context"
+import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
+import {
+  ReviewSnapshotService,
+  ReviewSnapshotUnavailableError,
+} from "../../../../src/main/services/review-snapshot"
+import {
+  paginateReviewSnapshot,
+  searchReviewSnapshot,
+} from "../../../../src/main/services/review-snapshot-pagination"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
-import { localRepositoryInput } from "./helpers"
 
 /** Defines reviews IPC handler implementations. */
 export const defineReviewHandlers = (
@@ -26,66 +38,33 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listHostedReviews,
-    async (_event, request): Promise<readonly PullRequestSummary[]> => {
+    async (_event, request): Promise<readonly HostedReviewSummary[]> => {
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.listPullRequests(request.repository))
+      return run(gitProvider.listHostedReviews(request.repository))
     },
   )
 
   handlers.define(
     InvokeChannel.listAssignedHostedReviews,
-    async (_event, request): Promise<readonly PullRequestSummary[]> => {
+    async (_event, request): Promise<readonly HostedReviewSummary[]> => {
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.listReviewRequests(request.providerId))
-    },
-  )
-
-  handlers.define(
-    InvokeChannel.getHostedReview,
-    async (_event, request): Promise<PullRequestDetail> => {
-      const gitProvider = await run(GitProvider)
-      return run(gitProvider.getPullRequestDetail(request.review))
-    },
-  )
-
-  handlers.define(
-    InvokeChannel.refreshHostedReview,
-    async (_event, request): Promise<PullRequestDetail> => {
-      const gitProvider = await run(GitProvider)
-      return run(gitProvider.refreshPullRequestDetail(request.review))
-    },
-  )
-
-  handlers.define(
-    InvokeChannel.getHostedReviewDiff,
-    async (_event, request): Promise<PullRequestDiff> => {
-      const gitProvider = await run(GitProvider)
-      return run(gitProvider.getPullRequestDiff(request.review))
-    },
-  )
-
-  handlers.define(
-    InvokeChannel.getHostedReviewSnapshot,
-    async (_event, request): Promise<PullRequestReviewSnapshot> => {
-      const contexts = await run(ReviewContextService)
-      return run(contexts.getPullRequestSnapshot(request.review))
+      return run(gitProvider.listAssignedReviews(request.providerId))
     },
   )
 
   handlers.define(
     InvokeChannel.getHostedReviewDecision,
-    async (_event, request): Promise<import("@diffdash/domain/git-provider").ReviewDecision> => {
+    async (_event, request): Promise<ReviewDecision> => {
       const gitProvider = await run(GitProvider)
-      return (await run(gitProvider.hasApprovedPullRequest(request.review))) ? "approved" : "none"
+      return run(gitProvider.getReviewDecision(request.review))
     },
   )
 
   handlers.define(
     InvokeChannel.submitHostedReviewDecision,
     async (_event, request): Promise<void> => {
-      if (request.decision !== "approved") throw new Error("Only approval is currently supported")
       const gitProvider = await run(GitProvider)
-      return run(gitProvider.approvePullRequest(request.review))
+      return run(gitProvider.submitReviewDecision(request.review, request.decision))
     },
   )
 
@@ -98,59 +77,74 @@ export const defineReviewHandlers = (
   )
 
   handlers.define(
-    InvokeChannel.localReviewDetail,
-    async (_event, { target }): Promise<LocalReviewDetail> => {
-      const git = await run(GitService)
-      const store = await run(RepositoryStore)
-      const detail = await run(git.getLocalReviewDetail(target))
-      await run(store.upsertRepository(localRepositoryInput(detail.rootPath)))
-      return detail
+    InvokeChannel.acquireHostedReviewSnapshot,
+    async (_event, { review }): Promise<HostedReviewSnapshotManifest> => {
+      const snapshots = await run(ReviewSnapshotService)
+      return makeReviewSnapshotManifest(await run(snapshots.acquireHosted(review)))
     },
   )
 
   handlers.define(
-    InvokeChannel.localReviewDiff,
-    async (_event, { target }): Promise<LocalReviewDiff> => {
-      const git = await run(GitService)
-      const store = await run(RepositoryStore)
-      const diff = await run(git.getLocalReviewDiff(target))
-      await run(store.upsertRepository(localRepositoryInput(diff.rootPath)))
-      return diff
+    InvokeChannel.acquireLocalReviewSnapshot,
+    async (_event, { target }): Promise<LocalReviewSnapshotManifest> => {
+      const snapshots = await run(ReviewSnapshotService)
+      const repositories = await run(RepositoryLinker)
+      const snapshot = await run(snapshots.acquireLocal(target))
+      await run(repositories.ensureLocal(snapshot.detail.rootPath))
+      return makeReviewSnapshotManifest(snapshot)
     },
   )
 
   handlers.define(
-    InvokeChannel.localReviewSnapshot,
-    async (_event, { target }): Promise<LocalReviewSnapshot> => {
-      const git = await run(GitService)
-      const store = await run(RepositoryStore)
-      const snapshot = await run(git.getLocalReviewSnapshot(target))
-      await run(store.upsertRepository(localRepositoryInput(snapshot.detail.rootPath)))
-      return snapshot
+    InvokeChannel.getReviewSnapshotPage,
+    async (_event, request): Promise<ReviewSnapshotPageResponse> => {
+      const snapshots = await run(ReviewSnapshotService)
+      try {
+        const snapshot = await run(snapshots.get(request.snapshotId))
+        return paginateReviewSnapshot(snapshot, request, REVIEW_SNAPSHOT_PAGE_MAX_BYTES)
+      } catch (error) {
+        if (error instanceof ReviewSnapshotUnavailableError) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: error.reason,
+          })
+        }
+        throw error
+      }
+    },
+  )
+
+  handlers.define(
+    InvokeChannel.searchReviewSnapshot,
+    async (_event, request): Promise<ReviewSnapshotSearchResponse> => {
+      const snapshots = await run(ReviewSnapshotService)
+      try {
+        const snapshot = await run(snapshots.get(request.snapshotId))
+        return searchReviewSnapshot(snapshot, request, REVIEW_SNAPSHOT_SEARCH_MAX_BYTES)
+      } catch (error) {
+        if (error instanceof ReviewSnapshotUnavailableError) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: error.reason,
+          })
+        }
+        throw error
+      }
     },
   )
 
   handlers.define(
     InvokeChannel.listViewedFiles,
-    async (_event, request): Promise<readonly string[]> => {
+    async (_event, request): Promise<readonly ViewedFileRecord[]> => {
       const hostedRepository = request.review.repository
-      const store = await run(RepositoryStore)
-      const gitProvider = await run(GitProvider)
+      const repositories = await run(RepositoryLinker)
       const viewedFiles = await run(ViewedFileStore)
-      const repo = await run(
-        store.upsertRepository({
-          provider: hostedRepository.providerId,
-          owner: hostedRepository.namespace,
-          name: hostedRepository.name,
-          remoteUrl: await run(gitProvider.repositoryUrl(hostedRepository)),
-          localPath: null,
-        }),
-      )
+      const repo = await run(repositories.ensureHosted(hostedRepository))
       return run(
-        viewedFiles.list({
+        viewedFiles.listHosted({
           repoId: repo.id,
           prNumber: request.review.number,
-          headSha: request.headRevision,
+          baseRefName: request.baseRefName,
         }),
       )
     },
@@ -158,25 +152,16 @@ export const defineReviewHandlers = (
 
   handlers.define(InvokeChannel.setViewedFile, async (_event, request): Promise<void> => {
     const hostedRepository = request.review.repository
-    const store = await run(RepositoryStore)
-    const gitProvider = await run(GitProvider)
+    const repositories = await run(RepositoryLinker)
     const viewedFiles = await run(ViewedFileStore)
-    const repo = await run(
-      store.upsertRepository({
-        provider: hostedRepository.providerId,
-        owner: hostedRepository.namespace,
-        name: hostedRepository.name,
-        remoteUrl: await run(gitProvider.repositoryUrl(hostedRepository)),
-        localPath: null,
-      }),
-    )
+    const repo = await run(repositories.ensureHosted(hostedRepository))
     return run(
-      viewedFiles.set({
+      viewedFiles.setHosted({
         repoId: repo.id,
         prNumber: request.review.number,
-        headSha: request.headRevision,
+        baseRefName: request.baseRefName,
         reviewKey: request.reviewKey,
-        filePath: request.filePath,
+        patchHash: request.patchHash,
         viewed: request.viewed,
       }),
     )
@@ -184,55 +169,39 @@ export const defineReviewHandlers = (
 
   handlers.define(
     InvokeChannel.listLocalViewedFiles,
-    async (_event, { rootPath, headSha }): Promise<readonly string[]> => {
-      const git = await run(GitService)
-      const store = await run(RepositoryStore)
+    async (_event, request): Promise<readonly ViewedFileRecord[]> => {
+      const repositories = await run(RepositoryLinker)
       const viewedFiles = await run(ViewedFileStore)
-      const canonicalRootPath = await run(git.detectRoot(rootPath))
-      const repo = await run(store.upsertRepository(localRepositoryInput(canonicalRootPath)))
-      return run(viewedFiles.list({ repoId: repo.id, prNumber: null, headSha }))
-    },
-  )
-
-  handlers.define(
-    InvokeChannel.setLocalViewedFile,
-    async (_event, { rootPath, headSha, reviewKey, filePath, viewed }): Promise<void> => {
-      const git = await run(GitService)
-      const store = await run(RepositoryStore)
-      const viewedFiles = await run(ViewedFileStore)
-      const canonicalRootPath = await run(git.detectRoot(rootPath))
-      const repo = await run(store.upsertRepository(localRepositoryInput(canonicalRootPath)))
+      const repo = await run(repositories.ensureLocal(request.target.rootPath))
       return run(
-        viewedFiles.set({
-          repoId: repo.id,
-          prNumber: null,
-          headSha,
-          reviewKey,
-          filePath,
-          viewed,
-        }),
+        viewedFiles.listLocal(localViewedFileScope(repo.id, request.target, request.sourceBranch)),
       )
     },
   )
+
+  handlers.define(InvokeChannel.setLocalViewedFile, async (_event, request): Promise<void> => {
+    const repositories = await run(RepositoryLinker)
+    const viewedFiles = await run(ViewedFileStore)
+    const repo = await run(repositories.ensureLocal(request.target.rootPath))
+    return run(
+      viewedFiles.setLocal({
+        ...localViewedFileScope(repo.id, request.target, request.sourceBranch),
+        reviewKey: request.reviewKey,
+        patchHash: request.patchHash,
+        viewed: request.viewed,
+      }),
+    )
+  })
 }
 
-/** Registers hosted/local review handlers with Electron. */
-export const installReviewsController = (registry: IpcControllerRegistry) =>
-  registry.install([
-    InvokeChannel.listHostedReviews,
-    InvokeChannel.listAssignedHostedReviews,
-    InvokeChannel.getHostedReview,
-    InvokeChannel.refreshHostedReview,
-    InvokeChannel.getHostedReviewDiff,
-    InvokeChannel.getHostedReviewSnapshot,
-    InvokeChannel.getHostedReviewDecision,
-    InvokeChannel.submitHostedReviewDecision,
-    InvokeChannel.resolveLocalBranch,
-    InvokeChannel.localReviewDetail,
-    InvokeChannel.localReviewDiff,
-    InvokeChannel.localReviewSnapshot,
-    InvokeChannel.listViewedFiles,
-    InvokeChannel.setViewedFile,
-    InvokeChannel.listLocalViewedFiles,
-    InvokeChannel.setLocalViewedFile,
-  ])
+const localViewedFileScope = (
+  repoId: string,
+  target: LocalReviewTarget,
+  sourceBranch: string | null,
+) =>
+  ({
+    repoId,
+    sourceIdentity: sourceBranch === null ? "detached" : `branch:${sourceBranch}`,
+    comparisonKind: target.comparison["_tag"],
+    comparisonTarget: target.comparison["_tag"] === "branch" ? target.comparison.branchName : "",
+  }) as const

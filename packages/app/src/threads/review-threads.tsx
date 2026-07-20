@@ -1,3 +1,30 @@
+import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
+import {
+  BranchComparison,
+  LocalReviewTarget,
+  WorkingTreeComparison,
+} from "@diffdash/domain/local-review"
+import {
+  REVIEW_AGENT_PROGRESS_LABELS,
+  ReviewAgentProgress,
+  type ReviewAgentProgressStage,
+} from "@diffdash/domain/review-agent"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
+import {
+  HostedReviewTarget,
+  MarkdownBody,
+  type ReviewThreadAnchor,
+  ReviewThreadDetails,
+  type ReviewThreadId,
+  type ReviewThreadMessage,
+  type ReviewThreadMessageId,
+  type ReviewThreadTarget,
+} from "@diffdash/domain/review-thread"
+import {
+  AddReviewThreadUserMessageRequest,
+  CreateReviewThreadRequest,
+  RunReviewThreadAgentRequest,
+} from "@diffdash/protocol/review-threads"
 import { AlertCircle, Bot, Loader2, UserRound } from "lucide-react"
 import {
   Fragment,
@@ -9,52 +36,20 @@ import {
   useRef,
   useState,
 } from "react"
-
+import { captureAnalytics } from "@/shared/analytics"
+import { formatError } from "@/shared/errors"
+import { formatTimestamp } from "@/shared/timestamp"
 import { Badge } from "@/shared/ui/badge"
-import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { Button } from "@/shared/ui/button"
 import { Textarea } from "@/shared/ui/textarea"
+import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
-import {
-  MarkdownBody,
-  PullRequestReviewTarget,
-  ReviewThreadDetails,
-  type ReviewThreadAnchor,
-  type ReviewThreadId,
-  type ReviewThreadMessage,
-  type ReviewThreadMessageId,
-  type ReviewThreadTarget,
-} from "@diffdash/domain/review-thread"
-import {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  RunReviewThreadAgentRequest,
-} from "@diffdash/protocol/review-threads"
-import {
-  BranchComparison,
-  LocalReviewTarget,
-  WorkingTreeComparison,
-} from "@diffdash/domain/local-review"
-
-const captureAnalytics = (event: Parameters<typeof window.diffDash.analytics.capture>[0]) => {
-  void window.diffDash.analytics.capture(event).catch(() => undefined)
-}
-import { ReviewRevision } from "@diffdash/domain/review-identity"
-import type { GitProviderId } from "@diffdash/domain/git-provider"
-import {
-  ReviewAgentProgress,
-  type ReviewAgentProgressStage,
-  REVIEW_AGENT_PROGRESS_LABELS,
-} from "@diffdash/domain/review-agent"
 
 /** Renderer-owned review scope used to derive typed preload requests. */
 export type ReviewThreadScope =
   | {
-      readonly kind: "pullRequest"
-      readonly providerId: GitProviderId
-      readonly owner: string
-      readonly name: string
-      readonly number: number
+      readonly kind: "hosted"
+      readonly review: HostedReviewLocator
       readonly baseRevision: string | null
       readonly headRevision: string | null
     }
@@ -84,6 +79,7 @@ export type ReviewThreadsController = {
   readonly runAgent: (threadId: ReviewThreadId) => Promise<void>
   readonly runningThreadIds: readonly ReviewThreadId[]
   readonly agentProgress: readonly ReviewAgentProgress[]
+  readonly agentErrors: Readonly<Record<string, string>>
   readonly refreshThread: (threadId: ReviewThreadId) => Promise<void>
   readonly reload: () => Promise<void>
 }
@@ -95,12 +91,10 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const [error, setError] = useState<string | null>(null)
   const [runningThreadIds, setRunningThreadIds] = useState<readonly ReviewThreadId[]>([])
   const [agentProgress, setAgentProgress] = useState<readonly ReviewAgentProgress[]>([])
+  const [agentErrors, setAgentErrors] = useState<Readonly<Record<string, string>>>({})
   const baseRevision = scope.baseRevision
   const headRevision = scope.headRevision
-  const owner = scope.kind === "pullRequest" ? scope.owner : null
-  const providerId = scope.kind === "pullRequest" ? scope.providerId : null
-  const name = scope.kind === "pullRequest" ? scope.name : null
-  const number = scope.kind === "pullRequest" ? scope.number : null
+  const hostedReview = scope.kind === "hosted" ? scope.review : null
   const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
   const localBranchName =
     scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
@@ -150,14 +144,14 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setError(null)
     try {
       const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(providerId, owner, name, number, localTarget),
+        reviewThreadTarget(hostedReview, localTarget),
       )
       const loaded = await Promise.all(
         threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
       )
       setDetails(sortThreadDetails(loaded))
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Could not load review threads"))
+      setError(formatError(cause, "Could not load review threads"))
     } finally {
       setLoading(false)
     }
@@ -184,10 +178,11 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setDetails([])
     setRunningThreadIds([])
     setAgentProgress([])
+    setAgentErrors({})
     setLoading(true)
     setError(null)
     window.diffDash.reviewThreads
-      .list(reviewThreadTarget(providerId, owner, name, number, localTarget))
+      .list(reviewThreadTarget(hostedReview, localTarget))
       .then((threads) =>
         Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
       )
@@ -196,7 +191,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
         return undefined
       })
       .catch((cause: unknown) => {
-        if (!cancelled) setError(threadErrorMessage(cause, "Could not load review threads"))
+        if (!cancelled) setError(formatError(cause, "Could not load review threads"))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -205,32 +200,34 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     return () => {
       cancelled = true
     }
-  }, [
-    available,
-    baseRevision,
-    headRevision,
-    localTarget,
-    localTargetKey,
-    name,
-    number,
-    owner,
-    providerId,
-  ])
+  }, [available, baseRevision, headRevision, localTarget, localTargetKey, hostedReview])
 
-  const refreshThread = async (threadId: ReviewThreadId) => {
+  const refreshThreadDetails = async (threadId: ReviewThreadId) => {
     try {
       const refreshed = await window.diffDash.reviewThreads.get(threadId)
       setDetails((current) =>
         sortThreadDetails([...current.filter((item) => item.thread.id !== threadId), refreshed]),
       )
-      setError(null)
+      return refreshed
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Could not refresh thread"))
+      setError(formatError(cause, "Could not refresh thread"))
       throw cause
     }
   }
+  const refreshThread = async (threadId: ReviewThreadId) => {
+    await refreshThreadDetails(threadId)
+  }
 
-  const runAgent = async (threadId: ReviewThreadId) => {
+  const runAgent = async (threadId: ReviewThreadId, resolvedDetails?: ReviewThreadDetails) => {
+    const currentDetails = resolvedDetails ?? details.find((item) => item.thread.id === threadId)
+    if (currentDetails === undefined || baseRevision === null || headRevision === null) {
+      throw new Error("Review thread target is unavailable")
+    }
+    const previousLatestMessageId = currentDetails.messages.at(-1)?.id
+    setAgentErrors((current) => {
+      const { [threadId]: _removed, ...remaining } = current
+      return remaining
+    })
     setRunningThreadIds((current) =>
       current.includes(threadId) ? current : [...current, threadId],
     )
@@ -242,7 +239,11 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const pending = window.diffDash.reviewThreads.runAgent(
         RunReviewThreadAgentRequest.make({
           threadId,
-          target: reviewThreadTarget(providerId, owner, name, number, localTarget),
+          target: reviewThreadTarget(hostedReview, localTarget),
+          repoId: currentDetails.thread.repoId,
+          reviewKey: currentDetails.thread.reviewKey,
+          expectedBaseRevision: ReviewRevision.make(baseRevision),
+          expectedHeadRevision: ReviewRevision.make(headRevision),
         }),
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
@@ -256,8 +257,19 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       })
       setError(null)
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Local review agent could not complete the response"))
-      await refreshThread(threadId).catch(() => undefined)
+      const refreshed = await refreshThreadDetails(threadId).catch(() => null)
+      const latestMessage = refreshed?.messages.at(-1)
+      const persistedNewFailure =
+        latestMessage?.author === "agent" &&
+        latestMessage.status === "failed" &&
+        latestMessage.id !== previousLatestMessageId
+      if (!persistedNewFailure) {
+        setAgentErrors((current) => ({
+          ...current,
+          [threadId]: formatError(cause, "Local review agent could not complete the response"),
+        }))
+      }
+      throw cause
     } finally {
       setRunningThreadIds((current) => current.filter((id) => id !== threadId))
       setAgentProgress((current) => current.filter((item) => item.threadId !== threadId))
@@ -271,7 +283,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     try {
       const created = await window.diffDash.reviewThreads.create(
         CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(providerId, owner, name, number, localTarget),
+          target: reviewThreadTarget(hostedReview, localTarget),
           expectedBaseRevision: ReviewRevision.make(baseRevision),
           expectedHeadRevision: ReviewRevision.make(headRevision),
           anchor,
@@ -284,9 +296,9 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
         reviewType: localTarget === null ? "pull_request" : "local_diff",
       })
       setError(null)
-      void runAgent(created.thread.id)
+      void runAgent(created.thread.id, created).catch(() => undefined)
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Could not create thread"))
+      setError(formatError(cause, "Could not create thread"))
       throw cause
     }
   }
@@ -301,9 +313,9 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       setDetails((current) => replaceThreadDetails(current, updatedDetails))
       setError(null)
-      void runAgent(threadId)
+      void runAgent(threadId, updatedDetails).catch(() => undefined)
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Could not send follow-up message"))
+      setError(formatError(cause, "Could not send follow-up message"))
       throw cause
     }
   }
@@ -318,6 +330,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     runAgent,
     runningThreadIds,
     agentProgress,
+    agentErrors,
     refreshThread,
     reload: load,
   }
@@ -357,7 +370,7 @@ export function ReviewThreadComposer({
       await onSubmit(value)
       setBody("")
     } catch (cause) {
-      setError(threadErrorMessage(cause, "Could not create thread"))
+      setError(formatError(cause, "Could not create thread"))
     } finally {
       setSubmitting(false)
     }
@@ -423,6 +436,7 @@ export function ReviewThreadPanel({
   embedded = false,
   agentRunning,
   agentProgress = null,
+  agentError = null,
   orchestration,
   onAddUserMessage,
   onRefresh,
@@ -431,6 +445,7 @@ export function ReviewThreadPanel({
   readonly embedded?: boolean
   readonly agentRunning: boolean
   readonly agentProgress?: ReviewAgentProgressStage | null
+  readonly agentError?: string | null
   readonly orchestration?: ReviewThreadOrchestration
   readonly onAddUserMessage: (threadId: ReviewThreadId, bodyMarkdown: string) => Promise<void>
   readonly onRefresh: (threadId: ReviewThreadId) => Promise<void>
@@ -443,6 +458,16 @@ export function ReviewThreadPanel({
     (message) => message.author === "agent" && message.status === "pending",
   )
   const progressLabel = REVIEW_AGENT_PROGRESS_LABELS[agentProgress ?? "preparing-context"]
+  const latestMessage = messages.at(-1)
+  const hasUnansweredUserMessage = latestMessage?.author === "user"
+  const visibleAgentError = agentError
+  const agentActive = agentRunning || hasPendingAgentMessage
+  const interruptedTurn = hasUnansweredUserMessage && !agentActive
+  const displayedError = agentActive
+    ? null
+    : (error ??
+      visibleAgentError ??
+      (interruptedTurn ? "The agent response did not start. Retry to try again." : null))
 
   const run = async (action: () => Promise<void>, fallback: string) => {
     setBusy(true)
@@ -450,7 +475,7 @@ export function ReviewThreadPanel({
     try {
       await action()
     } catch (cause) {
-      setError(threadErrorMessage(cause, fallback))
+      setError(formatError(cause, fallback))
     } finally {
       setBusy(false)
     }
@@ -499,7 +524,7 @@ export function ReviewThreadPanel({
         {agentRunning && !hasPendingAgentMessage ? (
           <UnicodeLoadingText className="text-muted-foreground text-xs" text={progressLabel} />
         ) : null}
-        {agentRunning || hasPendingAgentMessage ? null : (
+        {agentRunning || hasPendingAgentMessage || hasUnansweredUserMessage ? null : (
           <ReviewThreadComposer
             label="Continue conversation"
             placeholder="Ask a follow-up question"
@@ -507,11 +532,27 @@ export function ReviewThreadPanel({
             onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
           />
         )}
-        {error === null ? null : (
-          <p role="alert" className="text-destructive flex items-center gap-1 text-xs">
+        {displayedError === null ? null : (
+          <div role="alert" className="text-destructive flex items-center gap-1 text-xs">
             <AlertCircle className="size-3.5" />
-            {error}
-          </p>
+            <span>{displayedError}</span>
+            {orchestration !== undefined && (visibleAgentError !== null || interruptedTurn) ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={busy || latestMessage === undefined}
+                onClick={() => {
+                  if (latestMessage === undefined) return
+                  void run(
+                    () => orchestration.retryAgentMessage(thread.id, latestMessage.id),
+                    "Could not retry agent response",
+                  )
+                }}
+              >
+                Retry
+              </Button>
+            ) : null}
+          </div>
         )}
       </div>
     </article>
@@ -791,21 +832,18 @@ const sortThreadDetails = (details: readonly ReviewThreadDetails[]) => {
 }
 
 const reviewThreadTarget = (
-  providerId: GitProviderId | null,
-  owner: string | null,
-  name: string | null,
-  number: number | null,
+  hostedReview: HostedReviewLocator | null,
   localTarget: LocalReviewTarget | null,
 ): ReviewThreadTarget => {
-  if (providerId !== null && owner !== null && name !== null && number !== null) {
-    return PullRequestReviewTarget.make({ kind: "pullRequest", providerId, owner, name, number })
+  if (hostedReview !== null) {
+    return HostedReviewTarget.make({ kind: "hosted", review: hostedReview })
   }
   if (localTarget === null) throw new Error("Local review target is unavailable")
   return localTarget
 }
 
 /** Human-readable label for any persisted anchor. */
-export const anchorLabel = (anchor: ReviewThreadAnchor) => {
+const anchorLabel = (anchor: ReviewThreadAnchor) => {
   return `${anchor.filePath}:${anchor.lineNumber} · ${anchor.side}`
 }
 
@@ -813,13 +851,4 @@ export const anchorLabel = (anchor: ReviewThreadAnchor) => {
 export const reviewLineLabel = (anchor: ReviewThreadAnchor) =>
   `${anchor.side === "old" ? "L" : "R"}${anchor.lineNumber}`
 
-const formatMessageTime = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.valueOf())) return value
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-    date,
-  )
-}
-
-const threadErrorMessage = (cause: unknown, fallback: string) =>
-  cause instanceof Error && cause.message.length > 0 ? cause.message : fallback
+const formatMessageTime = (value: string) => formatTimestamp(value, value)

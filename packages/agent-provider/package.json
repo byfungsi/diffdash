@@ -5,7 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/agent-provider.ts",
+    "./policy": "./src/policy.ts",
+    "./provider-json": "./src/provider-json.ts",
     "./registry": "./src/registry.ts",
+    "./review-output": "./src/review-output.ts",
+    "./runtime": "./src/runtime.ts",
+    "./security": "./src/security.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {

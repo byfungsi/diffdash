@@ -1,8 +1,4 @@
 import { createServer } from "node:net"
-import { mkdir, rm, writeFile } from "node:fs/promises"
-import { randomUUID } from "node:crypto"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 
 import {
   type Config,
@@ -10,14 +6,12 @@ import {
   type OpencodeClient,
   type Part,
 } from "@opencode-ai/sdk/v2"
-import { Deferred, Effect, Exit, Redacted, Schema, Stream } from "effect"
+import { Deferred, Effect, Exit, Option, Redacted, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
-  AgentCapabilityReady,
-  AgentCapabilityUnavailable,
   AgentExecutionPolicy,
   AgentModelDescriptor,
   AgentModelId,
@@ -26,7 +20,6 @@ import {
   AgentProviderId,
   AgentProviderManifest,
   AgentProviderOperationError,
-  AgentProviderProbeError,
   AgentRuntimeRequirement,
   AgentSessionId,
   AgentSessionSupport,
@@ -35,7 +28,6 @@ import {
   isAgentExecutionPolicyEnforced,
   McpToolName,
   type AgentCapability,
-  type AgentCapabilityProbe,
   type AgentProviderRegistration,
   type ReviewThreadRequest,
   ReviewThreadResponse,
@@ -43,12 +35,33 @@ import {
   type WalkthroughRequest,
   WalkthroughResult,
 } from "@diffdash/agent-provider"
-import { defaultExecutablePath, type CliRunner } from "@diffdash/process/cli"
-import type { CliStreamRunner } from "@diffdash/process/cli-stream"
-import { resolveExecutableInPath } from "@diffdash/process/executable"
+import { parseProviderJsonText } from "@diffdash/agent-provider/provider-json"
+import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
+import {
+  normalizeProviderReviewThreadResponse as normalizeResponse,
+  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
+} from "@diffdash/agent-provider/review-output"
+import {
+  boundedProviderDiagnostic,
+  makeAgentProviderOperationErrorFactory,
+  probeAgentRuntime,
+  projectAgentCapabilityProbe,
+} from "@diffdash/agent-provider/runtime"
+import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
+import { processRequest, type ProcessRunner } from "@diffdash/process"
+import {
+  defaultExecutablePath,
+  findExecutableInPath,
+  type ExecutablePath,
+} from "@diffdash/process/executable"
+import { makeTempFileScoped } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("opencode")
 const executable = "opencode"
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId,
+  fallbackReason: "OpenCode execution failed",
+})
 const walkthroughMessage =
   "Generate a DiffDash walkthrough from the attached prompt file. Return JSON only."
 
@@ -111,29 +124,17 @@ export const OPENCODE_MANIFEST = AgentProviderManifest.make({
 })
 
 /** Explicit non-mutating policy accepted by OpenCode walkthrough execution. */
-export const OPENCODE_WALKTHROUGH_POLICY = AgentExecutionPolicy.make({
+export const OPENCODE_WALKTHROUGH_POLICY = makeNonMutatingAgentExecutionPolicy({
   network: "allow",
-  sensitiveFiles: "deny",
   repository: "local-working-copy",
   shell: "deny",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
 })
 
 /** Explicit non-mutating policy accepted by OpenCode review execution. */
-export const OPENCODE_REVIEW_POLICY = AgentExecutionPolicy.make({
+export const OPENCODE_REVIEW_POLICY = makeNonMutatingAgentExecutionPolicy({
   network: "allow",
-  sensitiveFiles: "deny",
   repository: "reviewed-revision",
   shell: "deny",
-  fileMutation: "deny",
-  gitMutation: "deny",
-  providerPublishing: "deny",
-  providerPublishingTools: [],
-  allowedMcpTools: [],
 })
 
 /** OpenCode-native permission action. */
@@ -165,8 +166,7 @@ export const OPENCODE_PERMISSION_RULES: Readonly<Record<string, OpenCodePermissi
 
 /** Host dependencies required to construct the OpenCode leaf provider. */
 export interface OpenCodeProviderDependencies {
-  readonly cli: CliRunner
-  readonly cliStream: CliStreamRunner
+  readonly processes: ProcessRunner
   readonly tempDirectory?: string
   readonly executablePath?: string
   readonly createClient?: (baseUrl: string) => OpencodeClient
@@ -183,12 +183,12 @@ export interface ResolveOpenCodeExecutableOptions {
 /** Resolves OpenCode through the same normalized PATH used for GUI-launched commands. */
 export const resolveOpenCodeExecutable = (
   options: ResolveOpenCodeExecutableOptions = {},
-): string | null => {
+): Effect.Effect<Option.Option<ExecutablePath>> => {
   const normalizedPath = defaultExecutablePath(
     options.envPath ?? process.env.PATH ?? "",
     options.home ?? process.env.HOME ?? "",
   )
-  return resolveExecutableInPath(executable, {
+  return findExecutableInPath(executable, {
     envPath: normalizedPath,
     ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
     ...(options.platform === undefined ? {} : { platform: options.platform }),
@@ -203,51 +203,26 @@ export const makeOpenCodeProvider = (
   return {
     manifest: OPENCODE_MANIFEST,
     walkthrough: {
-      probe: capabilityProbe(runtimeProbe, "walkthrough"),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "walkthrough"),
       execute: (request) => executeWalkthrough(dependencies, request),
     },
     reviewThread: {
-      probe: capabilityProbe(runtimeProbe, "review-thread"),
+      probe: projectAgentCapabilityProbe(runtimeProbe, "review-thread"),
       execute: (request) => executeReview(dependencies, request),
     },
   }
 }
 
-interface RuntimeProbeResult {
-  readonly ready: boolean
-  readonly version: string | null
-  readonly reason: string
-}
-
-const probeOpenCodeRuntime = (
-  dependencies: OpenCodeProviderDependencies,
-): Effect.Effect<RuntimeProbeResult, AgentProviderProbeError> =>
-  Effect.suspend(() => {
-    const path = resolveRuntimeExecutable(dependencies)
-    return dependencies.cli.run(path, ["--version"], { timeoutMs: 5_000 }).pipe(
-      Effect.map((result) => ({ ready: true, version: parseVersion(result.stdout), reason: "" })),
-      Effect.catchAll((cause) =>
-        Effect.succeed({
-          ready: false,
-          version: null,
-          reason: boundedReason(cause, "OpenCode is not installed or available"),
-        }),
-      ),
-    )
+const probeOpenCodeRuntime = (dependencies: OpenCodeProviderDependencies) =>
+  probeAgentRuntime({
+    versionOutput: Effect.gen(function* () {
+      const path = yield* resolveRuntimeExecutable(dependencies)
+      return yield* dependencies.processes
+        .run(processRequest(path, ["--version"], { timeoutMs: 5_000 }))
+        .pipe(Effect.map((result) => result.stdout))
+    }),
+    unavailableReason: "OpenCode is not installed or available",
   })
-
-const capabilityProbe = (
-  runtimeProbe: Effect.Effect<RuntimeProbeResult, AgentProviderProbeError>,
-  capability: AgentCapability,
-): Effect.Effect<AgentCapabilityProbe, AgentProviderProbeError> =>
-  runtimeProbe.pipe(
-    Effect.map(
-      (result): AgentCapabilityProbe =>
-        result.ready
-          ? AgentCapabilityReady.make({ capability, runtimeVersion: result.version })
-          : AgentCapabilityUnavailable.make({ capability, reason: result.reason }),
-    ),
-  )
 
 const executeWalkthrough = (
   dependencies: OpenCodeProviderDependencies,
@@ -257,18 +232,21 @@ const executeWalkthrough = (
   AgentProviderOperationError | InvalidAgentProviderResponseError
 > =>
   Effect.gen(function* () {
-    yield* requirePolicy("walkthrough", request.policy, "local-working-copy")
-    return yield* Effect.acquireUseRelease(
-      writePromptFile(dependencies.tempDirectory ?? tmpdir(), request.prompt),
-      (promptPath) =>
-        dependencies.cli
-          .run(resolveRuntimeExecutable(dependencies), makeWalkthroughArgs(request, promptPath), {
-            cwd: request.workingDirectory,
-            timeoutMs: request.timeoutMs,
-            env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(makeBaseServerConfig()) },
-          })
+    yield* requirePolicy("walkthrough", request.policy, OPENCODE_WALKTHROUGH_POLICY)
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        const promptPath = yield* writePromptFile(dependencies.tempDirectory, request.prompt)
+        const executablePath = yield* resolveRuntimeExecutable(dependencies)
+        return yield* dependencies.processes
+          .run(
+            processRequest(executablePath, makeWalkthroughArgs(request, promptPath), {
+              cwd: request.workingDirectory,
+              timeoutMs: request.timeoutMs,
+              env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(makeBaseServerConfig()) },
+            }),
+          )
           .pipe(
-            Effect.mapError(operationError("walkthrough")),
+            Effect.mapError(operationErrors.fromCause("walkthrough")),
             Effect.flatMap((result) => {
               const text = result.stdout.trim()
               return text.length === 0
@@ -279,8 +257,8 @@ const executeWalkthrough = (
                   })
                 : Effect.succeed(WalkthroughResult.make({ text }))
             }),
-          ),
-      (promptPath) => Effect.promise(() => rm(promptPath, { force: true })),
+          )
+      }),
     )
   })
 
@@ -295,16 +273,12 @@ const makeWalkthroughArgs = (request: WalkthroughRequest, promptPath: string) =>
   walkthroughMessage,
 ]
 
-const writePromptFile = (directory: string, prompt: string) =>
-  Effect.tryPromise({
-    try: async () => {
-      await mkdir(directory, { recursive: true })
-      const path = join(directory, `opencode-prompt-${randomUUID()}.txt`)
-      await writeFile(path, prompt, { encoding: "utf8", mode: 0o600 })
-      return path
-    },
-    catch: operationError("walkthrough"),
-  })
+const writePromptFile = (directory: string | undefined, prompt: string) =>
+  makeTempFileScoped(prompt, {
+    ...(directory === undefined ? {} : { parentDirectory: directory }),
+    prefix: "opencode-prompt-",
+    fileName: "prompt.txt",
+  }).pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
 
 const executeReview = (
   dependencies: OpenCodeProviderDependencies,
@@ -314,16 +288,16 @@ const executeReview = (
   AgentProviderOperationError | InvalidAgentProviderResponseError
 > =>
   Effect.gen(function* () {
-    yield* requirePolicy("review-thread", request.policy, "reviewed-revision")
-    if (!request.mcp.allowedTools.every((tool) => request.policy.allowedMcpTools.includes(tool))) {
-      return yield* operationErrorValue(
+    yield* requirePolicy("review-thread", request.policy, OPENCODE_REVIEW_POLICY)
+    if (!isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)) {
+      return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
       )
     }
     const output = yield* runOpenCodeTurn(dependencies, request)
     if (output.parts.some((part) => part.type === "patch")) {
-      return yield* operationErrorValue(
+      return yield* operationErrors.fromReason(
         "review-thread",
         "OpenCode emitted a patch despite non-mutating permissions",
       )
@@ -388,29 +362,30 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
   Effect.gen(function* () {
     const port = yield* Effect.tryPromise({
       try: availableLoopbackPort,
-      catch: operationError("review-thread"),
+      catch: operationErrors.fromCause("review-thread"),
     })
     const ready = yield* Deferred.make<string, AgentProviderOperationError>()
-    const process = dependencies.cliStream
-      .stream(
-        resolveRuntimeExecutable(dependencies),
-        ["serve", "--hostname=127.0.0.1", `--port=${port}`],
-        { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) } },
+    const executablePath = yield* resolveRuntimeExecutable(dependencies)
+    const process = dependencies.processes
+      .streamLines(
+        processRequest(executablePath, ["serve", "--hostname=127.0.0.1", `--port=${port}`], {
+          env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+        }),
       )
       .pipe(
         Stream.runForEach((event) => {
           const { _tag: tag } = event
-          if (tag !== "CliLine" || event.source !== "stdout") return Effect.void
+          if (tag !== "ProcessLine" || event.source !== "stdout") return Effect.void
           const match = /^opencode server listening.*on\s+(https?:\/\/[^\s]+)/u.exec(event.line)
           return match?.[1] === undefined
             ? Effect.void
             : Deferred.succeed(ready, match[1]).pipe(Effect.asVoid)
         }),
-        Effect.mapError(operationError("review-thread")),
+        Effect.mapError(operationErrors.fromCause("review-thread")),
         Effect.onExit((exit) =>
           Deferred.fail(
             ready,
-            operationErrorValue(
+            operationErrors.fromReason(
               "review-thread",
               `OpenCode server stopped before use: ${Exit.isFailure(exit) ? "failed" : "completed"}`,
             ),
@@ -420,7 +395,7 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
     yield* process.pipe(Effect.forkScoped)
     const timeout = Effect.sleep("5 seconds").pipe(
       Effect.zipRight(
-        operationErrorValue("review-thread", "Timed out waiting for OpenCode server"),
+        operationErrors.fromReason("review-thread", "Timed out waiting for OpenCode server"),
       ),
     )
     const url = yield* Deferred.await(ready).pipe(Effect.raceFirst(timeout))
@@ -495,7 +470,7 @@ const callSession = (client: OpencodeClient, request: ReviewThreadRequest) =>
         }),
       } satisfies OpenCodeTurnOutput
     },
-    catch: operationError("review-thread"),
+    catch: operationErrors.fromCause("review-thread"),
   })
 
 const createSession = async (
@@ -680,7 +655,9 @@ const decodeReviewResponse = (
       InvalidAgentProviderResponseError.make({
         providerId,
         capability: "review-thread",
-        reason: `OpenCode returned an invalid review response: ${String(cause)}`,
+        reason: boundedProviderDiagnostic(
+          `OpenCode returned an invalid review response: ${String(cause)}`,
+        ),
       }),
     ),
   )
@@ -692,137 +669,26 @@ const parseTextResponse = (parts: readonly OpenCodePart[]): unknown => {
     .map((part) => part.text)
     .join("\n")
     .trim()
-  const json = text.startsWith("```")
-    ? text.replace(/^```(?:json)?\s*/u, "").replace(/\s*```$/u, "")
-    : text
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return text
-  }
+  return parseProviderJsonText(text)
 }
-
-const normalizeResponse = (value: unknown): unknown => {
-  if (!isRecord(value)) return value
-  const locations = value.referencedLocations ?? value.referencedAnchors ?? []
-  return {
-    bodyMarkdown: value.bodyMarkdown,
-    threadSummary: value.threadSummary ?? value.threadSummaryUpdate ?? null,
-    referencedLocations: Array.isArray(locations)
-      ? locations.map((location) =>
-          typeof location === "string" ? location : JSON.stringify(location),
-        )
-      : locations,
-  }
-}
-
-const reviewAnchorJsonSchema = (
-  tag: "review" | "file" | "hunk" | "line",
-  properties: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
-) => ({
-  type: "object",
-  additionalProperties: false,
-  required: ["_tag", ...Object.keys(properties)],
-  properties: { _tag: { type: "string", enum: [tag] }, ...properties },
-})
-
-const reviewResponseJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["bodyMarkdown", "threadSummaryUpdate", "referencedAnchors"],
-  properties: {
-    bodyMarkdown: { type: "string", minLength: 1 },
-    threadSummaryUpdate: { type: ["string", "null"], minLength: 1 },
-    referencedAnchors: {
-      type: ["array", "null"],
-      items: {
-        anyOf: [
-          reviewAnchorJsonSchema("review", {}),
-          reviewAnchorJsonSchema("file", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-          }),
-          reviewAnchorJsonSchema("hunk", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            header: { type: "string" },
-            oldStart: { type: "number" },
-            oldLines: { type: "number" },
-            newStart: { type: "number" },
-            newLines: { type: "number" },
-          }),
-          reviewAnchorJsonSchema("line", {
-            fileId: { type: "string", minLength: 1 },
-            filePath: { type: "string" },
-            oldPath: { type: ["string", "null"] },
-            hunkId: { type: "string", minLength: 1 },
-            hunkFingerprint: { type: "string", minLength: 1 },
-            hunkHeader: { type: "string" },
-            side: { type: "string", enum: ["old", "new"] },
-            lineNumber: { type: "number" },
-            lineContent: { type: "string" },
-          }),
-        ],
-      },
-    },
-  },
-} as const
 
 const requirePolicy = (
   capability: AgentCapability,
   policy: AgentExecutionPolicy,
-  repository: AgentExecutionPolicy["repository"],
+  expected: AgentExecutionPolicy,
 ) => {
-  const valid = isAgentExecutionPolicyEnforced(
-    policy,
-    AgentExecutionPolicy.make({ ...OPENCODE_WALKTHROUGH_POLICY, repository }),
-  )
+  const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrorValue(capability, "OpenCode requires the explicit non-mutating policy")
+    : operationErrors.fromReason(capability, "OpenCode requires the explicit non-mutating policy")
 }
 
-const operationError = (capability: AgentCapability) => (cause: unknown) =>
-  AgentProviderOperationError.make({
-    providerId,
-    capability,
-    reason: boundedReason(cause, "OpenCode execution failed"),
-    cause,
-  })
-
-const operationErrorValue = (capability: AgentCapability, reason: string) =>
-  AgentProviderOperationError.make({ providerId, capability, reason })
-
-const boundedReason = (cause: unknown, fallback: string) => {
-  if (isRecord(cause) && typeof cause.stderr === "string" && cause.stderr.trim().length > 0) {
-    return redactDiagnostic(cause.stderr)
-  }
-  return cause instanceof Error && cause.message.trim().length > 0
-    ? redactDiagnostic(cause.message)
-    : fallback
-}
-
-const redactDiagnostic = (value: string) =>
-  value
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/giu, "Bearer [redacted]")
-    .replace(/Authorization[^\s]*\s*[:=]\s*[^\s]+/giu, "Authorization: [redacted]")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(-600)
-
-const parseVersion = (output: string) => {
-  const value = output.trim()
-  if (value.length === 0) return null
-  const match = /(?:^|\s)v?(\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?)(?:\s|$)/u.exec(value)
-  return match?.[1] ?? value.slice(0, 100)
-}
-
-const resolveRuntimeExecutable = (dependencies: OpenCodeProviderDependencies) =>
-  dependencies.executablePath ?? executable
+const resolveRuntimeExecutable = (
+  dependencies: OpenCodeProviderDependencies,
+): Effect.Effect<string> =>
+  dependencies.executablePath === undefined
+    ? resolveOpenCodeExecutable().pipe(Effect.map(Option.getOrElse(() => executable)))
+    : Effect.succeed(dependencies.executablePath)
 
 function modelDescriptor(id: string, displayName: string, quality: "fast" | "balanced" | "best") {
   return AgentModelDescriptor.make({
@@ -834,9 +700,6 @@ function modelDescriptor(id: string, displayName: string, quality: "fast" | "bal
 }
 
 const nonNegative = (value: number) => (Number.isFinite(value) && value >= 0 ? value : null)
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
 
 /** Converts a provider-owned model to its SDK identity. */
 export const openCodeModelId = (modelId: string) => AgentModelId.make(modelId)

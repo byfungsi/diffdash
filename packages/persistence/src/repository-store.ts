@@ -1,21 +1,23 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import { Repo, type RepoProvider, type UpsertRepositoryInput } from "@diffdash/domain/repository"
+import { Repo, RepoProvider, type UpsertRepositoryInput } from "@diffdash/domain/repository"
 import { DatabaseService } from "./database"
 
-interface RepoRow {
-  readonly id: string
-  readonly provider: RepoProvider
-  readonly owner: string
-  readonly name: string
-  readonly remote_url: string
-  readonly local_path: string | null
-  readonly is_favorite: 0 | 1
-  readonly last_opened_at: string | null
-  readonly last_synced_at: string | null
-  readonly created_at: string
-  readonly updated_at: string
-}
+const RepoRow = Schema.Struct({
+  id: Schema.String,
+  provider: RepoProvider,
+  owner: Schema.String,
+  name: Schema.String,
+  remote_url: Schema.String,
+  local_path: Schema.NullOr(Schema.String),
+  is_favorite: Schema.Literal(0, 1),
+  last_opened_at: Schema.NullOr(Schema.String),
+  last_synced_at: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+  updated_at: Schema.String,
+})
+
+const RepoRows = Schema.Array(RepoRow)
 
 /** A typed failure from repository persistence operations. */
 export class RepositoryStoreError extends Schema.TaggedError<RepositoryStoreError>()(
@@ -47,15 +49,17 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
       const database = yield* DatabaseService
 
       const getById = (id: string) =>
-        database.get<RepoRow>("SELECT * FROM repos WHERE id = ?", [id]).pipe(
-          Effect.mapError((cause) => RepositoryStoreError.make({ operation: "getById", cause })),
+        database.get("SELECT * FROM repos WHERE id = ?", [id]).pipe(
+          Effect.mapError((cause) =>
+            RepositoryStoreError.make({ operation: "getById.query", cause }),
+          ),
           Effect.flatMap((row) =>
             row === undefined
               ? RepositoryStoreError.make({
-                  operation: "getById",
+                  operation: "getById.notFound",
                   cause: new Error(`Repo not found: ${id}`),
                 })
-              : Effect.succeed(toRepo(row)),
+              : decodeRepo("getById.decode", row),
           ),
         )
 
@@ -70,9 +74,11 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
             : `SELECT * FROM repos
                ORDER BY is_favorite DESC, last_opened_at DESC NULLS LAST, owner ASC, name ASC`
           const params = hasSearch ? [`%${search}%`, `%${search}%`, `%${search}%`] : []
-          return database.all<RepoRow>(sql, params).pipe(
-            Effect.map((rows) => rows.map(toRepo)),
-            Effect.mapError((cause) => RepositoryStoreError.make({ operation: "list", cause })),
+          return database.all(sql, params).pipe(
+            Effect.mapError((cause) =>
+              RepositoryStoreError.make({ operation: "list.query", cause }),
+            ),
+            Effect.flatMap((rows) => decodeRepos("list.decode", rows)),
           )
         }),
         upsertRepository: Effect.fn("RepositoryStore.upsertRepository")(function (input) {
@@ -146,7 +152,7 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
 const repoId = (provider: RepoProvider, owner: string, name: string) =>
   `${provider}:${owner}/${name}`
 
-const toRepo = (row: RepoRow) =>
+const toRepo = (row: typeof RepoRow.Type) =>
   Repo.make({
     id: row.id,
     provider: row.provider,
@@ -160,3 +166,15 @@ const toRepo = (row: RepoRow) =>
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
+
+const decodeRepo = (operation: string, input: unknown) =>
+  Schema.decodeUnknown(RepoRow)(input).pipe(
+    Effect.map(toRepo),
+    Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
+  )
+
+const decodeRepos = (operation: string, input: readonly unknown[]) =>
+  Schema.decodeUnknown(RepoRows)(input).pipe(
+    Effect.map((rows) => rows.map(toRepo)),
+    Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
+  )

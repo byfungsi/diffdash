@@ -1,15 +1,21 @@
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { app } from "electron"
+import { resolveApplicationIdentity } from "./application-identity"
 
 /** Resolves paths whose locations differ between development and packaged builds. */
 export const applicationPaths = () => {
+  const { storageNamespace } = resolveApplicationIdentity({
+    appDataPath: app.getPath("appData"),
+    packaged: app.isPackaged,
+  })
   const configDirectory = join(
     process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
-    "diffdash",
+    storageNamespace,
   )
+  const applicationDataDirectory = join(homedir(), `.${storageNamespace}`)
   return {
-    agentWorkingDirectory: join(app.getPath("temp"), "diffdash"),
+    agentWorkingDirectory: join(app.getPath("temp"), storageNamespace),
     configDirectory,
     databasePath: join(app.getPath("userData"), "diffdash.sqlite"),
     developmentIconPath: app.isPackaged
@@ -20,10 +26,10 @@ export const applicationPaths = () => {
       : resolve(__dirname, "../../bin/diffdash.mjs"),
     remoteWorktreePoolPath:
       process.env.DIFFDASH_REMOTE_WORKTREE_POOL_PATH ??
-      join(homedir(), ".diffdash", "remote-worktree-pool"),
+      join(applicationDataDirectory, "remote-worktree-pool"),
     settingsPath: join(configDirectory, "settings.json"),
     statePath: join(configDirectory, "state.json"),
     worktreePoolPath:
-      process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(homedir(), ".diffdash", "worktree-pool"),
+      process.env.DIFFDASH_WORKTREE_POOL_PATH ?? join(applicationDataDirectory, "worktree-pool"),
   } as const
 }

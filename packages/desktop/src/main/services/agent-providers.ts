@@ -6,13 +6,11 @@ import type {
   AgentProviderRegistration,
 } from "@diffdash/agent-provider"
 import { agentAutoRoutingPolicies, AgentProviderRegistry } from "@diffdash/agent-provider/registry"
+import { boundedProviderDiagnostic, boundedProviderReason } from "@diffdash/agent-provider/runtime"
 import {
   AgentProviderAutoCandidates,
   AgentProviderCapabilityStatus,
   AgentProviderCatalog,
-  AgentProviderDefaults,
-  AgentProviderModel,
-  AgentProviderSetupRequirement,
   AgentProviderStatus,
 } from "@diffdash/protocol/agent-providers"
 
@@ -60,11 +58,9 @@ const providerStatus = (registration: AgentProviderRegistration) =>
       return AgentProviderStatus.make({
         ...manifest.descriptor,
         capabilities,
-        models: manifest.models.map((model) => AgentProviderModel.make(model)),
-        defaults: AgentProviderDefaults.make(manifest.defaults),
-        setup: manifest.requirements.map((requirement) =>
-          AgentProviderSetupRequirement.make(requirement),
-        ),
+        models: manifest.models,
+        defaults: manifest.defaults,
+        setup: manifest.requirements,
       })
     }),
   )
@@ -98,14 +94,14 @@ const capabilityStatus = (
             capability,
             status: "policy-unsupported",
             runtimeVersion: null,
-            reason,
+            reason: boundedProviderDiagnostic(reason),
           }),
         AgentCapabilityUnavailable: ({ reason }) =>
           AgentProviderCapabilityStatus.make({
             capability,
             status: "unavailable",
             runtimeVersion: null,
-            reason,
+            reason: boundedProviderDiagnostic(reason),
           }),
       }),
     ),
@@ -115,7 +111,7 @@ const capabilityStatus = (
           capability,
           status: "unavailable",
           runtimeVersion: null,
-          reason: error instanceof Error ? error.message : "The provider probe failed.",
+          reason: boundedProviderReason(error, "The provider probe failed."),
         }),
       ),
     ),

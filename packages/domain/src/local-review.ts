@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-import { PullRequestFile } from "./pull-request"
+import { ChangedFile } from "./git-provider"
 
 /** Local changes compared with the checkout's current HEAD. */
 export const WorkingTreeComparison = Schema.TaggedStruct("workingTree", {})
@@ -39,7 +39,7 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
   headSha: Schema.String,
   diffHash: Schema.String,
   title: Schema.String,
-  files: Schema.Array(PullRequestFile),
+  files: Schema.Array(ChangedFile),
   fetchedAt: Schema.String,
 }) {}
 

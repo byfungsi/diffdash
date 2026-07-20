@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"codex-thread-multiple-messages"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"message-commentary","type":"agent_message","text":"I am checking the changed hunk."}}
+{"type":"item.completed","item":{"id":"message-final","type":"agent_message","text":"{\"bodyMarkdown\":\"The final structured response wins.\",\"threadSummaryUpdate\":null,\"referencedAnchors\":null}"}}
+{"type":"turn.completed","usage":{"input_tokens":30,"cached_input_tokens":10,"output_tokens":12}}

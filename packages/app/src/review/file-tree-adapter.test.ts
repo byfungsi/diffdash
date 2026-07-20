@@ -1,14 +1,15 @@
-import { describe, expect, it } from "@effect/vitest"
-
-import { buildReviewFileTreeInput } from "./file-tree-adapter"
 import { ParsedDiffFile } from "@diffdash/domain/diff"
-import { makeReviewFileId } from "@diffdash/domain/review-identity"
+import { makeReviewFileId, makeReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { prepareFileTreeInput } from "@pierre/trees"
+import { describe, expect, it } from "@effect/vitest"
+import { buildReviewFileTreeInput } from "./file-tree-adapter"
 
 const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>
   ParsedDiffFile.make({
     additions: 1,
     deletions: 0,
     fileId: makeReviewFileId(path, null),
+    patchHash: makeReviewFilePatchHash({ hunks: [], oldPath: null, path, status }),
     hunks: [],
     oldPath: null,
     patch: `diff --git a/${path} b/${path}`,
@@ -43,6 +44,20 @@ describe("buildReviewFileTreeInput", () => {
       hiddenCount: 0,
       paths: ["src/app.tsx", "pnpm-lock.yaml", "assets/logo.png"],
     })
+  })
+
+  it("sorts non-contiguous directory paths before constructing the file tree", () => {
+    const prepared = prepareFileTreeInput([
+      "src/main/services/database.ts",
+      "web/landing/src/App.tsx",
+      "src/main/services/agent-run-store.ts",
+    ])
+
+    expect(prepared.paths).toEqual([
+      "src/main/services/agent-run-store.ts",
+      "src/main/services/database.ts",
+      "web/landing/src/App.tsx",
+    ])
   })
 
   it("preserves a deterministic 10,000-file canonical inventory", () => {

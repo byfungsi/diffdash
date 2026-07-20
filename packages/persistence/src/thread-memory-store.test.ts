@@ -5,8 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
+import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import {
-  makePullRequestReviewKey,
+  makeReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
@@ -52,7 +53,7 @@ const createThread = Effect.gen(function* () {
   })
   return yield* threads.create({
     repoId: repo.id,
-    reviewKey: makePullRequestReviewKey("github", "fungsi", "diffdash", 76),
+    reviewKey: makeReviewKey(makeHostedReviewLocator("github", "fungsi", "diffdash", 76)),
     prNumber: 76,
     baseRevision: ReviewRevision.make("base-sha"),
     headRevision: ReviewRevision.make("head-sha"),

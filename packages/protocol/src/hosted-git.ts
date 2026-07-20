@@ -49,22 +49,6 @@ export class OpenHostedReviewFileRequest extends Schema.Class<OpenHostedReviewFi
   headRevision: Schema.NullOr(Schema.String),
 }) {}
 
-/** Revision-scoped viewed-file lookup for one hosted review. */
-export class HostedViewedFilesRequest extends Schema.Class<HostedViewedFilesRequest>(
-  "HostedViewedFilesRequest",
-)({ review: HostedReviewLocator, headRevision: Schema.String }) {}
-
-/** Revision-scoped viewed-file mutation for one hosted review. */
-export class SetHostedViewedFileRequest extends Schema.Class<SetHostedViewedFileRequest>(
-  "SetHostedViewedFileRequest",
-)({
-  review: HostedReviewLocator,
-  headRevision: Schema.String,
-  reviewKey: Schema.String,
-  filePath: Schema.String,
-  viewed: Schema.Boolean,
-}) {}
-
 /** Revision-scoped walkthrough lookup for one hosted review. */
 export class HostedWalkthroughRequest extends Schema.Class<HostedWalkthroughRequest>(
   "HostedWalkthroughRequest",

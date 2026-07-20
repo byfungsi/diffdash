@@ -20,12 +20,22 @@ import {
   HostedReviewSummary,
   ProviderActor,
   RepositoryNamespace,
-  ReviewChangedFile,
+  ChangedFile,
   ReviewCommit,
   type GitProviderRegistration,
   type ReviewDecision,
 } from "@diffdash/git-provider"
-import type { CliRunner } from "@diffdash/process/cli"
+import {
+  processRequest,
+  type ProcessOutputPolicyInput,
+  type ProcessRunner,
+} from "@diffdash/process"
+
+// Four UTF-8 bytes per character keeps complete capture aligned with the 2M-character large-diff policy.
+const COMPLETE_DIFF_STDOUT = {
+  maxBytes: 8_000_000,
+  overflow: "error",
+} satisfies ProcessOutputPolicyInput
 
 /** Configuration for one GitHub.com or GitHub Enterprise provider instance. */
 export interface GitHubProviderConfig {
@@ -317,7 +327,7 @@ const detail = (
   HostedReviewDetail.make({
     summary: summary(providerId, namespace, name, pullRequest),
     files: pullRequest.files.map((file) =>
-      ReviewChangedFile.make({
+      ChangedFile.make({
         path: file.path,
         additions: file.additions,
         deletions: file.deletions,
@@ -406,27 +416,35 @@ const versionAtLeast = (version: string, minimum: readonly number[]) => {
 
 /** Inspects installation, authentication, and repository-search support for one GitHub host. */
 export const inspectGitHubCli = (
-  cli: CliRunner,
+  processes: ProcessRunner,
   config: Pick<GitHubProviderConfig, "host"> = {},
 ): Effect.Effect<GitHubCliInspection> => {
   const host = normalizeHost(config.host)
-  return cli.run("gh", ["--version"], { timeoutMs: 5_000 }).pipe(
+  return processes.run(processRequest("gh", ["--version"], { timeoutMs: 5_000 })).pipe(
     Effect.flatMap((result) => {
       const version = parseGitHubCliVersion(result.stdout)
       return Effect.all(
         [
-          cli
-            .run("gh", ["search", "repos", "--help", ...hostArgs(host)], {
-              timeoutMs: 5_000,
-            })
+          processes
+            .run(
+              processRequest("gh", ["search", "repos", "--help", ...hostArgs(host)], {
+                timeoutMs: 5_000,
+              }),
+            )
             .pipe(
               Effect.as(true),
               Effect.catchAll(() => Effect.succeed(false)),
             ),
-          cli.run("gh", ["auth", "status", "--hostname", host], { timeoutMs: 10_000 }).pipe(
-            Effect.as(true),
-            Effect.catchAll(() => Effect.succeed(false)),
-          ),
+          processes
+            .run(
+              processRequest("gh", ["auth", "status", "--hostname", host], {
+                timeoutMs: 10_000,
+              }),
+            )
+            .pipe(
+              Effect.as(true),
+              Effect.catchAll(() => Effect.succeed(false)),
+            ),
         ],
         { concurrency: "unbounded" },
       ).pipe(
@@ -455,7 +473,7 @@ export const inspectGitHubCli = (
 /** Creates an SDK registration backed by the authenticated `gh` CLI. */
 export const createGitHubProvider = (
   config: GitHubProviderConfig,
-  cli: CliRunner,
+  processes: ProcessRunner,
 ): GitHubProviderRegistration => {
   const host = normalizeHost(config.host)
   const providerId = GitProviderId.make(config.id ?? "github")
@@ -479,8 +497,15 @@ export const createGitHubProvider = (
       reviewPlural: "pull requests",
     }),
   })
-  const run = (operation: string, args: readonly string[], timeoutMs = 20_000) =>
-    cli.run("gh", args, { timeoutMs }).pipe(Effect.mapError(operationError(providerId, operation)))
+  const run = (
+    operation: string,
+    args: readonly string[],
+    timeoutMs = 20_000,
+    stdout?: ProcessOutputPolicyInput,
+  ) =>
+    processes
+      .run(processRequest("gh", args, stdout === undefined ? { timeoutMs } : { timeoutMs, stdout }))
+      .pipe(Effect.mapError(operationError(providerId, operation)))
   const decode = <A, I>(operation: string, output: string, schema: Schema.Schema<A, I>) =>
     decodeJson(operation, output, schema).pipe(
       Effect.mapError(operationError(providerId, operation)),
@@ -493,6 +518,10 @@ export const createGitHubProvider = (
           operation,
           message: `Repository belongs to ${repositoryLocator.providerId}, not ${providerId}`,
         })
+  const repositoryWebUrl = (repositoryLocator: HostedRepositoryLocator) => {
+    const namespace = repositoryLocator.namespace.split("/").map(encodeURIComponent).join("/")
+    return `https://${host}/${namespace}/${encodeURIComponent(repositoryLocator.name)}`
+  }
 
   const listAccessibleRepositories = Effect.fn("GitHub.listAccessibleRepositories")(function* () {
     const result = yield* run("listAccessibleRepositories", [
@@ -575,7 +604,7 @@ export const createGitHubProvider = (
   const registration: GitHubProviderRegistration = {
     descriptor,
     publishingTools: ["gh"],
-    diagnose: inspectGitHubCli(cli, { host }).pipe(
+    diagnose: inspectGitHubCli(processes, { host }).pipe(
       Effect.map((inspection) =>
         GitProviderDiagnostic.make({
           providerId,
@@ -656,6 +685,7 @@ export const createGitHubProvider = (
         "getReviewDiff",
         ["pr", "diff", String(review.number), "--repo", repo],
         60_000,
+        COMPLETE_DIFF_STDOUT,
       )
       return HostedReviewDiff.make({
         locator: review,
@@ -683,13 +713,17 @@ export const createGitHubProvider = (
         "--approve",
       ])
     }),
-    repositoryUrl: (repositoryLocator) => {
-      const namespace = repositoryLocator.namespace.split("/").map(encodeURIComponent).join("/")
-      return `https://${host}/${namespace}/${encodeURIComponent(repositoryLocator.name)}`
-    },
+    repositoryUrl: (repositoryLocator) =>
+      requireProvider(repositoryLocator, "repositoryUrl").pipe(
+        Effect.as(repositoryWebUrl(repositoryLocator)),
+      ),
     fileUrl: (repositoryLocator, path, revision) => {
       const encodedPath = path.split("/").map(encodeURIComponent).join("/")
-      return `${registration.repositoryUrl(repositoryLocator)}/blob/${encodeURIComponent(revision)}/${encodedPath}`
+      return requireProvider(repositoryLocator, "fileUrl").pipe(
+        Effect.as(
+          `${repositoryWebUrl(repositoryLocator)}/blob/${encodeURIComponent(revision)}/${encodedPath}`,
+        ),
+      )
     },
     bootstrapBareRepository: Effect.fn("GitHub.bootstrapBareRepository")(
       function* (repositoryLocator, destination) {

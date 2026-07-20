@@ -1,7 +1,10 @@
 export {
   type DiffLineAnnotation,
   type FileDiffOptions,
+  type PostRenderPhase,
+  type SelectionSide,
   Virtualizer as DiffVirtualizer,
+  VirtualizedFileDiff,
   type VirtualFileMetrics,
 } from "@pierre/diffs"
 export {

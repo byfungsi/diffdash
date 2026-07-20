@@ -1,16 +1,19 @@
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import {
-  FailureEnvelope,
+  encodeFailureEnvelopeWithinBudget,
+  InvokeContract,
   invokeRequestSchema,
   invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
-import { toTransportError, transportError } from "@diffdash/protocol/transport-error"
+import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
+import { TransportError, transportError } from "@diffdash/protocol/transport-error"
 import { Schema } from "effect"
-import { ipcMain } from "electron"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
-import { isTrustedIpcSender } from "../transport"
+import { ipcMain } from "electron"
+import type { RendererSecurityPolicy } from "../../electron-policy"
+import { toPublicIpcError } from "../public-error"
 
 type InvokeHandler = Parameters<typeof ipcMain.handle>[1]
 type ControllerHandler<Channel extends InvokeChannel> = (
@@ -18,29 +21,82 @@ type ControllerHandler<Channel extends InvokeChannel> = (
   request: InvokeRequest<Channel>,
 ) => Promise<InvokeResponse<Channel>>
 
+/** Response prepared transactionally and committed only after successful boundary encoding. */
+interface TransactionalControllerResponse<Response> {
+  readonly response: Response
+  readonly commit: () => void
+}
+
 /** Collects handler implementations before domain controllers register them with Electron. */
 export class IpcControllerRegistry {
-  readonly #handlers = new Map<string, InvokeHandler>()
-  readonly #installed = new Set<string>()
+  readonly #handlers = new Map<InvokeChannel, InvokeHandler>()
   readonly #ipc: Pick<IpcMain, "handle">
+  readonly #expectedChannels: readonly InvokeChannel[]
+  readonly #rendererSecurityPolicy: RendererSecurityPolicy
+  #installed = false
 
-  constructor(ipc: Pick<IpcMain, "handle"> = ipcMain) {
+  constructor(
+    rendererSecurityPolicy: RendererSecurityPolicy,
+    ipc: Pick<IpcMain, "handle"> = ipcMain,
+    expectedChannels: readonly InvokeChannel[] = Object.values(InvokeChannel),
+  ) {
+    this.#rendererSecurityPolicy = rendererSecurityPolicy
     this.#ipc = ipc
+    this.#expectedChannels = expectedChannels
   }
 
   readonly define = <Channel extends InvokeChannel>(
     channel: Channel,
     handler: ControllerHandler<Channel>,
   ) => {
+    this.#define(channel, async (event, request) => ({
+      response: await handler(event, request),
+      commit: null,
+    }))
+  }
+
+  /** Defines a handler whose state mutation occurs only after its response passes encoding. */
+  readonly defineTransactional = <Channel extends InvokeChannel>(
+    channel: Channel,
+    handler: (
+      event: IpcMainInvokeEvent,
+      request: InvokeRequest<Channel>,
+    ) => Promise<TransactionalControllerResponse<InvokeResponse<Channel>>>,
+  ) => {
+    this.#define(channel, handler)
+  }
+
+  readonly #define = <Channel extends InvokeChannel>(
+    channel: Channel,
+    handler: (
+      event: IpcMainInvokeEvent,
+      request: InvokeRequest<Channel>,
+    ) => Promise<{
+      readonly response: InvokeResponse<Channel>
+      readonly commit: (() => void) | null
+    }>,
+  ) => {
     if (this.#handlers.has(channel)) throw new Error(`Duplicate IPC handler: ${channel}`)
     this.#handlers.set(channel, async (event, rawRequest) => {
-      if (!isTrustedIpcSender(event)) {
+      const encodeFailure = (error: TransportError) =>
+        encodeFailureEnvelopeWithinBudget(error, InvokeContract[channel].maxResponseBytes)
+      if (!this.#rendererSecurityPolicy.isTrustedIpcSender(event)) {
         return encodeFailure(
           transportError(
             "FORBIDDEN_SENDER",
             "IPC request did not originate from DiffDash",
             channel,
           ),
+        )
+      }
+
+      try {
+        assertJsonPayloadWithinBudget(rawRequest, InvokeContract[channel].maxRequestBytes, channel)
+      } catch (error) {
+        return encodeFailure(
+          error instanceof TransportError
+            ? error
+            : transportError("INVALID_REQUEST", `Invalid request for ${channel}`, channel),
         )
       }
 
@@ -53,19 +109,26 @@ export class IpcControllerRegistry {
         )
       }
 
-      let response: InvokeResponse<Channel>
+      let prepared: {
+        readonly response: InvokeResponse<Channel>
+        readonly commit: (() => void) | null
+      }
       try {
-        response = await handler(event, request)
+        prepared = await handler(event, request)
       } catch (error) {
-        return encodeFailure(toTransportError(error, channel))
+        return encodeFailure(toPublicIpcError(error, channel))
       }
 
       try {
-        return Schema.encodeUnknownSync(successEnvelope(invokeResponseSchema(channel)))({
+        const encoded = Schema.encodeUnknownSync(successEnvelope(invokeResponseSchema(channel)))({
           _tag: "Success",
-          value: response,
+          value: prepared.response,
         })
-      } catch {
+        assertJsonPayloadWithinBudget(encoded, InvokeContract[channel].maxResponseBytes, channel)
+        prepared.commit?.()
+        return encoded
+      } catch (error) {
+        if (error instanceof TransportError) return encodeFailure(error)
         return encodeFailure(
           transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
         )
@@ -73,23 +136,23 @@ export class IpcControllerRegistry {
     })
   }
 
-  readonly install = (channels: readonly string[]) => {
-    for (const channel of channels) {
+  readonly install = () => {
+    if (this.#installed) throw new Error("IPC controllers are already installed")
+
+    const expected = new Set(this.#expectedChannels)
+    const missing = this.#expectedChannels.filter((channel) => !this.#handlers.has(channel))
+    const unexpected = [...this.#handlers.keys()].filter((channel) => !expected.has(channel))
+    if (missing.length > 0 || unexpected.length > 0) {
+      throw new Error(
+        `IPC controllers do not match the protocol contract (missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`,
+      )
+    }
+
+    this.#installed = true
+    for (const channel of this.#expectedChannels) {
       const handler = this.#handlers.get(channel)
       if (handler === undefined) throw new Error(`Missing IPC handler: ${channel}`)
-      if (this.#installed.has(channel))
-        throw new Error(`Duplicate IPC controller channel: ${channel}`)
       this.#ipc.handle(channel, handler)
-      this.#installed.add(channel)
-    }
-  }
-
-  readonly assertComplete = () => {
-    if (this.#installed.size !== Object.keys(InvokeChannel).length) {
-      throw new Error("IPC controllers do not match the protocol contract")
     }
   }
 }
-
-const encodeFailure = (error: ReturnType<typeof transportError>) =>
-  Schema.encodeSync(FailureEnvelope)({ _tag: "Failure", error })

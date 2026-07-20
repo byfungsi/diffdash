@@ -1,16 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
-import { flushSync } from "react-dom"
-import { createRoot, type Root } from "react-dom/client"
-import type { ReactNode } from "react"
-
 import {
-  ReviewMarkdown,
-  ReviewThreadComposer,
-  ReviewThreadIndex,
-  ReviewThreadPanel,
-  type ReviewThreadOrchestration,
-  reviewLineLabel,
-} from "./review-threads"
+  ReviewFileId,
+  ReviewHunkFingerprint,
+  ReviewHunkId,
+  ReviewKey,
+  ReviewRevision,
+} from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
   MarkdownBody,
@@ -20,13 +14,18 @@ import {
   ReviewThreadMessage,
   ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
+import type { ReactNode } from "react"
+import { flushSync } from "react-dom"
+import { createRoot, type Root } from "react-dom/client"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
-  ReviewFileId,
-  ReviewHunkFingerprint,
-  ReviewHunkId,
-  ReviewKey,
-  ReviewRevision,
-} from "@diffdash/domain/review-identity"
+  ReviewMarkdown,
+  ReviewThreadComposer,
+  ReviewThreadIndex,
+  type ReviewThreadOrchestration,
+  ReviewThreadPanel,
+  reviewLineLabel,
+} from "./review-threads"
 
 let root: Root | null = null
 
@@ -171,22 +170,94 @@ describe("review thread UI", () => {
     expect(document.body.textContent).not.toContain("Close")
   })
 
-  it("shows the current provider-neutral agent stage before the pending message is refreshed", () => {
+  it("shows progress without a false failure before the pending message is refreshed", () => {
     render(
       <ReviewThreadPanel
         agentRunning
-        agentProgress="reviewing"
-        details={threadDetails({ pending: false })}
+        agentProgress="creating-repository"
+        details={userOnlyThreadDetails()}
+        orchestration={{ retryAgentMessage: async () => undefined }}
         onAddUserMessage={threadMessageActionMock()}
         onRefresh={threadActionMock()}
       />,
     )
 
-    expect(document.querySelector("output")?.textContent).toContain("Agent is reviewing...")
+    expect(document.querySelector("output")?.textContent).toContain(
+      "Creating isolated repository...",
+    )
     expect(document.body.textContent).not.toContain("Codex")
     expect(document.body.textContent).not.toContain("Claude")
     expect(document.body.textContent).not.toContain("OpenCode")
+    expect(document.body.textContent).not.toContain("The agent response did not start")
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(buttonsNamed("Retry")).toHaveLength(0)
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
+  })
+
+  it("shows a thread-local orchestration failure with a working retry", async () => {
+    const details = userOnlyThreadDetails()
+    const retryAgentMessage = vi.fn<ReviewThreadOrchestration["retryAgentMessage"]>(
+      async () => undefined,
+    )
+    render(
+      <ReviewThreadPanel
+        agentRunning={false}
+        agentError="No review agent provider is available"
+        details={details}
+        orchestration={{ retryAgentMessage }}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
+    )
+
+    expect(document.body.textContent).toContain("No review agent provider is available")
+    const localRetry = [...document.querySelectorAll<HTMLButtonElement>("button")].at(-1)
+    expect(localRetry?.textContent).toBe("Retry")
+    localRetry?.click()
+    await vi.waitFor(() =>
+      expect(retryAgentMessage).toHaveBeenCalledWith(
+        details.thread.id,
+        details.messages.at(-1)?.id,
+      ),
+    )
+  })
+
+  it("recovers a persisted user-only turn instead of offering another follow-up", async () => {
+    const details = userOnlyThreadDetails()
+    const retryAgentMessage = vi.fn<ReviewThreadOrchestration["retryAgentMessage"]>(
+      async () => undefined,
+    )
+    render(
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={details}
+        orchestration={{ retryAgentMessage }}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
+    )
+
+    expect(document.body.textContent).toContain("The agent response did not start")
+    expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
+    buttonNamed("Retry").click()
+    await vi.waitFor(() =>
+      expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id, details.messages[0]?.id),
+    )
+  })
+
+  it("shows a new retry error even when the previous response already failed", () => {
+    render(
+      <ReviewThreadPanel
+        agentRunning={false}
+        agentError="The review snapshot could not be refreshed"
+        details={threadDetails({ pending: false })}
+        orchestration={{ retryAgentMessage: async () => undefined }}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
+    )
+
+    expect(document.body.textContent).toContain("The review snapshot could not be refreshed")
   })
 
   it("updates the pending agent message to the latest preparation stage", () => {
@@ -308,6 +379,16 @@ const threadDetails = ({ previousRevision = false, pending = true } = {}) => {
   })
 }
 
+const userOnlyThreadDetails = () => {
+  const populated = threadDetails({ pending: false })
+  const initialMessage = populated.messages[0]
+  if (initialMessage === undefined) throw new Error("Expected an initial user message")
+  return ReviewThreadDetails.make({
+    thread: populated.thread,
+    messages: [initialMessage],
+  })
+}
+
 const render = (node: ReactNode) => {
   const element = document.createElement("div")
   document.body.append(element)
@@ -322,6 +403,11 @@ const buttonNamed = (name: string) => {
   if (button === undefined) throw new Error(`Button not found: ${name}`)
   return button
 }
+
+const buttonsNamed = (name: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
+    (candidate) => candidate.textContent?.trim() === name,
+  )
 
 const setTextareaValue = (textarea: HTMLTextAreaElement, value: string) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set

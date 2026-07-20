@@ -1,22 +1,22 @@
-import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
 import { Buffer } from "node:buffer"
-
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { ParsedDiff } from "@diffdash/domain/diff"
+import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { ReviewAgentArtifact, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import { LocalReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewRevision, ReviewSnapshotId } from "@diffdash/domain/review-identity"
 import {
   LineReviewAnchor,
   MarkdownBody,
-  type ReviewThreadAnchor,
   ReviewThread,
+  type ReviewThreadAnchor,
   ReviewThreadId,
   ReviewThreadMessage,
   ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Either } from "effect"
 import {
   type BuildReviewPromptContextInput,
   ReviewContextBuilder,
@@ -83,8 +83,21 @@ const makeHugeHunkDiff = () => {
   ].join("\n")
 }
 
+const makeManyFilesDiff = (count: number) =>
+  Array.from({ length: count }, (_, index) => {
+    const path = `src/generated/feature-${String(index).padStart(4, "0")}-${"segment-".repeat(4)}.ts`
+    return `diff --git a/${path} b/${path}
+index 1111111..2222222 100644
+--- a/${path}
++++ b/${path}
+@@ -1 +1 @@
+-export const value = ${index}
++export const value = ${index + 1}`
+  }).join("\n")
+
 const makeSnapshot = (diff: string) =>
   LocalReviewSnapshot.make({
+    snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000005"),
     reviewKey: ReviewKey.make("local:/workspace/diffdash"),
     baseRevision: ReviewRevision.make("base-sha"),
     headRevision: ReviewRevision.make("head-sha"),
@@ -122,36 +135,25 @@ const anchorForSnapshot = (
   )
   if (file === undefined || hunk === undefined) throw new Error("Expected anchor hunk fixture")
 
-  let oldLine = hunk.oldStart
-  let newLine = hunk.newStart
-  for (const line of hunk.lines) {
-    if (line.startsWith(" ")) {
-      oldLine += 1
-      newLine += 1
-      continue
-    }
-    if (line.startsWith("-")) {
-      oldLine += 1
-      continue
-    }
-    if (line.startsWith("+")) {
-      if (lineContent === undefined || line.slice(1) === lineContent) {
-        return LineReviewAnchor.make({
-          fileId: file.fileId,
-          filePath: file.path,
-          oldPath: file.oldPath,
-          hunkId: hunk.id,
-          hunkFingerprint: hunk.fingerprint,
-          hunkHeader: hunk.header,
-          side: "new",
-          lineNumber: newLine,
-          lineContent: line.slice(1),
-        })
-      }
-      newLine += 1
-    }
+  const line = projectDiffHunkLines(hunk).find(
+    (candidate) =>
+      candidate.kind === "addition" &&
+      (lineContent === undefined || candidate.content === lineContent),
+  )
+  if (line?.newLineNumber === null || line?.newLineNumber === undefined) {
+    throw new Error("Expected added anchor line fixture")
   }
-  throw new Error("Expected added anchor line fixture")
+  return LineReviewAnchor.make({
+    fileId: file.fileId,
+    filePath: file.path,
+    oldPath: file.oldPath,
+    hunkId: hunk.id,
+    hunkFingerprint: hunk.fingerprint,
+    hunkHeader: hunk.header,
+    side: "new",
+    lineNumber: line.newLineNumber,
+    lineContent: line.content,
+  })
 }
 
 const makeThread = (anchor: ReviewThreadAnchor, updatedAt = "2026-07-12T00:00:00.000Z") =>
@@ -215,7 +217,7 @@ describe("ReviewContextBuilder", () => {
         expect(result.stablePromptPrefix).toContain("# DiffDash review thread context v2")
         expect(result.stablePromptPrefix).toContain("## Thread-mode safety")
         expect(result.stablePromptPrefix).toContain("## Required response schema")
-        expect(result.stablePromptPrefix).toContain("## Compact changed-file inventory")
+        expect(result.stablePromptPrefix).toContain("## Bounded changed-file inventory")
         for (const file of input.snapshot.parsedDiff.files) {
           expect(result.stablePromptPrefix).toContain(file.path)
         }
@@ -368,6 +370,26 @@ describe("ReviewContextBuilder", () => {
       expect(first.dynamicPromptSuffix.indexOf("## Current anchor")).toBeLessThan(
         first.dynamicPromptSuffix.indexOf("## Current anchor hunk"),
       )
+    }).pipe(Effect.provide(ReviewContextBuilder.layer)),
+  )
+
+  it.effect("bounds the changed-file inventory and still includes the current hunk", () =>
+    Effect.gen(function* () {
+      const service = yield* ReviewContextBuilder
+      const snapshot = makeSnapshot(makeManyFilesDiff(1_000))
+      const input = makeInput(snapshot)
+      const result = yield* service.build(input)
+      const promptBytes = Buffer.byteLength(
+        `${result.stablePromptPrefix}${result.dynamicPromptSuffix}`,
+        "utf8",
+      )
+
+      expect(promptBytes).toBeLessThanOrEqual(64 * 1024)
+      expect(result.stablePromptPrefix).toContain('"totalFiles":1000')
+      expect(result.stablePromptPrefix).toMatch(/"omittedFiles":[1-9]\d*/u)
+      expect(result.stablePromptPrefix).toContain('"path":"src/generated/feature-0000-')
+      expect(result.stablePromptPrefix).not.toContain('"path":"src/generated/feature-0999-')
+      expect(result.dynamicPromptSuffix).toContain("+export const value = 1")
     }).pipe(Effect.provide(ReviewContextBuilder.layer)),
   )
 

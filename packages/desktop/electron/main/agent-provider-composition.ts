@@ -7,19 +7,17 @@ import { makeClaudeProvider } from "@diffdash/agent-provider-claude"
 import { makeCodexProvider } from "@diffdash/agent-provider-codex"
 import { makeFixtureAgentProvider } from "@diffdash/agent-provider-fixture"
 import { makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
-import type { CliRunner } from "@diffdash/process/cli"
-import type { CliStreamRunner } from "@diffdash/process/cli-stream"
+import type { ProcessRunner } from "@diffdash/process"
 
 /** Dependencies supplied once by the desktop application boundary. */
-export interface AgentProviderCompositionDependencies {
-  readonly cli: CliRunner
-  readonly cliStream: CliStreamRunner
+interface AgentProviderCompositionDependencies {
+  readonly processes: ProcessRunner
   readonly tempDirectory: string
   readonly includeFixture: boolean
 }
 
 /** Complete agent provider composition consumed by registry and catalog services. */
-export interface AgentProviderComposition {
+interface AgentProviderComposition {
   readonly registrations: readonly AgentProviderRegistration[]
   readonly policies: AgentAutoRoutingPolicies
 }
@@ -29,8 +27,7 @@ export const createAgentProviderComposition = (
   dependencies: AgentProviderCompositionDependencies,
 ): AgentProviderComposition => {
   const shared = {
-    cli: dependencies.cli,
-    cliStream: dependencies.cliStream,
+    processes: dependencies.processes,
     tempDirectory: dependencies.tempDirectory,
   }
   const registrations: readonly AgentProviderRegistration[] = [

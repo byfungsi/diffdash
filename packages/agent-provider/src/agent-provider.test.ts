@@ -38,6 +38,7 @@ import {
   reviewConformance,
   walkthroughConformance,
 } from "./testing"
+import { isScopedMcpToolSubset } from "./security"
 
 const walkthroughId = AgentProviderId.make("walkthrough-provider")
 const reviewId = AgentProviderId.make("review-provider")
@@ -166,7 +167,14 @@ const reviewRegistration = (): AgentProviderRegistration => ({
     probe: Effect.succeed(
       AgentCapabilityReady.make({ capability: "review-thread", runtimeVersion: "1.0.0" }),
     ),
-    execute: () => Effect.succeed(reviewResult),
+    execute: (request) =>
+      isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)
+        ? Effect.succeed(reviewResult)
+        : AgentProviderOperationError.make({
+            providerId: reviewId,
+            capability: "review-thread",
+            reason: "Scoped MCP access includes tools outside the execution policy",
+          }),
   },
 })
 

@@ -1,6 +1,11 @@
 import { Schema } from "effect"
 
-import { ReviewFileId, ReviewHunkFingerprint, ReviewHunkId } from "./review-identity"
+import {
+  ReviewFileId,
+  ReviewFilePatchHash,
+  ReviewHunkFingerprint,
+  ReviewHunkId,
+} from "./review-identity"
 
 /** File statuses derived from unified diff metadata. */
 export const DiffFileStatus = Schema.Literal("added", "modified", "deleted", "renamed", "binary")
@@ -23,6 +28,7 @@ export class ParsedDiffHunk extends Schema.Class<ParsedDiffHunk>("ParsedDiffHunk
 /** Parsed metadata and renderable patch text for one changed file. */
 export class ParsedDiffFile extends Schema.Class<ParsedDiffFile>("ParsedDiffFile")({
   fileId: ReviewFileId,
+  patchHash: ReviewFilePatchHash,
   reviewKey: Schema.String,
   path: Schema.String,
   oldPath: Schema.NullOr(Schema.String),

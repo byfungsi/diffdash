@@ -24,16 +24,16 @@ const AgentRunArtifactRow = Schema.Struct({
   title: Schema.String,
   content: Schema.String,
   content_digest: Schema.String,
-  metadata_json: Schema.String,
+  metadata_json: ArtifactMetadataJson,
   truncated: Schema.Literal(0, 1),
-  original_size: Schema.Number,
+  original_size: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
   created_at: Schema.String,
 })
 
-interface AgentRunOwnerRow {
-  readonly provider: unknown
-  readonly thread_id: unknown
-}
+const AgentRunOwnerRow = Schema.Struct({
+  provider: ReviewAgentProviderId,
+  thread_id: ReviewThreadId,
+})
 
 /** A typed failure from normalized agent artifact persistence operations. */
 export class AgentRunArtifactStoreError extends Schema.TaggedError<AgentRunArtifactStoreError>()(
@@ -158,14 +158,11 @@ const assertArtifactOwner = (
   transaction: DatabaseTransaction,
   input: SaveAgentRunArtifactInput,
 ) => {
-  const row = transaction.get<AgentRunOwnerRow>(
-    "SELECT provider, thread_id FROM agent_runs WHERE id = ?",
-    [input.runId],
-  )
+  const row = transaction.get("SELECT provider, thread_id FROM agent_runs WHERE id = ?", [
+    input.runId,
+  ])
   if (row === undefined) throw new Error(`Agent run not found: ${input.runId}`)
-  const owner = Schema.decodeUnknownSync(
-    Schema.Struct({ provider: ReviewAgentProviderId, thread_id: ReviewThreadId }),
-  )(row)
+  const owner = Schema.decodeUnknownSync(AgentRunOwnerRow)(row)
   if (owner.thread_id !== input.threadId) throw new Error("Artifact thread does not own agent run")
   if (owner.provider !== input.artifact.provider) {
     throw new Error("Artifact provider does not match agent run provider")
@@ -191,7 +188,6 @@ const decodeArtifactRows = (operation: string, rows: readonly unknown[]) =>
 
 const decodeArtifactRow = (input: unknown) => {
   const row = Schema.decodeUnknownSync(AgentRunArtifactRow)(input)
-  const metadata = Schema.decodeUnknownSync(ArtifactMetadataJson)(row.metadata_json)
   return StoredAgentRunArtifact.make({
     id: row.id,
     runId: row.run_id,
@@ -202,7 +198,7 @@ const decodeArtifactRow = (input: unknown) => {
       title: row.title,
       content: row.content,
       contentDigest: row.content_digest,
-      metadata,
+      metadata: row.metadata_json,
       truncated: row.truncated === 1,
       originalSize: row.original_size,
     }),

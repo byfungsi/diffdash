@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs"
+import { parseReleaseNotesArguments } from "./release-arguments.mjs"
+import {
+  releaseVersionFromChangelogHeading,
+  releaseVersionFromVersionOrTag,
+} from "./release-policy.mjs"
 
-const tag = process.argv[2]
-
-if (tag === undefined || tag.trim().length === 0) {
-  throw new Error("Usage: node scripts/release/extract-release-notes.mjs <tag>")
-}
-
-const version = tag.trim().replace(/^v/, "")
+const { tag } = parseReleaseNotesArguments()
+const version = releaseVersionFromVersionOrTag(tag.trim())
 const changelog = readFileSync("packages/desktop/CHANGELOG.md", "utf8")
 const lines = changelog.split(/\r?\n/)
 const headingIndex = lines.findIndex((line) => headingVersion(line) === version)
@@ -34,10 +34,5 @@ console.log(notes)
 function headingVersion(line) {
   const match = /^##\s+(.+?)\s*$/.exec(line)
   if (match === null) return null
-
-  const headingText = match[1]
-  const versionMatch = /(?:^|@|\[|\s)v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?:\]|\s|$)/.exec(
-    headingText,
-  )
-  return versionMatch?.[1] ?? null
+  return releaseVersionFromChangelogHeading(match[1])
 }

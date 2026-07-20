@@ -3,42 +3,64 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Either, Layer, Stream } from "effect"
 
-import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
+import {
+  ProcessExitError,
+  ProcessResult,
+  ProcessService,
+  type ProcessExecutionError,
+  type ProcessOutputPolicyInput,
+  type ProcessRequest,
+} from "@diffdash/process"
 import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./local-git"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { REPOSITORY_SCOPED_GIT_ENV, sanitizedGitEnvironment } from "./git-environment"
 
-const makeCliResult = (stdout: string, args: readonly string[]): CliResult => ({
-  args,
-  command: "git",
-  cwd: null,
-  exitCode: 0,
-  stderr: "",
-  stdout,
-})
+const makeProcessResult = (stdout: string, args: readonly string[]): ProcessResult =>
+  ProcessResult.make({
+    args,
+    command: "git",
+    cwd: null,
+    exitCode: 0,
+    signal: null,
+    stderr: "",
+    stderrTruncated: false,
+    stdout,
+    stdoutTruncated: false,
+    outputTruncated: false,
+  })
+
+type FakeProcessRun = (
+  command: string,
+  args: readonly string[],
+  request: ProcessRequest,
+) => Effect.Effect<ProcessResult, ProcessExecutionError>
+
+const makeProcessLayer = (run: FakeProcessRun) =>
+  Layer.succeed(
+    ProcessService,
+    ProcessService.of({
+      run: (request) => run(request.command, request.args, request),
+      streamLines: () => Stream.empty,
+    }),
+  )
 
 describe("GitService", () => {
   it.effect(
     "detects a local Git checkout root and origin URL without parsing provider identity",
     () =>
       Effect.gen(function* () {
-        const calls: CliResult[] = []
-        const cliLayer = Layer.succeed(
-          CliService,
-          CliService.of({
-            run: (_command, args) => {
-              const result = makeCliResult(
-                args.includes("rev-parse")
-                  ? "/workspace/repo\n"
-                  : "git@example.com:owner/repo.git\n",
-                args,
-              )
-              calls.push(result)
-              return Effect.succeed(result)
-            },
-          }),
-        )
-        const layer = GitService.layer.pipe(Layer.provide(cliLayer))
+        const calls: ProcessRequest[] = []
+        const processesLayer = makeProcessLayer((_command, args, request) => {
+          const result = makeProcessResult(
+            args.includes("rev-parse") ? "/workspace/repo\n" : "git@example.com:owner/repo.git\n",
+            args,
+          )
+          calls.push(request)
+          return Effect.succeed(result)
+        })
+        const layer = GitService.layer.pipe(Layer.provide(processesLayer))
 
         const service = yield* GitService.pipe(Effect.provide(layer))
         const detected = yield* service.detectRepository("/workspace/repo/src")
@@ -51,28 +73,27 @@ describe("GitService", () => {
           ["-C", "/workspace/repo/src", "rev-parse", "--show-toplevel"],
           ["-C", "/workspace/repo", "remote", "get-url", "origin"],
         ])
+        expect(calls.map((call) => call.unsetEnv)).toEqual([
+          [...REPOSITORY_SCOPED_GIT_ENV],
+          [...REPOSITORY_SCOPED_GIT_ENV],
+        ])
       }),
   )
 
   it.effect("enumerates all local remotes and fetch URLs without provider assumptions", () =>
     Effect.gen(function* () {
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (_command, args) => {
-            const stdout = args.includes("rev-parse")
-              ? "/workspace/repo\n"
-              : args.at(-1) === "remote.origin.url"
-                ? "git@example.com:group/repo.git\nhttps://example.com/group/repo.git\n"
-                : args.at(-1) === "remote.upstream.url"
-                  ? "https://upstream.example/group/repo.git\n"
-                  : "origin\nupstream\n"
-            return Effect.succeed(makeCliResult(stdout, args))
-          },
-        }),
-      )
+      const processesLayer = makeProcessLayer((_command, args) => {
+        const stdout = args.includes("rev-parse")
+          ? "/workspace/repo\n"
+          : args.at(-1) === "remote.origin.url"
+            ? "git@example.com:group/repo.git\nhttps://example.com/group/repo.git\n"
+            : args.at(-1) === "remote.upstream.url"
+              ? "https://upstream.example/group/repo.git\n"
+              : "origin\nupstream\n"
+        return Effect.succeed(makeProcessResult(stdout, args))
+      })
       const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
       expect(yield* service.listRemotes("/workspace/repo/src")).toEqual([
@@ -90,6 +111,7 @@ describe("GitService", () => {
 
   it.effect("builds local review details from tracked and untracked changes", () =>
     Effect.gen(function* () {
+      let parseCalls = 0
       const trackedDiff = `diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
 --- a/src/app.ts
@@ -104,54 +126,62 @@ index 0000000..3333333
 +++ b/notes.txt
 @@ -0,0 +1 @@
 +note`
-      const calls: Array<{ readonly args: readonly string[]; readonly cwd: string | undefined }> =
-        []
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (command, args, options) => {
-            calls.push({ args: [...args], cwd: options?.cwd })
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("branch --show-current")) {
-              return Effect.succeed(makeCliResult("feature/local\n", args))
-            }
-            if (joined.includes("rev-parse --verify HEAD")) {
-              return Effect.succeed(
-                makeCliResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
-              )
-            }
-            if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
-              return Effect.succeed(makeCliResult(trackedDiff, args))
-            }
-            if (joined.includes("ls-files --others --exclude-standard -z")) {
-              return Effect.succeed(makeCliResult("notes.txt\0", args))
-            }
-            if (args[0] === "diff" && args.includes("--no-index")) {
-              return Effect.fail(
-                CliError.make({
-                  command,
-                  args: [...args],
-                  cwd: options?.cwd ?? null,
-                  exitCode: 1,
-                  stdout: untrackedDiff,
-                  stderr: "",
-                  cause: null,
-                }),
-              )
-            }
+      const calls: Array<{
+        readonly args: readonly string[]
+        readonly cwd: string | null
+        readonly stdout: ProcessOutputPolicyInput | undefined
+      }> = []
+      const processesLayer = makeProcessLayer((command, args, request) => {
+        calls.push({ args: [...args], cwd: request.cwd, stdout: request.stdout ?? undefined })
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("branch --show-current")) {
+          return Effect.succeed(makeProcessResult("feature/local\n", args))
+        }
+        if (joined.includes("rev-parse --verify HEAD")) {
+          return Effect.succeed(
+            makeProcessResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
+          )
+        }
+        if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+          return Effect.succeed(makeProcessResult(trackedDiff, args))
+        }
+        if (joined.includes("ls-files --others --exclude-standard -z")) {
+          return Effect.succeed(makeProcessResult("notes.txt\0", args))
+        }
+        if (args[0] === "diff" && args.includes("--no-index")) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command,
+              args: [...args],
+              cwd: request.cwd,
+              exitCode: 1,
+              signal: null,
+              stdout: untrackedDiff,
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Command exited with code 1",
+            }),
+          )
+        }
 
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
-      const layer = GitService.layer.pipe(Layer.provide(cliLayer))
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
+      const layer = GitService.layerWith({
+        parseDiff: (rawDiff) => {
+          parseCalls += 1
+          return parseUnifiedDiff(rawDiff)
+        },
+      }).pipe(Layer.provide(processesLayer))
 
       const service = yield* GitService.pipe(Effect.provide(layer))
       const detail = yield* service.getLocalReviewDetail("/workspace/repo/src")
       const diff = yield* service.getLocalReviewDiff("/workspace/repo/src")
+      parseCalls = 0
       const snapshot = yield* service.getLocalReviewSnapshot("/workspace/repo/src")
 
       expect(detail).toMatchObject({
@@ -166,7 +196,14 @@ index 0000000..3333333
       expect(diff.diff).toContain("diff --git a/notes.txt b/notes.txt")
       expect(snapshot.baseRevision).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
       expect(snapshot.headRevision).toBe(diff.headSha)
+      expect(snapshot.detail.files).toEqual(detail.files)
+      expect(parseCalls).toBe(1)
       expect(calls.some((call) => call.cwd === "/workspace/repo")).toBe(true)
+      expect(
+        calls
+          .filter((call) => call.args.includes("diff"))
+          .every((call) => call.stdout?.maxBytes === 8_000_000 && call.stdout.overflow === "error"),
+      ).toBe(true)
     }),
   )
 
@@ -175,51 +212,44 @@ index 0000000..3333333
       const targetSha = "dddddddddddddddddddddddddddddddddddddddd"
       const mergeBaseSha = "cccccccccccccccccccccccccccccccccccccccc"
       const calls: string[][] = []
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (_command, args) => {
-            calls.push([...args])
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("branch --show-current")) {
-              return Effect.succeed(makeCliResult("feat/abc\n", args))
-            }
-            if (joined.includes("check-ref-format --branch dev")) {
-              return Effect.succeed(makeCliResult("dev\n", args))
-            }
-            if (joined.includes(" fetch --no-tags origin ")) {
-              return Effect.succeed(makeCliResult("", args))
-            }
-            if (
-              joined.includes(
-                "rev-parse --verify --end-of-options refs/remotes/origin/dev^{commit}",
-              )
-            ) {
-              return Effect.succeed(makeCliResult(`${targetSha}\n`, args))
-            }
-            if (joined.includes(`merge-base ${targetSha} HEAD`)) {
-              return Effect.succeed(makeCliResult(`${mergeBaseSha}\n`, args))
-            }
-            if (joined.includes(`diff --no-ext-diff ${mergeBaseSha} --`)) {
-              return Effect.succeed(
-                makeCliResult(
-                  "diff --git a/src/feature.ts b/src/feature.ts\n--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-old\n+new",
-                  args,
-                ),
-              )
-            }
-            if (joined.includes("ls-files --others --exclude-standard -z")) {
-              return Effect.succeed(makeCliResult("", args))
-            }
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
+      const processesLayer = makeProcessLayer((_command, args) => {
+        calls.push([...args])
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("branch --show-current")) {
+          return Effect.succeed(makeProcessResult("feat/abc\n", args))
+        }
+        if (joined.includes("check-ref-format --branch dev")) {
+          return Effect.succeed(makeProcessResult("dev\n", args))
+        }
+        if (joined.includes(" fetch --no-tags origin ")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        if (
+          joined.includes("rev-parse --verify --end-of-options refs/remotes/origin/dev^{commit}")
+        ) {
+          return Effect.succeed(makeProcessResult(`${targetSha}\n`, args))
+        }
+        if (joined.includes(`merge-base ${targetSha} HEAD`)) {
+          return Effect.succeed(makeProcessResult(`${mergeBaseSha}\n`, args))
+        }
+        if (joined.includes(`diff --no-ext-diff ${mergeBaseSha} --`)) {
+          return Effect.succeed(
+            makeProcessResult(
+              "diff --git a/src/feature.ts b/src/feature.ts\n--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-old\n+new",
+              args,
+            ),
+          )
+        }
+        if (joined.includes("ls-files --others --exclude-standard -z")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
       const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
       const target = yield* service.resolveBranchComparison("/workspace/repo", "dev")
       const detail = yield* service.getLocalReviewDetail(target)
@@ -246,43 +276,38 @@ index 0000000..3333333
   it.effect("resolves the origin default branch when diff has no branch argument", () =>
     Effect.gen(function* () {
       const calls: string[][] = []
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (_command, args) => {
-            calls.push([...args])
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("branch --show-current")) {
-              return Effect.succeed(makeCliResult("feat/abc\n", args))
-            }
-            if (joined.includes("symbolic-ref --quiet --short refs/remotes/origin/HEAD")) {
-              return Effect.succeed(makeCliResult("origin/main\n", args))
-            }
-            if (joined.includes("check-ref-format --branch main")) {
-              return Effect.succeed(makeCliResult("main\n", args))
-            }
-            if (joined.includes("fetch --no-tags origin")) {
-              return Effect.succeed(makeCliResult("", args))
-            }
-            if (joined.includes("refs/remotes/origin/main^{commit}")) {
-              return Effect.succeed(
-                makeCliResult("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n", args),
-              )
-            }
-            if (joined.includes("merge-base eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee HEAD")) {
-              return Effect.succeed(
-                makeCliResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
-              )
-            }
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
+      const processesLayer = makeProcessLayer((_command, args) => {
+        calls.push([...args])
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("branch --show-current")) {
+          return Effect.succeed(makeProcessResult("feat/abc\n", args))
+        }
+        if (joined.includes("symbolic-ref --quiet --short refs/remotes/origin/HEAD")) {
+          return Effect.succeed(makeProcessResult("origin/main\n", args))
+        }
+        if (joined.includes("check-ref-format --branch main")) {
+          return Effect.succeed(makeProcessResult("main\n", args))
+        }
+        if (joined.includes("fetch --no-tags origin")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        if (joined.includes("refs/remotes/origin/main^{commit}")) {
+          return Effect.succeed(
+            makeProcessResult("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n", args),
+          )
+        }
+        if (joined.includes("merge-base eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee HEAD")) {
+          return Effect.succeed(
+            makeProcessResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
+          )
+        }
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
       const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
       const target = yield* service.resolveBranchComparison("/workspace/repo", null)
@@ -303,33 +328,28 @@ index 0000000..3333333
     Effect.gen(function* () {
       const headSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       const calls: string[][] = []
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (_command, args) => {
-            calls.push([...args])
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("branch --show-current")) {
-              return Effect.succeed(makeCliResult("main\n", args))
-            }
-            if (joined.includes("check-ref-format --branch main")) {
-              return Effect.succeed(makeCliResult("main\n", args))
-            }
-            if (joined.includes("refs/heads/main^{commit}")) {
-              return Effect.succeed(makeCliResult(`${headSha}\n`, args))
-            }
-            if (joined.includes(`merge-base ${headSha} HEAD`)) {
-              return Effect.succeed(makeCliResult(`${headSha}\n`, args))
-            }
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
+      const processesLayer = makeProcessLayer((_command, args) => {
+        calls.push([...args])
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("branch --show-current")) {
+          return Effect.succeed(makeProcessResult("main\n", args))
+        }
+        if (joined.includes("check-ref-format --branch main")) {
+          return Effect.succeed(makeProcessResult("main\n", args))
+        }
+        if (joined.includes("refs/heads/main^{commit}")) {
+          return Effect.succeed(makeProcessResult(`${headSha}\n`, args))
+        }
+        if (joined.includes(`merge-base ${headSha} HEAD`)) {
+          return Effect.succeed(makeProcessResult(`${headSha}\n`, args))
+        }
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
       const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
       const target = yield* service.resolveBranchComparison("/workspace/repo", "main")
@@ -347,45 +367,44 @@ index 0000000..3333333
   it.effect("reports a clear error when the comparison branch has no common ancestor", () =>
     Effect.gen(function* () {
       const targetSha = "dddddddddddddddddddddddddddddddddddddddd"
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (command, args) => {
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("branch --show-current")) {
-              return Effect.succeed(makeCliResult("feat/abc\n", args))
-            }
-            if (joined.includes("check-ref-format --branch dev")) {
-              return Effect.succeed(makeCliResult("dev\n", args))
-            }
-            if (joined.includes(" fetch --no-tags origin ")) {
-              return Effect.succeed(makeCliResult("", args))
-            }
-            if (joined.includes("refs/remotes/origin/dev^{commit}")) {
-              return Effect.succeed(makeCliResult(`${targetSha}\n`, args))
-            }
-            if (joined.includes(`merge-base ${targetSha} HEAD`)) {
-              return Effect.fail(
-                CliError.make({
-                  command,
-                  args: [...args],
-                  cwd: null,
-                  exitCode: 1,
-                  stdout: "",
-                  stderr: "",
-                  cause: null,
-                }),
-              )
-            }
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
+      const processesLayer = makeProcessLayer((command, args, request) => {
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("branch --show-current")) {
+          return Effect.succeed(makeProcessResult("feat/abc\n", args))
+        }
+        if (joined.includes("check-ref-format --branch dev")) {
+          return Effect.succeed(makeProcessResult("dev\n", args))
+        }
+        if (joined.includes(" fetch --no-tags origin ")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        if (joined.includes("refs/remotes/origin/dev^{commit}")) {
+          return Effect.succeed(makeProcessResult(`${targetSha}\n`, args))
+        }
+        if (joined.includes(`merge-base ${targetSha} HEAD`)) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command,
+              args: [...args],
+              cwd: request.cwd,
+              exitCode: 1,
+              signal: null,
+              stdout: "",
+              stderr: "",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Command exited with code 1",
+            }),
+          )
+        }
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
       const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(cliLayer))),
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
       const result = yield* Effect.either(service.resolveBranchComparison("/workspace/repo", "dev"))
@@ -435,7 +454,7 @@ index 0000000..3333333
         const statusBefore = git(rootPath, "status", "--porcelain", "--untracked-files=all")
 
         const service = yield* GitService.pipe(
-          Effect.provide(GitService.layer.pipe(Layer.provide(CliService.layer))),
+          Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
         )
         const mainTarget = yield* service.resolveBranchComparison(rootPath, "main")
         const mainSnapshot = yield* service.getLocalReviewSnapshot(mainTarget)
@@ -483,41 +502,36 @@ index 0000000..3333333
   it.effect("FUN-80 AC: rejects a local snapshot that changes during repeated capture", () =>
     Effect.gen(function* () {
       let diffRead = 0
-      const cliLayer = Layer.succeed(
-        CliService,
-        CliService.of({
-          run: (_command, args) => {
-            const joined = args.join(" ")
-            if (joined.includes("rev-parse --show-toplevel")) {
-              return Effect.succeed(makeCliResult("/workspace/repo\n", args))
-            }
-            if (joined.includes("rev-parse --verify HEAD")) {
-              return Effect.succeed(
-                makeCliResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
-              )
-            }
-            if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
-              diffRead += 1
-              return Effect.succeed(
-                makeCliResult(
-                  `diff --git a/src/app.ts b/src/app.ts
+      const processesLayer = makeProcessLayer((_command, args) => {
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+        }
+        if (joined.includes("rev-parse --verify HEAD")) {
+          return Effect.succeed(
+            makeProcessResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
+          )
+        }
+        if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+          diffRead += 1
+          return Effect.succeed(
+            makeProcessResult(
+              `diff --git a/src/app.ts b/src/app.ts
 --- a/src/app.ts
 +++ b/src/app.ts
 @@ -1 +1 @@
 -old
 +new-${diffRead}`,
-                  args,
-                ),
-              )
-            }
-            if (joined.includes("ls-files --others --exclude-standard -z")) {
-              return Effect.succeed(makeCliResult("", args))
-            }
-            throw new Error(`Unexpected git call: ${joined}`)
-          },
-        }),
-      )
-      const layer = GitService.layer.pipe(Layer.provide(cliLayer))
+              args,
+            ),
+          )
+        }
+        if (joined.includes("ls-files --others --exclude-standard -z")) {
+          return Effect.succeed(makeProcessResult("", args))
+        }
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
+      const layer = GitService.layer.pipe(Layer.provide(processesLayer))
       const service = yield* GitService.pipe(Effect.provide(layer))
       const result = yield* Effect.either(service.getLocalReviewSnapshot("/workspace/repo"))
 
@@ -531,6 +545,7 @@ const git = (cwd: string, ...args: readonly string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
+    env: sanitizedGitEnvironment(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim()
 

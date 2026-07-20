@@ -1,75 +1,31 @@
 import { createHash, randomUUID } from "node:crypto"
-import { constants } from "node:fs"
-import { access, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join, relative, resolve } from "node:path"
-import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
+import { Context, Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
 
 import { makeHostedRepositoryKey } from "@diffdash/domain/git-provider"
 import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
+import { ProcessService, type ProcessResult, type ProcessRunner } from "@diffdash/process"
+import { gitProcessRequest } from "./git-environment"
+import { isProcessAlive, withFileLock } from "./hosted-review-workspace-file-lock"
 import {
-  type CliStreamResult,
-  type CliStreamRunner,
-  CliStreamService,
-} from "@diffdash/process/cli-stream"
+  type Manifest,
+  type Slot,
+  mutateManifest,
+  updateSlot,
+} from "./hosted-review-workspace-manifest"
+import { HostedReviewWorkspacePoolError, poolError } from "./hosted-review-workspace-pool-error"
+import {
+  makeManagedWorkspaceFilesystem,
+  type ManagedWorkspaceFilesystem,
+  type ManagedWorkspacePath,
+  pathForRepository,
+  pathForSlot,
+} from "./hosted-review-workspace-paths"
 
-const MANIFEST_VERSION = 2
 const MAX_POOL_SLOTS = 10
-const LOCK_RETRY_MS = 50
-const LOCK_TIMEOUT_MS = 5_000
 const GIT_TIMEOUT_MS = 120_000
 const REPOSITORY_LOCK_TIMEOUT_MS = 30 * 60 * 1_000
-const REPOSITORY_SCOPED_GIT_ENV = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_COMMON_DIR",
-  "GIT_DIR",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_PREFIX",
-  "GIT_QUARANTINE_PATH",
-  "GIT_WORK_TREE",
-] as const
-
-const WorktreeLease = Schema.Struct({
-  id: Schema.String,
-  runId: Schema.String,
-  threadId: Schema.String,
-  instanceId: Schema.String,
-  pid: Schema.Number,
-  acquiredAt: Schema.String,
-})
-
-const WorktreeSlot = Schema.Struct({
-  id: Schema.String,
-  providerId: Schema.String,
-  repositoryKey: Schema.String,
-  state: Schema.Literal("preparing", "leased", "cleaning", "available", "quarantined"),
-  headSha: Schema.NullOr(Schema.String),
-  reviewNumber: Schema.NullOr(Schema.Number),
-  lastThreadId: Schema.NullOr(Schema.String),
-  lease: Schema.NullOr(WorktreeLease),
-  createdAt: Schema.String,
-  lastUsedAt: Schema.String,
-  lastError: Schema.NullOr(Schema.String),
-})
-
-const RemoteRepository = Schema.Struct({
-  providerId: Schema.String,
-  repositoryKey: Schema.String,
-  clonedAt: Schema.String,
-  lastUsedAt: Schema.String,
-})
-
-const WorktreeManifest = Schema.Struct({
-  version: Schema.Literal(MANIFEST_VERSION),
-  repositories: Schema.Array(RemoteRepository),
-  slots: Schema.Array(WorktreeSlot),
-})
-
-type Manifest = typeof WorktreeManifest.Type
-type Slot = typeof WorktreeSlot.Type
-
 /** Input required to materialize one exact hosted-review workspace. */
 export interface HostedReviewWorkspaceInput {
   readonly runId: AgentRunId
@@ -86,24 +42,7 @@ export interface HostedReviewWorkspaceLease {
   readonly slotId: string
 }
 
-/** Recoverable failures preparing, leasing, or restoring an isolated review workspace. */
-export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedReviewWorkspacePoolError>()(
-  "HostedReviewWorkspacePoolError",
-  {
-    code: Schema.Literal(
-      "link-required",
-      "capacity",
-      "lock",
-      "manifest",
-      "git",
-      "revision-changed",
-      "cleanup",
-    ),
-    operation: Schema.String,
-    reason: Schema.String,
-    cause: Schema.Defect,
-  },
-) {}
+export { HostedReviewWorkspacePoolError } from "./hosted-review-workspace-pool-error"
 
 /** Executes hosted-review agent work inside an exclusively leased managed worktree. */
 export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedReviewWorkspacePool")<
@@ -123,9 +62,11 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
     Layer.effect(
       HostedReviewWorkspacePool,
       Effect.gen(function* () {
-        const cli = yield* CliStreamService
-        const localPoolRoot = resolve(config.worktreePoolPath)
-        const remotePoolRoot = resolve(config.remoteWorktreePoolPath)
+        const processes = yield* ProcessService
+        const [localFilesystem, remoteFilesystem] = yield* Effect.all([
+          makeManagedWorkspaceFilesystem(config.worktreePoolPath),
+          makeManagedWorkspaceFilesystem(config.remoteWorktreePoolPath),
+        ])
         const instanceId = randomUUID()
 
         const use = <A, E, R>(
@@ -133,17 +74,22 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
           run: (lease: HostedReviewWorkspaceLease) => Effect.Effect<A, E, R>,
           onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
         ): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> => {
-          const poolRoot = input.sourcePath === null ? remotePoolRoot : localPoolRoot
+          const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
 
           return Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               yield* reportProgress(onProgress, "reserving-workspace")
-              const lease = yield* reserveAndPrepare(poolRoot, instanceId, cli, input, onProgress)
+              const lease = yield* restore(
+                reserveAndPrepare(filesystem, instanceId, processes, input, onProgress),
+              )
               const runExit = yield* restore(run(lease)).pipe(Effect.exit)
               yield* reportProgress(onProgress, "restoring-workspace")
-              const cleanupExit = yield* restoreAndRelease(poolRoot, cli, input, lease).pipe(
-                Effect.exit,
-              )
+              const cleanupExit = yield* restoreAndRelease(
+                filesystem,
+                processes,
+                input,
+                lease,
+              ).pipe(Effect.exit)
               if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause)
               if (Exit.isFailure(runExit)) return yield* Effect.failCause(runExit.cause)
               return runExit.value
@@ -162,28 +108,27 @@ interface Reservation {
 }
 
 const reserveAndPrepare = (
-  poolRoot: string,
+  filesystem: ManagedWorkspaceFilesystem,
   instanceId: string,
-  cli: CliStreamRunner,
+  processes: ProcessRunner,
   input: HostedReviewWorkspaceInput,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
-    yield* fsOperation("mkdir.pool", () => mkdir(poolRoot, { recursive: true, mode: 0o700 }))
-    const reservation = yield* mutateManifest(poolRoot, (manifest) =>
+    const reservation = yield* mutateManifest(filesystem, (manifest) =>
       reserveSlot(manifest, instanceId, input),
     )
 
-    const slotPath = pathForSlot(poolRoot, reservation.slot)
+    const slotPath = pathForSlot(filesystem, reservation.slot)
     const lease = {
       localPath: slotPath,
       headSha: input.checkout.revision,
       slotId: reservation.slot.id,
     } satisfies HostedReviewWorkspaceLease
 
-    const prepared = prepareSlot(poolRoot, cli, input, reservation, onProgress).pipe(
+    const prepared = prepareSlot(filesystem, processes, input, reservation, onProgress).pipe(
       Effect.tap(() =>
-        mutateManifest(poolRoot, (manifest) => ({
+        mutateManifest(filesystem, (manifest) => ({
           manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
             ...slot,
             state: "leased",
@@ -198,7 +143,7 @@ const reserveAndPrepare = (
     )
 
     const quarantine = (reason: string) =>
-      mutateManifest(poolRoot, (manifest) => ({
+      mutateManifest(filesystem, (manifest) => ({
         manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
           ...slot,
           state: "quarantined",
@@ -220,45 +165,44 @@ const reserveAndPrepare = (
   })
 
 const prepareSlot = (
-  poolRoot: string,
-  cli: CliStreamRunner,
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
   input: HostedReviewWorkspaceInput,
   reservation: Reservation,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) => {
   const repositoryKey = makeHostedRepositoryKey(input.checkout.repository)
-  const repositoryRoot = pathForRepository(poolRoot, repositoryKey)
+  const repositoryRoot = pathForRepository(filesystem, repositoryKey)
 
   const evicted = reservation.evicted
   const evict =
     evicted === null
       ? Effect.void
       : withFileLock(
-          join(pathForRepository(poolRoot, evicted.repositoryKey), "repository.lock"),
-          () => evictSlot(poolRoot, cli, evicted),
+          filesystem,
+          filesystem.child(pathForRepository(filesystem, evicted.repositoryKey), "repository.lock"),
+          () => evictSlot(filesystem, processes, evicted),
           REPOSITORY_LOCK_TIMEOUT_MS,
         )
 
   return evict.pipe(
     Effect.zipRight(
       withFileLock(
-        join(repositoryRoot, "repository.lock"),
+        filesystem,
+        filesystem.child(repositoryRoot, "repository.lock"),
         () =>
           Effect.gen(function* () {
             const sourcePath = input.sourcePath
-            yield* fsOperation("mkdir.repository", () =>
-              mkdir(repositoryRoot, { recursive: true, mode: 0o700 }),
-            )
-            const barePath = join(repositoryRoot, "repository.git")
-            let bareExists = yield* pathExists(barePath)
-            if (bareExists && !(yield* isBareRepository(cli, barePath))) {
-              yield* fsOperation("repository.removeInvalid", () =>
-                rm(barePath, { recursive: true, force: true }),
-              )
+            yield* filesystem.ensureDirectory(repositoryRoot, "repository.mkdir")
+            const barePath = filesystem.child(repositoryRoot, "repository.git")
+            let bareExists = yield* filesystem.exists(barePath, "repository.exists")
+            if (bareExists && !(yield* isBareRepository(filesystem, processes, barePath))) {
+              yield* filesystem.remove(barePath, "repository.removeInvalid")
               bareExists = false
             }
             if (!bareExists) {
               yield* reportProgress(onProgress, "creating-repository")
+              yield* filesystem.validate(barePath, "repository.create.path")
               if (sourcePath === null) {
                 yield* input
                   .bootstrapBareRepository(barePath)
@@ -272,9 +216,10 @@ const prepareSlot = (
                       ),
                     ),
                   )
-                yield* recordRemoteRepositoryUse(poolRoot, input.checkout, true)
+                yield* filesystem.validate(barePath, "repository.bootstrap.result")
+                yield* recordRemoteRepositoryUse(filesystem, input.checkout, true)
               } else {
-                yield* runGit(cli, [
+                yield* runManagedGit(filesystem, [barePath], processes, [
                   "clone",
                   "--bare",
                   "--no-hardlinks",
@@ -285,14 +230,14 @@ const prepareSlot = (
               }
             }
             if (sourcePath !== null) {
-              const sourceRemote = yield* runGit(cli, [
+              const sourceRemote = yield* runGit(processes, [
                 "-C",
                 sourcePath,
                 "remote",
                 "get-url",
                 "origin",
               ])
-              yield* runGit(cli, [
+              yield* runManagedGit(filesystem, [barePath], processes, [
                 "--git-dir",
                 barePath,
                 "remote",
@@ -304,7 +249,7 @@ const prepareSlot = (
 
             const fetchedRef = `refs/diffdash/reviews/${input.checkout.review.number}/head`
             yield* reportProgress(onProgress, "fetching-review-revision")
-            yield* runGit(cli, [
+            yield* runManagedGit(filesystem, [barePath], processes, [
               "--git-dir",
               barePath,
               "fetch",
@@ -313,7 +258,7 @@ const prepareSlot = (
               "origin",
               `+${input.checkout.fetchRef}:${fetchedRef}`,
             ])
-            const fetched = yield* runGit(cli, [
+            const fetched = yield* runManagedGit(filesystem, [barePath], processes, [
               "--git-dir",
               barePath,
               "rev-parse",
@@ -332,13 +277,14 @@ const prepareSlot = (
 
             yield* reportProgress(onProgress, "checking-out-revision")
             yield* recreateWorktree(
-              cli,
+              filesystem,
+              processes,
               barePath,
-              pathForSlot(poolRoot, reservation.slot),
+              pathForSlot(filesystem, reservation.slot),
               fetchedSha,
             )
             if (sourcePath === null)
-              yield* recordRemoteRepositoryUse(poolRoot, input.checkout, false)
+              yield* recordRemoteRepositoryUse(filesystem, input.checkout, false)
           }),
         REPOSITORY_LOCK_TIMEOUT_MS,
       ),
@@ -347,25 +293,36 @@ const prepareSlot = (
 }
 
 const restoreAndRelease = (
-  poolRoot: string,
-  cli: CliStreamRunner,
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
   input: HostedReviewWorkspaceInput,
   lease: HostedReviewWorkspaceLease,
 ) =>
   Effect.gen(function* () {
-    yield* mutateManifest(poolRoot, (manifest) => ({
+    yield* mutateManifest(filesystem, (manifest) => ({
       manifest: updateSlot(manifest, lease.slotId, (slot) => ({ ...slot, state: "cleaning" })),
       value: undefined,
     }))
     const repositoryRoot = pathForRepository(
-      poolRoot,
+      filesystem,
       makeHostedRepositoryKey(input.checkout.repository),
     )
-    const barePath = join(repositoryRoot, "repository.git")
+    const barePath = filesystem.child(repositoryRoot, "repository.git")
 
     const cleanup = withFileLock(
-      join(repositoryRoot, "repository.lock"),
-      () => recreateWorktree(cli, barePath, lease.localPath, lease.headSha),
+      filesystem,
+      filesystem.child(repositoryRoot, "repository.lock"),
+      () =>
+        recreateWorktree(
+          filesystem,
+          processes,
+          barePath,
+          pathForSlot(filesystem, {
+            repositoryKey: makeHostedRepositoryKey(input.checkout.repository),
+            id: lease.slotId,
+          }),
+          lease.headSha,
+        ),
       REPOSITORY_LOCK_TIMEOUT_MS,
     ).pipe(
       Effect.mapError((cause) =>
@@ -381,7 +338,7 @@ const restoreAndRelease = (
     return yield* cleanup.pipe(
       Effect.matchEffect({
         onFailure: (cause) =>
-          mutateManifest(poolRoot, (manifest) => ({
+          mutateManifest(filesystem, (manifest) => ({
             manifest: updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "quarantined",
@@ -391,7 +348,7 @@ const restoreAndRelease = (
             value: undefined,
           })).pipe(Effect.zipRight(Effect.fail(cause))),
         onSuccess: () =>
-          mutateManifest(poolRoot, (manifest) => ({
+          mutateManifest(filesystem, (manifest) => ({
             manifest: updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "available",
@@ -407,14 +364,15 @@ const restoreAndRelease = (
   })
 
 const recreateWorktree = (
-  cli: CliStreamRunner,
-  barePath: string,
-  worktreePath: string,
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+  worktreePath: ManagedWorkspacePath,
   headSha: string,
 ) =>
   Effect.gen(function* () {
-    if (yield* pathExists(worktreePath)) {
-      yield* runGit(cli, [
+    if (yield* filesystem.exists(worktreePath, "worktree.exists")) {
+      yield* runManagedGit(filesystem, [barePath, worktreePath], processes, [
         "--git-dir",
         barePath,
         "worktree",
@@ -422,12 +380,17 @@ const recreateWorktree = (
         "--force",
         worktreePath,
       ]).pipe(Effect.catchAll(() => Effect.void))
-      yield* fsOperation("worktree.removeDirectory", () =>
-        rm(worktreePath, { recursive: true, force: true }),
-      )
+      yield* filesystem.remove(worktreePath, "worktree.removeDirectory")
     }
-    yield* runGit(cli, ["--git-dir", barePath, "worktree", "prune", "--expire", "now"])
-    yield* runGit(cli, [
+    yield* runManagedGit(filesystem, [barePath], processes, [
+      "--git-dir",
+      barePath,
+      "worktree",
+      "prune",
+      "--expire",
+      "now",
+    ])
+    yield* runManagedGit(filesystem, [barePath, worktreePath], processes, [
       "--git-dir",
       barePath,
       "worktree",
@@ -437,16 +400,23 @@ const recreateWorktree = (
       worktreePath,
       headSha,
     ])
-    yield* verifyWorktree(cli, worktreePath, headSha)
+    yield* filesystem.validate(worktreePath, "worktree.created.path")
+    yield* verifyWorktree(filesystem, processes, worktreePath, headSha)
   })
 
-const verifyWorktree = (cli: CliStreamRunner, worktreePath: string, headSha: string) =>
+const verifyWorktree = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  worktreePath: ManagedWorkspacePath,
+  headSha: string,
+) =>
   Effect.gen(function* () {
+    yield* filesystem.validate(worktreePath, "worktree.verify.path")
     const [head, branch, status, clean] = yield* Effect.all([
-      runGit(cli, ["-C", worktreePath, "rev-parse", "--verify", "HEAD"]),
-      runGit(cli, ["-C", worktreePath, "branch", "--show-current"]),
-      runGit(cli, ["-C", worktreePath, "status", "--porcelain", "--untracked-files=all"]),
-      runGit(cli, ["-C", worktreePath, "clean", "-ndx"]),
+      runGit(processes, ["-C", worktreePath, "rev-parse", "--verify", "HEAD"]),
+      runGit(processes, ["-C", worktreePath, "branch", "--show-current"]),
+      runGit(processes, ["-C", worktreePath, "status", "--porcelain", "--untracked-files=all"]),
+      runGit(processes, ["-C", worktreePath, "clean", "-ndx"]),
     ])
     if (
       head.stdout.trim() !== headSha ||
@@ -463,20 +433,34 @@ const verifyWorktree = (cli: CliStreamRunner, worktreePath: string, headSha: str
     }
   })
 
-const evictSlot = (poolRoot: string, cli: CliStreamRunner, slot: Slot) => {
-  const repositoryRoot = pathForRepository(poolRoot, slot.repositoryKey)
-  const barePath = join(repositoryRoot, "repository.git")
-  const slotPath = pathForSlot(poolRoot, slot)
+const evictSlot = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  slot: Slot,
+) => {
+  const repositoryRoot = pathForRepository(filesystem, slot.repositoryKey)
+  const barePath = filesystem.child(repositoryRoot, "repository.git")
+  const slotPath = pathForSlot(filesystem, slot)
   return Effect.gen(function* () {
-    if (yield* pathExists(barePath)) {
-      yield* runGit(cli, ["--git-dir", barePath, "worktree", "remove", "--force", slotPath]).pipe(
-        Effect.catchAll(() => Effect.void),
-      )
-      yield* runGit(cli, ["--git-dir", barePath, "worktree", "prune", "--expire", "now"]).pipe(
-        Effect.catchAll(() => Effect.void),
-      )
+    if (yield* filesystem.exists(barePath, "evict.repository.exists")) {
+      yield* runManagedGit(filesystem, [barePath, slotPath], processes, [
+        "--git-dir",
+        barePath,
+        "worktree",
+        "remove",
+        "--force",
+        slotPath,
+      ]).pipe(Effect.catchAll(() => Effect.void))
+      yield* runManagedGit(filesystem, [barePath], processes, [
+        "--git-dir",
+        barePath,
+        "worktree",
+        "prune",
+        "--expire",
+        "now",
+      ]).pipe(Effect.catchAll(() => Effect.void))
     }
-    yield* fsOperation("evict.remove", () => rm(slotPath, { recursive: true, force: true }))
+    yield* filesystem.remove(slotPath, "evict.remove")
   })
 }
 
@@ -560,186 +544,51 @@ const reserveSlot = (
   }
 }
 
-const mutateManifest = <A>(
-  poolRoot: string,
-  change: (manifest: Manifest) => { readonly manifest: Manifest; readonly value: A },
-): Effect.Effect<A, HostedReviewWorkspacePoolError> =>
-  withFileLock(join(poolRoot, "manifest.lock"), () =>
+const runGit = (
+  processes: ProcessRunner,
+  args: readonly string[],
+): Effect.Effect<ProcessResult, HostedReviewWorkspacePoolError> =>
+  Effect.interruptibleMask((restore) =>
     Effect.gen(function* () {
-      const manifestPath = join(poolRoot, "manifest.json")
-      const manifest = yield* readManifest(manifestPath)
-      const changed = yield* Effect.try({
-        try: () => change(manifest),
-        catch: (cause) =>
-          cause instanceof HostedReviewWorkspacePoolError
-            ? cause
-            : poolError(
-                "manifest",
-                "manifest.change",
-                "Could not update the worktree pool manifest.",
-                cause,
-              ),
-      })
-      yield* writeManifest(manifestPath, { ...changed.manifest, version: MANIFEST_VERSION })
-      return changed.value
-    }),
-  )
-
-const readManifest = (
-  manifestPath: string,
-): Effect.Effect<Manifest, HostedReviewWorkspacePoolError> =>
-  Effect.tryPromise({
-    try: async () => {
-      try {
-        const parsed = JSON.parse(await readFile(manifestPath, "utf8")) as unknown
-        if (isRecord(parsed) && parsed.version === 1) {
-          await rm(join(dirname(manifestPath), "repositories"), { recursive: true, force: true })
-          return { version: MANIFEST_VERSION, repositories: [], slots: [] }
-        }
-        return await Effect.runPromise(Schema.decodeUnknown(WorktreeManifest)(parsed))
-      } catch (cause) {
-        if (isNodeError(cause, "ENOENT"))
-          return { version: MANIFEST_VERSION, repositories: [], slots: [] }
-        throw cause
-      }
-    },
-    catch: (cause) =>
-      poolError(
-        "manifest",
-        "manifest.read",
-        "DiffDash could not read its isolated worktree manifest.",
-        cause,
-      ),
-  })
-
-const writeManifest = (manifestPath: string, manifest: Manifest) =>
-  fsOperation("manifest.write", async () => {
-    const temporaryPath = `${manifestPath}.${randomUUID()}.tmp`
-    await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporaryPath, manifestPath)
-  })
-
-const withFileLock = <A, E, R>(
-  lockPath: string,
-  use: () => Effect.Effect<A, E, R>,
-  timeoutMs = LOCK_TIMEOUT_MS,
-): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> =>
-  Effect.acquireUseRelease(acquireFileLock(lockPath, timeoutMs), use, (token) =>
-    releaseFileLock(lockPath, token),
-  )
-
-const acquireFileLock = (lockPath: string, timeoutMs: number) =>
-  Effect.tryPromise({
-    try: async () => {
-      await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
-      const token = randomUUID()
-      const startedAt = Date.now()
-      for (;;) {
-        try {
-          // oxlint-disable-next-line eslint/no-await-in-loop -- Lock attempts must be serialized.
-          const handle = await open(
-            lockPath,
-            constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-            0o600,
-          )
-          // oxlint-disable-next-line eslint/no-await-in-loop -- The acquired handle must be written before closing.
-          await handle.writeFile(
-            JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() }),
-          )
-          // oxlint-disable-next-line eslint/no-await-in-loop -- Lock publication requires closing this handle first.
-          await handle.close()
-          return token
-        } catch (cause) {
-          if (!isNodeError(cause, "EEXIST")) throw cause
-          // oxlint-disable-next-line eslint/no-await-in-loop -- Each retry must inspect the current owner.
-          const owner = await readLockOwner(lockPath)
-          if (owner !== null && !isProcessAlive(owner.pid)) {
-            // oxlint-disable-next-line eslint/no-await-in-loop -- A stale lock must be removed before retrying.
-            await rm(lockPath, { force: true })
-            continue
-          }
-          if (Date.now() - startedAt >= timeoutMs)
-            throw new Error(`Timed out waiting for ${lockPath}`, { cause })
-          // oxlint-disable-next-line eslint/no-await-in-loop -- Backoff intentionally precedes the next lock attempt.
-          await new Promise((resolvePromise) => setTimeout(resolvePromise, LOCK_RETRY_MS))
-        }
-      }
-    },
-    catch: (cause) =>
-      poolError(
-        "lock",
-        "lock.acquire",
-        "DiffDash could not lock its isolated worktree pool.",
-        cause,
-      ),
-  })
-
-const releaseFileLock = (lockPath: string, token: string) =>
-  Effect.promise(async () => {
-    const owner = await readLockOwner(lockPath)
-    if (owner?.token === token) await rm(lockPath, { force: true })
-  })
-
-const readLockOwner = async (
-  lockPath: string,
-): Promise<{ readonly token: string; readonly pid: number } | null> => {
-  try {
-    const parsed = JSON.parse(await readFile(lockPath, "utf8")) as unknown
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "token" in parsed &&
-      typeof parsed.token === "string" &&
-      "pid" in parsed &&
-      typeof parsed.pid === "number"
-    ) {
-      return { token: parsed.token, pid: parsed.pid }
-    }
-  } catch {
-    const details = await stat(lockPath).catch(() => null)
-    if (details !== null && Date.now() - details.mtimeMs > LOCK_TIMEOUT_MS)
-      await rm(lockPath, { force: true })
-  }
-  return null
-}
-
-const runGit = (cli: CliStreamRunner, args: readonly string[]) =>
-  cli
-    .stream("git", args, {
-      timeoutMs: GIT_TIMEOUT_MS,
-      killAfterMs: 1_000,
-      maxOutputBytes: 1024 * 1024,
-      env: { GIT_TERMINAL_PROMPT: "0" },
-      unsetEnv: REPOSITORY_SCOPED_GIT_ENV,
-    })
-    .pipe(
-      Stream.runLast,
-      Effect.flatMap(
-        Option.match({
-          onNone: () =>
-            Effect.fail(
-              poolError(
-                "git",
-                "git.run",
-                "A Git command ended without a result.",
-                new Error("No exit event"),
-              ),
+      // ProcessService races child signals internally; keep that fiber interruptible while
+      // joining it under the caller's original status so protected workspace cleanup stays masked.
+      const fiber = yield* processes
+        .streamLines(
+          gitProcessRequest(args, {
+            timeoutMs: GIT_TIMEOUT_MS,
+            killAfterMs: 1_000,
+            stdout: { maxBytes: 1024 * 1024, overflow: "error" },
+            stderr: { maxBytes: 1024 * 1024, overflow: "truncate" },
+            env: { GIT_TERMINAL_PROMPT: "0" },
+          }),
+        )
+        .pipe(Stream.runLast, Effect.fork)
+      const lastEvent = yield* restore(Fiber.join(fiber))
+      return yield* Option.match(lastEvent, {
+        onNone: () =>
+          Effect.fail(
+            poolError(
+              "git",
+              "git.run",
+              "A Git command ended without a result.",
+              new Error("No exit event"),
             ),
-          onSome: (event) => {
-            const { _tag: tag } = event
-            return tag === "CliExit"
-              ? Effect.succeed(event.result)
-              : Effect.fail(
-                  poolError(
-                    "git",
-                    "git.run",
-                    "A Git command ended without an exit event.",
-                    new Error(event.line),
-                  ),
-                )
-          },
-        }),
-      ),
+          ),
+        onSome: (event) => {
+          const { _tag: tag } = event
+          return tag === "ProcessExit"
+            ? Effect.succeed(event.result)
+            : Effect.fail(
+                poolError(
+                  "git",
+                  "git.run",
+                  "A Git command ended without an exit event.",
+                  new Error(event.line),
+                ),
+              )
+        },
+      })
+    }).pipe(
       Effect.mapError((cause) =>
         cause instanceof HostedReviewWorkspacePoolError
           ? cause
@@ -750,20 +599,40 @@ const runGit = (cli: CliStreamRunner, args: readonly string[]) =>
               cause,
             ),
       ),
-    ) as Effect.Effect<CliStreamResult, HostedReviewWorkspacePoolError>
+    ),
+  )
 
-const isBareRepository = (cli: CliStreamRunner, barePath: string) =>
-  runGit(cli, ["--git-dir", barePath, "rev-parse", "--is-bare-repository"]).pipe(
+const runManagedGit = (
+  filesystem: ManagedWorkspaceFilesystem,
+  paths: readonly ManagedWorkspacePath[],
+  processes: ProcessRunner,
+  args: readonly string[],
+) =>
+  Effect.forEach(paths, (path) => filesystem.validate(path, "git.managedPath"), {
+    discard: true,
+  }).pipe(Effect.zipRight(runGit(processes, args)))
+
+const isBareRepository = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+) =>
+  runManagedGit(filesystem, [barePath], processes, [
+    "--git-dir",
+    barePath,
+    "rev-parse",
+    "--is-bare-repository",
+  ]).pipe(
     Effect.map((result) => result.stdout.trim() === "true"),
     Effect.catchAll(() => Effect.succeed(false)),
   )
 
 const recordRemoteRepositoryUse = (
-  poolRoot: string,
+  filesystem: ManagedWorkspaceFilesystem,
   checkout: HostedReviewCheckoutSpec,
   cloned: boolean,
 ) =>
-  mutateManifest(poolRoot, (manifest) => {
+  mutateManifest(filesystem, (manifest) => {
     const now = new Date().toISOString()
     const repositoryKey = makeHostedRepositoryKey(checkout.repository)
     const existing = manifest.repositories.find((item) => item.repositoryKey === repositoryKey)
@@ -787,98 +656,7 @@ const recordRemoteRepositoryUse = (
     }
   })
 
-const pathExists = (path: string) =>
-  Effect.promise(async () => {
-    try {
-      await access(path)
-      return true
-    } catch {
-      return false
-    }
-  })
-
 const reportProgress = (
   reporter: ((stage: ReviewAgentProgressStage) => Effect.Effect<void>) | undefined,
   stage: ReviewAgentProgressStage,
 ) => reporter?.(stage) ?? Effect.void
-
-const fsOperation = (operation: string, run: () => Promise<unknown>) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) =>
-      poolError(
-        "manifest",
-        operation,
-        "DiffDash could not update its isolated workspace files.",
-        cause,
-      ),
-  }).pipe(Effect.asVoid)
-
-const updateSlot = (
-  manifest: Manifest,
-  slotId: string,
-  update: (slot: Slot) => Slot,
-): Manifest => ({
-  ...manifest,
-  slots: manifest.slots.map((slot) => (slot.id === slotId ? update(slot) : slot)),
-})
-
-const pathForRepository = (poolRoot: string, repositoryKey: string) => {
-  const digest = createHash("sha256").update(repositoryKey).digest("hex")
-  const path = resolve(poolRoot, "repositories", digest)
-  assertContained(poolRoot, path)
-  return path
-}
-
-const pathForSlot = (poolRoot: string, slot: Pick<Slot, "repositoryKey" | "id">) => {
-  const path = resolve(pathForRepository(poolRoot, slot.repositoryKey), safeSegment(slot.id))
-  assertContained(poolRoot, path)
-  return path
-}
-
-const safeSegment = (value: string) => {
-  if (!/^[a-zA-Z0-9_.-]+$/u.test(value) || value === "." || value === "..") {
-    throw poolError(
-      "manifest",
-      "path.segment",
-      "The repository identity cannot be represented safely in the worktree pool.",
-      new Error(`Unsafe path segment: ${value}`),
-    )
-  }
-  return value.toLowerCase()
-}
-
-const assertContained = (root: string, path: string) => {
-  const child = relative(resolve(root), resolve(path))
-  if (child.startsWith("..") || resolve(path) === resolve(root)) {
-    throw poolError(
-      "manifest",
-      "path.containment",
-      "A managed worktree path escaped the configured pool root.",
-      new Error(path),
-    )
-  }
-}
-
-const isProcessAlive = (pid: number | undefined) => {
-  if (pid === undefined) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (cause) {
-    return isNodeError(cause, "EPERM")
-  }
-}
-
-const isNodeError = (cause: unknown, code: string): cause is NodeJS.ErrnoException =>
-  cause instanceof Error && "code" in cause && cause.code === code
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const poolError = (
-  code: HostedReviewWorkspacePoolError["code"],
-  operation: string,
-  reason: string,
-  cause: unknown,
-) => HostedReviewWorkspacePoolError.make({ code, operation, reason, cause })

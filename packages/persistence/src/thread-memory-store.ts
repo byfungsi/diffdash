@@ -16,7 +16,7 @@ const ThreadMemoryRow = Schema.Struct({
   summarized_through_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
   summary_algorithm: ThreadMemorySummaryAlgorithm,
   summary_version: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
-  important_artifact_ids_json: Schema.String,
+  important_artifact_ids_json: ImportantArtifactIdsJson,
   updated_at: Schema.String,
 })
 
@@ -122,9 +122,7 @@ const decodeThreadMemoryRow = (input: unknown) => {
     summarizedThroughSequence: row.summarized_through_sequence,
     summaryAlgorithm: row.summary_algorithm,
     summaryVersion: row.summary_version,
-    importantArtifactIds: Schema.decodeUnknownSync(ImportantArtifactIdsJson)(
-      row.important_artifact_ids_json,
-    ),
+    importantArtifactIds: row.important_artifact_ids_json,
     updatedAt: row.updated_at,
   })
 }

@@ -1,5 +1,8 @@
 import { Schema } from "effect"
 
+/** Maximum commands returned by one transactional renderer drain. */
+export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
+
 /** Open working-tree changes for a local checkout. */
 export class OpenWorkingTreeCommand extends Schema.TaggedClass<OpenWorkingTreeCommand>()(
   "openWorkingTree",

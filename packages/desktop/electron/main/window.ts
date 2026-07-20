@@ -1,10 +1,12 @@
 import { join } from "node:path"
-import { pathToFileURL } from "node:url"
 import { EventChannel } from "@diffdash/protocol/channels"
-import { app, BrowserWindow, dialog, shell } from "electron"
+import { app, BrowserWindow, dialog } from "electron"
 import { electronErrorPageDataUrl } from "../error-page"
-import { createDiffDashBrowserWindowOptions, isInternalNavigationAllowed } from "./electron-policy"
-import { openAllowedExternalUrl } from "./file-opening"
+import {
+  createDiffDashBrowserWindowOptions,
+  createRendererNavigationHandlers,
+} from "./electron-policy"
+import type { RendererSecurityPolicy } from "./electron-policy"
 import { sendProtocolEvent } from "./ipc/transport"
 import type { createNavigationCommandQueue } from "./navigation-command-queue"
 import { applicationPaths } from "./paths"
@@ -21,11 +23,13 @@ export const createMainWindow = ({
   logStartupStage,
   navigationCommands,
   onClosed,
+  rendererSecurityPolicy,
   revealWindow,
 }: {
   readonly logStartupStage: (stage: string) => void
   readonly navigationCommands: NavigationCommands
   readonly onClosed: () => void
+  readonly rendererSecurityPolicy: RendererSecurityPolicy
   readonly revealWindow: (window: BrowserWindow) => void
 }) => {
   const window = new BrowserWindow(
@@ -52,9 +56,7 @@ export const createMainWindow = ({
   showFallbackTimer = setTimeout(showMainWindow, 2_000)
   showFallbackTimer.unref()
 
-  const rendererUrl =
-    process.env.ELECTRON_RENDERER_URL ??
-    pathToFileURL(join(__dirname, "../renderer/index.html")).toString()
+  const rendererUrl = rendererSecurityPolicy.rendererEntryUrl
   let loadingErrorPage = false
   const showElectronError = (message: string) => {
     if (window.isDestroyed() || loadingErrorPage) return
@@ -99,23 +101,16 @@ export const createMainWindow = ({
       )
     }
   })
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    void openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
-    return { action: "deny" }
-  })
-  window.webContents.on("will-navigate", (event, url) => {
-    if (isInternalNavigationAllowed(url, window.webContents.getURL())) return
-    event.preventDefault()
-    void openAllowedExternalUrl((targetUrl) => shell.openExternal(targetUrl), url)
-  })
+  const rendererNavigation = createRendererNavigationHandlers(rendererSecurityPolicy)
+  window.webContents.setWindowOpenHandler(({ url }) => rendererNavigation.handleWindowOpen(url))
+  window.webContents.on("will-navigate", rendererNavigation.handleNavigation)
+  window.webContents.on("will-redirect", rendererNavigation.handleNavigation)
   if (app.isPackaged) {
     window.webContents.on("devtools-opened", () => window.webContents.closeDevTools())
   }
 
-  const loadWindow = process.env.ELECTRON_RENDERER_URL
-    ? window.loadURL(process.env.ELECTRON_RENDERER_URL)
-    : window.loadFile(join(__dirname, "../renderer/index.html"))
-  void loadWindow
+  void window
+    .loadURL(rendererUrl)
     .then(() => {
       logStartupStage("renderer loaded")
       showMainWindow()

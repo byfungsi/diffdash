@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
-import { MarkdownBody, PullRequestReviewTarget } from "@diffdash/domain/review-thread"
+import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import {
   AddReviewThreadUserMessageRequest,
   RunReviewThreadAgentRequest,
@@ -21,6 +21,7 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
+import { ReviewSnapshotPageRequest } from "@diffdash/protocol/review-snapshot"
 
 const review = HostedReviewLocator.make({
   repository: HostedRepositoryLocator.make({
@@ -43,17 +44,30 @@ describe("scenario-backed DiffDash API", () => {
           HostedProviderRequest.make({ providerId: GitProviderId.make("github") }),
         ),
       )
-      const detail = yield* Effect.promise(() =>
-        api.hostedReviews.get(HostedReviewRequest.make({ review })),
+      const manifest = yield* Effect.promise(() =>
+        api.reviewSnapshots.acquireHosted(HostedReviewRequest.make({ review })),
       )
-      const diff = yield* Effect.promise(() =>
-        api.hostedReviews.getDiff(HostedReviewRequest.make({ review })),
+      const page = yield* Effect.promise(() =>
+        api.reviewSnapshots.getPage(
+          ReviewSnapshotPageRequest.make({
+            snapshotId: manifest.snapshotId,
+            cursor: null,
+            fileIds: [],
+          }),
+        ),
       )
 
       expect(repositories.map((repository) => repository.id)).toEqual(["github:emberline/dispatch"])
       expect(reviewRequests[0]?.title).toBe("Make webhook replay claims atomic")
-      expect(detail.headRefOid).toBe("c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69")
-      expect(diff.diff).toContain("WHERE replay_claim.claimed_until < excluded.claimed_at")
+      expect(manifest.detail.summary.head.revision).toBe("c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69")
+      expect(page["_tag"]).toBe("available")
+      if (page["_tag"] === "available") {
+        expect(page.files).toHaveLength(8)
+        expect(page.nextCursor).not.toBeNull()
+        expect(page.files.map((file) => file.patch).join("\n")).toContain(
+          "WHERE replay_claim.claimed_until < excluded.claimed_at",
+        )
+      }
       expect(timeline.getState().revisionId).toBe("01-initial")
     }),
   )
@@ -62,13 +76,7 @@ describe("scenario-backed DiffDash API", () => {
     Effect.gen(function* () {
       const scenario = yield* loadAtomicWebhookReplayScenario
       const { api, timeline } = createDemoRuntime(scenario)
-      const target = PullRequestReviewTarget.make({
-        kind: "pullRequest",
-        providerId: GitProviderId.make("github"),
-        owner: "emberline",
-        name: "dispatch",
-        number: 417,
-      })
+      const target = HostedReviewTarget.make({ kind: "hosted", review })
       const summaries = yield* Effect.promise(() => api.reviewThreads.list(target))
       const threadId = summaries[0]?.id
       expect(threadId).toBeDefined()
@@ -92,7 +100,14 @@ describe("scenario-backed DiffDash API", () => {
         progressStages.push(progress.stage)
       })
       const pending = api.reviewThreads.runAgent(
-        RunReviewThreadAgentRequest.make({ threadId, target }),
+        RunReviewThreadAgentRequest.make({
+          threadId,
+          target,
+          repoId: initial.thread.repoId,
+          reviewKey: initial.thread.reviewKey,
+          expectedBaseRevision: initial.thread.currentBaseRevision,
+          expectedHeadRevision: initial.thread.currentHeadRevision,
+        }),
       )
       const pendingDetails = yield* Effect.promise(() => api.reviewThreads.get(threadId))
 
@@ -140,7 +155,7 @@ describe("scenario-backed DiffDash API", () => {
         expect(updateTags).toEqual(["available", "downloading", "downloaded"])
         expect(timeline.getState().updateState).toBe("downloaded")
         expect(timeline.getActionLog().map((action) => action.type)).toContain(
-          "gitProvider.approvePullRequest",
+          "gitProvider.submitReviewDecision",
         )
       }),
   )

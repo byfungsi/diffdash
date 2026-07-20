@@ -1,13 +1,20 @@
 import {
   eventPayloadSchema,
+  EventContract,
   FailureEnvelope,
+  InvokeContract,
   invokeRequestSchema,
   invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
+import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
 import type { EventPayload, InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import { transportError } from "@diffdash/protocol/transport-error"
+import {
+  safeTransportErrorMessage,
+  TransportError,
+  transportError,
+} from "@diffdash/protocol/transport-error"
 import { Schema } from "effect"
 
 /** Narrow ipcRenderer surface consumed by the schema-validated preload transport. */
@@ -29,7 +36,13 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
     let encodedRequest: unknown
     try {
       encodedRequest = Schema.encodeUnknownSync(invokeRequestSchema(channel))(request)
-    } catch {
+      assertJsonPayloadWithinBudget(
+        encodedRequest,
+        InvokeContract[channel].maxRequestBytes,
+        channel,
+      )
+    } catch (error) {
+      if (error instanceof TransportError) throw error
       throw rendererTransportError("INVALID_REQUEST", "Invalid request", channel)
     }
 
@@ -37,15 +50,17 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
     try {
       rawResponse = await ipc.invoke(channel, encodedRequest)
     } catch (cause) {
-      throw rendererTransportError("IPC_FAILURE", ipcErrorMessage(cause), channel)
+      throw rendererTransportError("IPC_FAILURE", safeTransportErrorMessage(cause), channel)
     }
 
     let envelope
     try {
+      assertJsonPayloadWithinBudget(rawResponse, InvokeContract[channel].maxResponseBytes, channel)
       envelope = Schema.decodeUnknownSync(
         Schema.Union(successEnvelope(invokeResponseSchema(channel)), FailureEnvelope),
       )(rawResponse)
-    } catch {
+    } catch (error) {
+      if (error instanceof TransportError) throw error
       throw rendererTransportError("INVALID_RESPONSE", "Invalid response", channel)
     }
     if (envelope["_tag"] === "Failure") {
@@ -65,6 +80,7 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
   ) => {
     const wrapped = (_event: unknown, rawPayload: unknown) => {
       try {
+        assertJsonPayloadWithinBudget(rawPayload, EventContract[channel].maxPayloadBytes, channel)
         listener(Schema.decodeUnknownSync(eventPayloadSchema(channel))(rawPayload))
       } catch {
         // Invalid host events are isolated from renderer state and future subscriptions.
@@ -74,9 +90,6 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
     return () => ipc.removeListener(channel, wrapped)
   },
 })
-
-const ipcErrorMessage = (cause: unknown) =>
-  cause instanceof Error && cause.message.length > 0 ? cause.message : String(cause)
 
 const rendererTransportError = (
   code: string,

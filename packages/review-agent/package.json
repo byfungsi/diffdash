@@ -8,8 +8,7 @@
     "./anchor-mapper": "./src/review-thread-anchor-mapper.ts",
     "./artifact-normalizer": "./src/agent-artifact-normalizer.ts",
     "./context-builder": "./src/review-context-builder.ts",
-    "./mcp-server": "./src/diffdash-mcp-server.ts",
-    "./thread-memory": "./src/thread-memory.ts"
+    "./mcp-server": "./src/diffdash-mcp-server.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

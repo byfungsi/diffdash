@@ -1,6 +1,72 @@
+const releaseVersionSource = String.raw`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?`
+const releaseVersionPattern = new RegExp(`^${releaseVersionSource}$`, "u")
+const releaseTagPattern = new RegExp(`^v${releaseVersionSource}$`, "u")
+const changelogHeadingVersionPattern = new RegExp(
+  `(?:^|@|\\[|\\s)v?(${releaseVersionSource})(?:\\]|\\s|$)`,
+  "u",
+)
+const stableReleasePrefixPattern = /^releases\/v?(\d+)\.(\d+)\.(\d+)\/$/u
+
+/** Returns whether a package version matches the release scripts' SemVer-like grammar. */
+export const isReleaseVersion = (version) =>
+  typeof version === "string" && releaseVersionPattern.test(version)
+
+/** Verifies a package version without narrowing the historically accepted grammar. */
+export const assertReleaseVersion = (version) => {
+  if (!isReleaseVersion(version)) {
+    throw new Error(`package.json version must be SemVer-like, got ${JSON.stringify(version)}`)
+  }
+}
+
+/** Creates a release tag for a validated package version. */
+export const releaseTagForVersion = (version) => {
+  assertReleaseVersion(version)
+  return `v${version}`
+}
+
+/** Returns whether a tag matches the release scripts' v-prefixed version grammar. */
+export const isReleaseTag = (tag) => typeof tag === "string" && releaseTagPattern.test(tag)
+
+/** Verifies a v-prefixed release tag. */
+export const assertReleaseTag = (tag) => {
+  if (!isReleaseTag(tag)) {
+    throw new Error(`Release tag must look like v<semver>, got ${JSON.stringify(tag)}`)
+  }
+}
+
+/** Extracts the package version from a validated release tag. */
+export const releaseVersionFromTag = (tag) => {
+  assertReleaseTag(tag)
+  return tag.slice(1)
+}
+
+/** Extracts a version from the version-or-tag input historically accepted by release notes. */
+export const releaseVersionFromVersionOrTag = (value) => {
+  if (isReleaseVersion(value)) return value
+  if (isReleaseTag(value)) return value.slice(1)
+  throw new Error(`Release version or tag is invalid: ${JSON.stringify(value)}`)
+}
+
+/** Extracts a release version from a changelog heading using the shared version grammar. */
+export const releaseVersionFromChangelogHeading = (headingText) =>
+  changelogHeadingVersionPattern.exec(headingText)?.[1] ?? null
+
+/** Parses an R2 stable release prefix, accepting the existing optional v prefix. */
+export const parseStableReleasePrefix = (prefix) => {
+  const match = stableReleasePrefixPattern.exec(prefix)
+  return match === null
+    ? null
+    : { prefix, version: [Number(match[1]), Number(match[2]), Number(match[3])] }
+}
+
+/** Returns whether a path is an R2 stable release prefix eligible for retention cleanup. */
+export const isStableReleasePrefix = (prefix) => parseStableReleasePrefix(prefix) !== null
+
 /** Verifies that a release tag names the package version being built. */
 export const assertTagMatchesVersion = (tag, packageVersion) => {
-  if (tag !== `v${packageVersion}`) {
+  assertReleaseTag(tag)
+  assertReleaseVersion(packageVersion)
+  if (tag !== releaseTagForVersion(packageVersion)) {
     throw new Error(`Release tag ${tag} does not match package version ${packageVersion}.`)
   }
 }
@@ -40,7 +106,7 @@ export const selectReleaseArtifacts = (names, tag = "release") => {
 
 /** Builds deterministic public metadata from already-hashed release assets. */
 export const createLatestMetadata = ({ tag, baseUrl, generatedAt, assets }) => ({
-  version: tag.replace(/^v/u, ""),
+  version: releaseVersionFromTag(tag),
   tag,
   generatedAt,
   assets: assets
@@ -55,7 +121,7 @@ export const createLatestMetadata = ({ tag, baseUrl, generatedAt, assets }) => (
 
 /** Builds the stable pointer consumed by the download worker. */
 export const createStableMetadata = ({ tag, promotedAt }) => ({
-  version: tag.replace(/^v/u, ""),
+  version: releaseVersionFromTag(tag),
   tag,
   promotedAt,
 })
@@ -77,12 +143,7 @@ export const runWithRetries = (run, { attempts = 3, onRetry = () => undefined } 
 /** Selects the promoted release and two newest other stable releases for retention. */
 export const retainedReleasePrefixes = (prefixes, promotedTag) => {
   const parsed = prefixes
-    .map((prefix) => {
-      const match = /^releases\/v?(\d+)\.(\d+)\.(\d+)\/$/u.exec(prefix)
-      return match === null
-        ? null
-        : { prefix, version: [Number(match[1]), Number(match[2]), Number(match[3])] }
-    })
+    .map(parseStableReleasePrefix)
     .filter((entry) => entry !== null)
     .toSorted(
       (left, right) =>

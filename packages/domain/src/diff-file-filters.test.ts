@@ -1,14 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-
-import { getHiddenDiffFileReason, filterVisibleDiffFiles } from "./diff-file-filters"
 import { ParsedDiffFile } from "./diff"
-import { makeReviewFileId } from "./review-identity"
+import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "./diff-file-filters"
+import { makeReviewFileId, makeReviewFilePatchHash } from "./review-identity"
 
 const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>
   ParsedDiffFile.make({
     additions: 1,
     deletions: 0,
     fileId: makeReviewFileId(path, null),
+    patchHash: makeReviewFilePatchHash({ hunks: [], oldPath: null, path, status }),
     hunks: [],
     oldPath: null,
     patch: `diff --git a/${path} b/${path}`,

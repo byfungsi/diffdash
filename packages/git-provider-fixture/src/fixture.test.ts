@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Either } from "effect"
 
+import {
+  GitProviderOperationError,
+  makeHostedRepositoryLocator,
+  makeHostedReviewLocator,
+} from "@diffdash/git-provider"
 import { gitProviderConformance } from "@diffdash/git-provider/testing"
 import { createFixtureGitProvider } from "./fixture"
 
@@ -34,6 +39,29 @@ describe("Fixture Forge provider", () => {
       expect(detail.files[0]?.path).toBe("src/fixture.ts")
       expect(diff.diff).toContain("+new fixture")
       expect(checkout.fetchRef).toBe("refs/merge-requests/73/head")
+    }),
+  )
+
+  it.effect("rejects a same-provider locator for another repository or review", () =>
+    Effect.gen(function* () {
+      const provider = createFixtureGitProvider()
+      const repositoryResult = yield* Effect.either(
+        provider.listReviews(
+          makeHostedRepositoryLocator("fixture", "platform/backend", "other-service"),
+        ),
+      )
+      const reviewResult = yield* Effect.either(
+        provider.getReview(makeHostedReviewLocator("fixture", "platform/backend", "service", 74)),
+      )
+
+      expect(Either.isLeft(repositoryResult)).toBe(true)
+      expect(Either.isLeft(reviewResult)).toBe(true)
+      if (Either.isLeft(repositoryResult)) {
+        expect(repositoryResult.left).toBeInstanceOf(GitProviderOperationError)
+      }
+      if (Either.isLeft(reviewResult)) {
+        expect(reviewResult.left).toBeInstanceOf(GitProviderOperationError)
+      }
     }),
   )
 })

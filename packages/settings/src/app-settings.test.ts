@@ -1,11 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Either } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { AppSettings } from "./app-settings"
+import { AppSettings, AppSettingsError } from "./app-settings"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-settings-test-"))),
@@ -26,6 +26,24 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual(DEFAULT_AI_SETTINGS)
+    }),
+  )
+
+  it.scoped("maps non-ENOENT filesystem failures to read errors", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      mkdirSync(join(directory, "diffdash", "settings.json"), { recursive: true })
+
+      const result = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* Effect.either(appSettings.get)
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(AppSettingsError)
+        expect(result.left.operation).toBe("read")
+      }
     }),
   )
 

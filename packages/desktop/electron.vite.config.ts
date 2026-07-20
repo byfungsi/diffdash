@@ -17,7 +17,6 @@ const packageVersion =
 
 const internalPackages = [
   "@diffdash/agent-provider",
-  "@diffdash/agent-provider/registry",
   "@diffdash/agent-provider-claude",
   "@diffdash/agent-provider-codex",
   "@diffdash/agent-provider-fixture",
@@ -32,11 +31,6 @@ const internalPackages = [
   "@diffdash/process",
   "@diffdash/protocol",
   "@diffdash/review-agent",
-  "@diffdash/review-agent/anchor-mapper",
-  "@diffdash/review-agent/artifact-normalizer",
-  "@diffdash/review-agent/context-builder",
-  "@diffdash/review-agent/mcp-server",
-  "@diffdash/review-agent/thread-memory",
   "@diffdash/settings",
   "@diffdash/walkthrough",
 ]

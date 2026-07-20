@@ -1,11 +1,13 @@
 import { Atom } from "@effect-atom/atom-react"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 
-import type { PullRequestSummary } from "@diffdash/domain/pull-request"
+import { HostedReviewSummary } from "@diffdash/domain/git-provider"
 import { HostedProviderRequest } from "@diffdash/protocol/hosted-git"
 import { providersAtom, repositoriesAtom, isBookmarkedPullRequestRepo } from "@/repositories/atoms"
 import { pullRequestsAtom, repoKey } from "@/review/atoms"
-import { fetchEffect } from "@/shared/effect-api"
+import { fetchSchemaEffect } from "@/shared/effect-api"
+
+const HostedReviewSummaries = Schema.Array(HostedReviewSummary)
 
 /** Hosted review requests assigned to the current user. */
 export const reviewRequestsAtom = Atom.make(
@@ -15,7 +17,7 @@ export const reviewRequestsAtom = Atom.make(
       providers
         .filter((provider) => provider.capabilities.assignedReviews)
         .map((provider) =>
-          fetchEffect(() =>
+          fetchSchemaEffect(HostedReviewSummaries, () =>
             window.diffDash.hostedReviews.listAssigned(
               HostedProviderRequest.make({ providerId: provider.id }),
             ),
@@ -25,7 +27,7 @@ export const reviewRequestsAtom = Atom.make(
     )
     return reviews.flat()
   }),
-  { initialValue: [] as readonly PullRequestSummary[] },
+  { initialValue: [] as readonly HostedReviewSummary[] },
 ).pipe(Atom.keepAlive)
 
 /** Open review counts for bookmarked repositories. */

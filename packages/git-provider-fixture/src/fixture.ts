@@ -20,8 +20,10 @@ import {
   HostedReviewSummary,
   ProviderActor,
   RepositoryNamespace,
-  ReviewChangedFile,
+  ChangedFile,
   ReviewCommit,
+  sameHostedRepository,
+  sameHostedReview,
   type GitProviderRegistration,
 } from "@diffdash/git-provider"
 
@@ -72,13 +74,21 @@ export const createFixtureGitProvider = (
     createdAt: "2026-07-16T00:00:00.000Z",
     updatedAt: "2026-07-16T01:00:00.000Z",
   })
-  const requireProvider = (locator: HostedRepositoryLocator, operation: string) =>
-    locator.providerId === id
+  const requireRepository = (locator: HostedRepositoryLocator, operation: string) =>
+    sameHostedRepository(locator, repository)
       ? Effect.void
       : GitProviderOperationError.make({
           providerId: id,
           operation,
-          message: `Repository belongs to ${locator.providerId}, not ${id}`,
+          message: "Fixture repository locator does not match the configured repository",
+        })
+  const requireReview = (locator: HostedReviewLocator, operation: string) =>
+    sameHostedReview(locator, review)
+      ? Effect.void
+      : GitProviderOperationError.make({
+          providerId: id,
+          operation,
+          message: "Fixture review locator does not match the configured review",
         })
 
   return {
@@ -126,14 +136,14 @@ export const createFixtureGitProvider = (
       ]),
     listAssignedReviews: () => Effect.succeed([summary]),
     listReviews: (locator) =>
-      requireProvider(locator, "listReviews").pipe(Effect.as([summary] as const)),
+      requireRepository(locator, "listReviews").pipe(Effect.as([summary] as const)),
     getReview: (locator) =>
-      requireProvider(locator.repository, "getReview").pipe(
+      requireReview(locator, "getReview").pipe(
         Effect.as(
           HostedReviewDetail.make({
             summary,
             files: [
-              ReviewChangedFile.make({
+              ChangedFile.make({
                 path: "src/fixture.ts",
                 additions: 1,
                 deletions: 1,
@@ -151,7 +161,7 @@ export const createFixtureGitProvider = (
         ),
       ),
     getReviewDiff: (locator) =>
-      requireProvider(locator.repository, "getReviewDiff").pipe(
+      requireReview(locator, "getReviewDiff").pipe(
         Effect.as(
           HostedReviewDiff.make({
             locator: review,
@@ -170,21 +180,27 @@ export const createFixtureGitProvider = (
         ),
       ),
     getReviewDecision: (locator) =>
-      requireProvider(locator.repository, "getReviewDecision").pipe(Effect.as("none" as const)),
+      requireReview(locator, "getReviewDecision").pipe(Effect.as("none" as const)),
     submitReviewDecision: () =>
       GitProviderOperationError.make({
         providerId: id,
         operation: "submitReviewDecision",
         message: "Fixture Forge does not support review decisions",
       }),
-    repositoryUrl: () => repositoryUrl,
-    fileUrl: (_locator, path, revision) =>
-      `${repositoryUrl}/files/${encodeURIComponent(revision)}/${path
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`,
-    bootstrapBareRepository: (_locator, destination) =>
-      (config.bootstrapBareRepository?.(destination) ?? Effect.void).pipe(
+    repositoryUrl: (locator) =>
+      requireRepository(locator, "repositoryUrl").pipe(Effect.as(repositoryUrl)),
+    fileUrl: (locator, path, revision) =>
+      requireRepository(locator, "fileUrl").pipe(
+        Effect.as(
+          `${repositoryUrl}/files/${encodeURIComponent(revision)}/${path
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/")}`,
+        ),
+      ),
+    bootstrapBareRepository: (locator, destination) =>
+      requireRepository(locator, "bootstrapBareRepository").pipe(
+        Effect.andThen(config.bootstrapBareRepository?.(destination) ?? Effect.void),
         Effect.mapError((cause) =>
           GitProviderOperationError.make({
             providerId: id,
@@ -195,7 +211,7 @@ export const createFixtureGitProvider = (
         ),
       ),
     checkoutSpec: (locator) =>
-      requireProvider(locator.repository, "checkoutSpec").pipe(
+      requireReview(locator, "checkoutSpec").pipe(
         Effect.as(
           HostedReviewCheckoutSpec.make({
             repository,

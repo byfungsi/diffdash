@@ -1,5 +1,10 @@
-import { ParsedDiff, ParsedDiffFile, ParsedDiffHunk, type DiffFileStatus } from "./diff"
-import { makeReviewFileId, makeReviewHunkFingerprint, makeReviewHunkId } from "./review-identity"
+import { type DiffFileStatus, ParsedDiff, ParsedDiffFile, ParsedDiffHunk } from "./diff"
+import {
+  makeReviewFileId,
+  makeReviewFilePatchHash,
+  makeReviewHunkFingerprint,
+  makeReviewHunkId,
+} from "./review-identity"
 
 interface DraftHunk {
   readonly header: string
@@ -121,25 +126,49 @@ const toParsedFile = (file: DraftFile) => {
   const oldPath = file.renameFrom ?? deletedOldPath(file)
   const status = inferStatus(file)
   const fileId = makeReviewFileId(path, oldPath)
+  const hunks = file.hunks.map((hunk) =>
+    ParsedDiffHunk.make({
+      id: makeReviewHunkId(fileId, hunk.header, hunk.lines),
+      fingerprint: makeReviewHunkFingerprint(hunk.lines),
+      ...hunk,
+    }),
+  )
 
   return ParsedDiffFile.make({
     fileId,
+    patchHash: makeReviewFilePatchHash({
+      hunks,
+      metadata: canonicalFileMetadata(file, status),
+      oldPath,
+      path,
+      status,
+    }),
     reviewKey: oldPath === null ? path : `${oldPath}->${path}`,
     path,
     oldPath,
     status,
     additions: file.additions,
     deletions: file.deletions,
-    hunks: file.hunks.map((hunk) =>
-      ParsedDiffHunk.make({
-        id: makeReviewHunkId(fileId, hunk.header, hunk.lines),
-        fingerprint: makeReviewHunkFingerprint(hunk.lines),
-        ...hunk,
-      }),
-    ),
+    hunks,
     patch: trimTrailingEmptyLine(file.lines).join("\n"),
   })
 }
+
+const canonicalFileMetadata = (file: DraftFile, status: DiffFileStatus) =>
+  file.lines.flatMap((line) => {
+    if (
+      line.startsWith("old mode ") ||
+      line.startsWith("new mode ") ||
+      line.startsWith("new file mode ") ||
+      line.startsWith("deleted file mode ")
+    ) {
+      return [line]
+    }
+    if (status !== "binary") return []
+    const index = /^index ([^.]+)\.\.([^\s]+)(?:\s+(.+))?$/.exec(line)
+    if (index === null) return []
+    return [`binary-object:${/^0+$/.test(index[2] ?? "") ? index[1] : index[2]}`]
+  })
 
 const inferStatus = (file: DraftFile): DiffFileStatus => {
   if (file.status !== null) return file.status

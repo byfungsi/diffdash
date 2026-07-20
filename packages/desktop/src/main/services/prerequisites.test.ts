@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option, Stream } from "effect"
 import { spawnSync } from "node:child_process"
 import {
   chmodSync,
@@ -7,10 +7,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -18,11 +20,17 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { AppConfig } from "./app-config"
-import { CliError, CliService, type CliResult } from "@diffdash/process/cli"
 import {
+  ProcessExitError,
+  type ProcessRequest,
+  ProcessResult,
+  ProcessService,
+} from "@diffdash/process"
+import {
+  findExecutableInPath,
   Prerequisites,
   refreshAppImageCliLaunchers,
-  resolveExecutableInPath,
+  replaceExecutableAtomically,
 } from "./prerequisites"
 import { GitProvider } from "./git-provider"
 import { AgentProviders } from "./agent-providers"
@@ -31,6 +39,7 @@ import {
   AgentProviderCapabilityStatus,
   AgentProviderCatalog,
   AgentProviderDefaults,
+  AgentProviderId,
   AgentProviderStatus,
 } from "@diffdash/protocol/agent-providers"
 import {
@@ -102,7 +111,7 @@ const makeLayer = (
   },
 ) =>
   Prerequisites.layer.pipe(
-    Layer.provideMerge(fakeCliLayer(options)),
+    Layer.provideMerge(fakeProcessLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
     Layer.provideMerge(fakeAgentProvidersLayer(options)),
     Layer.provide(
@@ -387,11 +396,31 @@ describe("Prerequisites", () => {
       })
       yield* withPath(fakeBin)
 
-      yield* Effect.sync(() => refreshAppImageCliLaunchers(sourcePath, appImagePath))
+      yield* refreshAppImageCliLaunchers(sourcePath, appImagePath)
 
       const launcher = readFileSync(launcherPath, "utf8")
       expect(launcher).toContain("--diffdash-cli-v1")
       expect(launcher).not.toContain("old parser")
+    }),
+  )
+
+  it.scoped("atomically replaces executables with mode 0755 and cleans failed temporaries", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const executablePath = join(directory, "diffdash")
+      const blockedTarget = join(directory, "blocked")
+      yield* Effect.sync(() => {
+        writeFileSync(executablePath, "old", "utf8")
+        replaceExecutableAtomically(executablePath, "new")
+        mkdirSync(blockedTarget)
+      })
+
+      expect(readFileSync(executablePath, "utf8")).toBe("new")
+      expect(statSync(executablePath).mode & 0o777).toBe(0o755)
+      expect(() => replaceExecutableAtomically(blockedTarget, "cannot replace directory")).toThrow(
+        /EISDIR|ENOTDIR|EPERM/,
+      )
+      expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([])
     }),
   )
 
@@ -404,7 +433,8 @@ describe("Prerequisites", () => {
         chmodSync(executablePath, 0o755)
       })
 
-      expect(resolveExecutableInPath("diffdash", { envPath: directory })).toBe(executablePath)
+      const found = yield* findExecutableInPath("diffdash", { envPath: directory })
+      expect(Option.getOrNull(found)).toBe(executablePath)
     }),
   )
 })
@@ -456,13 +486,13 @@ const fakeGitProviderLayer = (options: {
       fileUrl: () => unavailableProviderMethod(),
       searchRepositories: () => unavailableProviderMethod(),
       listSearchScopes: () => unavailableProviderMethod(),
-      listPullRequests: () => unavailableProviderMethod(),
-      listReviewRequests: () => unavailableProviderMethod(),
-      getPullRequestDetail: () => unavailableProviderMethod(),
-      refreshPullRequestDetail: () => unavailableProviderMethod(),
-      getPullRequestDiff: () => unavailableProviderMethod(),
-      hasApprovedPullRequest: () => unavailableProviderMethod(),
-      approvePullRequest: () => unavailableProviderMethod(),
+      listHostedReviews: () => unavailableProviderMethod(),
+      listAssignedReviews: () => unavailableProviderMethod(),
+      getHostedReview: () => unavailableProviderMethod(),
+      refreshHostedReview: () => unavailableProviderMethod(),
+      getHostedReviewDiff: () => unavailableProviderMethod(),
+      getReviewDecision: () => unavailableProviderMethod(),
+      submitReviewDecision: () => unavailableProviderMethod(),
       hostedReviewCheckoutSpec: () => unavailableProviderMethod(),
       bootstrapBareRepository: () => unavailableProviderMethod(),
       isAvailable: () => Effect.succeed(supported),
@@ -479,7 +509,7 @@ const fakeAgentProvidersLayer = (options: { readonly availableCommands: Readonly
           providers: ["claude", "codex", "opencode"].map((id) => {
             const ready = options.availableCommands.has(id)
             return AgentProviderStatus.make({
-              id,
+              id: AgentProviderId.make(id),
               displayName: id,
               description: `${id} fixture`,
               homepage: null,
@@ -500,72 +530,77 @@ const fakeAgentProvidersLayer = (options: { readonly availableCommands: Readonly
             })
           }),
           autoCandidates: AgentProviderAutoCandidates.make({
-            walkthrough: ["claude", "codex", "opencode"],
-            reviewThread: ["claude", "codex", "opencode"],
+            walkthrough: ["claude", "codex", "opencode"].map((id) => AgentProviderId.make(id)),
+            reviewThread: ["claude", "codex", "opencode"].map((id) => AgentProviderId.make(id)),
           }),
         }),
       ),
     }),
   )
 
-const fakeCliLayer = (options: {
+const fakeProcessLayer = (options: {
   readonly availableCommands: ReadonlySet<string>
   readonly ghAuthenticated?: boolean
   readonly ghSearchRepositoriesAvailable?: boolean
   readonly ghVersion?: string
 }) =>
   Layer.succeed(
-    CliService,
-    CliService.of({
-      run: (command, args) => {
+    ProcessService,
+    ProcessService.of({
+      run: (request) => {
+        const { args, command } = request
         if (command === "gh" && args[0] === "auth") {
           return options.availableCommands.has("gh") && (options.ghAuthenticated ?? true)
-            ? Effect.succeed(cliResult(command, args))
-            : Effect.fail(cliError(command, args))
+            ? Effect.succeed(processResult(request))
+            : Effect.fail(processExitError(request))
         }
 
         if (command === "gh" && args[0] === "--version") {
           return options.availableCommands.has("gh")
-            ? Effect.succeed(
-                cliResult(command, args, `gh version ${options.ghVersion ?? "2.76.1"}`),
-              )
-            : Effect.fail(cliError(command, args))
+            ? Effect.succeed(processResult(request, `gh version ${options.ghVersion ?? "2.76.1"}`))
+            : Effect.fail(processExitError(request))
         }
 
         if (command === "gh" && args[0] === "search") {
           return options.availableCommands.has("gh") &&
             (options.ghSearchRepositoriesAvailable ?? true)
-            ? Effect.succeed(cliResult(command, args))
-            : Effect.fail(cliError(command, args))
+            ? Effect.succeed(processResult(request))
+            : Effect.fail(processExitError(request))
         }
 
         return options.availableCommands.has(command)
-          ? Effect.succeed(cliResult(command, args))
-          : Effect.fail(cliError(command, args))
+          ? Effect.succeed(processResult(request))
+          : Effect.fail(processExitError(request))
       },
+      streamLines: () => Stream.die(new Error("Unused test process stream")),
     }),
   )
 
-const cliResult = (
-  command: string,
-  args: readonly string[],
-  stdout = `${command} ok`,
-): CliResult => ({
-  args,
-  command,
-  cwd: null,
-  exitCode: 0,
-  stderr: "",
-  stdout,
-})
+const processResult = (request: ProcessRequest, stdout = `${request.command} ok`) =>
+  ProcessResult.make({
+    args: request.args,
+    command: request.command,
+    cwd: request.cwd,
+    exitCode: 0,
+    signal: null,
+    stderr: "",
+    stderrTruncated: false,
+    stdout,
+    stdoutTruncated: false,
+    outputTruncated: false,
+  })
 
-const cliError = (command: string, args: readonly string[]) =>
-  CliError.make({
-    args: [...args],
-    cause: null,
-    command,
-    cwd: null,
+const processExitError = (request: ProcessRequest) =>
+  ProcessExitError.make({
+    args: request.args,
+    command: request.command,
+    cwd: request.cwd,
     exitCode: 1,
-    stderr: `${command} missing`,
+    signal: null,
+    stderr: `${request.command} missing`,
+    stderrTruncated: false,
     stdout: "",
+    stdoutTruncated: false,
+    outputTruncated: false,
+    message: "Command exited with code 1",
   })

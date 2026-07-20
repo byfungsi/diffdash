@@ -11,18 +11,20 @@ import {
 } from "node:fs"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { parseLinuxReleaseArguments } from "./release-arguments.mjs"
+import { assertCommandAvailable, runSyncCommand } from "./release-command.mjs"
 
-const args = process.argv.slice(2)
+const cli = parseLinuxReleaseArguments()
 const workspacePackageJson = JSON.parse(readFileSync("package.json", "utf8"))
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
-const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
-const platform = readOption("--platform") ?? process.env.RELEASE_LINUX_PLATFORM ?? "linux/amd64"
-const image = readOption("--image") ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-trixie"
+const releaseAssetsDir = path.resolve(cli.assetsDir ?? "release-assets")
+const platform = cli.platform ?? process.env.RELEASE_LINUX_PLATFORM ?? "linux/amd64"
+const image = cli.image ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-trixie"
 const pnpmVersion = workspacePackageJson.packageManager?.startsWith("pnpm@")
   ? workspacePackageJson.packageManager.slice("pnpm@".length)
   : "10.26.1"
 
-assertCommand("docker", ["--version"])
+assertCommandAvailable("docker", ["--version"])
 mkdirSync(releaseAssetsDir, { recursive: true })
 
 const tempRoot = path.join(releaseAssetsDir, ".tmp")
@@ -39,7 +41,7 @@ try {
     maxBuffer: 1024 * 1024 * 1024,
   })
   writeFileSync(archivePath, archive)
-  run("tar", ["-xf", archivePath, "-C", sourceDir])
+  runSyncCommand("tar", ["-xf", archivePath, "-C", sourceDir])
   writeHomepageMetadata(sourceDir)
 
   const dockerCommand = [
@@ -55,7 +57,7 @@ try {
     "pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never",
   ].join(" && ")
 
-  run("docker", [
+  runSyncCommand("docker", [
     "run",
     "--rm",
     "--platform",
@@ -117,25 +119,6 @@ try {
   rmSync(tempRoot, { force: true, recursive: true })
 }
 
-function readOption(name) {
-  const index = args.indexOf(name)
-  if (index === -1) return undefined
-
-  const value = args[index + 1]
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`Missing value for ${name}`)
-  }
-  return value
-}
-
-function assertCommand(command, commandArgs) {
-  try {
-    execFileSync(command, commandArgs, { stdio: "ignore" })
-  } catch {
-    throw new Error(`Required command is not available or failed: ${command}`)
-  }
-}
-
 function writeHomepageMetadata(sourceDir) {
   if (typeof packageJson.homepage !== "string" || packageJson.homepage.trim().length === 0) return
 
@@ -143,13 +126,4 @@ function writeHomepageMetadata(sourceDir) {
   const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"))
   sourcePackageJson.homepage = packageJson.homepage
   writeFileSync(packageJsonPath, `${JSON.stringify(sourcePackageJson, null, 2)}\n`)
-}
-
-function run(command, commandArgs) {
-  console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
-  execFileSync(command, commandArgs, { env: process.env, stdio: "inherit" })
-}
-
-function shellQuote(value) {
-  return /[^A-Za-z0-9_./:=@-]/.test(value) ? JSON.stringify(value) : value
 }

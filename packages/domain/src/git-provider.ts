@@ -60,6 +60,39 @@ export class HostedReviewLocator extends Schema.Class<HostedReviewLocator>("Host
   number: HostedReviewNumber,
 }) {}
 
+/** Builds a typed locator for one hosted repository. */
+export const makeHostedRepositoryLocator = (providerId: string, namespace: string, name: string) =>
+  HostedRepositoryLocator.make({
+    providerId: GitProviderId.make(providerId),
+    namespace: RepositoryNamespace.make(namespace),
+    name: HostedRepositoryName.make(name),
+  })
+
+/** Builds a typed locator for one hosted review. */
+export const makeHostedReviewLocator = (
+  providerId: string,
+  namespace: string,
+  name: string,
+  number: number,
+) =>
+  HostedReviewLocator.make({
+    repository: makeHostedRepositoryLocator(providerId, namespace, name),
+    number: HostedReviewNumber.make(number),
+  })
+
+/** Returns whether two hosted repository locators identify the same configured target. */
+export const sameHostedRepository = (
+  left: HostedRepositoryLocator,
+  right: HostedRepositoryLocator,
+): boolean =>
+  left.providerId === right.providerId &&
+  left.namespace.toLocaleLowerCase("en-US") === right.namespace.toLocaleLowerCase("en-US") &&
+  left.name.toLocaleLowerCase("en-US") === right.name.toLocaleLowerCase("en-US")
+
+/** Returns whether two hosted review locators identify the same configured target. */
+export const sameHostedReview = (left: HostedReviewLocator, right: HostedReviewLocator): boolean =>
+  sameHostedRepository(left.repository, right.repository) && left.number === right.number
+
 /** Local-only repository source, separate from hosted provider identity. */
 export class LocalRepositorySource extends Schema.TaggedClass<LocalRepositorySource>()(
   "local",
@@ -142,8 +175,8 @@ export class BranchRevision extends Schema.Class<BranchRevision>("BranchRevision
   revision: Schema.NullOr(Schema.String),
 }) {}
 
-/** Provider-neutral changed-file metadata. */
-export class ReviewChangedFile extends Schema.Class<ReviewChangedFile>("ReviewChangedFile")({
+/** Provider-neutral changed-file metadata shared by hosted and local reviews. */
+export class ChangedFile extends Schema.Class<ChangedFile>("ChangedFile")({
   path: Schema.String,
   additions: Schema.Number,
   deletions: Schema.Number,
@@ -185,7 +218,7 @@ export class HostedReviewSummary extends Schema.Class<HostedReviewSummary>("Host
 /** Detailed provider-neutral hosted review metadata. */
 export class HostedReviewDetail extends Schema.Class<HostedReviewDetail>("HostedReviewDetail")({
   summary: HostedReviewSummary,
-  files: Schema.Array(ReviewChangedFile),
+  files: Schema.Array(ChangedFile),
   commits: Schema.Array(ReviewCommit),
 }) {}
 

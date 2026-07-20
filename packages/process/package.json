@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    "./cli": "./src/cli.ts",
-    "./cli-stream": "./src/cli-stream.ts",
-    "./executable": "./src/executable.ts"
+    ".": "./src/process.ts",
+    "./executable": "./src/executable.ts",
+    "./temp-resource": "./src/temp-resource.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

@@ -12,10 +12,13 @@
     "./cli-navigation": "./src/cli-navigation.ts",
     "./hosted-git": "./src/hosted-git.ts",
     "./ipc": "./src/ipc.ts",
+    "./payload-budget": "./src/payload-budget.ts",
     "./prerequisites": "./src/prerequisites.ts",
     "./repository-link": "./src/repository-link.ts",
     "./review-threads": "./src/review-threads.ts",
-    "./transport-error": "./src/transport-error.ts"
+    "./review-snapshot": "./src/review-snapshot.ts",
+    "./transport-error": "./src/transport-error.ts",
+    "./viewed-files": "./src/viewed-files.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -24,6 +27,7 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
     "@diffdash/domain": "workspace:*",
     "effect": "catalog:"
   },

@@ -31,4 +31,4 @@ function Surface({
   return <div className={cn(surfaceVariants({ active, variant, className }))} {...props} />
 }
 
-export { Surface, surfaceVariants }
+export { Surface }

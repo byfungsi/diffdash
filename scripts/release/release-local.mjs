@@ -2,27 +2,18 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import "./load-local-env.mjs"
+import { parseLocalReleaseArguments } from "./release-arguments.mjs"
+import { runSyncCommand } from "./release-command.mjs"
+import { assertTagMatchesVersion, releaseTagForVersion } from "./release-policy.mjs"
 
-const args = process.argv.slice(2)
+const cli = parseLocalReleaseArguments()
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
-const tag = readOption("--tag") ?? `v${packageJson.version}`
-const releaseAssetsDir = path.resolve(readOption("--assets-dir") ?? "release-assets")
-const macArch = readOption("--mac-arch") ?? process.env.RELEASE_MAC_ARCH ?? "all"
-const skipChecks = hasFlag("--skip-checks")
-const skipMac = hasFlag("--skip-mac")
-const skipLinux = hasFlag("--skip-linux")
-const skipPublish = hasFlag("--skip-publish")
-const allowDirty = hasFlag("--allow-dirty")
-const requireTagAtHead = hasFlag("--require-tag-at-head")
+const tag = cli.tag ?? releaseTagForVersion(packageJson.version)
+const releaseAssetsDir = path.resolve(cli.assetsDir ?? "release-assets")
+const macArch = cli.macArch ?? process.env.RELEASE_MAC_ARCH ?? "all"
+const { skipChecks, skipMac, skipLinux, skipPublish, allowDirty, requireTagAtHead } = cli
 
-if (!/^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(tag)) {
-  throw new Error(`Release tag must look like v<semver>, got ${JSON.stringify(tag)}`)
-}
-
-const expectedTag = `v${packageJson.version}`
-if (tag !== expectedTag) {
-  throw new Error(`Release tag ${tag} does not match package version ${packageJson.version}.`)
-}
+assertTagMatchesVersion(tag, packageJson.version)
 
 if (!allowDirty) {
   const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()
@@ -43,10 +34,10 @@ if (tagCommit !== headCommit) {
   console.warn(`Warning: ${message}`)
 }
 
-run("node", ["scripts/release/extract-release-notes.mjs", tag])
+runSyncCommand("node", ["scripts/release/extract-release-notes.mjs", tag])
 
 if (!skipChecks) {
-  run("pnpm", ["release:check"])
+  runSyncCommand("pnpm", ["release:check"])
 }
 
 if (!skipMac) {
@@ -54,15 +45,19 @@ if (!skipMac) {
   if (macArch !== undefined && macArch.trim().length > 0) {
     macArgs.push("--arch", macArch)
   }
-  run("node", macArgs)
+  runSyncCommand("node", macArgs)
 }
 
 if (!skipLinux) {
-  run("node", ["scripts/release/build-local-linux-release.mjs", "--assets-dir", releaseAssetsDir])
+  runSyncCommand("node", [
+    "scripts/release/build-local-linux-release.mjs",
+    "--assets-dir",
+    releaseAssetsDir,
+  ])
 }
 
 if (!skipPublish) {
-  run("node", [
+  runSyncCommand("node", [
     "scripts/release/publish-release-assets.mjs",
     "--tag",
     tag,
@@ -74,28 +69,4 @@ if (!skipPublish) {
 console.log(`Local release candidate flow completed for ${tag}`)
 if (!skipPublish) {
   console.log(`Publish the GitHub draft, then run: pnpm release:promote -- --tag ${tag}`)
-}
-
-function hasFlag(name) {
-  return args.includes(name)
-}
-
-function readOption(name) {
-  const index = args.indexOf(name)
-  if (index === -1) return undefined
-
-  const value = args[index + 1]
-  if (value === undefined || value.startsWith("--")) {
-    throw new Error(`Missing value for ${name}`)
-  }
-  return value
-}
-
-function run(command, commandArgs) {
-  console.log(`$ ${command} ${commandArgs.map(shellQuote).join(" ")}`)
-  execFileSync(command, commandArgs, { env: process.env, stdio: "inherit" })
-}
-
-function shellQuote(value) {
-  return /[^A-Za-z0-9_./:=@-]/.test(value) ? JSON.stringify(value) : value
 }

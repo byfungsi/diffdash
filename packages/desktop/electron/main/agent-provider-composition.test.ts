@@ -6,9 +6,9 @@ import { createAgentProviderComposition } from "./agent-provider-composition"
 describe("agent provider composition", () => {
   it("adds a fourth provider with one composition registration", () => {
     const composition = createAgentProviderComposition({
-      cli: { run: () => Effect.dieMessage("probe is not evaluated during composition") },
-      cliStream: {
-        stream: () => Stream.dieMessage("execution is not evaluated during composition"),
+      processes: {
+        run: () => Effect.dieMessage("probe is not evaluated during composition"),
+        streamLines: () => Stream.dieMessage("execution is not evaluated during composition"),
       },
       tempDirectory: "/tmp/diffdash-agent-composition",
       includeFixture: true,

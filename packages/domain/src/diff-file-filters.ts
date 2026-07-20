@@ -1,4 +1,8 @@
 import type { ParsedDiffFile } from "./diff"
+import { reviewPathBasename } from "./review-path"
+
+/** Minimal parsed-file metadata required for visibility decisions. */
+export type DiffFileSummary = Pick<ParsedDiffFile, "path" | "status">
 
 /** Reasons a diff file is hidden by default in review navigation. */
 export type HiddenDiffFileReason = "binary" | "generated" | "lockfile" | "vendored"
@@ -10,9 +14,9 @@ export interface DiffFileVisibility {
 }
 
 /** Returns the hidden-by-default reason for noisy files, or null when visible. */
-export const getHiddenDiffFileReason = (file: ParsedDiffFile): HiddenDiffFileReason | null => {
+export const getHiddenDiffFileReason = (file: DiffFileSummary): HiddenDiffFileReason | null => {
   const path = file.path.toLowerCase()
-  const name = path.split("/").at(-1) ?? path
+  const name = reviewPathBasename(path)
 
   if (file.status === "binary" || binaryExtensions.some((extension) => path.endsWith(extension))) {
     return "binary"
@@ -30,10 +34,10 @@ export const annotateDiffFileVisibility = (
   files.map((file) => ({ file, hiddenReason: getHiddenDiffFileReason(file) }))
 
 /** Returns files visible under the current hidden-file preference. */
-export const filterVisibleDiffFiles = (
-  files: readonly ParsedDiffFile[],
+export const filterVisibleDiffFiles = <File extends DiffFileSummary>(
+  files: readonly File[],
   showHidden: boolean,
-): readonly ParsedDiffFile[] =>
+): readonly File[] =>
   showHidden ? files : files.filter((file) => getHiddenDiffFileReason(file) === null)
 
 const lockfileNames = new Set([

@@ -1,19 +1,24 @@
 import { Effect, Schema } from "effect"
 
 import {
-  PullRequestCommit,
-  PullRequestDetail,
-  PullRequestDiff,
-  PullRequestFile,
-  PullRequestSummary,
-  ReviewActor,
-} from "@diffdash/domain/pull-request"
+  BranchRevision,
+  ChangedFile,
+  HostedReviewDetail,
+  HostedReviewDiff,
+  HostedReviewSummary,
+  ProviderActor,
+  ReviewCommit,
+  makeHostedReviewLocator,
+} from "@diffdash/domain/git-provider"
 import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import type { ParsedDiff } from "@diffdash/domain/diff"
+import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { PullRequestReviewSnapshot } from "@diffdash/domain/review-context"
+import { HostedReviewSnapshot } from "@diffdash/domain/review-context"
 import {
-  makePullRequestReviewKey,
+  makeReviewDiffIdentity,
+  makeReviewKey,
+  makeReviewSnapshotId,
   ReviewRevision,
   type ReviewKey,
 } from "@diffdash/domain/review-identity"
@@ -38,7 +43,7 @@ import {
   validateWalkthrough,
   WALKTHROUGH_PROMPT_VERSION,
   Walkthrough,
-  walkthroughPullRequestScope,
+  walkthroughHostedReviewScope,
   WalkthroughChapter,
   WalkthroughStop,
   WalkthroughSupportItem,
@@ -227,10 +232,10 @@ export interface DemoScenarioAssets {
 /** One coherent, fully materialized pull-request revision. */
 export interface MaterializedDemoRevision {
   readonly id: string
-  readonly detail: PullRequestDetail
-  readonly diff: PullRequestDiff
+  readonly detail: HostedReviewDetail
+  readonly diff: HostedReviewDiff
   readonly parsedDiff: ParsedDiff
-  readonly snapshot: PullRequestReviewSnapshot
+  readonly snapshot: HostedReviewSnapshot
   readonly walkthrough: StoredWalkthrough
 }
 
@@ -273,22 +278,12 @@ export const decodeDemoJson = <A, I>(
   schema: Schema.Schema<A, I>,
   source: string,
 ): Effect.Effect<A, DemoScenarioValidationError> =>
-  Effect.try({
-    try: () => JSON.parse(source) as unknown,
-    catch: () =>
+  Schema.decodeUnknown(Schema.parseJson(schema))(source).pipe(
+    Effect.mapError(() =>
       DemoScenarioValidationError.make({
         scenarioId,
-        details: [`${assetName} is not valid JSON.`],
+        details: [`${assetName} is not valid JSON or does not match its required schema.`],
       }),
-  }).pipe(
-    Effect.flatMap(Schema.decodeUnknown(schema)),
-    Effect.mapError((error) =>
-      error instanceof DemoScenarioValidationError
-        ? error
-        : DemoScenarioValidationError.make({
-            scenarioId,
-            details: [`${assetName} does not match its required schema.`],
-          }),
     ),
   )
 
@@ -300,11 +295,13 @@ export const materializeDemoScenario = (
   Effect.gen(function* () {
     const manifestErrors = validateManifest(manifest)
     if (manifestErrors.length > 0) return yield* scenarioFailure(manifest.id, manifestErrors)
-    const reviewKey = makePullRequestReviewKey(
-      "github",
-      manifest.repository.owner,
-      manifest.repository.name,
-      manifest.pullRequest.number,
+    const reviewKey = makeReviewKey(
+      makeHostedReviewLocator(
+        "github",
+        manifest.repository.owner,
+        manifest.repository.name,
+        manifest.pullRequest.number,
+      ),
     )
     const repository = Repo.make({
       id: manifest.repository.id,
@@ -412,45 +409,62 @@ const materializeRevision = (
       ])
     }
     const files = parsedDiff.files.map((file) =>
-      PullRequestFile.make({
+      ChangedFile.make({
         path: file.path,
         additions: file.additions,
         deletions: file.deletions,
         changeType: file.status,
       }),
     )
-    const common = {
-      repoOwner: repository.owner,
-      repoName: repository.name,
-      number: manifest.pullRequest.number,
+    const locator = makeHostedReviewLocator(
+      repository.provider,
+      repository.owner,
+      repository.name,
+      manifest.pullRequest.number,
+    )
+    const summary = HostedReviewSummary.make({
+      locator,
       title: manifest.pullRequest.title,
       body: manifest.pullRequest.body,
-      author: ReviewActor.make({ login: manifest.pullRequest.author }),
+      author: ProviderActor.make({
+        id: null,
+        username: manifest.pullRequest.author,
+        displayName: null,
+        avatarUrl: null,
+      }),
       state: manifest.pullRequest.state,
+      decision: "none",
       url: `${repository.remoteUrl}/pull/${manifest.pullRequest.number}`,
-      isDraft: manifest.pullRequest.isDraft,
-      baseRefName: manifest.pullRequest.baseRefName,
-      baseRefOid: revision.baseSha,
-      headRefName: manifest.pullRequest.headRefName,
-      headRefOid: revision.headSha,
+      draft: manifest.pullRequest.isDraft,
+      base: BranchRevision.make({
+        name: manifest.pullRequest.baseRefName,
+        revision: revision.baseSha,
+      }),
+      head: BranchRevision.make({
+        name: manifest.pullRequest.headRefName,
+        revision: revision.headSha,
+      }),
       createdAt: manifest.pullRequest.createdAt,
       updatedAt: revision.updatedAt,
-    }
-    const detail = PullRequestDetail.make({
-      ...common,
-      files,
-      commits: revision.commits.map((commit) => PullRequestCommit.make(commit)),
     })
-    PullRequestSummary.make(common)
-    const diff = PullRequestDiff.make({
-      repoOwner: repository.owner,
-      repoName: repository.name,
-      number: manifest.pullRequest.number,
-      headRefOid: revision.headSha,
+    const detail = HostedReviewDetail.make({
+      summary,
+      files,
+      commits: revision.commits.map((commit) =>
+        ReviewCommit.make({
+          revision: commit.oid,
+          title: commit.messageHeadline,
+          authoredAt: commit.authoredDate,
+        }),
+      ),
+    })
+    const diff = HostedReviewDiff.make({
+      locator,
+      headRevision: revision.headSha,
       diff: rawDiff ?? "",
       fetchedAt: revision.fetchedAt,
     })
-    const scope = walkthroughPullRequestScope(manifest.pullRequest.number)
+    const scope = walkthroughHostedReviewScope(locator)
     const hunkDigest = buildWalkthroughHunkDigest(parsedDiff.files, scope)
     const source = yield* Schema.decodeUnknown(DemoWalkthroughSource)(walkthroughSource).pipe(
       Effect.mapError(() =>
@@ -471,10 +485,18 @@ const materializeRevision = (
       walkthrough,
       createdAt: revision.fetchedAt,
     })
-    const snapshot = PullRequestReviewSnapshot.make({
+    const baseRevision = ReviewRevision.make(revision.baseSha)
+    const headRevision = ReviewRevision.make(revision.headSha)
+    const snapshot = HostedReviewSnapshot.make({
+      snapshotId: makeReviewSnapshotId({
+        reviewKey,
+        baseRevision,
+        headRevision,
+        diffIdentity: makeReviewDiffIdentity(diff.diff),
+      }),
       reviewKey,
-      baseRevision: ReviewRevision.make(revision.baseSha),
-      headRevision: ReviewRevision.make(revision.headSha),
+      baseRevision,
+      headRevision,
       detail,
       diff,
       parsedDiff,
@@ -638,42 +660,12 @@ const resolveLineAnchor = (
 const hunkContainsLocator = (
   hunk: ParsedDiff["files"][number]["hunks"][number],
   locator: DemoLineLocator,
-) => {
-  let oldLine = hunk.oldStart
-  let newLine = hunk.newStart
-  for (const line of hunk.lines) {
-    if (line.startsWith(" ")) {
-      if (
-        ((locator.side === "old" && locator.lineNumber === oldLine) ||
-          (locator.side === "new" && locator.lineNumber === newLine)) &&
-        locator.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      oldLine += 1
-      newLine += 1
-    } else if (line.startsWith("-")) {
-      if (
-        locator.side === "old" &&
-        locator.lineNumber === oldLine &&
-        locator.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      oldLine += 1
-    } else if (line.startsWith("+")) {
-      if (
-        locator.side === "new" &&
-        locator.lineNumber === newLine &&
-        locator.lineContent === line.slice(1)
-      ) {
-        return true
-      }
-      newLine += 1
-    }
-  }
-  return false
-}
+) =>
+  findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
+    side: locator.side,
+    lineNumber: locator.lineNumber,
+    content: locator.lineContent,
+  }) !== null
 
 const validateManifest = (manifest: DemoScenarioManifest) => {
   const details: string[] = []

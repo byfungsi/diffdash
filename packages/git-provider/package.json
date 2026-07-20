@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     ".": "./src/git-provider.ts",
-    "./registry": "./src/registry.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {

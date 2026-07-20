@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Either, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { repositorySource } from "@diffdash/domain/repository"
 import { HostedRepositorySource, LocalRepositorySource } from "@diffdash/domain/git-provider"
 import { DatabaseService } from "./database"
-import { RepositoryStore } from "./repository-store"
+import { RepositoryStore, RepositoryStoreError } from "./repository-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-test-"))),
@@ -148,6 +148,53 @@ describe("RepositoryStore", () => {
         expect(repositorySource(github)).toBeInstanceOf(HostedRepositorySource)
         expect(repositorySource(legacyLocal)).toBeInstanceOf(LocalRepositorySource)
         expect(yield* store.list()).toHaveLength(3)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("rejects corrupt repository text, nullable, and favorite columns", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const database = yield* DatabaseService
+        const repo = yield* store.upsertRepository({
+          localPath: "/tmp/corrupt-repo",
+          name: "corrupt-repo",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/corrupt-repo",
+        })
+
+        yield* database.run("UPDATE repos SET owner = x'01' WHERE id = ?", [repo.id])
+        const corruptText = yield* Effect.either(store.list())
+        expect(Either.isLeft(corruptText)).toBe(true)
+        if (Either.isLeft(corruptText)) {
+          expect(corruptText.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptText.left.operation).toBe("list.decode")
+        }
+
+        yield* database.run("UPDATE repos SET owner = ?, local_path = x'01' WHERE id = ?", [
+          "fungsi",
+          repo.id,
+        ])
+        const corruptNullable = yield* Effect.either(store.touch(repo.id))
+        expect(Either.isLeft(corruptNullable)).toBe(true)
+        if (Either.isLeft(corruptNullable)) {
+          expect(corruptNullable.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptNullable.left.operation).toBe("getById.decode")
+        }
+
+        yield* database.run("UPDATE repos SET local_path = NULL, is_favorite = 2 WHERE id = ?", [
+          repo.id,
+        ])
+        const corruptFavorite = yield* Effect.either(store.list())
+        expect(Either.isLeft(corruptFavorite)).toBe(true)
+        if (Either.isLeft(corruptFavorite)) {
+          expect(corruptFavorite.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptFavorite.left.operation).toBe("list.decode")
+        }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

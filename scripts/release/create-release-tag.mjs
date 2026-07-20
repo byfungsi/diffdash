@@ -1,14 +1,12 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
+import { parseCreateReleaseTagArguments } from "./release-arguments.mjs"
+import { releaseTagForVersion } from "./release-policy.mjs"
 
+parseCreateReleaseTagArguments()
 const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
 const version = packageJson.version
-
-if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
-  throw new Error(`package.json version must be SemVer-like, got ${JSON.stringify(version)}`)
-}
-
-const tag = `v${version}`
+const tag = releaseTagForVersion(version)
 const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" })
 
 if (status.trim().length > 0) {

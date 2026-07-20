@@ -1,6 +1,4 @@
-import { Context, Effect, Either, Layer, Schema } from "effect"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
+import { Context, Effect, Either, Layer, Predicate, Schema } from "effect"
 
 import {
   AICapabilityRoutes,
@@ -10,6 +8,7 @@ import {
   AutoQuality,
   DEFAULT_AI_SETTINGS,
 } from "@diffdash/domain/ai-settings"
+import { readOptionalTextFile, writePrettyJsonFile } from "./file-storage"
 
 const decodeAppearance = Schema.decodeUnknownEither(Appearance)
 const decodeAutoQuality = Schema.decodeUnknownEither(AutoQuality)
@@ -54,39 +53,24 @@ export class AppSettings extends Context.Tag("@diffdash/AppSettings")<
 }
 
 const readSettingsFile = (path: string): Effect.Effect<string | null, AppSettingsError> =>
-  Effect.try({
-    try: () => {
-      try {
-        return readFileSync(path, "utf8")
-      } catch (cause) {
-        if (isNodeError(cause) && cause.code === "ENOENT") return null
-        throw cause
-      }
-    },
-    catch: (cause) => AppSettingsError.make({ operation: "read", cause }),
-  })
+  readOptionalTextFile(path).pipe(
+    Effect.mapError((error) => AppSettingsError.make({ operation: "read", cause: error.error })),
+  )
 
 const writeSettingsFile = (
   path: string,
   settings: unknown,
 ): Effect.Effect<void, AppSettingsError> =>
-  Effect.try({
-    try: () => {
-      mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`, "utf8")
-    },
-    catch: (cause) => AppSettingsError.make({ operation: "write", cause }),
-  })
-
-const isNodeError = (cause: unknown): cause is NodeJS.ErrnoException =>
-  cause instanceof Error && "code" in cause
+  writePrettyJsonFile(path, settings).pipe(
+    Effect.mapError((error) => AppSettingsError.make({ operation: "write", cause: error.error })),
+  )
 
 const mergeSettings = (content: string | null, settings: AISettings): unknown => {
   if (content === null) return settings
   try {
     const existing: unknown = JSON.parse(content)
-    if (!isRecord(existing)) return settings
-    const existingModels = isRecord(existing.models) ? existing.models : {}
+    if (!Predicate.isReadonlyRecord(existing)) return settings
+    const existingModels = Predicate.isReadonlyRecord(existing.models) ? existing.models : {}
     const { provider: _legacyProvider, ...current } = existing
     const { auto: _legacyAutoQuality, ...providerModels } = existingModels
     return { ...current, ...settings, models: { ...providerModels, ...settings.models } }
@@ -104,7 +88,7 @@ const decodeSettings = (
   } catch {
     return { settings: DEFAULT_AI_SETTINGS, migrated: false }
   }
-  if (!isRecord(parsed)) return { settings: DEFAULT_AI_SETTINGS, migrated: false }
+  if (!Predicate.isReadonlyRecord(parsed)) return { settings: DEFAULT_AI_SETTINGS, migrated: false }
 
   const appearance = decodeOrDefault(
     decodeAppearance,
@@ -158,7 +142,7 @@ const decodeCurrentAgentSettings = (settings: Readonly<Record<string, unknown>>)
 
 const migrateLegacyAgentSettings = (settings: Readonly<Record<string, unknown>>) => {
   const provider = nonEmptyString(settings.provider) ?? "auto"
-  const legacyModels = isRecord(settings.models) ? settings.models : {}
+  const legacyModels = Predicate.isReadonlyRecord(settings.models) ? settings.models : {}
   const models = { ...DEFAULT_AI_SETTINGS.models }
   for (const [providerId, modelId] of Object.entries(legacyModels)) {
     if (providerId === "auto") continue
@@ -190,6 +174,3 @@ const decodeOrDefault = <A>(
 
 const nonEmptyString = (value: unknown) =>
   typeof value === "string" && value.length > 0 ? value : null
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)

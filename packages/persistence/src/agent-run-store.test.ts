@@ -7,22 +7,25 @@ import { join } from "node:path"
 import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import {
   ReviewAgentArtifact,
+  type ReviewAgentProviderId,
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
 } from "@diffdash/domain/review-agent"
+import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import {
-  makePullRequestReviewKey,
+  makeReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
-import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
+import { HostedReviewTarget, LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
-import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
+import { AgentRunStore } from "./agent-run-store"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore } from "./review-thread-store"
+import { ReviewTurnStore } from "./review-turn-store"
 import { ThreadMemoryStore, ThreadMemoryStoreError } from "./thread-memory-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
@@ -34,12 +37,14 @@ const makeLayer = (databasePath: string) =>
   Layer.mergeAll(
     RepositoryStore.layer,
     ReviewThreadStore.layer,
+    ReviewTurnStore.layer,
     AgentRunStore.layer,
     AgentRunArtifactStore.layer,
     ThreadMemoryStore.layer,
   ).pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
 
-const reviewKey = makePullRequestReviewKey("github", "fungsi", "diffdash", 69)
+const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 69)
+const reviewKey = makeReviewKey(review)
 const lineAnchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-69"),
   filePath: "src/agent-run.ts",
@@ -52,44 +57,57 @@ const lineAnchor = LineReviewAnchor.make({
   lineContent: "const agentRun = true",
 })
 
-const createThread = Effect.gen(function* () {
-  const repositories = yield* RepositoryStore
-  const threads = yield* ReviewThreadStore
-  const repo = yield* repositories.upsertRepository({
-    provider: "github",
-    owner: "fungsi",
-    name: "diffdash",
-    remoteUrl: "https://github.com/fungsi/diffdash",
-    localPath: null,
+const beginTurn = (provider: ReviewAgentProviderId, model: string) =>
+  Effect.gen(function* () {
+    const repositories = yield* RepositoryStore
+    const threads = yield* ReviewThreadStore
+    const turns = yield* ReviewTurnStore
+    const repo = yield* repositories.upsertRepository({
+      provider: "github",
+      owner: "fungsi",
+      name: "diffdash",
+      remoteUrl: "https://github.com/fungsi/diffdash",
+      localPath: null,
+    })
+    const thread = yield* threads.create({
+      repoId: repo.id,
+      reviewKey,
+      prNumber: 69,
+      baseRevision: ReviewRevision.make("base-sha"),
+      headRevision: ReviewRevision.make("head-sha"),
+      anchor: lineAnchor,
+      bodyMarkdown: MarkdownBody.make("Review this change"),
+    })
+    const targetInput = {
+      threadId: thread.thread.id,
+      target: HostedReviewTarget.make({ kind: "hosted", review }),
+      repoId: repo.id,
+      reviewKey,
+      baseRevision: thread.thread.currentBaseRevision,
+      headRevision: thread.thread.currentHeadRevision,
+    }
+    const mapping = yield* turns.validateTarget(targetInput)
+    const begun = yield* turns.beginTurn({
+      ...targetInput,
+      mapping,
+      provider,
+      model,
+      promptVersion: AgentPromptVersion.make("review-thread-v3"),
+    })
+    return { begun, thread }
   })
-  return yield* threads.create({
-    repoId: repo.id,
-    reviewKey,
-    prNumber: 69,
-    baseRevision: ReviewRevision.make("base-sha"),
-    headRevision: ReviewRevision.make("head-sha"),
-    anchor: lineAnchor,
-    bodyMarkdown: MarkdownBody.make("Review this change"),
-  })
-})
 
 describe("agent run persistence", () => {
-  it.scoped("FUN-69 AC: persists successful and failed run lifecycle transitions", () =>
+  it.scoped("FUN-69 AC: reads aggregate-owned run lifecycle records", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const thread = yield* createThread
+        const { begun, thread } = yield* beginTurn("claude", "claude-sonnet-4")
         const runs = yield* AgentRunStore
+        const turns = yield* ReviewTurnStore
         const database = yield* DatabaseService
         const providerRunId = ReviewAgentProviderRunId.make("claude-session-1")
-        const started = yield* runs.start({
-          threadId: thread.thread.id,
-          provider: "claude",
-          model: "claude-sonnet-4",
-          promptVersion: AgentPromptVersion.make("thread-v1"),
-        })
-        const attached = yield* runs.setProviderRunId({ runId: started.id, providerRunId })
         const usage = ReviewAgentUsage.make({
           inputTokens: 120,
           outputTokens: 40,
@@ -97,15 +115,24 @@ describe("agent run persistence", () => {
           cacheWriteTokens: null,
           costUsd: 0.0042,
         })
-        const completed = yield* runs.complete({ runId: started.id, usage })
+        yield* turns.completeTurn({
+          threadId: thread.thread.id,
+          runId: begun.run.id,
+          messageId: begun.pendingMessage.id,
+          bodyMarkdown: MarkdownBody.make("Completed response"),
+          artifacts: [],
+          providerRunId,
+          usage,
+          memoryUpdate: null,
+        })
+        const completed = yield* runs.get(begun.run.id)
 
-        expect(started).toMatchObject({
+        expect(begun.run).toMatchObject({
           status: "running",
           completedAt: null,
           usage: null,
           error: null,
         })
-        expect(attached.providerRunId).toBe(providerRunId)
         expect(completed).toMatchObject({
           status: "completed",
           providerRunId,
@@ -114,29 +141,12 @@ describe("agent run persistence", () => {
         })
         expect(completed.completedAt).not.toBeNull()
 
-        const failedRun = yield* runs.start({
-          threadId: thread.thread.id,
-          provider: "codex",
-          model: "gpt-5-codex",
-          promptVersion: AgentPromptVersion.make("thread-v1"),
-        })
-        const failed = yield* runs.fail({ runId: failedRun.id, error: "Provider exited" })
-        const terminalTransition = yield* Effect.either(
-          runs.complete({ runId: failedRun.id, usage: null }),
-        )
         const listed = yield* runs.listForThread(thread.thread.id)
 
-        expect(failed).toMatchObject({ status: "failed", usage: null, error: "Provider exited" })
-        expect(listed.map(({ id }) => id)).toEqual(
-          expect.arrayContaining([started.id, failedRun.id]),
-        )
-        expect(Either.isLeft(terminalTransition)).toBe(true)
-        if (Either.isLeft(terminalTransition)) {
-          expect(terminalTransition.left).toBeInstanceOf(AgentRunStoreError)
-        }
+        expect(listed.map(({ id }) => id)).toEqual([begun.run.id])
 
-        yield* database.run("UPDATE agent_runs SET model = '' WHERE id = ?", [started.id])
-        const malformed = yield* Effect.either(runs.get(started.id))
+        yield* database.run("UPDATE agent_runs SET model = '' WHERE id = ?", [begun.run.id])
+        const malformed = yield* Effect.either(runs.get(begun.run.id))
         expect(Either.isLeft(malformed)).toBe(true)
         if (Either.isLeft(malformed)) expect(malformed.left.operation).toBe("get.decode")
       }).pipe(Effect.provide(makeLayer(databasePath)))
@@ -148,16 +158,9 @@ describe("agent run persistence", () => {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const thread = yield* createThread
-        const runs = yield* AgentRunStore
+        const { begun, thread } = yield* beginTurn("claude", "claude-sonnet-4")
         const artifacts = yield* AgentRunArtifactStore
         const database = yield* DatabaseService
-        const run = yield* runs.start({
-          threadId: thread.thread.id,
-          provider: "claude",
-          model: "claude-sonnet-4",
-          promptVersion: AgentPromptVersion.make("thread-v1"),
-        })
         const normalized = ReviewAgentArtifact.make({
           type: "file_read",
           provider: "claude",
@@ -169,12 +172,12 @@ describe("agent run persistence", () => {
           truncated: false,
         })
         const first = yield* artifacts.save({
-          runId: run.id,
+          runId: begun.run.id,
           threadId: thread.thread.id,
           artifact: normalized,
         })
         const second = yield* artifacts.save({
-          runId: run.id,
+          runId: begun.run.id,
           threadId: thread.thread.id,
           artifact: ReviewAgentArtifact.make({
             ...normalized,
@@ -182,7 +185,7 @@ describe("agent run persistence", () => {
             title: "Provider note",
           }),
         })
-        const byRun = yield* artifacts.listForRun(run.id)
+        const byRun = yield* artifacts.listForRun(begun.run.id)
         const byThread = yield* artifacts.listForThread(thread.thread.id)
 
         expect(byRun).toHaveLength(2)
@@ -201,7 +204,7 @@ describe("agent run persistence", () => {
         const wrongProvider = ReviewAgentArtifact.make({ ...normalized, provider: "codex" })
         const rejected = yield* Effect.either(
           artifacts.save({
-            runId: run.id,
+            runId: begun.run.id,
             threadId: thread.thread.id,
             artifact: wrongProvider,
           }),
@@ -215,7 +218,7 @@ describe("agent run persistence", () => {
           "not-json",
           first.id,
         ])
-        const malformed = yield* Effect.either(artifacts.listForRun(run.id))
+        const malformed = yield* Effect.either(artifacts.listForRun(begun.run.id))
         expect(Either.isLeft(malformed)).toBe(true)
         if (Either.isLeft(malformed)) expect(malformed.left.operation).toBe("listForRun.decode")
       }).pipe(Effect.provide(makeLayer(databasePath)))
@@ -227,17 +230,10 @@ describe("agent run persistence", () => {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const thread = yield* createThread
-        const runs = yield* AgentRunStore
+        const { begun, thread } = yield* beginTurn("opencode", "configured-model")
         const artifacts = yield* AgentRunArtifactStore
         const memory = yield* ThreadMemoryStore
         const database = yield* DatabaseService
-        const run = yield* runs.start({
-          threadId: thread.thread.id,
-          provider: "opencode",
-          model: "configured-model",
-          promptVersion: AgentPromptVersion.make("thread-v1"),
-        })
         const normalized = ReviewAgentArtifact.make({
           type: "mcp_tool_result",
           provider: "opencode",
@@ -249,7 +245,7 @@ describe("agent run persistence", () => {
           truncated: false,
         })
         const artifact = yield* artifacts.save({
-          runId: run.id,
+          runId: begun.run.id,
           threadId: thread.thread.id,
           artifact: normalized,
         })

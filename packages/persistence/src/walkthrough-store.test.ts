@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Either, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -13,7 +13,7 @@ import {
 } from "@diffdash/domain/walkthrough"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
-import { WalkthroughStore } from "./walkthrough-store"
+import { WalkthroughStore, WalkthroughStoreError } from "./walkthrough-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-test-"))),
@@ -40,7 +40,7 @@ const makeWalkthrough = (summary: string) =>
             title: "Entry point",
             summary: "Review the entry point first.",
             risk: "critical",
-            hunkIds: ["src/app.tsx:pull-request:51:h1"],
+            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
           }),
         ],
       }),
@@ -50,7 +50,7 @@ const makeWalkthrough = (summary: string) =>
         id: "support-docs",
         title: "Docs",
         reason: "Documentation support.",
-        hunkIds: ["docs/readme.md:pull-request:51:h1"],
+        hunkIds: ["docs/readme.md:hosted-review:github:fungsi/diffdash#51:h1"],
       }),
     ],
   })
@@ -225,5 +225,49 @@ describe("WalkthroughStore", () => {
           expect(differentRepository).toBeNull()
         }).pipe(Effect.provide(makeLayer(databasePath)))
       }),
+  )
+
+  it.scoped("decodes outer walkthrough columns before content JSON", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const repositoryStore = yield* RepositoryStore
+        const walkthroughStore = yield* WalkthroughStore
+        const database = yield* DatabaseService
+        const repo = yield* repositoryStore.upsertRepository({
+          localPath: null,
+          name: "corrupt-walkthrough",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/corrupt-walkthrough",
+        })
+        const key = { ...cacheKey, repoId: repo.id }
+        yield* walkthroughStore.save({
+          ...key,
+          prNumber: 51,
+          walkthrough: makeWalkthrough("Corrupt after save."),
+        })
+        yield* database.run(
+          "UPDATE walkthroughs SET pr_number = 1.5, content_json = 'not-json' WHERE repo_id = ?",
+          [repo.id],
+        )
+
+        const corruptOuter = yield* Effect.either(walkthroughStore.get(key))
+        expect(Either.isLeft(corruptOuter)).toBe(true)
+        if (Either.isLeft(corruptOuter)) {
+          expect(corruptOuter.left).toBeInstanceOf(WalkthroughStoreError)
+          expect(corruptOuter.left.operation).toBe("get.decodeRow")
+        }
+
+        yield* database.run("UPDATE walkthroughs SET pr_number = 51 WHERE repo_id = ?", [repo.id])
+        const corruptContent = yield* Effect.either(walkthroughStore.get(key))
+        expect(Either.isLeft(corruptContent)).toBe(true)
+        if (Either.isLeft(corruptContent)) {
+          expect(corruptContent.left).toBeInstanceOf(WalkthroughStoreError)
+          expect(corruptContent.left.operation).toBe("get.decodeContent")
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
   )
 })

@@ -34,8 +34,13 @@ const makeLayer = (
   remoteUrl = linkedRepo.remoteUrl,
   remoteUrls: readonly string[] = [remoteUrl],
 ) => {
-  const persisted: Array<{ readonly owner: string; readonly name: string; readonly path: string }> =
-    []
+  const persisted: Array<{
+    readonly favorite: boolean | undefined
+    readonly owner: string
+    readonly name: string
+    readonly path: string | null
+    readonly remoteUrl: string
+  }> = []
   const layer = RepositoryLinker.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -66,17 +71,20 @@ const makeLayer = (
                       : repository("fungsi", "diffdash"),
                   )
                 : GitProviderRemoteParseError.make({ remoteUrl: value }),
-            repositoryUrl: () => Effect.succeed(""),
+            repositoryUrl: (locator) =>
+              Effect.succeed(
+                `https://${locator.providerId}.example/${locator.namespace}/${locator.name}`,
+              ),
             fileUrl: () => Effect.succeed(""),
             searchRepositories: () => unavailable(),
             listSearchScopes: () => unavailable(),
-            listPullRequests: () => unavailable(),
-            listReviewRequests: () => unavailable(),
-            getPullRequestDetail: () => unavailable(),
-            refreshPullRequestDetail: () => unavailable(),
-            getPullRequestDiff: () => unavailable(),
-            hasApprovedPullRequest: () => unavailable(),
-            approvePullRequest: () => unavailable(),
+            listHostedReviews: () => unavailable(),
+            listAssignedReviews: () => unavailable(),
+            getHostedReview: () => unavailable(),
+            refreshHostedReview: () => unavailable(),
+            getHostedReviewDiff: () => unavailable(),
+            getReviewDecision: () => unavailable(),
+            submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
             bootstrapBareRepository: () => unavailable(),
             isAvailable: () => Effect.succeed(true),
@@ -85,17 +93,25 @@ const makeLayer = (
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
-            list: () => unavailable(),
+            list: () => Effect.succeed([linkedRepo]),
             upsertRepository: (input) =>
               Effect.sync(() => {
                 persisted.push({
+                  favorite: input.isFavorite,
                   owner: input.owner,
                   name: input.name,
-                  path: input.localPath ?? "",
+                  path: input.localPath,
+                  remoteUrl: input.remoteUrl,
                 })
-                return Repo.make({ ...linkedRepo, ...input, isFavorite: true })
+                return Repo.make({
+                  ...linkedRepo,
+                  ...input,
+                  localPath: input.localPath ?? linkedRepo.localPath,
+                  isFavorite: input.isFavorite === true || linkedRepo.isFavorite,
+                })
               }),
-            setFavorite: () => unavailable(),
+            setFavorite: (_id, isFavorite) =>
+              Effect.succeed(Repo.make({ ...linkedRepo, isFavorite })),
             touch: () => unavailable(),
           }),
         ),
@@ -119,7 +135,13 @@ describe("RepositoryLinker", () => {
 
       expect(repo.localPath).toBe("/workspace/diffdash")
       expect(persisted).toEqual([
-        { owner: "fungsi", name: "diffdash", path: "/workspace/diffdash" },
+        {
+          favorite: true,
+          owner: "fungsi",
+          name: "diffdash",
+          path: "/workspace/diffdash",
+          remoteUrl: linkedRepo.remoteUrl,
+        },
       ])
     }).pipe(Effect.provide(layer))
   })
@@ -170,6 +192,45 @@ describe("RepositoryLinker", () => {
       if (Either.isLeft(result)) {
         expect(result.left.reason).toContain("configured provider")
       }
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect(
+    "resolves hosted URLs while preserving an existing favorite and linked checkout",
+    () => {
+      const { layer, persisted } = makeLayer()
+      return Effect.gen(function* () {
+        const linker = yield* RepositoryLinker
+        const repo = yield* linker.ensureHosted(repository("fungsi", "diffdash"))
+
+        expect(repo.localPath).toBe(linkedRepo.localPath)
+        expect(repo.isFavorite).toBe(true)
+        expect(persisted).toEqual([
+          {
+            favorite: undefined,
+            owner: "fungsi",
+            name: "diffdash",
+            path: null,
+            remoteUrl: "https://github.example/fungsi/diffdash",
+          },
+        ])
+      }).pipe(Effect.provide(layer))
+    },
+  )
+
+  it.effect("canonicalizes local repositories before persistence", () => {
+    const { layer, persisted } = makeLayer()
+    return Effect.gen(function* () {
+      const linker = yield* RepositoryLinker
+      const repo = yield* linker.ensureLocal("/workspace/diffdash/src")
+
+      expect(repo.localPath).toBe(linkedRepo.localPath)
+      expect(persisted[0]).toMatchObject({
+        favorite: false,
+        owner: "local",
+        path: "/workspace/diffdash",
+        remoteUrl: "file:///workspace/diffdash",
+      })
     }).pipe(Effect.provide(layer))
   })
 })

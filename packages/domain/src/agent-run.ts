@@ -8,6 +8,7 @@ import {
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
 } from "./review-agent"
+import { ReviewKey, ReviewRevision } from "./review-identity"
 import { ReviewThreadId } from "./review-thread"
 
 /** Version identifier for the stable prompt contract used by an agent run. */
@@ -29,6 +30,9 @@ export type AgentRunStatus = typeof AgentRunStatus.Type
 export class AgentRun extends Schema.Class<AgentRun>("AgentRun")({
   id: AgentRunId,
   threadId: ReviewThreadId,
+  reviewKey: ReviewKey,
+  baseRevision: ReviewRevision,
+  headRevision: ReviewRevision,
   provider: ReviewAgentProviderId,
   model: Schema.String.pipe(Schema.minLength(1)),
   promptVersion: AgentPromptVersion,
@@ -38,38 +42,6 @@ export class AgentRun extends Schema.Class<AgentRun>("AgentRun")({
   error: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
   startedAt: Schema.String,
   completedAt: Schema.NullOr(Schema.String),
-}) {}
-
-/** Input for recording the start of a provider execution. */
-export class StartAgentRunInput extends Schema.Class<StartAgentRunInput>("StartAgentRunInput")({
-  threadId: ReviewThreadId,
-  provider: ReviewAgentProviderId,
-  model: Schema.String.pipe(Schema.minLength(1)),
-  promptVersion: AgentPromptVersion,
-}) {}
-
-/** Input for attaching a provider-owned run or session ID. */
-export class SetAgentProviderRunIdInput extends Schema.Class<SetAgentProviderRunIdInput>(
-  "SetAgentProviderRunIdInput",
-)({
-  runId: AgentRunId,
-  providerRunId: ReviewAgentProviderRunId,
-}) {}
-
-/** Input for completing a running provider execution. */
-export class CompleteAgentRunInput extends Schema.Class<CompleteAgentRunInput>(
-  "CompleteAgentRunInput",
-)({
-  runId: AgentRunId,
-  providerRunId: Schema.optional(ReviewAgentProviderRunId),
-  usage: Schema.NullOr(ReviewAgentUsage),
-}) {}
-
-/** Input for failing a running provider execution with a user-safe error summary. */
-export class FailAgentRunInput extends Schema.Class<FailAgentRunInput>("FailAgentRunInput")({
-  runId: AgentRunId,
-  error: Schema.String.pipe(Schema.minLength(1)),
-  providerRunId: Schema.optional(ReviewAgentProviderRunId),
 }) {}
 
 /** A normalized artifact together with its persistent run and thread ownership. */

@@ -152,6 +152,17 @@ test("only desktop composition imports a concrete Git provider", () => {
   }
 })
 
+test("Electron IPC controllers do not access repository persistence directly", () => {
+  const controllers = sourceFiles(join(root, "packages/desktop/electron/main/ipc/controllers"))
+  for (const file of controllers) {
+    assert.doesNotMatch(
+      readFileSync(file, "utf8"),
+      /["']@diffdash\/persistence\/repository-store["']/,
+      `${file} must resolve repositories through a main-process service`,
+    )
+  }
+})
+
 test("agent providers remain isolated leaf integrations", () => {
   const sdk = manifests.find(({ manifest }) => manifest.name === "@diffdash/agent-provider")
   assert.ok(sdk, "@diffdash/agent-provider must exist")
@@ -174,6 +185,16 @@ test("agent providers remain isolated leaf integrations", () => {
       `${provider.manifest.name} crosses the agent provider leaf boundary`,
     )
   }
+})
+
+test("protocol may reuse only the browser-safe agent provider SDK boundary", () => {
+  const protocol = manifests.find(({ manifest }) => manifest.name === "@diffdash/protocol")
+  assert.ok(protocol, "@diffdash/protocol must exist")
+  assert.equal(protocol.manifest.dependencies["@diffdash/agent-provider"], "workspace:*")
+  const source = sourceFiles(join(protocol.directory, "src"))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(source, /["']@diffdash\/agent-provider-(?:[^"']+)["']/)
 })
 
 test("provider manifests remain platform-neutral leaves", () => {

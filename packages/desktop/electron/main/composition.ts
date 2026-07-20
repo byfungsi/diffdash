@@ -8,33 +8,32 @@ import { createGitHubProvider } from "@diffdash/git-provider-github"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
-import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
 import { DatabaseService } from "@diffdash/persistence/database"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ThreadMemoryStore } from "@diffdash/persistence/thread-memory-store"
+import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
-import { CliService } from "@diffdash/process/cli"
-import { CliStreamService } from "@diffdash/process/cli-stream"
+import { ProcessService, processRequest } from "@diffdash/process"
+import { ReviewAgentRouting, ReviewAgentService } from "@diffdash/review-agent"
+import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
+import { AgentArtifactNormalizer } from "@diffdash/review-agent/artifact-normalizer"
+import { ReviewContextBuilder } from "@diffdash/review-agent/context-builder"
+import { DiffDashMcpServer } from "@diffdash/review-agent/mcp-server"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { AppState } from "@diffdash/settings/app-state"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
 import { Effect, Layer } from "effect"
 import { app } from "electron"
-import { AgentArtifactNormalizer } from "../../src/main/services/agent-artifact-normalizer"
 import { AgentProviders } from "../../src/main/services/agent-providers"
 import { Analytics } from "../../src/main/services/analytics"
 import { AppConfig } from "../../src/main/services/app-config"
 import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
-import { DiffDashMcpServer } from "../../src/main/services/diffdash-mcp-server"
 import { GitProvider } from "../../src/main/services/git-provider"
 import { Prerequisites } from "../../src/main/services/prerequisites"
 import { RepositoryLinker } from "../../src/main/services/repository-linker"
-import { ReviewAgentRouting, ReviewAgentService } from "../../src/main/services/review-agent"
 import { ReviewContextService } from "../../src/main/services/review-context"
-import { ReviewContextBuilder } from "../../src/main/services/review-context-builder"
-import { ReviewThreadAnchorMapper } from "../../src/main/services/review-thread-anchor-mapper"
+import { ReviewSnapshotService } from "../../src/main/services/review-snapshot"
 import { createAgentProviderComposition } from "./agent-provider-composition"
 import { applicationPaths } from "./paths"
 
@@ -69,12 +68,12 @@ export const createAppLayer = () => {
     worktreePoolPath,
   })
   const settingsLayer = AppSettings.layer(settingsPath)
-  const cliLayer = CliService.layer
+  const processLayer = ProcessService.layer
   const gitProviderRegistryLayer = Layer.effect(
     GitProviderRegistry,
     Effect.gen(function* () {
-      const cli = yield* CliService
-      const registrations: GitProviderRegistration[] = [createGitHubProvider({}, cli)]
+      const processes = yield* ProcessService
+      const registrations: GitProviderRegistration[] = [createGitHubProvider({}, processes)]
       if (process.env.DIFFDASH_E2E_FAKE_GIT_PROVIDER === "1") {
         const remoteUrl = process.env.DIFFDASH_E2E_FAKE_GIT_REMOTE
         registrations.push(
@@ -89,10 +88,12 @@ export const createAppLayer = () => {
             bootstrapBareRepository: (destination) =>
               remoteUrl === undefined
                 ? Effect.dieMessage("DIFFDASH_E2E_FAKE_GIT_REMOTE is required")
-                : cli
-                    .run("git", ["clone", "--bare", "--", remoteUrl, destination], {
-                      timeoutMs: 120_000,
-                    })
+                : processes
+                    .run(
+                      processRequest("git", ["clone", "--bare", "--", remoteUrl, destination], {
+                        timeoutMs: 120_000,
+                      }),
+                    )
                     .pipe(Effect.asVoid),
           }),
         )
@@ -103,18 +104,16 @@ export const createAppLayer = () => {
       )
       return registry
     }),
-  ).pipe(Layer.provide(cliLayer))
+  )
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
   const appStateLayer = AppState.layer(statePath)
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
-      const cli = yield* CliService
-      const cliStream = yield* CliStreamService
+      const processes = yield* ProcessService
       const { registrations, policies } = createAgentProviderComposition({
-        cli,
-        cliStream,
+        processes,
         tempDirectory: agentWorkingDirectory,
         includeFixture: process.env.DIFFDASH_E2E_FAKE_AGENT_PROVIDER === "1",
       })
@@ -122,7 +121,7 @@ export const createAppLayer = () => {
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
       )
     }),
-  ).pipe(Layer.provide(cliLayer), Layer.provide(CliStreamService.layer))
+  )
   const walkthroughRoutingLayer = Layer.effect(
     WalkthroughRouting,
     Effect.gen(function* () {
@@ -153,7 +152,11 @@ export const createAppLayer = () => {
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
   )
+  const reviewSnapshotLayer = ReviewSnapshotService.layer().pipe(
+    Layer.provideMerge(reviewContextLayer),
+  )
   const threadStoreLayer = ReviewThreadStore.layer
+  const reviewTurnStoreLayer = ReviewTurnStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
   const reviewAgentRoutingLayer = Layer.effect(
     ReviewAgentRouting,
@@ -182,15 +185,13 @@ export const createAppLayer = () => {
     Layer.provideMerge(artifactStoreLayer),
   )
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
-    Layer.provideMerge(settingsLayer),
     Layer.provideMerge(reviewAgentRoutingLayer),
     Layer.provideMerge(agentProviderRegistryLayer),
     Layer.provideMerge(gitProviderRegistryLayer),
     Layer.provideMerge(mcpLayer),
     Layer.provideMerge(ReviewContextBuilder.layer),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
-    Layer.provideMerge(ThreadMemoryStore.layer),
-    Layer.provideMerge(AgentRunStore.layer),
+    Layer.provideMerge(reviewTurnStoreLayer),
     Layer.provideMerge(
       HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
     ),
@@ -215,7 +216,8 @@ export const createAppLayer = () => {
   return Layer.mergeAll(
     repositoryLinkerLayer,
     analyticsLayer,
-    reviewContextLayer,
+    reviewSnapshotLayer,
+    reviewTurnStoreLayer,
     appStateLayer,
     Prerequisites.layer.pipe(
       Layer.provideMerge(gitProviderLayer),
@@ -231,8 +233,7 @@ export const createAppLayer = () => {
     updaterLayer,
   ).pipe(
     Layer.provideMerge(DatabaseService.layer(databasePath)),
-    Layer.provideMerge(cliLayer),
-    Layer.provideMerge(CliStreamService.layer),
+    Layer.provideMerge(processLayer),
     Layer.provide(configLayer),
   )
 }

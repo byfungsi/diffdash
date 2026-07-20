@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { afterAll, describe, expect, it } from "@effect/vitest"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { Effect, Redacted, Stream } from "effect"
+import { Effect, Option, Redacted, Stream } from "effect"
 
 import {
   AgentExecutionPolicy,
@@ -23,12 +23,13 @@ import {
   reviewConformance,
   walkthroughConformance,
 } from "@diffdash/agent-provider/testing"
-import { CliError, type CliResult, type CliRunOptions } from "@diffdash/process/cli"
 import {
-  type CliStreamEvent,
-  type CliStreamOptions,
-  type CliStreamRunner,
-} from "@diffdash/process/cli-stream"
+  ProcessLine,
+  ProcessResult,
+  ProcessSpawnError,
+  type ProcessRequest,
+  type ProcessRunner,
+} from "@diffdash/process"
 import {
   makeOpenCodeProvider,
   makeOpenCodeServerConfig,
@@ -42,7 +43,7 @@ import {
 interface Call {
   readonly command: string
   readonly args: readonly string[]
-  readonly options: CliRunOptions | CliStreamOptions | undefined
+  readonly options: ProcessRequest
   readonly prompt: string | null
 }
 
@@ -62,52 +63,54 @@ const makeHarness = (options: HarnessOptions = {}) => {
   let createdSessions = 0
   let reusedSessions = 0
   let abortedSessions = 0
-  const cli = {
-    run: (command: string, args: readonly string[], runOptions?: CliRunOptions) =>
+  const processes: ProcessRunner = {
+    run: (request) =>
       Effect.tryPromise({
         try: async () => {
-          const fileIndex = args.indexOf("--file")
-          const promptPath = fileIndex < 0 ? undefined : args[fileIndex + 1]
+          const fileIndex = request.args.indexOf("--file")
+          const promptPath = fileIndex < 0 ? undefined : request.args[fileIndex + 1]
           calls.push({
-            command,
-            args: [...args],
-            options: runOptions,
+            command: request.command,
+            args: request.args,
+            options: request,
             prompt: promptPath === undefined ? null : await readFile(promptPath, "utf8"),
           })
           return cliResult(
-            command,
-            args,
-            args[0] === "--version"
+            request,
+            request.args[0] === "--version"
               ? "opencode 1.17.16"
               : (options.walkthroughOutput ?? "generated walkthrough"),
           )
         },
         catch: (cause) =>
-          CliError.make({
-            command,
-            args: [...args],
-            cwd: runOptions?.cwd ?? null,
+          ProcessSpawnError.make({
+            command: request.command,
+            args: request.args,
+            cwd: request.cwd,
             exitCode: null,
-            stderr: String(cause),
+            signal: null,
+            stdout: "",
+            stderr: "",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            outputTruncated: false,
+            message: String(cause),
             cause,
           }),
       }),
-  }
-  const cliStream: CliStreamRunner = {
-    stream: (command: string, args: readonly string[], streamOptions?: CliStreamOptions) => {
-      calls.push({ command, args: [...args], options: streamOptions, prompt: null })
+    streamLines: (request) => {
+      calls.push({ command: request.command, args: request.args, options: request, prompt: null })
       return Stream.acquireRelease(
         Effect.sync(() => void (serverAcquired = true)),
         () => Effect.sync(() => void (serverReleased = true)),
       ).pipe(
         Stream.flatMap(() =>
           Stream.concat(
-            Stream.fromIterable<CliStreamEvent>([
-              {
-                _tag: "CliLine",
+            Stream.fromIterable([
+              ProcessLine.make({
                 source: "stdout",
                 line: "opencode server listening on http://127.0.0.1:43210",
-              },
+              }),
             ]),
             Stream.never,
           ),
@@ -151,8 +154,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     return { session } as unknown as OpencodeClient
   }
   const registration = makeOpenCodeProvider({
-    cli,
-    cliStream,
+    processes,
     tempDirectory: directory,
     executablePath: "opencode",
     createClient,
@@ -179,14 +181,19 @@ afterAll(async () => {
   )
 })
 
-const cliResult = (command: string, args: readonly string[], stdout: string): CliResult => ({
-  command,
-  args,
-  cwd: null,
-  exitCode: 0,
-  stdout,
-  stderr: "",
-})
+const cliResult = (request: ProcessRequest, stdout: string): ProcessResult =>
+  ProcessResult.make({
+    command: request.command,
+    args: request.args,
+    cwd: request.cwd,
+    exitCode: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    outputTruncated: false,
+  })
 
 const allowedTool = McpToolName.make("getDiffHunk")
 const reviewPolicy = AgentExecutionPolicy.make({
@@ -395,21 +402,33 @@ describe("OpenCode provider", () => {
     }),
   )
 
-  it("owns defaults, automatic tiers, executable resolution, and scoped server config", () => {
-    expect(OPENCODE_DEFAULT_MODEL).toBe("openai/gpt-5.3-codex-spark")
-    expect(OPENCODE_AUTO_MODELS.balanced).toEqual([
-      "anthropic/claude-sonnet-5",
-      "openai/gpt-5.3-codex-spark",
-    ])
-    expect(resolveOpenCodeExecutable({ envPath: "", home: "/missing" })).toBeNull()
-    const config = makeOpenCodeServerConfig(
-      "http://127.0.0.1:9000/mcp",
-      Redacted.make("scoped-token"),
-    )
-    expect(config.permission).toMatchObject({ "*": "deny", edit: "deny", bash: "deny" })
-    expect(config.mcp?.diffdash).toMatchObject({
-      url: "http://127.0.0.1:9000/mcp",
-      headers: { Authorization: "Bearer scoped-token" },
-    })
-  })
+  it.effect("owns defaults, automatic tiers, executable resolution, and scoped server config", () =>
+    Effect.gen(function* () {
+      expect(OPENCODE_DEFAULT_MODEL).toBe("openai/gpt-5.3-codex-spark")
+      expect(OPENCODE_AUTO_MODELS.balanced).toEqual([
+        "anthropic/claude-sonnet-5",
+        "openai/gpt-5.3-codex-spark",
+      ])
+      expect(OPENCODE_WALKTHROUGH_POLICY).toMatchObject({
+        repository: "local-working-copy",
+        shell: "deny",
+      })
+      expect(OPENCODE_REVIEW_POLICY).toMatchObject({
+        repository: "reviewed-revision",
+        shell: "deny",
+      })
+      expect(
+        Option.isNone(yield* resolveOpenCodeExecutable({ envPath: "", home: "/missing" })),
+      ).toBe(true)
+      const config = makeOpenCodeServerConfig(
+        "http://127.0.0.1:9000/mcp",
+        Redacted.make("scoped-token"),
+      )
+      expect(config.permission).toMatchObject({ "*": "deny", edit: "deny", bash: "deny" })
+      expect(config.mcp?.diffdash).toMatchObject({
+        url: "http://127.0.0.1:9000/mcp",
+        headers: { Authorization: "Bearer scoped-token" },
+      })
+    }),
+  )
 })

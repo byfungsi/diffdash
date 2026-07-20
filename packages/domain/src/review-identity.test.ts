@@ -1,13 +1,20 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { parseUnifiedDiff } from "./diff-parser"
+import { makeHostedReviewLocator } from "./git-provider"
 import {
   BranchComparison,
   LocalReviewTarget,
   localReviewTargetKey,
   workingTreeReviewTarget,
 } from "./local-review"
-import { makePullRequestReviewKey } from "./review-identity"
+import {
+  makeReviewDiffIdentity,
+  makeReviewKey,
+  makeReviewSnapshotId,
+  ReviewKey,
+  ReviewRevision,
+} from "./review-identity"
 
 const shiftedDiff = (oldStart: number, newStart: number) => `diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
@@ -18,9 +25,36 @@ index 1111111..2222222 100644
 -const value = "old"
 +const value = "new"`
 
+const binaryDiffFile = (newObject: string) =>
+  parseUnifiedDiff(`diff --git a/assets/logo.png b/assets/logo.png
+index 1111111..${newObject} 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ`).files[0]
+
+const modeDiffFile = (newMode: string) =>
+  parseUnifiedDiff(`diff --git a/scripts/run.sh b/scripts/run.sh
+old mode 100644
+new mode ${newMode}`).files[0]
+
 describe("review identity", () => {
+  it("derives deterministic revision-and-diff keyed snapshot IDs", () => {
+    const input = {
+      reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
+      baseRevision: ReviewRevision.make("base"),
+      headRevision: ReviewRevision.make("head"),
+      diffIdentity: makeReviewDiffIdentity("diff --git a/a b/a"),
+    }
+
+    expect(makeReviewSnapshotId(input)).toBe(makeReviewSnapshotId(input))
+    expect(
+      makeReviewSnapshotId({
+        ...input,
+        diffIdentity: makeReviewDiffIdentity("diff --git a/a b/a\n+changed"),
+      }),
+    ).not.toBe(makeReviewSnapshotId(input))
+  })
+
   it("FUN-80 AC: creates canonical provider review keys", () => {
-    expect(makePullRequestReviewKey("github", "fungsi", "diffdash", 51)).toBe(
+    expect(makeReviewKey(makeHostedReviewLocator("github", "fungsi", "diffdash", 51))).toBe(
       "github:fungsi/diffdash#51",
     )
   })
@@ -55,7 +89,7 @@ describe("review identity", () => {
       }),
     })
     const keys = [
-      makePullRequestReviewKey("github", "fungsi", "diffdash", 51),
+      makeReviewKey(makeHostedReviewLocator("github", "fungsi", "diffdash", 51)),
       localReviewTargetKey(workingTree),
       localReviewTargetKey(mainAtA),
       localReviewTargetKey(mainAtB),
@@ -72,6 +106,33 @@ describe("review identity", () => {
     expect(first?.fileId).toBe(repeated?.fileId)
     expect(first?.hunks[0]?.id).toBe(repeated?.hunks[0]?.id)
     expect(first?.hunks[0]?.fingerprint).toBe(repeated?.hunks[0]?.fingerprint)
+    expect(first?.patchHash).toBe(repeated?.patchHash)
+  })
+
+  it("keeps file patch hashes stable across blob-only metadata changes", () => {
+    const first = parseUnifiedDiff(shiftedDiff(1, 1)).files[0]
+    const second = parseUnifiedDiff(
+      shiftedDiff(1, 1).replace("index 1111111..2222222", "index aaaaaaa..bbbbbbb"),
+    ).files[0]
+
+    expect(first?.patch).not.toBe(second?.patch)
+    expect(first?.patchHash).toBe(second?.patchHash)
+  })
+
+  it("changes file patch hashes when content changes but not when line ranges shift", () => {
+    const original = parseUnifiedDiff(shiftedDiff(1, 1)).files[0]
+    const changedBody = parseUnifiedDiff(
+      shiftedDiff(1, 1).replace('+const value = "new"', '+const value = "newer"'),
+    ).files[0]
+    const shifted = parseUnifiedDiff(shiftedDiff(20, 20)).files[0]
+
+    expect(original?.patchHash).not.toBe(changedBody?.patchHash)
+    expect(original?.patchHash).toBe(shifted?.patchHash)
+  })
+
+  it("changes file patch hashes for binary content and mode-only changes", () => {
+    expect(binaryDiffFile("2222222")?.patchHash).not.toBe(binaryDiffFile("3333333")?.patchHash)
+    expect(modeDiffFile("100755")?.patchHash).not.toBe(modeDiffFile("100600")?.patchHash)
   })
 
   it("FUN-80 AC: keeps content fingerprints stable when a hunk moves", () => {

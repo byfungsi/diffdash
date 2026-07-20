@@ -1,8 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
 
 import { AppState as SharedAppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
+import { readOptionalTextFile, writePrettyJsonFile } from "./file-storage"
 
 const AppStateFromJson = Schema.parseJson(SharedAppState)
 
@@ -41,26 +40,11 @@ export class AppState extends Context.Tag("@diffdash/AppState")<
 }
 
 const readStateFile = (path: string): Effect.Effect<string | null, AppStateError> =>
-  Effect.try({
-    try: () => {
-      try {
-        return readFileSync(path, "utf8")
-      } catch (cause) {
-        if (isNodeError(cause) && cause.code === "ENOENT") return null
-        throw cause
-      }
-    },
-    catch: (cause) => AppStateError.make({ operation: "read", cause }),
-  })
+  readOptionalTextFile(path).pipe(
+    Effect.mapError((error) => AppStateError.make({ operation: "read", cause: error.error })),
+  )
 
 const writeStateFile = (path: string, state: SharedAppState): Effect.Effect<void, AppStateError> =>
-  Effect.try({
-    try: () => {
-      mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, "utf8")
-    },
-    catch: (cause) => AppStateError.make({ operation: "write", cause }),
-  })
-
-const isNodeError = (cause: unknown): cause is NodeJS.ErrnoException =>
-  cause instanceof Error && "code" in cause
+  writePrettyJsonFile(path, state).pipe(
+    Effect.mapError((error) => AppStateError.make({ operation: "write", cause: error.error })),
+  )

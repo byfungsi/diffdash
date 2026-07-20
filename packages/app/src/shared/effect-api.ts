@@ -18,3 +18,11 @@ export function fetchEffect<A>(tryPromise: () => Promise<A>) {
       }),
   })
 }
+
+/** Lifts and decodes one context-bridged preload response into an Effect atom operation. */
+export function fetchSchemaEffect<A, I>(
+  schema: Schema.Schema<A, I, never>,
+  tryPromise: () => Promise<unknown>,
+) {
+  return fetchEffect(async () => Schema.decodeUnknownSync(schema)(await tryPromise()))
+}

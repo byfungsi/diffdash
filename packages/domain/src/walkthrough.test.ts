@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
 import { parseUnifiedDiff } from "./diff-parser"
+import { makeHostedReviewLocator } from "./git-provider"
 import {
   buildWalkthroughHunkDigest,
   flattenWalkthroughStops,
@@ -9,7 +10,7 @@ import {
   prepareWalkthroughPromptInput,
   validateWalkthrough,
   walkthroughLocalDiffScope,
-  walkthroughPullRequestScope,
+  walkthroughHostedReviewScope,
 } from "./walkthrough"
 
 const parsedDiff = parseUnifiedDiff(`diff --git a/src/app.tsx b/src/app.tsx
@@ -30,7 +31,9 @@ index 3333333..4444444 100644
 -docs
 +docs update`)
 
-const scope = walkthroughPullRequestScope(51)
+const scope = walkthroughHostedReviewScope(
+  makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
+)
 const hunkDigest = buildWalkthroughHunkDigest(parsedDiff.files, scope)
 const [appEntryHunk, appFooterHunk, docsHunk] = hunkDigest
 
@@ -133,7 +136,7 @@ describe("validateWalkthrough", () => {
               stops: [
                 {
                   ...validWalkthrough.chapters[0]?.stops[0],
-                  hunkIds: ["src/unknown.ts:pull-request:51:h1"],
+                  hunkIds: [`src/unknown.ts:${scope}:h1`],
                 },
               ],
             },
@@ -144,7 +147,7 @@ describe("validateWalkthrough", () => {
 
       expect(error.reason).toBe("invalid_hunk_coverage")
       expect(error.details).toContain(
-        "Chapter 1, stop 1 (Entry point) references an unknown hunk ID: src/unknown.ts:pull-request:51:h1",
+        `Chapter 1, stop 1 (Entry point) references an unknown hunk ID: src/unknown.ts:${scope}:h1`,
       )
     }),
   )
