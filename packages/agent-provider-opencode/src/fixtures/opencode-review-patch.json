@@ -1,0 +1,27 @@
+{
+  "info": {
+    "id": "assistant-message-2",
+    "modelID": "claude-sonnet-5",
+    "providerID": "anthropic",
+    "structured": {
+      "bodyMarkdown": "Changed the file.",
+      "threadSummaryUpdate": null,
+      "referencedAnchors": null
+    },
+    "tokens": {
+      "input": 1,
+      "output": 1,
+      "cache": { "read": 0, "write": 0 }
+    },
+    "cost": 0
+  },
+  "parts": [
+    {
+      "type": "patch",
+      "id": "patch-1",
+      "messageID": "assistant-message-2",
+      "hash": "patch-hash",
+      "files": ["src/main.ts"]
+    }
+  ]
+}

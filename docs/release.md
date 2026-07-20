@@ -20,15 +20,15 @@ Prepare the release version and tag:
 ```bash
 pnpm changeset
 pnpm release:version
-git add package.json pnpm-lock.yaml CHANGELOG.md .changeset
+git add packages/desktop/package.json packages/desktop/CHANGELOG.md pnpm-lock.yaml .changeset
 git commit -m "chore: release v0.1.1"
 pnpm release:tag
 git push origin main --tags
 ```
 
-The tag must match the `package.json` version exactly. For example, `package.json` version `0.1.1` must use tag `v0.1.1`.
+The tag must match the `packages/desktop/package.json` version exactly. For example, desktop version `0.1.1` must use tag `v0.1.1`.
 
-`pnpm release:version` applies pending Changesets and updates `CHANGELOG.md`. The GitHub draft release notes are extracted from the matching `CHANGELOG.md` section.
+`pnpm release:version` applies pending Changesets and updates `packages/desktop/CHANGELOG.md`. The GitHub draft release notes are extracted from its matching section.
 
 Run the complete local release flow:
 
@@ -38,7 +38,7 @@ pnpm release:local
 
 The single command:
 
-- verifies release notes exist in `CHANGELOG.md` for `v<package.version>`
+- verifies release notes exist in `packages/desktop/CHANGELOG.md` for the desktop version
 - runs `pnpm release:check`
 - builds both signed, notarized, stapled macOS DMGs and updater ZIPs into `release-assets/`
 - builds the Linux x64 AppImage, updater metadata, and `.deb` in Docker into `release-assets/`
@@ -48,7 +48,7 @@ The single command:
 - mirrors the same assets to R2 at `releases/<tag>/`
 - leaves the currently promoted stable release unchanged while the GitHub Release is a draft
 
-The command requires a clean working tree. The tag must match the `package.json` version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
+The command requires a clean working tree. The tag must match the desktop package version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
 
 Useful options:
 
@@ -101,7 +101,7 @@ Recovery options:
 
 ```bash
 pnpm release:local:mac -- --package-existing --skip-notarize --arch arm64
-node scripts/notarize-app.mjs dist/mac-arm64/DiffDash.app --submission-id <id>
+node scripts/release/notarize-app.mjs packages/desktop/dist/mac-arm64/DiffDash.app --submission-id <id>
 ```
 
 Use `--package-existing --skip-notarize` only after `xcrun stapler validate` confirms an existing app is already stapled.
@@ -116,7 +116,7 @@ The local Linux build script:
 
 - archives `HEAD` into a temporary build directory
 - runs `node:22-trixie` through Docker with `--platform linux/amd64`
-- installs dependencies with the pinned `pnpm` version from `package.json`
+- installs dependencies with the pinned `pnpm` version from the root `package.json`
 - rebuilds native modules for Electron on Linux
 - builds the Linux AppImage with its embedded blockmap, updater metadata, and `.deb`
 - copies all Linux release and updater artifacts to `release-assets/`
@@ -146,7 +146,7 @@ The local publish script:
 Regenerate metadata without uploading when recovering manually:
 
 ```bash
-node scripts/publish-release-assets.mjs --metadata-only
+node scripts/release/publish-release-assets.mjs --metadata-only
 ```
 
 ## Required Local Configuration
@@ -273,7 +273,53 @@ Run the release gate before packaging:
 pnpm release:check
 ```
 
-This runs formatting checks, lint, TypeScript, unit tests, browser tests, and a production build.
+This runs formatting, lint, TypeScript, unit, browser, Electron, packaged Electron, release-policy,
+and download-worker checks.
+
+## Script Ownership And Caching
+
+Repository-wide build/setup checks live in `scripts/build/`. Release orchestration lives in
+`scripts/release/`. Scripts remain inside a package only when they implement that package's own
+build or runtime boundary, such as desktop icon generation and native module rebuilds, persistence
+fixture generation, and packaged-E2E assembly.
+
+Signing, notarization, native rebuilds, installer packaging, GitHub draft creation, R2 upload,
+promotion, deployment, captures, and media rendering are intentionally uncached because they use
+host tools, credentials, external state, or generated binaries. macOS signing/notarization and DMG
+packaging must run on macOS; Linux AppImage/deb packaging runs in the configured Linux Docker
+platform; Windows NSIS must run on Windows. Turbo marks the corresponding package operations as
+uncached, and the repository release commands run directly rather than through Turbo.
+
+## Operational Evidence Record
+
+Signing, notarization, installers, and public promotion require one retained Markdown record per
+release. Store the record outside `dist/` and `release-assets/`; do not attach credentials, private
+keys, notarization request payloads, user repositories, or release binaries.
+
+Record these fields:
+
+- Release tag, package version, commit SHA, operator, approver, UTC start/end, host OS/architecture,
+  Node, pnpm, Electron, and command transcript location.
+- SHA-256 for every promoted artifact and the generated `SHA256SUMS`/`latest.json` files.
+- Apple notarization submission ID and final status, with secret-bearing output redacted.
+- Pass/fail/not-run for each check below, including an owner and follow-up issue for every exception.
+
+Run and retain these checks:
+
+| Surface | Exact check | Expected result |
+|---|---|---|
+| macOS signature | `codesign --verify --deep --strict --verbose=2 DiffDash.app` | Exit 0 for arm64 and x64 apps. |
+| macOS Gatekeeper | `spctl --assess --type execute --verbose=4 DiffDash.app` | Accepted Developer ID application. |
+| macOS notarization | `xcrun stapler validate DiffDash.app` and mounted-DMG launch on a clean account | Staple validates and app launches without bypass. |
+| AppImage | Launch the x64 AppImage on a clean supported Linux host | App boots; update eligibility reports AppImage support. |
+| deb | Install, launch `/usr/bin/diffdash`, upgrade, remove, and inspect launcher ownership | Hook creates only the owned launcher and removal leaves unrelated files untouched. |
+| Windows NSIS | Install, launch, upgrade, uninstall on supported Windows | Record `not-run` unless performed on Windows; never infer a pass from another platform. |
+| Public pointers | Fetch `stable.json`, `latest.json`, and platform updater metadata with GET and HEAD | Status, version, tag, cache headers, and referenced artifact match the promoted release. |
+| Public downloads | Resolve macOS arm64/x64, Linux AppImage/deb aliases and download each object | Redirect target is versioned, architecture-correct, downloadable, and matches `SHA256SUMS`. |
+| Retention | List `releases/` after promotion | Promoted release plus two newest other stable versions remain; GitHub archive remains intact. |
+
+Revalidate after release-script, package-name, signing identity, installer-hook, worker-route, R2
+layout, or updater-feed changes.
 
 ## Packaging Commands
 
@@ -286,7 +332,7 @@ pnpm dist:linux:deb
 pnpm dist:win
 ```
 
-Artifacts are written to `dist/`.
+Artifacts are written to `packages/desktop/dist/`.
 
 ## macOS
 
@@ -311,12 +357,12 @@ pnpm release:local:mac
 Verify a local signed build with:
 
 ```bash
-codesign --verify --deep --strict --verbose=2 dist/mac-arm64/DiffDash.app
-spctl -a -vv --type exec dist/mac-arm64/DiffDash.app
-xcrun stapler validate dist/mac-arm64/DiffDash.app
+codesign --verify --deep --strict --verbose=2 packages/desktop/dist/mac-arm64/DiffDash.app
+spctl -a -vv --type exec packages/desktop/dist/mac-arm64/DiffDash.app
+xcrun stapler validate packages/desktop/dist/mac-arm64/DiffDash.app
 ```
 
-For x64 local builds, use `dist/mac/DiffDash.app`.
+For x64 local builds, use `packages/desktop/dist/mac/DiffDash.app`.
 
 Alternative Apple ID notarization credentials are also supported by Electron Builder:
 

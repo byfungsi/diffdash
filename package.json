@@ -1,212 +1,83 @@
 {
-  "name": "diffdash",
-  "productName": "DiffDash",
-  "version": "0.3.1",
-  "description": "Desktop code review app with Effect-powered TypeScript services.",
-  "homepage": "https://github.com/byfungsi/diffdash",
+  "name": "@diffdash/workspace",
+  "private": true,
   "type": "module",
-  "main": "out/main/index.js",
-  "bin": {
-    "diffdash": "bin/diffdash.mjs"
-  },
   "scripts": {
-    "assets:icons": "node scripts/generate-icons.mjs",
-    "dev": "pnpm assets:icons && pnpm native:electron && electron-vite dev",
-    "build": "electron-vite build",
-    "pack": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --dir --publish=never",
-    "promo:data:check": "vitest run src/demo",
-    "promo:capture": "node demo/capture/capture.mjs",
-    "promo:demo:record": "node demo/capture/record-demo.mjs",
-    "promo:demo": "vite --config demo/capture/vite.config.ts",
-    "promo:demo:build": "vite build --config demo/capture/vite.config.ts",
-    "promo:audio": "node media/scripts/generate-audio.mjs",
-    "promo:media:typecheck": "tsc --noEmit -p media/tsconfig.json",
-    "promo:pdf": "node media/scripts/generate-storyboard-pdfs.mjs",
+    "assets:icons": "pnpm --filter @diffdash/desktop assets:icons",
+    "dev": "pnpm --filter @diffdash/desktop dev",
+    "build": "turbo run build --filter='./packages/*' --filter='./tools/*'",
+    "pack": "pnpm --filter @diffdash/desktop run pack",
+    "pack:e2e": "pnpm --filter @diffdash/e2e package:e2e",
+    "promo:data:check": "pnpm --filter @diffdash/demo test",
+    "promo:capture": "turbo run capture --filter @diffdash/promo-capture",
+    "promo:demo:record": "pnpm --filter @diffdash/promo-capture record",
+    "promo:demo": "pnpm --filter @diffdash/promo-capture dev",
+    "promo:demo:build": "pnpm --filter @diffdash/promo-capture build",
+    "promo:audio": "pnpm --filter @diffdash/promo-media audio",
+    "promo:media:typecheck": "pnpm --filter @diffdash/promo-media typecheck",
+    "promo:pdf": "pnpm --filter @diffdash/promo-media storyboard",
     "promo:pivot": "pnpm promo:demo:record && pnpm promo:pdf",
-    "promo:studio": "pnpm promo:audio && remotion studio media/src/index.ts --public-dir=media/public",
-    "promo:render": "pnpm promo:audio && remotion render media/src/index.ts PromoLandscape media/output/diffdash-v0.2.1-landscape.mp4 --public-dir=media/public --codec=h264 --crf=18 && node media/scripts/mux-compatible-audio.mjs media/output/diffdash-v0.2.1-landscape.mp4",
-    "promo:render:vertical": "pnpm promo:audio && remotion render media/src/index.ts PromoVertical media/output/diffdash-v0.2.1-vertical.mp4 --public-dir=media/public --codec=h264 --crf=18 && node media/scripts/mux-compatible-audio.mjs media/output/diffdash-v0.2.1-vertical.mp4",
-    "promo:render:all": "pnpm promo:render && pnpm promo:render:vertical && pnpm promo:verify",
-    "promo:typecheck": "tsc --noEmit -p demo/tsconfig.json",
-    "promo:verify": "node media/scripts/verify-render.mjs",
-    "dist": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --publish=never",
-    "dist:mac": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --mac dmg zip --publish=never",
-    "dist:linux": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux AppImage deb --publish=never",
-    "dist:linux:deb": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --linux deb --publish=never",
-    "dist:win": "pnpm assets:icons && pnpm native:electron && pnpm build && electron-builder --win nsis --publish=never",
+    "promo:studio": "pnpm --filter @diffdash/promo-media studio",
+    "promo:render": "turbo run render --filter @diffdash/promo-media",
+    "promo:render:vertical": "turbo run render:vertical --filter @diffdash/promo-media",
+    "promo:render:all": "turbo run render:all --filter @diffdash/promo-media",
+    "promo:typecheck": "pnpm --filter @diffdash/demo typecheck && pnpm --filter @diffdash/promo-capture typecheck",
+    "promo:verify": "pnpm --filter @diffdash/promo-media verify",
+    "dist": "pnpm --filter @diffdash/desktop dist",
+    "dist:mac": "pnpm --filter @diffdash/desktop dist:mac",
+    "dist:linux": "pnpm --filter @diffdash/desktop dist:linux",
+    "dist:linux:deb": "pnpm --filter @diffdash/desktop dist:linux:deb",
+    "dist:win": "pnpm --filter @diffdash/desktop dist:win",
+    "fixtures:database-v8": "pnpm --filter @diffdash/desktop fixtures:database-v8",
     "changeset": "changeset",
-    "release:check": "pnpm assets:icons && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:browser && pnpm test:e2e && pnpm release:infrastructure:check",
-    "release:infrastructure:check": "node --check scripts/build-local-mac-release.mjs && node --check scripts/build-local-linux-release.mjs && node --check scripts/publish-release-assets.mjs && node --check scripts/promote-release.mjs && pnpm --dir web/download-worker check && pnpm --dir web/download-worker test",
-    "release:local": "node scripts/release-local.mjs",
-    "release:local:mac": "node scripts/build-local-mac-release.mjs",
-    "release:local:linux": "node scripts/build-local-linux-release.mjs",
-    "release:local:publish": "node scripts/publish-release-assets.mjs",
-    "release:notes": "node scripts/extract-release-notes.mjs",
-    "release:promote": "node scripts/promote-release.mjs",
-    "release:tag": "node scripts/create-release-tag.mjs",
+    "release:check": "pnpm check && pnpm test:browser && pnpm test:e2e && pnpm test:e2e:packaged && pnpm build && pnpm release:infrastructure:check",
+    "release:infrastructure:check": "node --check packages/persistence/scripts/generate-database-v8-fixture.mjs && node --check packages/e2e/scripts/build-packaged-e2e.mjs && node --check scripts/release/build-local-mac-release.mjs && node --check scripts/release/build-local-linux-release.mjs && node --check scripts/release/create-release-tag.mjs && node --check scripts/release/extract-release-notes.mjs && node --check scripts/release/load-local-env.mjs && node --check scripts/release/notarize-app.mjs && node --check scripts/release/promote-release.mjs && node --check scripts/release/publish-release-assets.mjs && node --check scripts/release/release-arguments.mjs && node --check scripts/release/release-command.mjs && node --check scripts/release/release-environment.mjs && node --check scripts/release/release-local.mjs && node --check scripts/release/release-policy.mjs && node --test scripts/release/*.test.mjs && pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test",
+    "release:local": "node scripts/release/release-local.mjs",
+    "release:local:mac": "node scripts/release/build-local-mac-release.mjs",
+    "release:local:linux": "node scripts/release/build-local-linux-release.mjs",
+    "release:local:publish": "node scripts/release/publish-release-assets.mjs",
+    "release:notes": "node scripts/release/extract-release-notes.mjs",
+    "release:promote": "node scripts/release/promote-release.mjs",
+    "release:tag": "node scripts/release/create-release-tag.mjs",
     "release:version": "changeset version",
-    "preview": "electron-vite preview",
-    "prepare": "effect-language-service patch && node scripts/install-husky.mjs",
-    "typecheck": "tsc --noEmit",
-    "test": "pnpm native:node && vitest run",
-    "test:browser": "vitest --config vitest.browser.config.ts run",
-    "test:e2e": "pnpm native:electron && pnpm build && pnpm exec electron --version && playwright test",
-    "test:all": "pnpm test && pnpm test:browser && pnpm test:e2e",
-    "test:watch": "vitest",
-    "lint": "oxlint . --no-error-on-unmatched-pattern",
+    "preview": "pnpm --filter @diffdash/desktop preview",
+    "prepare": "effect-language-service patch && node scripts/build/install-husky.mjs",
+    "typecheck": "turbo run typecheck --filter='./packages/*' --filter='./tools/*'",
+    "ci:affected": "turbo run lint typecheck test build --affected --filter='./packages/*' --filter='./tools/*'",
+    "ci:integration": "pnpm --filter @diffdash/desktop native:node && pnpm --filter @diffdash/desktop test:unit && pnpm test:browser && pnpm test:e2e",
+    "test": "pnpm test:boundaries && pnpm --filter @diffdash/desktop native:node && pnpm --filter @diffdash/domain test && pnpm --filter @diffdash/agent-provider test && pnpm --filter @diffdash/agent-provider-claude test && pnpm --filter @diffdash/agent-provider-codex test && pnpm --filter @diffdash/agent-provider-fixture test && pnpm --filter @diffdash/agent-provider-opencode test && pnpm --filter @diffdash/review-agent test && pnpm --filter @diffdash/walkthrough test && pnpm --filter @diffdash/git-provider test && pnpm --filter @diffdash/git-provider-github test && pnpm --filter @diffdash/git-provider-fixture test && pnpm --filter @diffdash/local-git test && pnpm --filter @diffdash/protocol test && pnpm --filter @diffdash/app test && pnpm --filter @diffdash/process test && pnpm --filter @diffdash/settings test && pnpm --filter @diffdash/persistence test && pnpm --filter @diffdash/desktop test:unit && pnpm --filter @diffdash/web test && pnpm --filter @diffdash/download-worker test && pnpm --filter @diffdash/e2e test && pnpm --filter @diffdash/promo-capture test && pnpm --filter @diffdash/promo-media test && pnpm promo:data:check",
+    "test:boundaries": "node --test scripts/build/package-boundaries.test.mjs",
+    "test:browser": "pnpm --filter @diffdash/app test:browser",
+    "test:e2e": "turbo run e2e --filter @diffdash/e2e",
+    "test:e2e:packaged": "turbo run e2e:packaged --filter @diffdash/e2e",
+    "test:all": "pnpm test && pnpm test:browser && pnpm test:e2e && pnpm --filter @diffdash/download-worker test",
+    "lint": "oxlint . --no-error-on-unmatched-pattern && pnpm test:boundaries",
     "lint:fix": "oxlint . --fix --no-error-on-unmatched-pattern",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "native:electron": "npm_config_runtime=electron npm_config_target=43.0.0 npm_config_disturl=https://electronjs.org/headers node scripts/rebuild-better-sqlite3.mjs",
-    "native:node": "node scripts/rebuild-better-sqlite3.mjs"
+    "generated:check": "pnpm assets:icons && pnpm --filter @diffdash/desktop fixtures:database-v8 && git diff --exit-code -- packages/desktop/resources/icons packages/persistence/src/fixtures/database-v8-populated.sqlite",
+    "check": "pnpm generated:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "native:electron": "pnpm --filter @diffdash/desktop native:electron",
+    "native:node": "pnpm --filter @diffdash/desktop native:node",
+    "workspace:build": "turbo run build --filter='./packages/*' --filter='./tools/*'",
+    "workspace:typecheck": "turbo run typecheck --filter='./packages/*' --filter='./tools/*'",
+    "workspace:test": "turbo run test --filter='./packages/*' --filter='./tools/*'",
+    "workspace:lint": "turbo run lint --filter='./packages/*' --filter='./tools/*'",
+    "web:deploy:dry-run": "pnpm --filter @diffdash/web deploy:dry-run"
   },
-  "keywords": [],
-  "author": "Muhammad Hanif",
-  "license": "ISC",
   "packageManager": "pnpm@10.26.1",
-  "dependencies": {
-    "@effect-atom/atom-react": "^0.5.0",
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@opencode-ai/sdk": "1.17.16",
-    "@pierre/diffs": "^1.2.12",
-    "@pierre/trees": "1.0.0-beta.5",
-    "@radix-ui/react-slot": "^1.3.0",
-    "better-sqlite3": "^12.11.1",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "effect": "^3.21.4",
-    "electron-updater": "6.8.9",
-    "lucide-react": "^1.23.0",
-    "posthog-node": "5.41.0",
-    "radix-ui": "^1.6.2",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "tailwind-merge": "^3.6.0",
-    "tw-animate-css": "^1.4.0",
-    "unicode-animations": "^1.0.3",
-    "zod": "3.25.76"
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
     "@changesets/cli": "^2.31.0",
     "@effect/language-service": "^0.86.4",
-    "@effect/vitest": "^0.29.0",
-    "@playwright/test": "^1.61.1",
-    "@remotion/cli": "4.0.489",
-    "@remotion/renderer": "4.0.489",
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.1.0",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/browser": "^3.2.7",
-    "electron": "^43.0.0",
-    "electron-builder": "^26.15.3",
-    "electron-vite": "^5.0.0",
+    "@types/node": "catalog:",
+    "esbuild": "0.28.1",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.8",
-    "oxlint": "^1.73.0",
+    "oxlint": "catalog:",
     "oxlint-plugin-react-doctor": "^0.7.1",
-    "playwright": "^1.61.1",
-    "remotion": "4.0.489",
-    "shadcn": "^4.13.0",
-    "tailwindcss": "^4.3.2",
-    "typescript": "^6.0.3",
-    "vite": "^7.3.6",
-    "vitest": "^3.2.7"
-  },
-  "build": {
-    "appId": "dev.diffdash.app",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "asar": true,
-    "compression": "normal",
-    "npmRebuild": false,
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "out/**",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/**/*.node"
-    ],
-    "removePackageScripts": true,
-    "publish": [
-      {
-        "provider": "generic",
-        "url": "https://download.usediffdash.com/updates/stable"
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "darkModeSupport": true,
-      "hardenedRuntime": true,
-      "icon": "resources/icons/icon.icns",
-      "notarize": true,
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "type": "distribution",
-      "extraResources": [
-        {
-          "from": "resources/darwin/bin/diffdash",
-          "to": "bin/diffdash"
-        }
-      ]
-    },
-    "dmg": {
-      "backgroundColor": "#111827",
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    },
-    "linux": {
-      "category": "Development",
-      "executableName": "diffdash-desktop",
-      "icon": "resources/icons/png",
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "extraResources": [
-        {
-          "from": "resources/linux/bin/diffdash",
-          "to": "bin/diffdash"
-        }
-      ]
-    },
-    "deb": {
-      "maintainer": "Muhammad Hanif <pocisite@gmail.com>",
-      "afterInstall": "resources/linux/deb/after-install.sh",
-      "afterRemove": "resources/linux/deb/after-remove.sh"
-    },
-    "win": {
-      "icon": "resources/icons/icon.ico",
-      "target": [
-        "nsis"
-      ]
-    },
-    "nsis": {
-      "allowElevation": true,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "oneClick": false,
-      "perMachine": false
-    }
+    "turbo": "^2.10.5",
+    "typescript": "catalog:"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

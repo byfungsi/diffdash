@@ -1,0 +1,28 @@
+{
+  "name": "@diffdash/agent-provider-opencode",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/opencode.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "@opencode-ai/sdk": "1.17.16",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

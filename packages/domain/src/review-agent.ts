@@ -1,0 +1,121 @@
+import { Schema } from "effect"
+
+import { ReviewAnchor, ReviewThreadId } from "./review-thread"
+
+/** Persistent identity for one review agent execution. */
+export const AgentRunId = Schema.String.pipe(Schema.minLength(1), Schema.brand("AgentRunId"))
+
+/** Persistent identity for one review agent execution. */
+export type AgentRunId = typeof AgentRunId.Type
+
+/** Persistent identity for one normalized agent artifact. */
+export const ReviewAgentArtifactId = Schema.String.pipe(
+  Schema.minLength(1),
+  Schema.brand("ReviewAgentArtifactId"),
+)
+
+/** Persistent identity for one normalized agent artifact. */
+export type ReviewAgentArtifactId = typeof ReviewAgentArtifactId.Type
+
+/** Provider-owned identity for an agent run or session. */
+export const ReviewAgentProviderRunId = Schema.String.pipe(
+  Schema.minLength(1),
+  Schema.brand("ReviewAgentProviderRunId"),
+)
+
+/** Provider-owned identity for an agent run or session. */
+export type ReviewAgentProviderRunId = typeof ReviewAgentProviderRunId.Type
+
+/** Open identity of the provider that produced a review run or artifact. */
+export const ReviewAgentProviderId = Schema.String.pipe(Schema.minLength(1))
+
+/** Open identity of the provider that produced a review run or artifact. */
+export type ReviewAgentProviderId = typeof ReviewAgentProviderId.Type
+
+/** Provider-neutral lifecycle stages shown while a review agent turn is running. */
+export const ReviewAgentProgressStage = Schema.Literal(
+  "preparing-context",
+  "reserving-workspace",
+  "creating-repository",
+  "fetching-review-revision",
+  "checking-out-revision",
+  "starting-agent",
+  "reviewing",
+  "restoring-workspace",
+)
+
+/** Provider-neutral lifecycle stages shown while a review agent turn is running. */
+export type ReviewAgentProgressStage = typeof ReviewAgentProgressStage.Type
+
+/** One transient lifecycle update for a running review thread agent. */
+export class ReviewAgentProgress extends Schema.Class<ReviewAgentProgress>("ReviewAgentProgress")({
+  threadId: ReviewThreadId,
+  stage: ReviewAgentProgressStage,
+}) {}
+
+/** User-facing copy for each provider-neutral review-agent lifecycle stage. */
+export const REVIEW_AGENT_PROGRESS_LABELS: Readonly<Record<ReviewAgentProgressStage, string>> = {
+  "preparing-context": "Preparing review context...",
+  "reserving-workspace": "Reserving isolated workspace...",
+  "creating-repository": "Creating isolated repository...",
+  "fetching-review-revision": "Fetching latest review revision...",
+  "checking-out-revision": "Checking out and verifying review revision...",
+  "starting-agent": "Starting agent...",
+  reviewing: "Agent is reviewing...",
+  "restoring-workspace": "Restoring isolated workspace...",
+}
+
+/** Validated product response returned by every review agent provider. */
+export class ReviewThreadAgentResponse extends Schema.Class<ReviewThreadAgentResponse>(
+  "ReviewThreadAgentResponse",
+)({
+  bodyMarkdown: Schema.String.pipe(Schema.minLength(1)),
+  threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.minLength(1))),
+  referencedAnchors: Schema.optional(Schema.Array(ReviewAnchor)),
+}) {}
+
+/** Normalized artifact categories independent of provider event protocols. */
+export const ReviewAgentArtifactType = Schema.Literal(
+  "file_read",
+  "search_result",
+  "shell_output",
+  "web_result",
+  "diff_context",
+  "mcp_tool_result",
+  "provider_message",
+  "unknown",
+)
+
+/** Normalized artifact categories independent of provider event protocols. */
+export type ReviewAgentArtifactType = typeof ReviewAgentArtifactType.Type
+
+/** A bounded provider artifact suitable for persistence and later prompt context. */
+export class ReviewAgentArtifact extends Schema.Class<ReviewAgentArtifact>("ReviewAgentArtifact")({
+  type: ReviewAgentArtifactType,
+  provider: ReviewAgentProviderId,
+  title: Schema.String,
+  content: Schema.String,
+  contentDigest: Schema.String,
+  metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  truncated: Schema.Boolean,
+  originalSize: Schema.Number,
+}) {}
+
+/** Provider-neutral usage and cost fields reported for one turn when available. */
+export class ReviewAgentUsage extends Schema.Class<ReviewAgentUsage>("ReviewAgentUsage")({
+  inputTokens: Schema.NullOr(Schema.Number),
+  outputTokens: Schema.NullOr(Schema.Number),
+  cacheReadTokens: Schema.NullOr(Schema.Number),
+  cacheWriteTokens: Schema.NullOr(Schema.Number),
+  costUsd: Schema.NullOr(Schema.Number),
+}) {}
+
+/** Complete normalized result from one local review thread provider turn. */
+export class ReviewAgentTurnResult extends Schema.Class<ReviewAgentTurnResult>(
+  "ReviewAgentTurnResult",
+)({
+  response: ReviewThreadAgentResponse,
+  artifacts: Schema.Array(ReviewAgentArtifact),
+  providerRunId: Schema.NullOr(ReviewAgentProviderRunId),
+  usage: Schema.NullOr(ReviewAgentUsage),
+}) {}

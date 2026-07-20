@@ -1,0 +1,40 @@
+{
+  "name": "@diffdash/protocol",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./agent-providers": "./src/agent-providers.ts",
+    "./analytics": "./src/analytics.ts",
+    "./api": "./src/api.ts",
+    "./app-update": "./src/app-update.ts",
+    "./channels": "./src/channels.ts",
+    "./cli-navigation": "./src/cli-navigation.ts",
+    "./hosted-git": "./src/hosted-git.ts",
+    "./ipc": "./src/ipc.ts",
+    "./payload-budget": "./src/payload-budget.ts",
+    "./prerequisites": "./src/prerequisites.ts",
+    "./repository-link": "./src/repository-link.ts",
+    "./review-threads": "./src/review-threads.ts",
+    "./review-snapshot": "./src/review-snapshot.ts",
+    "./transport-error": "./src/transport-error.ts",
+    "./viewed-files": "./src/viewed-files.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,6 +1,8 @@
 # DiffDash
 
-DiffDash is a macOS-first desktop code review app for GitHub PRs, local repositories, and AI-generated walkthroughs.
+DiffDash is a macOS-first desktop code review app for hosted reviews, local repositories, and
+AI-generated walkthroughs and review threads. GitHub, Claude, Codex, and OpenCode are current built-in
+providers behind provider-neutral Git and agent contracts.
 
 ## Current Stack
 
@@ -15,20 +17,21 @@ DiffDash is a macOS-first desktop code review app for GitHub PRs, local reposito
 - Vitest + `@effect/vitest` for unit tests and Effect-aware scoped resources
 - Vitest Browser Mode for renderer integration tests
 - Playwright for Electron E2E flows
-- `git`, `gh`, and eventually `codex exec` through typed main-process services
-- `@pierre/diffs` and `@pierre/trees` are installed for the review workspace milestones
+- `git`, `gh`, Claude, Codex, and OpenCode through typed main-process services and provider packages
+- `@pierre/diffs` and `@pierre/trees` render review diffs and file trees
 
-## Milestone 1 Scope
+## Architecture
 
-The current foundation includes:
+The workspace separates browser-safe domain/protocol/application packages, main-process
+infrastructure, provider-neutral orchestration, concrete provider leaves, and one Electron
+composition root. Renderer code reaches Node, SQLite, Git, CLIs, and updater capabilities only
+through the typed preload protocol.
 
-- Electron app shell with React renderer
-- shadcn/ui baseline components
-- Effect language service and strict TypeScript setup
-- SQLite schema for repos, PRs, viewed files, and walkthroughs
-- Effect services for CLI execution, SQLite access, repo storage, GitHub search, and local GitHub remote detection
-- Typed preload API for renderer-to-main calls
-- Home screen for local repo add, remote GitHub search, and repo bookmarking
+Concrete Git and agent integrations are built-in leaf packages registered only by desktop
+composition. These package boundaries are dependency and ownership boundaries, not runtime
+sandboxing. See `docs/architecture.md`, `docs/git-provider-authoring.md`, and
+`docs/agent-provider-authoring.md` for the package graph, allowed directions, extension templates,
+security requirements, tests, and release policy.
 
 ## Scripts
 
@@ -40,6 +43,7 @@ pnpm typecheck
 pnpm test
 pnpm test:browser
 pnpm test:e2e
+pnpm test:e2e:packaged
 pnpm test:all
 pnpm check
 pnpm build
@@ -104,7 +108,7 @@ The preference is stored in `~/.config/diffdash/settings.json`. To opt out manua
 
 Keep the existing `provider` and `models` fields when editing the file. Packaged builds read the
 public PostHog project configuration from `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST` at build time;
-the Electron build falls back to the same values in `web/landing/.env`, and analytics is a no-op
+the Electron build falls back to the same values in `packages/web/.env`, and analytics is a no-op
 when either value is missing.
 
 ## Quality Gates
@@ -114,7 +118,10 @@ when either value is missing.
 - `pnpm test` runs unit tests for utilities, Effect services, persistence, CLI adapters, and isolated components.
 - `pnpm test:browser` runs Vitest Browser Mode interaction tests for composed renderer behavior.
 - `pnpm test:e2e` rebuilds native modules for Electron, builds the app, and runs Playwright Electron E2E tests.
-- `pnpm test:all` runs unit, browser integration, and Electron E2E tests in sequence.
+- `pnpm test:e2e:packaged` launches the existing unsigned electron-builder target and verifies ASAR,
+  updater and CLI resources, native SQLite, packaged branches, preload isolation, deterministic Git
+  and agent provider composition, and restart persistence without authentication or network access.
+- `pnpm test:all` runs unit, browser integration, Electron E2E, and download-worker tests in sequence.
 - `pnpm check` runs formatting check, lint, TypeScript, and tests.
 - `.husky/pre-commit` runs lint-staged auto-formatting, `pnpm typecheck`, and `pnpm test` once the folder is inside a Git repository and `pnpm prepare` has run.
 
@@ -130,11 +137,15 @@ Use three levels of tests:
 - Vitest Browser Mode integration tests for page/component interaction and renderer state transitions.
 - Playwright Electron E2E tests for complete flows through the real app shell, preload IPC, main-process services, and renderer.
 
+The primary Electron E2E flow also closes and relaunches DiffDash against the same user-data and
+settings directories. It verifies preload isolation, SQLite-backed viewed files, completed review
+threads, cached walkthroughs, and source-checkout safety across a real application restart.
+
 Tests should use real seams:
 
 - Effect layers for service dependencies
 - temp SQLite databases for persistence behavior
-- narrow fakes at service boundaries, such as fake CLI output for `gh`
+- narrow fakes at service boundaries, including deterministic Git, hosted provider, and agent fixtures
 - real subprocesses only where the behavior under test is CLI execution itself
 
 Browser tests require the Playwright Chromium binary once per machine:
@@ -144,8 +155,6 @@ pnpm exec playwright install chromium
 ```
 
 Browser-backed tests run headless by default. Use non-headless mode only when debugging a visual or timing issue.
-
-This workspace is currently not a Git repository, so Husky hook installation is skipped until `.git` exists.
 
 ## Effect Guidance
 
@@ -162,11 +171,12 @@ Use the local Effect source reference at `~/.local/share/effect-solutions/effect
 
 Use shadcn/ui for reusable primitives and keep app-specific composition in feature components.
 
-The shadcn config is `components.json`, with aliases pointing to `src/renderer/src`.
+The shadcn config is `packages/desktop/components.json`, with aliases pointing to
+`packages/app/src`.
 
 ## Required Local Tools
 
 - `pnpm`
 - `git`
 - `gh` for GitHub repo and PR access
-- `codex` for later AI walkthrough generation
+- at least one supported agent runtime: Claude, Codex, or OpenCode

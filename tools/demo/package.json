@@ -1,0 +1,29 @@
+{
+  "name": "@diffdash/demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./atomic-webhook-replay": "./src/atomic-webhook-replay.ts",
+    "./demo-api": "./src/demo-api.ts",
+    "./demo-scenario": "./src/demo-scenario.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

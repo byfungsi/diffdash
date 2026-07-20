@@ -48,8 +48,8 @@ Use this to explore APIs, find usage examples, and understand implementation det
 - Model main-process dependencies as Effect services with explicit layers.
 - Provide Effect layers once at the app boundary rather than inside business logic.
 - Use `Schema.Class` and `Schema.TaggedError` for shared data and recoverable errors.
-- Use shadcn/ui components from `src/renderer/src/components/ui` for reusable UI primitives.
-- Keep feature UI in `src/renderer/src` and platform/service logic in `src/main/services`.
+- Use shadcn/ui components from `packages/app/src/components/ui` for reusable UI primitives.
+- Keep feature UI in `packages/app/src` and platform/service logic in `packages/desktop/src/main/services`.
 - Run `pnpm format`, `pnpm lint`, `pnpm typecheck`, and `pnpm build` after significant bootstrap or architecture changes.
 - Run `pnpm test` when changing service, parsing, persistence, CLI, or Effect layer behavior.
 - Do not bypass React Doctor findings by adding memoization by default; first prefer simpler component boundaries or stable event patterns.
@@ -61,7 +61,7 @@ Use this to explore APIs, find usage examples, and understand implementation det
 - Build reusable design-system primitives first, then compose feature UI from those primitives. Avoid scattered HTML with random styling across feature code.
 - Keep light mode work compatible with future dark mode by using semantic tokens instead of hard-coded surface, text, border, and accent values.
 - Treat bring-your-own-theme support as a product requirement: new UI should be easy to retheme without rewriting components.
-- When a feature needs a new visual pattern, decide whether it belongs in `src/renderer/src/components/ui` or a feature-local component before adding styles inline.
+- When a feature needs a new visual pattern, decide whether it belongs in `packages/app/src/components/ui` or a feature-local component before adding styles inline.
 
 ## TypeScript Coding Standards
 

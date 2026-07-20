@@ -1,0 +1,222 @@
+@import "tailwindcss";
+@source ".";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: oklch(0.985 0.005 95);
+  --foreground: oklch(0.19 0.018 260);
+  --card: oklch(0.995 0.003 95);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.46 0.16 265);
+  --primary-foreground: oklch(0.985 0.005 95);
+  --secondary: oklch(0.94 0.018 260);
+  --secondary-foreground: oklch(0.23 0.025 260);
+  --muted: oklch(0.94 0.014 250);
+  --muted-foreground: oklch(0.51 0.035 255);
+  --accent: oklch(0.93 0.035 75);
+  --accent-foreground: oklch(0.25 0.032 65);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.985 0.005 95);
+  --border: oklch(0.88 0.018 260);
+  --input: var(--border);
+  --ring: oklch(0.58 0.16 265);
+  --radius: 1rem;
+  --search-surface: oklch(1 0 0);
+  --search-surface-border: oklch(0.84 0.03 260);
+  --search-surface-shadow:
+    0 26px 70px -24px rgb(15 23 42 / 64%), 0 16px 38px -24px rgb(15 23 42 / 42%);
+  --search-results-max-height: min(28rem, calc(100vh - 16rem));
+  --review-sidebar: oklch(0.43 0.06 225);
+  --review-sidebar-border: oklch(0.34 0.055 235 / 70%);
+  --review-sidebar-divider: oklch(0.34 0.055 235 / 60%);
+  --review-sidebar-fg: oklch(0.9 0.025 250);
+  --review-sidebar-muted: oklch(0.82 0.035 250 / 72%);
+  --review-sidebar-control: oklch(1 0 0 / 10%);
+  --review-sidebar-control-hover: oklch(1 0 0 / 8%);
+  --review-sidebar-control-active: oklch(1 0 0 / 10%);
+  --review-sidebar-emphasis: oklch(0.76 0.14 225);
+  --review-tree-selected: oklch(0.71 0.15 235 / 12%);
+  --review-tree-selected-border: oklch(0.71 0.15 235 / 72%);
+  --review-tree-indent: oklch(0.72 0.04 250 / 18%);
+  --review-success: oklch(0.72 0.1 160);
+  --review-success-foreground: oklch(0.18 0.025 160);
+  --review-danger: oklch(0.74 0.12 25);
+  --walkthrough-marker-surface: var(--card);
+  --risk-critical: oklch(0.57 0.2 25);
+  --risk-review: oklch(0.59 0.14 72);
+  --risk-support: oklch(0.48 0.035 260);
+  --favorite: oklch(0.72 0.16 78);
+  --review-search-match: oklch(0.88 0.15 92 / 72%);
+  --review-search-active: oklch(0.72 0.18 72);
+  --review-search-active-foreground: oklch(0.18 0.03 65);
+  --diff-canvas: oklch(0.99 0.003 95);
+  --diff-gutter: oklch(0.965 0.007 95);
+  --diff-separator: oklch(0.94 0.01 95);
+  --diff-addition: #dafbe1;
+  --diff-addition-emphasis: #aceebb;
+  --diff-deletion: #ffebe9;
+  --diff-deletion-emphasis: #ffcecb;
+  --diff-hover: color-mix(in oklch, var(--primary) 8%, var(--diff-canvas));
+  --diff-selection: color-mix(in oklch, var(--primary) 14%, var(--diff-canvas));
+  --pr-open: #2da44e;
+  --pr-closed: oklch(0.57 0.2 25);
+  --pr-merged: oklch(0.52 0.17 305);
+  --pr-draft: oklch(0.53 0.03 260);
+  --pr-status-foreground: #ffffff;
+}
+
+@layer utilities {
+  .max-h-search-results {
+    max-height: var(--search-results-max-height);
+  }
+}
+
+.dark {
+  --background: oklch(0.205 0.016 260);
+  --foreground: oklch(0.9 0.01 250);
+  --card: oklch(0.235 0.018 260);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.68 0.16 265);
+  --primary-foreground: oklch(0.19 0.018 260);
+  --secondary: oklch(0.275 0.022 260);
+  --secondary-foreground: oklch(0.88 0.012 250);
+  --muted: oklch(0.265 0.018 260);
+  --muted-foreground: oklch(0.68 0.022 255);
+  --accent: oklch(0.29 0.035 75);
+  --accent-foreground: oklch(0.88 0.02 80);
+  --destructive: oklch(0.66 0.18 25);
+  --destructive-foreground: oklch(0.97 0.01 25);
+  --border: oklch(0.295 0.022 260);
+  --input: var(--border);
+  --ring: oklch(0.68 0.16 265);
+  --search-surface: var(--card);
+  --search-surface-border: var(--border);
+  --search-surface-shadow: 0 26px 70px -24px rgb(0 0 0 / 48%), 0 16px 38px -24px rgb(0 0 0 / 34%);
+  --review-sidebar: oklch(0.25 0.045 235);
+  --review-sidebar-border: oklch(0.33 0.04 245 / 80%);
+  --review-sidebar-divider: oklch(0.33 0.04 245 / 70%);
+  --review-sidebar-fg: oklch(0.92 0.02 250);
+  --review-sidebar-muted: oklch(0.78 0.03 250 / 72%);
+  --review-sidebar-control: oklch(1 0 0 / 8%);
+  --review-sidebar-control-hover: oklch(1 0 0 / 10%);
+  --review-sidebar-control-active: oklch(1 0 0 / 12%);
+  --review-sidebar-emphasis: oklch(0.75 0.15 225);
+  --review-tree-selected: oklch(0.71 0.15 235 / 16%);
+  --review-tree-selected-border: oklch(0.71 0.15 235 / 78%);
+  --review-tree-indent: oklch(0.75 0.035 250 / 20%);
+  --review-success: oklch(0.78 0.1 160);
+  --review-success-foreground: oklch(0.18 0.025 160);
+  --review-danger: oklch(0.78 0.12 25);
+  --walkthrough-marker-surface: oklch(0.93 0.01 250);
+  --risk-critical: oklch(0.76 0.14 25);
+  --risk-review: oklch(0.78 0.12 78);
+  --risk-support: oklch(0.7 0.035 255);
+  --favorite: oklch(0.8 0.14 82);
+  --review-search-match: oklch(0.68 0.14 88 / 58%);
+  --review-search-active: oklch(0.8 0.17 88);
+  --review-search-active-foreground: oklch(0.2 0.03 65);
+  --diff-canvas: oklch(0.245 0.017 260);
+  --diff-gutter: oklch(0.265 0.019 260);
+  --diff-separator: oklch(0.285 0.02 260);
+  --diff-addition: color-mix(in oklch, var(--review-success) 12%, var(--diff-canvas));
+  --diff-addition-emphasis: color-mix(in oklch, var(--review-success) 22%, var(--diff-canvas));
+  --diff-deletion: color-mix(in oklch, var(--review-danger) 12%, var(--diff-canvas));
+  --diff-deletion-emphasis: color-mix(in oklch, var(--review-danger) 26%, var(--diff-canvas));
+  --diff-hover: color-mix(in oklch, var(--primary) 9%, var(--diff-canvas));
+  --diff-selection: color-mix(in oklch, var(--primary) 16%, var(--diff-canvas));
+  --pr-open: #2ea043;
+  --pr-closed: oklch(0.66 0.18 25);
+  --pr-merged: oklch(0.66 0.16 305);
+  --pr-draft: oklch(0.62 0.035 260);
+  --pr-status-foreground: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-search-surface: var(--search-surface);
+  --color-search-surface-border: var(--search-surface-border);
+  --color-review-sidebar: var(--review-sidebar);
+  --color-review-sidebar-border: var(--review-sidebar-border);
+  --color-review-sidebar-divider: var(--review-sidebar-divider);
+  --color-review-sidebar-fg: var(--review-sidebar-fg);
+  --color-review-sidebar-muted: var(--review-sidebar-muted);
+  --color-review-sidebar-control: var(--review-sidebar-control);
+  --color-review-sidebar-control-hover: var(--review-sidebar-control-hover);
+  --color-review-sidebar-control-active: var(--review-sidebar-control-active);
+  --color-review-sidebar-emphasis: var(--review-sidebar-emphasis);
+  --color-review-tree-selected: var(--review-tree-selected);
+  --color-review-tree-selected-border: var(--review-tree-selected-border);
+  --color-review-tree-indent: var(--review-tree-indent);
+  --color-review-success: var(--review-success);
+  --color-review-success-foreground: var(--review-success-foreground);
+  --color-review-danger: var(--review-danger);
+  --color-walkthrough-marker-surface: var(--walkthrough-marker-surface);
+  --color-risk-critical: var(--risk-critical);
+  --color-risk-review: var(--risk-review);
+  --color-risk-support: var(--risk-support);
+  --color-favorite: var(--favorite);
+  --color-pr-open: var(--pr-open);
+  --color-pr-closed: var(--pr-closed);
+  --color-pr-merged: var(--pr-merged);
+  --color-pr-draft: var(--pr-draft);
+  --color-pr-status-fg: var(--pr-status-foreground);
+  --shadow-search-floating: var(--search-surface-shadow);
+  --spacing-review-sidebar: 23.125rem;
+  --spacing-review-title-inset: 5.25rem;
+  --spacing-review-title-top-offset: 0.1875rem;
+  --container-review-diff: 77.5rem;
+  --text-caption: 0.6875rem;
+  --text-caption--line-height: 1rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family:
+      Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  #root {
+    inset: 0;
+    position: fixed;
+  }
+}

@@ -1,0 +1,201 @@
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Either, Layer } from "effect"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+import { repositorySource } from "@diffdash/domain/repository"
+import { HostedRepositorySource, LocalRepositorySource } from "@diffdash/domain/git-provider"
+import { DatabaseService } from "./database"
+import { RepositoryStore, RepositoryStoreError } from "./repository-store"
+
+const makeTempDatabasePath = Effect.acquireRelease(
+  Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-test-"))),
+  (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
+).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
+
+const makeLayer = (databasePath: string) =>
+  RepositoryStore.layer.pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
+
+describe("RepositoryStore", () => {
+  it.scoped("persists local and remote-only repositories", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const remote = yield* store.upsertRepository({
+          isFavorite: true,
+          localPath: null,
+          name: "remote-repo",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/remote-repo",
+        })
+        const local = yield* store.upsertRepository({
+          isFavorite: false,
+          localPath: "/tmp/local-repo",
+          name: "local-repo",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/local-repo",
+        })
+        const repos = yield* store.list()
+
+        expect(remote.localPath).toBeNull()
+        expect(remote.isFavorite).toBe(true)
+        expect(local.localPath).toBe("/tmp/local-repo")
+        expect(repos.map((repo) => repo.id)).toEqual([remote.id, local.id])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("updates favorite state and supports search", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const database = yield* DatabaseService
+        const repo = yield* store.upsertRepository({
+          localPath: null,
+          name: "searchable",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/searchable",
+        })
+
+        const updated = yield* store.setFavorite(repo.id, true)
+        const matches = yield* store.list("fungsi/search")
+        yield* database.run(
+          "UPDATE repos SET last_opened_at = '2000-01-01T00:00:00.000Z', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+          [repo.id],
+        )
+        const touched = yield* store.touch(repo.id)
+
+        expect(updated.isFavorite).toBe(true)
+        expect(matches).toHaveLength(1)
+        expect(matches[0]?.id).toBe(repo.id)
+        expect(touched.lastOpenedAt).not.toBe("2000-01-01T00:00:00.000Z")
+        expect(touched.updatedAt).not.toBe("2000-01-01T00:00:00.000Z")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("upgrades a hosted favorite with its local checkout without duplicating it", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const hosted = yield* store.upsertRepository({
+          isFavorite: true,
+          localPath: null,
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+        })
+        const linked = yield* store.upsertRepository({
+          isFavorite: false,
+          localPath: "/tmp/diffdash",
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash.git",
+        })
+        const repositories = yield* store.list()
+
+        expect(repositories).toHaveLength(1)
+        expect(linked.id).toBe(hosted.id)
+        expect(linked.createdAt).toBe(hosted.createdAt)
+        expect(linked.localPath).toBe("/tmp/diffdash")
+        expect(linked.isFavorite).toBe(true)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("FUN-130 AC: isolates nested repositories across provider IDs", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const github = yield* store.upsertRepository({
+          localPath: null,
+          name: "service",
+          owner: "platform/backend",
+          provider: "github",
+          remoteUrl: "https://github.com/platform/backend/service",
+        })
+        const enterprise = yield* store.upsertRepository({
+          localPath: null,
+          name: "service",
+          owner: "platform/backend",
+          provider: "github-enterprise",
+          remoteUrl: "https://git.example.com/platform/backend/service",
+        })
+        const legacyLocal = yield* store.upsertRepository({
+          localPath: "/tmp/service",
+          name: "service-local-id",
+          owner: "local",
+          provider: "local",
+          remoteUrl: "",
+        })
+
+        expect(github.id).toBe("github:platform/backend/service")
+        expect(enterprise.id).toBe("github-enterprise:platform/backend/service")
+        expect(repositorySource(github)).toBeInstanceOf(HostedRepositorySource)
+        expect(repositorySource(legacyLocal)).toBeInstanceOf(LocalRepositorySource)
+        expect(yield* store.list()).toHaveLength(3)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("rejects corrupt repository text, nullable, and favorite columns", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const database = yield* DatabaseService
+        const repo = yield* store.upsertRepository({
+          localPath: "/tmp/corrupt-repo",
+          name: "corrupt-repo",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/corrupt-repo",
+        })
+
+        yield* database.run("UPDATE repos SET owner = x'01' WHERE id = ?", [repo.id])
+        const corruptText = yield* Effect.either(store.list())
+        expect(Either.isLeft(corruptText)).toBe(true)
+        if (Either.isLeft(corruptText)) {
+          expect(corruptText.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptText.left.operation).toBe("list.decode")
+        }
+
+        yield* database.run("UPDATE repos SET owner = ?, local_path = x'01' WHERE id = ?", [
+          "fungsi",
+          repo.id,
+        ])
+        const corruptNullable = yield* Effect.either(store.touch(repo.id))
+        expect(Either.isLeft(corruptNullable)).toBe(true)
+        if (Either.isLeft(corruptNullable)) {
+          expect(corruptNullable.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptNullable.left.operation).toBe("getById.decode")
+        }
+
+        yield* database.run("UPDATE repos SET local_path = NULL, is_favorite = 2 WHERE id = ?", [
+          repo.id,
+        ])
+        const corruptFavorite = yield* Effect.either(store.list())
+        expect(Either.isLeft(corruptFavorite)).toBe(true)
+        if (Either.isLeft(corruptFavorite)) {
+          expect(corruptFavorite.left).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptFavorite.left.operation).toBe("list.decode")
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+})

@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.1"
+  TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+  TURBO_SCM_HEAD: ${{ github.event.pull_request.head.sha }}
+
+jobs:
+  verify:
+    name: Format, affected packages, and integration
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies from lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Install browser and Electron system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Check generated output drift
+        run: pnpm generated:check
+
+      - name: Lint, typecheck, unit test, and build affected packages
+        run: pnpm ci:affected
+
+      - name: Run architecture and bundle boundaries
+        run: pnpm test:boundaries
+
+      - name: Run browser tests
+        run: pnpm test:browser
+
+      - name: Run download worker checks
+        run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test
+
+      - name: Run Electron E2E tests
+        run: xvfb-run -a pnpm test:e2e
+
+      - name: Detect provider or protocol changes
+        id: integration
+        shell: bash
+        run: |
+          if git diff --quiet "${TURBO_SCM_BASE}" "${TURBO_SCM_HEAD}" -- \
+            packages/protocol \
+            packages/agent-provider \
+            packages/agent-provider-* \
+            packages/git-provider \
+            packages/git-provider-*; then
+            printf '%s\n' 'required=false' >> "${GITHUB_OUTPUT}"
+          else
+            printf '%s\n' 'required=true' >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Run dependent provider and protocol integration
+        if: steps.integration.outputs.required == 'true'
+        run: xvfb-run -a pnpm ci:integration

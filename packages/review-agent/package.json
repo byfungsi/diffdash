@@ -1,0 +1,37 @@
+{
+  "name": "@diffdash/review-agent",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/review-agent.ts",
+    "./anchor-mapper": "./src/review-thread-anchor-mapper.ts",
+    "./artifact-normalizer": "./src/agent-artifact-normalizer.ts",
+    "./context-builder": "./src/review-context-builder.ts",
+    "./mcp-server": "./src/diffdash-mcp-server.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/git-provider": "workspace:*",
+    "@diffdash/local-git": "workspace:*",
+    "@diffdash/persistence": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "effect": "catalog:",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

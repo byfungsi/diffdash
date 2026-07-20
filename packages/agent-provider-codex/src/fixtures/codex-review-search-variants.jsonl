@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"codex-thread-search-variants"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"web-full","type":"web_search","query":"Codex JSONL protocol","status":"completed","action":{"type":"open_page","url":"https://developers.openai.com/codex/non-interactive-mode"},"results":[{"title":"Non-interactive mode","url":"https://developers.openai.com/codex/non-interactive-mode","content":"JSONL event documentation"}]}}
+{"type":"item.completed","item":{"id":"web-query-only","type":"web_search","query":"Codex item variants"}}
+{"type":"item.completed","item":{"id":"web-status-only","type":"web_search_call","status":"completed"}}
+{"type":"item.completed","item":{"id":"web-nested","type":"web_search_call","action":{"type":"search","queries":["Codex exec JSONL","Codex web search item"]},"details":{"status":"completed"},"response":{"url":"https://example.com/codex","content":{"summary":"Nested web result"}}}}
+{"type":"item.completed","item":{"id":"repository-search","type":"search","source":"repository","request":{"query":"provider-result-adapter"},"result":{"status":"completed","content":[{"path":"packages/review-agent/src/provider-result-adapter.ts","line":13}]}}}
+{"type":"item.completed","item":{"id":"ambiguous-search","type":"search","query":"unproven search scope","status":"completed","result":{"content":"Must remain unknown"}}}
+{"type":"item.completed","item":{"id":"message-search","type":"agent_message","text":"{\"bodyMarkdown\":\"The changed hunk is correct.\",\"threadSummaryUpdate\":null,\"referencedAnchors\":null}"}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":40,"output_tokens":24}}

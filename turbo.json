@@ -1,0 +1,132 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@diffdash/download-worker#build": {
+      "outputs": []
+    },
+    "@diffdash/demo#build": {
+      "outputs": []
+    },
+    "@diffdash/promo-capture#build": {
+      "outputs": [".cache/host/**"]
+    },
+    "@diffdash/desktop#build": {
+      "outputs": ["out/**"]
+    },
+    "@diffdash/web#build": {
+      "outputs": ["dist/**"]
+    },
+    "@diffdash/promo-media#build": {
+      "outputs": []
+    },
+    "@diffdash/app#build": {
+      "outputs": []
+    },
+    "@diffdash/domain#build": {
+      "outputs": []
+    },
+    "@diffdash/agent-provider#build": {
+      "outputs": []
+    },
+    "@diffdash/git-provider#build": {
+      "outputs": []
+    },
+    "@diffdash/git-provider-github#build": {
+      "outputs": []
+    },
+    "@diffdash/local-git#build": {
+      "outputs": []
+    },
+    "@diffdash/protocol#build": {
+      "outputs": []
+    },
+    "@diffdash/process#build": {
+      "outputs": []
+    },
+    "@diffdash/settings#build": {
+      "outputs": []
+    },
+    "@diffdash/persistence#build": {
+      "outputs": []
+    },
+    "@diffdash/e2e#build": {
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "lint": {
+      "dependsOn": ["^lint"],
+      "outputs": []
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "capture": {
+      "cache": false
+    },
+    "render": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
+    },
+    "render:vertical": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
+    },
+    "render:all": {
+      "dependsOn": ["@diffdash/promo-capture#capture"],
+      "cache": false
+    },
+    "e2e": {
+      "dependsOn": ["@diffdash/desktop#build"],
+      "cache": false
+    },
+    "package:e2e": {
+      "cache": false
+    },
+    "e2e:packaged": {
+      "dependsOn": ["@diffdash/e2e#package:e2e"],
+      "cache": false
+    },
+    "deploy": {
+      "cache": false
+    },
+    "deploy:dry-run": {
+      "cache": false
+    },
+    "pack": {
+      "cache": false
+    },
+    "dist": {
+      "cache": false
+    },
+    "dist:mac": {
+      "cache": false
+    },
+    "dist:linux": {
+      "cache": false
+    },
+    "dist:linux:deb": {
+      "cache": false
+    },
+    "dist:win": {
+      "cache": false
+    },
+    "native:electron": {
+      "cache": false
+    },
+    "native:node": {
+      "cache": false
+    }
+  }
+}

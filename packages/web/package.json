@@ -1,0 +1,33 @@
+{
+  "name": "@diffdash/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "check:worker": "node --check worker/index.js",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "lint": "oxlint src worker vite.config.ts --no-error-on-unmatched-pattern",
+    "deploy": "pnpm check:worker && pnpm build && wrangler deploy",
+    "deploy:dry-run": "pnpm check:worker && pnpm build && wrangler deploy --dry-run",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@gsap/react": "^2.1.2",
+    "gsap": "^3.15.0",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

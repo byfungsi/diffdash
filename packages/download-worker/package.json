@@ -1,0 +1,21 @@
+{
+  "name": "@diffdash/download-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "check": "node --check src/index.js",
+    "build": "pnpm check",
+    "typecheck": "pnpm check",
+    "lint": "pnpm check",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "catalog:"
+  }
+}

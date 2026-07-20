@@ -1,0 +1,37 @@
+{
+  "name": "@diffdash/promo-capture",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "capture": "node capture.mjs",
+    "record": "node record-demo.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "lint": "oxlint src vite.config.ts --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/app": "workspace:*",
+    "@diffdash/demo": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@playwright/test": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "oxlint": "catalog:",
+    "playwright": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

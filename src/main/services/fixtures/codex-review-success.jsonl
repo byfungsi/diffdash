@@ -1,7 +1,0 @@
-{"type":"thread.started","thread_id":"codex-thread-sanitized-74"}
-{"type":"turn.started"}
-{"type":"item.started","item":{"id":"cmd-1","type":"command_execution","command":"git diff -- src/main/example.ts","status":"in_progress"}}
-{"type":"item.completed","item":{"id":"cmd-1","type":"command_execution","command":"git diff -- src/main/example.ts","aggregated_output":"@@ -1 +1 @@\n-old\n+new","exit_code":0,"status":"completed"}}
-{"type":"item.completed","item":{"id":"mcp-1","type":"mcp_tool_call","server":"diffdash","tool":"getDiffHunk","arguments":{"fileId":"file-sanitized","hunkId":"hunk-sanitized"},"result":{"content":[{"type":"text","text":"{\"status\":\"available\"}"}]},"status":"completed"}}
-{"type":"item.completed","item":{"id":"message-1","type":"agent_message","text":"{\"bodyMarkdown\":\"The changed hunk is correct.\",\"threadSummaryUpdate\":null,\"referencedAnchors\":null}"}}
-{"type":"turn.completed","usage":{"input_tokens":240,"cached_input_tokens":120,"output_tokens":42,"reasoning_output_tokens":8}}

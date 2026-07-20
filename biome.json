@@ -5,17 +5,24 @@
     "includes": [
       "**",
       "!node_modules",
-      "!out",
-      "!dist",
-      "!web/landing/dist",
-      "!coverage",
-      "!test-results",
+      "!**/out",
+      "!**/dist",
+      "!**/.turbo",
+      "!**/coverage",
+      "!**/test-results",
+      "!**/release-assets",
       "!demo/.cache",
       "!media/.cache",
       "!media/output",
       "!media/public/audio",
       "!media/public/captures",
       "!media/public/fonts",
+      "!tools/promo-capture/.cache",
+      "!tools/promo-media/.cache",
+      "!tools/promo-media/output",
+      "!tools/promo-media/public/audio",
+      "!tools/promo-media/public/captures",
+      "!tools/promo-media/public/fonts",
       "!pnpm-lock.yaml",
       "!*.tsbuildinfo"
     ]
@@ -37,6 +44,9 @@
     }
   },
   "linter": {
+    "enabled": false
+  },
+  "assist": {
     "enabled": false
   }
 }

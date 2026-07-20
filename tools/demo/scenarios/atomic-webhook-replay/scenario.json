@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "id": "atomic-webhook-replay",
+  "title": "Atomic webhook replay claims",
+  "appVersion": "v0.2.1",
+  "locale": "en-US",
+  "timezone": "UTC",
+  "theme": "dark",
+  "currentRevisionId": "02-database-clock",
+  "repository": {
+    "id": "github:emberline/dispatch",
+    "owner": "emberline",
+    "name": "dispatch",
+    "description": "Reliable event delivery for multi-region commerce systems.",
+    "remoteUrl": "https://github.com/emberline/dispatch",
+    "createdAt": "2026-06-18T09:24:00Z"
+  },
+  "pullRequest": {
+    "number": 417,
+    "title": "Make webhook replay claims atomic",
+    "body": "## Context\n\nDuring the June 28 incident, two workers could replay the same failed delivery because ownership was recorded after the status check.\n\n## Changes\n\n- claim replay ownership in Postgres before delivery\n- recover claims after a bounded lease\n- expose claim state in the operations console\n- cover concurrent workers and document the recovery path\n\n## Rollout\n\nShip behind `atomic_replay_claims`, enable in one region, then expand after the duplicate-delivery metric remains flat for 24 hours.",
+    "author": "nina-sato",
+    "state": "OPEN",
+    "isDraft": false,
+    "baseRefName": "main",
+    "headRefName": "nina/webhook-replay-claims",
+    "createdAt": "2026-07-09T08:42:17Z"
+  },
+  "searchScopes": [
+    { "login": "hanipcode", "kind": "user" },
+    { "login": "emberline", "kind": "organization" }
+  ],
+  "revisions": [
+    {
+      "id": "01-initial",
+      "baseSha": "73e9bd92aeb7c0f4bf61e152ead72dc60ef128bf",
+      "headSha": "c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69",
+      "fetchedAt": "2026-07-09T11:18:42Z",
+      "updatedAt": "2026-07-09T11:14:08Z",
+      "diffAsset": "revisions/01-initial/unified.diff",
+      "walkthroughAsset": "revisions/01-initial/walkthrough.json",
+      "commits": [
+        {
+          "oid": "8ba42596ec97df2417a97523ed5149113beebaf5",
+          "messageHeadline": "Add atomic replay claim persistence",
+          "authoredDate": "2026-07-09T09:07:31Z"
+        },
+        {
+          "oid": "c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69",
+          "messageHeadline": "Expose replay ownership in operations",
+          "authoredDate": "2026-07-09T10:56:44Z"
+        }
+      ]
+    },
+    {
+      "id": "02-database-clock",
+      "baseSha": "73e9bd92aeb7c0f4bf61e152ead72dc60ef128bf",
+      "headSha": "f16d263bf19eea8ba23cd15700db6f8f1ba38c12",
+      "fetchedAt": "2026-07-10T08:36:19Z",
+      "updatedAt": "2026-07-10T08:31:55Z",
+      "diffAsset": "revisions/02-database-clock/unified.diff",
+      "walkthroughAsset": "revisions/02-database-clock/walkthrough.json",
+      "commits": [
+        {
+          "oid": "8ba42596ec97df2417a97523ed5149113beebaf5",
+          "messageHeadline": "Add atomic replay claim persistence",
+          "authoredDate": "2026-07-09T09:07:31Z"
+        },
+        {
+          "oid": "c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69",
+          "messageHeadline": "Expose replay ownership in operations",
+          "authoredDate": "2026-07-09T10:56:44Z"
+        },
+        {
+          "oid": "f16d263bf19eea8ba23cd15700db6f8f1ba38c12",
+          "messageHeadline": "Use database time for replay leases",
+          "authoredDate": "2026-07-10T08:24:39Z"
+        }
+      ]
+    }
+  ],
+  "threads": [
+    {
+      "id": "thread-replay-lease",
+      "originalRevisionId": "01-initial",
+      "currentRevisionId": "02-database-clock",
+      "anchorStatus": "active",
+      "locator": {
+        "path": "packages/db/src/replay-claims.ts",
+        "side": "new",
+        "lineNumber": 20,
+        "lineContent": "     WHERE replay_claim.claimed_until < excluded.claimed_at"
+      },
+      "createdAt": "2026-07-09T12:03:11Z",
+      "updatedAt": "2026-07-10T08:18:27Z",
+      "messages": [
+        {
+          "id": "message-lease-question",
+          "sequence": 0,
+          "author": "user",
+          "bodyMarkdown": "Does a crashed worker strand this delivery forever, or can another worker reclaim it after the lease expires?",
+          "status": "complete",
+          "agentRunId": null,
+          "createdAt": "2026-07-09T12:03:11Z",
+          "updatedAt": "2026-07-09T12:03:11Z"
+        },
+        {
+          "id": "message-lease-answer",
+          "sequence": 1,
+          "author": "agent",
+          "bodyMarkdown": "Another worker can reclaim it after `claimed_until` passes. The `ON CONFLICT ... DO UPDATE` remains atomic: only the worker whose claim observes an expired lease receives the returned row.\n\nThe risk is the time source. `excluded.claimed_at` currently comes from the worker, so clock drift between regions can shorten or extend the effective lease.",
+          "status": "complete",
+          "agentRunId": "run-lease-initial",
+          "createdAt": "2026-07-09T12:03:18Z",
+          "updatedAt": "2026-07-09T12:03:23Z"
+        },
+        {
+          "id": "message-clock-question",
+          "sequence": 2,
+          "author": "user",
+          "bodyMarkdown": "Can two regions disagree if their worker clocks drift?",
+          "status": "complete",
+          "agentRunId": null,
+          "createdAt": "2026-07-10T08:17:54Z",
+          "updatedAt": "2026-07-10T08:17:54Z"
+        },
+        {
+          "id": "message-clock-answer",
+          "sequence": 3,
+          "author": "agent",
+          "bodyMarkdown": "Yes. Revision 2 closes that gap by reading `transaction_timestamp()` from Postgres before claiming and by covering two workers with intentionally skewed application clocks. Lease comparison and lease creation now share one authoritative clock.",
+          "status": "complete",
+          "agentRunId": "run-lease-follow-up",
+          "createdAt": "2026-07-10T08:18:02Z",
+          "updatedAt": "2026-07-10T08:18:27Z"
+        }
+      ]
+    }
+  ],
+  "agentTurns": [
+    {
+      "id": "turn-lease-initial",
+      "threadId": "thread-replay-lease",
+      "agentRunId": "run-lease-initial",
+      "responseBodyMarkdown": "Another worker can reclaim it after `claimed_until` passes. The `ON CONFLICT ... DO UPDATE` remains atomic: only the worker whose claim observes an expired lease receives the returned row.\n\nThe risk is the time source. `excluded.claimed_at` currently comes from the worker, so clock drift between regions can shorten or extend the effective lease.",
+      "threadSummaryUpdate": "Replay claims are recoverable after lease expiry; database time should govern cross-region leases.",
+      "progress": [
+        { "afterMs": 0, "stage": "preparing-context" },
+        { "afterMs": 180, "stage": "reserving-workspace" },
+        { "afterMs": 420, "stage": "fetching-review-revision" },
+        { "afterMs": 760, "stage": "checking-out-revision" },
+        { "afterMs": 1040, "stage": "starting-agent" },
+        { "afterMs": 1320, "stage": "reviewing" },
+        { "afterMs": 2380, "stage": "restoring-workspace" }
+      ]
+    },
+    {
+      "id": "turn-lease-follow-up",
+      "threadId": "thread-replay-lease",
+      "agentRunId": "run-lease-follow-up",
+      "responseBodyMarkdown": "Yes. Revision 2 closes that gap by reading `transaction_timestamp()` from Postgres before claiming and by covering two workers with intentionally skewed application clocks. Lease comparison and lease creation now share one authoritative clock.",
+      "threadSummaryUpdate": "Database time now governs replay claim leases across regions.",
+      "progress": [
+        { "afterMs": 0, "stage": "preparing-context" },
+        { "afterMs": 260, "stage": "starting-agent" },
+        { "afterMs": 520, "stage": "reviewing" },
+        { "afterMs": 1680, "stage": "restoring-workspace" }
+      ]
+    }
+  ],
+  "initiallyViewedFilePaths": ["docs/runbooks/webhook-replays.md"]
+}
