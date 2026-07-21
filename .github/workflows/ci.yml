@@ -67,6 +67,11 @@ jobs:
           DEBUG: pw:browser
         run: xvfb-run -a pnpm test:e2e
 
+      - name: Run packaged Electron E2E tests
+        env:
+          DEBUG: pw:browser
+        run: xvfb-run -a pnpm test:e2e:packaged
+
       - name: Detect provider or protocol changes
         id: integration
         shell: bash

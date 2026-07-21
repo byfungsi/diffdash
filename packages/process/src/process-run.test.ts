@@ -325,6 +325,23 @@ describe("ProcessService captured execution", () => {
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
+  it.scopedLive("allows inherited stdio to close shortly after the direct child exits", () =>
+    Effect.gen(function* () {
+      const script = `
+        const { spawn } = require('node:child_process')
+        const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 250)'], {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        })
+        child.unref()
+        process.stdout.write('parent-output')
+      `
+      const cli = testRunner(yield* ProcessService)
+      const result = yield* cli.run(process.execPath, ["-e", script])
+
+      expect(result.stdout).toBe("parent-output")
+    }).pipe(Effect.provide(ProcessService.layer)),
+  )
+
   it.scopedLive("finishes at the cleanup deadline when detached inherited stdio never closes", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
