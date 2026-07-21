@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.4.1
+
+### Patch Changes
+
+- [#11](https://github.com/byfungsi/diffdash/pull/11) [`97eb2ab`](https://github.com/byfungsi/diffdash/commit/97eb2ab7784f5836597d9c446b3b4222b3984225) Thanks [@hanipcode](https://github.com/hanipcode)! - Discover OpenCode from `~/.opencode/bin` after desktop launches without shadowing other CLI tools, keep packaged upgrades on the stable application data path, create recovery-safe SQLite backups before schema migrations, and surface bookmark load failures with retry.
+
 ## 0.4.0
 
 ### Minor Changes
