@@ -79,10 +79,22 @@ export const boundedProviderReason = (
     cause.reason.trim().length > 0
   ) {
     reason = cause.reason
+  } else if (isGenericProcessSpawnFailure(cause)) {
+    reason = fallback
   } else if (cause instanceof Error && cause.message.trim().length > 0) {
     reason = cause.message
   }
   return boundedProviderDiagnostic(reason, extraRedaction, maximumLength)
+}
+
+const isGenericProcessSpawnFailure = (cause: unknown) => {
+  const message =
+    Predicate.isReadonlyRecord(cause) && typeof cause.message === "string"
+      ? cause.message
+      : cause instanceof Error
+        ? cause.message
+        : null
+  return message !== null && message.trim().toLowerCase() === "failed to spawn command"
 }
 
 /** Sanitizes and bounds a provider-owned diagnostic string. */

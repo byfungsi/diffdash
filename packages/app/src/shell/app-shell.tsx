@@ -221,6 +221,9 @@ export function AppShell() {
   })
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
+  const bookmarksStatus = Result.isFailure(repositoriesResult)
+    ? resultErrorMessage(repositoriesResult, "Could not load bookmarked repositories")
+    : null
   const providers = availableProviders
   const bookmarkedRepos = repos.filter(isBookmarkedPullRequestRepo)
   const hasQuery = query.trim().length > 0
@@ -823,6 +826,7 @@ export function AppShell() {
         <HomeScreen
           activeProviderId={activeProviderId}
           bookmarkedRepos={bookmarkedRepos}
+          bookmarksStatus={bookmarksStatus}
           diagnostics={diagnostics}
           hasQuery={hasQuery}
           isLoadingDiagnostics={isLoadingDiagnostics}
@@ -847,6 +851,7 @@ export function AppShell() {
           setupStatus={setupActionStatus}
           onBookmark={(repo) => void bookmarkRemote(repo)}
           onInstallDiffDashCli={() => void installDiffDashCli()}
+          onRetryBookmarks={refreshRepositories}
           onOpenDocs={openSetupDocs}
           onOpenRecentReview={openRecentReview}
           onOpenReview={openReview}

@@ -1,4 +1,12 @@
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
@@ -294,6 +302,23 @@ describe("DatabaseService", () => {
         assertPopulatedVersion8Fixture.pipe(Effect.provide(makeCompatibilityLayer(databasePath))),
       )
 
+      const directory = resolve(databasePath, "..")
+      const backups = readdirSync(directory).filter((name) => name.includes(".pre-migration-v8-"))
+      expect(backups).toHaveLength(1)
+      expect(existsSync(join(directory, backups[0] ?? ""))).toBe(true)
+      const backupSqlite = new BetterSqlite3(join(directory, backups[0] ?? ""), {
+        readonly: true,
+        fileMustExist: true,
+      })
+      expect(backupSqlite.pragma("user_version", { simple: true })).toBe(8)
+      expect(
+        backupSqlite
+          .prepare("SELECT is_favorite FROM repos WHERE id = ?")
+          .pluck()
+          .get("github:byfungsi/diffdash"),
+      ).toBe(1)
+      backupSqlite.close()
+
       const sqlite = new BetterSqlite3(databasePath)
       expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
       const agentRunsSql = sqlite
@@ -443,12 +468,54 @@ describe("DatabaseService", () => {
 
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
       const sqlite = new BetterSqlite3(databasePath)
+      sqlite
+        .prepare(
+          `INSERT INTO repos (
+            id, provider, owner, name, remote_url, local_path, is_favorite,
+            last_opened_at, last_synced_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "github:byfungsi/diffdash",
+          "github",
+          "byfungsi",
+          "diffdash",
+          "https://github.com/byfungsi/diffdash",
+          null,
+          1,
+          "2026-07-16T00:00:00.000Z",
+          "2026-07-16T00:00:00.000Z",
+          "2026-07-16T00:00:00.000Z",
+          "2026-07-16T00:00:00.000Z",
+        )
       sqlite.pragma("user_version = 0")
       sqlite.close()
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
+      const directory = resolve(databasePath, "..")
+      const backups = readdirSync(directory).filter((name) => name.includes(".pre-migration-v0-"))
+      expect(backups).toHaveLength(1)
+      const backupSqlite = new BetterSqlite3(join(directory, backups[0] ?? ""), {
+        readonly: true,
+        fileMustExist: true,
+      })
+      expect(backupSqlite.pragma("user_version", { simple: true })).toBe(0)
+      expect(
+        backupSqlite
+          .prepare("SELECT is_favorite FROM repos WHERE id = ?")
+          .pluck()
+          .get("github:byfungsi/diffdash"),
+      ).toBe(1)
+      backupSqlite.close()
+
       const reopened = new BetterSqlite3(databasePath)
       expect(reopened.pragma("user_version", { simple: true })).toBe(11)
+      expect(
+        reopened
+          .prepare("SELECT is_favorite FROM repos WHERE id = ?")
+          .pluck()
+          .get("github:byfungsi/diffdash"),
+      ).toBe(1)
       reopened.close()
     }),
   )

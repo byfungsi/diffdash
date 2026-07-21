@@ -593,10 +593,22 @@ const migrations: readonly DatabaseMigration[] = [
   },
 ]
 
+/** Highest schema version applied by DiffDash migrations. */
+export const latestDatabaseSchemaVersion = () => migrations.at(-1)?.version ?? 0
+
+/** Reads the durable SQLite schema version stored in `PRAGMA user_version`. */
+export const readDatabaseUserVersion = (database: BetterSqliteDatabase) => {
+  const version: unknown = database.pragma("user_version", { simple: true })
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 0) {
+    throw new Error("SQLite returned an invalid user_version")
+  }
+  return version
+}
+
 /** Runs pending SQLite schema migrations atomically in ascending version order. */
 export const runDatabaseMigrations = (database: BetterSqliteDatabase) => {
-  const currentVersion = readUserVersion(database)
-  const latestVersion = migrations.at(-1)?.version ?? 0
+  const currentVersion = readDatabaseUserVersion(database)
+  const latestVersion = latestDatabaseSchemaVersion()
   if (currentVersion > latestVersion) {
     throw new Error(
       `Database schema version ${currentVersion} is newer than supported version ${latestVersion}`,
@@ -610,14 +622,6 @@ export const runDatabaseMigrations = (database: BetterSqliteDatabase) => {
       database.pragma(`user_version = ${migration.version}`)
     })()
   }
-}
-
-const readUserVersion = (database: BetterSqliteDatabase) => {
-  const version: unknown = database.pragma("user_version", { simple: true })
-  if (typeof version !== "number" || !Number.isInteger(version) || version < 0) {
-    throw new Error("SQLite returned an invalid user_version")
-  }
-  return version
 }
 
 const migrateLegacyWalkthroughs = (database: BetterSqliteDatabase) => {
