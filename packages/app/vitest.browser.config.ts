@@ -17,6 +17,8 @@ export default defineConfig({
     },
   },
   test: {
+    fileParallelism: false,
+    maxWorkers: 1,
     browser: {
       enabled: true,
       headless: true,
