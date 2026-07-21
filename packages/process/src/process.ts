@@ -25,7 +25,7 @@ export const defaultKillAfterMs = 1_000
 export const defaultForceKillAfterMs = 1_000
 
 /** Default time allowed for inherited stdio to close after the direct child exits. */
-export const defaultExitCloseAfterMs = 100
+export const defaultExitCloseAfterMs = 1_000
 
 /** Default maximum bytes allowed in one streaming line, excluding its LF delimiter. */
 export const defaultMaxLineBytes = 1024 * 1024
