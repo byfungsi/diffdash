@@ -559,6 +559,7 @@ test("forwards a CLI command to the running DiffDash instance", async ({
     execFileSync(
       electronExecutable,
       [
+        ...(process.platform === "linux" ? ["--no-sandbox"] : []),
         join(desktopRoot, "out/main/index.js"),
         `--user-data-dir=${userData}`,
         `--diffdash-cli-v1=${localRepo}`,
