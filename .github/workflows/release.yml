@@ -244,7 +244,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
-        run: pnpm release:local:mac -- --arch "${{ matrix.arch }}" --assets-dir release-assets
+        run: pnpm release:local:mac --arch "${{ matrix.arch }}" --assets-dir release-assets
 
       - name: Verify bundled native module architecture
         env:

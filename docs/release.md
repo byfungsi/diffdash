@@ -94,8 +94,8 @@ pnpm release:local:mac
 This builds the native host architecture by default. To force an architecture:
 
 ```bash
-pnpm release:local:mac -- --arch arm64
-pnpm release:local:mac -- --arch x64
+pnpm release:local:mac --arch arm64
+pnpm release:local:mac --arch x64
 ```
 
 The local macOS build script:
@@ -110,7 +110,7 @@ The local macOS build script:
 Recovery options:
 
 ```bash
-pnpm release:local:mac -- --package-existing --skip-notarize --arch arm64
+pnpm release:local:mac --package-existing --skip-notarize --arch arm64
 node scripts/release/notarize-app.mjs packages/desktop/dist/mac-arm64/DiffDash.app --submission-id <id>
 ```
 
