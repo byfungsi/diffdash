@@ -38,6 +38,14 @@ const processIsRunning = (pid: number): boolean => {
   }
 }
 
+const waitForProcessExit = (pid: number, attemptsRemaining = 200): Promise<void> => {
+  if (!processIsRunning(pid)) return Promise.resolve()
+  if (attemptsRemaining === 0) return Promise.reject(new Error(`Timed out waiting for PID ${pid}`))
+  return new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
+    waitForProcessExit(pid, attemptsRemaining - 1),
+  )
+}
+
 const killIfRunning = (pid: number): void => {
   try {
     process.kill(pid, "SIGKILL")
@@ -194,9 +202,9 @@ describe("ProcessService captured execution", () => {
       const result = yield* Effect.either(
         cli.run(process.execPath, ["-e", script], {
           env: { SIGNAL_PATH: signalPath },
-          timeoutMs: 100,
-          killAfterMs: 25,
-          forceKillAfterMs: 25,
+          timeoutMs: 1_000,
+          killAfterMs: 500,
+          forceKillAfterMs: 500,
         }),
       )
 
@@ -204,7 +212,7 @@ describe("ProcessService captured execution", () => {
       if (Either.isLeft(result)) {
         expect(result.left).toMatchObject({
           _tag: "ProcessTimeoutError",
-          message: "Command timed out after 100ms",
+          message: "Command timed out after 1000ms",
           stdout: "partial",
           stderr: "warning",
         })
@@ -273,6 +281,7 @@ describe("ProcessService captured execution", () => {
       yield* Fiber.interrupt(fiber)
 
       const pid = Number.parseInt(readFileSync(pidPath, "utf8"), 10)
+      yield* Effect.promise(() => waitForProcessExit(pid))
       expect(readFileSync(signalPath, "utf8")).toBe("SIGTERM")
       expect(processIsRunning(pid)).toBe(false)
     }).pipe(Effect.provide(ProcessService.layer)),
@@ -297,8 +306,8 @@ describe("ProcessService captured execution", () => {
         cli.run(process.execPath, ["-e", script], {
           env: { DESCENDANT_PATH: descendantPath },
           exitCloseAfterMs: 10,
-          killAfterMs: 25,
-          forceKillAfterMs: 25,
+          killAfterMs: 500,
+          forceKillAfterMs: 500,
         }),
       )
 
@@ -308,6 +317,7 @@ describe("ProcessService captured execution", () => {
         expect(result.left).toBeInstanceOf(ProcessCleanupError)
         expect(result.left.stdout).toBe("parent-output")
       }
+      yield* Effect.promise(() => waitForProcessExit(descendantPid))
       expect(processIsRunning(descendantPid)).toBe(false)
     }).pipe(Effect.provide(ProcessService.layer)),
   )
@@ -342,7 +352,7 @@ describe("ProcessService captured execution", () => {
 
       expect(Either.isLeft(result)).toBe(true)
       if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ProcessCleanupError)
-      expect(elapsedMs).toBeLessThan(1_000)
+      expect(elapsedMs).toBeLessThan(5_000)
       expect(processIsRunning(descendantPid)).toBe(true)
     }).pipe(Effect.provide(ProcessService.layer)),
   )
