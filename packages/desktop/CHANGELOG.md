@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- [#6](https://github.com/byfungsi/diffdash/pull/6) [`c9badbe`](https://github.com/byfungsi/diffdash/commit/c9badbed1688cb12dc95ac6e973f9fe2bc24287f) Thanks [@hanipcode](https://github.com/hanipcode)! - Add an extensible provider architecture for isolated Git integrations and AI review agents.
+
 ## 0.3.1
 
 ### Patch Changes
