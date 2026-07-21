@@ -983,6 +983,7 @@ scenario("repositoryInvalidation", async () => {
   setInputValue(searchInput, "invalidations")
   searchInput.dispatchEvent(new Event("input", { bubbles: true }))
   await vi.waitFor(() => expect(calls.searchRepositories).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(document.body.textContent).toContain("fungsi/remote-review"))
 
   calls.listRepositories.mockClear()
   calls.searchRepositories.mockClear()
@@ -2481,6 +2482,9 @@ scenario("homeToReview", async () => {
       element.getAttribute("data-column-number") === lineNumber &&
       element.getAttribute("data-line-index") === addedLineIndex,
   )
+  refreshedGutterNumber
+    ?.closest("pre")
+    ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
   refreshedGutterNumber?.dispatchEvent(
     new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
   )
