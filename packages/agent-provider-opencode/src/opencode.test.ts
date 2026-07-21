@@ -1,7 +1,7 @@
-import { mkdtempSync } from "node:fs"
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs"
 import { readdir, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 import { afterAll, describe, expect, it } from "@effect/vitest"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
@@ -429,6 +429,60 @@ describe("OpenCode provider", () => {
         url: "http://127.0.0.1:9000/mcp",
         headers: { Authorization: "Bearer scoped-token" },
       })
+    }),
+  )
+
+  it.effect("resolves OpenCode from ~/.opencode/bin without requiring a shell PATH entry", () =>
+    Effect.gen(function* () {
+      const home = mkdtempSync(join(tmpdir(), "diffdash-opencode-home-"))
+      harnessDirectories.add(home)
+      const openCodeBin = join(home, ".opencode", "bin")
+      const executablePath = join(openCodeBin, "opencode")
+      mkdirSync(openCodeBin, { recursive: true })
+      writeFileSync(executablePath, "#!/bin/sh\n", "utf8")
+      chmodSync(executablePath, 0o755)
+
+      const found = yield* resolveOpenCodeExecutable({
+        envPath: "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin",
+        home,
+      })
+      expect(Option.getOrNull(found)).toBe(resolve(executablePath))
+    }),
+  )
+
+  it.effect("reports a provider-owned reason when OpenCode is not installed", () =>
+    Effect.gen(function* () {
+      const directory = mkdtempSync(join(tmpdir(), "diffdash-opencode-missing-"))
+      harnessDirectories.add(directory)
+      const processes: ProcessRunner = {
+        run: () => Effect.die(new Error("OpenCode process runner should not run when unresolved")),
+        streamLines: () => Stream.empty,
+      }
+      const registration = makeOpenCodeProvider({
+        processes,
+        tempDirectory: directory,
+      })
+      const previousHome = process.env.HOME
+      const previousUserProfile = process.env.USERPROFILE
+      const previousPath = process.env.PATH
+      process.env.HOME = directory
+      delete process.env.USERPROFILE
+      process.env.PATH = ""
+      try {
+        const probe = yield* requireWalkthrough(registration).probe
+        expect(probe).toMatchObject({
+          _tag: "AgentCapabilityUnavailable",
+          reason: "OpenCode is not installed or available",
+        })
+      } finally {
+        if (previousHome === undefined) delete process.env.HOME
+        else process.env.HOME = previousHome
+        if (previousUserProfile === undefined) delete process.env.USERPROFILE
+        else process.env.USERPROFILE = previousUserProfile
+        if (previousPath === undefined) delete process.env.PATH
+        else process.env.PATH = previousPath
+      }
+      yield* Effect.promise(() => rm(directory, { force: true, recursive: true }))
     }),
   )
 })

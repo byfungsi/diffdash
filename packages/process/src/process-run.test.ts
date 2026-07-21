@@ -379,4 +379,29 @@ describe("ProcessService captured execution", () => {
       expect(result.stdout).toBe("local-bin")
     }).pipe(Effect.provide(ProcessService.layer)),
   )
+
+  it.scopedLive("does not resolve unrelated commands from ~/.opencode/bin", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempDirectory
+      const openCodeBin = join(home, ".opencode", "bin")
+      const commandPath = join(openCodeBin, "diffdash-shadow-command")
+      yield* Effect.sync(() => {
+        mkdirSync(openCodeBin, { recursive: true })
+        writeFileSync(commandPath, "#!/bin/sh\nprintf shadowed", "utf8")
+        chmodSync(commandPath, 0o755)
+      })
+
+      const cli = testRunner(yield* ProcessService)
+      const result = yield* Effect.either(
+        cli.run("diffdash-shadow-command", [], {
+          env: {
+            HOME: home,
+            PATH: "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin",
+          },
+        }),
+      )
+
+      expect(Either.isLeft(result)).toBe(true)
+    }).pipe(Effect.provide(ProcessService.layer)),
+  )
 })

@@ -1,9 +1,13 @@
 import BetterSqlite3, { type Database as BetterSqliteDatabase } from "better-sqlite3"
 import { Context, Effect, Layer, Schema } from "effect"
-import { dirname } from "node:path"
-import { mkdirSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
+import { existsSync, mkdirSync } from "node:fs"
 
-import { runDatabaseMigrations } from "./database-migrations"
+import {
+  latestDatabaseSchemaVersion,
+  readDatabaseUserVersion,
+  runDatabaseMigrations,
+} from "./database-migrations"
 
 type SqlParams = readonly unknown[] | Record<string, unknown>
 
@@ -41,13 +45,15 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
       DatabaseService,
       Effect.gen(function* () {
         const db = yield* Effect.acquireRelease(
-          Effect.try({
-            try: () => {
+          Effect.tryPromise({
+            try: async () => {
               mkdirSync(dirname(databasePath), { recursive: true })
+              const existedBeforeOpen = existsSync(databasePath)
               const database = new BetterSqlite3(databasePath)
               try {
                 database.pragma("journal_mode = WAL")
                 database.pragma("foreign_keys = ON")
+                await backupDatabaseBeforeMigration(database, databasePath, existedBeforeOpen)
                 runDatabaseMigrations(database)
                 return database
               } catch (cause) {
@@ -78,6 +84,40 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
         })
       }),
     )
+}
+
+/** Creates a recovery-safe SQLite backup before applying a schema upgrade. */
+export const backupDatabaseBeforeMigration = async (
+  database: BetterSqliteDatabase,
+  databasePath: string,
+  existedBeforeOpen = existsSync(databasePath),
+) => {
+  if (!shouldBackupDatabase(database, existedBeforeOpen)) return null
+
+  const currentVersion = readDatabaseUserVersion(database)
+  const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "")
+  const backupPath = join(
+    dirname(databasePath),
+    `${basename(databasePath)}.pre-migration-v${currentVersion}-${stamp}`,
+  )
+  await database.backup(backupPath)
+  return backupPath
+}
+
+const shouldBackupDatabase = (database: BetterSqliteDatabase, existedBeforeOpen: boolean) => {
+  const currentVersion = readDatabaseUserVersion(database)
+  const latestVersion = latestDatabaseSchemaVersion()
+  if (currentVersion >= latestVersion) return false
+  if (currentVersion > 0) return true
+  if (!existedBeforeOpen) return false
+  const tables = database
+    .prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+       LIMIT 1`,
+    )
+    .all()
+  return tables.length > 0
 }
 
 const runStatement = <A>(_db: BetterSqliteDatabase, operation: string, execute: () => A) =>

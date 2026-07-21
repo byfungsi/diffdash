@@ -12,6 +12,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   await verifyPackagedResources(packaged)
 
   const fakeBin = testInfo.outputPath("fake-bin")
+  const home = testInfo.outputPath("home")
+  const openCodeBin = join(home, ".opencode", "bin")
   const gitLog = testInfo.outputPath("git-runs.log")
   const sourceRepo = testInfo.outputPath("source-repo")
   const remoteRepo = testInfo.outputPath("fixture.git")
@@ -20,10 +22,11 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   await Promise.all([
     mkdir(fakeBin, { recursive: true }),
+    mkdir(openCodeBin, { recursive: true }),
     mkdir(userData, { recursive: true }),
     mkdir(join(xdgConfigHome, "diffdash"), { recursive: true }),
   ])
-  await installPackagedFakeCli(fakeBin)
+  await installPackagedFakeCli(fakeBin, openCodeBin)
   const revisions = await installFixtureRepository(sourceRepo, remoteRepo)
   await writeFile(
     join(xdgConfigHome, "diffdash", "state.json"),
@@ -58,7 +61,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       DIFFDASH_E2E_HIDDEN: "1",
       DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
       FAKE_GIT_LOG: gitLog,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      HOME: home,
+      PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`,
       REAL_GIT_PATH: realGitPath,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
@@ -117,6 +121,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         return {
           agent: catalog.providers.find(({ id }) => id === "fixture-agent"),
           git: fixtureGit,
+          opencode: catalog.providers.find(({ id }) => id === "opencode"),
           repository: repositories.find(({ provider }) => provider === "fixture"),
           routes: settings.routes,
           updater,
@@ -134,6 +139,13 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         id: "fixture",
         displayName: "Fixture Forge",
         capabilities: expect.objectContaining({ reviewDecisions: false }),
+      }),
+      opencode: expect.objectContaining({
+        id: "opencode",
+        capabilities: expect.arrayContaining([
+          expect.objectContaining({ capability: "walkthrough", status: "ready" }),
+          expect.objectContaining({ capability: "review-thread", status: "ready" }),
+        ]),
       }),
       repository: expect.objectContaining({
         provider: "fixture",
@@ -344,13 +356,13 @@ const commit = (cwd: string, message: string) =>
     message,
   )
 
-const installPackagedFakeCli = async (directory: string) => {
+const installPackagedFakeCli = async (directory: string, openCodeDirectory: string) => {
   await Promise.all([
     writeExecutable(join(directory, "git"), fakeGitScript),
     writeExecutable(join(directory, "gh"), fakeGhScript),
     writeExecutable(join(directory, "codex"), fakeVersionScript("codex")),
     writeExecutable(join(directory, "claude"), fakeVersionScript("claude")),
-    writeExecutable(join(directory, "opencode"), fakeVersionScript("opencode")),
+    writeExecutable(join(openCodeDirectory, "opencode"), fakeVersionScript("opencode")),
   ])
 }
 

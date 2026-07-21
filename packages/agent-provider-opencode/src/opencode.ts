@@ -1,4 +1,5 @@
 import { createServer } from "node:net"
+import { delimiter, join } from "node:path"
 
 import {
   type Config,
@@ -180,14 +181,15 @@ export interface ResolveOpenCodeExecutableOptions {
   readonly platform?: NodeJS.Platform
 }
 
-/** Resolves OpenCode through the same normalized PATH used for GUI-launched commands. */
+/** Resolves OpenCode through the GUI-safe PATH plus the OpenCode installer directory. */
 export const resolveOpenCodeExecutable = (
   options: ResolveOpenCodeExecutableOptions = {},
 ): Effect.Effect<Option.Option<ExecutablePath>> => {
-  const normalizedPath = defaultExecutablePath(
-    options.envPath ?? process.env.PATH ?? "",
-    options.home ?? process.env.HOME ?? "",
-  )
+  const home = options.home ?? process.env.HOME ?? process.env.USERPROFILE ?? ""
+  const guiPath = defaultExecutablePath(options.envPath ?? process.env.PATH ?? "", home)
+  const openCodeBin = home.length > 0 ? join(home, ".opencode", "bin") : ""
+  const normalizedPath =
+    openCodeBin.length === 0 ? guiPath : [openCodeBin, guiPath].filter(Boolean).join(delimiter)
   return findExecutableInPath(executable, {
     envPath: normalizedPath,
     ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
@@ -216,7 +218,7 @@ export const makeOpenCodeProvider = (
 const probeOpenCodeRuntime = (dependencies: OpenCodeProviderDependencies) =>
   probeAgentRuntime({
     versionOutput: Effect.gen(function* () {
-      const path = yield* resolveRuntimeExecutable(dependencies)
+      const path = yield* resolveRuntimeExecutable(dependencies, "walkthrough")
       return yield* dependencies.processes
         .run(processRequest(path, ["--version"], { timeoutMs: 5_000 }))
         .pipe(Effect.map((result) => result.stdout))
@@ -236,7 +238,7 @@ const executeWalkthrough = (
     return yield* Effect.scoped(
       Effect.gen(function* () {
         const promptPath = yield* writePromptFile(dependencies.tempDirectory, request.prompt)
-        const executablePath = yield* resolveRuntimeExecutable(dependencies)
+        const executablePath = yield* resolveRuntimeExecutable(dependencies, "walkthrough")
         return yield* dependencies.processes
           .run(
             processRequest(executablePath, makeWalkthroughArgs(request, promptPath), {
@@ -365,7 +367,7 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
       catch: operationErrors.fromCause("review-thread"),
     })
     const ready = yield* Deferred.make<string, AgentProviderOperationError>()
-    const executablePath = yield* resolveRuntimeExecutable(dependencies)
+    const executablePath = yield* resolveRuntimeExecutable(dependencies, "review-thread")
     const process = dependencies.processes
       .streamLines(
         processRequest(executablePath, ["serve", "--hostname=127.0.0.1", `--port=${port}`], {
@@ -685,9 +687,18 @@ const requirePolicy = (
 
 const resolveRuntimeExecutable = (
   dependencies: OpenCodeProviderDependencies,
-): Effect.Effect<string> =>
+  capability: AgentCapability,
+): Effect.Effect<string, AgentProviderOperationError> =>
   dependencies.executablePath === undefined
-    ? resolveOpenCodeExecutable().pipe(Effect.map(Option.getOrElse(() => executable)))
+    ? resolveOpenCodeExecutable().pipe(
+        Effect.flatMap((resolved) =>
+          Option.match(resolved, {
+            onNone: () =>
+              operationErrors.fromReason(capability, "OpenCode is not installed or available"),
+            onSome: (path) => Effect.succeed(path),
+          }),
+        ),
+      )
     : Effect.succeed(dependencies.executablePath)
 
 function modelDescriptor(id: string, displayName: string, quality: "fast" | "balanced" | "best") {

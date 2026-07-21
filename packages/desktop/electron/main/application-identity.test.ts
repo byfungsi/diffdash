@@ -7,6 +7,32 @@ describe("application identity", () => {
       appName: "DiffDash",
       appUserModelId: "dev.diffdash.app",
       storageNamespace: "diffdash",
+      userDataPath: "/app-data/DiffDash",
+    })
+    expect(
+      resolveApplicationIdentity({
+        appDataPath: "C:\\Users\\me\\AppData\\Roaming",
+        packaged: true,
+      }),
+    ).toEqual({
+      appName: "DiffDash",
+      appUserModelId: "dev.diffdash.app",
+      storageNamespace: "diffdash",
+      userDataPath: "C:\\Users\\me\\AppData\\Roaming/DiffDash",
+    })
+  })
+
+  it("does not override an explicit packaged Electron user-data directory", () => {
+    expect(
+      resolveApplicationIdentity({
+        appDataPath: "/app-data",
+        explicitUserDataDirectory: true,
+        packaged: true,
+      }),
+    ).toEqual({
+      appName: "DiffDash",
+      appUserModelId: "dev.diffdash.app",
+      storageNamespace: "diffdash",
       userDataPath: null,
     })
   })

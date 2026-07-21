@@ -29,6 +29,21 @@ describe("provider runtime helpers", () => {
     expect(boundedProviderReason(new Error("secret message"), "fallback", redact)).toBe(
       "[redacted] message",
     )
+    expect(boundedProviderReason(new Error("Failed to spawn command"), "fallback", redact)).toBe(
+      "fallback",
+    )
+    expect(
+      boundedProviderReason(
+        { _tag: "ProcessSpawnError", message: "Failed to spawn command" },
+        "fallback",
+      ),
+    ).toBe("fallback")
+    expect(
+      boundedProviderReason(
+        new Error("ENOENT: no such file or directory, open '/tmp/x'"),
+        "fallback",
+      ),
+    ).toBe("ENOENT: no such file or directory, open '/tmp/x'")
     expect(boundedProviderReason(null, "fallback", redact)).toBe("fallback")
   })
 

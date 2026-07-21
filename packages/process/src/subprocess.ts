@@ -482,7 +482,7 @@ const waitForTerminal = (terminal: Deferred.Deferred<NodeProcessTerminal>, durat
 const spawnChild = (input: SpawnProcessInput): ChildProcessWithoutNullStreams => {
   const env = { ...process.env, ...input.env }
   for (const key of input.unsetEnv) delete env[key]
-  env.PATH = executablePath(env.PATH, env.HOME)
+  env.PATH = executablePath(env.PATH, env.HOME ?? env.USERPROFILE)
   return spawn(input.command, [...input.args], {
     cwd: input.cwd ?? undefined,
     detached: process.platform !== "win32",
@@ -494,7 +494,10 @@ const spawnChild = (input: SpawnProcessInput): ChildProcessWithoutNullStreams =>
 }
 
 /** Builds the normalized executable path shared by process execution and lookup. */
-export const executablePath = (envPath = "", home = process.env.HOME ?? "") => {
+export const executablePath = (
+  envPath = "",
+  home = process.env.HOME ?? process.env.USERPROFILE ?? "",
+) => {
   const pathDirectories = envPath.split(delimiter).filter((entry) => entry.length > 0)
   const supplementalDirectories = [
     home.length > 0 ? join(home, ".local", "bin") : "",

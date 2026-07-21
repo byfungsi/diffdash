@@ -15,7 +15,7 @@ export const resolveApplicationIdentity = ({
         appName: "DiffDash",
         appUserModelId: "dev.diffdash.app",
         storageNamespace: "diffdash",
-        userDataPath: null,
+        userDataPath: explicitUserDataDirectory ? null : join(appDataPath, "DiffDash"),
       }
     : {
         appName: "DiffDash Development",

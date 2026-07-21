@@ -42,6 +42,7 @@ export type RecentReviewEntry = {
 type HomeScreenProps = {
   readonly activeProviderId: string | null
   readonly bookmarkedRepos: readonly Repo[]
+  readonly bookmarksStatus: string | null
   readonly diagnostics: AppPrerequisites
   readonly hasQuery: boolean
   readonly isLoadingDiagnostics: boolean
@@ -71,6 +72,7 @@ type HomeScreenProps = {
   readonly onOpenReview: (pullRequest: HostedReviewSummary) => void
   readonly onOpenReviewRequest: (pullRequest: HostedReviewSummary) => void
   readonly onRecheck: () => void
+  readonly onRetryBookmarks: () => void
   readonly onSelectProvider: (providerId: string) => void
   readonly onSelectRepo: (repo: Repo) => void
   readonly onSelectRemote: (repo: HostedRepository) => void
@@ -84,6 +86,7 @@ type HomeScreenProps = {
 export const HomeScreen = ({
   activeProviderId,
   bookmarkedRepos,
+  bookmarksStatus,
   diagnostics,
   hasQuery,
   isLoadingDiagnostics,
@@ -114,6 +117,7 @@ export const HomeScreen = ({
   onOpenReviewRequest,
   onQueryChange,
   onRecheck,
+  onRetryBookmarks,
   onSelectProvider,
   onSelectRepo,
   onSelectRemote,
@@ -212,7 +216,14 @@ export const HomeScreen = ({
               <CardDescription>Starred repos stay here for fast PR review.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-2">
-              {bookmarkedRepos.length === 0 ? (
+              {bookmarksStatus !== null ? (
+                <EmptyState className="md:col-span-2 space-y-3">
+                  <p>{bookmarksStatus}</p>
+                  <Button variant="outline" className="rounded-xl" onClick={onRetryBookmarks}>
+                    Retry
+                  </Button>
+                </EmptyState>
+              ) : bookmarkedRepos.length === 0 ? (
                 <EmptyState className="md:col-span-2">
                   Search for a repository to create your first bookmark.
                 </EmptyState>
