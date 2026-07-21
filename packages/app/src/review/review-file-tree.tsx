@@ -49,7 +49,6 @@ export const ReviewFileTree = ({
   readonly onSelectPath: (path: string) => void
 }) => {
   const appliedSelectedPathRef = useRef<string | null>(null)
-  const suppressSelectionChangeRef = useRef(false)
   const treeInput = buildReviewFileTreeInput(files, true)
   const preparedInput = prepareFileTreeInput(treeInput.paths)
   const treeInputKey = `${treeInput.paths.join("\u0000")}\u0001${treeInput.gitStatus
@@ -63,9 +62,13 @@ export const ReviewFileTree = ({
     initialSelectedPaths: selectedPath === null ? [] : [selectedPath],
     itemHeight: 26,
     onSelectionChange: (paths) => {
-      if (suppressSelectionChangeRef.current) return
       const path = paths[0]
-      if (path !== undefined && treeInput.paths.includes(path)) onSelectPath(path)
+      if (
+        path !== undefined &&
+        path !== appliedSelectedPathRef.current &&
+        treeInput.paths.includes(path)
+      )
+        onSelectPath(path)
     },
     search: false,
     stickyFolders: false,
@@ -88,13 +91,9 @@ export const ReviewFileTree = ({
       appliedSelectedPathRef.current = null
       return
     }
-    suppressSelectionChangeRef.current = true
+    appliedSelectedPathRef.current = selectedPath
     model.getItem(selectedPath)?.select()
     model.scrollToPath(selectedPath, { focus: false, offset: "nearest" })
-    appliedSelectedPathRef.current = selectedPath
-    window.setTimeout(() => {
-      suppressSelectionChangeRef.current = false
-    }, 0)
   }, [model, selectedPath, treeInput.paths])
 
   return (
