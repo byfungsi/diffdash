@@ -264,8 +264,8 @@ describe("ProcessService captured execution", () => {
       const signalPath = join(directory, "signal")
       const script = `
         const fs = require('node:fs')
-        fs.writeFileSync(process.env.PID_PATH, String(process.pid))
         process.on('SIGTERM', () => fs.writeFileSync(process.env.SIGNAL_PATH, 'SIGTERM'))
+        fs.writeFileSync(process.env.PID_PATH, String(process.pid))
         setInterval(() => {}, 1_000)
       `
       const cli = testRunner(yield* ProcessService)
