@@ -650,9 +650,9 @@ const installFakeCli = async (directory: string) => {
     writeExecutable(join(directory, "diffdash"), fakeDiffDashScript),
     writeExecutable(join(directory, "gh"), fakeGhScript),
     writeExecutable(join(directory, "git"), fakeGitScript),
-    writeExecutable(join(directory, "codex"), fakeCodexScript),
-    writeExecutable(join(directory, "claude"), fakeClaudeScript),
-    writeExecutable(join(directory, "opencode"), fakeOpenCodeScript),
+    writeFakeAgentExecutable(join(directory, "codex"), "codex 0.1.0", fakeCodexScript),
+    writeFakeAgentExecutable(join(directory, "claude"), "claude 0.1.0", fakeClaudeScript),
+    writeFakeAgentExecutable(join(directory, "opencode"), "opencode 0.1.0", fakeOpenCodeScript),
   ])
 }
 
@@ -730,6 +730,22 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
 const writeExecutable = async (path: string, content: string) => {
   await writeFile(path, content, "utf8")
   await chmod(path, 0o755)
+}
+
+const writeFakeAgentExecutable = async (path: string, version: string, script: string) => {
+  await Promise.all([
+    writeExecutable(
+      path,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' '${version}'
+  exit 0
+fi
+exec /usr/bin/env node "$0.mjs" "$@"
+`,
+    ),
+    writeFile(`${path}.mjs`, script, "utf8"),
+  ])
 }
 
 const countLogLines = async (path: string) => {
