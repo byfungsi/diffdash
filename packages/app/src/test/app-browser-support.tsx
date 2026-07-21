@@ -2178,10 +2178,7 @@ scenario("viewedViewportAnchor", async () => {
 
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
   window.scrollTo(0, 0)
-  diffPane.scrollTop += largeCard.getBoundingClientRect().top - visibleTop + 300
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
-  expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
   const diffContainer = largeCard.querySelector("diffs-container")
   expect(diffContainer).not.toBeNull()
 
@@ -2254,16 +2251,7 @@ scenario("markAllViewedViewport", async () => {
   if (diffPane === null || stickyChrome === null || largeCard === null) return
 
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
-  const targetScrollTop =
-    diffPane.scrollTop + largeCard.getBoundingClientRect().top - visibleTop + 300
-  await vi.waitFor(() => {
-    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThanOrEqual(targetScrollTop)
-  })
-  diffPane.scrollTop = targetScrollTop
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await vi.waitFor(() => {
-    expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
-  })
+  await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
 
   const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.includes("Actions") ?? false,
@@ -2470,41 +2458,13 @@ scenario("homeToReview", async () => {
   const addedLineIndex = addedLine?.getAttribute("data-line-index")
   expect(addedLine).toBeDefined()
   expect(lineNumber).toBe("1")
-  const gutterNumber = [...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]")].find(
-    (element) =>
-      element.getAttribute("data-column-number") === lineNumber &&
-      element.getAttribute("data-line-index") === addedLineIndex,
-  )
-  expect(gutterNumber).not.toBeUndefined()
-  gutterNumber?.dispatchEvent(
-    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
-  )
-  await vi.waitFor(() => {
-    expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
-  })
-  const gutterUtility = diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")
-  expect(gutterUtility).not.toBeNull()
-  clickGutterUtility(gutterUtility!)
+  const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  clickGutterUtility(gutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
-  const refreshedGutterNumber = [
-    ...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]"),
-  ].find(
-    (element) =>
-      element.getAttribute("data-column-number") === lineNumber &&
-      element.getAttribute("data-line-index") === addedLineIndex,
-  )
-  refreshedGutterNumber
-    ?.closest("pre")
-    ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
-  refreshedGutterNumber?.dispatchEvent(
-    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
-  )
-  await vi.waitFor(() => {
-    expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
-  })
-  clickGutterUtility(diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")!)
+  const refreshedGutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  clickGutterUtility(refreshedGutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
@@ -2987,6 +2947,52 @@ const getDiffLine = (shadowRoot: ShadowRoot, content: string) =>
   [...shadowRoot.querySelectorAll<HTMLElement>("[data-line]")].find(
     (element) => element.textContent?.trim() === content,
   )
+
+const scrollDiffCardAboveViewport = async (
+  diffPane: HTMLElement,
+  diffCard: HTMLElement,
+  visibleTop: number,
+) => {
+  const targetScrollTop =
+    diffPane.scrollTop + diffCard.getBoundingClientRect().top - visibleTop + 300
+  await vi.waitFor(() => {
+    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThanOrEqual(targetScrollTop)
+  })
+  diffPane.scrollTop = targetScrollTop
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(diffCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  })
+}
+
+const revealGutterUtility = async (
+  shadowRoot: ShadowRoot,
+  lineNumber: string | null | undefined,
+  lineIndex: string | null | undefined,
+) => {
+  const gutterNumber = await vi.waitFor(() => {
+    const element = [...shadowRoot.querySelectorAll<HTMLElement>("[data-column-number]")].find(
+      (candidate) =>
+        candidate.getAttribute("data-column-number") === lineNumber &&
+        candidate.getAttribute("data-line-index") === lineIndex,
+    )
+    expect(element).toBeDefined()
+    if (element === undefined) throw new Error("Missing diff gutter number")
+    return element
+  })
+  gutterNumber
+    .closest("pre")
+    ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
+  gutterNumber.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
+  )
+  return vi.waitFor(() => {
+    const utility = shadowRoot.querySelector<HTMLButtonElement>("[data-utility-button]")
+    expect(utility).not.toBeNull()
+    if (utility === null) throw new Error("Missing diff gutter utility")
+    return utility
+  })
+}
 
 const getHighlightTexts = (name: string) =>
   [...(CSS.highlights.get(name) ?? [])].map((highlightRange) => {
