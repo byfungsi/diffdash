@@ -1,0 +1,491 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types:
+      - published
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build, for example v1.0.0"
+        required: true
+        type: string
+      promote:
+        description: "Promote after recovering an already-published release"
+        required: false
+        default: false
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, for example v1.0.0"
+        required: true
+        type: string
+      promote:
+        description: "Promote after recovering an already-published release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.1"
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+
+jobs:
+  resolve:
+    name: Resolve release
+    runs-on: ubuntu-24.04
+    outputs:
+      needs-build: ${{ steps.candidate.outputs.needs-build }}
+      release-sha: ${{ steps.identity.outputs.release-sha }}
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Verify trusted release identity
+        id: identity
+        env:
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          release_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          git merge-base --is-ancestor "${release_commit}" origin/main
+
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/desktop/package.json', 'utf8')).version")"
+          expected_tag="v${package_version}"
+          if [ "${RELEASE_TAG}" != "${expected_tag}" ]; then
+            printf '%s\n' "Release tag ${RELEASE_TAG} does not match package version ${package_version}. Expected ${expected_tag}." >&2
+            exit 1
+          fi
+          if [ "${RELEASE_IS_PRERELEASE}" = "true" ]; then
+            printf '%s\n' "Stable release automation does not accept prerelease ${RELEASE_TAG}." >&2
+            exit 1
+          fi
+          node --input-type=module -e 'import { assertStableReleaseTag } from "./scripts/release/release-policy.mjs"; assertStableReleaseTag(process.argv[1])' "${RELEASE_TAG}"
+          node scripts/release/extract-release-notes.mjs "${RELEASE_TAG}" > /dev/null
+          printf 'release-sha=%s\n' "${release_commit}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check existing release candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOLVED_RELEASE_SHA: ${{ steps.identity.outputs.release-sha }}
+        run: |
+          needs_build=true
+          release_json="${RUNNER_TEMP}/release.json"
+          provenance_dir="${RUNNER_TEMP}/release-provenance"
+          mkdir -p "${provenance_dir}"
+          if gh release view "${RELEASE_TAG}" --json assets > "${release_json}" 2>/dev/null && \
+            gh release download "${RELEASE_TAG}" --pattern release-provenance.json --dir "${provenance_dir}" > /dev/null 2>&1; then
+            if RELEASE_JSON="${release_json}" PROVENANCE_PATH="${provenance_dir}/release-provenance.json" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs"
+          import {
+            validateReleaseAssetNames,
+            validateReleaseProvenance,
+          } from "./scripts/release/release-policy.mjs"
+
+          const release = JSON.parse(readFileSync(process.env.RELEASE_JSON, "utf8"))
+          validateReleaseAssetNames(release.assets.map((asset) => asset.name), process.env.RELEASE_TAG)
+          const provenance = JSON.parse(readFileSync(process.env.PROVENANCE_PATH, "utf8"))
+          validateReleaseProvenance(provenance, {
+            tag: process.env.RELEASE_TAG,
+            commit: process.env.RESOLVED_RELEASE_SHA,
+            assets: release.assets,
+          })
+          NODE
+            then
+              needs_build=false
+            fi
+          fi
+          printf 'needs-build=%s\n' "${needs_build}" >> "${GITHUB_OUTPUT}"
+
+  checks:
+    name: Release checks
+    needs: resolve
+    if: needs.resolve.outputs.needs-build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browser
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Electron test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2t64 \
+            libatk-bridge2.0-0 \
+            libatspi2.0-0 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnotify4 \
+            libnss3 \
+            libsecret-1-0 \
+            libxss1 \
+            libxtst6 \
+            xdg-utils \
+            xvfb
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install chromium
+
+      - name: Run release checks
+        run: xvfb-run -a pnpm release:check
+
+  build-macos:
+    name: Build macOS ${{ matrix.arch }}
+    needs:
+      - resolve
+      - checks
+    if: needs.resolve.outputs.needs-build == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate native architecture and Apple configuration
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: |
+          node -e 'if (process.arch !== process.argv[1]) throw new Error(`Expected ${process.argv[1]} runner, got ${process.arch}`)' "${{ matrix.arch }}"
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "$(printenv "$name")" ]; then
+              printf '%s\n' "Missing required Apple signing configuration: ${name}" >&2
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: Configure Apple notarization key
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          KEY_PATH: ${{ runner.temp }}/apple-notarization/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+        run: |
+          mkdir -p "$(dirname "${KEY_PATH}")"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs"
+
+          writeFileSync(process.env.KEY_PATH, Buffer.from(process.env.APPLE_API_KEY_BASE64, "base64"), {
+            mode: 0o600,
+          })
+          NODE
+          printf 'APPLE_API_KEY=%s\n' "${KEY_PATH}" >> "${GITHUB_ENV}"
+
+      - name: Build, sign, notarize, and package macOS release
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+        run: pnpm release:local:mac -- --arch "${{ matrix.arch }}" --assets-dir release-assets
+
+      - name: Verify bundled native module architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          native_module="$(node --input-type=module <<'NODE'
+          import { readdirSync } from "node:fs"
+          import path from "node:path"
+
+          const dist = "packages/desktop/dist"
+          const entry = readdirSync(dist, { recursive: true }).find((name) => name.endsWith("better_sqlite3.node"))
+          if (entry === undefined) throw new Error("Packaged better_sqlite3.node was not found.")
+          process.stdout.write(path.join(dist, entry))
+          NODE
+          )"
+          architecture="$(file "${native_module}")"
+          if [ "${EXPECTED_ARCH}" = "arm64" ]; then expected_token="arm64"; else expected_token="x86_64"; fi
+          case "${architecture}" in
+            *"${expected_token}"*) ;;
+            *) printf '%s\n' "Unexpected native module architecture: ${architecture}" >&2; exit 1 ;;
+          esac
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-macos-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-linux:
+    name: Build Linux x64
+    needs:
+      - resolve
+      - checks
+    if: needs.resolve.outputs.needs-build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot dpkg
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux packages
+        run: |
+          pnpm assets:icons
+          pnpm native:electron
+          pnpm build
+          pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never
+
+      - name: Collect Linux artifacts
+        run: |
+          mkdir -p release-assets
+          cp packages/desktop/dist/*.AppImage release-assets/
+          cp packages/desktop/dist/*.deb release-assets/
+          cp packages/desktop/dist/latest-linux.yml release-assets/
+          if compgen -G "packages/desktop/dist/*.AppImage.blockmap" > /dev/null; then
+            cp packages/desktop/dist/*.AppImage.blockmap release-assets/
+          fi
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-linux-x64
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Stage GitHub Release and R2 candidate
+    needs:
+      - resolve
+      - build-macos
+      - build-linux
+    if: needs.resolve.outputs.needs-build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Reverify release tag
+        env:
+          EXPECTED_RELEASE_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: |
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          actual_release_sha="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          if [ "${actual_release_sha}" != "${EXPECTED_RELEASE_SHA}" ]; then
+            printf '%s\n' "Release tag ${RELEASE_TAG} moved after validation." >&2
+            exit 1
+          fi
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: release-assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Stage GitHub and R2 assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: node scripts/release/publish-release-assets.mjs --tag "${RELEASE_TAG}" --assets-dir release-assets --allow-published
+
+  stage-existing:
+    name: Verify and stage existing candidate
+    needs: resolve
+    if: >-
+      needs.resolve.outputs.needs-build == 'false'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out resolved release commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Reverify release tag
+        env:
+          EXPECTED_RELEASE_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: |
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          actual_release_sha="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          if [ "${actual_release_sha}" != "${EXPECTED_RELEASE_SHA}" ]; then
+            printf '%s\n' "Release tag ${RELEASE_TAG} moved after validation." >&2
+            exit 1
+          fi
+
+      - name: Download existing GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${RELEASE_TAG}" --dir release-assets
+
+      - name: Verify GitHub assets and repair R2 candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: node scripts/release/publish-release-assets.mjs --tag "${RELEASE_TAG}" --assets-dir release-assets --allow-published --require-existing-r2-provenance
+
+  promote:
+    name: Promote published release
+    needs:
+      - resolve
+      - checks
+      - build-macos
+      - build-linux
+      - publish
+      - stage-existing
+    if: >-
+      always() &&
+      (github.event_name == 'release' ||
+      ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.promote)) &&
+      needs.resolve.result == 'success' &&
+      ((needs.resolve.outputs.needs-build == 'true' && needs.publish.result == 'success') ||
+      (needs.resolve.outputs.needs-build == 'false' && needs.stage-existing.result == 'success'))
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: stable-release-promotion
+      cancel-in-progress: false
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.release-sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Reverify release tag
+        env:
+          EXPECTED_RELEASE_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: |
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          actual_release_sha="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          if [ "${actual_release_sha}" != "${EXPECTED_RELEASE_SHA}" ]; then
+            printf '%s\n' "Release tag ${RELEASE_TAG} moved after validation." >&2
+            exit 1
+          fi
+
+      - name: Promote, verify, and prune stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve.outputs.release-sha }}
+        run: node scripts/release/promote-release.mjs --tag "${RELEASE_TAG}"

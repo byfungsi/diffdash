@@ -11,48 +11,49 @@ GitHub Releases are the long-term artifact archive. Cloudflare R2 is the public 
 
 Homebrew distribution is intentionally deferred.
 
-## Local Release Flow
+## GitHub Release Flow
 
-The primary release flow runs locally to avoid paying CI runner time while Apple notarization is queued.
+The primary release flow runs on standard GitHub-hosted runners. Public repositories receive these runners without Actions minute charges. Cloudflare R2 remains the stable download and updater origin.
 
-Prepare the release version and tag:
+Add a Changeset to each feature PR that changes user-visible desktop behavior:
 
 ```bash
 pnpm changeset
-pnpm release:version
-git add packages/desktop/package.json packages/desktop/CHANGELOG.md pnpm-lock.yaml .changeset
-git commit -m "chore: release v0.1.1"
-pnpm release:tag
-git push origin main --tags
+pnpm exec changeset status
 ```
 
-The tag must match the `packages/desktop/package.json` version exactly. For example, desktop version `0.1.1` must use tag `v0.1.1`.
+Changesets target only `@diffdash/desktop`. Use `patch` for fixes and small improvements, `minor` for new user-visible capabilities, and `major` only for explicitly breaking public behavior. Documentation, tests, CI, release automation, and behavior-neutral refactors normally do not need a Changeset.
 
-`pnpm release:version` applies pending Changesets and updates `packages/desktop/CHANGELOG.md`. The GitHub draft release notes are extracted from its matching section.
+After a feature PR merges, `.github/workflows/version.yml` runs the SHA-pinned `changesets/action`. It creates or updates the `changeset-release/main` pull request with the calculated desktop version, consumed Changesets, and GitHub-linked `packages/desktop/CHANGELOG.md` entries. The action uses GitHub API commit mode so its bot-authored version commit is signed by GitHub.
 
-Run the complete local release flow:
+Review and manually merge the version PR when ready to release. Its merge triggers the Version workflow again. With no Changesets remaining, the workflow validates the version and changelog, creates the missing lightweight `v<package.version>` tag at the merge commit, and calls `.github/workflows/release.yml` directly.
 
-```bash
-pnpm release:local
-```
+Do not run `pnpm release:version`, create the version commit, or create the tag during the normal flow. Those are recovery operations. The generated tag must match `packages/desktop/package.json` exactly and point to a commit reachable from `main`.
 
-The single command:
+The Release workflow:
 
 - verifies release notes exist in `packages/desktop/CHANGELOG.md` for the desktop version
 - runs `pnpm release:check`
-- builds both signed, notarized, stapled macOS DMGs and updater ZIPs into `release-assets/`
-- builds the Linux x64 AppImage, updater metadata, and `.deb` in Docker into `release-assets/`
+- builds signed, notarized, and stapled macOS arm64 and x64 releases on native GitHub macOS runners
+- builds the Linux x64 AppImage, updater metadata, and `.deb` on GitHub Ubuntu
 - generates `SHA256SUMS` and `latest.json`
 - creates or updates a draft GitHub Release for the version tag
-- uploads all `release-assets/` files to the draft GitHub Release
+- uploads the exact release asset matrix to the GitHub Release
 - mirrors the same assets to R2 at `releases/<tag>/`
 - leaves the currently promoted stable release unchanged while the GitHub Release is a draft
 
-The command requires a clean working tree. The tag must match the desktop package version and exist in Git. If the tag does not point at `HEAD`, the script warns because local artifacts are built from the current checkout. Add `-- --require-tag-at-head` when you want that to be a hard failure.
+Review and publish the draft in GitHub. The `release: published` event then verifies the GitHub and R2 candidate, updates `stable.json` and root `latest.json`, verifies all public updater and download routes, and only then prunes R2 retention.
 
-Useful options:
+The Releases dashboard is also supported. Creating and publishing a release with a new matching tag starts the same workflow. The published release can briefly appear without binaries while Actions builds them; the stable updater channel remains unchanged until all assets and public checks pass. Dashboard-created lightweight tags and locally created annotated tags are both accepted.
+
+Use the workflow's manual dispatch for recovery. Enable its `promote` input only when recovering an already-published release whose automatic promotion failed.
+
+## Local Recovery Flow
+
+Local scripts remain available for release recovery and debugging:
 
 ```bash
+pnpm release:local
 pnpm release:local -- --mac-arch arm64
 pnpm release:local -- --mac-arch x64
 pnpm release:local -- --mac-arch all
@@ -60,18 +61,27 @@ pnpm release:local -- --skip-checks
 pnpm release:local -- --skip-mac
 pnpm release:local -- --skip-linux
 pnpm release:local -- --skip-publish
+pnpm release:local -- --allow-published
 pnpm release:local -- --assets-dir release-assets/test-run
 ```
 
-Use skip options for recovery/debugging only. The normal release command should run without skip flags.
+Use local and skip options for recovery/debugging only. Normal releases run in GitHub Actions. `--allow-published` can add missing assets to a dashboard-published release, but refuses to replace any existing GitHub or R2 bytes.
 
-Review and publish the draft GitHub Release, then promote it:
+Local builds and publishing require a clean tree, an up-to-date `origin/main`, and a release tag at `HEAD` that is reachable from `origin/main`. Publishing records and verifies the tag commit in release provenance. Existing published candidates can repair missing R2 assets only when their provenance already matches the immutable R2 candidate. Stable promotion runs only in the serialized GitHub workflow and rejects versions older than the currently promoted release.
+
+If version-PR automation fails, authenticate the GitHub changelog generator before applying Changesets locally:
 
 ```bash
-pnpm release:promote -- --tag v<package.version>
+GITHUB_TOKEN="$(gh auth token)" pnpm release:version
+pnpm release:notes v<package.version>
+pnpm release:tag
 ```
 
-Promotion verifies the published GitHub Release, both macOS architectures, Linux AppImage metadata, checksums, and the R2 mirror. It then updates `stable.json` and root `latest.json`, and prunes R2 to the promoted release plus two retained releases. Manual downloads and automatic update clients only follow this promoted pointer.
+Only commit, tag, or push this recovery output after reviewing it and receiving explicit approval.
+
+To recover promotion after the GitHub Release is published, manually dispatch the `Release` workflow with the matching tag and enable its `promote` input. Local promotion is intentionally disabled so it cannot race the serialized GitHub promotion job.
+
+Promotion verifies the published GitHub Release, both macOS architectures, Linux AppImage metadata, checksums, and the R2 mirror. It updates `stable.json` and root `latest.json`, verifies the public pointers, updater feeds, versioned files, and download redirects, then prunes R2 to the promoted release plus two retained releases. Manual downloads and automatic update clients only follow this promoted pointer.
 
 Partial commands are available when debugging a single stage.
 
@@ -141,7 +151,7 @@ The local publish script:
 - creates or updates a draft GitHub Release for the package version tag
 - uploads all `release-assets/` files to the draft GitHub Release with per-file retries
 - mirrors the same assets to R2 at `releases/<tag>/`
-- does not change the stable download or update channel until `pnpm release:promote` runs
+- does not change the stable download or update channel; publishing the draft triggers verified promotion in GitHub Actions
 
 Regenerate metadata without uploading when recovering manually:
 
@@ -149,7 +159,7 @@ Regenerate metadata without uploading when recovering manually:
 node scripts/release/publish-release-assets.mjs --metadata-only
 ```
 
-## Required Local Configuration
+## Required Local Recovery Configuration
 
 Local release scripts load `.env` from the repository root automatically. Existing shell environment variables take precedence over values in `.env`. To use another file, set `DIFFDASH_ENV_FILE=/path/to/file`.
 
@@ -213,7 +223,9 @@ The R2 access key must be able to list, upload, and delete objects in the releas
 
 ## Required GitHub Actions Configuration
 
-GitHub Actions release builds are manual-only fallback jobs. Configure these only if using the manual `Release` workflow.
+GitHub Actions is the primary version and release environment. Enable **Allow GitHub Actions to create and approve pull requests** at the organization level first, then in repository **Settings > Actions > General**, so `github-actions[bot]` can maintain the Changesets version PR. Workflow permissions remain explicitly scoped in each workflow. An organization policy that disables this capability cannot be overridden by the repository.
+
+Release jobs run only for trusted version tags, reusable calls from the Version workflow, manually dispatched recovery runs, and published GitHub Releases.
 
 Secrets:
 
@@ -233,7 +245,7 @@ Variables:
 
 The R2 access key must be able to list, upload, and delete objects in the release bucket.
 
-The workflow uses GitHub's built-in `GITHUB_TOKEN` for draft release creation, so no separate GitHub token is needed.
+The workflows use GitHub's built-in `GITHUB_TOKEN` for the signed Changesets commit, version PR, release tag, reusable release call, and release upload, so no separate GitHub token is needed.
 
 Create `CSC_LINK` from the exported Developer ID Application certificate:
 
@@ -286,8 +298,8 @@ fixture generation, and packaged-E2E assembly.
 Signing, notarization, native rebuilds, installer packaging, GitHub draft creation, R2 upload,
 promotion, deployment, captures, and media rendering are intentionally uncached because they use
 host tools, credentials, external state, or generated binaries. macOS signing/notarization and DMG
-packaging must run on macOS; Linux AppImage/deb packaging runs in the configured Linux Docker
-platform; Windows NSIS must run on Windows. Turbo marks the corresponding package operations as
+packaging must run on macOS; Linux AppImage/deb packaging runs on Linux in Actions or the configured
+Docker platform during local recovery; Windows NSIS must run on Windows. Turbo marks the corresponding package operations as
 uncached, and the repository release commands run directly rather than through Turbo.
 
 ## Operational Evidence Record
@@ -336,7 +348,7 @@ Artifacts are written to `packages/desktop/dist/`.
 
 ## macOS
 
-`pnpm dist:mac` builds a DMG and ZIP. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:mac` when debugging macOS packaging only. The local macOS release stage signs the app, notarizes with visible status polling, staples the ticket, verifies the app, and copies the DMG into `release-assets/`.
+`pnpm dist:mac` builds a DMG and ZIP. Production releases use GitHub Actions; use `pnpm release:local:mac` only when debugging or recovering macOS packaging. The local macOS release stage signs the app, notarizes with visible status polling, staples the ticket, verifies the app, and copies the DMG into `release-assets/`.
 
 Release macOS builds are signed with a Developer ID Application certificate, notarized through App Store Connect API key credentials, and stapled by Electron Builder before packaging.
 
@@ -382,7 +394,7 @@ Use an in-app install action or Homebrew cask to symlink that helper into a PATH
 
 ## Linux
 
-`pnpm dist:linux` builds AppImage and deb packages on Linux. For releases, prefer `pnpm release:local` for the full flow or `pnpm release:local:linux` when debugging Linux packaging only. The local Linux release stage uses Docker to build both x64 formats from a Linux container.
+`pnpm dist:linux` builds AppImage and deb packages on Linux. Production releases use GitHub Actions; use `pnpm release:local:linux` only when debugging or recovering Linux packaging. The local Linux release stage uses Docker to build both x64 formats from a Linux container.
 
 The AppImage is portable and does not add `diffdash` to `PATH` automatically:
 
@@ -407,9 +419,9 @@ as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git re
 
 ## GitHub Publishing
 
-`pnpm release:local` runs publishing after packaging succeeds. `pnpm release:local:publish` creates or updates the draft GitHub Release and uploads the files from `release-assets/` when debugging publishing only.
+GitHub Actions publishes after all platform jobs succeed. `pnpm release:local:publish` creates or updates the GitHub Release and uploads files from `release-assets/` for recovery only.
 
-The `electron-builder` config can still publish directly to GitHub when invoked with publishing enabled, but DiffDash release publishing should use the local publish script so GitHub Release and R2 metadata stay in sync:
+The `electron-builder` config can still publish directly to GitHub when invoked with publishing enabled, but DiffDash release publishing should use `scripts/release/publish-release-assets.mjs` so GitHub Release and R2 metadata stay in sync. The local recovery command is:
 
 ```bash
 GH_TOKEN=... pnpm release:local:publish

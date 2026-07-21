@@ -32,8 +32,7 @@ export const parseLocalReleaseArguments = (args = process.argv.slice(2)) => {
     "skip-mac": { type: "boolean" },
     "skip-linux": { type: "boolean" },
     "skip-publish": { type: "boolean" },
-    "allow-dirty": { type: "boolean" },
-    "require-tag-at-head": { type: "boolean" },
+    "allow-published": { type: "boolean" },
   })
 
   return {
@@ -44,8 +43,7 @@ export const parseLocalReleaseArguments = (args = process.argv.slice(2)) => {
     skipMac: values["skip-mac"] ?? false,
     skipLinux: values["skip-linux"] ?? false,
     skipPublish: values["skip-publish"] ?? false,
-    allowDirty: values["allow-dirty"] ?? false,
-    requireTagAtHead: values["require-tag-at-head"] ?? false,
+    allowPublished: values["allow-published"] ?? false,
   }
 }
 
@@ -89,12 +87,16 @@ export const parsePublishReleaseArguments = (args = process.argv.slice(2)) => {
     tag: { type: "string" },
     "assets-dir": { type: "string" },
     "metadata-only": { type: "boolean" },
+    "allow-published": { type: "boolean" },
+    "require-existing-r2-provenance": { type: "boolean" },
   })
 
   return {
     tag: values.tag,
     assetsDir: values["assets-dir"],
     metadataOnly: values["metadata-only"] ?? false,
+    allowPublished: values["allow-published"] ?? false,
+    requireExistingR2Provenance: values["require-existing-r2-provenance"] ?? false,
   }
 }
 
@@ -104,6 +106,15 @@ export const parsePromoteReleaseArguments = (args = process.argv.slice(2)) => {
     tag: { type: "string" },
   })
   return { tag: values.tag }
+}
+
+/** Parses public release verification arguments. */
+export const parseVerifyReleaseArguments = (args = process.argv.slice(2)) => {
+  const { values } = parseOptions("release:verify", args, {
+    tag: { type: "string" },
+    "base-url": { type: "string" },
+  })
+  return { tag: values.tag, baseUrl: values["base-url"] }
 }
 
 /** Parses notarization arguments without changing its timeout-aware command runner. */

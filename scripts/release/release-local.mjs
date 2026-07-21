@@ -11,27 +11,21 @@ const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "ut
 const tag = cli.tag ?? releaseTagForVersion(packageJson.version)
 const releaseAssetsDir = path.resolve(cli.assetsDir ?? "release-assets")
 const macArch = cli.macArch ?? process.env.RELEASE_MAC_ARCH ?? "all"
-const { skipChecks, skipMac, skipLinux, skipPublish, allowDirty, requireTagAtHead } = cli
+const { skipChecks, skipMac, skipLinux, skipPublish, allowPublished } = cli
 
 assertTagMatchesVersion(tag, packageJson.version)
 
-if (!allowDirty) {
-  const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()
-  if (status.length > 0) {
-    throw new Error(
-      "Working tree must be clean before releasing. Commit/stash changes or pass --allow-dirty for testing only.",
-    )
-  }
+const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()
+if (status.length > 0) {
+  throw new Error("Working tree must be clean before building or publishing release artifacts.")
 }
 
 const tagCommit = execFileSync("git", ["rev-list", "-n", "1", tag], { encoding: "utf8" }).trim()
 const headCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
 if (tagCommit !== headCommit) {
-  const message = `Release tag ${tag} does not point at HEAD. Local artifacts will be built from the current checkout.`
-  if (requireTagAtHead) {
-    throw new Error(message)
-  }
-  console.warn(`Warning: ${message}`)
+  throw new Error(
+    `Release tag ${tag} does not point at HEAD. Refusing to build or publish mismatched local artifacts.`,
+  )
 }
 
 runSyncCommand("node", ["scripts/release/extract-release-notes.mjs", tag])
@@ -57,16 +51,18 @@ if (!skipLinux) {
 }
 
 if (!skipPublish) {
-  runSyncCommand("node", [
+  const publishArgs = [
     "scripts/release/publish-release-assets.mjs",
     "--tag",
     tag,
     "--assets-dir",
     releaseAssetsDir,
-  ])
+  ]
+  if (allowPublished) publishArgs.push("--allow-published")
+  runSyncCommand("node", publishArgs)
 }
 
 console.log(`Local release candidate flow completed for ${tag}`)
 if (!skipPublish) {
-  console.log(`Publish the GitHub draft, then run: pnpm release:promote -- --tag ${tag}`)
+  console.log(`Publish the GitHub draft; GitHub Actions will promote ${tag} after verification.`)
 }

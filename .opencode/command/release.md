@@ -1,5 +1,5 @@
 ---
-description: Prepare a DiffDash release with Changesets, changelog notes, version tag, and the GitHub/R2 release workflow.
+description: Guide the automated DiffDash version PR, release tag, GitHub draft, and Cloudflare R2 release flow.
 agent: build
 ---
 
@@ -11,4 +11,4 @@ Arguments from the user:
 $ARGUMENTS
 ```
 
-Follow the skill exactly. If the requested version bump or exact version is ambiguous, ask one concise question before editing files. Do not push or create a GitHub Release manually unless the user explicitly asks; the pushed tag triggers the release workflow.
+Follow the skill exactly. If the intended Changeset bump is ambiguous, ask one concise question before editing files. Do not create a version commit, merge the version PR, push, tag, or publish a GitHub Release unless the skill requires user approval and the user explicitly asks.

@@ -155,6 +155,9 @@ for (const arch of archs) {
     throw new Error(`Expected DMG was not created: ${artifactPath}`)
   }
   if (!existsSync(zipPath)) throw new Error(`Expected updater ZIP was not created: ${zipPath}`)
+  if (!existsSync(blockmapPath)) {
+    throw new Error(`Expected macOS updater blockmap was not created: ${blockmapPath}`)
+  }
   if (!existsSync(metadataPath)) {
     throw new Error(`Expected macOS updater metadata was not created: ${metadataPath}`)
   }
@@ -165,9 +168,7 @@ for (const arch of archs) {
 
   copyFileSync(artifactPath, path.join(releaseAssetsDir, path.basename(artifactPath)))
   copyFileSync(zipPath, path.join(releaseAssetsDir, path.basename(zipPath)))
-  if (existsSync(blockmapPath)) {
-    copyFileSync(blockmapPath, path.join(releaseAssetsDir, path.basename(blockmapPath)))
-  }
+  copyFileSync(blockmapPath, path.join(releaseAssetsDir, path.basename(blockmapPath)))
   copyFileSync(metadataPath, path.join(releaseAssetsDir, `latest-mac-${arch}.yml`))
   console.log(`Copied ${path.basename(artifactPath)} to ${releaseAssetsDir}`)
   console.log(`Copied macOS ${arch} updater artifacts to ${releaseAssetsDir}`)

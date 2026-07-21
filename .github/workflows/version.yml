@@ -1,0 +1,130 @@
+name: Version
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: version-main
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.26.1"
+
+jobs:
+  version:
+    name: Update version PR or create release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      release-tag: ${{ steps.release.outputs.release-tag }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read current desktop version
+        id: current
+        run: |
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/desktop/package.json', 'utf8')).version")"
+          printf 'package-version=%s\n' "${package_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create or update Changesets version PR
+        id: changesets
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          version: pnpm release:version
+          commit: "chore: version desktop"
+          title: "chore: version desktop"
+          commitMode: github-api
+          setupGitUser: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Validate generated version changes
+        if: steps.changesets.outputs.hasChangesets == 'true'
+        env:
+          PREVIOUS_PACKAGE_VERSION: ${{ steps.current.outputs.package-version }}
+        run: |
+          pnpm format:check
+          git diff --check
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/desktop/package.json', 'utf8')).version")"
+          if [ "${package_version}" = "${PREVIOUS_PACKAGE_VERSION}" ]; then
+            printf '%s\n' "Changesets did not update the desktop package version." >&2
+            exit 1
+          fi
+          unexpected_files="$(git diff --name-only | grep -Ev '^(\.changeset/[^/]+\.md|packages/desktop/(CHANGELOG\.md|package\.json)|pnpm-lock\.yaml)$' || true)"
+          if [ -n "${unexpected_files}" ]; then
+            printf '%s\n' "Changesets modified unexpected files:" "${unexpected_files}" >&2
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import { readdirSync } from "node:fs"
+
+          const pending = readdirSync(".changeset").filter(
+            (name) => name.endsWith(".md") && name !== "README.md",
+          )
+          if (pending.length > 0) {
+            throw new Error(`Version PR left pending Changesets: ${pending.join(", ")}`)
+          }
+          NODE
+          pnpm release:notes "v${package_version}" > /dev/null
+
+      - name: Create missing release tag
+        id: release
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          package_version="$(node -p "JSON.parse(require('node:fs').readFileSync('packages/desktop/package.json', 'utf8')).version")"
+          release_tag="v${package_version}"
+
+          node --input-type=module -e 'import { assertStableReleaseTag } from "./scripts/release/release-policy.mjs"; assertStableReleaseTag(process.argv[1])' "${release_tag}"
+          pnpm release:notes "${release_tag}" > /dev/null
+
+          if git fetch --force origin "refs/tags/${release_tag}:refs/tags/${release_tag}" 2>/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "${release_tag}")"
+            if ! git merge-base --is-ancestor "${tagged_commit}" "${GITHUB_SHA}"; then
+              printf '%s\n' "Existing ${release_tag} does not point to an ancestor of ${GITHUB_SHA}." >&2
+              exit 1
+            fi
+            printf '%s\n' "${release_tag} already exists; no release is needed."
+            exit 0
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${release_tag}" \
+            -f sha="${GITHUB_SHA}" > /dev/null
+          printf 'release-tag=%s\n' "${release_tag}" >> "${GITHUB_OUTPUT}"
+
+  release:
+    name: Start release
+    needs: version
+    if: needs.version.outputs.release-tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.version.outputs.release-tag }}
+      promote: false
+    secrets: inherit
