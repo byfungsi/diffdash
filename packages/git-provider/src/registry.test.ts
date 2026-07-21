@@ -392,9 +392,10 @@ describe("GitProviderRegistry", () => {
       const provider = yield* registry.get(GitProviderId.make("fake"))
       const listed = yield* Effect.either(provider.listReviews(requestedRepository))
       const detail = yield* Effect.either(provider.getReview(requestedReview))
-      const checkout = yield* Effect.either(
-        provider.checkoutSpecAtRevision?.(requestedReview, "head") ?? Effect.void,
-      )
+      const checkoutSpecAtRevision = provider.checkoutSpecAtRevision
+      expect(checkoutSpecAtRevision).toBeDefined()
+      if (checkoutSpecAtRevision === undefined) return
+      const checkout = yield* Effect.either(checkoutSpecAtRevision(requestedReview, "head"))
 
       expect(Either.isLeft(listed)).toBe(true)
       expect(Either.isLeft(detail)).toBe(true)
