@@ -63,6 +63,8 @@ jobs:
         run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test
 
       - name: Run Electron E2E tests
+        env:
+          DEBUG: pw:browser
         run: xvfb-run -a pnpm test:e2e
 
       - name: Detect provider or protocol changes
