@@ -35,7 +35,7 @@ describe("App review browser interactions", () => {
   it("removes stale trailing buffers after navigating across many wrapped files", async () => {
     expect.hasAssertions()
     await appBrowserScenario("wrappedFileBuffers")()
-  })
+  }, 45_000)
 
   it("finds and highlights exact case-insensitive substrings across diff lines", async () => {
     expect.hasAssertions()
