@@ -42,7 +42,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install browser and Electron system dependencies
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm --filter @diffdash/e2e exec playwright install --with-deps chromium
 
       - name: Check formatting
         run: pnpm format:check
@@ -63,6 +63,8 @@ jobs:
         run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test
 
       - name: Run Electron E2E tests
+        env:
+          DEBUG: pw:browser
         run: xvfb-run -a pnpm test:e2e
 
       - name: Detect provider or protocol changes

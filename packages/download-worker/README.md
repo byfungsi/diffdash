@@ -2,7 +2,7 @@
 
 Cloudflare Worker for stable download redirects and automatic-update feeds.
 
-Every endpoint resolves the tag in R2 `stable.json`. Uploaded GitHub drafts remain unavailable until `pnpm release:promote` updates that pointer.
+Every endpoint resolves the tag in R2 `stable.json`. Uploaded GitHub drafts remain unavailable until the serialized GitHub Release workflow updates that pointer.
 
 ## Endpoints
 
@@ -34,7 +34,7 @@ The worker expects:
 - R2 bucket binding `RELEASES_BUCKET`, configured in `wrangler.jsonc`
 - R2 bucket `diffdash`, with artifacts under `releases/v*/`
 - `PUBLIC_RELEASE_BASE_URL`, configured in `wrangler.jsonc`
-- R2 root `stable.json`, written only by `pnpm release:promote`
+- R2 root `stable.json`, written only by the GitHub Release promotion job
 - Worker routes for `macos*`, `linux*`, and `updates*`, configured in `wrangler.jsonc`
 - R2 public custom domain `download.usediffdash.com` for `/releases/...` assets
 

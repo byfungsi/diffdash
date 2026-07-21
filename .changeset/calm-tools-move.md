@@ -1,5 +1,5 @@
 ---
-"@diffdash/desktop": patch
+"@diffdash/desktop": minor
 ---
 
-Move desktop product ownership into the pnpm workspace without changing runtime behavior.
+Add an extensible provider architecture for isolated Git integrations and AI review agents.

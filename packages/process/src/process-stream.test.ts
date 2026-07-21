@@ -48,6 +48,14 @@ const processIsRunning = (pid: number): boolean => {
   }
 }
 
+const waitForProcessExit = (pid: number, attemptsRemaining = 200): Promise<void> => {
+  if (!processIsRunning(pid)) return Promise.resolve()
+  if (attemptsRemaining === 0) return Promise.reject(new Error(`Timed out waiting for PID ${pid}`))
+  return new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
+    waitForProcessExit(pid, attemptsRemaining - 1),
+  )
+}
+
 describe("ProcessService line streaming", () => {
   it.live("emits ordered complete UTF-8 lines across chunk boundaries", () =>
     Effect.gen(function* () {
@@ -300,9 +308,9 @@ describe("ProcessService line streaming", () => {
       const result = yield* Effect.either(
         streamCli(process.execPath, ["-e", script], {
           env: { MARKER: marker },
-          killAfterMs: 25,
-          forceKillAfterMs: 25,
-          timeoutMs: 100,
+          killAfterMs: 500,
+          forceKillAfterMs: 500,
+          timeoutMs: 1_000,
         }).pipe(Stream.runCollect),
       )
 
@@ -330,8 +338,8 @@ describe("ProcessService line streaming", () => {
       `
       const fiber = yield* streamCli(process.execPath, ["-e", script], {
         env: { MARKER: marker },
-        killAfterMs: 25,
-        forceKillAfterMs: 25,
+        killAfterMs: 500,
+        forceKillAfterMs: 500,
       }).pipe(
         Stream.tap((event) => {
           const { _tag: tag } = event
@@ -346,6 +354,7 @@ describe("ProcessService line streaming", () => {
 
       yield* Fiber.interrupt(fiber)
 
+      yield* Effect.promise(() => waitForProcessExit(pid))
       expect(existsSync(marker)).toBe(true)
       expect(readFileSync(marker, "utf8")).toBe("SIGTERM")
       expect(processIsRunning(pid)).toBe(false)

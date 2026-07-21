@@ -79,31 +79,38 @@ export class AppUpdater extends Context.Tag("@diffdash/AppUpdater")<
 
 /** Creates the production adapter around electron-updater. */
 export const nativeUpdaterAdapter = (): NativeUpdaterAdapter => {
-  const { autoUpdater } = electronUpdater
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
-  autoUpdater.allowPrerelease = false
+  let updater: ElectronNativeUpdater | null = null
+  const getUpdater = () => {
+    if (updater !== null) return updater
+
+    const { autoUpdater } = electronUpdater
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = true
+    autoUpdater.allowPrerelease = false
+    updater = autoUpdater
+    return updater
+  }
 
   return {
-    configure: (feedUrl) => autoUpdater.setFeedURL({ provider: "generic", url: feedUrl }),
-    check: () => autoUpdater.checkForUpdates(),
-    download: () => autoUpdater.downloadUpdate(),
-    quitAndInstall: () => autoUpdater.quitAndInstall(false, true),
-    onChecking: (listener) => subscribeNative(autoUpdater, "checking-for-update", listener),
+    configure: (feedUrl) => getUpdater().setFeedURL({ provider: "generic", url: feedUrl }),
+    check: () => getUpdater().checkForUpdates(),
+    download: () => getUpdater().downloadUpdate(),
+    quitAndInstall: () => getUpdater().quitAndInstall(false, true),
+    onChecking: (listener) => subscribeNative(getUpdater(), "checking-for-update", listener),
     onAvailable: (listener) =>
-      subscribeNative(autoUpdater, "update-available", (info: UpdateInfo) =>
+      subscribeNative(getUpdater(), "update-available", (info: UpdateInfo) =>
         listener({ version: info.version }),
       ),
-    onNotAvailable: (listener) => subscribeNative(autoUpdater, "update-not-available", listener),
+    onNotAvailable: (listener) => subscribeNative(getUpdater(), "update-not-available", listener),
     onProgress: (listener) =>
-      subscribeNative(autoUpdater, "download-progress", (info: ProgressInfo) =>
+      subscribeNative(getUpdater(), "download-progress", (info: ProgressInfo) =>
         listener({ percent: info.percent }),
       ),
     onDownloaded: (listener) =>
-      subscribeNative(autoUpdater, "update-downloaded", (info: UpdateInfo) =>
+      subscribeNative(getUpdater(), "update-downloaded", (info: UpdateInfo) =>
         listener({ version: info.version }),
       ),
-    onError: (listener) => subscribeNative(autoUpdater, "error", listener),
+    onError: (listener) => subscribeNative(getUpdater(), "error", listener),
   }
 }
 

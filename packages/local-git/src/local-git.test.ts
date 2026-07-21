@@ -557,6 +557,8 @@ const commitAll = (cwd: string, message: string) => {
     "user.name=DiffDash Test",
     "-c",
     "user.email=test@diffdash.dev",
+    "-c",
+    "commit.gpgSign=false",
     "commit",
     "-m",
     message,

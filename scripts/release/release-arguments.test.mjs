@@ -10,6 +10,7 @@ import {
   parsePromoteReleaseArguments,
   parsePublishReleaseArguments,
   parseReleaseNotesArguments,
+  parseVerifyReleaseArguments,
 } from "./release-arguments.mjs"
 
 test("parses every documented local release option and flag", () => {
@@ -25,8 +26,7 @@ test("parses every documented local release option and flag", () => {
       "--skip-mac",
       "--skip-linux",
       "--skip-publish",
-      "--allow-dirty",
-      "--require-tag-at-head",
+      "--allow-published",
     ]),
     {
       tag: "v0.3.1",
@@ -36,8 +36,7 @@ test("parses every documented local release option and flag", () => {
       skipMac: true,
       skipLinux: true,
       skipPublish: true,
-      allowDirty: true,
-      requireTagAtHead: true,
+      allowPublished: true,
     },
   )
 })
@@ -78,10 +77,28 @@ test("parses focused build, publish, promotion, and notarization arguments", () 
     },
   )
   assert.deepEqual(
-    parsePublishReleaseArguments(["--tag", "v0.3.1", "--assets-dir", "assets", "--metadata-only"]),
-    { tag: "v0.3.1", assetsDir: "assets", metadataOnly: true },
+    parsePublishReleaseArguments([
+      "--tag",
+      "v0.3.1",
+      "--assets-dir",
+      "assets",
+      "--metadata-only",
+      "--allow-published",
+      "--require-existing-r2-provenance",
+    ]),
+    {
+      tag: "v0.3.1",
+      assetsDir: "assets",
+      metadataOnly: true,
+      allowPublished: true,
+      requireExistingR2Provenance: true,
+    },
   )
   assert.deepEqual(parsePromoteReleaseArguments(["--tag", "v0.3.1"]), { tag: "v0.3.1" })
+  assert.deepEqual(
+    parseVerifyReleaseArguments(["--tag", "v0.3.1", "--base-url", "download.example.test"]),
+    { tag: "v0.3.1", baseUrl: "download.example.test" },
+  )
   assert.deepEqual(
     parseNotarizeArguments([
       "DiffDash.app",

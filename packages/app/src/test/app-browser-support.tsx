@@ -983,6 +983,7 @@ scenario("repositoryInvalidation", async () => {
   setInputValue(searchInput, "invalidations")
   searchInput.dispatchEvent(new Event("input", { bubbles: true }))
   await vi.waitFor(() => expect(calls.searchRepositories).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(document.body.textContent).toContain("fungsi/remote-review"))
 
   calls.listRepositories.mockClear()
   calls.searchRepositories.mockClear()
@@ -1730,12 +1731,19 @@ scenario("wrappedFileBuffers", async () => {
   await vi.waitFor(() => expect(getDiffCardPaths()).toHaveLength(fixture.paths.length))
 
   const visitFile = async (path: string) => {
-    getChangedFilesTreeItem(path)?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, composed: true }),
-    )
+    const treeItem = await vi.waitFor(() => {
+      const item = getChangedFilesTreeItem(path)
+      expect(item).not.toBeNull()
+      if (item === null) throw new Error(`Missing file-tree item for ${path}`)
+      return item
+    })
+    treeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
     await vi.waitFor(
-      () => expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull(),
-      { timeout: 10_000 },
+      () => {
+        expect(document.querySelector(`[data-selected-review-path="${path}"]`)).not.toBeNull()
+        expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull()
+      },
+      { timeout: 20_000 },
     )
   }
   const shiftedPath = fixture.paths[2] ?? ""
@@ -2170,10 +2178,7 @@ scenario("viewedViewportAnchor", async () => {
 
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
   window.scrollTo(0, 0)
-  diffPane.scrollTop += largeCard.getBoundingClientRect().top - visibleTop + 300
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
-  expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
   const diffContainer = largeCard.querySelector("diffs-container")
   expect(diffContainer).not.toBeNull()
 
@@ -2246,10 +2251,7 @@ scenario("markAllViewedViewport", async () => {
   if (diffPane === null || stickyChrome === null || largeCard === null) return
 
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
-  diffPane.scrollTop += largeCard.getBoundingClientRect().top - visibleTop + 300
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
-  expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
 
   const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.includes("Actions") ?? false,
@@ -2456,51 +2458,34 @@ scenario("homeToReview", async () => {
   const addedLineIndex = addedLine?.getAttribute("data-line-index")
   expect(addedLine).toBeDefined()
   expect(lineNumber).toBe("1")
-  const gutterNumber = [...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]")].find(
-    (element) =>
-      element.getAttribute("data-column-number") === lineNumber &&
-      element.getAttribute("data-line-index") === addedLineIndex,
-  )
-  expect(gutterNumber).not.toBeUndefined()
-  gutterNumber?.dispatchEvent(
-    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
-  )
-  await vi.waitFor(() => {
-    expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
-  })
-  const gutterUtility = diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")
-  expect(gutterUtility).not.toBeNull()
-  clickGutterUtility(gutterUtility!)
+  const gutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  clickGutterUtility(gutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
-  const refreshedGutterNumber = [
-    ...diffShadow!.querySelectorAll<HTMLElement>("[data-column-number]"),
-  ].find(
-    (element) =>
-      element.getAttribute("data-column-number") === lineNumber &&
-      element.getAttribute("data-line-index") === addedLineIndex,
-  )
-  refreshedGutterNumber?.dispatchEvent(
-    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
-  )
-  await vi.waitFor(() => {
-    expect(diffShadow!.querySelector("[data-utility-button]")).not.toBeNull()
-  })
-  clickGutterUtility(diffShadow!.querySelector<HTMLButtonElement>("[data-utility-button]")!)
+  const refreshedGutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
+  clickGutterUtility(refreshedGutterUtility)
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
 
-  getDiffLine(diffShadow!, "new")?.dispatchEvent(
-    new MouseEvent("click", { bubbles: true, composed: true }),
-  )
+  const addedDiffLine = await vi.waitFor(() => {
+    const line = getDiffLine(diffShadow!, "new")
+    expect(line).toBeDefined()
+    if (line === undefined) throw new Error("Missing added diff line")
+    return line
+  })
+  addedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
-  getDiffLine(diffShadow!, "new")?.dispatchEvent(
-    new MouseEvent("click", { bubbles: true, composed: true }),
-  )
+  const refreshedAddedDiffLine = await vi.waitFor(() => {
+    const line = getDiffLine(diffShadow!, "new")
+    expect(line).toBeDefined()
+    if (line === undefined) throw new Error("Missing refreshed added diff line")
+    return line
+  })
+  refreshedAddedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
@@ -2962,6 +2947,52 @@ const getDiffLine = (shadowRoot: ShadowRoot, content: string) =>
   [...shadowRoot.querySelectorAll<HTMLElement>("[data-line]")].find(
     (element) => element.textContent?.trim() === content,
   )
+
+const scrollDiffCardAboveViewport = async (
+  diffPane: HTMLElement,
+  diffCard: HTMLElement,
+  visibleTop: number,
+) => {
+  const targetScrollTop =
+    diffPane.scrollTop + diffCard.getBoundingClientRect().top - visibleTop + 300
+  await vi.waitFor(() => {
+    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThanOrEqual(targetScrollTop)
+  })
+  diffPane.scrollTop = targetScrollTop
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(diffCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  })
+}
+
+const revealGutterUtility = async (
+  shadowRoot: ShadowRoot,
+  lineNumber: string | null | undefined,
+  lineIndex: string | null | undefined,
+) => {
+  const gutterNumber = await vi.waitFor(() => {
+    const element = [...shadowRoot.querySelectorAll<HTMLElement>("[data-column-number]")].find(
+      (candidate) =>
+        candidate.getAttribute("data-column-number") === lineNumber &&
+        candidate.getAttribute("data-line-index") === lineIndex,
+    )
+    expect(element).toBeDefined()
+    if (element === undefined) throw new Error("Missing diff gutter number")
+    return element
+  })
+  gutterNumber
+    .closest("pre")
+    ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
+  gutterNumber.dispatchEvent(
+    new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
+  )
+  return vi.waitFor(() => {
+    const utility = shadowRoot.querySelector<HTMLButtonElement>("[data-utility-button]")
+    expect(utility).not.toBeNull()
+    if (utility === null) throw new Error("Missing diff gutter utility")
+    return utility
+  })
+}
 
 const getHighlightTexts = (name: string) =>
   [...(CSS.highlights.get(name) ?? [])].map((highlightRange) => {

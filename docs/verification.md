@@ -134,7 +134,7 @@ record migration-sensitive invariants added during M8.
 | `MCP-001` | `[B]` | `diffdash-mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, immutable diff/repository context, traversal denial, and local reviews. |
 | `WORKTREE-001` | `[B]` | `review-worktree-pool.test.ts` covers exact GitHub PR heads, clone reuse, capacity, concurrent leases, revision movement, quarantine, destructive reuse, and checkout non-mutation. |
 | `WORKTREE-RECOVERY-001` | `[B]` | Dead-PID leases and manifest locks are recovered, cleanup failures quarantine slots, the globally oldest idle slot is evicted at capacity, and malicious path segments cannot escape the pool. |
-| `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, stable artifact routing, and current local release orchestration. |
+| `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, GitHub-hosted release orchestration, stable artifact routing, and public promotion verification. |
 | `RELEASE-POLICY-001` | `[B]` | Credential-free release policy tests lock tag/version matching, the stable asset matrix, deterministic metadata, bounded retries, and promoted-plus-two retention. |
 | `DOWNLOAD-WORKER-001` | `[B]` | Stable download routing covers aliases, GET/HEAD/method policy, exact architecture, unsafe/missing assets, missing/malformed metadata, and storage failures. |
 | `UPDATE-STATE-001` | `[B]` | Desktop updater tests cover architecture feeds, unsupported installs, checking/idle/available/downloading/downloaded/error states, progress clamps, and invalid download/install requests. |
