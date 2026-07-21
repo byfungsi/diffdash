@@ -1,4 +1,5 @@
 import {
+  type AgentCapability,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentCapabilityPolicyUnsupported,
@@ -52,6 +53,44 @@ const registration = (
 }
 
 describe("AgentProviders", () => {
+  it.live("bounds concurrent capability probes", () => {
+    let active = 0
+    let maximumActive = 0
+    const probe = (capability: AgentCapability) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          active += 1
+          maximumActive = Math.max(maximumActive, active)
+        }),
+        () =>
+          Effect.sleep("20 millis").pipe(
+            Effect.as(
+              AgentCapabilityUnavailable.make({
+                capability,
+                reason: "Unavailable in concurrency test",
+              }),
+            ),
+          ),
+        () =>
+          Effect.sync(() => {
+            active -= 1
+          }),
+      )
+    const registrations = ["first", "second", "third"].map((id) =>
+      registration(id, probe("walkthrough"), probe("review-thread")),
+    )
+    const registry = AgentProviderRegistry.layer(registrations, {
+      walkthrough: [],
+      reviewThread: [],
+    })
+    const layer = AgentProviders.layer.pipe(Layer.provide(registry))
+
+    return Effect.gen(function* () {
+      yield* (yield* AgentProviders).catalog
+      expect(maximumActive).toBe(2)
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("bounds and redacts returned and unexpected capability probe failures", () => {
     const failingProviderId = AgentProviderId.make("failing")
     const registrations = [

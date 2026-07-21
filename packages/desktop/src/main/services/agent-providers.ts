@@ -32,7 +32,7 @@ export class AgentProviders extends Context.Tag("@diffdash/AgentProviders")<
 
 const makeCatalog = (registrations: readonly AgentProviderRegistration[]) => {
   const policies = agentAutoRoutingPolicies(registrations)
-  return Effect.all(registrations.map(providerStatus), { concurrency: "unbounded" }).pipe(
+  return Effect.all(registrations.map(providerStatus), { concurrency: 2 }).pipe(
     Effect.map((providers) =>
       AgentProviderCatalog.make({
         providers,
@@ -51,7 +51,7 @@ const providerStatus = (registration: AgentProviderRegistration) =>
       capabilityStatus("walkthrough", registration.walkthrough?.probe),
       capabilityStatus("review-thread", registration.reviewThread?.probe),
     ],
-    { concurrency: "unbounded" },
+    { concurrency: 1 },
   ).pipe(
     Effect.map((capabilities) => {
       const manifest = registration.manifest
