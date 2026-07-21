@@ -164,7 +164,7 @@ jobs:
             xvfb
 
       - name: Install Playwright browser
-        run: pnpm exec playwright install chromium
+        run: pnpm --filter @diffdash/e2e exec playwright install chromium
 
       - name: Run release checks
         run: xvfb-run -a pnpm release:check
