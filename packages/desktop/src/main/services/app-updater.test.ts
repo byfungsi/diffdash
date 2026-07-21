@@ -1,7 +1,12 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
-import { AppUpdater, type AppUpdaterOptions, type NativeUpdaterAdapter } from "./app-updater"
+import {
+  AppUpdater,
+  type AppUpdaterOptions,
+  nativeUpdaterAdapter,
+  type NativeUpdaterAdapter,
+} from "./app-updater"
 
 const baseOptions = (adapter: NativeUpdaterAdapter): AppUpdaterOptions => ({
   adapter,
@@ -13,6 +18,10 @@ const baseOptions = (adapter: NativeUpdaterAdapter): AppUpdaterOptions => ({
 })
 
 describe("AppUpdater", () => {
+  it("defers native updater initialization until the adapter is used", () => {
+    expect(() => nativeUpdaterAdapter()).not.toThrow()
+  })
+
   it.scoped("selects the macOS architecture feed and waits for download approval", () => {
     const fake = makeFakeUpdater()
 
