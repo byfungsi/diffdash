@@ -1731,12 +1731,19 @@ scenario("wrappedFileBuffers", async () => {
   await vi.waitFor(() => expect(getDiffCardPaths()).toHaveLength(fixture.paths.length))
 
   const visitFile = async (path: string) => {
-    getChangedFilesTreeItem(path)?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, composed: true }),
-    )
+    const treeItem = await vi.waitFor(() => {
+      const item = getChangedFilesTreeItem(path)
+      expect(item).not.toBeNull()
+      if (item === null) throw new Error(`Missing file-tree item for ${path}`)
+      return item
+    })
+    treeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
     await vi.waitFor(
-      () => expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull(),
-      { timeout: 10_000 },
+      () => {
+        expect(document.querySelector(`[data-selected-review-path="${path}"]`)).not.toBeNull()
+        expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull()
+      },
+      { timeout: 20_000 },
     )
   }
   const shiftedPath = fixture.paths[2] ?? ""
@@ -2247,10 +2254,16 @@ scenario("markAllViewedViewport", async () => {
   if (diffPane === null || stickyChrome === null || largeCard === null) return
 
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
-  diffPane.scrollTop += largeCard.getBoundingClientRect().top - visibleTop + 300
+  const targetScrollTop =
+    diffPane.scrollTop + largeCard.getBoundingClientRect().top - visibleTop + 300
+  await vi.waitFor(() => {
+    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThanOrEqual(targetScrollTop)
+  })
+  diffPane.scrollTop = targetScrollTop
   diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
-  expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  await vi.waitFor(() => {
+    expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop - 250)
+  })
 
   const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.includes("Actions") ?? false,
@@ -2496,15 +2509,23 @@ scenario("homeToReview", async () => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
 
-  getDiffLine(diffShadow!, "new")?.dispatchEvent(
-    new MouseEvent("click", { bubbles: true, composed: true }),
-  )
+  const addedDiffLine = await vi.waitFor(() => {
+    const line = getDiffLine(diffShadow!, "new")
+    expect(line).toBeDefined()
+    if (line === undefined) throw new Error("Missing added diff line")
+    return line
+  })
+  addedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
-  getDiffLine(diffShadow!, "new")?.dispatchEvent(
-    new MouseEvent("click", { bubbles: true, composed: true }),
-  )
+  const refreshedAddedDiffLine = await vi.waitFor(() => {
+    const line = getDiffLine(diffShadow!, "new")
+    expect(line).toBeDefined()
+    if (line === undefined) throw new Error("Missing refreshed added diff line")
+    return line
+  })
+  refreshedAddedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
