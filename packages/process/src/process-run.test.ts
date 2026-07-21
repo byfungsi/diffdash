@@ -130,7 +130,10 @@ describe("ProcessService captured execution", () => {
       const over = yield* Effect.either(
         cli.run(
           process.execPath,
-          ["-e", "process.stdout.write('abcdef'); process.stderr.write('diagnostic')"],
+          [
+            "-e",
+            "process.stderr.write('diagnostic', () => setTimeout(() => process.stdout.write('abcdef'), 250))",
+          ],
           {
             stdout: { maxBytes: 5, overflow: "error" },
             stderr: { maxBytes: 10, overflow: "truncate" },
