@@ -89,7 +89,8 @@
     },
     "e2e": {
       "dependsOn": ["@diffdash/desktop#build"],
-      "cache": false
+      "cache": false,
+      "passThroughEnv": ["DEBUG"]
     },
     "package:e2e": {
       "cache": false
