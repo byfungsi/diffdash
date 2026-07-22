@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.4.3
+
+### Patch Changes
+
+- [#15](https://github.com/byfungsi/diffdash/pull/15) [`ee95be0`](https://github.com/byfungsi/diffdash/commit/ee95be00d903e77578c9692491cb0064744a3498) Thanks [@hanipcode](https://github.com/hanipcode)! - Scope review navigation results to the active sidebar and clarify walkthrough sections with their full paths.
+
 ## 0.4.2
 
 ### Patch Changes
