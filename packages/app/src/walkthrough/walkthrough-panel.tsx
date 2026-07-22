@@ -140,7 +140,7 @@ export const WalkthroughSidebar = ({
                     )
                     const selected = activeStepIndex === index
                     return (
-                      <li key={step.id} className="relative">
+                      <li key={`${index}:${step.id}`} className="relative">
                         <span
                           className={`absolute top-[10px] -left-[17px] z-10 flex size-3.5 items-center justify-center rounded-full border text-[9px] ${visited ? "border-review-success bg-review-success text-review-success-foreground" : selected ? "border-primary bg-walkthrough-marker-surface text-primary shadow-[0_0_0_3px_var(--color-review-sidebar)]" : "border-primary/70 bg-walkthrough-marker-surface text-primary"}`}
                         >
