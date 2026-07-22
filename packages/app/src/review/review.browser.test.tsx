@@ -12,9 +12,14 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("dismissRepositoryBanner")()
   })
 
-  it("keeps a file-tree selection stable while the diff pane scrolls", async () => {
+  it("clears temporary file-tree selection after navigating to a collapsed card", async () => {
     expect.hasAssertions()
     await appBrowserScenario("fileTreeSelection")()
+  })
+
+  it("middle-truncates long paths without overflowing review cards", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("longReviewPaths")()
   })
 
   it("loads bounded snapshot pages incrementally and fetches selected files on demand", async () => {
@@ -40,6 +45,16 @@ describe("App review browser interactions", () => {
   it("finds and highlights exact case-insensitive substrings across diff lines", async () => {
     expect.hasAssertions()
     await appBrowserScenario("diffSearchSubstrings")()
+  })
+
+  it("starts search forward from the current viewport instead of the first file", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffSearchViewportAnchor")()
+  })
+
+  it("anchors search inside an unmounted virtualized line range", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffSearchVirtualViewportAnchor")()
   })
 
   it("temporarily reveals hidden, filtered, and viewed files for search results", async () => {

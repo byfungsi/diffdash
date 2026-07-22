@@ -39,7 +39,7 @@ cannot be made reliable in local automation.
 | Download worker | `pnpm --filter @diffdash/download-worker test` | Stable release routing and artifact selection |
 | Full test gate | `pnpm test:all` | Unit, browser, Electron, and worker suites |
 | Landing build | `pnpm --filter @diffdash/web build` | Landing TypeScript and production bundle |
-| Promo data | `pnpm promo:data:check` | Deterministic demo scenarios |
+| Demo data | `pnpm --filter @diffdash/demo test` | Deterministic demo scenarios |
 | Release infrastructure | `pnpm release:infrastructure:check` | Release-script syntax and worker checks |
 
 ## Executable Baseline Evidence

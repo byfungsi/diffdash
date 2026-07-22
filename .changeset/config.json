@@ -29,8 +29,7 @@
     "@diffdash/walkthrough",
     "@diffdash/web",
     "@diffdash/demo",
-    "@diffdash/promo-capture",
-    "@diffdash/promo-media"
+    "@diffdash/demo-video"
   ],
   "privatePackages": {
     "version": true,

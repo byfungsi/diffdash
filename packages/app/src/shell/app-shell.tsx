@@ -64,6 +64,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { UpdateBanner } from "@/shared/ui/update-banner"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
+import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 
 type Screen = "home" | "repo" | "review"
 
@@ -121,6 +122,7 @@ export function AppShell() {
   )
   const [recentReviews, setRecentReviews] = useState<readonly RecentReviewEntry[]>([])
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
+  const [shortcutReferenceOpen, setShortcutReferenceOpen] = useState(false)
   const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
   const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
   const deferredSearchQuery = useDeferredValue(query.trim())
@@ -460,6 +462,19 @@ export function AppShell() {
       window.removeEventListener("auxclick", suppressHandledAuxClick, true)
     }
   })
+
+  useEffect(() => {
+    const openShortcutReference = (event: KeyboardEvent) => {
+      if (!isModKey(event) || event.altKey || event.key !== "/") return
+
+      event.preventDefault()
+      event.stopPropagation()
+      setShortcutReferenceOpen(true)
+    }
+
+    window.addEventListener("keydown", openShortcutReference, true)
+    return () => window.removeEventListener("keydown", openShortcutReference, true)
+  }, [])
 
   useEffect(() => {
     const openGoToPalette = (event: KeyboardEvent) => {
@@ -887,6 +902,10 @@ export function AppShell() {
         placeholder="Search repos and PRs"
         title="Go anywhere"
         onOpenChange={setGoToPaletteOpen}
+      />
+      <KeyboardShortcutReference
+        open={shortcutReferenceOpen}
+        onOpenChange={setShortcutReferenceOpen}
       />
     </main>
   )

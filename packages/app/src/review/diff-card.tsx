@@ -19,6 +19,7 @@ import { diffCardDomId } from "./viewed-file-viewport"
 import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
+import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import {
   ReviewThreadComposer,
   ReviewThreadPanel,
@@ -126,7 +127,7 @@ export const OpenDiffCard = ({
       <section
         id={diffCardDomId(file.reviewKey)}
         data-diff-card-path={file.path}
-        className={`bg-card scroll-mt-14 rounded-2xl border shadow-xs ${selectedClassName}`}
+        className={`bg-card scroll-mt-14 overflow-hidden rounded-2xl border shadow-xs ${selectedClassName}`}
       >
         <DiffCardHeader
           expanded={isExpanded}
@@ -283,7 +284,7 @@ const DiffCardHeader = ({
   const ChevronIcon = expanded ? ChevronDown : ChevronRight
   return (
     <div className="flex items-center justify-between gap-3 px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
         <Button
           size="icon-xs"
           variant="ghost"
@@ -294,17 +295,23 @@ const DiffCardHeader = ({
         >
           <ChevronIcon className="size-4" />
         </Button>
-        <button type="button" className="min-w-0 text-left" onClick={onSelect}>
+        <button
+          type="button"
+          className="min-w-0 flex-1 overflow-hidden text-left"
+          aria-label={`Select ${file.path}`}
+          title={file.path}
+          onClick={onSelect}
+        >
           <div className="min-w-0">
-            <div
-              className={`truncate font-mono text-xs tracking-wide ${viewed ? "text-muted-foreground" : ""}`}
-            >
-              {file.path}
-            </div>
+            <MiddleTruncatedText
+              value={file.path}
+              className={`font-mono text-xs tracking-wide ${viewed ? "text-muted-foreground" : ""}`}
+            />
             {file.oldPath === null ? null : (
-              <div className="text-muted-foreground text-caption truncate font-mono">
-                from {file.oldPath}
-              </div>
+              <MiddleTruncatedText
+                value={`from ${file.oldPath}`}
+                className="text-muted-foreground text-caption font-mono"
+              />
             )}
           </div>
         </button>

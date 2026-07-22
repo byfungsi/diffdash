@@ -5,6 +5,7 @@ import {
   createR2ClientConfiguration,
   loadLocalEnvironment,
   parseLocalEnvLine,
+  requiredAnalyticsEnvironment,
   requiredEnvironment,
 } from "./release-environment.mjs"
 
@@ -19,6 +20,24 @@ test("required environment access rejects missing and blank values without expos
   assert.equal(requiredEnvironment("TOKEN", { TOKEN: " secret " }), " secret ")
   assert.throws(() => requiredEnvironment("TOKEN", {}), /TOKEN/u)
   assert.throws(() => requiredEnvironment("TOKEN", { TOKEN: "   " }), /TOKEN/u)
+})
+
+test("requires complete analytics configuration for packaged releases", () => {
+  assert.deepEqual(
+    requiredAnalyticsEnvironment({
+      VITE_POSTHOG_HOST: "https://us.i.posthog.com",
+      VITE_POSTHOG_KEY: "phc_test",
+    }),
+    { host: "https://us.i.posthog.com", key: "phc_test" },
+  )
+  assert.throws(
+    () => requiredAnalyticsEnvironment({ VITE_POSTHOG_HOST: "https://us.i.posthog.com" }),
+    /VITE_POSTHOG_KEY/u,
+  )
+  assert.throws(
+    () => requiredAnalyticsEnvironment({ VITE_POSTHOG_KEY: "phc_test" }),
+    /VITE_POSTHOG_HOST/u,
+  )
 })
 
 test("builds the R2 endpoint and AWS environment without mutating the source", () => {

@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest"
 import { appBrowserScenario } from "@/test/app-browser-support"
 
 describe("App shell browser interactions", () => {
+  it("opens the complete macOS shortcut reference from Home and restores focus", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceHome")()
+  })
+
+  it("opens the Windows shortcut reference from an editable Review control", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceReview")()
+  })
+
   it("asks before downloading an update and restarts only after it is ready", async () => {
     expect.hasAssertions()
     await appBrowserScenario("updateDownloadRestart")()

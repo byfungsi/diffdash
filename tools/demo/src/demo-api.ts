@@ -53,6 +53,11 @@ import {
 } from "@diffdash/protocol/agent-providers"
 import type { DiffDashApi } from "@diffdash/protocol/api"
 import {
+  type CliNavigationCommand,
+  OpenBranchDiffCommand,
+  OpenWorkingTreeCommand,
+} from "@diffdash/protocol/cli-navigation"
+import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
   AppUpdateDownloading,
@@ -115,6 +120,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
 
   const progressListeners = new Set<(progress: ReviewAgentProgress) => void>()
   const updateListeners = new Set<(state: AppUpdateState) => void>()
+  const navigationListeners = new Set<() => void>()
   const actions: DemoAction[] = []
   const pendingRuns = new Map<string, PendingAgentRun>()
   const snapshotCache = new Map<string, ReviewSnapshot>()
@@ -124,6 +130,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   let viewedFiles = new Map<string, ReviewFilePatchHash>()
   let settings = cloneSettings(DEFAULT_AI_SETTINGS)
   let appState = AppState.make({ onboardingCompleted: true })
+  const diagnostics = readyDemoPrerequisites()
   let updateState: AppUpdateState = AppUpdateUnsupported.make({
     currentVersion: scenario.manifest.appVersion.replace(/^v/, ""),
     reason: "development",
@@ -131,6 +138,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   let threadDetails = new Map<ReviewThreadId, ReviewThreadDetails>()
   let createdThreadCounter = 0
   let createdMessageCounter = 0
+  let navigationCommands: CliNavigationCommand[] = []
   const provider = GitProviderDescriptor.make({
     id: GitProviderId.make("github"),
     kind: GitProviderKind.make("github"),
@@ -201,11 +209,17 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     )
     createdThreadCounter = 0
     createdMessageCounter = 0
+    navigationCommands = []
   }
 
   const setUpdateState = (state: AppUpdateState) => {
     updateState = state
     for (const listener of updateListeners) listener(state)
+  }
+
+  const enqueueNavigation = (command: CliNavigationCommand) => {
+    navigationCommands.push(command)
+    for (const listener of navigationListeners) listener()
   }
 
   const requireReview = (owner: string, name: string, number: number) => {
@@ -273,7 +287,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         setUpdateState(
           AppUpdateAvailable.make({
             currentVersion: scenario.manifest.appVersion.replace(/^v/, ""),
-            version: "0.2.2",
+            version: "0.4.4",
           }),
         )
         return
@@ -282,7 +296,22 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         setUpdateState(
           AppUpdateDownloaded.make({
             currentVersion: scenario.manifest.appVersion.replace(/^v/, ""),
-            version: "0.2.2",
+            version: "0.4.4",
+          }),
+        )
+        return
+      }
+      if (checkpointId === "navigation-working-tree") {
+        enqueueNavigation(
+          OpenWorkingTreeCommand.make({ localPath: "/Users/demo/emberline-dispatch" }),
+        )
+        return
+      }
+      if (checkpointId === "navigation-branch-diff") {
+        enqueueNavigation(
+          OpenBranchDiffCommand.make({
+            localPath: "/Users/demo/emberline-dispatch",
+            branchName: "dev",
           }),
         )
         return
@@ -359,7 +388,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         setUpdateState(
           AppUpdateDownloading.make({
             currentVersion: scenario.manifest.appVersion.replace(/^v/, ""),
-            version: "0.2.2",
+            version: "0.4.4",
             percent: 62,
           }),
         )
@@ -368,65 +397,39 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       onStateChanged: (listener) => listenerSubscription(updateListeners, listener),
     },
     navigation: {
-      drainCommands: async () => [],
-      onCommandsAvailable: () => () => undefined,
+      drainCommands: async () => navigationCommands.splice(0, navigationCommands.length),
+      onCommandsAvailable: (listener) => {
+        const unsubscribe = listenerSubscription(navigationListeners, listener)
+        if (navigationCommands.length > 0) queueMicrotask(listener)
+        return unsubscribe
+      },
     },
-    diagnostics: async () =>
-      AppPrerequisites.make({
-        gitInstalled: true,
-        ghInstalled: true,
-        ghVersion: "2.74.1",
-        ghSearchRepositoriesAvailable: true,
-        ghSupported: true,
-        ghAuthenticated: true,
-        codingAgentInstalled: true,
-        installedCodingAgents: ["codex", "claude", "opencode"],
-        diffDashCliInstalled: true,
-        diffDashCliInPath: true,
-        diffDashCliPath: "/usr/local/bin/diffdash",
-        checkedAt: "2026-07-10T08:36:19Z",
-      }),
+    diagnostics: async () => diagnostics,
     agentProviders: {
       getCatalog: async () =>
         AgentProviderCatalog.make({
           providers: [
-            AgentProviderStatus.make({
-              id: AgentProviderId.make("codex"),
-              displayName: "Codex",
-              description: "Demo agent provider",
-              homepage: null,
-              capabilities: [
-                AgentProviderCapabilityStatus.make({
-                  capability: "walkthrough",
-                  status: "ready",
-                  runtimeVersion: "demo",
-                  reason: null,
-                }),
-                AgentProviderCapabilityStatus.make({
-                  capability: "review-thread",
-                  status: "ready",
-                  runtimeVersion: "demo",
-                  reason: null,
-                }),
-              ],
-              models: [
-                AgentProviderModel.make({
-                  id: AgentModelId.make("gpt-5.3-codex-spark"),
-                  displayName: "GPT 5.3 Codex Spark",
-                  capabilities: ["walkthrough", "review-thread"],
-                  quality: "balanced",
-                }),
-              ],
-              defaults: AgentProviderDefaults.make({
-                walkthroughModel: AgentModelId.make("gpt-5.3-codex-spark"),
-                reviewThreadModel: AgentModelId.make("gpt-5.3-codex-spark"),
-              }),
-              setup: [],
-            }),
+            demoAgentProvider("claude", "Claude", "claude-sonnet-5", "Sonnet 5.0", "best"),
+            demoAgentProvider(
+              "codex",
+              "Codex",
+              "gpt-5.3-codex-spark",
+              "GPT 5.3 Codex Spark",
+              "balanced",
+            ),
+            demoAgentProvider("opencode", "OpenCode", "opencode-gpt-5.3", "GPT 5.3", "balanced"),
           ],
           autoCandidates: AgentProviderAutoCandidates.make({
-            walkthrough: [AgentProviderId.make("codex")],
-            reviewThread: [AgentProviderId.make("codex")],
+            walkthrough: [
+              AgentProviderId.make("claude"),
+              AgentProviderId.make("codex"),
+              AgentProviderId.make("opencode"),
+            ],
+            reviewThread: [
+              AgentProviderId.make("codex"),
+              AgentProviderId.make("claude"),
+              AgentProviderId.make("opencode"),
+            ],
           }),
         }),
     },
@@ -716,6 +719,10 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       acquireLocal: async (target) => {
         const detail = LocalReviewDetail.make({
           ...localReviewDetail(target.rootPath, currentRevision),
+          title:
+            target.comparison["_tag"] === "workingTree"
+              ? "Local changes"
+              : `Changes vs ${target.comparison.branchName}`,
           comparison: target.comparison,
         })
         const diff = LocalReviewDiff.make({
@@ -884,6 +891,63 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   resetState()
   return { api, timeline }
 }
+
+const demoAgentProvider = (
+  id: string,
+  displayName: string,
+  modelId: string,
+  modelDisplayName: string,
+  quality: "fast" | "balanced" | "best",
+) =>
+  AgentProviderStatus.make({
+    id: AgentProviderId.make(id),
+    displayName,
+    description: `${displayName} demo runtime`,
+    homepage: null,
+    capabilities: [
+      AgentProviderCapabilityStatus.make({
+        capability: "walkthrough",
+        status: "ready",
+        runtimeVersion: "demo",
+        reason: null,
+      }),
+      AgentProviderCapabilityStatus.make({
+        capability: "review-thread",
+        status: "ready",
+        runtimeVersion: "demo",
+        reason: null,
+      }),
+    ],
+    models: [
+      AgentProviderModel.make({
+        id: AgentModelId.make(modelId),
+        displayName: modelDisplayName,
+        capabilities: ["walkthrough", "review-thread"],
+        quality,
+      }),
+    ],
+    defaults: AgentProviderDefaults.make({
+      walkthroughModel: AgentModelId.make(modelId),
+      reviewThreadModel: AgentModelId.make(modelId),
+    }),
+    setup: [],
+  })
+
+const readyDemoPrerequisites = () =>
+  AppPrerequisites.make({
+    gitInstalled: true,
+    ghInstalled: true,
+    ghVersion: "2.74.1",
+    ghSearchRepositoriesAvailable: true,
+    ghSupported: true,
+    ghAuthenticated: true,
+    codingAgentInstalled: true,
+    installedCodingAgents: ["codex", "claude", "opencode"],
+    diffDashCliInstalled: true,
+    diffDashCliInPath: true,
+    diffDashCliPath: "/usr/local/bin/diffdash",
+    checkedAt: "2026-07-10T08:36:19Z",
+  })
 
 const listenerSubscription = <A>(
   listeners: Set<(value: A) => void>,

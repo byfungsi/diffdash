@@ -1,3 +1,4 @@
+/* oxlint-disable eslint/no-underscore-dangle -- Protocol unions use Effect-compatible _tag discriminants. */
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import type { ReviewSnapshot } from "@diffdash/domain/review-context"
@@ -20,6 +21,7 @@ import {
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
   type ReviewSnapshotSearchRequest,
+  type ReviewSnapshotSearchAnchor,
   type ReviewSnapshotSearchResponse,
   ReviewSnapshotSearchResponse as ReviewSnapshotSearchResponseSchema,
 } from "@diffdash/protocol/review-snapshot"
@@ -100,9 +102,12 @@ export const searchReviewSnapshot = (
   if (request.snapshotId !== snapshot.snapshotId) {
     return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
   }
-  const queryHash = stableCursorHash([request.query])
+  const queryHash = stableCursorHash([request.query, searchAnchorKey(request.anchor)])
   const offset = decodeCursor(request.cursor, "search", queryHash)
-  const matches = allSearchMatches(snapshot, request.query)
+  const matches = anchoredSearchMatches(snapshot, request.query, request.anchor)
+  if (matches === null) {
+    return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+  }
   if (offset === null || offset > matches.length) {
     return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
   }
@@ -193,6 +198,56 @@ const allSearchMatches = (snapshot: ReviewSnapshot, query: string) => {
   }
   return matches
 }
+
+const anchoredSearchMatches = (
+  snapshot: ReviewSnapshot,
+  query: string,
+  anchor: ReviewSnapshotSearchAnchor | null,
+) => {
+  const matches = allSearchMatches(snapshot, query)
+  if (anchor === null || matches.length === 0) return matches
+  const anchorFileIndex = snapshot.parsedDiff.files.findIndex(
+    (file) => file.fileId === anchor.fileId,
+  )
+  if (anchorFileIndex < 0) return null
+
+  const anchorFile = snapshot.parsedDiff.files[anchorFileIndex]
+  const anchorHunkIndex =
+    anchor._tag === "line"
+      ? (anchorFile?.hunks.findIndex((hunk) => hunk.id === anchor.hunkId) ?? -1)
+      : -1
+  if (anchor._tag === "line" && anchorHunkIndex < 0) return null
+
+  const filesById = new Map(
+    snapshot.parsedDiff.files.map((file, fileIndex) => [
+      file.fileId,
+      {
+        fileIndex,
+        hunkIndexes: new Map(file.hunks.map((hunk, hunkIndex) => [hunk.id, hunkIndex])),
+      },
+    ]),
+  )
+  const startIndex = matches.findIndex((match) => {
+    const position = filesById.get(match.fileId)
+    if (position === undefined || position.fileIndex < anchorFileIndex) return false
+    if (position.fileIndex > anchorFileIndex || anchor._tag === "file") return true
+    const hunkIndex = position.hunkIndexes.get(match.hunkId)
+    if (hunkIndex === undefined) return false
+    return (
+      hunkIndex > anchorHunkIndex ||
+      (hunkIndex === anchorHunkIndex && match.hunkLineIndex >= anchor.hunkLineIndex)
+    )
+  })
+  if (startIndex <= 0) return matches
+  return [...matches.slice(startIndex), ...matches.slice(0, startIndex)]
+}
+
+const searchAnchorKey = (anchor: ReviewSnapshotSearchAnchor | null) =>
+  anchor === null
+    ? ""
+    : anchor._tag === "file"
+      ? `file:${anchor.fileId}`
+      : `line:${anchor.fileId}:${anchor.hunkId}:${anchor.hunkLineIndex}`
 
 const makePageCursor = (offset: number, hash: string) =>
   ReviewSnapshotPageCursor.make(`page:v1:${offset}:${hash}`)
