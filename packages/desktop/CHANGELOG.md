@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.4.2
+
+### Patch Changes
+
+- [#13](https://github.com/byfungsi/diffdash/pull/13) [`3d1c7e6`](https://github.com/byfungsi/diffdash/commit/3d1c7e69910cc7d66c30c05676aacb725681bab1) Thanks [@hanipcode](https://github.com/hanipcode)! - Keep provider readiness checks reliable under load by allowing command output streams enough time to close after the command exits.
+
 ## 0.4.1
 
 ### Patch Changes
