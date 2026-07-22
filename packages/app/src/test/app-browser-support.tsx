@@ -459,6 +459,34 @@ const walkthrough = StoredWalkthrough.make({
           }),
         ],
       }),
+      WalkthroughChapter.make({
+        id: "duplicate-chapter",
+        title: "Section A",
+        summary: "First configuration section.",
+        stops: [
+          WalkthroughStop.make({
+            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
+            id: "duplicate-stop",
+            risk: "review",
+            summary: "Review the first configuration path.",
+            title: "Ci.yml",
+          }),
+        ],
+      }),
+      WalkthroughChapter.make({
+        id: "duplicate-chapter",
+        title: "Section B",
+        summary: "Second configuration section.",
+        stops: [
+          WalkthroughStop.make({
+            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
+            id: "duplicate-stop",
+            risk: "review",
+            summary: "Review the second configuration path.",
+            title: "Ci.yml",
+          }),
+        ],
+      }),
     ],
     support: [
       WalkthroughSupportItem.make({
@@ -2562,9 +2590,7 @@ scenario("homeToReview", async () => {
   dispatchKeyboardShortcut("k", { metaKey: true })
   await vi.waitFor(() => {
     expect(
-      document.querySelector<HTMLInputElement>(
-        'dialog input[placeholder="Search files and walkthrough sections"]',
-      ),
+      document.querySelector<HTMLInputElement>('dialog input[placeholder="Search files"]'),
     ).not.toBeNull()
   })
   const reviewCommandInput = document.querySelector<HTMLInputElement>("dialog input")
@@ -2617,9 +2643,11 @@ scenario("homeToReview", async () => {
     expect(approvedButton?.disabled).toBe(true)
   })
 
-  const walkthroughTab = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Walkthrough",
-  )
+  const walkthroughTab = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      'input[placeholder="Filter files"] + div button',
+    ),
+  ].find((button) => button.textContent === "Walkthrough")
   expect(walkthroughTab).toBeDefined()
   walkthroughTab?.click()
 
@@ -2647,14 +2675,24 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(
       document.querySelector<HTMLInputElement>(
-        'dialog input[placeholder="Search files and walkthrough sections"]',
+        'dialog input[placeholder="Search walkthrough sections"]',
       ),
     ).not.toBeNull()
   })
   const walkthroughCommandInput = document.querySelector<HTMLInputElement>("dialog input")
   expect(walkthroughCommandInput).not.toBeNull()
+  const walkthroughPaletteButtons = [
+    ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
+  ]
+  expect(walkthroughPaletteButtons.some((button) => button.textContent?.includes("File ·"))).toBe(
+    false,
+  )
+  expect(document.body.textContent).toContain("Runtime > Entry point")
+  expect(document.body.textContent).toContain("Section A > Ci.yml")
+  expect(document.body.textContent).toContain("Section B > Ci.yml")
+  expect(document.body.textContent).toContain("Support > Documentation")
   if (walkthroughCommandInput !== null) {
-    setInputValue(walkthroughCommandInput, "Documentation")
+    setInputValue(walkthroughCommandInput, "Support > Documentation")
     walkthroughCommandInput.dispatchEvent(new Event("input", { bubbles: true }))
   }
   const docsStepPaletteButton = [
@@ -2668,10 +2706,42 @@ scenario("homeToReview", async () => {
     expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
   })
 
-  const entryStepButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Entry point") ?? false,
-  )
-  expect(entryStepButton).toBeDefined()
+  const paletteTreeTab = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      'input[placeholder="Filter files"] + div button',
+    ),
+  ].find((button) => button.textContent === "Tree")
+  expect(paletteTreeTab).toBeDefined()
+  paletteTreeTab?.click()
+  dispatchKeyboardShortcut("k", { metaKey: true })
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector<HTMLInputElement>('dialog input[placeholder="Search files"]'),
+    ).not.toBeNull()
+  })
+  const treePaletteText = document.querySelector("dialog")?.textContent ?? ""
+  expect(treePaletteText).toContain("src/app.tsx")
+  expect(treePaletteText).toContain("docs/readme.md")
+  expect(treePaletteText).not.toContain("Runtime > Entry point")
+  expect(treePaletteText).not.toContain("Support > Documentation")
+  document
+    .querySelector<HTMLButtonElement>('dialog button[aria-label="Close command palette"]')
+    ?.click()
+  const paletteWalkthroughTab = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      'input[placeholder="Filter files"] + div button',
+    ),
+  ].find((button) => button.textContent === "Walkthrough")
+  expect(paletteWalkthroughTab).toBeDefined()
+  paletteWalkthroughTab?.click()
+
+  let entryStepButton: HTMLButtonElement | undefined
+  await vi.waitFor(() => {
+    entryStepButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Entry point") ?? false,
+    )
+    expect(entryStepButton).toBeDefined()
+  })
   entryStepButton?.click()
 
   await vi.waitFor(() => {

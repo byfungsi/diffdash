@@ -1130,6 +1130,7 @@ export const ReviewDetailView = ({
   }
   const reviewGoToItems = reviewGoToPaletteItems({
     files: changedFiles,
+    mode: sidebarTab,
     onSelectFile: selectReviewFile,
     onSelectWalkthroughStep: selectWalkthroughStepAndFocus,
     steps: activeWalkthroughSteps,
@@ -1666,7 +1667,7 @@ export const ReviewDetailView = ({
       <CommandPaletteDialog
         items={reviewGoToItems}
         open={goToPaletteOpen}
-        placeholder="Search files and walkthrough sections"
+        placeholder={sidebarTab === "walkthrough" ? "Search walkthrough sections" : "Search files"}
         title="Go anywhere"
         onOpenChange={setGoToPaletteOpen}
       />
@@ -1959,30 +1960,32 @@ const isEditableTarget = (target: EventTarget | null) => {
 
 const reviewGoToPaletteItems = ({
   files,
+  mode,
   onSelectFile,
   onSelectWalkthroughStep,
   steps,
 }: {
   readonly files: readonly ReviewSnapshotFileInventory[]
+  readonly mode: ReviewSidebarTab
   readonly onSelectFile: (file: ReviewSnapshotFileInventory) => void
   readonly onSelectWalkthroughStep: (index: number) => void
   readonly steps: readonly WalkthroughReviewStep[]
-}): readonly CommandPaletteItem[] => [
-  ...files.map((file) => ({
-    id: `file:${file.reviewKey}`,
-    keywords: `${file.path} ${file.oldPath ?? ""} file diff`,
-    subtitle: `File · +${file.additions} -${file.deletions}`,
-    title: file.path,
-    onSelect: () => onSelectFile(file),
-  })),
-  ...steps.map((step, index) => ({
-    id: `walkthrough:${step.id}`,
-    keywords: `${step.title} ${step.summary} ${step.chapterTitle ?? ""} walkthrough section`,
-    subtitle: `${step.chapterTitle ?? "Walkthrough"} · ${step.risk}`,
-    title: step.title,
-    onSelect: () => onSelectWalkthroughStep(index),
-  })),
-]
+}): readonly CommandPaletteItem[] =>
+  mode === "tree"
+    ? files.map((file) => ({
+        id: `file:${file.reviewKey}`,
+        keywords: `${file.path} ${file.oldPath ?? ""} file diff`,
+        subtitle: `File · +${file.additions} -${file.deletions}`,
+        title: file.path,
+        onSelect: () => onSelectFile(file),
+      }))
+    : steps.map((step, index) => ({
+        id: `walkthrough:${index}:${step.id}`,
+        keywords: `${step.title} ${step.summary} ${step.chapterTitle ?? ""} walkthrough section`,
+        subtitle: `${step.chapterTitle ?? "Walkthrough"} · ${step.risk}`,
+        title: `${step.chapterTitle ?? "Walkthrough"} > ${step.title}`,
+        onSelect: () => onSelectWalkthroughStep(index),
+      }))
 
 const reviewActionPaletteItems = ({
   aiAgentAvailable,
