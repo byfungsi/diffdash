@@ -18,6 +18,7 @@ import {
   ReviewSnapshotPageResponse as ReviewSnapshotPageResponseSchema,
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
+  type ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchMatch,
   type ReviewSnapshotSearchRequest,
   type ReviewSnapshotSearchResponse,
@@ -100,9 +101,12 @@ export const searchReviewSnapshot = (
   if (request.snapshotId !== snapshot.snapshotId) {
     return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
   }
-  const queryHash = stableCursorHash([request.query])
+  const queryHash = stableCursorHash([request.query, searchAnchorKey(request.anchor)])
   const offset = decodeCursor(request.cursor, "search", queryHash)
-  const matches = allSearchMatches(snapshot, request.query)
+  const matches = anchoredSearchMatches(snapshot, request.query, request.anchor)
+  if (matches === null) {
+    return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+  }
   if (offset === null || offset > matches.length) {
     return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
   }
@@ -193,6 +197,32 @@ const allSearchMatches = (snapshot: ReviewSnapshot, query: string) => {
   }
   return matches
 }
+
+const anchoredSearchMatches = (
+  snapshot: ReviewSnapshot,
+  query: string,
+  anchor: ReviewSnapshotSearchFileAnchor | null,
+) => {
+  const matches = allSearchMatches(snapshot, query)
+  if (anchor === null || matches.length === 0) return matches
+  const anchorFileIndex = snapshot.parsedDiff.files.findIndex(
+    (file) => file.fileId === anchor.fileId,
+  )
+  if (anchorFileIndex < 0) return null
+
+  const filesById = new Map(
+    snapshot.parsedDiff.files.map((file, fileIndex) => [file.fileId, fileIndex]),
+  )
+  const startIndex = matches.findIndex((match) => {
+    const fileIndex = filesById.get(match.fileId)
+    return fileIndex !== undefined && fileIndex >= anchorFileIndex
+  })
+  if (startIndex <= 0) return matches
+  return [...matches.slice(startIndex), ...matches.slice(0, startIndex)]
+}
+
+const searchAnchorKey = (anchor: ReviewSnapshotSearchFileAnchor | null) =>
+  anchor === null ? "" : `file:${anchor.fileId}`
 
 const makePageCursor = (offset: number, hash: string) =>
   ReviewSnapshotPageCursor.make(`page:v1:${offset}:${hash}`)

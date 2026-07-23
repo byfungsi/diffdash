@@ -402,6 +402,7 @@ export function ReviewThreadComposer({
         value={body}
         ref={textareaRef}
         aria-label="Thread message"
+        className="resize-none"
         placeholder={placeholder}
         onChange={(event) => setBody(event.currentTarget.value)}
         onKeyDown={onKeyDown}
@@ -484,12 +485,17 @@ export function ReviewThreadPanel({
     <article
       className={cn(
         "bg-card min-w-0 overflow-hidden",
-        embedded ? "rounded-none border-0 shadow-none" : "my-2 rounded-lg border shadow-xs",
+        embedded
+          ? "flex min-h-0 flex-1 flex-col rounded-none border-0 shadow-none"
+          : "my-2 rounded-lg border shadow-xs",
       )}
       aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} review thread`}
       data-review-thread-id={thread.id}
     >
-      <div className="space-y-2.5 p-3">
+      <div
+        data-review-thread-history
+        className={cn("space-y-2.5 p-3", embedded && "max-h-review-thread-history overflow-y-auto")}
+      >
         {previousRevision ||
         thread.anchorStatus === "outdated" ||
         thread.anchorStatus === "unresolved_anchor" ? (
@@ -524,14 +530,6 @@ export function ReviewThreadPanel({
         {agentRunning && !hasPendingAgentMessage ? (
           <UnicodeLoadingText className="text-muted-foreground text-xs" text={progressLabel} />
         ) : null}
-        {agentRunning || hasPendingAgentMessage || hasUnansweredUserMessage ? null : (
-          <ReviewThreadComposer
-            label="Continue conversation"
-            placeholder="Ask a follow-up question"
-            submitLabel="Send"
-            onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
-          />
-        )}
         {displayedError === null ? null : (
           <div role="alert" className="text-destructive flex items-center gap-1 text-xs">
             <AlertCircle className="size-3.5" />
@@ -555,66 +553,17 @@ export function ReviewThreadPanel({
           </div>
         )}
       </div>
-    </article>
-  )
-}
-
-/** Compact navigation for persisted review threads. */
-export function ReviewThreadIndex({
-  items,
-  loading,
-  error,
-  onReload,
-  onSelect,
-}: {
-  readonly items: readonly ReviewThreadDetails[]
-  readonly loading: boolean
-  readonly error: string | null
-  readonly onReload: () => Promise<void>
-  readonly onSelect: (details: ReviewThreadDetails) => void
-}) {
-  if (!loading && error === null && items.length === 0) return null
-
-  return (
-    <section
-      className="bg-card rounded-xl border px-3 py-2.5 shadow-xs"
-      aria-labelledby="thread-index-title"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="thread-index-title" className="text-xs font-semibold">
-          Review threads
-        </h2>
-        <Badge variant="secondary" className="text-caption">
-          {items.length}
-        </Badge>
-      </div>
-      {loading ? (
-        <output className="text-muted-foreground mt-2 flex items-center gap-1.5 text-xs">
-          <Loader2 className="size-3 animate-spin" /> Loading threads
-        </output>
-      ) : null}
-      {error === null ? null : (
-        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-          <span role="alert" className="text-destructive truncate">
-            {error}
-          </span>
-          <Button size="xs" variant="outline" onClick={() => void onReload()}>
-            Retry
-          </Button>
+      {agentRunning || hasPendingAgentMessage || hasUnansweredUserMessage ? null : (
+        <div className={cn("shrink-0", embedded ? "border-t p-3" : "px-3 pb-3")}>
+          <ReviewThreadComposer
+            label="Continue conversation"
+            placeholder="Ask a follow-up question"
+            submitLabel="Send"
+            onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
+          />
         </div>
       )}
-      {items.length === 0 ? null : (
-        <ol className="mt-2 flex flex-wrap gap-1.5">
-          {items.map((details) => (
-            <li key={details.thread.id}>
-              <Button size="xs" variant="outline" onClick={() => onSelect(details)}>
-                {anchorLabel(details.thread.currentAnchor ?? details.thread.originalAnchor)}
-              </Button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+    </article>
   )
 }
 

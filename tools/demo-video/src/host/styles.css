@@ -1,5 +1,5 @@
 @import "@diffdash/app/styles.css";
-@source "../../../packages/app/src";
+@source "../../../../packages/app/src";
 
 @font-face {
   font-family: "Inter";
@@ -9,25 +9,14 @@
   font-display: block;
 }
 
-html[data-demo-capture="still"] *,
-html[data-demo-capture="still"] *::before,
-html[data-demo-capture="still"] *::after {
-  scroll-behavior: auto !important;
-  animation-duration: 0s !important;
-  animation-delay: 0s !important;
-  transition-duration: 0s !important;
-  transition-delay: 0s !important;
-  caret-color: transparent !important;
-}
-
 html,
 body,
 #root {
   min-height: 100%;
 }
 
-.capture-loading,
-.capture-error {
+.demo-loading,
+.demo-error {
   display: grid;
   min-height: 100vh;
   place-items: center;
@@ -41,7 +30,7 @@ body,
     sans-serif;
 }
 
-.capture-error {
+.demo-error {
   padding: 48px;
   color: #fca5a5;
   white-space: pre-wrap;

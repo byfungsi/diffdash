@@ -12,6 +12,7 @@ import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import {
   ReviewSnapshotPageRequest,
   ReviewSnapshotPageResponse,
+  ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchRequest,
 } from "@diffdash/protocol/review-snapshot"
 import { describe, expect, it } from "@effect/vitest"
@@ -234,5 +235,30 @@ describe("review snapshot pagination", () => {
     if (secondSearch["_tag"] !== "available") throw new Error("Expected an available search page")
     expect(secondSearch.matches[0]?.filePath).toBe("src/unloaded.ts")
     expect(secondSearch.nextCursor).toBeNull()
+  })
+
+  it("rotates search results forward from a file viewport anchor", () => {
+    const snapshot = makeSnapshot(threeFileDiff)
+    const secondFile = snapshot.parsedDiff.files[1]
+    expect(secondFile).toBeDefined()
+    if (secondFile === undefined) return
+
+    const fromSecondFile = searchReviewSnapshot(
+      snapshot,
+      ReviewSnapshotSearchRequest.make({
+        snapshotId: snapshot.snapshotId,
+        query: "needle",
+        cursor: null,
+        limit: 10,
+        anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId }),
+      }),
+      256_000,
+    )
+    expect(fromSecondFile["_tag"]).toBe("available")
+    if (fromSecondFile["_tag"] !== "available") return
+    expect(fromSecondFile.matches.map((match) => match.filePath)).toEqual([
+      "src/second.ts",
+      "src/first.ts",
+    ])
   })
 })

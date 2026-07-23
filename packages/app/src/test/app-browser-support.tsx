@@ -1,4 +1,4 @@
-/* oxlint-disable vitest/no-standalone-expect -- Shared callbacks are registered by feature-owned browser suites. */
+/* oxlint-disable vitest/no-standalone-expect, eslint/no-underscore-dangle -- Shared callbacks use Effect-compatible tagged unions. */
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
@@ -41,6 +41,14 @@ import {
   ReviewKey,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
+import {
+  MarkdownBody,
+  ReviewThread,
+  ReviewThreadDetails,
+  ReviewThreadId,
+  ReviewThreadMessage,
+  ReviewThreadMessageId,
+} from "@diffdash/domain/review-thread"
 import {
   StoredWalkthrough,
   Walkthrough,
@@ -94,6 +102,7 @@ import {
   REVIEW_SEARCH_MATCH_HIGHLIGHT,
 } from "@/review/review-search-highlights"
 import { App } from "../app"
+import { lineReviewAnchor } from "../review/thread-annotations"
 import "../styles.css"
 
 const repo = Repo.make({
@@ -332,6 +341,52 @@ ${tailChangedLines}`,
   })
 
   return { largeDetail, largeDiff, largePath, largePullRequest, tailPath }
+}
+
+const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>) => {
+  const file = parseUnifiedDiff(fixture.largeDiff.diff).files[0]
+  if (file === undefined) throw new Error("Expected a parsed large diff file")
+  const anchor = lineReviewAnchor(file, "additions", 5)
+  if (anchor === null) throw new Error("Expected a reviewable line in the large diff")
+  const threadId = ReviewThreadId.make("thread-long-virtualized")
+  const createdAt = "2026-07-23T09:00:00Z"
+
+  return ReviewThreadDetails.make({
+    thread: ReviewThread.make({
+      id: threadId,
+      repoId: repo.id,
+      reviewKey: ReviewKey.make(file.reviewKey),
+      prNumber: fixture.largePullRequest.locator.number,
+      baseRevision: ReviewRevision.make("base-long-thread"),
+      headRevision: ReviewRevision.make("head-long-thread"),
+      currentBaseRevision: ReviewRevision.make("base-long-thread"),
+      currentHeadRevision: ReviewRevision.make("head-long-thread"),
+      originalAnchor: anchor,
+      currentAnchor: anchor,
+      anchorStatus: "active",
+      createdAt,
+      updatedAt: createdAt,
+    }),
+    messages: Array.from({ length: 80 }, (_message, index) =>
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(`message-long-${index + 1}`),
+        threadId,
+        sequence: index + 1,
+        author: index % 2 === 0 ? "user" : "agent",
+        bodyMarkdown: MarkdownBody.make(
+          `### Review turn ${index + 1}\n\n${Array.from(
+            { length: 6 },
+            (_line, lineIndex) =>
+              `Detailed review context ${index + 1}.${lineIndex + 1} keeps this history intentionally tall.`,
+          ).join("\n\n")}`,
+        ),
+        status: "complete",
+        agentRunId: index % 2 === 0 ? null : `run-long-${index + 1}`,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+    ),
+  })
 }
 
 const makeManyFileDiffFixture = () => {
@@ -679,6 +734,7 @@ type AppBrowserScenarioId =
   | "cliPullRequestFailure"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
+  | "diffSearchViewportAnchor"
   | "diffSearchVisibility"
   | "dismissRepositoryBanner"
   | "explicitProviderRouting"
@@ -687,8 +743,10 @@ type AppBrowserScenarioId =
   | "homeToReview"
   | "incrementalSnapshotPages"
   | "largeDiffVirtualization"
+  | "longThreadVirtualization"
   | "linkRepositoryBanner"
   | "localReview"
+  | "longReviewPaths"
   | "markAllViewedViewport"
   | "missingSetupHomeBanner"
   | "onboardingTelemetryOptOut"
@@ -697,6 +755,8 @@ type AppBrowserScenarioId =
   | "repositoryInvalidation"
   | "repositorySearchFailure"
   | "sampledWalkthrough"
+  | "shortcutReferenceHome"
+  | "shortcutReferenceReview"
   | "snapshotExpiryReload"
   | "staleLocalFavorites"
   | "unavailableProviderRoute"
@@ -706,6 +766,7 @@ type AppBrowserScenarioId =
   | "veryLargePlainDiff"
   | "viewedAcrossPushes"
   | "viewedPersistenceRollback"
+  | "viewedShortcutPointerTarget"
   | "viewedViewportAnchor"
   | "virtualizedSearch"
   | "walkthroughNoAgent"
@@ -1543,45 +1604,67 @@ scenario("fileTreeSelection", async () => {
   })
 
   const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
-  const firstCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+  const docsCard = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
   const docsTreeItem = getChangedFilesTreeItem("docs/readme.md")
   expect(diffPane).not.toBeNull()
-  expect(firstCard).not.toBeNull()
+  expect(docsCard).not.toBeNull()
   expect(docsTreeItem).not.toBeNull()
-  if (diffPane === null || firstCard === null || docsTreeItem === null) return
+  if (diffPane === null || docsCard === null || docsTreeItem === null) return
 
-  const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(firstCard)
-  diffPane.dispatchEvent(
-    new PointerEvent("pointermove", {
-      bubbles: true,
-      clientX: 400,
-      clientY: 300,
-      composed: true,
-      pointerType: "mouse",
-    }),
-  )
-  diffPane.dispatchEvent(
-    new PointerEvent("pointerout", {
-      bubbles: true,
-      composed: true,
-      pointerType: "mouse",
-      relatedTarget: docsTreeItem,
-    }),
-  )
+  docsCard.querySelector<HTMLButtonElement>('button[aria-label="Collapse diff"]')?.click()
+  await vi.waitFor(() => expect(docsCard.querySelector("[data-diff-card-body]")).toBeNull())
 
   docsTreeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
 
-  await vi.waitFor(() => {
-    expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
-    expect(getDiffShadowRoot("docs/readme.md")?.textContent).toContain("docs update")
-  })
+  await new Promise<void>((resolve) =>
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+  )
+  await vi.waitFor(() => expect(getSelectedChangedFileTreeItems()).toHaveLength(0))
 
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 120 }))
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
-  expect(elementFromPoint).toHaveBeenCalledTimes(1)
-  expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
+  expect(getSelectedChangedFileTreeItems()).toHaveLength(0)
+})
+
+scenario("longReviewPaths", async () => {
+  const longPath = "src/atomic-webhook-replay-story-with-an-extremely-long-name.test.ts"
+  installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      files: detail.files.map((file) =>
+        file.path === "src/app.tsx" ? ChangedFile.make({ ...file, path: longPath }) : file,
+      ),
+    }),
+    pullRequestDiff: HostedReviewDiff.make({
+      ...diff,
+      diff: diff.diff.replaceAll("src/app.tsx", longPath),
+    }),
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #51"),
+  )
+  reviewButton?.click()
+
+  const card = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(`[data-diff-card-path="${longPath}"]`)
+    expect(element).not.toBeNull()
+    return element!
+  })
+  const pathText = card.querySelector<HTMLElement>(`[aria-label="${longPath}"]`)
+  expect(pathText).not.toBeNull()
+  expect(pathText?.getAttribute("aria-label")).toBe(longPath)
+  expect(pathText?.className).toContain("overflow-hidden")
+
+  const treeItem = getChangedFilesTreeItem(longPath)
+  expect(treeItem).not.toBeNull()
+  expect(treeItem?.getAttribute("aria-label")).toContain(
+    "atomic-webhook-replay-story-with-an-extremely-long-name.test.ts",
+  )
+  expect(treeItem?.querySelector("[data-truncate-marker]")).not.toBeNull()
 })
 
 scenario("incrementalSnapshotPages", async () => {
@@ -1712,9 +1795,6 @@ scenario("largeDiffVirtualization", async () => {
       const tailCard = document.querySelector<HTMLElement>(
         `[data-diff-card-path="${fixture.tailPath}"]`,
       )
-      expect(
-        document.querySelector(`[data-selected-review-path="${fixture.tailPath}"]`),
-      ).not.toBeNull()
       expect(tailCard).not.toBeNull()
       expect(getDiffShadowRoot(fixture.tailPath)?.textContent).toContain("tail1")
       expect(tailCard?.querySelector("[data-diff-loading-skeleton]")).toBeNull()
@@ -1740,6 +1820,101 @@ scenario("largeDiffVirtualization", async () => {
   await vi.waitFor(() => {
     expect(getDiffCardPaths()).toEqual([fixture.largePath])
   })
+})
+
+scenario("longThreadVirtualization", async () => {
+  const fixture = makeLargeDiffFixture(3_000, 75, 20)
+  const reviewThreadDetails = [makeLongReviewThread(fixture)]
+  installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+    reviewThreadDetails,
+  })
+  renderApp({ strictMode: true })
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #75"),
+  )
+  reviewButton?.click()
+
+  const annotationButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-diff-card-path="${fixture.largePath}"] [data-review-thread-annotation] button`,
+    )
+    expect(button).not.toBeNull()
+    if (button === null) throw new Error("Expected the long review thread annotation")
+    return button
+  })
+  annotationButton.click()
+
+  const { chatBox, conversation, history } = await vi.waitFor(() => {
+    const diffCard = document.querySelector<HTMLElement>(
+      `[data-diff-card-path="${fixture.largePath}"]`,
+    )
+    const nextConversation = diffCard?.querySelector<HTMLElement>(
+      "[data-review-thread-conversation]",
+    )
+    const nextHistory = diffCard?.querySelector<HTMLElement>("[data-review-thread-history]")
+    const nextChatBox = nextConversation?.parentElement
+    expect(nextConversation).not.toBeNull()
+    expect(nextHistory).not.toBeNull()
+    expect(nextChatBox).not.toBeNull()
+    expect(nextHistory?.scrollHeight).toBeGreaterThan(nextHistory?.clientHeight ?? 0)
+    if (
+      nextConversation === undefined ||
+      nextConversation === null ||
+      nextHistory === undefined ||
+      nextHistory === null ||
+      nextChatBox === undefined ||
+      nextChatBox === null
+    ) {
+      throw new Error("Expected a bounded review thread conversation")
+    }
+    return { chatBox: nextChatBox, conversation: nextConversation, history: nextHistory }
+  })
+
+  expect(history.getBoundingClientRect().height).toBeLessThanOrEqual(
+    Math.min(28 * 16, window.innerHeight * 0.5) + 1,
+  )
+  expect(chatBox.getBoundingClientRect().height).toBeGreaterThan(
+    history.getBoundingClientRect().height,
+  )
+  const composer = conversation.querySelector<HTMLFormElement>("form")
+  expect(composer).not.toBeNull()
+  expect(composer?.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    chatBox.getBoundingClientRect().bottom + 1,
+  )
+
+  const boundedHeight = chatBox.getBoundingClientRect().height
+  history.scrollTop = history.scrollHeight
+  history.dispatchEvent(new Event("scroll", { bubbles: true }))
+  expect(history.scrollTop).toBeGreaterThan(0)
+  expect(chatBox.getBoundingClientRect().height).toBe(boundedHeight)
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+
+  const tailTreeItem = getChangedFilesTreeItem(fixture.tailPath)
+  expect(tailTreeItem).not.toBeNull()
+  tailTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(
+    () => {
+      expect(getDiffShadowRoot(fixture.tailPath)?.querySelector("[data-line]")).not.toBeNull()
+      const tailCard = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${fixture.tailPath}"]`,
+      )
+      const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(tailCard).not.toBeNull()
+      expect(diffPane).not.toBeNull()
+      if (tailCard === null || diffPane === null) return
+      const cardRect = tailCard.getBoundingClientRect()
+      const paneRect = diffPane.getBoundingClientRect()
+      expect(cardRect.bottom).toBeGreaterThan(paneRect.top)
+      expect(cardRect.top).toBeLessThan(paneRect.bottom)
+    },
+    { timeout: 10_000 },
+  )
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
 })
 
 scenario("wrappedFileBuffers", async () => {
@@ -1768,7 +1943,6 @@ scenario("wrappedFileBuffers", async () => {
     treeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
     await vi.waitFor(
       () => {
-        expect(document.querySelector(`[data-selected-review-path="${path}"]`)).not.toBeNull()
         expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull()
       },
       { timeout: 20_000 },
@@ -1883,6 +2057,92 @@ scenario("diffSearchSubstrings", async () => {
     expect(document.querySelector("[data-review-search-toolbar]")).toBeNull()
     expect(CSS.highlights.has(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toBe(false)
     expect(CSS.highlights.has(REVIEW_SEARCH_MATCH_HIGHLIGHT)).toBe(false)
+  })
+})
+
+scenario("diffSearchViewportAnchor", async () => {
+  const fillerLines = Array.from({ length: 80 }, (_, index) => `+const filler${index} = true`).join(
+    "\n",
+  )
+  const lockFileStart = diff.diff.indexOf("diff --git a/pnpm-lock.yaml")
+  installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      files: detail.files.filter((file) => file.path !== "pnpm-lock.yaml"),
+    }),
+    pullRequestDiff: HostedReviewDiff.make({
+      ...diff,
+      diff: diff.diff
+        .slice(0, lockFileStart)
+        .replace(
+          "@@ -1,1 +1,1 @@\n-old\n+new",
+          `@@ -1,1 +1,81 @@\n-shared app old\n+shared app new\n${fillerLines}`,
+        )
+        .replace("-docs\n+docs update", "-shared docs old\n+shared docs update")
+        .replace("-lock old\n+lock new", "-shared lock old\n+shared lock new"),
+    }),
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #51"),
+  )
+  reviewButton?.click()
+  const docsCard = await vi.waitFor(() => {
+    const card = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
+    expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
+    expect(card).not.toBeNull()
+    return card!
+  })
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  const appCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+  expect(diffPane).not.toBeNull()
+  expect(stickyChrome).not.toBeNull()
+  expect(appCard).not.toBeNull()
+  if (diffPane === null || stickyChrome === null || appCard === null) return
+
+  await vi.waitFor(() => {
+    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThan(1_000)
+  })
+  diffPane.scrollTop = diffPane.scrollHeight - diffPane.clientHeight
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
+    expect(appCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleTop)
+    expect(docsCard.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
+    expect(docsCard.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
+  })
+
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
+    expect(input).not.toBeNull()
+    return input!
+  })
+  setInputValue(searchInput, "shared")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 4")
+    expect(getDiffShadowRoot("docs/readme.md")?.contains(getActiveHighlightLine())).toBe(true)
+    expect(getActiveHighlightLine()?.textContent).toContain("shared docs")
+  })
+
+  searchInput.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("2 / 4")
+    expect(getDiffShadowRoot("docs/readme.md")?.contains(getActiveHighlightLine())).toBe(true)
+  })
+  searchInput.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("3 / 4")
+    expect(getDiffShadowRoot("src/app.tsx")?.contains(getActiveHighlightLine())).toBe(true)
   })
 })
 
@@ -2248,6 +2508,63 @@ scenario("viewedViewportAnchor", async () => {
   )
 })
 
+scenario("viewedShortcutPointerTarget", async () => {
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #51"),
+  )
+  reviewButton?.click()
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("src/app.tsx")).not.toBeNull()
+    expect(getViewedCheckbox("docs/readme.md")).not.toBeNull()
+  })
+
+  getViewedCheckbox("src/app.tsx")?.click()
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+    expect(getDiffShadowRoot("src/app.tsx")).toBeNull()
+  })
+  await new Promise<void>((resolve) =>
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+  )
+
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  const appCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+  const docsCard = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
+  expect(diffPane).not.toBeNull()
+  expect(stickyChrome).not.toBeNull()
+  expect(appCard).not.toBeNull()
+  expect(docsCard).not.toBeNull()
+  if (diffPane === null || stickyChrome === null || appCard === null || docsCard === null) return
+  vi.spyOn(stickyChrome, "offsetHeight", "get").mockReturnValue(100)
+  vi.spyOn(diffPane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800))
+  vi.spyOn(appCard, "getBoundingClientRect").mockReturnValue(new DOMRect(300, 100, 800, 50))
+  vi.spyOn(docsCard, "getBoundingClientRect").mockReturnValue(new DOMRect(300, 170, 800, 400))
+  const docsRect = docsCard.getBoundingClientRect()
+  diffPane.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      clientX: docsRect.left + Math.min(100, docsRect.width / 2),
+      clientY: docsRect.top + Math.min(20, docsRect.height / 2),
+      composed: true,
+      pointerType: "mouse",
+    }),
+  )
+  dispatchKeyboardShortcut("v")
+
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
+    expect(getDiffShadowRoot("docs/readme.md")).toBeNull()
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+    expect(getDiffShadowRoot("src/app.tsx")).toBeNull()
+    expect(document.body.textContent).toContain("Marked docs/readme.md as viewed")
+  })
+})
+
 scenario("markAllViewedViewport", async () => {
   const fixture = makeLargeDiffFixture(400, 55, 400)
   installDiffDashApi({
@@ -2390,6 +2707,90 @@ scenario("viewedPersistenceRollback", async () => {
   })
   const card = getViewedCheckbox("src/app.tsx")?.closest("section")
   expect(card?.querySelector("[data-diff-card-body]")).not.toBeNull()
+})
+
+scenario("shortcutReferenceHome", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  const searchInput = document.querySelector<HTMLInputElement>(
+    'input[placeholder="Search bookmarked and accessible repositories"]',
+  )
+  expect(searchInput).not.toBeNull()
+  searchInput?.focus()
+
+  dispatchKeyboardShortcut("/", { metaKey: true })
+  const dialog = await vi.waitFor(() => {
+    const shortcutDialog = document.querySelector<HTMLDialogElement>(
+      'dialog[aria-labelledby="keyboard-shortcut-reference-title"]',
+    )
+    expect(shortcutDialog).not.toBeNull()
+    return shortcutDialog
+  })
+
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Close keyboard shortcuts")
+  expect(dialog?.textContent).toContain("General")
+  expect(dialog?.textContent).toContain("Review Search")
+  expect(dialog?.textContent).toContain("Comments")
+  expect(dialog?.textContent).toContain("Go anywhere")
+  expect(dialog?.textContent).toContain("Review actions")
+  expect(dialog?.textContent).toContain("Search review")
+  expect(dialog?.textContent).toContain("Next match")
+  expect(dialog?.textContent).toContain("Previous match")
+  expect(dialog?.textContent).toContain("Toggle viewed file")
+  expect(dialog?.textContent).toContain("Submit comment")
+  expect(dialog?.textContent).toContain("Cmd")
+  expect(dialog?.textContent).not.toContain("Ctrl")
+
+  document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
+    ).toBeNull()
+    expect(document.activeElement).toBe(searchInput)
+  })
+})
+
+scenario("shortcutReferenceReview", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Win32")
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #51"),
+  )
+  reviewButton?.click()
+  await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+
+  const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  expect(filterInput).not.toBeNull()
+  filterInput?.focus()
+  dispatchKeyboardShortcut("/", { ctrlKey: true })
+
+  const dialog = await vi.waitFor(() => {
+    const shortcutDialog = document.querySelector<HTMLDialogElement>(
+      'dialog[aria-labelledby="keyboard-shortcut-reference-title"]',
+    )
+    expect(shortcutDialog).not.toBeNull()
+    return shortcutDialog
+  })
+  expect(dialog?.textContent).toContain("Ctrl")
+  expect(dialog?.textContent).not.toContain("Cmd")
+
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Close keyboard shortcuts"]')
+    ?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
+    ).toBeNull()
+    expect(document.activeElement).toBe(filterInput)
+  })
 })
 
 scenario("homeToReview", async () => {
@@ -2605,9 +3006,7 @@ scenario("homeToReview", async () => {
   expect(docsPaletteButton).toBeDefined()
   docsPaletteButton?.click()
 
-  await vi.waitFor(() => {
-    expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
-  })
+  await vi.waitFor(() => expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull())
 
   actionsButton?.click()
   await vi.waitFor(() => {
@@ -2846,7 +3245,6 @@ scenario("homeToReview", async () => {
     expect(getChangedFilesTreeItemPaths()).toContain("src/app.tsx")
     expect(getChangedFilesTreeItemPaths()).toContain("docs/readme.md")
     expect(getChangedFilesTreeItemPaths()).toContain("pnpm-lock.yaml")
-    expect(document.querySelector('[data-selected-review-path="docs/readme.md"]')).not.toBeNull()
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md", "pnpm-lock.yaml"])
   })
 
@@ -2996,6 +3394,12 @@ const getChangedFilesTreeItem = (path: string) =>
     .querySelector("file-tree-container")
     ?.shadowRoot?.querySelector<HTMLElement>(`[data-item-path="${path}"]`) ?? null
 
+const getSelectedChangedFileTreeItems = () => [
+  ...(document
+    .querySelector("file-tree-container")
+    ?.shadowRoot?.querySelectorAll<HTMLElement>("[data-item-selected]") ?? []),
+]
+
 const getDiffCardPaths = () =>
   [...document.querySelectorAll("[data-diff-card-path]")]
     .map((element) => element.getAttribute("data-diff-card-path"))
@@ -3087,12 +3491,17 @@ const clickGutterUtility = (button: HTMLButtonElement) => {
 
 const dispatchKeyboardShortcut = (
   key: string,
-  options: { readonly metaKey?: boolean; readonly shiftKey?: boolean } = {},
+  options: {
+    readonly ctrlKey?: boolean
+    readonly metaKey?: boolean
+    readonly shiftKey?: boolean
+  } = {},
 ) => {
   window.dispatchEvent(
     new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
+      ctrlKey: options.ctrlKey ?? false,
       key,
       metaKey: options.metaKey ?? false,
       shiftKey: options.shiftKey ?? false,
@@ -3152,6 +3561,7 @@ const installDiffDashApi = (
     readonly pullRequestDiff?: HostedReviewDiff
     readonly providers?: readonly GitProviderDescriptor[]
     readonly repositories?: readonly Repo[]
+    readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
@@ -3166,6 +3576,7 @@ const installDiffDashApi = (
   const appState = options.appState ?? { onboardingCompleted: true }
   const diagnostics = options.diagnostics ?? readyPrerequisites
   const repositories = options.repositories ?? [repo]
+  const reviewThreadDetails = options.reviewThreadDetails ?? []
   const initialUpdateState =
     options.updateState ??
     AppUpdateUnsupported.make({ currentVersion: "0.1.4", reason: "development" })
@@ -3387,7 +3798,28 @@ const installDiffDashApi = (
       })
     }
     const index = buildReviewSearchIndex(snapshot.parsedDiff.files)
-    const occurrences = searchReviewIndex(index, request.query)
+    const unanchoredOccurrences = searchReviewIndex(index, request.query)
+    const searchAnchor = request.anchor
+    const anchorFileIndex =
+      searchAnchor === null
+        ? -1
+        : snapshot.parsedDiff.files.findIndex((file) => file.fileId === searchAnchor.fileId)
+    const anchoredIndex =
+      searchAnchor === null
+        ? 0
+        : unanchoredOccurrences.findIndex((occurrence) => {
+            const fileIndex = snapshot.parsedDiff.files.findIndex(
+              (file) => file.reviewKey === occurrence.reviewKey,
+            )
+            return fileIndex >= anchorFileIndex
+          })
+    const occurrences =
+      anchoredIndex > 0
+        ? [
+            ...unanchoredOccurrences.slice(anchoredIndex),
+            ...unanchoredOccurrences.slice(0, anchoredIndex),
+          ]
+        : unanchoredOccurrences
     const offset =
       request.cursor === null ? 0 : Number(/^search:v1:([0-9]+):/.exec(request.cursor)?.[1])
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > occurrences.length) {
@@ -3499,15 +3931,17 @@ const installDiffDashApi = (
       setFavorite: calls.setRepositoryFavorite,
     },
     reviewThreads: {
-      list: async () => [],
+      list: async () => reviewThreadDetails.map((item) => item.thread),
       create: async () => {
         throw new Error("Review thread creation is not used by this fixture")
       },
       addUserMessage: async () => {
         throw new Error("Review thread messages are not used by this fixture")
       },
-      get: async () => {
-        throw new Error("Review thread loading is not used by this fixture")
+      get: async (threadId) => {
+        const details = reviewThreadDetails.find((item) => item.thread.id === threadId)
+        if (details === undefined) throw new Error(`Review thread not found: ${threadId}`)
+        return details
       },
       runAgent: async () => {
         throw new Error("Review thread agents are not used by this fixture")

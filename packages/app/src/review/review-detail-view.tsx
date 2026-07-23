@@ -3,7 +3,7 @@ import { AISettings } from "@diffdash/domain/ai-settings"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "@diffdash/domain/diff-file-filters"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
-import { type ReviewThreadAnchor, type ReviewThreadDetails } from "@diffdash/domain/review-thread"
+import type { ReviewThreadAnchor } from "@diffdash/domain/review-thread"
 import {
   buildWalkthroughHunkDigest,
   focusFilesForWalkthroughHunks,
@@ -14,6 +14,7 @@ import {
 } from "@diffdash/protocol/agent-providers"
 import {
   type ReviewSnapshotSearchCursor,
+  ReviewSnapshotSearchFileAnchor,
   type ReviewSnapshotSearchMatch,
   ReviewSnapshotSearchRequest,
   ReviewSnapshotSearchResponse,
@@ -55,7 +56,7 @@ import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
-import { ReviewThreadIndex, useReviewThreads } from "@/threads/review-threads"
+import { useReviewThreads } from "@/threads/review-threads"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import {
   WalkthroughMainHeader,
@@ -95,11 +96,7 @@ import {
   reviewSubjectWalkthroughScope,
   reviewThreadScope,
 } from "./review-subject"
-import {
-  lineAnchorIsInFile,
-  type ReviewThreadAnnotation,
-  sameReviewThreadLine,
-} from "./thread-annotations"
+import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
 import { useReviewSnapshotPages } from "./use-review-snapshot-pages"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
@@ -289,17 +286,17 @@ export const ReviewDetailView = ({
   const reviewSearchInputRef = useRef<HTMLInputElement>(null)
   const previousReviewSearchFocusRef = useRef<HTMLElement | null>(null)
   const activeReviewSearchOccurrenceRef = useRef<ReviewSearchOccurrence | null>(null)
-  const lastAutoScrolledPathRef = useRef<string | null>(null)
-  const pendingActiveFileFrameRef = useRef<number | null>(null)
+  const reviewSearchAnchorRef = useRef<ReviewSnapshotSearchFileAnchor | null>(null)
+  const lastPointerPositionRef = useRef<{
+    readonly clientX: number
+    readonly clientY: number
+  } | null>(null)
   const pendingFileNavigationFrameRef = useRef<number | null>(null)
   const pendingFileNavigationTokenRef = useRef<symbol | null>(null)
   const pendingSearchNavigationFrameRef = useRef<number | null>(null)
   const pendingSearchNavigationIdRef = useRef<string | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
-  const lastPointerPositionRef = useRef<{
-    readonly clientX: number
-    readonly clientY: number
-  } | null>(null)
+  const reviewDiffResizeObserverRef = useRef<ResizeObserver | null>(null)
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
   const [reviewSearchHighlights] = useState(() => new ReviewSearchHighlightManager())
   const [reviewSearchPageCache] = useState(() => new ReviewSearchPageCache())
@@ -313,7 +310,7 @@ export const ReviewDetailView = ({
   const [collapsedWalkthroughFileKeys, setCollapsedWalkthroughFileKeys] = useState<
     ReadonlySet<string>
   >(() => new Set())
-  const [activeFilePath, setActiveFilePath] = useState<string | null>(null)
+  const [treeNavigationPath, setTreeNavigationPath] = useState<string | null>(null)
   const [showHiddenFiles, setShowHiddenFiles] = useState(false)
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
@@ -354,9 +351,6 @@ export const ReviewDetailView = ({
   )
   useEffect(
     () => () => {
-      if (pendingActiveFileFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
-      }
       if (pendingFileNavigationFrameRef.current !== null) {
         window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
       }
@@ -367,6 +361,39 @@ export const ReviewDetailView = ({
     },
     [],
   )
+  useEffect(() => {
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const registration = [...reviewDiffRegistrationsRef.current.values()].find(
+          (candidate) => candidate.host === entry.target,
+        )
+        if (
+          registration === undefined ||
+          registration.phase === "unmount" ||
+          !registration.host.isConnected
+        ) {
+          continue
+        }
+
+        registration.instance.syncVirtualizedTop()
+        diffVirtualizer.markDOMDirty()
+        diffVirtualizer.requestHeightReconcile(registration.instance)
+      }
+    })
+    reviewDiffResizeObserverRef.current = observer
+    for (const registration of reviewDiffRegistrationsRef.current.values()) {
+      if (registration.phase !== "unmount" && registration.host.isConnected) {
+        observer.observe(registration.host)
+      }
+    }
+
+    return () => {
+      observer.disconnect()
+      if (reviewDiffResizeObserverRef.current === observer) {
+        reviewDiffResizeObserverRef.current = null
+      }
+    }
+  }, [diffVirtualizer])
   useEffect(() => () => reviewSearchHighlights.dispose(), [reviewSearchHighlights])
   const reviewBaseSha = reviewSubjectBaseSha(reviewSubject)
   const reviewHeadSha = reviewSubjectHeadSha(reviewSubject)
@@ -401,14 +428,10 @@ export const ReviewDetailView = ({
     selectedPath !== null && visibleBaseFiles.some((file) => file.path === selectedPath)
       ? selectedPath
       : (visibleBaseFiles[0]?.path ?? null)
-  const activeVisiblePath =
-    activeFilePath !== null && visibleBaseFiles.some((file) => file.path === activeFilePath)
-      ? activeFilePath
-      : selectedVisiblePath
   const selectedTreePath =
-    activeVisiblePath !== null &&
-    filteredChangedFiles.some((file) => file.path === activeVisiblePath)
-      ? activeVisiblePath
+    treeNavigationPath !== null &&
+    filteredChangedFiles.some((file) => file.path === treeNavigationPath)
+      ? treeNavigationPath
       : null
   const totalAdditions = changedFiles.reduce((total, file) => total + file.additions, 0)
   const totalDeletions = changedFiles.reduce((total, file) => total + file.deletions, 0)
@@ -451,7 +474,6 @@ export const ReviewDetailView = ({
               file.reviewKey === activeSearchReviewKey || visibleReviewKeys.has(file.reviewKey),
           )
         })()
-  const indexedThreadDetails = reviewThreads.details
   const activeStepComplete =
     activeWalkthroughStep !== null &&
     activeStepFiles.length > 0 &&
@@ -504,6 +526,7 @@ export const ReviewDetailView = ({
               query: reviewSearchQuery,
               cursor,
               limit: 200,
+              anchor: reviewSearchAnchorRef.current,
             }),
           ),
         )
@@ -612,6 +635,14 @@ export const ReviewDetailView = ({
     })
   })
   const updateReviewSearchQuery = useStableCallback((query: string) => {
+    if (query.length === 0) {
+      reviewSearchAnchorRef.current = captureReviewSearchAnchor(
+        diffScrollContainerRef.current,
+        stickyReviewChromeRef.current,
+        lastPointerPositionRef.current,
+        changedFiles,
+      )
+    }
     setReviewSearchQuery(query)
     reviewSearchTargetIndexRef.current = 0
     activeReviewSearchIndexRef.current = 0
@@ -627,6 +658,12 @@ export const ReviewDetailView = ({
     if (!reviewSearchOpen && document.activeElement instanceof HTMLElement) {
       previousReviewSearchFocusRef.current = document.activeElement
     }
+    reviewSearchAnchorRef.current = captureReviewSearchAnchor(
+      diffScrollContainerRef.current,
+      stickyReviewChromeRef.current,
+      lastPointerPositionRef.current,
+      changedFiles,
+    )
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
     setReviewSearchOpen(true)
@@ -661,7 +698,20 @@ export const ReviewDetailView = ({
     registration.instance.rerender()
     return registration.generation
   })
-  const scheduleFileNavigation = useStableCallback((reviewKey: string) => {
+  const finishFileNavigation = useStableCallback((token: symbol, path: string) => {
+    if (pendingFileNavigationTokenRef.current !== token) return
+    pendingFileNavigationTokenRef.current = null
+    setTreeNavigationPath((current) => (current === path ? null : current))
+  })
+  const cancelFileNavigation = useStableCallback(() => {
+    pendingFileNavigationTokenRef.current = null
+    if (pendingFileNavigationFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
+      pendingFileNavigationFrameRef.current = null
+    }
+    setTreeNavigationPath(null)
+  })
+  const scheduleFileNavigation = useStableCallback((path: string, reviewKey: string) => {
     const token = Symbol(reviewKey)
     pendingFileNavigationTokenRef.current = token
     if (pendingFileNavigationFrameRef.current !== null) {
@@ -686,6 +736,9 @@ export const ReviewDetailView = ({
           diffVirtualizer.markDOMDirty()
           alignDiffCardInPane(container, card, stickyHeight)
           readyFrames = 0
+        } else if (card.querySelector("[data-diff-card-body]") === null) {
+          finishFileNavigation(token, path)
+          return
         } else if (requestedGeneration !== null) {
           const registration = reviewDiffRegistrationsRef.current.get(reviewKey)
           if (
@@ -702,7 +755,7 @@ export const ReviewDetailView = ({
         } else {
           readyFrames += 1
           if (readyFrames >= 2) {
-            pendingFileNavigationTokenRef.current = null
+            finishFileNavigation(token, path)
             return
           }
         }
@@ -712,7 +765,7 @@ export const ReviewDetailView = ({
       if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
         pendingFileNavigationFrameRef.current = window.requestAnimationFrame(navigate)
       } else {
-        pendingFileNavigationTokenRef.current = null
+        finishFileNavigation(token, path)
       }
     }
 
@@ -851,6 +904,9 @@ export const ReviewDetailView = ({
   >((reviewKey, node, instance, phase) => {
     if (instance instanceof VirtualizedFileDiff) {
       const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
+      if (previous !== undefined && previous.host !== node) {
+        reviewDiffResizeObserverRef.current?.unobserve(previous.host)
+      }
       reviewDiffRegistrationsRef.current.set(reviewKey, {
         generation:
           previous?.host === node && previous.instance === instance ? previous.generation + 1 : 1,
@@ -859,27 +915,32 @@ export const ReviewDetailView = ({
         phase,
       })
       if (phase === "unmount") {
+        reviewDiffResizeObserverRef.current?.unobserve(node)
         queueMicrotask(() => {
           const current = reviewDiffRegistrationsRef.current.get(reviewKey)
           if (current?.host === node && !node.isConnected) {
             reviewDiffRegistrationsRef.current.delete(reviewKey)
           }
         })
+      } else {
+        reviewDiffResizeObserverRef.current?.observe(node)
       }
     }
     reviewSearchHighlights.handlePostRender(reviewKey, node, instance, phase)
     handleViewedDiffRendered(reviewKey, phase)
   })
   useEffect(() => {
-    lastAutoScrolledPathRef.current = null
-    lastPointerPositionRef.current = null
     pendingFileNavigationTokenRef.current = null
+    lastPointerPositionRef.current = null
+    for (const registration of reviewDiffRegistrationsRef.current.values()) {
+      reviewDiffResizeObserverRef.current?.unobserve(registration.host)
+    }
     reviewDiffRegistrationsRef.current.clear()
     if (pendingFileNavigationFrameRef.current !== null) {
       window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
       pendingFileNavigationFrameRef.current = null
     }
-    setActiveFilePath(null)
+    setTreeNavigationPath(null)
     setSidebarTab("tree")
     setWalkthroughState({ status: "idle" })
     setActiveWalkthroughStepIndex(0)
@@ -889,6 +950,7 @@ export const ReviewDetailView = ({
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
     setReviewSearchOpen(false)
+    reviewSearchAnchorRef.current = null
     setReviewSearchQuery("")
     reviewSearchPageCache.clear()
     setReviewSearchOccurrences([])
@@ -931,6 +993,13 @@ export const ReviewDetailView = ({
   useEffect(() => {
     const handleReviewShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
+      if (
+        pendingFileNavigationTokenRef.current !== null &&
+        isViewportScrollKey(key) &&
+        !isEditableTarget(event.target)
+      ) {
+        cancelFileNavigation()
+      }
       if (isModKey(event) && key === "f") {
         event.preventDefault()
         event.stopPropagation()
@@ -976,8 +1045,15 @@ export const ReviewDetailView = ({
         return
       }
 
+      const activePath = reviewActiveCard(
+        diffScrollContainerRef.current,
+        stickyReviewChromeRef.current,
+        lastPointerPositionRef.current,
+      )?.dataset.diffCardPath
       const file =
-        visibleChangedFiles.find((changedFile) => changedFile.path === activeVisiblePath) ?? null
+        visibleChangedFiles.find((changedFile) => changedFile.path === activePath) ??
+        visibleChangedFiles.find((changedFile) => changedFile.path === selectedVisiblePath) ??
+        null
       if (file === null) return
 
       event.preventDefault()
@@ -992,25 +1068,17 @@ export const ReviewDetailView = ({
     return () => window.removeEventListener("keydown", handleReviewShortcut, true)
   }, [
     actionPaletteOpen,
-    activeVisiblePath,
+    cancelFileNavigation,
     closeReviewSearch,
     goToPaletteOpen,
     moveReviewSearch,
     openReviewSearch,
     reviewSearchOpen,
+    selectedVisiblePath,
     setViewedPreservingViewport,
     viewedFileKeys,
     visibleChangedFiles,
   ])
-
-  useEffect(() => {
-    if (selectedPath === null || lastAutoScrolledPathRef.current === selectedPath) return
-    const file = visibleChangedFiles.find((changedFile) => changedFile.path === selectedPath)
-    if (file === undefined) return
-
-    lastAutoScrolledPathRef.current = selectedPath
-    scheduleFileNavigation(file.reviewKey)
-  }, [scheduleFileNavigation, selectedPath, visibleChangedFiles])
 
   const loadWalkthrough = async (regenerate: boolean) => {
     if (!regenerate && reviewBaseSha !== null && reviewHeadSha !== null) {
@@ -1178,45 +1246,10 @@ export const ReviewDetailView = ({
     selectPathAndScroll(file.path, file.reviewKey)
   }
   const selectPathAndScroll = (path: string, reviewKey?: string) => {
-    lastAutoScrolledPathRef.current = path
-    lastPointerPositionRef.current = null
-    if (pendingActiveFileFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
-      pendingActiveFileFrameRef.current = null
-    }
-    setActiveFilePath(path)
+    setTreeNavigationPath(path)
     onSelectPath(path)
     const file = changedFiles.find((changedFile) => changedFile.path === path)
-    if (file !== undefined) scheduleFileNavigation(reviewKey ?? file.reviewKey)
-  }
-  const selectIndexedThread = (details: ReviewThreadDetails) => {
-    const anchor = details.thread.currentAnchor ?? details.thread.originalAnchor
-    setExpandedLineAnchor(anchor)
-    setFileFilter("")
-    const file = changedFiles.find(
-      (candidate) => candidate.fileId === anchor.fileId || candidate.path === anchor.filePath,
-    )
-    if (file === undefined) return
-    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
-    const walkthroughStepIndex = activeWalkthroughSteps.findIndex((step) =>
-      focusFilesForWalkthroughHunks(loadedChangedFiles, step.hunkIds, walkthroughScope).some(
-        (candidate) => lineAnchorIsInFile(anchor, candidate),
-      ),
-    )
-    if (walkthroughStepIndex >= 0) {
-      const walkthroughFile = focusFilesForWalkthroughHunks(
-        loadedChangedFiles,
-        activeWalkthroughSteps[walkthroughStepIndex]?.hunkIds ?? [],
-        walkthroughScope,
-      ).find((candidate) => lineAnchorIsInFile(anchor, candidate))
-      if (walkthroughFile !== undefined) {
-        selectSidebarTab("walkthrough")
-        selectWalkthroughStep(walkthroughStepIndex)
-        selectPathAndScroll(walkthroughFile.path, walkthroughFile.reviewKey)
-        return
-      }
-    }
-    selectPathAndScroll(file.path, file.reviewKey)
+    if (file !== undefined) scheduleFileNavigation(path, reviewKey ?? file.reviewKey)
   }
   const openRepositoryFile = async (path: string) => {
     setFileOpenStatus(`Opening ${path}...`)
@@ -1243,25 +1276,6 @@ export const ReviewDetailView = ({
       setApprovalState("unapproved")
       setFileOpenStatus(formatError(error, "Could not approve pull request"))
     }
-  }
-  const setActiveFileFromPoint = (clientX: number, clientY: number) => {
-    const path = document
-      .elementFromPoint(clientX, clientY)
-      ?.closest<HTMLElement>("[data-diff-card-path]")?.dataset.diffCardPath
-    if (path !== undefined)
-      setActiveFilePath((currentPath) => (currentPath === path ? currentPath : path))
-  }
-  const syncActiveFileFromPointer = () => {
-    const position = lastPointerPositionRef.current
-    if (position === null || pendingActiveFileFrameRef.current !== null) return
-
-    pendingActiveFileFrameRef.current = window.requestAnimationFrame(() => {
-      pendingActiveFileFrameRef.current = null
-      const latestPosition = lastPointerPositionRef.current
-      if (latestPosition !== null) {
-        setActiveFileFromPoint(latestPosition.clientX, latestPosition.clientY)
-      }
-    })
   }
   const linkRepository = async () => {
     if (repositoryLinking) return
@@ -1407,21 +1421,15 @@ export const ReviewDetailView = ({
           data-review-diff-scroll-container
           style={{ overflowAnchor: "none" }}
           className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+          onPointerDown={cancelFileNavigation}
           onPointerMove={(event) => {
-            lastPointerPositionRef.current = {
-              clientX: event.clientX,
-              clientY: event.clientY,
-            }
-            setActiveFileFromPoint(event.clientX, event.clientY)
+            lastPointerPositionRef.current = { clientX: event.clientX, clientY: event.clientY }
           }}
           onPointerLeave={() => {
             lastPointerPositionRef.current = null
-            if (pendingActiveFileFrameRef.current !== null) {
-              window.cancelAnimationFrame(pendingActiveFileFrameRef.current)
-              pendingActiveFileFrameRef.current = null
-            }
           }}
-          onScroll={syncActiveFileFromPointer}
+          onTouchStart={cancelFileNavigation}
+          onWheel={cancelFileNavigation}
         >
           <div className="min-h-full">
             <div
@@ -1602,13 +1610,6 @@ export const ReviewDetailView = ({
                 ) : null}
               </section>
 
-              <ReviewThreadIndex
-                items={indexedThreadDetails}
-                loading={reviewThreads.loading}
-                error={reviewThreads.error}
-                onReload={reviewThreads.reload}
-                onSelect={selectIndexedThread}
-              />
               {normalizedFileFilter.length === 0 && renderedChangedFiles.length === 0 ? (
                 <EmptyState>No changed files found.</EmptyState>
               ) : null}
@@ -1644,9 +1645,7 @@ export const ReviewDetailView = ({
                     }
                     reviewThreads={reviewThreads}
                     selected={
-                      activeSearchReviewKey === file.reviewKey ||
-                      selectedVisiblePath === file.path ||
-                      activeFilePath === file.path
+                      activeSearchReviewKey === file.reviewKey || selectedVisiblePath === file.path
                     }
                     viewed={viewedFileKeys.has(file.reviewKey)}
                     onDiffRendered={(node, instance, phase) =>
@@ -1951,6 +1950,15 @@ const reviewDiffOptionsForTheme = (theme: ResolvedTheme): FileDiffOptions<Review
 
 const isModKey = (event: KeyboardEvent) => event.metaKey || event.ctrlKey
 
+const isViewportScrollKey = (key: string) =>
+  key === "arrowdown" ||
+  key === "arrowup" ||
+  key === "end" ||
+  key === "home" ||
+  key === "pagedown" ||
+  key === "pageup" ||
+  key === " "
+
 const isEditableTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
@@ -2090,6 +2098,67 @@ const isDiffCardVisible = (container: HTMLElement, card: HTMLElement, stickyHead
   return (
     cardRect.bottom > containerRect.top + stickyHeaderOffset && cardRect.top < containerRect.bottom
   )
+}
+
+const reviewViewportCard = (container: HTMLElement | null, stickyChrome: HTMLElement | null) => {
+  if (container === null) return null
+  const containerRect = container.getBoundingClientRect()
+  const visibleTop = containerRect.top + (stickyChrome?.offsetHeight ?? 0)
+  const cards = container.querySelectorAll<HTMLElement>("[data-diff-card-path]")
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect()
+    if (rect.bottom > visibleTop && rect.top < containerRect.bottom) return card
+  }
+  return null
+}
+
+const reviewActiveCard = (
+  container: HTMLElement | null,
+  stickyChrome: HTMLElement | null,
+  pointerPosition: { readonly clientX: number; readonly clientY: number } | null,
+) => {
+  if (container === null) return null
+  const containerRect = container.getBoundingClientRect()
+  const visibleTop = containerRect.top + (stickyChrome?.offsetHeight ?? 0)
+  const cards = container.querySelectorAll<HTMLElement>("[data-diff-card-path]")
+  const pointerCard =
+    pointerPosition !== null &&
+    pointerPosition.clientX >= containerRect.left &&
+    pointerPosition.clientX <= containerRect.right &&
+    pointerPosition.clientY >= visibleTop &&
+    pointerPosition.clientY <= containerRect.bottom
+      ? ([...cards].find((card) => {
+          const rect = card.getBoundingClientRect()
+          return (
+            pointerPosition.clientX >= rect.left &&
+            pointerPosition.clientX <= rect.right &&
+            pointerPosition.clientY >= rect.top &&
+            pointerPosition.clientY <= rect.bottom
+          )
+        }) ?? null)
+      : null
+  if (
+    pointerCard !== null &&
+    container.contains(pointerCard) &&
+    isDiffCardVisible(container, pointerCard, stickyChrome?.offsetHeight ?? 0)
+  ) {
+    return pointerCard
+  }
+  return reviewViewportCard(container, stickyChrome)
+}
+
+const captureReviewSearchAnchor = (
+  container: HTMLElement | null,
+  stickyChrome: HTMLElement | null,
+  pointerPosition: { readonly clientX: number; readonly clientY: number } | null,
+  inventory: readonly ReviewSnapshotFileInventory[],
+): ReviewSnapshotSearchFileAnchor | null => {
+  const card = reviewActiveCard(container, stickyChrome, pointerPosition)
+  const path = card?.dataset.diffCardPath
+  if (container === null || card === null || path === undefined) return null
+  const inventoryFile = inventory.find((file) => file.path === path)
+  if (inventoryFile === undefined) return null
+  return ReviewSnapshotSearchFileAnchor.make({ fileId: inventoryFile.fileId })
 }
 
 const isDiffCardRendered = (card: HTMLElement) => {

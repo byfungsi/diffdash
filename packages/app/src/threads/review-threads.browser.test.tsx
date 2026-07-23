@@ -21,7 +21,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ReviewMarkdown,
   ReviewThreadComposer,
-  ReviewThreadIndex,
   type ReviewThreadOrchestration,
   ReviewThreadPanel,
   reviewLineLabel,
@@ -111,31 +110,18 @@ describe("review thread UI", () => {
     expect(document.querySelector("button")?.textContent).not.toContain("Close")
   })
 
-  it("labels revision context and exposes compact index navigation", () => {
+  it("labels revision context", () => {
     const details = threadDetails({ previousRevision: true })
-    const onSelect = vi.fn<(details: ReviewThreadDetails) => void>()
     render(
-      <>
-        <ReviewThreadIndex
-          items={[details]}
-          loading={false}
-          error={null}
-          onReload={vi.fn<() => Promise<void>>(async () => undefined)}
-          onSelect={onSelect}
-        />
-        <ReviewThreadPanel
-          agentRunning={false}
-          details={details}
-          onAddUserMessage={threadMessageActionMock()}
-          onRefresh={threadActionMock()}
-        />
-      </>,
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={details}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
     )
 
-    expect(document.querySelector("#thread-index-title")?.textContent).toBe("Review threads")
     expect(document.body.textContent).toContain("Previous revision")
-    buttonNamed("src/example.ts:7 · new").click()
-    expect(onSelect).toHaveBeenCalledWith(details)
   })
 
   it("labels inline reviews by diff side and line instead of internal hunk identity", () => {

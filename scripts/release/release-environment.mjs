@@ -12,6 +12,12 @@ export const requiredEnvironment = (name, environment = process.env) => {
   return value
 }
 
+/** Returns the public PostHog configuration required in every packaged release. */
+export const requiredAnalyticsEnvironment = (environment = process.env) => ({
+  host: requiredEnvironment("VITE_POSTHOG_HOST", environment),
+  key: requiredEnvironment("VITE_POSTHOG_KEY", environment),
+})
+
 /** Builds the shared R2 endpoint and credential environment used by the AWS CLI. */
 export const createR2ClientConfiguration = (
   environment = process.env,

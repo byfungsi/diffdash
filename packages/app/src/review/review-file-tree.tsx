@@ -16,20 +16,8 @@ const REVIEW_FILE_TREE_CSS = `
   [data-type="scroll-container"], [data-type="sticky-overlay"] { background: transparent !important; }
   [data-type="item"] {
     background: transparent;
-    --truncate-marker-opacity: 0%;
-    --truncate-middle-marker-opacity: 0%;
-    --truncate-fade-marker-color: transparent;
   }
   [data-type="item"]:hover { background: var(--review-sidebar-control-hover); }
-  [data-type="item"] [data-truncate-marker],
-  [data-type="item"] [data-truncate-marker]::before,
-  [data-type="item"] [data-truncate-marker]::after,
-  [data-type="item"] [data-truncate-fade] {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
-    box-shadow: none !important;
-  }
   [data-type="item"][data-item-selected] {
     background: var(--review-tree-selected) !important;
     box-shadow: none !important;
@@ -49,7 +37,13 @@ export const ReviewFileTree = ({
   readonly onSelectPath: (path: string) => void
 }) => {
   const appliedSelectedPathRef = useRef<string | null>(null)
+  const applyingSelectionRef = useRef(false)
+  const selectionReleaseFrameRef = useRef<number | null>(null)
+  const availablePathsRef = useRef<ReadonlySet<string>>(new Set())
+  const onSelectPathRef = useRef(onSelectPath)
   const treeInput = buildReviewFileTreeInput(files, true)
+  availablePathsRef.current = new Set(treeInput.paths)
+  onSelectPathRef.current = onSelectPath
   const preparedInput = prepareFileTreeInput(treeInput.paths)
   const treeInputKey = `${treeInput.paths.join("\u0000")}\u0001${treeInput.gitStatus
     .map((entry) => `${entry.path}\u0000${entry.status}`)
@@ -62,13 +56,10 @@ export const ReviewFileTree = ({
     initialSelectedPaths: selectedPath === null ? [] : [selectedPath],
     itemHeight: 26,
     onSelectionChange: (paths) => {
-      const path = paths[0]
-      if (
-        path !== undefined &&
-        path !== appliedSelectedPathRef.current &&
-        treeInput.paths.includes(path)
-      )
-        onSelectPath(path)
+      if (applyingSelectionRef.current) return
+      const path =
+        paths.find((candidate) => candidate !== appliedSelectedPathRef.current) ?? paths.at(-1)
+      if (path !== undefined && availablePathsRef.current.has(path)) onSelectPathRef.current(path)
     },
     search: false,
     stickyFolders: false,
@@ -83,18 +74,36 @@ export const ReviewFileTree = ({
   }, [model, preparedInput, treeInput.gitStatus, treeInputKey])
 
   useEffect(() => {
-    const previousSelectedPath = appliedSelectedPathRef.current
-    if (previousSelectedPath !== null && previousSelectedPath !== selectedPath) {
-      model.getItem(previousSelectedPath)?.deselect()
+    const nextSelectedPath =
+      selectedPath !== null && availablePathsRef.current.has(selectedPath) ? selectedPath : null
+    applyingSelectionRef.current = true
+    for (const path of model.getSelectedPaths()) {
+      if (path !== nextSelectedPath) model.getItem(path)?.deselect()
     }
-    if (selectedPath === null || !treeInput.paths.includes(selectedPath)) {
-      appliedSelectedPathRef.current = null
-      return
+    if (nextSelectedPath !== null && !model.getSelectedPaths().includes(nextSelectedPath)) {
+      model.getItem(nextSelectedPath)?.select()
     }
-    appliedSelectedPathRef.current = selectedPath
-    model.getItem(selectedPath)?.select()
-    model.scrollToPath(selectedPath, { focus: false, offset: "nearest" })
-  }, [model, selectedPath, treeInput.paths])
+    appliedSelectedPathRef.current = nextSelectedPath
+    if (nextSelectedPath !== null) {
+      model.scrollToPath(nextSelectedPath, { focus: false, offset: "nearest" })
+    }
+    if (selectionReleaseFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionReleaseFrameRef.current)
+    }
+    selectionReleaseFrameRef.current = window.requestAnimationFrame(() => {
+      selectionReleaseFrameRef.current = null
+      applyingSelectionRef.current = false
+    })
+  }, [model, selectedPath, treeInputKey])
+
+  useEffect(
+    () => () => {
+      if (selectionReleaseFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionReleaseFrameRef.current)
+      }
+    },
+    [],
+  )
 
   return (
     <div

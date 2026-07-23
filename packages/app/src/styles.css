@@ -29,6 +29,7 @@
   --search-surface-shadow:
     0 26px 70px -24px rgb(15 23 42 / 64%), 0 16px 38px -24px rgb(15 23 42 / 42%);
   --search-results-max-height: min(28rem, calc(100vh - 16rem));
+  --review-thread-history-max-height: min(28rem, 50dvh);
   --review-sidebar: oklch(0.43 0.06 225);
   --review-sidebar-border: oklch(0.34 0.055 235 / 70%);
   --review-sidebar-divider: oklch(0.34 0.055 235 / 60%);
@@ -71,6 +72,10 @@
 @layer utilities {
   .max-h-search-results {
     max-height: var(--search-results-max-height);
+  }
+
+  .max-h-review-thread-history {
+    max-height: var(--review-thread-history-max-height);
   }
 }
 

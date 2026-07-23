@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "atomic-webhook-replay",
   "title": "Atomic webhook replay claims",
-  "appVersion": "v0.2.1",
+  "appVersion": "v0.4.3",
   "locale": "en-US",
   "timezone": "UTC",
   "theme": "dark",

@@ -1,5 +1,6 @@
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { useEffect, useRef } from "react"
+import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import { diffCardDomId } from "./viewed-file-viewport"
 
 /** Lazy parsed-file placeholder inputs. */
@@ -44,8 +45,8 @@ export const ReviewPagePlaceholder = ({
       className="bg-card min-h-36 rounded-2xl border p-4 shadow-xs"
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="truncate font-mono text-xs">{file.path}</span>
-        <span className="text-muted-foreground text-caption">
+        <MiddleTruncatedText value={file.path} className="flex-1 font-mono text-xs" />
+        <span className="text-muted-foreground text-caption shrink-0 whitespace-nowrap">
           {tooLarge ? "File exceeds the bounded page size" : loading ? "Loading diff..." : "Queued"}
         </span>
       </div>
