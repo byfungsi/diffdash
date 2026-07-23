@@ -112,25 +112,6 @@ export class ReviewSnapshotSearchFileAnchor extends Schema.TaggedClass<ReviewSna
   },
 ) {}
 
-/** Starts review search at or after one projected diff line. */
-export class ReviewSnapshotSearchLineAnchor extends Schema.TaggedClass<ReviewSnapshotSearchLineAnchor>()(
-  "line",
-  {
-    fileId: ReviewFileId,
-    hunkId: ReviewHunkId,
-    hunkLineIndex: Schema.Int.pipe(Schema.nonNegative()),
-  },
-) {}
-
-/** Optional viewport position used to rotate stable search result order. */
-export const ReviewSnapshotSearchAnchor = Schema.Union(
-  ReviewSnapshotSearchFileAnchor,
-  ReviewSnapshotSearchLineAnchor,
-)
-
-/** Optional viewport position used to rotate stable search result order. */
-export type ReviewSnapshotSearchAnchor = typeof ReviewSnapshotSearchAnchor.Type
-
 /** Bounded revision-keyed literal search request. */
 export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSearchRequest>(
   "ReviewSnapshotSearchRequest",
@@ -139,7 +120,9 @@ export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSear
   query: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(512)),
   cursor: Schema.NullOr(ReviewSnapshotSearchCursor),
   limit: Schema.Int.pipe(Schema.between(1, REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT)),
-  anchor: Schema.optionalWith(Schema.NullOr(ReviewSnapshotSearchAnchor), { default: () => null }),
+  anchor: Schema.optionalWith(Schema.NullOr(ReviewSnapshotSearchFileAnchor), {
+    default: () => null,
+  }),
 }) {}
 
 /** Semantic side occupied by one immutable parsed-diff search match. */

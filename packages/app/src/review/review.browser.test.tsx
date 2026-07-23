@@ -37,6 +37,11 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("largeDiffVirtualization")()
   })
 
+  it("bounds long review threads without blanking virtualized diffs", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("longThreadVirtualization")()
+  }, 30_000)
+
   it("removes stale trailing buffers after navigating across many wrapped files", async () => {
     expect.hasAssertions()
     await appBrowserScenario("wrappedFileBuffers")()
@@ -47,14 +52,14 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("diffSearchSubstrings")()
   })
 
-  it("starts search forward from the current viewport instead of the first file", async () => {
+  it("starts search from the active file instead of the first file", async () => {
     expect.hasAssertions()
     await appBrowserScenario("diffSearchViewportAnchor")()
   })
 
-  it("anchors search inside an unmounted virtualized line range", async () => {
+  it("toggles viewed state for the file under the pointer", async () => {
     expect.hasAssertions()
-    await appBrowserScenario("diffSearchVirtualViewportAnchor")()
+    await appBrowserScenario("viewedShortcutPointerTarget")()
   })
 
   it("temporarily reveals hidden, filtered, and viewed files for search results", async () => {

@@ -42,6 +42,14 @@ import {
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
+  MarkdownBody,
+  ReviewThread,
+  ReviewThreadDetails,
+  ReviewThreadId,
+  ReviewThreadMessage,
+  ReviewThreadMessageId,
+} from "@diffdash/domain/review-thread"
+import {
   StoredWalkthrough,
   Walkthrough,
   WalkthroughChapter,
@@ -94,6 +102,7 @@ import {
   REVIEW_SEARCH_MATCH_HIGHLIGHT,
 } from "@/review/review-search-highlights"
 import { App } from "../app"
+import { lineReviewAnchor } from "../review/thread-annotations"
 import "../styles.css"
 
 const repo = Repo.make({
@@ -332,6 +341,52 @@ ${tailChangedLines}`,
   })
 
   return { largeDetail, largeDiff, largePath, largePullRequest, tailPath }
+}
+
+const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>) => {
+  const file = parseUnifiedDiff(fixture.largeDiff.diff).files[0]
+  if (file === undefined) throw new Error("Expected a parsed large diff file")
+  const anchor = lineReviewAnchor(file, "additions", 5)
+  if (anchor === null) throw new Error("Expected a reviewable line in the large diff")
+  const threadId = ReviewThreadId.make("thread-long-virtualized")
+  const createdAt = "2026-07-23T09:00:00Z"
+
+  return ReviewThreadDetails.make({
+    thread: ReviewThread.make({
+      id: threadId,
+      repoId: repo.id,
+      reviewKey: ReviewKey.make(file.reviewKey),
+      prNumber: fixture.largePullRequest.locator.number,
+      baseRevision: ReviewRevision.make("base-long-thread"),
+      headRevision: ReviewRevision.make("head-long-thread"),
+      currentBaseRevision: ReviewRevision.make("base-long-thread"),
+      currentHeadRevision: ReviewRevision.make("head-long-thread"),
+      originalAnchor: anchor,
+      currentAnchor: anchor,
+      anchorStatus: "active",
+      createdAt,
+      updatedAt: createdAt,
+    }),
+    messages: Array.from({ length: 80 }, (_message, index) =>
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(`message-long-${index + 1}`),
+        threadId,
+        sequence: index + 1,
+        author: index % 2 === 0 ? "user" : "agent",
+        bodyMarkdown: MarkdownBody.make(
+          `### Review turn ${index + 1}\n\n${Array.from(
+            { length: 6 },
+            (_line, lineIndex) =>
+              `Detailed review context ${index + 1}.${lineIndex + 1} keeps this history intentionally tall.`,
+          ).join("\n\n")}`,
+        ),
+        status: "complete",
+        agentRunId: index % 2 === 0 ? null : `run-long-${index + 1}`,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+    ),
+  })
 }
 
 const makeManyFileDiffFixture = () => {
@@ -679,7 +734,6 @@ type AppBrowserScenarioId =
   | "cliPullRequestFailure"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
-  | "diffSearchVirtualViewportAnchor"
   | "diffSearchViewportAnchor"
   | "diffSearchVisibility"
   | "dismissRepositoryBanner"
@@ -689,6 +743,7 @@ type AppBrowserScenarioId =
   | "homeToReview"
   | "incrementalSnapshotPages"
   | "largeDiffVirtualization"
+  | "longThreadVirtualization"
   | "linkRepositoryBanner"
   | "localReview"
   | "longReviewPaths"
@@ -711,6 +766,7 @@ type AppBrowserScenarioId =
   | "veryLargePlainDiff"
   | "viewedAcrossPushes"
   | "viewedPersistenceRollback"
+  | "viewedShortcutPointerTarget"
   | "viewedViewportAnchor"
   | "virtualizedSearch"
   | "walkthroughNoAgent"
@@ -1766,6 +1822,101 @@ scenario("largeDiffVirtualization", async () => {
   })
 })
 
+scenario("longThreadVirtualization", async () => {
+  const fixture = makeLargeDiffFixture(3_000, 75, 20)
+  const reviewThreadDetails = [makeLongReviewThread(fixture)]
+  installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+    reviewThreadDetails,
+  })
+  renderApp({ strictMode: true })
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #75"),
+  )
+  reviewButton?.click()
+
+  const annotationButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `[data-diff-card-path="${fixture.largePath}"] [data-review-thread-annotation] button`,
+    )
+    expect(button).not.toBeNull()
+    if (button === null) throw new Error("Expected the long review thread annotation")
+    return button
+  })
+  annotationButton.click()
+
+  const { chatBox, conversation, history } = await vi.waitFor(() => {
+    const diffCard = document.querySelector<HTMLElement>(
+      `[data-diff-card-path="${fixture.largePath}"]`,
+    )
+    const nextConversation = diffCard?.querySelector<HTMLElement>(
+      "[data-review-thread-conversation]",
+    )
+    const nextHistory = diffCard?.querySelector<HTMLElement>("[data-review-thread-history]")
+    const nextChatBox = nextConversation?.parentElement
+    expect(nextConversation).not.toBeNull()
+    expect(nextHistory).not.toBeNull()
+    expect(nextChatBox).not.toBeNull()
+    expect(nextHistory?.scrollHeight).toBeGreaterThan(nextHistory?.clientHeight ?? 0)
+    if (
+      nextConversation === undefined ||
+      nextConversation === null ||
+      nextHistory === undefined ||
+      nextHistory === null ||
+      nextChatBox === undefined ||
+      nextChatBox === null
+    ) {
+      throw new Error("Expected a bounded review thread conversation")
+    }
+    return { chatBox: nextChatBox, conversation: nextConversation, history: nextHistory }
+  })
+
+  expect(history.getBoundingClientRect().height).toBeLessThanOrEqual(
+    Math.min(28 * 16, window.innerHeight * 0.5) + 1,
+  )
+  expect(chatBox.getBoundingClientRect().height).toBeGreaterThan(
+    history.getBoundingClientRect().height,
+  )
+  const composer = conversation.querySelector<HTMLFormElement>("form")
+  expect(composer).not.toBeNull()
+  expect(composer?.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    chatBox.getBoundingClientRect().bottom + 1,
+  )
+
+  const boundedHeight = chatBox.getBoundingClientRect().height
+  history.scrollTop = history.scrollHeight
+  history.dispatchEvent(new Event("scroll", { bubbles: true }))
+  expect(history.scrollTop).toBeGreaterThan(0)
+  expect(chatBox.getBoundingClientRect().height).toBe(boundedHeight)
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+
+  const tailTreeItem = getChangedFilesTreeItem(fixture.tailPath)
+  expect(tailTreeItem).not.toBeNull()
+  tailTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(
+    () => {
+      expect(getDiffShadowRoot(fixture.tailPath)?.querySelector("[data-line]")).not.toBeNull()
+      const tailCard = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${fixture.tailPath}"]`,
+      )
+      const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(tailCard).not.toBeNull()
+      expect(diffPane).not.toBeNull()
+      if (tailCard === null || diffPane === null) return
+      const cardRect = tailCard.getBoundingClientRect()
+      const paneRect = diffPane.getBoundingClientRect()
+      expect(cardRect.bottom).toBeGreaterThan(paneRect.top)
+      expect(cardRect.top).toBeLessThan(paneRect.bottom)
+    },
+    { timeout: 10_000 },
+  )
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+})
+
 scenario("wrappedFileBuffers", async () => {
   const fixture = makeManyFileDiffFixture()
   installDiffDashApi({
@@ -1993,74 +2144,6 @@ scenario("diffSearchViewportAnchor", async () => {
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("3 / 4")
     expect(getDiffShadowRoot("src/app.tsx")?.contains(getActiveHighlightLine())).toBe(true)
   })
-})
-
-scenario("diffSearchVirtualViewportAnchor", async () => {
-  const fixture = makeLargeDiffFixture(3_000, 74)
-  installDiffDashApi({
-    pullRequestDetail: fixture.largeDetail,
-    pullRequestDiff: fixture.largeDiff,
-    reviewRequests: [fixture.largePullRequest],
-  })
-  renderApp()
-
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #74"),
-  )
-  reviewButton?.click()
-  const diffPane = await vi.waitFor(() => {
-    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
-    expect(getDiffShadowRoot(fixture.largePath)).not.toBeNull()
-    expect(pane).not.toBeNull()
-    return pane!
-  })
-  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
-  const largeCard = document.querySelector<HTMLElement>(
-    `[data-diff-card-path="${fixture.largePath}"]`,
-  )
-  expect(stickyChrome).not.toBeNull()
-  expect(largeCard).not.toBeNull()
-  if (stickyChrome === null || largeCard === null) return
-
-  await vi.waitFor(() => {
-    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThan(20_000)
-  })
-  const targetScrollTop = Math.floor((diffPane.scrollHeight - diffPane.clientHeight) / 2)
-  diffPane.scrollTop = targetScrollTop
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  const paneRect = diffPane.getBoundingClientRect()
-  diffPane.dispatchEvent(
-    new PointerEvent("pointermove", {
-      bubbles: true,
-      clientX: paneRect.left + Math.min(100, paneRect.width / 2),
-      clientY: paneRect.top + stickyChrome.offsetHeight + 100,
-      composed: true,
-      pointerType: "mouse",
-    }),
-  )
-
-  dispatchKeyboardShortcut("f", { metaKey: true })
-  const searchInput = await vi.waitFor(() => {
-    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
-    expect(input).not.toBeNull()
-    return input!
-  })
-  setInputValue(searchInput, "after")
-  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
-
-  await vi.waitFor(
-    () => {
-      expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain(
-        "1 / 3001",
-      )
-      const activeLine = getActiveHighlightLine()
-      expect(getDiffShadowRoot(fixture.largePath)?.contains(activeLine)).toBe(true)
-      expect(Number(activeLine?.dataset.line)).toBeGreaterThan(400)
-      expect(diffPane.scrollTop).toBeGreaterThan(targetScrollTop - 1_000)
-    },
-    { timeout: 5_000 },
-  )
 })
 
 scenario("diffSearchVisibility", async () => {
@@ -2423,6 +2506,63 @@ scenario("viewedViewportAnchor", async () => {
     },
     { timeout: 5_000 },
   )
+})
+
+scenario("viewedShortcutPointerTarget", async () => {
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.getAttribute("aria-label")?.includes("Open requested review #51"),
+  )
+  reviewButton?.click()
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("src/app.tsx")).not.toBeNull()
+    expect(getViewedCheckbox("docs/readme.md")).not.toBeNull()
+  })
+
+  getViewedCheckbox("src/app.tsx")?.click()
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+    expect(getDiffShadowRoot("src/app.tsx")).toBeNull()
+  })
+  await new Promise<void>((resolve) =>
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+  )
+
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  const appCard = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+  const docsCard = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
+  expect(diffPane).not.toBeNull()
+  expect(stickyChrome).not.toBeNull()
+  expect(appCard).not.toBeNull()
+  expect(docsCard).not.toBeNull()
+  if (diffPane === null || stickyChrome === null || appCard === null || docsCard === null) return
+  vi.spyOn(stickyChrome, "offsetHeight", "get").mockReturnValue(100)
+  vi.spyOn(diffPane, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1_200, 800))
+  vi.spyOn(appCard, "getBoundingClientRect").mockReturnValue(new DOMRect(300, 100, 800, 50))
+  vi.spyOn(docsCard, "getBoundingClientRect").mockReturnValue(new DOMRect(300, 170, 800, 400))
+  const docsRect = docsCard.getBoundingClientRect()
+  diffPane.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      clientX: docsRect.left + Math.min(100, docsRect.width / 2),
+      clientY: docsRect.top + Math.min(20, docsRect.height / 2),
+      composed: true,
+      pointerType: "mouse",
+    }),
+  )
+  dispatchKeyboardShortcut("v")
+
+  await vi.waitFor(() => {
+    expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
+    expect(getDiffShadowRoot("docs/readme.md")).toBeNull()
+    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
+    expect(getDiffShadowRoot("src/app.tsx")).toBeNull()
+    expect(document.body.textContent).toContain("Marked docs/readme.md as viewed")
+  })
 })
 
 scenario("markAllViewedViewport", async () => {
@@ -3421,6 +3561,7 @@ const installDiffDashApi = (
     readonly pullRequestDiff?: HostedReviewDiff
     readonly providers?: readonly GitProviderDescriptor[]
     readonly repositories?: readonly Repo[]
+    readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
@@ -3435,6 +3576,7 @@ const installDiffDashApi = (
   const appState = options.appState ?? { onboardingCompleted: true }
   const diagnostics = options.diagnostics ?? readyPrerequisites
   const repositories = options.repositories ?? [repo]
+  const reviewThreadDetails = options.reviewThreadDetails ?? []
   const initialUpdateState =
     options.updateState ??
     AppUpdateUnsupported.make({ currentVersion: "0.1.4", reason: "development" })
@@ -3662,11 +3804,6 @@ const installDiffDashApi = (
       searchAnchor === null
         ? -1
         : snapshot.parsedDiff.files.findIndex((file) => file.fileId === searchAnchor.fileId)
-    const anchorFile = snapshot.parsedDiff.files[anchorFileIndex]
-    const anchorHunkIndex =
-      searchAnchor?._tag === "line"
-        ? (anchorFile?.hunks.findIndex((hunk) => hunk.id === searchAnchor.hunkId) ?? -1)
-        : -1
     const anchoredIndex =
       searchAnchor === null
         ? 0
@@ -3674,15 +3811,7 @@ const installDiffDashApi = (
             const fileIndex = snapshot.parsedDiff.files.findIndex(
               (file) => file.reviewKey === occurrence.reviewKey,
             )
-            if (fileIndex < anchorFileIndex) return false
-            if (fileIndex > anchorFileIndex || searchAnchor._tag === "file") return true
-            const hunkIndex = anchorFile?.hunks.findIndex((hunk) => hunk.id === occurrence.hunkId)
-            return (
-              hunkIndex !== undefined &&
-              (hunkIndex > anchorHunkIndex ||
-                (hunkIndex === anchorHunkIndex &&
-                  occurrence.hunkLineIndex >= searchAnchor.hunkLineIndex))
-            )
+            return fileIndex >= anchorFileIndex
           })
     const occurrences =
       anchoredIndex > 0
@@ -3802,15 +3931,17 @@ const installDiffDashApi = (
       setFavorite: calls.setRepositoryFavorite,
     },
     reviewThreads: {
-      list: async () => [],
+      list: async () => reviewThreadDetails.map((item) => item.thread),
       create: async () => {
         throw new Error("Review thread creation is not used by this fixture")
       },
       addUserMessage: async () => {
         throw new Error("Review thread messages are not used by this fixture")
       },
-      get: async () => {
-        throw new Error("Review thread loading is not used by this fixture")
+      get: async (threadId) => {
+        const details = reviewThreadDetails.find((item) => item.thread.id === threadId)
+        if (details === undefined) throw new Error(`Review thread not found: ${threadId}`)
+        return details
       },
       runAgent: async () => {
         throw new Error("Review thread agents are not used by this fixture")

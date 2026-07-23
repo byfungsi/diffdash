@@ -13,7 +13,6 @@ import {
   ReviewSnapshotPageRequest,
   ReviewSnapshotPageResponse,
   ReviewSnapshotSearchFileAnchor,
-  ReviewSnapshotSearchLineAnchor,
   ReviewSnapshotSearchRequest,
 } from "@diffdash/protocol/review-snapshot"
 import { describe, expect, it } from "@effect/vitest"
@@ -238,15 +237,11 @@ describe("review snapshot pagination", () => {
     expect(secondSearch.nextCursor).toBeNull()
   })
 
-  it("rotates search results forward from file and line viewport anchors", () => {
+  it("rotates search results forward from a file viewport anchor", () => {
     const snapshot = makeSnapshot(threeFileDiff)
     const secondFile = snapshot.parsedDiff.files[1]
-    const unloadedFile = snapshot.parsedDiff.files[2]
-    const unloadedHunk = unloadedFile?.hunks[0]
     expect(secondFile).toBeDefined()
-    expect(unloadedFile).toBeDefined()
-    expect(unloadedHunk).toBeDefined()
-    if (secondFile === undefined || unloadedFile === undefined || unloadedHunk === undefined) return
+    if (secondFile === undefined) return
 
     const fromSecondFile = searchReviewSnapshot(
       snapshot,
@@ -264,28 +259,6 @@ describe("review snapshot pagination", () => {
     expect(fromSecondFile.matches.map((match) => match.filePath)).toEqual([
       "src/second.ts",
       "src/first.ts",
-    ])
-
-    const fromSecondUnloadedLine = searchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "sentinel",
-        cursor: null,
-        limit: 10,
-        anchor: ReviewSnapshotSearchLineAnchor.make({
-          fileId: unloadedFile.fileId,
-          hunkId: unloadedHunk.id,
-          hunkLineIndex: 2,
-        }),
-      }),
-      256_000,
-    )
-    expect(fromSecondUnloadedLine["_tag"]).toBe("available")
-    if (fromSecondUnloadedLine["_tag"] !== "available") return
-    expect(fromSecondUnloadedLine.matches.map((match) => match.text)).toEqual([
-      "unloaded sentinel again",
-      "UNLOADED SENTINEL",
     ])
   })
 })

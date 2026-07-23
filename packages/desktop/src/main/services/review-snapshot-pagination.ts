@@ -1,4 +1,3 @@
-/* oxlint-disable eslint/no-underscore-dangle -- Protocol unions use Effect-compatible _tag discriminants. */
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import type { ReviewSnapshot } from "@diffdash/domain/review-context"
@@ -19,9 +18,9 @@ import {
   ReviewSnapshotPageResponse as ReviewSnapshotPageResponseSchema,
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
+  type ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchMatch,
   type ReviewSnapshotSearchRequest,
-  type ReviewSnapshotSearchAnchor,
   type ReviewSnapshotSearchResponse,
   ReviewSnapshotSearchResponse as ReviewSnapshotSearchResponseSchema,
 } from "@diffdash/protocol/review-snapshot"
@@ -202,7 +201,7 @@ const allSearchMatches = (snapshot: ReviewSnapshot, query: string) => {
 const anchoredSearchMatches = (
   snapshot: ReviewSnapshot,
   query: string,
-  anchor: ReviewSnapshotSearchAnchor | null,
+  anchor: ReviewSnapshotSearchFileAnchor | null,
 ) => {
   const matches = allSearchMatches(snapshot, query)
   if (anchor === null || matches.length === 0) return matches
@@ -211,43 +210,19 @@ const anchoredSearchMatches = (
   )
   if (anchorFileIndex < 0) return null
 
-  const anchorFile = snapshot.parsedDiff.files[anchorFileIndex]
-  const anchorHunkIndex =
-    anchor._tag === "line"
-      ? (anchorFile?.hunks.findIndex((hunk) => hunk.id === anchor.hunkId) ?? -1)
-      : -1
-  if (anchor._tag === "line" && anchorHunkIndex < 0) return null
-
   const filesById = new Map(
-    snapshot.parsedDiff.files.map((file, fileIndex) => [
-      file.fileId,
-      {
-        fileIndex,
-        hunkIndexes: new Map(file.hunks.map((hunk, hunkIndex) => [hunk.id, hunkIndex])),
-      },
-    ]),
+    snapshot.parsedDiff.files.map((file, fileIndex) => [file.fileId, fileIndex]),
   )
   const startIndex = matches.findIndex((match) => {
-    const position = filesById.get(match.fileId)
-    if (position === undefined || position.fileIndex < anchorFileIndex) return false
-    if (position.fileIndex > anchorFileIndex || anchor._tag === "file") return true
-    const hunkIndex = position.hunkIndexes.get(match.hunkId)
-    if (hunkIndex === undefined) return false
-    return (
-      hunkIndex > anchorHunkIndex ||
-      (hunkIndex === anchorHunkIndex && match.hunkLineIndex >= anchor.hunkLineIndex)
-    )
+    const fileIndex = filesById.get(match.fileId)
+    return fileIndex !== undefined && fileIndex >= anchorFileIndex
   })
   if (startIndex <= 0) return matches
   return [...matches.slice(startIndex), ...matches.slice(0, startIndex)]
 }
 
-const searchAnchorKey = (anchor: ReviewSnapshotSearchAnchor | null) =>
-  anchor === null
-    ? ""
-    : anchor._tag === "file"
-      ? `file:${anchor.fileId}`
-      : `line:${anchor.fileId}:${anchor.hunkId}:${anchor.hunkLineIndex}`
+const searchAnchorKey = (anchor: ReviewSnapshotSearchFileAnchor | null) =>
+  anchor === null ? "" : `file:${anchor.fileId}`
 
 const makePageCursor = (offset: number, hash: string) =>
   ReviewSnapshotPageCursor.make(`page:v1:${offset}:${hash}`)
