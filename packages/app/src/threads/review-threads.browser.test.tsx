@@ -23,6 +23,8 @@ import {
   ReviewThreadComposer,
   type ReviewThreadOrchestration,
   ReviewThreadPanel,
+  ReviewThreadSummary,
+  type ReviewThreadsController,
   reviewLineLabel,
 } from "./review-threads"
 
@@ -267,6 +269,68 @@ describe("review thread UI", () => {
     )
   })
 
+  it("keeps conversation updates pinned only while the reader remains near the bottom", async () => {
+    const initial = threadDetails({ pending: false })
+    const panel = (details: ReviewThreadDetails) => (
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={details}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />
+    )
+    render(panel(initial))
+    const history = document.querySelector<HTMLElement>('[role="log"]')
+    expect(history).not.toBeNull()
+    if (history === null) return
+    expect(history.getAttribute("aria-label")).toContain("conversation history")
+    expect(history.tabIndex).toBe(0)
+    Object.defineProperties(history, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+      scrollTop: { configurable: true, value: 700, writable: true },
+    })
+    history.dispatchEvent(new Event("scroll", { bubbles: true }))
+
+    const whileReading = appendMessage(initial, "message-new-user", "user")
+    flushSync(() => root?.render(panel(whileReading)))
+    await nextAnimationFrame()
+    expect(history.scrollTop).toBe(700)
+
+    history.scrollTop = 760
+    history.dispatchEvent(new Event("scroll", { bubbles: true }))
+    const whilePinned = appendMessage(whileReading, "message-new-agent", "agent")
+    flushSync(() => root?.render(panel(whilePinned)))
+    await nextAnimationFrame()
+    expect(history.scrollTop).toBe(1_000)
+  })
+
+  it("shows summary loading, count, and retryable load errors", async () => {
+    const reload = vi.fn<() => Promise<void>>(async () => undefined)
+    const summary = (loading: boolean, error: string | null) => (
+      <ReviewThreadSummary
+        controller={threadController({
+          details: [threadDetails({ pending: false })],
+          error,
+          loading,
+          reload,
+        })}
+        navigableThreadIds={new Set()}
+        onSelectThread={() => undefined}
+      />
+    )
+    render(summary(true, null))
+    expect(document.body.textContent).toContain("1 review thread")
+    expect(document.querySelector("output")?.textContent).toContain("Loading")
+
+    flushSync(() => root?.render(summary(false, "Could not load review threads")))
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not load review threads",
+    )
+    buttonNamed("Retry").click()
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
+  })
+
   it("renders semantic Markdown blocks without injecting HTML", () => {
     render(
       <div data-testid="markdown-under-test">
@@ -375,6 +439,43 @@ const userOnlyThreadDetails = () => {
   })
 }
 
+const appendMessage = (details: ReviewThreadDetails, id: string, author: "agent" | "user") =>
+  ReviewThreadDetails.make({
+    thread: details.thread,
+    messages: [
+      ...details.messages,
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(id),
+        threadId: details.thread.id,
+        sequence: details.messages.length + 1,
+        author,
+        bodyMarkdown: MarkdownBody.make(`New ${author} message`),
+        status: "complete",
+        agentRunId: author === "agent" ? `${id}-run` : null,
+        createdAt: "2026-07-12T09:02:00Z",
+        updatedAt: "2026-07-12T09:02:00Z",
+      }),
+    ],
+  })
+
+const threadController = (
+  overrides: Partial<ReviewThreadsController> = {},
+): ReviewThreadsController => ({
+  details: [],
+  error: null,
+  loading: false,
+  available: true,
+  createThread: async () => undefined,
+  addUserMessage: async () => undefined,
+  runAgent: async () => undefined,
+  runningThreadIds: [],
+  agentProgress: [],
+  agentErrors: {},
+  refreshThread: async () => undefined,
+  reload: async () => undefined,
+  ...overrides,
+})
+
 const render = (node: ReactNode) => {
   const element = document.createElement("div")
   document.body.append(element)
@@ -400,6 +501,9 @@ const setTextareaValue = (textarea: HTMLTextAreaElement, value: string) => {
   setter?.call(textarea, value)
   textarea.dispatchEvent(new Event("input", { bubbles: true }))
 }
+
+const nextAnimationFrame = () =>
+  new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
 const threadActionMock = () =>
   vi.fn<(threadId: ReviewThreadId) => Promise<void>>(async () => undefined)

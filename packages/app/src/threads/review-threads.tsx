@@ -45,6 +45,15 @@ import { Textarea } from "@/shared/ui/textarea"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
 
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Scrollable conversation logs need keyboard focus. */
+
+type ReviewThreadHistoryScrollState = {
+  readonly pinned: boolean
+  readonly scrollTop: number
+}
+
+const reviewThreadHistoryScrollStates = new Map<string, ReviewThreadHistoryScrollState>()
+
 /** Renderer-owned review scope used to derive typed preload requests. */
 export type ReviewThreadScope =
   | {
@@ -431,6 +440,123 @@ export function ReviewThreadComposer({
   )
 }
 
+/** Compact review-wide index that keeps every persisted thread reachable. */
+export function ReviewThreadSummary({
+  controller,
+  navigableThreadIds,
+  onSelectThread,
+}: {
+  readonly controller: ReviewThreadsController
+  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
+  readonly onSelectThread: (details: ReviewThreadDetails) => void
+}) {
+  const [expandedFallbackThreadId, setExpandedFallbackThreadId] = useState<ReviewThreadId | null>(
+    null,
+  )
+  const count = controller.details.length
+
+  return (
+    <section aria-label="Review threads" className="mt-3 border-t pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-medium">
+            {count} review thread{count === 1 ? "" : "s"}
+          </span>
+          {controller.loading ? (
+            <UnicodeLoadingText className="text-muted-foreground text-caption" text="Loading" />
+          ) : null}
+        </div>
+        {controller.error === null ? null : (
+          <div role="alert" className="text-destructive flex items-center gap-2 text-caption">
+            <span>{controller.error}</span>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={controller.loading}
+              onClick={() => void controller.reload()}
+            >
+              Retry
+            </Button>
+          </div>
+        )}
+      </div>
+      {controller.details.length === 0 ? null : (
+        <div className="mt-2 space-y-1.5">
+          {controller.details.map((details) => {
+            const { thread } = details
+            const anchor = thread.currentAnchor ?? thread.originalAnchor
+            const navigable = navigableThreadIds.has(thread.id)
+            const fallbackExpanded = expandedFallbackThreadId === thread.id
+            const fallbackContentId = `review-thread-summary-${thread.id}`
+            return (
+              <div key={thread.id} className="min-w-0">
+                <button
+                  type="button"
+                  className="bg-muted/35 hover:bg-muted/65 focus-visible:ring-ring flex min-h-8 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition focus-visible:ring-2 focus-visible:outline-none"
+                  aria-controls={navigable ? undefined : fallbackContentId}
+                  aria-expanded={navigable ? undefined : fallbackExpanded}
+                  onClick={() => {
+                    if (navigable) {
+                      onSelectThread(details)
+                      return
+                    }
+                    setExpandedFallbackThreadId((current) =>
+                      current === thread.id ? null : thread.id,
+                    )
+                  }}
+                >
+                  <span className="min-w-0 truncate font-mono" title={anchor.filePath}>
+                    {anchor.filePath}
+                  </span>
+                  <span className="text-muted-foreground shrink-0">
+                    {navigable ? reviewLineLabel(anchor) : fallbackThreadLabel(details)}
+                  </span>
+                </button>
+                {navigable || !fallbackExpanded ? null : (
+                  <div id={fallbackContentId} className="mt-1.5">
+                    <ReviewThreadPanel
+                      agentRunning={controller.runningThreadIds.includes(thread.id)}
+                      agentProgress={
+                        controller.agentProgress.find((progress) => progress.threadId === thread.id)
+                          ?.stage ?? null
+                      }
+                      agentError={controller.agentErrors[thread.id] ?? null}
+                      details={details}
+                      orchestration={{ retryAgentMessage: controller.runAgent }}
+                      onAddUserMessage={controller.addUserMessage}
+                      onRefresh={controller.refreshThread}
+                    />
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** Restores pinned or reader-controlled scroll positions after inline annotation rendering. */
+export const syncPinnedReviewThreadHistories = (root: ParentNode) => {
+  const histories = [...root.querySelectorAll<HTMLElement>("[data-review-thread-history]")]
+  histories.forEach((history) => {
+    const threadId = history.closest<HTMLElement>("[data-review-thread-id]")?.dataset.reviewThreadId
+    if (threadId === undefined) return
+    const state = reviewThreadHistoryScrollStates.get(threadId)
+    if (state?.pinned === false) {
+      history.scrollTop = state.scrollTop
+      return
+    }
+    history.scrollTop = history.scrollHeight
+    reviewThreadHistoryScrollStates.set(threadId, {
+      pinned: true,
+      scrollTop: history.scrollTop,
+    })
+  })
+}
+
 /** One persisted line thread with its full local conversation. */
 export function ReviewThreadPanel({
   details,
@@ -452,6 +578,9 @@ export function ReviewThreadPanel({
   readonly onRefresh: (threadId: ReviewThreadId) => Promise<void>
 }) {
   const { thread, messages } = details
+  const historyRef = useRef<HTMLDivElement>(null)
+  const historyInitializedRef = useRef(false)
+  const historyPinnedToBottomRef = useRef(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const previousRevision = thread.headRevision !== thread.currentHeadRevision
@@ -469,6 +598,27 @@ export function ReviewThreadPanel({
     : (error ??
       visibleAgentError ??
       (interruptedTurn ? "The agent response did not start. Retry to try again." : null))
+  const historyUpdateKey = `${messages
+    .map((message) => `${message.id}:${message.status}:${message.updatedAt}`)
+    .join("\u0000")}\u0001${agentRunning ? agentProgress : "idle"}`
+
+  useEffect(() => {
+    const history = historyRef.current
+    if (history === null) return
+    const shouldScroll = !historyInitializedRef.current || historyPinnedToBottomRef.current
+    historyInitializedRef.current = true
+    if (!shouldScroll) return
+    const scrollToBottom = () => {
+      if (!history.isConnected || !historyPinnedToBottomRef.current) return
+      syncPinnedReviewThreadHistories(history.parentElement ?? history)
+    }
+    scrollToBottom()
+    const frame = window.requestAnimationFrame(() => {
+      if (!historyPinnedToBottomRef.current) return
+      scrollToBottom()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [historyUpdateKey])
 
   const run = async (action: () => Promise<void>, fallback: string) => {
     setBusy(true)
@@ -493,8 +643,22 @@ export function ReviewThreadPanel({
       data-review-thread-id={thread.id}
     >
       <div
+        ref={historyRef}
+        role="log"
+        aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} conversation history`}
+        aria-relevant="additions text"
+        tabIndex={0}
         data-review-thread-history
-        className={cn("space-y-2.5 p-3", embedded && "max-h-review-thread-history overflow-y-auto")}
+        className="max-h-review-thread-history space-y-2.5 overflow-y-auto p-3"
+        onScroll={(event) => {
+          const history = event.currentTarget
+          const pinned = history.scrollHeight - history.clientHeight - history.scrollTop <= 48
+          historyPinnedToBottomRef.current = pinned
+          reviewThreadHistoryScrollStates.set(thread.id, {
+            pinned,
+            scrollTop: history.scrollTop,
+          })
+        }}
       >
         {previousRevision ||
         thread.anchorStatus === "outdated" ||
@@ -794,6 +958,12 @@ const reviewThreadTarget = (
 /** Human-readable label for any persisted anchor. */
 const anchorLabel = (anchor: ReviewThreadAnchor) => {
   return `${anchor.filePath}:${anchor.lineNumber} · ${anchor.side}`
+}
+
+const fallbackThreadLabel = (details: ReviewThreadDetails) => {
+  if (details.thread.anchorStatus === "outdated") return "Outdated"
+  if (details.thread.anchorStatus === "unresolved_anchor") return "Anchor unavailable"
+  return "Location unavailable"
 }
 
 /** Compact GitHub-style side and line label for an inline review disclosure. */

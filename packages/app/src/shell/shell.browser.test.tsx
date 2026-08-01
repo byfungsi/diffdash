@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest"
 import { appBrowserScenario } from "@/test/app-browser-support"
 
 describe("App shell browser interactions", () => {
+  it("shows a retryable error instead of onboarding when application state is unavailable", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("appStateRecovery")()
+  })
+
   it("opens the complete macOS shortcut reference from Home and restores focus", async () => {
     expect.hasAssertions()
     await appBrowserScenario("shortcutReferenceHome")()

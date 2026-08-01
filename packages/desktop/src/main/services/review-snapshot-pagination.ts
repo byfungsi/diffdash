@@ -203,12 +203,13 @@ const anchoredSearchMatches = (
   query: string,
   anchor: ReviewSnapshotSearchFileAnchor | null,
 ) => {
-  const matches = allSearchMatches(snapshot, query)
-  if (anchor === null || matches.length === 0) return matches
+  if (anchor === null) return allSearchMatches(snapshot, query)
   const anchorFileIndex = snapshot.parsedDiff.files.findIndex(
     (file) => file.fileId === anchor.fileId,
   )
   if (anchorFileIndex < 0) return null
+  const matches = allSearchMatches(snapshot, query)
+  if (matches.length === 0) return matches
 
   const filesById = new Map(
     snapshot.parsedDiff.files.map((file, fileIndex) => [file.fileId, fileIndex]),

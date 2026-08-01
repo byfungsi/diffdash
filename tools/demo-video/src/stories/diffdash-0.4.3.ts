@@ -17,7 +17,7 @@ const reviewButton = {
 } as const
 const walkthroughButton = { button: "Walkthrough", exact: true } as const
 const reviewActions = { button: "Actions", exact: true } as const
-const reviewThreads = { role: "heading", name: "Review threads", exact: true } as const
+const reviewThreads = { role: "region", name: "Review threads", exact: true } as const
 
 const openReview = () =>
   [
@@ -188,13 +188,7 @@ export const diffDash043Story = defineStory({
       },
       [
         ...openReview(),
-        click(walkthroughButton),
-        waitFor({ text: "Review focus", exact: true }),
-        click({
-          button: "Select walkthrough step 2: Acquire or recover in one statement",
-          exact: true,
-        }),
-        click({ button: "packages/db/src/replay-claims.ts:20 · new", exact: true }),
+        click({ button: /packages\/db\/src\/replay-claims\.ts\s+R20/ }),
         waitFor({ textbox: "Thread message", exact: true }),
         type(
           { textbox: "Thread message", exact: true },

@@ -1,5 +1,8 @@
 import type { Page } from "playwright"
 
+/** Fixed delivery viewport for every generated demo artifact. */
+export const DEMO_VIEWPORT = { width: 1440, height: 900 } as const
+
 /** Copy rendered on a release or chapter cover. */
 export interface CardCopy {
   readonly step: string
@@ -76,4 +79,13 @@ export interface DemoManifest {
     readonly trimStartSeconds: number
     readonly card: CardCopy
   }[]
+}
+
+/** Delivery metadata written only after a combined reel is complete. */
+export interface DemoRelease {
+  readonly schemaVersion: 1
+  readonly story: string
+  readonly video: string
+  readonly poster: string
+  readonly durationSeconds: number
 }

@@ -1,102 +1,129 @@
 /* eslint-disable no-await-in-loop -- Verification reports the exact clip that violates the delivery contract. */
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { access, open, readFile, readdir } from "node:fs/promises"
-import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { open, readFile, readdir, stat } from "node:fs/promises"
 
-import type { DemoManifest } from "./framework"
+import { decodeDemoManifest, decodeDemoRelease } from "./artifacts"
+import { demoOutputRoot, demoVideoPackageRoot } from "./environment"
+import { DEMO_VIEWPORT, type DemoRelease } from "./framework"
+import { probeMedia, type MediaProbe } from "./media"
+import { resolveContainedPath } from "./paths"
+import { getStory } from "./stories"
 
-const ffprobePath = process.env.FFPROBE_PATH ?? "ffprobe"
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const storyId = process.argv[2] ?? "diffdash-0.4.3"
-const outputDirectory = resolve(packageRoot, "output", storyId)
-const manifestText = await readFile(resolve(outputDirectory, "manifest.json"), "utf8")
-const manifest = JSON.parse(manifestText) as DemoManifest
+const durationToleranceSeconds = 0.05
 
-assert.equal(manifest.schemaVersion, 1)
-assert.equal(manifest.story, storyId)
-assert.equal(manifest.clips.length, 7)
-assert.equal(new Set(manifest.clips.map(({ name }) => name)).size, manifest.clips.length)
-assert.ok(!manifestText.includes(packageRoot), "manifest must not leak absolute workspace paths")
+/** Verifies all recorded and combined artifacts for one registered story. */
+export const verifyDemo = async (storyId: string) => {
+  const story = getStory(storyId)
+  const ffprobePath = process.env.FFPROBE_PATH ?? "ffprobe"
+  const outputDirectory = resolveContainedPath(demoOutputRoot, story.id)
+  const manifestText = await readFile(
+    resolveContainedPath(outputDirectory, "manifest.json"),
+    "utf8",
+  )
+  const releaseText = await readFile(resolveContainedPath(outputDirectory, "release.json"), "utf8")
+  const manifest = decodeDemoManifest(manifestText)
+  const release = decodeDemoRelease(releaseText)
 
-const files = await readdir(outputDirectory)
-assert.deepEqual(
-  files.filter((file) => file.startsWith("FAILED-")),
-  [],
-  "recording directory contains failed-take screenshots",
-)
+  assert.equal(manifest.story, story.id)
+  assert.equal(manifest.title, story.title)
+  assert.deepEqual(manifest.viewport, DEMO_VIEWPORT)
+  assert.deepEqual(manifest.intro, story.intro)
+  assert.deepEqual(manifest.outro, story.outro)
+  assert.deepEqual(
+    manifest.clips.map(({ name }) => name),
+    story.clips.map(({ name }) => name),
+    "manifest clip order must match the registered story",
+  )
+  assert.deepEqual(
+    manifest.clips.map(({ card }) => card),
+    story.clips.map(({ card }) => card),
+    "manifest chapter cards must match the registered story",
+  )
+  assert.ok(!manifestText.includes(demoVideoPackageRoot), "manifest must not leak absolute paths")
+  assert.ok(!releaseText.includes(demoVideoPackageRoot), "release metadata must not leak paths")
 
-for (const clip of manifest.clips) {
-  const path = resolve(outputDirectory, clip.file)
-  await access(path)
-  const probe = probeFile(path)
-  const video = probe.streams.find((stream) => stream.codec_type === "video")
-  assert.ok(video?.codec_name === "vp8" || video?.codec_name === "vp9")
-  assert.equal(video.width, 1440)
-  assert.equal(video.height, 900)
-  assert.ok(Number(probe.format.duration) > clip.trimStartSeconds + 1)
+  const files = await readdir(outputDirectory)
+  assert.deepEqual(
+    files.filter((file) => file.startsWith("FAILED-")),
+    [],
+    "recording directory contains failed-take screenshots",
+  )
+
+  for (const clip of manifest.clips) {
+    const path = resolveContainedPath(outputDirectory, clip.file)
+    await assertRegularNonEmptyFile(path, `recorded clip ${clip.name}`)
+    const probe = probeMedia(path, ffprobePath)
+    const video = probe.streams.find((stream) => stream.codecType === "video")
+    assert.ok(video?.codecName === "vp8" || video?.codecName === "vp9")
+    assert.equal(video.width, DEMO_VIEWPORT.width)
+    assert.equal(video.height, DEMO_VIEWPORT.height)
+    assert.ok(
+      probe.durationSeconds !== null && probe.durationSeconds > clip.trimStartSeconds,
+      `${clip.name} must contain media after its trim point`,
+    )
+  }
+
+  const finalPath = resolveContainedPath(outputDirectory, release.video)
+  await assertRegularNonEmptyFile(finalPath, "combined demo video")
+  const finalProbe = probeMedia(finalPath, ffprobePath)
+  const finalVideo = finalProbe.streams.find((stream) => stream.codecType === "video")
+  assert.equal(finalVideo?.codecName, "h264")
+  assert.equal(finalVideo?.width, DEMO_VIEWPORT.width)
+  assert.equal(finalVideo?.height, DEMO_VIEWPORT.height)
+  assert.equal(finalVideo?.frameRate, "30/1")
+  assert.equal(finalVideo?.pixelFormat, "yuv420p")
+  assert.equal(
+    finalProbe.streams.some((stream) => stream.codecType === "audio"),
+    false,
+    "release reel must remain silent",
+  )
+  assertReleaseMatchesMedia(story.id, release, finalProbe)
+  await assertFastStart(finalPath)
+
+  const posterPath = resolveContainedPath(outputDirectory, release.poster)
+  await assertRegularNonEmptyFile(posterPath, "demo poster")
+  const posterProbe = probeMedia(posterPath, ffprobePath)
+  const posterVideo = posterProbe.streams.find((stream) => stream.codecType === "video")
+  assert.equal(posterVideo?.codecName, "png")
+  assert.equal(posterVideo?.width, DEMO_VIEWPORT.width)
+  assert.equal(posterVideo?.height, DEMO_VIEWPORT.height)
+  process.stdout.write(
+    `[demo] verified ${manifest.clips.length} clips and ${release.video} (${release.durationSeconds.toFixed(1)}s)\n`,
+  )
 }
 
-const finalPath = resolve(outputDirectory, `${storyId}-demo.mp4`)
-const finalProbe = probeFile(finalPath)
-const finalVideo = finalProbe.streams.find((stream) => stream.codec_type === "video")
-assert.equal(finalVideo?.codec_name, "h264")
-assert.equal(finalVideo?.width, 1440)
-assert.equal(finalVideo?.height, 900)
-assert.equal(finalVideo?.r_frame_rate, "30/1")
-assert.equal(finalVideo?.pix_fmt, "yuv420p")
-assert.equal(
-  finalProbe.streams.some((stream) => stream.codec_type === "audio"),
-  false,
-  "Xenith-style release reel must remain silent",
-)
-assert.ok(Number(finalProbe.format.duration) > 60)
-
-const handle = await open(finalPath, "r")
-try {
-  const header = Buffer.alloc(1_048_576)
-  const { bytesRead } = await handle.read(header, 0, header.length, 0)
-  const headerText = header.subarray(0, bytesRead).toString("latin1")
-  const moov = headerText.indexOf("moov")
-  const mdat = headerText.indexOf("mdat")
-  assert.ok(moov >= 0 && mdat >= 0 && moov < mdat, "MP4 must use fast-start atom ordering")
-} finally {
-  await handle.close()
+/** Checks release filenames, story identity, and declared duration against probed media. */
+export const assertReleaseMatchesMedia = (
+  storyId: string,
+  release: DemoRelease,
+  probe: MediaProbe,
+) => {
+  assert.equal(release.story, storyId)
+  assert.equal(release.video, `${storyId}-demo.mp4`)
+  assert.equal(release.poster, `${storyId}-poster.png`)
+  assert.ok(probe.durationSeconds !== null && probe.durationSeconds > 0)
+  assert.ok(
+    Math.abs(release.durationSeconds - probe.durationSeconds) <= durationToleranceSeconds,
+    `release duration ${release.durationSeconds} must match actual duration ${probe.durationSeconds}`,
+  )
 }
 
-await access(resolve(outputDirectory, `${storyId}-poster.png`))
-await access(resolve(outputDirectory, "release.json"))
-process.stdout.write(`[demo] verified seven clips and ${storyId}-demo.mp4\n`)
-
-interface ProbeResult {
-  readonly streams: readonly {
-    readonly codec_type: string
-    readonly codec_name?: string
-    readonly width?: number
-    readonly height?: number
-    readonly r_frame_rate?: string
-    readonly pix_fmt?: string
-  }[]
-  readonly format: { readonly duration: string }
+const assertRegularNonEmptyFile = async (path: string, label: string) => {
+  const fileStat = await stat(path)
+  assert.ok(fileStat.isFile(), `${label} must be a regular file`)
+  assert.ok(fileStat.size > 0, `${label} must not be empty`)
 }
 
-function probeFile(path: string): ProbeResult {
-  return JSON.parse(
-    execFileSync(
-      ffprobePath,
-      [
-        "-v",
-        "error",
-        "-show_entries",
-        "stream=codec_type,codec_name,width,height,r_frame_rate,pix_fmt",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "json",
-        path,
-      ],
-      { encoding: "utf8" },
-    ),
-  ) as ProbeResult
+const assertFastStart = async (path: string) => {
+  const handle = await open(path, "r")
+  try {
+    const header = Buffer.alloc(1_048_576)
+    const { bytesRead } = await handle.read(header, 0, header.length, 0)
+    const headerText = header.subarray(0, bytesRead).toString("latin1")
+    const moov = headerText.indexOf("moov")
+    const mdat = headerText.indexOf("mdat")
+    assert.ok(moov >= 0 && mdat >= 0 && moov < mdat, "MP4 must use fast-start atom ordering")
+  } finally {
+    await handle.close()
+  }
 }

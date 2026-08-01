@@ -13,7 +13,6 @@ export const locate = (page: Page, target: Target): Locator => {
       .or(page.getByRole("tab", { name: target }))
       .or(page.getByRole("menuitem", { name: target }))
       .or(page.getByText(target))
-      .first()
   }
   if ("button" in target)
     return page.getByRole("button", { name: target.button, exact: target.exact ?? false })
@@ -21,7 +20,7 @@ export const locate = (page: Page, target: Target): Locator => {
     return page.getByRole("textbox", { name: target.textbox, exact: target.exact ?? false })
   if ("placeholder" in target)
     return page.getByPlaceholder(target.placeholder, { exact: target.exact ?? false })
-  if ("text" in target) return page.getByText(target.text, { exact: target.exact ?? false }).first()
+  if ("text" in target) return page.getByText(target.text, { exact: target.exact ?? false })
   if ("testId" in target) return page.getByTestId(target.testId)
   if ("css" in target) return page.locator(target.css)
   const role = target.role as Parameters<Page["getByRole"]>[0]

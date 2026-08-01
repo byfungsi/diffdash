@@ -1,90 +1,75 @@
-import { Cause, Effect } from "effect"
-import { randomUUID } from "node:crypto"
-import {
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs"
-import { basename, dirname, join } from "node:path"
+import { Error as PlatformError, FileSystem, Path } from "@effect/platform"
+import { Context, Effect, Layer, Ref } from "effect"
 
-import { isNodeError } from "./node-errors"
+const textEncoder = new TextEncoder()
 
-const NO_FAILURE = Symbol("NO_FAILURE")
+/** Filesystem operations used by JSON-backed settings services. */
+export interface FileStorageOperations {
+  readonly readOptionalTextFile: (
+    path: string,
+  ) => Effect.Effect<string | null, PlatformError.PlatformError>
+  readonly writePrettyJsonFile: (
+    path: string,
+    value: unknown,
+  ) => Effect.Effect<void, PlatformError.PlatformError>
+}
 
-/** Reads an optional UTF-8 file, treating only a missing path as absent. */
-export const readOptionalTextFile = (
-  path: string,
-): Effect.Effect<string | null, Cause.UnknownException> =>
-  Effect.try(() => {
-    try {
-      return readFileSync(path, "utf8")
-    } catch (cause) {
-      if (isNodeError(cause) && cause.code === "ENOENT") return null
-      throw cause
-    }
-  })
+/** Effect Platform-backed durable file storage for application settings and state. */
+export class FileStorage extends Context.Tag("@diffdash/settings/FileStorage")<
+  FileStorage,
+  FileStorageOperations
+>() {
+  static readonly layer = Layer.effect(
+    FileStorage,
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const pathService = yield* Path.Path
 
-/** Atomically replaces a file with private, fsynced, pretty-printed JSON. */
-export const writePrettyJsonFile = (
-  path: string,
-  value: unknown,
-): Effect.Effect<void, Cause.UnknownException> =>
-  Effect.try(() => {
-    const content = `${JSON.stringify(value, null, 2)}\n`
-    const directory = dirname(path)
-    const temporaryPath = join(directory, `.${basename(path)}.${randomUUID()}.tmp`)
-    let descriptor: number | null = null
-    let temporaryFileExists = false
-    let failure: unknown | typeof NO_FAILURE = NO_FAILURE
+      const readOptionalTextFile = Effect.fn("FileStorage.readOptionalTextFile")(function* (
+        path: string,
+      ) {
+        return yield* fileSystem.readFileString(path).pipe(
+          Effect.catchIf(
+            (error) => error instanceof PlatformError.SystemError && error.reason === "NotFound",
+            () => Effect.succeed(null),
+          ),
+        )
+      })
 
-    mkdirSync(directory, { recursive: true, mode: 0o700 })
+      const writePrettyJsonFile = Effect.fn("FileStorage.writePrettyJsonFile")(function* (
+        path: string,
+        value: unknown,
+      ) {
+        const content = textEncoder.encode(`${JSON.stringify(value, null, 2)}\n`)
+        const directory = pathService.dirname(path)
+        const temporaryPath = pathService.join(
+          directory,
+          `.${pathService.basename(path)}.${crypto.randomUUID()}.tmp`,
+        )
+        const temporaryCreated = yield* Ref.make(false)
+        const removeTemporaryFile = Ref.get(temporaryCreated).pipe(
+          Effect.flatMap((created) => (created ? fileSystem.remove(temporaryPath) : Effect.void)),
+        )
 
-    try {
-      descriptor = openSync(temporaryPath, "wx", 0o600)
-      temporaryFileExists = true
-      writeFileSync(descriptor, content, "utf8")
-      fsyncSync(descriptor)
+        yield* fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 })
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const file = yield* fileSystem.open(temporaryPath, { flag: "wx", mode: 0o600 })
+            yield* Ref.set(temporaryCreated, true)
+            yield* file.writeAll(content)
+            yield* file.sync
+          }),
+        ).pipe(
+          Effect.onError(() => removeTemporaryFile.pipe(Effect.orDie)),
+          Effect.zipRight(
+            fileSystem
+              .rename(temporaryPath, path)
+              .pipe(Effect.onError(() => removeTemporaryFile.pipe(Effect.orDie))),
+          ),
+        )
+      })
 
-      const descriptorToClose = descriptor
-      descriptor = null
-      closeSync(descriptorToClose)
-
-      renameSync(temporaryPath, path)
-      temporaryFileExists = false
-    } catch (cause) {
-      failure = cause
-    }
-
-    const cleanupFailures: unknown[] = []
-    if (descriptor !== null) {
-      const descriptorToClose = descriptor
-      descriptor = null
-      try {
-        closeSync(descriptorToClose)
-      } catch (cause) {
-        cleanupFailures.push(cause)
-      }
-    }
-    if (temporaryFileExists) {
-      try {
-        unlinkSync(temporaryPath)
-      } catch (cause) {
-        if (!isNodeError(cause) || cause.code !== "ENOENT") cleanupFailures.push(cause)
-      }
-    }
-
-    if (failure !== NO_FAILURE) {
-      if (cleanupFailures.length > 0) {
-        throw new AggregateError([failure, ...cleanupFailures], "Atomic JSON write cleanup failed")
-      }
-      throw failure
-    }
-    if (cleanupFailures.length > 0) {
-      throw new AggregateError(cleanupFailures, "Atomic JSON write cleanup failed")
-    }
-  })
+      return FileStorage.of({ readOptionalTextFile, writePrettyJsonFile })
+    }),
+  )
+}

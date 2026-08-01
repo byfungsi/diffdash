@@ -12,7 +12,7 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("dismissRepositoryBanner")()
   })
 
-  it("clears temporary file-tree selection after navigating to a collapsed card", async () => {
+  it("keeps file-tree selection current after navigating to a collapsed card", async () => {
     expect.hasAssertions()
     await appBrowserScenario("fileTreeSelection")()
   })
@@ -57,6 +57,16 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("diffSearchViewportAnchor")()
   })
 
+  it("keeps paginated search cursors bound to the anchor captured when search opened", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffSearchImmutableAnchor")()
+  })
+
+  it("opens active persisted threads and keeps unmappable threads available in the header", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("reviewThreadSummary")()
+  })
+
   it("toggles viewed state for the file under the pointer", async () => {
     expect.hasAssertions()
     await appBrowserScenario("viewedShortcutPointerTarget")()
@@ -92,7 +102,7 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("markAllViewedViewport")()
   })
 
-  it("retains viewed files across pushes until their displayed patch changes", async () => {
+  it("retains viewed files and refreshes same-path worker output when hunk shapes change", async () => {
     expect.hasAssertions()
     await appBrowserScenario("viewedAcrossPushes")()
   })

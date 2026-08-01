@@ -2,11 +2,13 @@ import assert from "node:assert/strict"
 import test from "node:test"
 
 import {
+  createLinuxDockerAnalyticsConfiguration,
   createR2ClientConfiguration,
   loadLocalEnvironment,
   parseLocalEnvLine,
   requiredAnalyticsEnvironment,
   requiredEnvironment,
+  requiredMacReleaseAnalyticsEnvironment,
 } from "./release-environment.mjs"
 
 const r2Environment = () => ({
@@ -38,6 +40,35 @@ test("requires complete analytics configuration for packaged releases", () => {
     () => requiredAnalyticsEnvironment({ VITE_POSTHOG_KEY: "phc_test" }),
     /VITE_POSTHOG_HOST/u,
   )
+})
+
+test("requires analytics for new macOS builds but not existing compiled apps", () => {
+  const environment = {
+    VITE_POSTHOG_HOST: "https://us.i.posthog.com",
+    VITE_POSTHOG_KEY: "phc_test",
+  }
+
+  assert.deepEqual(requiredMacReleaseAnalyticsEnvironment(false, environment), {
+    host: "https://us.i.posthog.com",
+    key: "phc_test",
+  })
+  assert.equal(requiredMacReleaseAnalyticsEnvironment(true, {}), undefined)
+})
+
+test("forwards analytics verbatim through Docker without placing values in logged arguments", () => {
+  const host = " https://analytics.example.test/a path?source=$release "
+  const key = " public-key-with-$shell-characters "
+  const configuration = createLinuxDockerAnalyticsConfiguration({
+    EXISTING: "retained",
+    VITE_POSTHOG_HOST: host,
+    VITE_POSTHOG_KEY: key,
+  })
+
+  assert.deepEqual(configuration.arguments, ["-e", "VITE_POSTHOG_HOST", "-e", "VITE_POSTHOG_KEY"])
+  assert.equal(configuration.environment.VITE_POSTHOG_HOST, host)
+  assert.equal(configuration.environment.VITE_POSTHOG_KEY, key)
+  assert.equal(configuration.environment.EXISTING, "retained")
+  assert.doesNotMatch(configuration.arguments.join(" "), /analytics\.example|public-key/u)
 })
 
 test("builds the R2 endpoint and AWS environment without mutating the source", () => {

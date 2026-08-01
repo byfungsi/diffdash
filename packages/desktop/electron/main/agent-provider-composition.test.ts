@@ -10,6 +10,11 @@ describe("agent provider composition", () => {
         run: () => Effect.dieMessage("probe is not evaluated during composition"),
         streamLines: () => Stream.dieMessage("execution is not evaluated during composition"),
       },
+      tempResources: {
+        makeTempDirectoryScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempFileScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempOutputPathScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+      },
       tempDirectory: "/tmp/diffdash-agent-composition",
       includeFixture: true,
     })

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Redacted, Stream } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
+import { Effect, Layer, Redacted, Stream } from "effect"
 import { readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -30,13 +32,23 @@ import {
   type ProcessRequest,
   type ProcessRunner,
 } from "@diffdash/process"
+import { TempResources } from "@diffdash/process/temp-resource"
 import {
   CODEX_AUTO_MODELS,
   CODEX_DEFAULT_MODEL,
+  CODEX_MODELS,
   CODEX_REVIEW_POLICY,
   CODEX_WALKTHROUGH_POLICY,
   makeCodexProvider,
 } from "./codex"
+
+const tempResources = Effect.runSync(
+  TempResources.pipe(
+    Effect.provide(
+      TempResources.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ),
+  ),
+)
 
 interface Call {
   readonly command: string
@@ -109,7 +121,10 @@ const makeHarness = (
       )
     },
   }
-  return { calls, registration: makeCodexProvider({ processes, tempDirectory: tmpdir() }) }
+  return {
+    calls,
+    registration: makeCodexProvider({ processes, tempResources, tempDirectory: tmpdir() }),
+  }
 }
 
 const result = (request: ProcessRequest, stdout: string): ProcessResult =>
@@ -241,6 +256,7 @@ agentCancellationConformance("Codex", {
     const cancellationTempDirectory = mkdtempSync(join(tmpdir(), "diffdash-codex-test-"))
     const harness = makeHarness()
     const registration = makeCodexProvider({
+      tempResources,
       processes: {
         run:
           harness.registration.walkthrough === undefined
@@ -473,11 +489,16 @@ describe("Codex provider", () => {
   )
 
   it("owns defaults and all automatic quality candidates", () => {
-    expect(CODEX_DEFAULT_MODEL).toBe(AgentModelId.make("gpt-5.3-codex-spark"))
+    expect(CODEX_DEFAULT_MODEL).toBe(AgentModelId.make("gpt-5.6-terra"))
+    expect(CODEX_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
+      { id: "gpt-5.6-sol", displayName: "GPT 5.6 Sol" },
+      { id: "gpt-5.6-terra", displayName: "GPT 5.6 Terra" },
+      { id: "gpt-5.6-luna", displayName: "GPT 5.6 Luna" },
+    ])
     expect(CODEX_AUTO_MODELS).toEqual({
-      best: "gpt-5.5",
-      balanced: "gpt-5.3-codex-spark",
-      fast: "gpt-5.4-mini",
+      best: "gpt-5.6-sol",
+      balanced: "gpt-5.6-terra",
+      fast: "gpt-5.6-luna",
     })
     expect(CODEX_WALKTHROUGH_POLICY).toMatchObject({
       repository: "local-working-copy",

@@ -1,18 +1,26 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
+import { Effect, Either, Layer } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
 import { AppState, AppStateError } from "./app-state"
+import { FileStorage } from "./file-storage"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-app-state-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
 
-const makeLayer = (directory: string) => AppState.layer(join(directory, "diffdash", "state.json"))
+const makeLayer = (directory: string) =>
+  AppState.layer(join(directory, "diffdash", "state.json")).pipe(
+    Layer.provide(
+      FileStorage.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ),
+  )
 
 it.scoped("FUN-148 AC: loads committed incomplete and completed onboarding fixtures", () =>
   Effect.gen(function* () {
@@ -102,17 +110,21 @@ describe("AppState", () => {
     }),
   )
 
-  it.scoped("falls back to defaults for invalid JSON", () =>
+  it.scoped("fails instead of treating invalid JSON as first-run state", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installStateFixture(directory, "settings-malformed.txt")
 
-      const state = yield* Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const appState = yield* AppState
-        return yield* appState.get
+        return yield* Effect.either(appState.get)
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(state).toEqual(DEFAULT_APP_STATE)
+      expect(Either.isLeft(result)).toBe(true)
+      if (Either.isLeft(result)) {
+        expect(result.left).toBeInstanceOf(AppStateError)
+        expect(result.left.operation).toBe("read")
+      }
     }),
   )
 })

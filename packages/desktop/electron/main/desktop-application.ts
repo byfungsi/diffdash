@@ -1,6 +1,12 @@
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { app, BrowserWindow, type BrowserWindow as BrowserWindowType, shell } from "electron"
+import {
+  app,
+  BrowserWindow,
+  type BrowserWindow as BrowserWindowType,
+  dialog,
+  shell,
+} from "electron"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { Effect } from "effect"
 import { resolveApplicationIdentity } from "./application-identity"
@@ -27,8 +33,8 @@ const revealWindow = (targetWindow: BrowserWindowType) => {
 }
 
 let mainWindow: BrowserWindowType | null = null
+let activeRendererSecurityPolicy: RendererSecurityPolicy | null = null
 const getWindow = () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
-const navigation = createNavigation({ getWindow, revealWindow })
 
 const configureApplicationIdentity = () => {
   const identity = resolveApplicationIdentity({
@@ -51,7 +57,20 @@ const createWindow = (rendererSecurityPolicy: RendererSecurityPolicy) => {
     rendererSecurityPolicy,
     revealWindow,
   })
+  return mainWindow
 }
+
+const activateMainWindow = () => {
+  const targetWindow = getWindow()
+  if (targetWindow !== null && !targetWindow.isDestroyed()) {
+    revealWindow(targetWindow)
+    return targetWindow
+  }
+  if (activeRendererSecurityPolicy === null) return null
+  return createWindow(activeRendererSecurityPolicy)
+}
+
+const navigation = createNavigation({ activateWindow: activateMainWindow })
 
 const start = async () => {
   if (process.platform === "darwin") {
@@ -78,9 +97,10 @@ const start = async () => {
     Effect.flatMap(ReviewTurnStore, (turns) => turns.recoverInterruptedTurns),
   )
   installIpcControllers(applicationRuntime, navigation.commands, rendererSecurityPolicy)
-  createWindow(rendererSecurityPolicy)
+  activeRendererSecurityPolicy = rendererSecurityPolicy
+  activateMainWindow()
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(rendererSecurityPolicy)
+    activateMainWindow()
   })
 }
 
@@ -89,17 +109,21 @@ export const startDesktopApplication = () => {
   configureApplicationIdentity()
   const acquired = installSingleInstanceHandling({
     enqueue: navigation.enqueue,
-    revealExistingWindow: () => {
-      const targetWindow = getWindow()
-      if (targetWindow !== null && !targetWindow.isDestroyed()) revealWindow(targetWindow)
-    },
+    revealExistingWindow: activateMainWindow,
   })
   if (!acquired) {
     app.quit()
     return
   }
 
-  void start()
+  void start().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`[startup:failed] ${message}`)
+    if (app.isReady() && !isHiddenE2EWindow()) {
+      dialog.showErrorBox("DiffDash could not start", message)
+    }
+    app.quit()
+  })
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit()
   })

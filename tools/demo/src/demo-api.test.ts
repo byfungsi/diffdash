@@ -22,6 +22,9 @@ import {
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
 import { ReviewSnapshotPageRequest } from "@diffdash/protocol/review-snapshot"
+import { LocalViewedFilesRequest } from "@diffdash/protocol/viewed-files"
+import { buildWalkthroughHunkDigest, walkthroughLocalDiffScope } from "@diffdash/domain/walkthrough"
+import { createDemoLocalReviewFixtures } from "./local-review-fixtures"
 
 const review = HostedReviewLocator.make({
   repository: HostedRepositoryLocator.make({
@@ -158,5 +161,82 @@ describe("scenario-backed DiffDash API", () => {
           "gitProvider.submitReviewDecision",
         )
       }),
+  )
+
+  it.effect("keeps working-tree and merge-base branch reviews isolated", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const [working, branch] = createDemoLocalReviewFixtures(scenario)
+      const { api } = createDemoRuntime(scenario)
+      const resolvedBranch = yield* Effect.promise(() =>
+        api.localReviews.resolveBranch(working.target.rootPath, "dev"),
+      )
+      const [workingManifest, branchManifest] = yield* Effect.promise(() =>
+        Promise.all([
+          api.reviewSnapshots.acquireLocal(working.target),
+          api.reviewSnapshots.acquireLocal(resolvedBranch),
+        ]),
+      )
+      const [workingThreads, branchThreads] = yield* Effect.promise(() =>
+        Promise.all([
+          api.reviewThreads.list(working.target),
+          api.reviewThreads.list(resolvedBranch),
+        ]),
+      )
+      const [workingViewed, branchViewed] = yield* Effect.promise(() =>
+        Promise.all([
+          api.viewedFiles.listLocal(
+            LocalViewedFilesRequest.make({
+              target: working.target,
+              sourceBranch: "nina/webhook-replay-claims",
+            }),
+          ),
+          api.viewedFiles.listLocal(
+            LocalViewedFilesRequest.make({
+              target: resolvedBranch,
+              sourceBranch: "nina/webhook-replay-claims",
+            }),
+          ),
+        ]),
+      )
+
+      expect(branch.target.comparison["_tag"]).toBe("branch")
+      if (branch.target.comparison["_tag"] === "branch") {
+        expect(branch.target.comparison.baseSha).toBe(branch.snapshot.baseRevision)
+        expect(branch.target.comparison.baseSha).not.toBe(branch.comparisonTargetSha)
+      }
+      expect(branch.excludedTargetOnlyPaths).toEqual(["docs/dev-release-notes.md"])
+      expect(
+        branch.snapshot.parsedDiff.files.some((file) =>
+          branch.excludedTargetOnlyPaths.includes(file.path),
+        ),
+      ).toBe(false)
+      expect(working.snapshot.diff.diff).not.toBe(branch.snapshot.diff.diff)
+      expect(working.snapshot.reviewKey).not.toBe(branch.snapshot.reviewKey)
+      expect(working.snapshot.snapshotId).not.toBe(branch.snapshot.snapshotId)
+      expect(workingManifest.snapshotId).not.toBe(branchManifest.snapshotId)
+      expect(workingThreads.map(({ id }) => id)).not.toEqual(branchThreads.map(({ id }) => id))
+      expect(workingThreads[0]?.reviewKey).toBe(working.snapshot.reviewKey)
+      expect(branchThreads[0]?.reviewKey).toBe(branch.snapshot.reviewKey)
+      expect(workingViewed.map(({ reviewKey }) => reviewKey)).not.toEqual(
+        branchViewed.map(({ reviewKey }) => reviewKey),
+      )
+
+      for (const fixture of [working, branch]) {
+        const localHunkIds = new Set(
+          buildWalkthroughHunkDigest(
+            fixture.snapshot.parsedDiff.files,
+            walkthroughLocalDiffScope(fixture.snapshot.headRevision),
+          ).map(({ id }) => id),
+        )
+        const walkthroughHunkIds = [
+          ...fixture.walkthrough.walkthrough.chapters.flatMap((chapter) =>
+            chapter.stops.flatMap((stop) => stop.hunkIds),
+          ),
+          ...fixture.walkthrough.walkthrough.support.flatMap((item) => item.hunkIds),
+        ]
+        expect(walkthroughHunkIds.every((id) => localHunkIds.has(id))).toBe(true)
+      }
+    }),
   )
 })

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
+import { Effect, Either, Layer } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { AppSettings, AppSettingsError } from "./app-settings"
+import { FileStorage } from "./file-storage"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-settings-test-"))),
@@ -13,7 +16,11 @@ const makeTempDirectory = Effect.acquireRelease(
 )
 
 const makeLayer = (directory: string) =>
-  AppSettings.layer(join(directory, "diffdash", "settings.json"))
+  AppSettings.layer(join(directory, "diffdash", "settings.json")).pipe(
+    Layer.provide(
+      FileStorage.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ),
+  )
 
 describe("AppSettings", () => {
   it.scoped("returns default settings when the file is missing", () =>
@@ -94,9 +101,9 @@ describe("AppSettings", () => {
         appearance: "dark",
         routes: { walkthrough: "codex", reviewThread: "codex" },
         models: {
-          codex: "gpt-5.4-mini",
+          codex: "gpt-5.6-luna",
           claude: "claude-haiku-4-5",
-          opencode: "openai/gpt-5.4-mini",
+          opencode: "openai/gpt-5.6-luna",
         },
         autoQuality: "fast",
         telemetryEnabled: true,

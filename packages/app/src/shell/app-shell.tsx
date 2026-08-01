@@ -1,6 +1,6 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { AISettings } from "@diffdash/domain/ai-settings"
-import { type AppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
+import type { AppState } from "@diffdash/domain/app-state"
 import {
   type GitProviderDescriptor,
   GitProviderId,
@@ -115,6 +115,8 @@ export function AppShell() {
   const [cliNavigationError, setCliNavigationError] = useState<string | null>(null)
   const [setupActionStatus, setSetupActionStatus] = useState<string | null>(null)
   const [appState, setAppState] = useState<AppState | null>(null)
+  const [appStateLoadAttempt, setAppStateLoadAttempt] = useState(0)
+  const [appStateLoadError, setAppStateLoadError] = useState<string | null>(null)
   const settingsMutation = useSettingsMutation()
   const aiSettings = settingsMutation.settings
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
@@ -392,14 +394,16 @@ export function AppShell() {
         if (!cancelled) setAppState(state)
         return undefined
       })
-      .catch(() => {
-        if (!cancelled) setAppState(DEFAULT_APP_STATE)
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setAppStateLoadError(formatError(error, "Could not load application state"))
+        }
       })
 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [appStateLoadAttempt])
 
   useEffect(() => {
     if (appState?.onboardingCompleted !== true) return
@@ -795,7 +799,30 @@ export function AppShell() {
           </Button>
         </div>
       )}
-      {appState === null ? (
+      {appStateLoadError !== null ? (
+        <section className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-8 py-10">
+          <EmptyState>
+            <div className="space-y-4" role="alert">
+              <div className="space-y-1">
+                <h1 className="text-foreground text-base font-semibold">
+                  DiffDash could not load application state
+                </h1>
+                <p>{appStateLoadError}</p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setAppState(null)
+                  setAppStateLoadError(null)
+                  setAppStateLoadAttempt((attempt) => attempt + 1)
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          </EmptyState>
+        </section>
+      ) : appState === null ? (
         <section className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center px-8 py-10">
           <EmptyState>Loading DiffDash...</EmptyState>
         </section>

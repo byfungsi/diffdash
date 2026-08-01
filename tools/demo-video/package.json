@@ -7,11 +7,11 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "record": "vite-node src/record.ts",
-    "combine": "vite-node src/combine.ts",
-    "video": "pnpm record && pnpm combine",
-    "verify": "vite-node src/verify.ts",
-    "dashboard": "vite-node src/dashboard.ts",
+    "record": "vite-node --script src/cli.ts record",
+    "combine": "vite-node --script src/cli.ts combine",
+    "video": "vite-node --script src/cli.ts video",
+    "verify": "vite-node --script src/cli.ts verify",
+    "dashboard": "vite-node --script src/cli.ts dashboard",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "oxlint src test vite.config.ts --no-error-on-unmatched-pattern"

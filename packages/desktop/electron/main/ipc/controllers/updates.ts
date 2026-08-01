@@ -31,6 +31,11 @@ export const defineUpdateHandlers = (
 
   handlers.define(InvokeChannel.updatesRestartAndInstall, async (): Promise<void> => {
     const updater = await run(AppUpdater)
+    const state = await run(updater.state)
+    if (state["_tag"] !== "downloaded") {
+      await run(updater.quitAndInstall)
+      return
+    }
     await shutdown.restartAndInstall(() => Effect.runPromise(updater.quitAndInstall))
   })
 }

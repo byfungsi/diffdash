@@ -172,16 +172,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await gutterNumber.hover()
     const utility = window.locator("diffs-container [data-utility-button]")
     await expect(utility).toBeVisible()
-    const pointerEvent = {
-      bubbles: true,
-      button: 0,
-      composed: true,
-      pointerId: 1,
-      pointerType: "mouse",
-    }
-    await utility.dispatchEvent("pointerdown", pointerEvent)
-    await utility.dispatchEvent("pointerup", pointerEvent)
-    await window.getByRole("textbox", { name: "Thread message" }).fill("Review fixture line")
+    await utility.evaluate((button) => {
+      const pointerEvent = {
+        bubbles: true,
+        button: 0,
+        composed: true,
+        pointerId: 1,
+        pointerType: "mouse",
+      }
+      button.dispatchEvent(new PointerEvent("pointerdown", pointerEvent))
+      button.dispatchEvent(new PointerEvent("pointerup", pointerEvent))
+    })
+    const composer = window.getByRole("textbox", { name: "Thread message" })
+    await expect(composer).toBeVisible()
+    await composer.fill("Review fixture line")
     await window.getByRole("button", { name: "Comment" }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
 
@@ -236,7 +240,11 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(reopenedReview).toBeVisible()
     await reopenedReview.click()
-    await restartedWindow.getByRole("button", { name: "src/fixture.ts:1 · old" }).click()
+    const persistedReviewDisclosure = restartedWindow.getByRole("button", {
+      name: "Review on L1",
+    })
+    await expect(persistedReviewDisclosure).toBeVisible()
+    await persistedReviewDisclosure.click()
     await expect(restartedWindow.getByText("Fixture review response")).toBeVisible()
   } finally {
     await app.close().catch(() => undefined)

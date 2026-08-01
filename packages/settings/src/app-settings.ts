@@ -8,7 +8,7 @@ import {
   AutoQuality,
   DEFAULT_AI_SETTINGS,
 } from "@diffdash/domain/ai-settings"
-import { readOptionalTextFile, writePrettyJsonFile } from "./file-storage"
+import { FileStorage, type FileStorageOperations } from "./file-storage"
 
 const decodeAppearance = Schema.decodeUnknownEither(Appearance)
 const decodeAutoQuality = Schema.decodeUnknownEither(AutoQuality)
@@ -29,41 +29,52 @@ export class AppSettings extends Context.Tag("@diffdash/AppSettings")<
   }
 >() {
   static readonly layer = (path: string) =>
-    Layer.succeed(
+    Layer.effect(
       AppSettings,
-      AppSettings.of({
-        get: readSettingsFile(path).pipe(
-          Effect.flatMap((content) => {
-            if (content === null) return Effect.succeed(DEFAULT_AI_SETTINGS)
-            const decoded = decodeSettings(content)
-            if (!decoded.migrated) return Effect.succeed(decoded.settings)
-            return writeSettingsFile(path, mergeSettings(content, decoded.settings)).pipe(
-              Effect.as(decoded.settings),
+      Effect.gen(function* () {
+        const storage = yield* FileStorage
+        return AppSettings.of({
+          get: readSettingsFile(storage, path).pipe(
+            Effect.flatMap((content) => {
+              if (content === null) return Effect.succeed(DEFAULT_AI_SETTINGS)
+              const decoded = decodeSettings(content)
+              if (!decoded.migrated) return Effect.succeed(decoded.settings)
+              return writeSettingsFile(
+                storage,
+                path,
+                mergeSettings(content, decoded.settings),
+              ).pipe(Effect.as(decoded.settings))
+            }),
+          ),
+          save: Effect.fn("AppSettings.save")(function (settings) {
+            return readSettingsFile(storage, path).pipe(
+              Effect.flatMap((content) =>
+                writeSettingsFile(storage, path, mergeSettings(content, settings)),
+              ),
+              Effect.as(settings),
             )
           }),
-        ),
-        save: Effect.fn("AppSettings.save")(function (settings) {
-          return readSettingsFile(path).pipe(
-            Effect.flatMap((content) => writeSettingsFile(path, mergeSettings(content, settings))),
-            Effect.as(settings),
-          )
-        }),
+        })
       }),
     )
 }
 
-const readSettingsFile = (path: string): Effect.Effect<string | null, AppSettingsError> =>
-  readOptionalTextFile(path).pipe(
-    Effect.mapError((error) => AppSettingsError.make({ operation: "read", cause: error.error })),
-  )
+const readSettingsFile = (
+  storage: FileStorageOperations,
+  path: string,
+): Effect.Effect<string | null, AppSettingsError> =>
+  storage
+    .readOptionalTextFile(path)
+    .pipe(Effect.mapError((error) => AppSettingsError.make({ operation: "read", cause: error })))
 
 const writeSettingsFile = (
+  storage: FileStorageOperations,
   path: string,
   settings: unknown,
 ): Effect.Effect<void, AppSettingsError> =>
-  writePrettyJsonFile(path, settings).pipe(
-    Effect.mapError((error) => AppSettingsError.make({ operation: "write", cause: error.error })),
-  )
+  storage
+    .writePrettyJsonFile(path, settings)
+    .pipe(Effect.mapError((error) => AppSettingsError.make({ operation: "write", cause: error })))
 
 const mergeSettings = (content: string | null, settings: AISettings): unknown => {
   if (content === null) return settings

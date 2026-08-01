@@ -6,20 +6,18 @@ import { createNavigationCommandQueue } from "./navigation-command-queue"
 
 /** Owns queued CLI navigation and renderer notification. */
 export const createNavigation = ({
-  getWindow,
-  revealWindow,
+  activateWindow,
 }: {
-  readonly getWindow: () => BrowserWindow | null
-  readonly revealWindow: (window: BrowserWindow) => void
+  readonly activateWindow: () => BrowserWindow | null
 }) => {
   const commands = createNavigationCommandQueue()
   return {
     commands,
     enqueue: (command: CliNavigationCommand) => {
       commands.enqueue(command)
-      const targetWindow = getWindow()
+      const targetWindow = activateWindow()
       if (targetWindow === null || targetWindow.isDestroyed()) return
-      revealWindow(targetWindow)
+      if (targetWindow.webContents.isLoadingMainFrame()) return
       sendProtocolEvent(targetWindow.webContents, EventChannel.navigationCommandsAvailable, {})
     },
   }

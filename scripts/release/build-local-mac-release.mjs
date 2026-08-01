@@ -12,7 +12,10 @@ import path from "node:path"
 import "./load-local-env.mjs"
 import { parseMacReleaseArguments } from "./release-arguments.mjs"
 import { runSyncCommand } from "./release-command.mjs"
-import { requiredEnvironment } from "./release-environment.mjs"
+import {
+  requiredEnvironment,
+  requiredMacReleaseAnalyticsEnvironment,
+} from "./release-environment.mjs"
 
 const cli = parseMacReleaseArguments()
 const desktopRoot = path.resolve("packages/desktop")
@@ -34,6 +37,9 @@ for (const arch of archs) {
   }
 }
 
+// --package-existing reuses compiled app bytes, so the current environment cannot validate their
+// embedded analytics configuration.
+requiredMacReleaseAnalyticsEnvironment(packageExisting)
 requiredEnvironment("APPLE_API_KEY")
 requiredEnvironment("APPLE_API_KEY_ID")
 requiredEnvironment("APPLE_API_ISSUER")

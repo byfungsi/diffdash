@@ -1,5 +1,5 @@
 ---
-"@diffdash/desktop": patch
+"@diffdash/desktop": minor
 ---
 
 Restore anonymous product analytics configuration in automated desktop release builds.

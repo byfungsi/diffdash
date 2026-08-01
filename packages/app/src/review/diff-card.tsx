@@ -1,11 +1,14 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
+import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
 import type { ReviewThreadAnchor } from "@diffdash/domain/review-thread"
 import { Check, ChevronDown, ChevronRight } from "lucide-react"
 import { useMemo, useState } from "react"
 import {
+  FileDiff,
+  type FileDiffMetadata,
   type FileDiffOptions,
-  PatchDiff,
+  getSingularPatch,
   useStableCallback,
   type VirtualFileMetrics,
 } from "./pierre"
@@ -25,6 +28,7 @@ import {
   ReviewThreadPanel,
   type ReviewThreadsController,
   reviewLineLabel,
+  syncPinnedReviewThreadHistories,
 } from "@/threads/review-threads"
 
 const REVIEW_DIFF_METRICS = {
@@ -72,6 +76,14 @@ export const OpenDiffCard = ({
   const diffReady = renderedPatch === file.patch
   const renderAsPlainText = isVeryLargeDiffFile(file)
   const isExpanded = forceExpanded || (expanded && !viewed)
+  const pierreFileDiff = useMemo(
+    () =>
+      ({
+        ...getSingularPatch(file.patch),
+        cacheKey: `${file.fileId}:${makeReviewDiffIdentity(file.patch)}`,
+      }) satisfies FileDiffMetadata,
+    [file.fileId, file.patch],
+  )
   const annotations = useMemo(
     () => reviewThreadAnnotations(file, reviewThreads.details, expandedLineAnchor),
     [expandedLineAnchor, file, reviewThreads.details],
@@ -105,6 +117,10 @@ export const OpenDiffCard = ({
     }
     setRenderedPatch(file.patch)
     onDiffRendered(node, instance, phase)
+    window.requestAnimationFrame(() => {
+      const card = document.getElementById(diffCardDomId(file.reviewKey))
+      if (card !== null) syncPinnedReviewThreadHistories(card)
+    })
   })
   const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewThreadAnnotation>>(
     () => ({
@@ -174,12 +190,12 @@ export const OpenDiffCard = ({
           className="bg-background relative -mt-px overflow-hidden border-t"
         >
           {diffReady ? null : <DiffLoadingSkeleton />}
-          <PatchDiff<ReviewThreadAnnotation>
+          <FileDiff<ReviewThreadAnnotation>
             className="block text-xs"
+            fileDiff={pierreFileDiff}
             lineAnnotations={annotations}
             metrics={REVIEW_DIFF_METRICS}
             options={interactiveDiffOptions}
-            patch={file.patch}
             renderAnnotation={(annotation) => {
               const { anchor, details, draftAnchor, expanded: reviewExpanded } = annotation.metadata
               const contentId = reviewThreadAnnotationContentId(anchor)

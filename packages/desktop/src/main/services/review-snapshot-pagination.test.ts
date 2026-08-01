@@ -5,6 +5,7 @@ import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   makeReviewSnapshotId,
   ReviewDiffIdentity,
+  ReviewFileId,
   ReviewKey,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
@@ -260,5 +261,77 @@ describe("review snapshot pagination", () => {
       "src/second.ts",
       "src/first.ts",
     ])
+  })
+
+  it("rejects an invalid file anchor even when the query has no matches", () => {
+    const snapshot = makeSnapshot(threeFileDiff)
+    const response = searchReviewSnapshot(
+      snapshot,
+      ReviewSnapshotSearchRequest.make({
+        snapshotId: snapshot.snapshotId,
+        query: "absent search value",
+        cursor: null,
+        limit: 10,
+        anchor: ReviewSnapshotSearchFileAnchor.make({
+          fileId: ReviewFileId.make("missing-file"),
+        }),
+      }),
+      256_000,
+    )
+
+    expect(response["_tag"]).toBe("expired")
+  })
+
+  it("binds continuation cursors to the original file anchor", () => {
+    const snapshot = makeSnapshot(threeFileDiff)
+    const firstFile = snapshot.parsedDiff.files[0]
+    const secondFile = snapshot.parsedDiff.files[1]
+    expect(firstFile).toBeDefined()
+    expect(secondFile).toBeDefined()
+    if (firstFile === undefined || secondFile === undefined) return
+    const anchor = ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId })
+    const firstPage = searchReviewSnapshot(
+      snapshot,
+      ReviewSnapshotSearchRequest.make({
+        snapshotId: snapshot.snapshotId,
+        query: "needle",
+        cursor: null,
+        limit: 1,
+        anchor,
+      }),
+      256_000,
+    )
+    expect(firstPage["_tag"]).toBe("available")
+    if (firstPage["_tag"] !== "available" || firstPage.nextCursor === null) {
+      throw new Error("Expected an anchored continuation cursor")
+    }
+
+    const continuation = searchReviewSnapshot(
+      snapshot,
+      ReviewSnapshotSearchRequest.make({
+        snapshotId: snapshot.snapshotId,
+        query: "needle",
+        cursor: firstPage.nextCursor,
+        limit: 1,
+        anchor,
+      }),
+      256_000,
+    )
+    expect(continuation["_tag"]).toBe("available")
+    if (continuation["_tag"] !== "available") return
+    expect(continuation.matches[0]?.filePath).toBe("src/first.ts")
+
+    const changedAnchor = searchReviewSnapshot(
+      snapshot,
+      ReviewSnapshotSearchRequest.make({
+        snapshotId: snapshot.snapshotId,
+        query: "needle",
+        cursor: firstPage.nextCursor,
+        limit: 1,
+        anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: firstFile.fileId }),
+      }),
+      256_000,
+    )
+    expect(changedAnchor["_tag"]).toBe("expired")
   })
 })

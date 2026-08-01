@@ -6,8 +6,9 @@ description: Author or edit DiffDash Playwright demo stories and clips. Use when
 # Author A DiffDash Demo Story
 
 Stories live in `tools/demo-video/src/stories/` and are registered in `stories/index.ts`. They drive
-the real renderer against deterministic scenario data. They are direct Playwright stories, not
-application tests and not Remotion compositions.
+the real renderer against deterministic scenario data. Product footage is recorded directly with
+Playwright; generated HTML chapter cards are captured as screenshots for FFmpeg assembly. Stories
+are not application tests or Remotion compositions.
 
 ## Story Shape
 

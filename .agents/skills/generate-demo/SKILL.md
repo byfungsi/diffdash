@@ -6,8 +6,9 @@ description: Generate a DiffDash release demo from independent Playwright clips,
 # Generate A DiffDash Demo
 
 Produces a landscape MP4 from the real DiffDash renderer against the deterministic `@diffdash/demo`
-runtime. It never uses Remotion, screenshots as video content, real repositories, credentials, or
-network services.
+runtime. Product footage comes from direct Playwright video recording, while generated HTML chapter
+cards are captured as screenshots and held as FFmpeg video segments. It never uses Remotion,
+product screenshot tours, real repositories, credentials, or network services.
 
 ## Workflow
 

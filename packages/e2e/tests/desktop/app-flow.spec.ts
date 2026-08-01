@@ -608,38 +608,64 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
   }
 })
 
-test("recreates the app window when macOS activates with no open windows", async ({
+test("recreates the closed macOS window for a forwarded CLI command", async ({
   browserName: _browserName,
 }, testInfo) => {
-  test.skip(process.platform !== "darwin", "Electron activation recreation is macOS behavior")
+  test.skip(process.platform !== "darwin", "Closing the last window keeps the macOS app alive")
   const userData = testInfo.outputPath("user-data")
   const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
-  await Promise.all([mkdir(userData, { recursive: true }), mkdir(fakeBin, { recursive: true })])
+  await Promise.all([
+    mkdir(userData, { recursive: true }),
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+  ])
   await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+  const appEnvironment = {
+    ...process.env,
+    DIFFDASH_E2E_HIDDEN: "1",
+    FAKE_REPO_ROOT: localRepo,
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
   const app = await electron.launch({
     args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
-    env: {
-      ...process.env,
-      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
-      DIFFDASH_E2E_HIDDEN: "1",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      XDG_CONFIG_HOME: xdgConfigHome,
-    },
+    env: appEnvironment,
   })
 
   try {
     const initialWindow = await app.firstWindow()
+    await dismissOnboardingIfPresent(initialWindow)
+    await expect(
+      initialWindow.getByRole("heading", { name: "DiffDash", exact: true }),
+    ).toBeVisible()
     await initialWindow.close()
     await expect
       .poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length))
       .toBe(0)
 
     const recreatedWindowPromise = app.waitForEvent("window")
-    await app.evaluate(({ app: electronApp }) => electronApp.emit("activate"))
+    const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
+      cwd: desktopRoot,
+      encoding: "utf8",
+    }).trim()
+    execFileSync(
+      electronExecutable,
+      [
+        join(desktopRoot, "out/main/index.js"),
+        `--user-data-dir=${userData}`,
+        `--diffdash-cli-v1=${localRepo}`,
+        "--",
+        "diff",
+        "dev",
+      ],
+      { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
+    )
     const recreatedWindow = await recreatedWindowPromise
 
-    await expect(recreatedWindow.getByRole("heading", { name: "DiffDash" })).toBeVisible()
+    await expect(recreatedWindow.getByRole("heading", { name: "Changes vs dev" })).toBeVisible()
+    await expect(recreatedWindow.getByText("src/local.ts").first()).toBeVisible()
   } finally {
     await app.close()
   }
@@ -671,8 +697,8 @@ const installAgentSettings = async (xdgConfigHome: string, provider: string) => 
       models: {
         auto: "balance",
         claude: "claude-sonnet-5",
-        codex: "gpt-5.3-codex-spark",
-        opencode: "openai/gpt-5.3-codex-spark",
+        codex: "gpt-5.6-terra",
+        opencode: "openai/gpt-5.6-terra",
       },
     }),
     "utf8",
@@ -690,6 +716,7 @@ const dismissOnboardingIfPresent = async (
       await window.getByRole("checkbox", { name: "Share anonymous usage data" }).uncheck()
     }
     await continueButton.click()
+    await expect(window.getByRole("heading", { name: "DiffDash", exact: true })).toBeVisible()
   } catch {
     // Onboarding is only shown for fresh app state.
   }
@@ -1162,7 +1189,7 @@ if (args[0] === "serve") {
         response.end(JSON.stringify({
           info: {
             id: "opencode-e2e-message",
-            modelID: "gpt-5.3-codex-spark",
+            modelID: "gpt-5.6-terra",
             providerID: "openai",
             structured: {
               bodyMarkdown: "OpenCode completed the line review.",

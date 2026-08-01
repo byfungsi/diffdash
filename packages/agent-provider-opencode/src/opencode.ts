@@ -55,7 +55,7 @@ import {
   findExecutableInPath,
   type ExecutablePath,
 } from "@diffdash/process/executable"
-import { makeTempFileScoped } from "@diffdash/process/temp-resource"
+import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("opencode")
 const executable = "opencode"
@@ -70,26 +70,26 @@ const walkthroughMessage =
 export const OPENCODE_PROVIDER_ID = providerId
 
 /** OpenCode model selected for new installations. */
-export const OPENCODE_DEFAULT_MODEL = AgentModelId.make("openai/gpt-5.3-codex-spark")
+export const OPENCODE_DEFAULT_MODEL = AgentModelId.make("openai/gpt-5.6-terra")
 
 /** OpenCode models and quality metadata owned by this provider. */
 export const OPENCODE_MODELS = [
-  modelDescriptor("openai/gpt-5.5", "GPT 5.5", "best"),
-  modelDescriptor("openai/gpt-5.3-codex-spark", "GPT 5.3 Codex Spark", "balanced"),
-  modelDescriptor("openai/gpt-5.4-mini", "GPT 5.4 Mini", "fast"),
-  modelDescriptor("anthropic/claude-opus-4-8", "Claude Opus 4.8", "best"),
-  modelDescriptor("anthropic/claude-sonnet-5", "Claude Sonnet 5.0", "balanced"),
+  modelDescriptor("openai/gpt-5.6-sol", "GPT 5.6 Sol", "best"),
+  modelDescriptor("openai/gpt-5.6-terra", "GPT 5.6 Terra", "balanced"),
+  modelDescriptor("openai/gpt-5.6-luna", "GPT 5.6 Luna", "fast"),
+  modelDescriptor("anthropic/claude-opus-5", "Claude Opus 5", "best"),
+  modelDescriptor("anthropic/claude-sonnet-5", "Claude Sonnet 5", "balanced"),
   modelDescriptor("anthropic/claude-haiku-4-5", "Claude Haiku 4.5", "fast"),
 ] as const
 
 /** OpenCode candidates used by automatic quality routing, in fallback order. */
 export const OPENCODE_AUTO_MODELS = {
-  best: [AgentModelId.make("anthropic/claude-opus-4-8"), AgentModelId.make("openai/gpt-5.5")],
+  best: [AgentModelId.make("anthropic/claude-opus-5"), AgentModelId.make("openai/gpt-5.6-sol")],
   balanced: [
     AgentModelId.make("anthropic/claude-sonnet-5"),
-    AgentModelId.make("openai/gpt-5.3-codex-spark"),
+    AgentModelId.make("openai/gpt-5.6-terra"),
   ],
-  fast: [AgentModelId.make("anthropic/claude-haiku-4-5"), AgentModelId.make("openai/gpt-5.4-mini")],
+  fast: [AgentModelId.make("anthropic/claude-haiku-4-5"), AgentModelId.make("openai/gpt-5.6-luna")],
 } as const
 
 /** Static OpenCode provider contribution. */
@@ -168,6 +168,7 @@ export const OPENCODE_PERMISSION_RULES: Readonly<Record<string, OpenCodePermissi
 /** Host dependencies required to construct the OpenCode leaf provider. */
 export interface OpenCodeProviderDependencies {
   readonly processes: ProcessRunner
+  readonly tempResources: TempResourceOperations
   readonly tempDirectory?: string
   readonly executablePath?: string
   readonly createClient?: (baseUrl: string) => OpencodeClient
@@ -237,7 +238,11 @@ const executeWalkthrough = (
     yield* requirePolicy("walkthrough", request.policy, OPENCODE_WALKTHROUGH_POLICY)
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        const promptPath = yield* writePromptFile(dependencies.tempDirectory, request.prompt)
+        const promptPath = yield* writePromptFile(
+          dependencies.tempResources,
+          dependencies.tempDirectory,
+          request.prompt,
+        )
         const executablePath = yield* resolveRuntimeExecutable(dependencies, "walkthrough")
         return yield* dependencies.processes
           .run(
@@ -275,12 +280,18 @@ const makeWalkthroughArgs = (request: WalkthroughRequest, promptPath: string) =>
   walkthroughMessage,
 ]
 
-const writePromptFile = (directory: string | undefined, prompt: string) =>
-  makeTempFileScoped(prompt, {
-    ...(directory === undefined ? {} : { parentDirectory: directory }),
-    prefix: "opencode-prompt-",
-    fileName: "prompt.txt",
-  }).pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
+const writePromptFile = (
+  tempResources: TempResourceOperations,
+  directory: string | undefined,
+  prompt: string,
+) =>
+  tempResources
+    .makeTempFileScoped(prompt, {
+      ...(directory === undefined ? {} : { parentDirectory: directory }),
+      prefix: "opencode-prompt-",
+      fileName: "prompt.txt",
+    })
+    .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
 
 const executeReview = (
   dependencies: OpenCodeProviderDependencies,

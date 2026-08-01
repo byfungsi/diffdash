@@ -15,6 +15,7 @@ import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { ProcessService, processRequest } from "@diffdash/process"
+import { TempResources } from "@diffdash/process/temp-resource"
 import { ReviewAgentRouting, ReviewAgentService } from "@diffdash/review-agent"
 import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
 import { AgentArtifactNormalizer } from "@diffdash/review-agent/artifact-normalizer"
@@ -22,7 +23,10 @@ import { ReviewContextBuilder } from "@diffdash/review-agent/context-builder"
 import { DiffDashMcpServer } from "@diffdash/review-agent/mcp-server"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { AppState } from "@diffdash/settings/app-state"
+import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
 import { Effect, Layer } from "effect"
 import { app } from "electron"
 import { AgentProviders } from "../../src/main/services/agent-providers"
@@ -67,7 +71,10 @@ export const createAppLayer = () => {
     remoteWorktreePoolPath,
     worktreePoolPath,
   })
-  const settingsLayer = AppSettings.layer(settingsPath)
+  const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+  const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
+  const tempResourcesLayer = TempResources.layer.pipe(Layer.provide(platformLayer))
+  const settingsLayer = AppSettings.layer(settingsPath).pipe(Layer.provide(fileStorageLayer))
   const processLayer = ProcessService.layer
   const gitProviderRegistryLayer = Layer.effect(
     GitProviderRegistry,
@@ -106,14 +113,16 @@ export const createAppLayer = () => {
     }),
   )
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
-  const appStateLayer = AppState.layer(statePath)
+  const appStateLayer = AppState.layer(statePath).pipe(Layer.provide(fileStorageLayer))
   const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
       const processes = yield* ProcessService
+      const tempResources = yield* TempResources
       const { registrations, policies } = createAgentProviderComposition({
         processes,
+        tempResources,
         tempDirectory: agentWorkingDirectory,
         includeFixture: process.env.DIFFDASH_E2E_FAKE_AGENT_PROVIDER === "1",
       })
@@ -121,7 +130,7 @@ export const createAppLayer = () => {
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
       )
     }),
-  )
+  ).pipe(Layer.provide(tempResourcesLayer))
   const walkthroughRoutingLayer = Layer.effect(
     WalkthroughRouting,
     Effect.gen(function* () {

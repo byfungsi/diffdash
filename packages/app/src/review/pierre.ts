@@ -1,6 +1,8 @@
 export {
   type DiffLineAnnotation,
+  type FileDiffMetadata,
   type FileDiffOptions,
+  getSingularPatch,
   type PostRenderPhase,
   type SelectionSide,
   Virtualizer as DiffVirtualizer,
@@ -8,6 +10,7 @@ export {
   type VirtualFileMetrics,
 } from "@pierre/diffs"
 export {
+  FileDiff,
   PatchDiff,
   type WorkerInitializationRenderOptions,
   WorkerPoolContextProvider,

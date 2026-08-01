@@ -43,6 +43,7 @@ import {
 } from "@diffdash/domain/review-identity"
 import {
   MarkdownBody,
+  type ReviewThreadAnchor,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
@@ -389,6 +390,60 @@ const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>) 
   })
 }
 
+const makeReviewThreadDetails = ({
+  anchor,
+  id,
+  status = "active",
+}: {
+  readonly anchor: ReviewThreadAnchor
+  readonly id: string
+  readonly status?: "active" | "outdated" | "unresolved_anchor"
+}) => {
+  const threadId = ReviewThreadId.make(id)
+  const createdAt = "2026-07-23T09:00:00Z"
+  return ReviewThreadDetails.make({
+    thread: ReviewThread.make({
+      id: threadId,
+      repoId: repo.id,
+      reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
+      prNumber: pullRequest.locator.number,
+      baseRevision: ReviewRevision.make("base-thread-summary"),
+      headRevision: ReviewRevision.make("head-thread-summary"),
+      currentBaseRevision: ReviewRevision.make("base-thread-summary"),
+      currentHeadRevision: ReviewRevision.make("head-thread-summary"),
+      originalAnchor: anchor,
+      currentAnchor: status === "active" ? anchor : null,
+      anchorStatus: status,
+      createdAt,
+      updatedAt: createdAt,
+    }),
+    messages: [
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(`${id}-user`),
+        threadId,
+        sequence: 1,
+        author: "user",
+        bodyMarkdown: MarkdownBody.make(`Question for ${anchor.filePath}`),
+        status: "complete",
+        agentRunId: null,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(`${id}-agent`),
+        threadId,
+        sequence: 2,
+        author: "agent",
+        bodyMarkdown: MarkdownBody.make(`Response for ${anchor.filePath}`),
+        status: "complete",
+        agentRunId: `${id}-run`,
+        createdAt,
+        updatedAt: createdAt,
+      }),
+    ],
+  })
+}
+
 const makeManyFileDiffFixture = () => {
   const number = 58
   const targetIndex = 12
@@ -625,9 +680,9 @@ const readyPrerequisites = AppPrerequisites.make({
 const readyAgentProviderCatalog = AgentProviderCatalog.make({
   providers: (
     [
-      ["codex", "Codex", "gpt-5.3-codex-spark", "GPT 5.3 Codex Spark"],
-      ["claude", "Claude", "claude-sonnet-5", "Sonnet 5.0"],
-      ["opencode", "OpenCode", "openai/gpt-5.3-codex-spark", "GPT 5.3 Codex Spark"],
+      ["codex", "Codex", "gpt-5.6-terra", "GPT 5.6 Terra"],
+      ["claude", "Claude", "claude-sonnet-5", "Sonnet 5"],
+      ["opencode", "OpenCode", "openai/gpt-5.6-terra", "GPT 5.6 Terra"],
     ] as const
   ).map(([id, displayName, model, modelName]) =>
     AgentProviderStatus.make({
@@ -725,6 +780,7 @@ type AppBrowserScenario = () => void | Promise<void>
 
 type AppBrowserScenarioId =
   | "agentMenusKeyboard"
+  | "appStateRecovery"
   | "appearance"
   | "cliBranchComparison"
   | "cliBranchNoAncestor"
@@ -734,6 +790,7 @@ type AppBrowserScenarioId =
   | "cliPullRequestFailure"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
+  | "diffSearchImmutableAnchor"
   | "diffSearchViewportAnchor"
   | "diffSearchVisibility"
   | "dismissRepositoryBanner"
@@ -754,6 +811,7 @@ type AppBrowserScenarioId =
   | "remoteRepositorySearch"
   | "repositoryInvalidation"
   | "repositorySearchFailure"
+  | "reviewThreadSummary"
   | "sampledWalkthrough"
   | "shortcutReferenceHome"
   | "shortcutReferenceReview"
@@ -853,6 +911,36 @@ scenario("firstRunOnboarding", async () => {
     expect(calls.captureAnalytics).toHaveBeenCalledWith({ event: "onboarding_completed" })
     expect(document.body.textContent).toContain("Bookmarked Repos")
   })
+})
+
+scenario("appStateRecovery", async () => {
+  let attempt = 0
+  const calls = installDiffDashApi({
+    getAppState: async () => {
+      attempt += 1
+      if (attempt === 1) throw new Error("Application runtime unavailable")
+      return { onboardingCompleted: true }
+    },
+  })
+  renderApp()
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("DiffDash could not load application state")
+    expect(document.body.textContent).toContain("Application runtime unavailable")
+    expect(document.body.textContent).not.toContain("Set up DiffDash")
+  })
+
+  const retryButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Retry",
+  )
+  expect(retryButton).toBeDefined()
+  retryButton?.click()
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).not.toContain("Set up DiffDash")
+  })
+  expect(calls.getAppState).toHaveBeenCalledTimes(2)
 })
 
 scenario("cliPathSetup", async () => {
@@ -1619,12 +1707,20 @@ scenario("fileTreeSelection", async () => {
   await new Promise<void>((resolve) =>
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
   )
-  await vi.waitFor(() => expect(getSelectedChangedFileTreeItems()).toHaveLength(0))
+  await vi.waitFor(() => {
+    expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
+    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
+      "docs/readme.md",
+    )
+  })
 
   diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 120 }))
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
-  expect(getSelectedChangedFileTreeItems()).toHaveLength(0)
+  expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
+  expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
+    "docs/readme.md",
+  )
 })
 
 scenario("longReviewPaths", async () => {
@@ -1878,6 +1974,11 @@ scenario("longThreadVirtualization", async () => {
   expect(history.getBoundingClientRect().height).toBeLessThanOrEqual(
     Math.min(28 * 16, window.innerHeight * 0.5) + 1,
   )
+  expect(history.getAttribute("role")).toBe("log")
+  expect(history.getAttribute("aria-label")).toContain("conversation history")
+  await vi.waitFor(() => {
+    expect(history.scrollHeight - history.clientHeight - history.scrollTop).toBeLessThanOrEqual(1)
+  })
   expect(chatBox.getBoundingClientRect().height).toBeGreaterThan(
     history.getBoundingClientRect().height,
   )
@@ -1915,6 +2016,126 @@ scenario("longThreadVirtualization", async () => {
     { timeout: 10_000 },
   )
   expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+})
+
+scenario("reviewThreadSummary", async () => {
+  const paths = ["src/app.tsx", "docs/readme.md", "src/extra.ts", "pnpm-lock.yaml"] as const
+  const summaryDiffText = paths
+    .map(
+      (path) => `diff --git a/${path} b/${path}
+--- a/${path}
++++ b/${path}
+@@ -1 +1 @@
+-old ${path}
++new ${path}`,
+    )
+    .join("\n")
+  const parsed = parseUnifiedDiff(summaryDiffText)
+  const docsFile = parsed.files.find((file) => file.path === "docs/readme.md")
+  const lockFile = parsed.files.find((file) => file.path === "pnpm-lock.yaml")
+  const appFile = parsed.files.find((file) => file.path === "src/app.tsx")
+  const docsAnchor = docsFile === undefined ? null : lineReviewAnchor(docsFile, "additions", 1)
+  const lockAnchor = lockFile === undefined ? null : lineReviewAnchor(lockFile, "additions", 1)
+  const appAnchor = appFile === undefined ? null : lineReviewAnchor(appFile, "additions", 1)
+  if (docsAnchor === null || lockAnchor === null || appAnchor === null) {
+    throw new Error("Expected summary review anchors")
+  }
+  const reviewThreadDetails = [
+    makeReviewThreadDetails({ anchor: docsAnchor, id: "thread-summary-docs" }),
+    makeReviewThreadDetails({ anchor: lockAnchor, id: "thread-summary-lock" }),
+    makeReviewThreadDetails({
+      anchor: appAnchor,
+      id: "thread-summary-outdated",
+      status: "outdated",
+    }),
+  ]
+  const calls = installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      files: parsed.files.map((file) =>
+        ChangedFile.make({
+          additions: file.additions,
+          changeType: file.status,
+          deletions: file.deletions,
+          path: file.path,
+        }),
+      ),
+    }),
+    pullRequestDiff: HostedReviewDiff.make({ ...diff, diff: summaryDiffText }),
+    reviewThreadDetails,
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label*="Open requested review #51"]')
+    ?.click()
+  const summary = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>('[aria-label="Review threads"]')
+    expect(element?.textContent).toContain("3 review threads")
+    return element!
+  })
+  const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  expect(filterInput).not.toBeNull()
+  if (filterInput === null) return
+  setInputValue(filterInput, "app")
+  filterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(() => expect(getDiffCardPaths()).toEqual(["src/app.tsx"]))
+
+  const lockThreadButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.includes("pnpm-lock.yaml") ?? false,
+  )
+  expect(lockThreadButton).not.toBeUndefined()
+  lockThreadButton?.click()
+  await vi.waitFor(
+    () => {
+      expect(filterInput.value).toBe("")
+      expect(getDiffCardPaths()).toContain("pnpm-lock.yaml")
+      expect(document.querySelector('[data-review-thread-id="thread-summary-lock"]')).not.toBeNull()
+      expect(
+        document.querySelector('[data-diff-card-path="pnpm-lock.yaml"] [data-diff-card-body]'),
+      ).not.toBeNull()
+    },
+    { timeout: 10_000 },
+  )
+  expect(
+    calls.getReviewSnapshotPage.mock.calls.some(([request]) =>
+      request.fileIds.includes(lockAnchor.fileId),
+    ),
+  ).toBe(true)
+
+  const docsViewed = getViewedCheckbox("docs/readme.md")
+  expect(docsViewed).not.toBeNull()
+  docsViewed?.click()
+  await vi.waitFor(() => expect(getDiffShadowRoot("docs/readme.md")).toBeNull())
+  setInputValue(filterInput, "app")
+  filterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  const docsThreadButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.includes("docs/readme.md") ?? false,
+  )
+  expect(docsThreadButton).not.toBeUndefined()
+  docsThreadButton?.click()
+  await vi.waitFor(
+    () => {
+      expect(filterInput.value).toBe("")
+      expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
+      expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
+      expect(document.querySelector('[data-review-thread-id="thread-summary-docs"]')).not.toBeNull()
+    },
+    { timeout: 10_000 },
+  )
+
+  const outdatedButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.includes("Outdated") ?? false,
+  )
+  expect(outdatedButton).not.toBeUndefined()
+  outdatedButton?.click()
+  await vi.waitFor(() => {
+    expect(
+      summary.querySelector('[data-review-thread-id="thread-summary-outdated"]'),
+    ).not.toBeNull()
+    expect(summary.textContent).toContain("Response for src/app.tsx")
+  })
 })
 
 scenario("wrappedFileBuffers", async () => {
@@ -2144,6 +2365,127 @@ scenario("diffSearchViewportAnchor", async () => {
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("3 / 4")
     expect(getDiffShadowRoot("src/app.tsx")?.contains(getActiveHighlightLine())).toBe(true)
   })
+})
+
+scenario("diffSearchImmutableAnchor", async () => {
+  const appMatches = Array.from({ length: 205 }, (_, index) => `+needle result ${index + 1}`).join(
+    "\n",
+  )
+  const searchDiffText = `diff --git a/src/app.tsx b/src/app.tsx
+--- a/src/app.tsx
++++ b/src/app.tsx
+@@ -1 +1,205 @@
+-old app
+${appMatches}
+diff --git a/docs/readme.md b/docs/readme.md
+--- a/docs/readme.md
++++ b/docs/readme.md
+@@ -1 +1 @@
+-old docs
++needle docs result`
+  const parsed = parseUnifiedDiff(searchDiffText)
+  const calls = installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      ...detail,
+      files: parsed.files.map((file) =>
+        ChangedFile.make({
+          additions: file.additions,
+          changeType: file.status,
+          deletions: file.deletions,
+          path: file.path,
+        }),
+      ),
+    }),
+    pullRequestDiff: HostedReviewDiff.make({ ...diff, diff: searchDiffText }),
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label*="Open requested review #51"]')
+    ?.click()
+  const docsTreeItem = await vi.waitFor(() => {
+    const item = getChangedFilesTreeItem("docs/readme.md")
+    expect(item).not.toBeNull()
+    return item!
+  })
+  docsTreeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(() => {
+    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
+      "docs/readme.md",
+    )
+    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const sticky = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+    const card = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
+    expect(pane).not.toBeNull()
+    expect(sticky).not.toBeNull()
+    expect(card).not.toBeNull()
+    if (pane === null || sticky === null || card === null) return
+    const visibleTop = pane.getBoundingClientRect().top + sticky.offsetHeight
+    expect(card.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
+    expect(card.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
+  })
+
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
+    expect(input).not.toBeNull()
+    return input!
+  })
+  setInputValue(searchInput, "needle")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 206")
+    expect(getDiffShadowRoot("docs/readme.md")?.contains(getActiveHighlightLine())).toBe(true)
+  })
+  const firstRequest = calls.searchReviewSnapshot.mock.calls[0]?.[0]
+  expect(firstRequest?.anchor?.fileId).toBe(parsed.files[1]?.fileId)
+
+  const appTreeItem = getChangedFilesTreeItem("src/app.tsx")
+  expect(appTreeItem).not.toBeNull()
+  appTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(() => {
+    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe("src/app.tsx")
+    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const sticky = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+    const card = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+    expect(pane).not.toBeNull()
+    expect(sticky).not.toBeNull()
+    expect(card).not.toBeNull()
+    if (pane === null || sticky === null || card === null) return
+    const visibleTop = pane.getBoundingClientRect().top + sticky.offsetHeight
+    expect(card.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
+    expect(card.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
+  })
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  await vi.waitFor(() => {
+    expect(document.activeElement).toBe(searchInput)
+    expect(searchInput.value).toBe("needle")
+  })
+
+  searchInput.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      shiftKey: true,
+    }),
+  )
+  await vi.waitFor(
+    () => {
+      expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain(
+        "206 / 206",
+      )
+      expect(calls.searchReviewSnapshot).toHaveBeenCalledTimes(2)
+    },
+    { timeout: 10_000 },
+  )
+  expect(
+    calls.searchReviewSnapshot.mock.calls.every(
+      ([request]) => request.anchor?.fileId === parsed.files[1]?.fileId,
+    ),
+  ).toBe(true)
+  expect(calls.searchReviewSnapshot.mock.calls[1]?.[0].cursor).not.toBeNull()
 })
 
 scenario("diffSearchVisibility", async () => {
@@ -2670,13 +3012,19 @@ scenario("viewedAcrossPushes", async () => {
   calls.getPullRequestDiff.mockResolvedValue(
     HostedReviewDiff.make({
       ...diff,
-      diff: diff.diff.replace("+new", "+new behavior"),
+      diff: diff.diff.replace(
+        "@@ -1,1 +1,1 @@\n-old\n+new",
+        "@@ -1,1 +1,1 @@\n-old\n+new behavior\n@@ -20,1 +20,2 @@\n context line\n+new distant line",
+      ),
       headRevision: thirdHead,
     }),
   )
   await reloadReviewDiff()
   await vi.waitFor(() => {
     expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(false)
+    const renderedText = getDiffShadowRoot("src/app.tsx")?.textContent ?? ""
+    expect(renderedText).toContain("new distant line")
+    expect(renderedText).not.toContain("deletionLine and additionLine are null")
   })
 })
 
@@ -3042,6 +3390,9 @@ scenario("homeToReview", async () => {
     expect(approvedButton?.disabled).toBe(true)
   })
 
+  getViewedCheckbox("src/app.tsx")?.click()
+  await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(false))
+
   const walkthroughTab = [
     ...document.querySelectorAll<HTMLButtonElement>(
       'input[placeholder="Filter files"] + div button',
@@ -3170,7 +3521,7 @@ scenario("homeToReview", async () => {
         routes: expect.objectContaining({ walkthrough: "claude" }),
       }),
     )
-    expect(document.body.textContent).toContain("Sonnet 5.0")
+    expect(document.body.textContent).toContain("Sonnet 5")
   })
 
   const reviewClaudeButton = [
@@ -3209,6 +3560,27 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).toContain("SUPPORT")
     expect(fileFilterInput?.value).toBe("")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
+  })
+
+  const walkthroughDiffCard = document.querySelector<HTMLElement>(
+    '[data-diff-card-path="docs/readme.md"]',
+  )
+  const walkthroughViewedCheckbox =
+    walkthroughDiffCard?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+  expect(walkthroughViewedCheckbox).not.toBeNull()
+  expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).not.toBeNull()
+  walkthroughViewedCheckbox?.click()
+
+  await vi.waitFor(() => {
+    expect(walkthroughViewedCheckbox?.checked).toBe(true)
+    expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).toBeNull()
+    expect(document.body.textContent).toContain("Mark complete")
+  })
+
+  walkthroughViewedCheckbox?.click()
+  await vi.waitFor(() => {
+    expect(walkthroughViewedCheckbox?.checked).toBe(false)
+    expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).not.toBeNull()
   })
 
   const markCompleteButton = [...document.querySelectorAll("button")].find(
@@ -3550,6 +3922,16 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
   setter?.call(input, value)
 }
 
+const stableBrowserCursorHash = (parts: readonly string[]) => {
+  const value = parts.join("\u0000")
+  let hash = 2_166_136_261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16_777_619)
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0")
+}
+
 const installDiffDashApi = (
   options: {
     readonly appState?: AppState
@@ -3557,6 +3939,7 @@ const installDiffDashApi = (
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
     readonly expireFirstSnapshotPage?: boolean
+    readonly getAppState?: DiffDashApi["appState"]["get"]
     readonly pullRequestDetail?: HostedReviewDetail
     readonly pullRequestDiff?: HostedReviewDiff
     readonly providers?: readonly GitProviderDescriptor[]
@@ -3633,6 +4016,9 @@ const installDiffDashApi = (
     ),
     getWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["get"]>(
       async () => options.walkthrough ?? walkthrough,
+    ),
+    getAppState: vi.fn<DiffDashApi["appState"]["get"]>(
+      options.getAppState ?? (async () => appState),
     ),
     regenerateWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["generate"]>(
       async () => options.walkthrough ?? walkthrough,
@@ -3804,6 +4190,12 @@ const installDiffDashApi = (
       searchAnchor === null
         ? -1
         : snapshot.parsedDiff.files.findIndex((file) => file.fileId === searchAnchor.fileId)
+    if (searchAnchor !== null && anchorFileIndex < 0) {
+      return ReviewSnapshotExpired.make({
+        snapshotId: request.snapshotId,
+        reason: "mismatched",
+      })
+    }
     const anchoredIndex =
       searchAnchor === null
         ? 0
@@ -3820,9 +4212,20 @@ const installDiffDashApi = (
             ...unanchoredOccurrences.slice(0, anchoredIndex),
           ]
         : unanchoredOccurrences
-    const offset =
-      request.cursor === null ? 0 : Number(/^search:v1:([0-9]+):/.exec(request.cursor)?.[1])
+    const cursorHash = stableBrowserCursorHash([
+      request.query,
+      searchAnchor === null ? "" : `file:${searchAnchor.fileId}`,
+    ])
+    const cursorMatch =
+      request.cursor === null ? null : /^search:v1:([0-9]+):([0-9a-f]{8})$/.exec(request.cursor)
+    const offset = request.cursor === null ? 0 : Number(cursorMatch?.[1])
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > occurrences.length) {
+      return ReviewSnapshotExpired.make({
+        snapshotId: request.snapshotId,
+        reason: "mismatched",
+      })
+    }
+    if (request.cursor !== null && cursorMatch?.[2] !== cursorHash) {
       return ReviewSnapshotExpired.make({
         snapshotId: request.snapshotId,
         reason: "mismatched",
@@ -3857,7 +4260,7 @@ const installDiffDashApi = (
       totalMatches: occurrences.length,
       nextCursor:
         end < occurrences.length
-          ? ReviewSnapshotSearchCursor.make(`search:v1:${end}:00000000`)
+          ? ReviewSnapshotSearchCursor.make(`search:v1:${end}:${cursorHash}`)
           : null,
     })
   })
@@ -3953,7 +4356,7 @@ const installDiffDashApi = (
       update: calls.updateSettings,
     },
     appState: {
-      get: async () => appState,
+      get: calls.getAppState,
       update: calls.updateAppState,
     },
     viewedFiles: {

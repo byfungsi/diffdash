@@ -3,7 +3,11 @@ import { AISettings } from "@diffdash/domain/ai-settings"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "@diffdash/domain/diff-file-filters"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
-import type { ReviewThreadAnchor } from "@diffdash/domain/review-thread"
+import type {
+  ReviewThreadAnchor,
+  ReviewThreadDetails,
+  ReviewThreadId,
+} from "@diffdash/domain/review-thread"
 import {
   buildWalkthroughHunkDigest,
   focusFilesForWalkthroughHunks,
@@ -56,7 +60,7 @@ import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
-import { useReviewThreads } from "@/threads/review-threads"
+import { ReviewThreadSummary, useReviewThreads } from "@/threads/review-threads"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import {
   WalkthroughMainHeader,
@@ -96,7 +100,11 @@ import {
   reviewSubjectWalkthroughScope,
   reviewThreadScope,
 } from "./review-subject"
-import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
+import {
+  reviewThreadAnnotationContentId,
+  type ReviewThreadAnnotation,
+  sameReviewThreadLine,
+} from "./thread-annotations"
 import { useReviewSnapshotPages } from "./use-review-snapshot-pages"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
@@ -245,6 +253,12 @@ type ReviewDiffRegistration = {
   readonly phase: PostRenderPhase
 }
 
+type ReviewSearchRequestGeneration = {
+  readonly anchor: ReviewSnapshotSearchFileAnchor | null
+  readonly query: string
+  readonly requestId: number
+}
+
 /** Source-neutral review detail composition with its coupled ephemeral interaction state. */
 export const ReviewDetailView = ({
   environment,
@@ -293,6 +307,8 @@ export const ReviewDetailView = ({
   } | null>(null)
   const pendingFileNavigationFrameRef = useRef<number | null>(null)
   const pendingFileNavigationTokenRef = useRef<symbol | null>(null)
+  const pendingThreadNavigationFrameRef = useRef<number | null>(null)
+  const pendingThreadNavigationIdRef = useRef<ReviewThreadId | null>(null)
   const pendingSearchNavigationFrameRef = useRef<number | null>(null)
   const pendingSearchNavigationIdRef = useRef<string | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
@@ -328,6 +344,7 @@ export const ReviewDetailView = ({
   const [repositoryLinking, setRepositoryLinking] = useState(false)
   const [repositoryLinkError, setRepositoryLinkError] = useState<string | null>(null)
   const reviewSearchRequestRef = useRef(0)
+  const reviewSearchGenerationRef = useRef<ReviewSearchRequestGeneration | null>(null)
   const reviewSearchNavigationRef = useRef(0)
   const reviewSearchTargetIndexRef = useRef(0)
   const activeReviewSearchIndexRef = useRef(0)
@@ -356,6 +373,9 @@ export const ReviewDetailView = ({
       }
       if (pendingSearchNavigationFrameRef.current !== null) {
         window.cancelAnimationFrame(pendingSearchNavigationFrameRef.current)
+      }
+      if (pendingThreadNavigationFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
       }
       reviewDiffRegistrationsRef.current.clear()
     },
@@ -432,7 +452,9 @@ export const ReviewDetailView = ({
     treeNavigationPath !== null &&
     filteredChangedFiles.some((file) => file.path === treeNavigationPath)
       ? treeNavigationPath
-      : null
+      : selectedPath !== null && filteredChangedFiles.some((file) => file.path === selectedPath)
+        ? selectedPath
+        : null
   const totalAdditions = changedFiles.reduce((total, file) => total + file.additions, 0)
   const totalDeletions = changedFiles.reduce((total, file) => total + file.deletions, 0)
   const activeStoredWalkthrough =
@@ -479,6 +501,16 @@ export const ReviewDetailView = ({
     activeStepFiles.length > 0 &&
     activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
   const reviewDiffOptions = reviewDiffOptionsForTheme(theme)
+  const navigableThreadIds = new Set<ReviewThreadId>(
+    reviewThreads.details.flatMap((details) => {
+      const anchor = details.thread.currentAnchor
+      return anchor !== null &&
+        details.thread.anchorStatus === "active" &&
+        changedFiles.some((file) => file.fileId === anchor.fileId && file.path === anchor.filePath)
+        ? [details.thread.id]
+        : []
+    }),
+  )
   const {
     handleDiffRendered: handleViewedDiffRendered,
     setFileViewed: setViewedPreservingViewport,
@@ -513,7 +545,7 @@ export const ReviewDetailView = ({
     async (
       cursor: ReviewSnapshotSearchCursor | null,
       startIndex: number,
-      requestId: number,
+      generation: ReviewSearchRequestGeneration,
       clearOnFailure = false,
     ): Promise<ReviewSearchPage | null> => {
       const cached = reviewSearchPageCache.get(cursor)
@@ -523,16 +555,17 @@ export const ReviewDetailView = ({
           await window.diffDash.reviewSnapshots.search(
             ReviewSnapshotSearchRequest.make({
               snapshotId: manifest.snapshotId,
-              query: reviewSearchQuery,
+              query: generation.query,
               cursor,
               limit: 200,
-              anchor: reviewSearchAnchorRef.current,
+              anchor: generation.anchor,
             }),
           ),
         )
-        if (requestId !== reviewSearchRequestRef.current) return null
+        if (generation.requestId !== reviewSearchRequestRef.current) return null
         if (response["_tag"] === "expired") {
           reviewSearchRequestRef.current += 1
+          reviewSearchGenerationRef.current = null
           reviewSearchPageCache.clear()
           setReviewSearchOccurrences([])
           setReviewSearchTotalMatches(0)
@@ -553,7 +586,7 @@ export const ReviewDetailView = ({
         setReviewSearchTotalMatches(response.totalMatches)
         return page
       } catch {
-        if (requestId === reviewSearchRequestRef.current && clearOnFailure) {
+        if (generation.requestId === reviewSearchRequestRef.current && clearOnFailure) {
           reviewSearchPageCache.clear()
           setReviewSearchOccurrences([])
           setReviewSearchTotalMatches(0)
@@ -563,12 +596,16 @@ export const ReviewDetailView = ({
     },
   )
   const activateReviewSearchIndex = useStableCallback(
-    async (targetIndex: number, requestId: number, navigationId: number) => {
+    async (
+      targetIndex: number,
+      generation: ReviewSearchRequestGeneration,
+      navigationId: number,
+    ) => {
       const cached = reviewSearchPageCache.find(targetIndex)
       if (cached !== null) {
         reviewSearchPageCache.get(cached.page.cursor)
         if (
-          requestId === reviewSearchRequestRef.current &&
+          generation.requestId === reviewSearchRequestRef.current &&
           navigationId === reviewSearchNavigationRef.current
         ) {
           activeReviewSearchIndexRef.current = targetIndex
@@ -580,9 +617,9 @@ export const ReviewDetailView = ({
 
       let cursor: ReviewSnapshotSearchCursor | null = null
       let startIndex = 0
-      while (requestId === reviewSearchRequestRef.current) {
+      while (generation.requestId === reviewSearchRequestRef.current) {
         // oxlint-disable-next-line eslint/no-await-in-loop -- Opaque cursors require replaying pages in order after eviction.
-        const page = await requestReviewSearchPage(cursor, startIndex, requestId)
+        const page = await requestReviewSearchPage(cursor, startIndex, generation)
         if (page === null) return false
         const pageEnd = page.startIndex + page.response.matches.length
         if (targetIndex >= page.startIndex && targetIndex < pageEnd) {
@@ -601,6 +638,12 @@ export const ReviewDetailView = ({
   useEffect(() => {
     const requestId = reviewSearchRequestRef.current + 1
     reviewSearchRequestRef.current = requestId
+    const generation = {
+      anchor: reviewSearchAnchorRef.current,
+      query: reviewSearchQuery,
+      requestId,
+    } satisfies ReviewSearchRequestGeneration
+    reviewSearchGenerationRef.current = generation
     reviewSearchNavigationRef.current += 1
     reviewSearchTargetIndexRef.current = 0
     activeReviewSearchIndexRef.current = 0
@@ -609,9 +652,10 @@ export const ReviewDetailView = ({
     setReviewSearchOccurrences([])
     setReviewSearchTotalMatches(0)
     if (!reviewSearchOpen || reviewSearchQuery.length === 0) {
+      reviewSearchGenerationRef.current = null
       return
     }
-    void requestReviewSearchPage(null, 0, requestId, true)
+    void requestReviewSearchPage(null, 0, generation, true)
   }, [
     manifest,
     requestReviewSearchPage,
@@ -621,13 +665,14 @@ export const ReviewDetailView = ({
   ])
   const moveReviewSearch = useStableCallback((direction: -1 | 1) => {
     if (reviewSearchTotalMatches === 0) return
+    const generation = reviewSearchGenerationRef.current
+    if (generation === null || generation.requestId !== reviewSearchRequestRef.current) return
     const current = reviewSearchTargetIndexRef.current % reviewSearchTotalMatches
     const targetIndex = (current + direction + reviewSearchTotalMatches) % reviewSearchTotalMatches
-    const requestId = reviewSearchRequestRef.current
     const navigationId = reviewSearchNavigationRef.current + 1
     reviewSearchNavigationRef.current = navigationId
     reviewSearchTargetIndexRef.current = targetIndex
-    void activateReviewSearchIndex(targetIndex, requestId, navigationId).then((activated) => {
+    void activateReviewSearchIndex(targetIndex, generation, navigationId).then((activated) => {
       if (!activated && navigationId === reviewSearchNavigationRef.current) {
         reviewSearchTargetIndexRef.current = activeReviewSearchIndexRef.current
       }
@@ -655,6 +700,10 @@ export const ReviewDetailView = ({
     })
   })
   const openReviewSearch = useStableCallback(() => {
+    if (reviewSearchOpen) {
+      focusReviewSearch()
+      return
+    }
     if (!reviewSearchOpen && document.activeElement instanceof HTMLElement) {
       previousReviewSearchFocusRef.current = document.activeElement
     }
@@ -671,6 +720,7 @@ export const ReviewDetailView = ({
   })
   const closeReviewSearch = useStableCallback(() => {
     setReviewSearchOpen(false)
+    reviewSearchGenerationRef.current = null
     pendingSearchNavigationIdRef.current = null
     if (pendingSearchNavigationFrameRef.current !== null) {
       window.cancelAnimationFrame(pendingSearchNavigationFrameRef.current)
@@ -708,6 +758,11 @@ export const ReviewDetailView = ({
     if (pendingFileNavigationFrameRef.current !== null) {
       window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
       pendingFileNavigationFrameRef.current = null
+    }
+    pendingThreadNavigationIdRef.current = null
+    if (pendingThreadNavigationFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
+      pendingThreadNavigationFrameRef.current = null
     }
     setTreeNavigationPath(null)
   })
@@ -771,6 +826,79 @@ export const ReviewDetailView = ({
 
     pendingFileNavigationFrameRef.current = window.requestAnimationFrame(navigate)
   })
+  const scheduleThreadNavigation = useStableCallback(
+    (threadId: ReviewThreadId, anchor: ReviewThreadAnchor, reviewKey: string) => {
+      pendingThreadNavigationIdRef.current = threadId
+      if (pendingThreadNavigationFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
+      }
+
+      let attempts = 0
+      let requestedGeneration: number | null = null
+      const navigate = () => {
+        pendingThreadNavigationFrameRef.current = null
+        if (pendingThreadNavigationIdRef.current !== threadId) return
+
+        const container = diffScrollContainerRef.current
+        const card = document.getElementById(diffCardDomId(reviewKey))
+        const registration = reviewDiffRegistrationsRef.current.get(reviewKey)
+        const stickyHeight = stickyReviewChromeRef.current?.offsetHeight ?? 0
+        if (container !== null && card !== null && registration !== undefined) {
+          const linePosition = registration.instance.getLinePosition(
+            anchor.lineNumber,
+            anchor.side === "old" ? "deletions" : "additions",
+          )
+          if (linePosition !== undefined) {
+            const viewportHeight = Math.max(1, container.clientHeight - stickyHeight)
+            const targetOffset =
+              diffVirtualizer.getOffsetInScrollContainer(registration.host) +
+              linePosition.top -
+              stickyHeight
+            const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+            container.scrollTop = Math.min(
+              Math.max(0, targetOffset - (viewportHeight - linePosition.height) / 2),
+              maxScrollTop,
+            )
+            container.dispatchEvent(new Event("scroll"))
+          } else {
+            alignDiffCardInPane(container, card, stickyHeight)
+          }
+
+          if (requestedGeneration === null || registration.generation > requestedGeneration) {
+            requestedGeneration = requestReviewDiffReconciliation(reviewKey)
+          }
+
+          const conversation = document.getElementById(reviewThreadAnnotationContentId(anchor))
+          const threadPanel = [
+            ...document.querySelectorAll<HTMLElement>("[data-review-thread-id]"),
+          ].find((panel) => panel.dataset.reviewThreadId === threadId)
+          const target = threadPanel ?? conversation
+          if (target !== null) {
+            const containerRect = container.getBoundingClientRect()
+            const targetRect = target.getBoundingClientRect()
+            const visibleTop = containerRect.top + stickyHeight
+            const maxTargetScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+            container.scrollTop = Math.min(
+              Math.max(0, container.scrollTop + targetRect.top - visibleTop - 8),
+              maxTargetScrollTop,
+            )
+            container.dispatchEvent(new Event("scroll"))
+            pendingThreadNavigationIdRef.current = null
+            return
+          }
+        }
+
+        attempts += 1
+        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
+          pendingThreadNavigationFrameRef.current = window.requestAnimationFrame(navigate)
+        } else {
+          pendingThreadNavigationIdRef.current = null
+        }
+      }
+
+      pendingThreadNavigationFrameRef.current = window.requestAnimationFrame(navigate)
+    },
+  )
   const scheduleSearchNavigation = useStableCallback((occurrence: ReviewSearchOccurrence) => {
     pendingSearchNavigationIdRef.current = occurrence.id
     if (pendingSearchNavigationFrameRef.current !== null) {
@@ -940,6 +1068,11 @@ export const ReviewDetailView = ({
       window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
       pendingFileNavigationFrameRef.current = null
     }
+    pendingThreadNavigationIdRef.current = null
+    if (pendingThreadNavigationFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
+      pendingThreadNavigationFrameRef.current = null
+    }
     setTreeNavigationPath(null)
     setSidebarTab("tree")
     setWalkthroughState({ status: "idle" })
@@ -951,6 +1084,7 @@ export const ReviewDetailView = ({
     setActionPaletteOpen(false)
     setReviewSearchOpen(false)
     reviewSearchAnchorRef.current = null
+    reviewSearchGenerationRef.current = null
     setReviewSearchQuery("")
     reviewSearchPageCache.clear()
     setReviewSearchOccurrences([])
@@ -1182,6 +1316,26 @@ export const ReviewDetailView = ({
     setFileFilter("")
     if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
     selectPathAndScroll(file.path, file.reviewKey)
+  }
+  const selectReviewThread = (details: ReviewThreadDetails) => {
+    const anchor = details.thread.currentAnchor
+    if (anchor === null || details.thread.anchorStatus !== "active") return
+    const file = changedFiles.find(
+      (candidate) => candidate.fileId === anchor.fileId && candidate.path === anchor.filePath,
+    )
+    if (file === undefined) return
+
+    cancelFileNavigation()
+    setSidebarTab("tree")
+    setFileFilter("")
+    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
+    setTreeNavigationPath(file.path)
+    onSelectPath(file.path)
+    setExpandedLineAnchor(anchor)
+    void loadSnapshotFiles([file.fileId]).then(() => {
+      scheduleThreadNavigation(details.thread.id, anchor, file.reviewKey)
+      return undefined
+    })
   }
   const selectWalkthroughStepAndFocus = (index: number) => {
     selectSidebarTab("walkthrough")
@@ -1603,11 +1757,11 @@ export const ReviewDetailView = ({
                     </>
                   )}
                 </div>
-                {reviewThreads.loading ? (
-                  <div className="text-muted-foreground mt-3 border-t pt-3 text-caption">
-                    Loading line comments...
-                  </div>
-                ) : null}
+                <ReviewThreadSummary
+                  controller={reviewThreads}
+                  navigableThreadIds={navigableThreadIds}
+                  onSelectThread={selectReviewThread}
+                />
               </section>
 
               {normalizedFileFilter.length === 0 && renderedChangedFiles.length === 0 ? (
@@ -1639,9 +1793,7 @@ export const ReviewDetailView = ({
                     file={parsedFile}
                     forceExpanded={
                       activeSearchReviewKey === file.reviewKey ||
-                      (sidebarTab === "walkthrough" &&
-                        activeWalkthroughStep !== null &&
-                        !collapsedWalkthroughFileKeys.has(file.reviewKey))
+                      expandedLineAnchor?.fileId === file.fileId
                     }
                     reviewThreads={reviewThreads}
                     selected={

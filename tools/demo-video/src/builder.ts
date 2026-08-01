@@ -1,4 +1,5 @@
 import type { CardCopy, DemoClip, DemoStory, RunContext, Step, Target } from "./framework"
+import { assertDemoSlug } from "./paths"
 
 /** Click an accessible target with human cursor movement. */
 export const click = (target: Target): Step => ({ kind: "click", target })
@@ -40,14 +41,16 @@ export const raw = (label: string, run: (context: RunContext) => Promise<void>):
 
 /** Define one independently replayable clip. */
 export const clip = (name: string, card: CardCopy, steps: readonly Step[]): DemoClip => ({
-  name,
+  name: assertDemoSlug(name, "clip ID"),
   card,
   steps,
 })
 
 /** Define the ordered release reel and validate unique clip names. */
 export const defineStory = (story: DemoStory): DemoStory => {
+  assertDemoSlug(story.id, "story ID")
   const names = story.clips.map(({ name }) => name)
+  for (const name of names) assertDemoSlug(name, "clip ID")
   if (new Set(names).size !== names.length) throw new Error("Demo clip names must be unique")
   return story
 }

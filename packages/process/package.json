@@ -15,9 +15,11 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "oxlint": "catalog:",
