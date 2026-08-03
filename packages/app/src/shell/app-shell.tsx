@@ -706,6 +706,12 @@ export function AppShell() {
       })
       return
     }
+    if (command["_tag"] === "openRepositoryComparison") {
+      const message = "Repository comparisons are not available in this build yet."
+      setActionStatus(message)
+      setCliNavigationError(message)
+      return
+    }
     await openProjectPath(
       command.localPath,
       command.number === null

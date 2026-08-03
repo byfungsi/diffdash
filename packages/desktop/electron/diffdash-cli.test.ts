@@ -51,11 +51,14 @@ const waitForCapture = (
 }
 
 describe("diffdash CLI", () => {
-  it("documents install and repair in source and packaged help", () => {
+  it("documents install, compare, and repair in source and packaged help", () => {
     const sourceResult = runSourceCli(["--help"])
     expect(sourceResult.status).toBe(0)
     expect(sourceResult.stdout).toContain("diffdash install [path]")
     expect(sourceResult.stdout).toContain("diffdash repair")
+    expect(sourceResult.stdout).toContain(
+      "diffdash compare <base> <head> --repository=<repository>",
+    )
     expect(sourceResult.stdout).toContain("diffdash --install-cli [directory]")
 
     for (const cli of packagedClis) {
@@ -63,6 +66,7 @@ describe("diffdash CLI", () => {
       expect(result.status).toBe(0)
       expect(result.stdout).toContain("diffdash install [path]")
       expect(result.stdout).toContain("diffdash repair")
+      expect(result.stdout).toContain("diffdash compare <base> <head> --repository=<repository>")
     }
   })
 
@@ -138,6 +142,17 @@ describe("diffdash CLI", () => {
         "pr",
         "42",
       ])
+      await expect(
+        runHarness(["compare", "v6.0", "v6.1", "--repository=torvalds/linux"]),
+      ).resolves.toEqual([
+        resolvedHarnessRoot,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--",
+        "compare",
+        "v6.0",
+        "v6.1",
+        "--repository=torvalds/linux",
+      ])
       await expect(runHarness(["repair"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
@@ -180,18 +195,24 @@ describe("diffdash CLI", () => {
           )
           chmodSync(harness.app, 0o755)
 
-          const result = spawnSync("/bin/sh", [harness.cli, "install", "linked-project"], {
-            cwd: workingDirectory,
-            encoding: "utf8",
-            env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
-          })
+          const result = spawnSync(
+            "/bin/sh",
+            [harness.cli, "compare", "v6.0", "v6.1", "--repository=torvalds/linux"],
+            {
+              cwd: workingDirectory,
+              encoding: "utf8",
+              env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
+            },
+          )
 
           expect(result.status).toBe(0)
-          await expect(waitForCapture(capturePath, 4)).resolves.toEqual([
+          await expect(waitForCapture(capturePath, 6)).resolves.toEqual([
             `--diffdash-cli-v1=${realpathSync(workingDirectory)}`,
             "--",
-            "install",
-            "linked-project",
+            "compare",
+            "v6.0",
+            "v6.1",
+            "--repository=torvalds/linux",
           ])
         }),
       )

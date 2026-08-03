@@ -13,7 +13,7 @@ const parse = (args: readonly string[]) =>
   )
 
 describe("parseCliNavigationCommand", () => {
-  it("parses project, repository, PR, branch, and repair commands", () => {
+  it("parses project, repository, PR, branch, comparison, and repair commands", () => {
     expect(parse([])).toMatchObject({ _tag: "openProject", localPath: "/workspace/repo" })
     expect(parse(["src"])).toMatchObject({
       _tag: "openProject",
@@ -33,6 +33,34 @@ describe("parseCliNavigationCommand", () => {
     expect(parse(["diff", "release/next"])).toMatchObject({
       _tag: "openBranchDiff",
       branchName: "release/next",
+    })
+    expect(parse(["compare", "v6.0", "v6.1", "--repository=torvalds/linux"])).toMatchObject({
+      _tag: "openRepositoryComparison",
+      baseRef: "v6.0",
+      headRef: "v6.1",
+      repository: {
+        providerId: null,
+        namespace: "torvalds",
+        name: "linux",
+      },
+    })
+    expect(
+      parse([
+        "compare",
+        "--repository",
+        "github:engineering/platform/diffdash",
+        "release/1",
+        "0123456789012345678901234567890123456789",
+      ]),
+    ).toMatchObject({
+      _tag: "openRepositoryComparison",
+      baseRef: "release/1",
+      headRef: "0123456789012345678901234567890123456789",
+      repository: {
+        providerId: "github",
+        namespace: "engineering/platform",
+        name: "diffdash",
+      },
     })
     expect(parse(["repair"])).toMatchObject({ _tag: "repairRepositoryIdentities" })
     expect(hasRepositoryIdentityRepairCommand([RepairRepositoryIdentitiesCommand.make({})])).toBe(
@@ -58,6 +86,49 @@ describe("parseCliNavigationCommand", () => {
       _tag: "error",
       message: expect.stringContaining("Usage: diffdash repair"),
     })
+  })
+
+  it.each([
+    {
+      args: ["compare", "v6.0", "v6.1"],
+      message: "--repository is required",
+    },
+    {
+      args: ["compare", "v6.0", "--repository=torvalds/linux"],
+      message: "Base and head revisions are required",
+    },
+    {
+      args: [
+        "compare",
+        "v6.0",
+        "v6.1",
+        "--repository=torvalds/linux",
+        "--repository=github:torvalds/linux",
+      ],
+      message: "Duplicate option",
+    },
+    {
+      args: ["compare", "v6.0", "v6.1", "--repo=torvalds/linux"],
+      message: "Unknown option",
+    },
+    {
+      args: ["compare", "v6.0", "v6.1", "--repository=torvalds"],
+      message: "Invalid repository selector",
+    },
+    {
+      args: ["compare", "v6..0", "v6.1", "--repository=torvalds/linux"],
+      message: "Invalid base revision",
+    },
+    {
+      args: ["compare", "v6.0", "feature~1", "--repository=torvalds/linux"],
+      message: "Invalid head revision",
+    },
+    {
+      args: ["compare", "v6.0", "v6.1", "extra", "--repository=torvalds/linux"],
+      message: "Too many arguments",
+    },
+  ])("returns a navigation error for invalid comparison syntax", ({ args, message }) => {
+    expect(parse(args)).toMatchObject({ _tag: "error", message: expect.stringContaining(message) })
   })
 
   it("keeps legacy packaged launcher arguments working", () => {

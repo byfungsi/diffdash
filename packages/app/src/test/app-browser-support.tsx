@@ -102,10 +102,13 @@ import {
   AppUpdateUnsupported,
 } from "@diffdash/protocol/app-update"
 import {
+  CliGitRevision,
+  CliRepositorySelector,
   type CliNavigationCommand,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
   OpenPullRequestCommand,
+  OpenRepositoryComparisonCommand,
   OpenWorkingTreeCommand,
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
@@ -893,6 +896,7 @@ type AppBrowserScenarioId =
   | "cliPathSetup"
   | "cliPullRequestFailure"
   | "cliRecheckReadiness"
+  | "cliRepositoryComparisonPending"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
@@ -2373,6 +2377,22 @@ scenario("cliBranchNoAncestor", async () => {
       "Could not resolve comparison branch: Branch dev does not share a common ancestor with the current HEAD",
     )
     expect(document.body.textContent).not.toContain("branch.mergeBase")
+  })
+})
+
+scenario("cliRepositoryComparisonPending", async () => {
+  const calls = installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  calls.openRepositoryComparison("v6.0", "v6.1")
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain(
+      "Repository comparisons are not available in this build yet.",
+    )
+    expect(calls.openProject).not.toHaveBeenCalled()
+    expect(calls.resolveBranch).not.toHaveBeenCalled()
   })
 })
 
@@ -6653,6 +6673,21 @@ const installDiffDashApi = (
     },
     openBranchDiff: (branchName: string | null, localPath = localReview.rootPath) => {
       pendingCommands.push(OpenBranchDiffCommand.make({ localPath, branchName }))
+      commandsAvailableListener?.()
+    },
+    openRepositoryComparison: (baseRef: string, headRef: string) => {
+      const repository = makeHostedRepositoryLocator("github", "torvalds", "linux")
+      pendingCommands.push(
+        OpenRepositoryComparisonCommand.make({
+          repository: CliRepositorySelector.make({
+            providerId: repository.providerId,
+            namespace: repository.namespace,
+            name: repository.name,
+          }),
+          baseRef: CliGitRevision.make(baseRef),
+          headRef: CliGitRevision.make(headRef),
+        }),
+      )
       commandsAvailableListener?.()
     },
     repairRepositoriesFromCli: () => {

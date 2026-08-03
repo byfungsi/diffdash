@@ -1,5 +1,11 @@
 import { Schema } from "effect"
 
+import {
+  GitProviderId,
+  HostedRepositoryName,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+
 /** Maximum commands returned by one transactional renderer drain. */
 export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
 
@@ -38,6 +44,64 @@ export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffComm
   },
 ) {}
 
+/** Hosted repository selector supplied by a public CLI invocation. */
+export class CliRepositorySelector extends Schema.Class<CliRepositorySelector>(
+  "CliRepositorySelector",
+)({
+  providerId: Schema.NullOr(GitProviderId),
+  namespace: RepositoryNamespace,
+  name: HostedRepositoryName,
+}) {}
+
+const forbiddenGitRevisionCharacters = new Set(["~", "^", ":", "?", "*", "[", "\\"])
+
+const isSafeGitRevisionInput = (input: string): boolean => {
+  if (
+    input.length === 0 ||
+    input.length > 255 ||
+    input === "@" ||
+    input.startsWith("-") ||
+    input.startsWith(".") ||
+    input.endsWith(".") ||
+    input.endsWith("/") ||
+    input.includes("..") ||
+    input.includes("//") ||
+    input.includes("@{") ||
+    input.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock"))
+  ) {
+    return false
+  }
+
+  return [...input].every((character) => {
+    const codePoint = character.codePointAt(0)
+    return (
+      codePoint !== undefined &&
+      codePoint > 0x20 &&
+      codePoint !== 0x7f &&
+      !forbiddenGitRevisionCharacters.has(character)
+    )
+  })
+}
+
+/** Safe branch, tag, or full commit input accepted by the public CLI. */
+export const CliGitRevision = Schema.String.pipe(
+  Schema.filter(isSafeGitRevisionInput, { message: () => "Invalid Git revision" }),
+  Schema.brand("CliGitRevision"),
+)
+
+/** Safe branch, tag, or full commit input accepted by the public CLI. */
+export type CliGitRevision = typeof CliGitRevision.Type
+
+/** Open an immutable comparison between two requested repository revisions. */
+export class OpenRepositoryComparisonCommand extends Schema.TaggedClass<OpenRepositoryComparisonCommand>()(
+  "openRepositoryComparison",
+  {
+    repository: CliRepositorySelector,
+    baseRef: CliGitRevision,
+    headRef: CliGitRevision,
+  },
+) {}
+
 /** Run one resumable repository identity repair pass. */
 export class RepairRepositoryIdentitiesCommand extends Schema.TaggedClass<RepairRepositoryIdentitiesCommand>()(
   "repairRepositoryIdentities",
@@ -57,6 +121,7 @@ export const CliNavigationCommand = Schema.Union(
   LinkRepositoryCommand,
   OpenPullRequestCommand,
   OpenBranchDiffCommand,
+  OpenRepositoryComparisonCommand,
   RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,
 )

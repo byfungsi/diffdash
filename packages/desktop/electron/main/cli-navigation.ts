@@ -1,11 +1,20 @@
 import { isAbsolute, resolve } from "node:path"
+import { Schema } from "effect"
 
 import {
+  GitProviderId,
+  HostedRepositoryName,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import {
+  CliGitRevision,
   CliNavigationErrorCommand,
+  CliRepositorySelector,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
   OpenProjectCommand,
   OpenPullRequestCommand,
+  OpenRepositoryComparisonCommand,
   OpenWorkingTreeCommand,
   RepairRepositoryIdentitiesCommand,
   type CliNavigationCommand,
@@ -108,6 +117,8 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
     })
   }
 
+  if (command === "compare") return parseCompareCommand(args)
+
   if (command === "repair") {
     return args.length === 1
       ? RepairRepositoryIdentitiesCommand.make({})
@@ -135,6 +146,97 @@ const validateOptionalArgument = (
 }
 
 const cliError = (message: string) => CliNavigationErrorCommand.make({ message })
+
+const COMPARE_USAGE =
+  "diffdash compare <base> <head> --repository=<provider:namespace/name|namespace/name>"
+
+const parseCompareCommand = (args: readonly string[]): CliNavigationCommand => {
+  const positionals: string[] = []
+  let repositoryInput: string | null = null
+
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (argument === undefined) continue
+    if (argument === "--repository") {
+      if (repositoryInput !== null)
+        return cliError(`Duplicate option: --repository\nUsage: ${COMPARE_USAGE}`)
+      const value = args[index + 1]
+      if (value === undefined || value.length === 0 || value.startsWith("-")) {
+        return cliError(`--repository requires a value.\nUsage: ${COMPARE_USAGE}`)
+      }
+      repositoryInput = value
+      index += 1
+      continue
+    }
+    if (argument.startsWith("--repository=")) {
+      if (repositoryInput !== null)
+        return cliError(`Duplicate option: --repository\nUsage: ${COMPARE_USAGE}`)
+      repositoryInput = argument.slice("--repository=".length)
+      if (repositoryInput.length === 0) {
+        return cliError(`--repository requires a value.\nUsage: ${COMPARE_USAGE}`)
+      }
+      continue
+    }
+    if (argument.startsWith("-")) {
+      return cliError(`Unknown option: ${argument}\nUsage: ${COMPARE_USAGE}`)
+    }
+    positionals.push(argument)
+  }
+
+  if (positionals.length !== 2) {
+    const message =
+      positionals.length < 2 ? "Base and head revisions are required." : "Too many arguments."
+    return cliError(`${message}\nUsage: ${COMPARE_USAGE}`)
+  }
+  if (repositoryInput === null) {
+    return cliError(`--repository is required.\nUsage: ${COMPARE_USAGE}`)
+  }
+
+  const [baseRef, headRef] = positionals
+  if (baseRef === undefined || !Schema.is(CliGitRevision)(baseRef)) {
+    return cliError(`Invalid base revision.\nUsage: ${COMPARE_USAGE}`)
+  }
+  if (headRef === undefined || !Schema.is(CliGitRevision)(headRef)) {
+    return cliError(`Invalid head revision.\nUsage: ${COMPARE_USAGE}`)
+  }
+
+  const repository = parseRepositorySelector(repositoryInput)
+  if (repository === null) {
+    return cliError(`Invalid repository selector.\nUsage: ${COMPARE_USAGE}`)
+  }
+
+  return OpenRepositoryComparisonCommand.make({
+    repository,
+    baseRef: CliGitRevision.make(baseRef),
+    headRef: CliGitRevision.make(headRef),
+  })
+}
+
+const parseRepositorySelector = (input: string): CliRepositorySelector | null => {
+  const separator = input.indexOf(":")
+  const providerInput = separator < 0 ? null : input.slice(0, separator)
+  const repositoryInput = separator < 0 ? input : input.slice(separator + 1)
+  const segments = repositoryInput.split("/")
+  const name = segments.pop()
+  const namespace = segments.join("/")
+  if (
+    (providerInput !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(providerInput)) ||
+    providerInput === "local" ||
+    namespace.length === 0 ||
+    name === undefined ||
+    name.length === 0 ||
+    !/^[^/:#%]+(?:\/[^/:#%]+)*$/.test(namespace) ||
+    !/^[^/:#%]+$/.test(name)
+  ) {
+    return null
+  }
+
+  return CliRepositorySelector.make({
+    providerId: providerInput === null ? null : GitProviderId.make(providerInput),
+    namespace: RepositoryNamespace.make(namespace),
+    name: HostedRepositoryName.make(name),
+  })
+}
 
 /** Reports whether a queued command explicitly requests repository identity repair. */
 export const hasRepositoryIdentityRepairCommand = (commands: readonly CliNavigationCommand[]) =>
