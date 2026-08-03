@@ -8,6 +8,7 @@ type ReviewSearchSide = "additions" | "context" | "deletions"
 type ReviewSearchLine = {
   readonly filePath: string
   readonly hunkId: string
+  readonly hunkFingerprint: string
   readonly hunkLineIndex: number
   readonly newLineNumber: number | null
   readonly oldLineNumber: number | null
@@ -37,6 +38,7 @@ export const buildReviewSearchIndex = (files: readonly ParsedDiffFile[]): Review
         lines.push({
           filePath: file.path,
           hunkId: hunk.id,
+          hunkFingerprint: hunk.fingerprint,
           hunkLineIndex: line.index,
           newLineNumber: line.newLineNumber,
           oldLineNumber: line.oldLineNumber,

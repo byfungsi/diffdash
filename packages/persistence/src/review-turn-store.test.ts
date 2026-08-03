@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,6 +12,7 @@ import {
 } from "@diffdash/domain/review-agent"
 import {
   makeReviewKey,
+  ReviewKey,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
@@ -129,6 +131,47 @@ const readCounts = Effect.gen(function* () {
 })
 
 describe("ReviewTurnStore", () => {
+  it.scoped("accepts a local review under a linked hosted project identity", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const rootPath = "/workspace/diffdash"
+        const localTarget = LocalReviewTarget.make({ kind: "local", rootPath })
+        const localKey = ReviewKey.make(
+          `local:${createHash("sha256").update(rootPath).digest("hex")}`,
+        )
+        const repository = yield* (yield* RepositoryStore).upsertRepository({
+          provider: "github",
+          owner: "fungsi",
+          name: "diffdash",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+          localPath: rootPath,
+        })
+        const details = yield* (yield* ReviewThreadStore).create({
+          repoId: repository.id,
+          reviewKey: localKey,
+          prNumber: null,
+          baseRevision,
+          headRevision,
+          anchor,
+          bodyMarkdown: MarkdownBody.make("Review the linked working tree."),
+        })
+
+        const mapping = yield* (yield* ReviewTurnStore).validateTarget({
+          threadId: details.thread.id,
+          target: localTarget,
+          repoId: repository.id,
+          reviewKey: localKey,
+          baseRevision,
+          headRevision,
+        })
+
+        expect(mapping.repoId).toBe(repository.id)
+        expect(mapping.reviewKey).toBe(localKey)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.scoped("rolls back beginTurn after every aggregate write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath

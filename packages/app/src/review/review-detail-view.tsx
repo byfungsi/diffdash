@@ -1,8 +1,24 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import { AISettings } from "@diffdash/domain/ai-settings"
+/* oxlint-disable jsx-a11y/prefer-tag-over-role -- A focusable ARIA separator is the standard keyboard-resizable splitter pattern. */
+import {
+  AISettings,
+  type CodeThemePreferences,
+  DEFAULT_CODE_THEME_PREFERENCES,
+  DiffViewMode,
+} from "@diffdash/domain/ai-settings"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { filterVisibleDiffFiles, getHiddenDiffFileReason } from "@diffdash/domain/diff-file-filters"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
+import type { ReviewFileId } from "@diffdash/domain/review-identity"
+import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import {
+  ReviewLocationV1,
+  ReviewNavigationBehavior,
+  ReviewNavigationInput,
+  ReviewSnapshotAddress,
+  ThreadReviewNavigationTarget,
+  FileReviewNavigationTarget,
+} from "@diffdash/domain/review-navigation"
 import type {
   ReviewThreadAnchor,
   ReviewThreadDetails,
@@ -16,23 +32,14 @@ import {
   type AgentProviderCatalog,
   EMPTY_AGENT_PROVIDER_CATALOG,
 } from "@diffdash/protocol/agent-providers"
+import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
+import { RegistryContext, Result, useAtomValue } from "@effect-atom/atom-react"
 import {
-  type ReviewSnapshotSearchCursor,
-  ReviewSnapshotSearchFileAnchor,
-  type ReviewSnapshotSearchMatch,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
-} from "@diffdash/protocol/review-snapshot"
-import { Result, useAtomValue } from "@effect-atom/atom-react"
-import { Schema } from "effect"
-import {
-  ArrowLeft,
   Check,
-  ChevronDown,
-  Cloud,
-  Command,
+  Ellipsis,
   FolderGit2,
   GitBranch,
+  GitPullRequest,
   Loader2,
   RefreshCw,
   Search,
@@ -41,7 +48,8 @@ import {
   X,
 } from "lucide-react"
 import { DropdownMenu } from "radix-ui"
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import type { ReactNode } from "react"
+import { useContext, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react"
 import {
   agentProviderOptions,
   agentUnavailableReason,
@@ -52,15 +60,22 @@ import {
   selectedAIModelLabel,
   selectedModelForProvider,
 } from "@/settings/agent-selection"
-import type { ResolvedTheme } from "@/settings/theme"
+import type { ColorScheme } from "@/settings/theme"
 import { captureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
-import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
-import { ReviewThreadSummary, useReviewThreads } from "@/threads/review-threads"
+import { WorkbenchContextActions } from "@/shell/workbench-context-actions"
+import { ProjectActivityNavigation } from "@/project-workspace/project-activity-navigation"
+import {
+  type ReviewThreadButtonRefs,
+  ReviewThreadDetailPane,
+  ReviewThreadListPane,
+  type ReviewThreadSidebarState,
+} from "@/threads/review-thread-sidebar"
+import { useReviewThreads } from "@/threads/review-threads"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import {
   WalkthroughMainHeader,
@@ -76,41 +91,50 @@ import {
   type FileDiffOptions,
   type PostRenderPhase,
   useStableCallback,
+  useWorkerPool,
   VirtualizedFileDiff,
   VirtualizerContext,
   type WorkerInitializationRenderOptions,
   WorkerPoolContextProvider,
   type WorkerPoolOptions,
 } from "./pierre"
-import { PullRequestStateBadge } from "./pull-request-state-badge"
 import { ReviewFileTree } from "./review-file-tree"
+import {
+  ReviewNavigatorController,
+  reviewNavigationLastOutcomeAtom,
+  reviewNavigationPresentationAtom,
+  reviewNavigationStatusAtom,
+} from "./review-navigation"
+import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-navigation-anchors"
 import { ReviewPagePlaceholder } from "./review-page-placeholder"
-import type { ReviewSearchOccurrence } from "./review-search"
 import { ReviewSearchHighlightManager } from "./review-search-highlights"
-import { type ReviewSearchPage, ReviewSearchPageCache } from "./review-search-page-cache"
+import { ReviewSearchController } from "./review-search-state"
 import { ReviewSearchToolbar } from "./review-search-toolbar"
 import type { ReviewSelectionProjection } from "./review-selection"
 import type { ReviewSourceOperations } from "./review-source-operations"
+import type { ReviewActivePane } from "./review-sidebar-layout"
+import { ReviewWorkbenchLayout } from "./review-workbench-layout"
+import {
+  type ReviewDiffRegistration,
+  ReviewViewportNavigationBridge,
+} from "./review-viewport-navigation"
 import {
   reviewSubjectBaseSha,
   reviewSubjectHeadSha,
   reviewSubjectIdentity,
-  reviewSubjectRepositoryLabel,
   reviewSubjectTitle,
   reviewSubjectWalkthroughScope,
   reviewThreadScope,
 } from "./review-subject"
-import {
-  reviewThreadAnnotationContentId,
-  type ReviewThreadAnnotation,
-  sameReviewThreadLine,
-} from "./thread-annotations"
+import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
 import { useReviewSnapshotPages } from "./use-review-snapshot-pages"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
-type ReviewSidebarTab = "tree" | "walkthrough"
+type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
+
+type ResolvedDiffViewMode = Exclude<DiffViewMode, "auto">
 
 /** Repository-link state consumed by ready review presentation. */
 export type RepositoryLinkState = "checking" | "linked" | "unlinked" | "not-applicable"
@@ -119,10 +143,17 @@ export type RepositoryLinkState = "checking" | "linked" | "unlinked" | "not-appl
 export type ReviewDetailEnvironment = {
   readonly aiAgentAvailable: boolean
   readonly aiSettings: AISettings
+  readonly quickNavigationRequest: number
   readonly repositoryLinkState: RepositoryLinkState
-  readonly theme: ResolvedTheme
+  readonly sidebarExpanded: boolean
+  readonly sidebarWidth: number
+  readonly threadDetailWidth: number
+  readonly colorScheme: ColorScheme
   readonly onAISettingsChange: (settings: AISettings) => void
   readonly onLinkRepository: () => Promise<boolean>
+  readonly onSidebarExpandedChange: (expanded: boolean) => void
+  readonly onSidebarWidthChange: (width: number) => void
+  readonly onThreadDetailWidthChange: (width: number) => void
 }
 
 /** Ready review state assembled by ReviewScreen after source selection succeeds. */
@@ -144,6 +175,18 @@ export type ReadyReviewDetailState = {
 const CODING_AGENT_SETUP_MESSAGE =
   "Walkthroughs require an available agent provider. Complete provider setup to enable guided review."
 
+const REVIEW_SPLIT_DIFF_MIN_WIDTH = 1_040
+const REVIEW_SPLIT_DIFF_RESTORE_MARGIN = 32
+
+const resolveAutoDiffViewMode = (
+  width: number,
+  current: ResolvedDiffViewMode,
+): ResolvedDiffViewMode => {
+  if (width < REVIEW_SPLIT_DIFF_MIN_WIDTH) return "unified"
+  if (width >= REVIEW_SPLIT_DIFF_MIN_WIDTH + REVIEW_SPLIT_DIFF_RESTORE_MARGIN) return "split"
+  return current
+}
+
 const REVIEW_DIFF_OPTIONS = {
   disableFileHeader: true,
   diffStyle: "split",
@@ -152,16 +195,17 @@ const REVIEW_DIFF_OPTIONS = {
   lineHoverHighlight: "both",
   lineDiffType: "word",
   overflow: "wrap",
-  stickyHeader: true,
+  tokenizeMaxLineLength: 2_000,
   theme: {
-    dark: "dark-plus",
-    light: "github-light",
+    dark: DEFAULT_CODE_THEME_PREFERENCES.dark,
+    light: DEFAULT_CODE_THEME_PREFERENCES.light,
   },
   themeType: "light",
   unsafeCSS: `
     :host {
       --diffs-bg: var(--diff-canvas);
-      --diffs-fg: var(--foreground);
+      --diffs-addition-color-override: var(--review-success);
+      --diffs-deletion-color-override: var(--review-danger);
       --diffs-fg-number-override: var(--muted-foreground);
       --diffs-fg-number-addition-override: var(--review-success);
       --diffs-fg-number-deletion-override: var(--review-danger);
@@ -182,7 +226,7 @@ const REVIEW_DIFF_OPTIONS = {
       --diffs-line-height: 20px;
     }
 
-    [data-diff-type="split"][data-overflow="wrap"] {
+    [data-diff][data-overflow="wrap"] {
       --diffs-code-grid: var(--diffs-grid-number-column-width) minmax(0, 1fr);
     }
 
@@ -199,6 +243,22 @@ const REVIEW_DIFF_OPTIONS = {
     [data-column-number] {
       line-height: 20px !important;
       min-height: 20px !important;
+    }
+
+    [data-indicators="bars"] [data-line-type="change-addition"][data-column-number]::before,
+    [data-indicators="bars"] [data-line-type="change-deletion"][data-column-number]::before {
+      opacity: 0.55;
+    }
+
+    [data-separator="line-info-basic"] {
+      box-shadow:
+        inset 0 1px 0 var(--diff-separator-border),
+        inset 0 -1px 0 var(--diff-separator-border);
+    }
+
+    [data-separator="line-info-basic"] [data-separator-content] {
+      color: var(--diff-separator-foreground);
+      font-weight: 500;
     }
 
     pre {
@@ -221,17 +281,10 @@ const REVIEW_DIFF_OPTIONS = {
   `,
 } satisfies FileDiffOptions<ReviewThreadAnnotation>
 
-const REVIEW_DIFF_OPTIONS_BY_THEME = {
-  dark: { ...REVIEW_DIFF_OPTIONS, themeType: "dark" },
-  light: { ...REVIEW_DIFF_OPTIONS, themeType: "light" },
-} satisfies Record<ResolvedTheme, FileDiffOptions<ReviewThreadAnnotation>>
-
 const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
   intersectionObserverMargin: 1_500,
   overscrollSize: 1_000,
 } as const
-
-const REVIEW_NAVIGATION_MAX_FRAMES = 600
 
 const REVIEW_DIFF_WORKER_POOL_OPTIONS = {
   poolSize: 1,
@@ -243,39 +296,44 @@ const REVIEW_DIFF_HIGHLIGHTER_OPTIONS = {
   lineDiffType: REVIEW_DIFF_OPTIONS.lineDiffType,
   maxLineDiffLength: 1_000,
   theme: REVIEW_DIFF_OPTIONS.theme,
-  tokenizeMaxLineLength: 1_000,
+  tokenizeMaxLineLength: REVIEW_DIFF_OPTIONS.tokenizeMaxLineLength,
 } satisfies WorkerInitializationRenderOptions
 
-type ReviewDiffRegistration = {
-  readonly generation: number
-  readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<unknown>
-  readonly phase: PostRenderPhase
-}
-
-type ReviewSearchRequestGeneration = {
-  readonly anchor: ReviewSnapshotSearchFileAnchor | null
-  readonly query: string
-  readonly requestId: number
-}
+const reviewDiffHighlighterOptions = (
+  codeThemes: CodeThemePreferences,
+): WorkerInitializationRenderOptions => ({
+  ...REVIEW_DIFF_HIGHLIGHTER_OPTIONS,
+  theme: codeThemes,
+})
 
 /** Source-neutral review detail composition with its coupled ephemeral interaction state. */
 export const ReviewDetailView = ({
+  activeRibbon,
   environment,
   ready,
-  onBack,
+  reviewsContext,
+  onActiveRibbonChange,
 }: {
+  readonly activeRibbon: ProjectWorkspaceRibbon
   readonly environment: ReviewDetailEnvironment
   readonly ready: ReadyReviewDetailState
-  readonly onBack: () => void
+  readonly reviewsContext: ReactNode
+  readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
 }) => {
   const {
     aiAgentAvailable,
     aiSettings,
+    quickNavigationRequest,
     repositoryLinkState,
-    theme,
+    sidebarExpanded,
+    sidebarWidth,
+    threadDetailWidth,
+    colorScheme,
     onAISettingsChange,
     onLinkRepository,
+    onSidebarExpandedChange,
+    onSidebarWidthChange,
+    onThreadDetailWidthChange,
   } = environment
   const {
     selection,
@@ -293,31 +351,55 @@ export const ReviewDetailView = ({
   } = ready
   const manifest = selection.manifest
   const reviewSubject = selection.subject
+  const reviewSnapshotAddress = ReviewSnapshotAddress.make({
+    projectId: manifest.projectId,
+    snapshotId: manifest.snapshotId,
+  })
+  const atomRegistry = useContext(RegistryContext)
   const agentProviderCatalogResult = useAtomValue(agentProviderCatalogAtom)
+  const navigationPresentation = useAtomValue(reviewNavigationPresentationAtom)
+  const navigationLastOutcome = useAtomValue(reviewNavigationLastOutcomeAtom)
+  const navigationStatus = useAtomValue(reviewNavigationStatusAtom)
+  const navigationLocked = navigationStatus._tag === "active"
   const agentProviderCatalog = resultValue(agentProviderCatalogResult, EMPTY_AGENT_PROVIDER_CATALOG)
   const diffScrollContainerRef = useRef<HTMLDivElement>(null)
+  const reviewDiffContentRef = useRef<HTMLElement>(null)
   const stickyReviewChromeRef = useRef<HTMLDivElement>(null)
   const reviewSearchInputRef = useRef<HTMLInputElement>(null)
+  const reviewSearchManifestRef = useRef(manifest)
+  const reviewsActivityButtonRef = useRef<HTMLButtonElement>(null)
+  const treeActivityButtonRef = useRef<HTMLButtonElement>(null)
+  const walkthroughActivityButtonRef = useRef<HTMLButtonElement>(null)
+  const threadsActivityButtonRef = useRef<HTMLButtonElement>(null)
+  const threadButtonRefs = useRef(new Map<ReviewThreadId, HTMLButtonElement>())
+  const previousSidebarExpandedRef = useRef(sidebarExpanded)
+  const quickNavigationRequestRef = useRef(quickNavigationRequest)
   const previousReviewSearchFocusRef = useRef<HTMLElement | null>(null)
-  const activeReviewSearchOccurrenceRef = useRef<ReviewSearchOccurrence | null>(null)
-  const reviewSearchAnchorRef = useRef<ReviewSnapshotSearchFileAnchor | null>(null)
   const lastPointerPositionRef = useRef<{
     readonly clientX: number
     readonly clientY: number
   } | null>(null)
-  const pendingFileNavigationFrameRef = useRef<number | null>(null)
-  const pendingFileNavigationTokenRef = useRef<symbol | null>(null)
-  const pendingThreadNavigationFrameRef = useRef<number | null>(null)
-  const pendingThreadNavigationIdRef = useRef<ReviewThreadId | null>(null)
-  const pendingSearchNavigationFrameRef = useRef<number | null>(null)
-  const pendingSearchNavigationIdRef = useRef<string | null>(null)
   const reviewDiffRegistrationsRef = useRef<Map<string, ReviewDiffRegistration>>(new Map())
+  const reviewDiffRegistrationsByHostRef = useRef(
+    new WeakMap<HTMLElement, ReviewDiffRegistration>(),
+  )
   const reviewDiffResizeObserverRef = useRef<ResizeObserver | null>(null)
   const [diffVirtualizer] = useState(() => new DiffVirtualizer(REVIEW_DIFF_VIRTUALIZER_CONFIG))
+  const [reviewNavigationAnchors] = useState(() => new ReviewNavigationAnchorRegistry())
+  const [reviewNavigator] = useState(() => new ReviewNavigatorController(atomRegistry))
+  const [reviewSearchController] = useState(() => new ReviewSearchController(atomRegistry))
+  const [reviewViewportBridge] = useState(
+    () => new ReviewViewportNavigationBridge(reviewNavigationAnchors),
+  )
+  const [autoDiffViewMode, setAutoDiffViewMode] = useState<ResolvedDiffViewMode>("split")
   const [reviewSearchHighlights] = useState(() => new ReviewSearchHighlightManager())
-  const [reviewSearchPageCache] = useState(() => new ReviewSearchPageCache())
   const [fileFilter, setFileFilter] = useState("")
-  const [sidebarTab, setSidebarTab] = useState<ReviewSidebarTab>("tree")
+  const [navigationSelectedFileId, setNavigationSelectedFileId] = useState<ReviewFileId | null>(
+    null,
+  )
+  const sidebarTab = projectRibbonToSidebarTab(activeRibbon)
+  const setSidebarTab = (tab: ReviewSidebarTab) =>
+    onActiveRibbonChange(sidebarTabToProjectRibbon(tab))
   const [walkthroughState, setWalkthroughState] = useState<WalkthroughState>({ status: "idle" })
   const [activeWalkthroughStepIndex, setActiveWalkthroughStepIndex] = useState(0)
   const [visitedWalkthroughStepIndexes, setVisitedWalkthroughStepIndexes] = useState<
@@ -326,34 +408,86 @@ export const ReviewDetailView = ({
   const [collapsedWalkthroughFileKeys, setCollapsedWalkthroughFileKeys] = useState<
     ReadonlySet<string>
   >(() => new Set())
-  const [treeNavigationPath, setTreeNavigationPath] = useState<string | null>(null)
   const [showHiddenFiles, setShowHiddenFiles] = useState(false)
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [actionPaletteOpen, setActionPaletteOpen] = useState(false)
-  const [reviewSearchOpen, setReviewSearchOpen] = useState(false)
-  const [reviewSearchQuery, setReviewSearchQuery] = useState("")
-  const [reviewSearchOccurrences, setReviewSearchOccurrences] = useState<
-    readonly ReviewSnapshotSearchMatch[]
-  >([])
-  const [reviewSearchTotalMatches, setReviewSearchTotalMatches] = useState(0)
-  const [activeReviewSearchIndex, setActiveReviewSearchIndex] = useState(0)
+  const reviewSearchToolbar = useAtomValue(reviewSearchController.toolbarAtom)
+  const activeReviewSearchMatch = useAtomValue(reviewSearchController.activeMatchAtom)
+  const reviewSearchOccurrences = useAtomValue(reviewSearchController.retainedMatchesAtom)
   const [fileOpenStatus, setFileOpenStatus] = useState<string | null>(null)
   const [approvalState, setApprovalState] = useState<PullRequestApprovalState>("checking")
   const [expandedLineAnchor, setExpandedLineAnchor] = useState<ReviewThreadAnchor | null>(null)
+  const [threadSidebarState, setThreadSidebarState] = useState<ReviewThreadSidebarState>({
+    _tag: "collapsed",
+  })
+  const [activePane, setActivePane] = useState<ReviewActivePane>("diff")
   const [repositoryBannerDismissed, setRepositoryBannerDismissed] = useState(false)
   const [repositoryLinking, setRepositoryLinking] = useState(false)
   const [repositoryLinkError, setRepositoryLinkError] = useState<string | null>(null)
-  const reviewSearchRequestRef = useRef(0)
-  const reviewSearchGenerationRef = useRef<ReviewSearchRequestGeneration | null>(null)
-  const reviewSearchNavigationRef = useRef(0)
-  const reviewSearchTargetIndexRef = useRef(0)
-  const activeReviewSearchIndexRef = useRef(0)
+  const [scrollPastEndHeight, setScrollPastEndHeight] = useState(0)
+  const previousFileFilterRef = useRef(fileFilter)
+  const reviewSearchOpen = reviewSearchToolbar.open
+  const reviewSearchQuery = reviewSearchToolbar.query
+  const reviewSearchTotalMatches = reviewSearchToolbar.totalMatches
+  const activeReviewSearchIndex = reviewSearchToolbar.activeGlobalIndex
+  reviewSearchController.updateRuntime({
+    navigator: reviewNavigator,
+    onSnapshotExpired: onReload,
+    search: (request) => window.diffDash.reviewSnapshots.search(request),
+  })
+
+  useEffect(() => {
+    if (quickNavigationRequestRef.current === quickNavigationRequest) return
+    quickNavigationRequestRef.current = quickNavigationRequest
+    setGoToPaletteOpen(true)
+  }, [quickNavigationRequest])
+
+  useEffect(() => {
+    const previouslyExpanded = previousSidebarExpandedRef.current
+    previousSidebarExpandedRef.current = sidebarExpanded
+    if (previouslyExpanded === sidebarExpanded) return
+    if (!sidebarExpanded) {
+      setThreadSidebarState({ _tag: "collapsed" })
+      setActivePane("diff")
+      return
+    }
+    setActivePane("context")
+    if (sidebarTab === "threads") setThreadSidebarState({ _tag: "list" })
+  }, [sidebarExpanded, sidebarTab])
   const {
+    fileErrors,
     files: snapshotFiles,
     loadingFileIds,
     loadFiles: loadSnapshotFiles,
+    pageReader: snapshotPageReader,
+    setPinnedFileIds: setPinnedSnapshotFileIds,
+    snapshotRefresh,
     tooLargeFileIds,
   } = useReviewSnapshotPages(manifest, sourceOperations.refresh)
+  const registerFileNavigationAnchor = useStableCallback(
+    (fileId: ReviewFileId, element: HTMLElement, focusElement: HTMLElement) =>
+      reviewNavigationAnchors.registerAnchor(reviewFileAnchorKey(fileId), {
+        measure: () => element.getBoundingClientRect(),
+        focus: () => {
+          if (!element.isConnected || !focusElement.isConnected) return false
+          focusElement.focus({ preventScroll: true })
+          return document.activeElement === focusElement
+        },
+        ownsFocus: (active) => active === focusElement,
+        isConnected: () => element.isConnected,
+      }),
+  )
+  useEffect(() => {
+    const releases = manifest.files.map((file) =>
+      reviewNavigationAnchors.registerDescriptor({
+        anchorKey: reviewFileAnchorKey(file.fileId),
+        fileId: file.fileId,
+      }),
+    )
+    return () => {
+      for (const release of releases) release()
+    }
+  }, [manifest.files, manifest.snapshotId, reviewNavigationAnchors])
   const setDiffScrollContainer = useStableCallback<(node: HTMLDivElement | null) => void>(
     (node) => {
       diffScrollContainerRef.current = node
@@ -368,41 +502,30 @@ export const ReviewDetailView = ({
   )
   useEffect(
     () => () => {
-      if (pendingFileNavigationFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
-      }
-      if (pendingSearchNavigationFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingSearchNavigationFrameRef.current)
-      }
-      if (pendingThreadNavigationFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
-      }
       reviewDiffRegistrationsRef.current.clear()
+      reviewDiffRegistrationsByHostRef.current = new WeakMap()
     },
     [],
   )
   useEffect(() => {
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const registration = [...reviewDiffRegistrationsRef.current.values()].find(
-          (candidate) => candidate.host === entry.target,
-        )
+        if (!(entry.target instanceof HTMLElement)) continue
+        const registration = reviewDiffRegistrationsByHostRef.current.get(entry.target)
         if (
           registration === undefined ||
-          registration.phase === "unmount" ||
+          !registration.rendered ||
           !registration.host.isConnected
         ) {
           continue
         }
 
-        registration.instance.syncVirtualizedTop()
-        diffVirtualizer.markDOMDirty()
         diffVirtualizer.requestHeightReconcile(registration.instance)
       }
     })
     reviewDiffResizeObserverRef.current = observer
     for (const registration of reviewDiffRegistrationsRef.current.values()) {
-      if (registration.phase !== "unmount" && registration.host.isConnected) {
+      if (registration.host.isConnected) {
         observer.observe(registration.host)
       }
     }
@@ -414,27 +537,55 @@ export const ReviewDetailView = ({
       }
     }
   }, [diffVirtualizer])
+  useLayoutEffect(() => {
+    if (aiSettings.diffViewMode !== "auto") return
+    const content = reviewDiffContentRef.current
+    if (content === null) return
+
+    const updateMode = (width: number) => {
+      setAutoDiffViewMode((current) => resolveAutoDiffViewMode(width, current))
+    }
+    updateMode(content.getBoundingClientRect().width)
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry !== undefined) updateMode(entry.contentRect.width)
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [aiSettings.diffViewMode])
   useEffect(() => () => reviewSearchHighlights.dispose(), [reviewSearchHighlights])
+  useEffect(() => {
+    if (previousFileFilterRef.current === fileFilter) return
+    previousFileFilterRef.current = fileFilter
+    setNavigationSelectedFileId(null)
+  }, [fileFilter])
   const reviewBaseSha = reviewSubjectBaseSha(reviewSubject)
   const reviewHeadSha = reviewSubjectHeadSha(reviewSubject)
   const reviewIdentity = reviewSubjectIdentity(reviewSubject)
   const reviewThreads = useReviewThreads(reviewThreadScope(reviewSubject))
+  const navigationTarget = navigationPresentation.activeTarget
+  const navigationThreadAnchor =
+    navigationTarget?._tag === "thread"
+      ? (reviewThreads.details.find((details) => details.thread.id === navigationTarget.threadId)
+          ?.thread.currentAnchor ?? null)
+      : null
+  useEffect(() => {
+    if (
+      threadSidebarState._tag === "detail" &&
+      !reviewThreads.loading &&
+      !reviewThreads.details.some((details) => details.thread.id === threadSidebarState.threadId)
+    ) {
+      setThreadSidebarState({ _tag: "list" })
+    }
+  }, [reviewThreads.details, reviewThreads.loading, threadSidebarState])
   const changedFiles = manifest.files
   const loadedFilesById = new Map(snapshotFiles.map((file) => [file.fileId, file]))
   const loadedChangedFiles = changedFiles.flatMap((file) => {
     const loaded = loadedFilesById.get(file.fileId)
     return loaded === undefined ? [] : [loaded]
   })
-  const normalizedReviewSearchIndex =
-    reviewSearchTotalMatches === 0
-      ? 0
-      : Math.min(activeReviewSearchIndex, reviewSearchTotalMatches - 1)
-  const cachedActiveReviewSearchMatch = reviewSearchPageCache.find(normalizedReviewSearchIndex)
-  const activeReviewSearchOccurrence = reviewSearchOpen
-    ? (cachedActiveReviewSearchMatch?.match ?? null)
-    : null
-  activeReviewSearchIndexRef.current = normalizedReviewSearchIndex
-  activeReviewSearchOccurrenceRef.current = activeReviewSearchOccurrence
+  const normalizedReviewSearchIndex = activeReviewSearchIndex
+  const activeReviewSearchOccurrence = reviewSearchOpen ? activeReviewSearchMatch : null
   const hiddenFileCount = changedFiles.filter(
     (file) => getHiddenDiffFileReason(file) !== null,
   ).length
@@ -444,14 +595,20 @@ export const ReviewDetailView = ({
     normalizedFileFilter.length === 0
       ? visibleBaseFiles
       : visibleBaseFiles.filter((file) => matchesReviewFileFilter(file, normalizedFileFilter))
+  const navigationSelectedPath =
+    navigationPresentation.selectedFileId === null
+      ? null
+      : (changedFiles.find((file) => file.fileId === navigationPresentation.selectedFileId)?.path ??
+        null)
   const selectedVisiblePath =
-    selectedPath !== null && visibleBaseFiles.some((file) => file.path === selectedPath)
+    navigationSelectedPath ??
+    (selectedPath !== null && visibleBaseFiles.some((file) => file.path === selectedPath)
       ? selectedPath
-      : (visibleBaseFiles[0]?.path ?? null)
+      : (visibleBaseFiles[0]?.path ?? null))
   const selectedTreePath =
-    treeNavigationPath !== null &&
-    filteredChangedFiles.some((file) => file.path === treeNavigationPath)
-      ? treeNavigationPath
+    navigationSelectedPath !== null &&
+    filteredChangedFiles.some((file) => file.path === navigationSelectedPath)
+      ? navigationSelectedPath
       : selectedPath !== null && filteredChangedFiles.some((file) => file.path === selectedPath)
         ? selectedPath
         : null
@@ -485,22 +642,97 @@ export const ReviewDetailView = ({
       ? activeWalkthroughInventory
       : filteredChangedFiles
   const activeSearchReviewKey = activeReviewSearchOccurrence?.reviewKey ?? null
+  const forcedVisibleFileIds = new Set(navigationPresentation.forceVisibleFileIds)
+  if (sidebarTab !== "walkthrough" && navigationSelectedFileId !== null) {
+    forcedVisibleFileIds.add(navigationSelectedFileId)
+  }
   const renderedChangedFiles =
-    activeSearchReviewKey === null ||
-    visibleChangedFiles.some((file) => file.reviewKey === activeSearchReviewKey)
+    (activeSearchReviewKey === null ||
+      visibleChangedFiles.some((file) => file.reviewKey === activeSearchReviewKey)) &&
+    forcedVisibleFileIds.size === 0
       ? visibleChangedFiles
       : (() => {
           const visibleReviewKeys = new Set(visibleChangedFiles.map((file) => file.reviewKey))
           return changedFiles.filter(
             (file) =>
-              file.reviewKey === activeSearchReviewKey || visibleReviewKeys.has(file.reviewKey),
+              file.reviewKey === activeSearchReviewKey ||
+              forcedVisibleFileIds.has(file.fileId) ||
+              visibleReviewKeys.has(file.reviewKey),
           )
         })()
+  const lastRenderedFileId = renderedChangedFiles.at(-1)?.fileId ?? null
+  useLayoutEffect(() => {
+    const container = diffScrollContainerRef.current
+    const stickyChrome = stickyReviewChromeRef.current
+    const content = reviewDiffContentRef.current
+    if (container === null || stickyChrome === null || content === null) return undefined
+    let previousStickyHeight = -1
+    const update = () => {
+      const stickyHeight = stickyChrome.offsetHeight
+      container.style.setProperty("--review-sticky-chrome-height", `${stickyHeight}px`)
+      if (stickyHeight !== previousStickyHeight) {
+        previousStickyHeight = stickyHeight
+        diffVirtualizer.markDOMDirty()
+        for (const registration of reviewDiffRegistrationsRef.current.values()) {
+          if (!registration.host.isConnected) continue
+          registration.instance.syncVirtualizedTop()
+          diffVirtualizer.requestHeightReconcile(registration.instance)
+        }
+      }
+      const cards = content.querySelectorAll<HTMLElement>("[data-review-file-id]")
+      const lastCard = cards.item(cards.length - 1)
+      if (lastCard === null) {
+        setScrollPastEndHeight(0)
+        return
+      }
+      const trailingContentHeight = Math.max(
+        0,
+        content.getBoundingClientRect().bottom - lastCard.getBoundingClientRect().top,
+      )
+      setScrollPastEndHeight(
+        Math.max(0, container.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
+      )
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(container)
+    observer.observe(stickyChrome)
+    observer.observe(content)
+    const cards = content.querySelectorAll<HTMLElement>("[data-review-file-id]")
+    const lastCard = cards.item(cards.length - 1)
+    if (lastCard !== null) observer.observe(lastCard)
+    return () => {
+      observer.disconnect()
+      container.style.removeProperty("--review-sticky-chrome-height")
+    }
+  }, [diffVirtualizer, lastRenderedFileId])
   const activeStepComplete =
     activeWalkthroughStep !== null &&
     activeStepFiles.length > 0 &&
     activeStepFiles.every((file) => viewedFileKeys.has(file.reviewKey))
-  const reviewDiffOptions = reviewDiffOptionsForTheme(theme)
+  const resolvedDiffViewMode =
+    aiSettings.diffViewMode === "auto" ? autoDiffViewMode : aiSettings.diffViewMode
+  const reviewDiffOptions = reviewDiffOptionsForTheme(
+    aiSettings.codeThemes,
+    colorScheme,
+    resolvedDiffViewMode,
+  )
+  const previousResolvedDiffViewModeRef = useRef(resolvedDiffViewMode)
+  useEffect(() => {
+    const previousMode = previousResolvedDiffViewModeRef.current
+    previousResolvedDiffViewModeRef.current = resolvedDiffViewMode
+    if (previousMode === resolvedDiffViewMode) return
+
+    const frame = window.requestAnimationFrame(() => {
+      diffVirtualizer.markDOMDirty()
+      for (const registration of reviewDiffRegistrationsRef.current.values()) {
+        if (!registration.host.isConnected) continue
+        registration.instance.syncVirtualizedTop()
+        diffVirtualizer.requestHeightReconcile(registration.instance)
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [diffVirtualizer, resolvedDiffViewMode])
   const navigableThreadIds = new Set<ReviewThreadId>(
     reviewThreads.details.flatMap((details) => {
       const anchor = details.thread.currentAnchor
@@ -524,6 +756,26 @@ export const ReviewDetailView = ({
     viewedFileKeys,
     visibleFiles: visibleChangedFiles,
   })
+  const selectedFileId =
+    selectedPath === null
+      ? null
+      : (changedFiles.find((file) => file.path === selectedPath)?.fileId ?? null)
+  useEffect(() => {
+    const pinnedFileIds = new Set<ReviewFileId>()
+    if (selectedFileId !== null) pinnedFileIds.add(selectedFileId)
+    if (activeReviewSearchOccurrence !== null) {
+      pinnedFileIds.add(activeReviewSearchOccurrence.fileId)
+    }
+    if (expandedLineAnchor !== null) pinnedFileIds.add(expandedLineAnchor.fileId)
+    for (const fileId of navigationPresentation.pinnedFileIds) pinnedFileIds.add(fileId)
+    setPinnedSnapshotFileIds(pinnedFileIds)
+  }, [
+    activeReviewSearchOccurrence,
+    expandedLineAnchor,
+    selectedFileId,
+    setPinnedSnapshotFileIds,
+    navigationPresentation.pinnedFileIds,
+  ])
   useEffect(() => {
     const initialFileIds = manifest.files.slice(0, 3).map((file) => file.fileId)
     void loadSnapshotFiles(initialFileIds)
@@ -541,157 +793,20 @@ export const ReviewDetailView = ({
       .map((file) => file.fileId)
     void loadSnapshotFiles(fileIds)
   }, [activeWalkthrough, loadSnapshotFiles, manifest.files])
-  const requestReviewSearchPage = useStableCallback(
-    async (
-      cursor: ReviewSnapshotSearchCursor | null,
-      startIndex: number,
-      generation: ReviewSearchRequestGeneration,
-      clearOnFailure = false,
-    ): Promise<ReviewSearchPage | null> => {
-      const cached = reviewSearchPageCache.get(cursor)
-      if (cached !== null) return cached
-      try {
-        const response = Schema.decodeUnknownSync(ReviewSnapshotSearchResponse)(
-          await window.diffDash.reviewSnapshots.search(
-            ReviewSnapshotSearchRequest.make({
-              snapshotId: manifest.snapshotId,
-              query: generation.query,
-              cursor,
-              limit: 200,
-              anchor: generation.anchor,
-            }),
-          ),
-        )
-        if (generation.requestId !== reviewSearchRequestRef.current) return null
-        if (response["_tag"] === "expired") {
-          reviewSearchRequestRef.current += 1
-          reviewSearchGenerationRef.current = null
-          reviewSearchPageCache.clear()
-          setReviewSearchOccurrences([])
-          setReviewSearchTotalMatches(0)
-          reviewSearchNavigationRef.current += 1
-          reviewSearchTargetIndexRef.current = 0
-          activeReviewSearchIndexRef.current = 0
-          setActiveReviewSearchIndex(0)
-          onReload()
-          return null
-        }
-        const activeCursor = reviewSearchPageCache.find(activeReviewSearchIndexRef.current)?.page
-          .cursor
-        const pinnedCursors = new Set<ReviewSnapshotSearchCursor | null>([cursor])
-        if (activeCursor !== undefined) pinnedCursors.add(activeCursor)
-        const page = { cursor, response, startIndex }
-        if (!reviewSearchPageCache.put(page, pinnedCursors)) return null
-        setReviewSearchOccurrences(reviewSearchPageCache.matches())
-        setReviewSearchTotalMatches(response.totalMatches)
-        return page
-      } catch {
-        if (generation.requestId === reviewSearchRequestRef.current && clearOnFailure) {
-          reviewSearchPageCache.clear()
-          setReviewSearchOccurrences([])
-          setReviewSearchTotalMatches(0)
-        }
-        return null
-      }
-    },
-  )
-  const activateReviewSearchIndex = useStableCallback(
-    async (
-      targetIndex: number,
-      generation: ReviewSearchRequestGeneration,
-      navigationId: number,
-    ) => {
-      const cached = reviewSearchPageCache.find(targetIndex)
-      if (cached !== null) {
-        reviewSearchPageCache.get(cached.page.cursor)
-        if (
-          generation.requestId === reviewSearchRequestRef.current &&
-          navigationId === reviewSearchNavigationRef.current
-        ) {
-          activeReviewSearchIndexRef.current = targetIndex
-          setActiveReviewSearchIndex(targetIndex)
-          return true
-        }
-        return false
-      }
-
-      let cursor: ReviewSnapshotSearchCursor | null = null
-      let startIndex = 0
-      while (generation.requestId === reviewSearchRequestRef.current) {
-        // oxlint-disable-next-line eslint/no-await-in-loop -- Opaque cursors require replaying pages in order after eviction.
-        const page = await requestReviewSearchPage(cursor, startIndex, generation)
-        if (page === null) return false
-        const pageEnd = page.startIndex + page.response.matches.length
-        if (targetIndex >= page.startIndex && targetIndex < pageEnd) {
-          if (navigationId !== reviewSearchNavigationRef.current) return false
-          activeReviewSearchIndexRef.current = targetIndex
-          setActiveReviewSearchIndex(targetIndex)
-          return true
-        }
-        if (page.response.nextCursor === null || page.response.matches.length === 0) return false
-        startIndex = pageEnd
-        cursor = page.response.nextCursor
-      }
-      return false
-    },
-  )
-  useEffect(() => {
-    const requestId = reviewSearchRequestRef.current + 1
-    reviewSearchRequestRef.current = requestId
-    const generation = {
-      anchor: reviewSearchAnchorRef.current,
-      query: reviewSearchQuery,
-      requestId,
-    } satisfies ReviewSearchRequestGeneration
-    reviewSearchGenerationRef.current = generation
-    reviewSearchNavigationRef.current += 1
-    reviewSearchTargetIndexRef.current = 0
-    activeReviewSearchIndexRef.current = 0
-    setActiveReviewSearchIndex(0)
-    reviewSearchPageCache.clear()
-    setReviewSearchOccurrences([])
-    setReviewSearchTotalMatches(0)
-    if (!reviewSearchOpen || reviewSearchQuery.length === 0) {
-      reviewSearchGenerationRef.current = null
-      return
-    }
-    void requestReviewSearchPage(null, 0, generation, true)
-  }, [
-    manifest,
-    requestReviewSearchPage,
-    reviewSearchOpen,
-    reviewSearchPageCache,
-    reviewSearchQuery,
-  ])
   const moveReviewSearch = useStableCallback((direction: -1 | 1) => {
-    if (reviewSearchTotalMatches === 0) return
-    const generation = reviewSearchGenerationRef.current
-    if (generation === null || generation.requestId !== reviewSearchRequestRef.current) return
-    const current = reviewSearchTargetIndexRef.current % reviewSearchTotalMatches
-    const targetIndex = (current + direction + reviewSearchTotalMatches) % reviewSearchTotalMatches
-    const navigationId = reviewSearchNavigationRef.current + 1
-    reviewSearchNavigationRef.current = navigationId
-    reviewSearchTargetIndexRef.current = targetIndex
-    void activateReviewSearchIndex(targetIndex, generation, navigationId).then((activated) => {
-      if (!activated && navigationId === reviewSearchNavigationRef.current) {
-        reviewSearchTargetIndexRef.current = activeReviewSearchIndexRef.current
-      }
-      return undefined
-    })
+    reviewSearchController.move(direction)
   })
   const updateReviewSearchQuery = useStableCallback((query: string) => {
-    if (query.length === 0) {
-      reviewSearchAnchorRef.current = captureReviewSearchAnchor(
-        diffScrollContainerRef.current,
-        stickyReviewChromeRef.current,
-        lastPointerPositionRef.current,
-        changedFiles,
-      )
-    }
-    setReviewSearchQuery(query)
-    reviewSearchTargetIndexRef.current = 0
-    activeReviewSearchIndexRef.current = 0
-    setActiveReviewSearchIndex(0)
+    const anchor =
+      query.length === 0
+        ? captureReviewSearchAnchor(
+            diffScrollContainerRef.current,
+            stickyReviewChromeRef.current,
+            lastPointerPositionRef.current,
+            changedFiles,
+          )
+        : undefined
+    reviewSearchController.setQuery(query, anchor)
   })
   const focusReviewSearch = useStableCallback(() => {
     window.requestAnimationFrame(() => {
@@ -707,25 +822,20 @@ export const ReviewDetailView = ({
     if (!reviewSearchOpen && document.activeElement instanceof HTMLElement) {
       previousReviewSearchFocusRef.current = document.activeElement
     }
-    reviewSearchAnchorRef.current = captureReviewSearchAnchor(
-      diffScrollContainerRef.current,
-      stickyReviewChromeRef.current,
-      lastPointerPositionRef.current,
-      changedFiles,
+    reviewSearchController.open(
+      captureReviewSearchAnchor(
+        diffScrollContainerRef.current,
+        stickyReviewChromeRef.current,
+        lastPointerPositionRef.current,
+        changedFiles,
+      ),
     )
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
-    setReviewSearchOpen(true)
     focusReviewSearch()
   })
   const closeReviewSearch = useStableCallback(() => {
-    setReviewSearchOpen(false)
-    reviewSearchGenerationRef.current = null
-    pendingSearchNavigationIdRef.current = null
-    if (pendingSearchNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingSearchNavigationFrameRef.current)
-      pendingSearchNavigationFrameRef.current = null
-    }
+    reviewSearchController.close()
     const previousFocus = previousReviewSearchFocusRef.current
     previousReviewSearchFocusRef.current = null
     window.requestAnimationFrame(() => {
@@ -734,11 +844,7 @@ export const ReviewDetailView = ({
   })
   const requestReviewDiffReconciliation = useStableCallback((reviewKey: string) => {
     const registration = reviewDiffRegistrationsRef.current.get(reviewKey)
-    if (
-      registration === undefined ||
-      registration.phase === "unmount" ||
-      !registration.host.isConnected
-    ) {
+    if (registration === undefined || !registration.host.isConnected) {
       return null
     }
 
@@ -748,266 +854,148 @@ export const ReviewDetailView = ({
     registration.instance.rerender()
     return registration.generation
   })
-  const finishFileNavigation = useStableCallback((token: symbol, path: string) => {
-    if (pendingFileNavigationTokenRef.current !== token) return
-    pendingFileNavigationTokenRef.current = null
-    setTreeNavigationPath((current) => (current === path ? null : current))
-  })
   const cancelFileNavigation = useStableCallback(() => {
-    pendingFileNavigationTokenRef.current = null
-    if (pendingFileNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
-      pendingFileNavigationFrameRef.current = null
-    }
-    pendingThreadNavigationIdRef.current = null
-    if (pendingThreadNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
-      pendingThreadNavigationFrameRef.current = null
-    }
-    setTreeNavigationPath(null)
+    reviewNavigator.cancelActive()
   })
-  const scheduleFileNavigation = useStableCallback((path: string, reviewKey: string) => {
-    const token = Symbol(reviewKey)
-    pendingFileNavigationTokenRef.current = token
-    if (pendingFileNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
-    }
-
-    let attempts = 0
-    let reconciliationPasses = 0
-    let requestedGeneration: number | null = null
-    let readyFrames = 0
-    const navigate = () => {
-      pendingFileNavigationFrameRef.current = null
-      if (pendingFileNavigationTokenRef.current !== token) return
-
-      const container = diffScrollContainerRef.current
-      const card = document.getElementById(diffCardDomId(reviewKey))
-      if (container !== null && card !== null) {
-        const stickyHeight = stickyReviewChromeRef.current?.offsetHeight ?? 0
-        const cardReady =
-          isDiffCardVisible(container, card, stickyHeight) && isDiffCardRendered(card)
-        if (!cardReady) {
-          diffVirtualizer.markDOMDirty()
-          alignDiffCardInPane(container, card, stickyHeight)
-          readyFrames = 0
-        } else if (card.querySelector("[data-diff-card-body]") === null) {
-          finishFileNavigation(token, path)
-          return
-        } else if (requestedGeneration !== null) {
-          const registration = reviewDiffRegistrationsRef.current.get(reviewKey)
-          if (
-            registration !== undefined &&
-            registration.phase !== "unmount" &&
-            registration.generation > requestedGeneration
-          ) {
-            reconciliationPasses += 1
-            requestedGeneration = null
-            alignDiffCardInPane(container, card, stickyHeight)
-          }
-        } else if (reconciliationPasses < 2) {
-          requestedGeneration = requestReviewDiffReconciliation(reviewKey)
-        } else {
-          readyFrames += 1
-          if (readyFrames >= 2) {
-            finishFileNavigation(token, path)
-            return
-          }
-        }
-      }
-
-      attempts += 1
-      if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-        pendingFileNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-      } else {
-        finishFileNavigation(token, path)
-      }
-    }
-
-    pendingFileNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-  })
-  const scheduleThreadNavigation = useStableCallback(
-    (threadId: ReviewThreadId, anchor: ReviewThreadAnchor, reviewKey: string) => {
-      pendingThreadNavigationIdRef.current = threadId
-      if (pendingThreadNavigationFrameRef.current !== null) {
-        window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
-      }
-
-      let attempts = 0
-      let requestedGeneration: number | null = null
-      const navigate = () => {
-        pendingThreadNavigationFrameRef.current = null
-        if (pendingThreadNavigationIdRef.current !== threadId) return
-
-        const container = diffScrollContainerRef.current
-        const card = document.getElementById(diffCardDomId(reviewKey))
-        const registration = reviewDiffRegistrationsRef.current.get(reviewKey)
-        const stickyHeight = stickyReviewChromeRef.current?.offsetHeight ?? 0
-        if (container !== null && card !== null && registration !== undefined) {
-          const linePosition = registration.instance.getLinePosition(
-            anchor.lineNumber,
-            anchor.side === "old" ? "deletions" : "additions",
-          )
-          if (linePosition !== undefined) {
-            const viewportHeight = Math.max(1, container.clientHeight - stickyHeight)
-            const targetOffset =
-              diffVirtualizer.getOffsetInScrollContainer(registration.host) +
-              linePosition.top -
-              stickyHeight
-            const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-            container.scrollTop = Math.min(
-              Math.max(0, targetOffset - (viewportHeight - linePosition.height) / 2),
-              maxScrollTop,
-            )
-            container.dispatchEvent(new Event("scroll"))
-          } else {
-            alignDiffCardInPane(container, card, stickyHeight)
-          }
-
-          if (requestedGeneration === null || registration.generation > requestedGeneration) {
-            requestedGeneration = requestReviewDiffReconciliation(reviewKey)
-          }
-
-          const conversation = document.getElementById(reviewThreadAnnotationContentId(anchor))
-          const threadPanel = [
-            ...document.querySelectorAll<HTMLElement>("[data-review-thread-id]"),
-          ].find((panel) => panel.dataset.reviewThreadId === threadId)
-          const target = threadPanel ?? conversation
-          if (target !== null) {
-            const containerRect = container.getBoundingClientRect()
-            const targetRect = target.getBoundingClientRect()
-            const visibleTop = containerRect.top + stickyHeight
-            const maxTargetScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-            container.scrollTop = Math.min(
-              Math.max(0, container.scrollTop + targetRect.top - visibleTop - 8),
-              maxTargetScrollTop,
-            )
-            container.dispatchEvent(new Event("scroll"))
-            pendingThreadNavigationIdRef.current = null
-            return
-          }
-        }
-
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingThreadNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        } else {
-          pendingThreadNavigationIdRef.current = null
-        }
-      }
-
-      pendingThreadNavigationFrameRef.current = window.requestAnimationFrame(navigate)
+  const submitFileNavigation = useStableCallback(
+    (file: ReviewSnapshotFileInventory, origin: "file-tree" | "walkthrough" | "command") => {
+      void reviewNavigator.navigate(
+        ReviewNavigationInput.make({
+          location: ReviewLocationV1.make({
+            version: 1,
+            snapshot: reviewSnapshotAddress,
+            target: FileReviewNavigationTarget.make({ fileId: file.fileId }),
+          }),
+          behavior: ReviewNavigationBehavior.make({
+            alignment: "start",
+            focus: "preserve",
+            selection: "update",
+            visibility: "temporarily-reveal",
+          }),
+          origin,
+        }),
+      )
     },
   )
-  const scheduleSearchNavigation = useStableCallback((occurrence: ReviewSearchOccurrence) => {
-    pendingSearchNavigationIdRef.current = occurrence.id
-    if (pendingSearchNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingSearchNavigationFrameRef.current)
-    }
-
-    let attempts = 0
-    let reconciliationPasses = 0
-    let requestedGeneration: number | null = null
-    const navigate = () => {
-      pendingSearchNavigationFrameRef.current = null
-      if (activeReviewSearchOccurrenceRef.current?.id !== occurrence.id) return
-
-      const container = diffScrollContainerRef.current
-      const target = reviewSearchHighlights.getScrollTarget(occurrence)
-      if (container === null || target === null || !target.host.isConnected) {
-        const card = document.getElementById(diffCardDomId(occurrence.reviewKey))
-        if (container !== null && card !== null) {
-          diffVirtualizer.markDOMDirty()
-          alignDiffCardInPane(container, card, stickyReviewChromeRef.current?.offsetHeight ?? 0)
-        }
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        }
-        return
-      }
-
-      if (requestedGeneration !== null) {
-        const registration = reviewDiffRegistrationsRef.current.get(occurrence.reviewKey)
-        if (
-          registration === undefined ||
-          registration.phase === "unmount" ||
-          registration.generation <= requestedGeneration
-        ) {
-          attempts += 1
-          if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-            pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-          }
-          return
-        }
-        reconciliationPasses += 1
-        requestedGeneration = null
-      }
-
-      if (reconciliationPasses === 0) {
-        requestedGeneration = requestReviewDiffReconciliation(occurrence.reviewKey)
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        }
-        return
-      }
-
-      const stickyHeight = stickyReviewChromeRef.current?.offsetHeight ?? 0
-      const viewportHeight = Math.max(1, container.clientHeight - stickyHeight)
-      const targetOffset =
-        diffVirtualizer.getOffsetInScrollContainer(target.host) + target.top - stickyHeight
-      const estimatedScrollTop = targetOffset - (viewportHeight - target.height) / 2
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-      container.scrollTop = Math.min(Math.max(0, estimatedScrollTop), maxScrollTop)
-      container.dispatchEvent(new Event("scroll"))
-
-      const matchRect = reviewSearchHighlights.getActiveMatchRect()
-      const matchElement = reviewSearchHighlights.getActiveMatchElement()
-      if (matchRect === null || matchElement === null) {
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        }
-        return
-      }
-
-      if (reconciliationPasses < 2) {
-        requestedGeneration = requestReviewDiffReconciliation(occurrence.reviewKey)
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        }
-        return
-      }
-
-      const containerRect = container.getBoundingClientRect()
-      const visibleTop = containerRect.top + stickyHeight
-      const visibleCenter = visibleTop + (containerRect.bottom - visibleTop) / 2
-      const matchElementRect = matchElement.getBoundingClientRect()
-      const matchElementCenter = matchElementRect.top + matchElementRect.height / 2
-      const refinedScrollTop = container.scrollTop + matchElementCenter - visibleCenter
-      const refinedMaxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-      container.scrollTop = Math.min(Math.max(0, refinedScrollTop), refinedMaxScrollTop)
-      container.dispatchEvent(new Event("scroll"))
-      const visibleMatchRect = reviewSearchHighlights.getActiveMatchRect()
-      const visibleContainerRect = container.getBoundingClientRect()
-      if (
-        visibleMatchRect === null ||
-        visibleMatchRect.bottom <= visibleContainerRect.top + stickyHeight ||
-        visibleMatchRect.top >= visibleContainerRect.bottom
-      ) {
-        attempts += 1
-        if (attempts < REVIEW_NAVIGATION_MAX_FRAMES) {
-          pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
-        }
-        return
-      }
-      pendingSearchNavigationIdRef.current = null
-    }
-
-    pendingSearchNavigationFrameRef.current = window.requestAnimationFrame(navigate)
+  const submitThreadNavigation = useStableCallback((threadId: ReviewThreadId) => {
+    void reviewNavigator.navigate(
+      ReviewNavigationInput.make({
+        location: ReviewLocationV1.make({
+          version: 1,
+          snapshot: reviewSnapshotAddress,
+          target: ThreadReviewNavigationTarget.make({ threadId }),
+        }),
+        behavior: ReviewNavigationBehavior.make({
+          alignment: "center",
+          focus: "target",
+          selection: "update",
+          visibility: "temporarily-reveal",
+        }),
+        origin: "thread-detail",
+      }),
+    )
   })
+  const prepareNavigationFile = useStableCallback(
+    (file: ReviewSnapshotFileInventory, input: ReviewNavigationInput) => {
+      if (input.behavior.selection === "update") onSelectPath(file.path)
+      if (input.behavior.selection === "update") setNavigationSelectedFileId(file.fileId)
+      setActivePane("diff")
+      if (input.origin === "thread-detail") {
+        setThreadSidebarState({ _tag: "collapsed" })
+        setSidebarTab("tree")
+        onSidebarExpandedChange(true)
+      }
+    },
+  )
+  reviewViewportBridge.update({
+    manifest,
+    containerRef: diffScrollContainerRef,
+    stickyChromeRef: stickyReviewChromeRef,
+    pages: snapshotPageReader,
+    diffRegistrations: reviewDiffRegistrationsRef.current,
+    diffVirtualizer,
+    searchHighlights: reviewSearchHighlights,
+    searchOccurrences: reviewSearchOccurrences,
+    threads: reviewThreads.details,
+    requestReconciliation: requestReviewDiffReconciliation,
+    prepareFile: prepareNavigationFile,
+    activateWindow: () => window.diffDash.navigation.activateWindow(),
+  })
+  const navigationDisposeTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (navigationDisposeTimerRef.current !== null) {
+      window.clearTimeout(navigationDisposeTimerRef.current)
+      navigationDisposeTimerRef.current = null
+    }
+    reviewNavigator.attach(
+      { projectId: manifest.projectId, snapshotId: manifest.snapshotId },
+      reviewViewportBridge,
+    )
+    return () => {
+      reviewNavigator.detach("review-loading")
+      navigationDisposeTimerRef.current = window.setTimeout(() => {
+        reviewNavigator.dispose()
+        reviewNavigationAnchors.dispose()
+      }, 0)
+    }
+  }, [
+    manifest.projectId,
+    manifest.snapshotId,
+    reviewNavigationAnchors,
+    reviewNavigator,
+    reviewViewportBridge,
+  ])
+  const reviewSearchDisposeTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (reviewSearchDisposeTimerRef.current !== null) {
+      window.clearTimeout(reviewSearchDisposeTimerRef.current)
+      reviewSearchDisposeTimerRef.current = null
+    }
+    reviewSearchController.attach(
+      ReviewSnapshotAddress.make({
+        projectId: manifest.projectId,
+        snapshotId: manifest.snapshotId,
+      }),
+    )
+    return () => {
+      reviewSearchController.detach()
+      reviewSearchDisposeTimerRef.current = window.setTimeout(() => {
+        reviewSearchController.dispose()
+      }, 0)
+    }
+  }, [reviewSearchController, manifest.projectId, manifest.snapshotId])
+  useEffect(() => {
+    const previous = reviewSearchManifestRef.current
+    reviewSearchManifestRef.current = manifest
+    if (
+      previous === manifest ||
+      previous.projectId !== manifest.projectId ||
+      previous.snapshotId !== manifest.snapshotId
+    ) {
+      return
+    }
+    reviewSearchController.attach(
+      ReviewSnapshotAddress.make({
+        projectId: manifest.projectId,
+        snapshotId: manifest.snapshotId,
+      }),
+    )
+  }, [manifest, reviewSearchController])
+  useEffect(() => {
+    if (!navigationLocked) return undefined
+    const container = diffScrollContainerRef.current
+    if (container === null) return undefined
+    const preventViewportInput = (event: Event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    container.addEventListener("wheel", preventViewportInput, { passive: false })
+    container.addEventListener("touchmove", preventViewportInput, { passive: false })
+    return () => {
+      container.removeEventListener("wheel", preventViewportInput)
+      container.removeEventListener("touchmove", preventViewportInput)
+    }
+  }, [navigationLocked])
   useLayoutEffect(() => {
     reviewSearchHighlights.setSearch(
       reviewSearchOpen ? reviewSearchOccurrences : [],
@@ -1019,14 +1007,6 @@ export const ReviewDetailView = ({
     reviewSearchOccurrences,
     reviewSearchOpen,
   ])
-  useEffect(() => {
-    if (activeReviewSearchOccurrence !== null) {
-      void loadSnapshotFiles([activeReviewSearchOccurrence.fileId]).then(() => {
-        scheduleSearchNavigation(activeReviewSearchOccurrence)
-        return undefined
-      })
-    }
-  }, [activeReviewSearchOccurrence, loadSnapshotFiles, scheduleSearchNavigation])
   const handleDiffRendered = useStableCallback<
     (reviewKey: string, node: HTMLElement, instance: object, phase: PostRenderPhase) => void
   >((reviewKey, node, instance, phase) => {
@@ -1034,20 +1014,24 @@ export const ReviewDetailView = ({
       const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
       if (previous !== undefined && previous.host !== node) {
         reviewDiffResizeObserverRef.current?.unobserve(previous.host)
+        reviewDiffRegistrationsByHostRef.current.delete(previous.host)
       }
-      reviewDiffRegistrationsRef.current.set(reviewKey, {
+      const registration = {
         generation:
           previous?.host === node && previous.instance === instance ? previous.generation + 1 : 1,
         host: node,
         instance,
-        phase,
-      })
+        rendered: phase !== "unmount",
+      } satisfies ReviewDiffRegistration
+      reviewDiffRegistrationsRef.current.set(reviewKey, registration)
+      reviewDiffRegistrationsByHostRef.current.set(node, registration)
       if (phase === "unmount") {
-        reviewDiffResizeObserverRef.current?.unobserve(node)
         queueMicrotask(() => {
           const current = reviewDiffRegistrationsRef.current.get(reviewKey)
           if (current?.host === node && !node.isConnected) {
+            reviewDiffResizeObserverRef.current?.unobserve(node)
             reviewDiffRegistrationsRef.current.delete(reviewKey)
+            reviewDiffRegistrationsByHostRef.current.delete(node)
           }
         })
       } else {
@@ -1058,23 +1042,14 @@ export const ReviewDetailView = ({
     handleViewedDiffRendered(reviewKey, phase)
   })
   useEffect(() => {
-    pendingFileNavigationTokenRef.current = null
     lastPointerPositionRef.current = null
     for (const registration of reviewDiffRegistrationsRef.current.values()) {
       reviewDiffResizeObserverRef.current?.unobserve(registration.host)
     }
     reviewDiffRegistrationsRef.current.clear()
-    if (pendingFileNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingFileNavigationFrameRef.current)
-      pendingFileNavigationFrameRef.current = null
-    }
-    pendingThreadNavigationIdRef.current = null
-    if (pendingThreadNavigationFrameRef.current !== null) {
-      window.cancelAnimationFrame(pendingThreadNavigationFrameRef.current)
-      pendingThreadNavigationFrameRef.current = null
-    }
-    setTreeNavigationPath(null)
-    setSidebarTab("tree")
+    reviewDiffRegistrationsByHostRef.current = new WeakMap()
+    reviewNavigator.cancelActive()
+    onSidebarExpandedChange(true)
     setWalkthroughState({ status: "idle" })
     setActiveWalkthroughStepIndex(0)
     setVisitedWalkthroughStepIndexes(new Set())
@@ -1082,23 +1057,14 @@ export const ReviewDetailView = ({
     setShowHiddenFiles(false)
     setGoToPaletteOpen(false)
     setActionPaletteOpen(false)
-    setReviewSearchOpen(false)
-    reviewSearchAnchorRef.current = null
-    reviewSearchGenerationRef.current = null
-    setReviewSearchQuery("")
-    reviewSearchPageCache.clear()
-    setReviewSearchOccurrences([])
-    setReviewSearchTotalMatches(0)
-    reviewSearchNavigationRef.current += 1
-    reviewSearchTargetIndexRef.current = 0
-    activeReviewSearchIndexRef.current = 0
-    setActiveReviewSearchIndex(0)
+    setNavigationSelectedFileId(null)
     setExpandedLineAnchor(null)
+    setThreadSidebarState({ _tag: "collapsed" })
     setRepositoryBannerDismissed(false)
     setRepositoryLinking(false)
     setRepositoryLinkError(null)
     setApprovalState("checking")
-  }, [reviewIdentity, reviewBaseSha, reviewHeadSha, reviewSearchPageCache])
+  }, [onSidebarExpandedChange, reviewBaseSha, reviewHeadSha, reviewIdentity, reviewNavigator])
 
   useEffect(() => {
     if (sourceOperations.decision._tag === "unsupported") {
@@ -1127,12 +1093,31 @@ export const ReviewDetailView = ({
   useEffect(() => {
     const handleReviewShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
-      if (
-        pendingFileNavigationTokenRef.current !== null &&
-        isViewportScrollKey(key) &&
-        !isEditableTarget(event.target)
-      ) {
-        cancelFileNavigation()
+      if (navigationLocked && key === "escape") {
+        event.preventDefault()
+        event.stopPropagation()
+        if (reviewSearchOpen) closeReviewSearch()
+        else {
+          setGoToPaletteOpen(false)
+          setActionPaletteOpen(false)
+          reviewNavigator.cancelForUser()
+        }
+        return
+      }
+      if (threadSidebarState._tag === "detail") return
+      if (navigationLocked && isViewportScrollKey(key) && !isEditableTarget(event.target)) {
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      if (key === "escape" && threadSidebarState._tag === "list") {
+        event.preventDefault()
+        event.stopPropagation()
+        setThreadSidebarState({ _tag: "collapsed" })
+        onSidebarExpandedChange(false)
+        setActivePane("diff")
+        window.requestAnimationFrame(() => threadsActivityButtonRef.current?.focus())
+        return
       }
       if (isModKey(event) && key === "f") {
         event.preventDefault()
@@ -1206,15 +1191,26 @@ export const ReviewDetailView = ({
     closeReviewSearch,
     goToPaletteOpen,
     moveReviewSearch,
+    navigationLocked,
+    onSidebarExpandedChange,
     openReviewSearch,
     reviewSearchOpen,
     selectedVisiblePath,
     setViewedPreservingViewport,
+    threadSidebarState._tag,
+    reviewNavigator,
     viewedFileKeys,
     visibleChangedFiles,
   ])
 
   const loadWalkthrough = async (regenerate: boolean) => {
+    if (changedFiles.length === 0) {
+      setWalkthroughState({
+        status: "empty",
+        message: "This review has no reviewable file changes.",
+      })
+      return
+    }
     if (!regenerate && reviewBaseSha !== null && reviewHeadSha !== null) {
       setWalkthroughState({ status: "loading", message: "Loading cached walkthrough" })
       try {
@@ -1234,7 +1230,7 @@ export const ReviewDetailView = ({
 
     if (!aiAgentAvailable) {
       setWalkthroughState({
-        status: "error",
+        status: "unavailable",
         message:
           "Walkthrough generation is disabled because the configured AI agent is unavailable.",
       })
@@ -1281,12 +1277,59 @@ export const ReviewDetailView = ({
     }
   }
 
-  const selectSidebarTab = (tab: ReviewSidebarTab) => {
-    if (tab === "walkthrough" && !aiAgentAvailable) return
-    setSidebarTab(tab)
-    if (tab === "walkthrough" && walkthroughState.status === "idle") {
-      void loadWalkthrough(false)
+  const loadActiveWalkthrough = useEffectEvent(loadWalkthrough)
+  useEffect(() => {
+    if (sidebarTab === "walkthrough" && walkthroughState.status === "idle") {
+      void loadActiveWalkthrough(false)
     }
+  }, [sidebarTab, walkthroughState.status])
+
+  const selectSidebarTab = (tab: ReviewSidebarTab) => {
+    setSidebarTab(tab)
+    onSidebarExpandedChange(true)
+    setActivePane("context")
+    setThreadSidebarState(tab === "threads" ? { _tag: "list" } : { _tag: "collapsed" })
+  }
+  const toggleSidebarTab = (tab: ReviewSidebarTab, placement: "rail" | "bottom") => {
+    if (placement === "bottom" && tab === sidebarTab && activePane === "thread-detail") {
+      setActivePane("diff")
+      return
+    }
+    if (
+      tab === sidebarTab &&
+      sidebarExpanded &&
+      (placement === "rail" || activePane === "context")
+    ) {
+      setThreadSidebarState({ _tag: "collapsed" })
+      onSidebarExpandedChange(false)
+      setActivePane("diff")
+      return
+    }
+    selectSidebarTab(tab)
+  }
+  const focusActiveSidebarTab = () => {
+    const button =
+      sidebarTab === "reviews"
+        ? reviewsActivityButtonRef.current
+        : sidebarTab === "tree"
+          ? treeActivityButtonRef.current
+          : sidebarTab === "walkthrough"
+            ? walkthroughActivityButtonRef.current
+            : threadsActivityButtonRef.current
+    window.requestAnimationFrame(() => button?.focus())
+  }
+  const updateThreadSidebarState = (state: ReviewThreadSidebarState) => {
+    setThreadSidebarState(state)
+    if (state._tag === "collapsed") {
+      cancelFileNavigation()
+      onSidebarExpandedChange(false)
+      setActivePane("diff")
+      focusActiveSidebarTab()
+      return
+    }
+    setSidebarTab("threads")
+    onSidebarExpandedChange(true)
+    setActivePane(state._tag === "detail" ? "thread-detail" : "context")
   }
 
   const markActiveWalkthroughStepComplete = () => {
@@ -1313,11 +1356,12 @@ export const ReviewDetailView = ({
     setFileOpenStatus(`Revealed ${hiddenFileCount} hidden file${hiddenFileCount === 1 ? "" : "s"}.`)
   }
   const selectReviewFile = (file: ReviewSnapshotFileInventory) => {
+    selectSidebarTab("tree")
     setFileFilter("")
-    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
-    selectPathAndScroll(file.path, file.reviewKey)
+    setActivePane("diff")
+    submitFileNavigation(file, "command")
   }
-  const selectReviewThread = (details: ReviewThreadDetails) => {
+  const goToReviewThread = (details: ReviewThreadDetails) => {
     const anchor = details.thread.currentAnchor
     if (anchor === null || details.thread.anchorStatus !== "active") return
     const file = changedFiles.find(
@@ -1325,17 +1369,8 @@ export const ReviewDetailView = ({
     )
     if (file === undefined) return
 
-    cancelFileNavigation()
-    setSidebarTab("tree")
-    setFileFilter("")
-    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
-    setTreeNavigationPath(file.path)
-    onSelectPath(file.path)
     setExpandedLineAnchor(anchor)
-    void loadSnapshotFiles([file.fileId]).then(() => {
-      scheduleThreadNavigation(details.thread.id, anchor, file.reviewKey)
-      return undefined
-    })
+    submitThreadNavigation(details.thread.id)
   }
   const selectWalkthroughStepAndFocus = (index: number) => {
     selectSidebarTab("walkthrough")
@@ -1350,9 +1385,15 @@ export const ReviewDetailView = ({
   const toggleExpandedLine = (anchor: ReviewThreadAnchor) => {
     setExpandedLineAnchor((current) => (sameReviewThreadLine(current, anchor) ? null : anchor))
   }
+  const openReviewThreadDetail = (details: ReviewThreadDetails) => {
+    setSidebarTab("threads")
+    onSidebarExpandedChange(true)
+    setThreadSidebarState({ _tag: "detail", threadId: details.thread.id })
+    setActivePane("thread-detail")
+  }
   const reviewGoToItems = reviewGoToPaletteItems({
     files: changedFiles,
-    mode: sidebarTab,
+    mode: sidebarTab === "walkthrough" ? "walkthrough" : "tree",
     onSelectFile: selectReviewFile,
     onSelectWalkthroughStep: selectWalkthroughStepAndFocus,
     steps: activeWalkthroughSteps,
@@ -1372,6 +1413,20 @@ export const ReviewDetailView = ({
     walkthroughLoading: walkthroughState.status === "loading",
   })
   const toggleVisibleDiffCard = (reviewKey: string) => {
+    const container = diffScrollContainerRef.current
+    const stickyChrome = stickyReviewChromeRef.current
+    const card = document.getElementById(diffCardDomId(reviewKey))
+    if (container !== null && stickyChrome !== null && card !== null) {
+      const visibleTop = container.getBoundingClientRect().top + stickyChrome.offsetHeight
+      const cardRect = card.getBoundingClientRect()
+      if (cardRect.top < visibleTop && cardRect.bottom > visibleTop) {
+        const requested = container.scrollTop + cardRect.top - visibleTop
+        const max = Math.max(0, container.scrollHeight - container.clientHeight)
+        container.scrollTop = Math.min(Math.max(0, requested), max)
+        container.dispatchEvent(new Event("scroll"))
+      }
+    }
+
     if (sidebarTab !== "walkthrough" || activeWalkthroughStep === null) {
       onToggleExpanded(reviewKey)
       return
@@ -1396,14 +1451,14 @@ export const ReviewDetailView = ({
   const selectWalkthroughFile = (stepIndex: number, file: ParsedDiffFile) => {
     selectWalkthroughStep(stepIndex)
     setFileFilter("")
-    if (getHiddenDiffFileReason(file) !== null) setShowHiddenFiles(true)
-    selectPathAndScroll(file.path, file.reviewKey)
+    setActivePane("diff")
+    const inventoryFile = changedFiles.find((candidate) => candidate.fileId === file.fileId)
+    if (inventoryFile !== undefined) submitFileNavigation(inventoryFile, "walkthrough")
   }
-  const selectPathAndScroll = (path: string, reviewKey?: string) => {
-    setTreeNavigationPath(path)
-    onSelectPath(path)
+  const selectPathAndScroll = (path: string) => {
+    setActivePane("diff")
     const file = changedFiles.find((changedFile) => changedFile.path === path)
-    if (file !== undefined) scheduleFileNavigation(path, reviewKey ?? file.reviewKey)
+    if (file !== undefined) submitFileNavigation(file, "file-tree")
   }
   const openRepositoryFile = async (path: string) => {
     setFileOpenStatus(`Opening ${path}...`)
@@ -1451,370 +1506,392 @@ export const ReviewDetailView = ({
 
   const reviewContent = (
     <>
-      <section className="bg-background flex h-full min-h-0 overflow-hidden text-sm">
-        <aside className="bg-review-sidebar text-review-sidebar-fg border-review-sidebar-border flex h-full min-h-0 w-review-sidebar shrink-0 flex-col border-r">
-          <div className="border-review-sidebar-divider flex h-12 items-center gap-2 border-b pt-review-title-top-offset pr-3 pl-review-title-inset">
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="shrink-0"
-              aria-label="Back"
-              onClick={onBack}
-            >
-              <ArrowLeft className="size-3" />
-            </Button>
-            <div
-              className="text-review-sidebar-fg min-w-0 flex-1 truncate font-mono text-xs"
-              title={reviewSubjectRepositoryLabel(reviewSubject)}
-            >
-              {reviewSubjectRepositoryLabel(reviewSubject)}
-            </div>
-            <WalkthroughSettingsMenu
-              catalog={agentProviderCatalog}
-              settings={aiSettings}
-              onChange={onAISettingsChange}
-            />
-          </div>
-
-          <div className="border-review-sidebar-divider space-y-2 border-b p-3">
-            <Input
-              value={fileFilter}
-              onChange={(event) => setFileFilter(event.currentTarget.value)}
-              className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-fg placeholder:text-review-sidebar-muted h-8 text-xs"
-              placeholder="Filter files"
-            />
-            <div className="bg-review-sidebar-control grid grid-cols-2 rounded-xl p-0.5 text-xs">
-              <button
-                type="button"
-                className={`rounded-lg py-1.5 font-medium ${sidebarTab === "tree" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
-                onClick={() => selectSidebarTab("tree")}
-              >
-                Tree
-              </button>
-              <button
-                type="button"
-                disabled={!aiAgentAvailable}
-                title={aiAgentAvailable ? undefined : CODING_AGENT_SETUP_MESSAGE}
-                className={`rounded-lg py-1.5 font-medium disabled:cursor-not-allowed disabled:opacity-45 ${sidebarTab === "walkthrough" ? "bg-review-sidebar-control-active text-review-sidebar-fg" : "text-review-sidebar-muted"}`}
-                onClick={() => selectSidebarTab("walkthrough")}
-              >
-                Walkthrough
-              </button>
-            </div>
-            {!aiAgentAvailable ? (
-              <p className="text-caption text-review-sidebar-muted leading-4">
-                {CODING_AGENT_SETUP_MESSAGE}
-              </p>
-            ) : null}
-            {sidebarTab === "walkthrough" ? (
-              <>
-                <div className="flex items-center justify-between gap-2 pt-1">
-                  <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
-                    {aiProviderLabel(aiSettings.routes.walkthrough, agentProviderCatalog)} /{" "}
-                    {selectedAIModelLabel(aiSettings, agentProviderCatalog)}
-                  </div>
-                </div>
-                {agentUnavailableReason(
-                  aiSettings.routes.walkthrough,
-                  agentProviderCatalog,
-                  "walkthrough",
-                ) === null ? null : (
-                  <p className="text-caption text-review-sidebar-muted leading-4">
-                    {agentUnavailableReason(
-                      aiSettings.routes.walkthrough,
-                      agentProviderCatalog,
-                      "walkthrough",
-                    )}
-                  </p>
-                )}
-              </>
-            ) : null}
-          </div>
-
-          <div
-            className={`min-h-0 flex-1 overscroll-contain py-2 pr-1 ${
-              sidebarTab === "walkthrough" ? "overflow-y-auto" : "overflow-hidden"
-            }`}
-          >
-            {sidebarTab === "walkthrough" ? (
-              <WalkthroughSidebar
-                activeStepIndex={activeWalkthroughStepIndex}
-                changedFiles={loadedChangedFiles}
-                hunkDigest={walkthroughHunkDigest}
-                scope={walkthroughScope}
-                state={walkthroughState}
-                visitedStepIndexes={visitedWalkthroughStepIndexes}
-                viewedFileKeys={viewedFileKeys}
-                onRegenerate={() => void loadWalkthrough(true)}
-                onRetry={() => void loadWalkthrough(false)}
-                onSelectFile={selectWalkthroughFile}
-                onSelectStep={selectWalkthroughStep}
+      <ReviewWorkbenchLayout
+        activePane={activePane}
+        detailOpen={threadSidebarState._tag === "detail"}
+        preferences={{ contextWidth: sidebarWidth, threadDetailWidth }}
+        sidebarRequestedOpen={sidebarExpanded}
+        onContextCollapsedByUser={() => onSidebarExpandedChange(false)}
+        onContextWidthCommit={onSidebarWidthChange}
+        onDetailCollapsedByUser={() => updateThreadSidebarState({ _tag: "list" })}
+        onDetailWidthCommit={onThreadDetailWidthChange}
+        renderActivityNavigation={(placement) => (
+          <ProjectActivityNavigation
+            activeRibbon={activeRibbon}
+            buttonRefs={{
+              reviews: reviewsActivityButtonRef,
+              files: treeActivityButtonRef,
+              walkthrough: walkthroughActivityButtonRef,
+              threads: threadsActivityButtonRef,
+            }}
+            placement={placement}
+            sidebarExpanded={sidebarExpanded && (placement === "rail" || activePane === "context")}
+            onSelect={(ribbon) => toggleSidebarTab(projectRibbonToSidebarTab(ribbon), placement)}
+          />
+        )}
+        context={
+          sidebarExpanded ? (
+            sidebarTab === "reviews" ? (
+              reviewsContext
+            ) : sidebarTab === "threads" ? (
+              <ReviewThreadListPane
+                buttonRefs={threadButtonRefs as ReviewThreadButtonRefs}
+                controller={reviewThreads}
+                navigableThreadIds={navigableThreadIds}
+                state={threadSidebarState}
+                onCollapse={() => updateThreadSidebarState({ _tag: "collapsed" })}
+                onGoToDiff={goToReviewThread}
+                onOpenDetail={(threadId) => updateThreadSidebarState({ _tag: "detail", threadId })}
               />
             ) : (
-              <ReviewFileTree
-                files={filteredChangedFiles}
-                selectedPath={selectedTreePath}
-                onSelectPath={selectPathAndScroll}
-              />
-            )}
-          </div>
-
-          <div className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-muted flex items-center justify-between gap-2 border-t px-3 py-2 text-xs">
-            <span>
-              {hiddenFileCount > 0 && !showHiddenFiles ? `${hiddenFileCount} hidden` : "Total"}
-            </span>
-            <span>
-              <span className="text-review-success">+{totalAdditions}</span>{" "}
-              <span className="text-review-danger">-{totalDeletions}</span>
-            </span>
-          </div>
-        </aside>
-
-        <div
-          ref={setDiffScrollContainer}
-          data-review-diff-scroll-container
-          style={{ overflowAnchor: "none" }}
-          className="h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
-          onPointerDown={cancelFileNavigation}
-          onPointerMove={(event) => {
-            lastPointerPositionRef.current = { clientX: event.clientX, clientY: event.clientY }
-          }}
-          onPointerLeave={() => {
-            lastPointerPositionRef.current = null
-          }}
-          onTouchStart={cancelFileNavigation}
-          onWheel={cancelFileNavigation}
-        >
-          <div className="min-h-full">
-            <div
-              ref={stickyReviewChromeRef}
-              data-review-sticky-chrome
-              className="bg-background/95 sticky top-0 z-10 backdrop-blur"
-            >
-              <div className="border-b px-5 py-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div
-                    role={operationError === null ? undefined : "alert"}
-                    className="text-muted-foreground min-w-0 truncate text-xs"
-                  >
-                    {operationError ?? fileOpenStatus ?? status}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ReviewActionsMenu items={reviewActionItems} />
-                  </div>
-                </div>
-              </div>
-              {reviewSearchOpen ? (
-                <ReviewSearchToolbar
-                  activeIndex={normalizedReviewSearchIndex}
-                  inputRef={reviewSearchInputRef}
-                  matchCount={reviewSearchTotalMatches}
-                  query={reviewSearchQuery}
-                  onClose={closeReviewSearch}
-                  onNext={() => moveReviewSearch(1)}
-                  onPrevious={() => moveReviewSearch(-1)}
-                  onQueryChange={updateReviewSearchQuery}
-                />
-              ) : null}
-              {showRepositoryLinkBanner ? (
-                <section
-                  aria-label="Local repository not linked"
-                  className="bg-accent/70 border-b px-5 py-3"
-                >
-                  <div className="mx-auto flex max-w-review-diff items-start gap-3">
-                    <div className="bg-background text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs">
-                      <FolderGit2 className="size-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold">
-                        Link a checkout for isolated agent review
-                      </p>
-                      <p className="text-muted-foreground mt-0.5 text-xs leading-5">
-                        DiffDash creates a private worktree at the exact PR revision. Your branch
-                        and local changes are never switched or cleaned.
-                      </p>
-                      {repositoryLinkError === null ? null : (
-                        <p role="alert" className="text-destructive mt-1 text-xs">
-                          {repositoryLinkError}
-                        </p>
-                      )}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={repositoryLinking}
-                      onClick={() => void linkRepository()}
-                    >
-                      {repositoryLinking ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                      {repositoryLinking ? "Linking" : "Link folder"}
-                    </Button>
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      aria-label="Dismiss local repository banner"
-                      onClick={() => setRepositoryBannerDismissed(true)}
-                    >
-                      <X className="size-3.5" />
-                    </Button>
-                  </div>
-                </section>
-              ) : null}
-            </div>
-
-            <main className="mx-auto max-w-review-diff space-y-4 px-5 py-4">
-              {sidebarTab === "walkthrough" ? (
-                <WalkthroughMainHeader
-                  activeStepComplete={activeStepComplete}
-                  step={activeWalkthroughStep}
-                  state={walkthroughState}
-                  onMarkComplete={markActiveWalkthroughStepComplete}
-                  onNextStep={() =>
-                    selectWalkthroughStep(
-                      activeWalkthrough === null
-                        ? activeWalkthroughStepIndex
-                        : Math.min(
-                            activeWalkthroughStepIndex + 1,
-                            activeWalkthroughSteps.length - 1,
-                          ),
-                    )
-                  }
-                  onRetry={() => void loadWalkthrough(false)}
-                />
-              ) : null}
-              <section
-                id="review-thread-summary"
-                className="bg-card scroll-mt-14 rounded-2xl border p-4 shadow-xs"
+              <aside
+                data-review-context-panel
+                className="bg-review-sidebar text-review-sidebar-fg relative z-20 flex h-full min-h-0 min-w-0 flex-col"
               >
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {reviewSubject.kind === "hosted" ? (
-                    <>
-                      <Badge variant="outline" className="text-caption">
-                        #{reviewSubject.hostedReview.summary.locator.number}
-                      </Badge>
-                      <PullRequestStateBadge
-                        className="text-caption"
-                        isDraft={reviewSubject.hostedReview.summary.draft}
-                        state={reviewSubject.hostedReview.summary.state}
-                      />
-                      <Badge variant="secondary" className="text-caption">
-                        @{reviewSubject.hostedReview.summary.author.username}
-                      </Badge>
-                      {sidebarTab === "walkthrough" ? (
-                        <Badge
-                          variant="outline"
-                          className="text-caption"
-                          title="Walkthrough generated from PR metadata and diff only."
-                        >
-                          <Cloud className="size-3" />
-                          Diff-only
-                        </Badge>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <Badge variant="outline" className="text-caption">
-                        Local
-                      </Badge>
-                      {reviewSubject.localReview.branchName === null ? null : (
-                        <Badge variant="secondary" className="text-caption">
-                          <GitBranch className="size-3" />
-                          {reviewSubject.localReview.branchName}
-                        </Badge>
-                      )}
-                      {reviewSubject.localReview.comparison["_tag"] === "branch" ? (
-                        <Badge variant="outline" className="text-caption">
-                          vs {reviewSubject.localReview.comparison.branchName}
-                        </Badge>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-                <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-                  {reviewSubjectTitle(reviewSubject)}
-                </h1>
-                <div className="text-muted-foreground mt-2 grid gap-2 text-xs md:grid-cols-4">
-                  <Metric label="Files" value={String(manifest.files.length)} />
-                  {reviewSubject.kind === "hosted" ? (
-                    <>
-                      <Metric
-                        label="Commits"
-                        value={String(reviewSubject.hostedReview.commits.length)}
-                      />
-                      <Metric
-                        label="Head"
-                        value={shortSha(reviewSubject.hostedReview.summary.head.revision)}
-                      />
-                      <Metric
-                        label="Base"
-                        value={shortSha(reviewSubject.hostedReview.summary.base.revision)}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <Metric label="Repo" value={reviewSubject.localReview.repoName} />
-                      <Metric label="Diff" value={shortSha(reviewSubject.localReview.headSha)} />
-                      <Metric label="Base" value={shortSha(reviewSubject.localReview.baseSha)} />
-                    </>
-                  )}
-                </div>
-                <ReviewThreadSummary
-                  controller={reviewThreads}
-                  navigableThreadIds={navigableThreadIds}
-                  onSelectThread={selectReviewThread}
-                />
-              </section>
+                <header
+                  data-review-context-header
+                  className="border-review-sidebar-divider flex h-9 shrink-0 items-center gap-2 border-b px-3"
+                >
+                  <h2 className="text-caption min-w-0 flex-1 truncate font-semibold tracking-wide uppercase">
+                    {sidebarTab === "walkthrough" ? "Walkthrough" : "Files"}
+                  </h2>
+                  <WalkthroughSettingsMenu
+                    catalog={agentProviderCatalog}
+                    settings={aiSettings}
+                    onChange={onAISettingsChange}
+                  />
+                </header>
 
-              {normalizedFileFilter.length === 0 && renderedChangedFiles.length === 0 ? (
-                <EmptyState>No changed files found.</EmptyState>
-              ) : null}
-              {normalizedFileFilter.length > 0 && renderedChangedFiles.length === 0 ? (
-                <EmptyState>No files match this filter.</EmptyState>
-              ) : null}
-              {renderedChangedFiles.map((file) => {
-                const parsedFile = loadedFilesById.get(file.fileId)
-                return parsedFile === undefined ? (
-                  <ReviewPagePlaceholder
-                    key={file.reviewKey}
-                    file={file}
-                    loading={loadingFileIds.has(file.fileId)}
-                    tooLarge={tooLargeFileIds.has(file.fileId)}
-                    onVisible={() => void loadSnapshotFiles([file.fileId])}
+                <div className="bg-review-sidebar-control/20 space-y-2 p-3">
+                  <Input
+                    value={fileFilter}
+                    onChange={(event) => setFileFilter(event.currentTarget.value)}
+                    className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-fg placeholder:text-review-sidebar-muted h-8 text-xs"
+                    placeholder="Filter files"
                   />
-                ) : (
-                  <OpenDiffCard
-                    key={file.reviewKey}
-                    diffOptions={reviewDiffOptions}
-                    expanded={
-                      sidebarTab === "walkthrough" && activeWalkthroughStep !== null
-                        ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
-                        : expandedFileKeys.has(file.reviewKey)
-                    }
-                    expandedLineAnchor={expandedLineAnchor}
-                    file={parsedFile}
-                    forceExpanded={
-                      activeSearchReviewKey === file.reviewKey ||
-                      expandedLineAnchor?.fileId === file.fileId
-                    }
-                    reviewThreads={reviewThreads}
-                    selected={
-                      activeSearchReviewKey === file.reviewKey || selectedVisiblePath === file.path
-                    }
-                    viewed={viewedFileKeys.has(file.reviewKey)}
-                    onDiffRendered={(node, instance, phase) =>
-                      handleDiffRendered(file.reviewKey, node, instance, phase)
-                    }
-                    onOpenFile={() => void openRepositoryFile(file.path)}
-                    onSelect={() => selectPathAndScroll(file.path, file.reviewKey)}
-                    onSetViewed={(viewed) => setViewedPreservingViewport(file.reviewKey, viewed)}
-                    onToggleLine={toggleExpandedLine}
-                    onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
+                  {sidebarTab === "walkthrough" ? (
+                    <div className="text-caption text-review-sidebar-muted min-w-0 truncate">
+                      {aiProviderLabel(aiSettings.routes.walkthrough, agentProviderCatalog)} /{" "}
+                      {selectedAIModelLabel(aiSettings, agentProviderCatalog)}
+                    </div>
+                  ) : null}
+                  {sidebarTab === "walkthrough" && !aiAgentAvailable ? (
+                    <p className="text-caption text-review-sidebar-muted leading-4">
+                      {CODING_AGENT_SETUP_MESSAGE}
+                    </p>
+                  ) : null}
+                  {sidebarTab === "walkthrough" &&
+                  agentUnavailableReason(
+                    aiSettings.routes.walkthrough,
+                    agentProviderCatalog,
+                    "walkthrough",
+                  ) !== null ? (
+                    <p className="text-caption text-review-sidebar-muted leading-4">
+                      {agentUnavailableReason(
+                        aiSettings.routes.walkthrough,
+                        agentProviderCatalog,
+                        "walkthrough",
+                      )}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div
+                  className={`min-h-0 flex-1 overscroll-contain py-2 pr-1 ${
+                    sidebarTab === "walkthrough" ? "overflow-y-auto" : "overflow-hidden"
+                  }`}
+                >
+                  {sidebarTab === "walkthrough" ? (
+                    <WalkthroughSidebar
+                      activeStepIndex={activeWalkthroughStepIndex}
+                      changedFiles={loadedChangedFiles}
+                      hunkDigest={walkthroughHunkDigest}
+                      scope={walkthroughScope}
+                      state={walkthroughState}
+                      visitedStepIndexes={visitedWalkthroughStepIndexes}
+                      viewedFileKeys={viewedFileKeys}
+                      onRegenerate={() => void loadWalkthrough(true)}
+                      onRetry={() => void loadWalkthrough(false)}
+                      onSelectFile={selectWalkthroughFile}
+                      onSelectStep={selectWalkthroughStep}
+                    />
+                  ) : (
+                    <ReviewFileTree
+                      files={filteredChangedFiles}
+                      selectedPath={selectedTreePath}
+                      onSelectPath={selectPathAndScroll}
+                    />
+                  )}
+                </div>
+
+                <div className="border-review-sidebar-divider bg-review-sidebar-control text-review-sidebar-muted flex items-center justify-between gap-2 border-t px-3 py-2 text-xs">
+                  <span>
+                    {hiddenFileCount > 0 && !showHiddenFiles
+                      ? `${hiddenFileCount} hidden`
+                      : "Total"}
+                  </span>
+                  <span>
+                    <span className="text-review-success-text">+{totalAdditions}</span>{" "}
+                    <span className="text-review-danger-text">-{totalDeletions}</span>
+                  </span>
+                </div>
+              </aside>
+            )
+          ) : null
+        }
+        detail={
+          <ReviewThreadDetailPane
+            buttonRefs={threadButtonRefs as ReviewThreadButtonRefs}
+            controller={reviewThreads}
+            navigableThreadIds={navigableThreadIds}
+            state={threadSidebarState}
+            onClose={() => updateThreadSidebarState({ _tag: "list" })}
+            onGoToDiff={goToReviewThread}
+          />
+        }
+        diff={
+          <div
+            ref={setDiffScrollContainer}
+            data-review-diff-scroll-container
+            data-review-navigation-outcome={
+              navigationLastOutcome === null
+                ? undefined
+                : `${navigationLastOutcome._tag}:${"reason" in navigationLastOutcome ? navigationLastOutcome.reason : ""}:${"phase" in navigationLastOutcome ? navigationLastOutcome.phase : ""}`
+            }
+            data-review-navigation-phase={
+              navigationStatus._tag === "active" ? navigationStatus.phase : "idle"
+            }
+            data-code-theme-light={aiSettings.codeThemes.light}
+            data-code-theme-dark={aiSettings.codeThemes.dark}
+            data-color-scheme={colorScheme}
+            data-review-navigation-locked={navigationLocked ? "" : undefined}
+            aria-busy={navigationLocked}
+            style={{
+              overflowAnchor: "none",
+              overflowY: navigationLocked ? "hidden" : "auto",
+              scrollbarGutter: "stable",
+            }}
+            className="bg-workspace-canvas h-full min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+            onPointerMove={(event) => {
+              lastPointerPositionRef.current = { clientX: event.clientX, clientY: event.clientY }
+            }}
+            onPointerLeave={() => {
+              lastPointerPositionRef.current = null
+            }}
+          >
+            <div className="min-h-full">
+              <div
+                ref={stickyReviewChromeRef}
+                data-review-sticky-chrome
+                className="bg-workspace-canvas/95 sticky top-0 z-30 backdrop-blur"
+              >
+                <div
+                  data-review-editor-header
+                  className="bg-card/90 border-review-sidebar-border flex h-9 items-center gap-3 border-b px-3"
+                >
+                  <div className="text-muted-foreground flex min-w-0 flex-1 items-center gap-2 text-xs">
+                    {reviewSubject.kind === "hosted" ? (
+                      <GitPullRequest className="text-primary size-3.5 shrink-0" />
+                    ) : (
+                      <GitBranch className="text-primary size-3.5 shrink-0" />
+                    )}
+                    {reviewSubject.kind === "hosted" ? (
+                      <span className="shrink-0 font-medium">
+                        #{reviewSubject.hostedReview.summary.locator.number}
+                      </span>
+                    ) : (
+                      <span
+                        className="max-w-56 shrink-0 truncate font-medium"
+                        title={
+                          reviewSubject.localReview.branchName === null
+                            ? "Local"
+                            : `Local (${reviewSubject.localReview.branchName})`
+                        }
+                      >
+                        {reviewSubject.localReview.branchName === null
+                          ? "Local"
+                          : `Local (${reviewSubject.localReview.branchName})`}
+                      </span>
+                    )}
+                    <span
+                      className="text-foreground min-w-0 truncate"
+                      title={reviewSubjectTitle(reviewSubject)}
+                    >
+                      {reviewSubjectTitle(reviewSubject)}
+                    </span>
+                  </div>
+                  <DiffViewSettingsMenu settings={aiSettings} onChange={onAISettingsChange} />
+                </div>
+                <div className="sr-only" aria-live="polite">
+                  {operationError ?? fileOpenStatus ?? status}
+                </div>
+                {operationError === null ? null : (
+                  <div
+                    role="alert"
+                    className="border-destructive/25 bg-destructive/10 text-destructive border-b px-4 py-2 text-xs"
+                  >
+                    {operationError}
+                  </div>
+                )}
+                {reviewSearchOpen ? (
+                  <ReviewSearchToolbar
+                    activeIndex={normalizedReviewSearchIndex}
+                    inputRef={reviewSearchInputRef}
+                    matchCount={reviewSearchTotalMatches}
+                    query={reviewSearchQuery}
+                    onClose={closeReviewSearch}
+                    onNext={() => moveReviewSearch(1)}
+                    onPrevious={() => moveReviewSearch(-1)}
+                    onQueryChange={updateReviewSearchQuery}
                   />
-                )
-              })}
-            </main>
+                ) : null}
+                {showRepositoryLinkBanner ? (
+                  <section
+                    aria-label="Local repository not linked"
+                    className="bg-accent/70 border-b px-5 py-3"
+                  >
+                    <div className="mx-auto flex max-w-review-diff items-start gap-3">
+                      <div className="bg-background text-primary mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs">
+                        <FolderGit2 className="size-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold">
+                          Link a checkout for isolated agent review
+                        </p>
+                        <p className="text-muted-foreground mt-0.5 text-xs leading-5">
+                          DiffDash creates a private worktree at the exact PR revision. Your branch
+                          and local changes are never switched or cleaned.
+                        </p>
+                        {repositoryLinkError === null ? null : (
+                          <p role="alert" className="text-destructive mt-1 text-xs">
+                            {repositoryLinkError}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={repositoryLinking}
+                        onClick={() => void linkRepository()}
+                      >
+                        {repositoryLinking ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                        {repositoryLinking ? "Linking" : "Link folder"}
+                      </Button>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label="Dismiss local repository banner"
+                        onClick={() => setRepositoryBannerDismissed(true)}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+
+              <main
+                ref={reviewDiffContentRef}
+                data-review-diff-content
+                className="mx-auto max-w-review-diff space-y-4 px-5 py-4"
+              >
+                {sidebarTab === "walkthrough" ? (
+                  <WalkthroughMainHeader
+                    activeStepComplete={activeStepComplete}
+                    step={activeWalkthroughStep}
+                    state={walkthroughState}
+                    onMarkComplete={markActiveWalkthroughStepComplete}
+                    onNextStep={() =>
+                      selectWalkthroughStep(
+                        activeWalkthrough === null
+                          ? activeWalkthroughStepIndex
+                          : Math.min(
+                              activeWalkthroughStepIndex + 1,
+                              activeWalkthroughSteps.length - 1,
+                            ),
+                      )
+                    }
+                    onRetry={() => void loadWalkthrough(false)}
+                  />
+                ) : null}
+                {normalizedFileFilter.length === 0 && renderedChangedFiles.length === 0 ? (
+                  <EmptyState>
+                    <div className="space-y-3">
+                      <p>No changed files in this review.</p>
+                      <Button variant="outline" onClick={() => onActiveRibbonChange("reviews")}>
+                        Choose another review
+                      </Button>
+                    </div>
+                  </EmptyState>
+                ) : null}
+                {normalizedFileFilter.length > 0 && renderedChangedFiles.length === 0 ? (
+                  <EmptyState>No files match this filter.</EmptyState>
+                ) : null}
+                {renderedChangedFiles.map((file) => {
+                  const parsedFile = loadedFilesById.get(file.fileId)
+                  return parsedFile === undefined ? (
+                    <ReviewPagePlaceholder
+                      key={file.reviewKey}
+                      error={fileErrors.get(file.fileId) ?? null}
+                      file={file}
+                      loading={loadingFileIds.has(file.fileId)}
+                      scrollContainerRef={diffScrollContainerRef}
+                      snapshotRefresh={snapshotRefresh}
+                      tooLarge={tooLargeFileIds.has(file.fileId)}
+                      onFileAnchorChange={(element, focusElement) =>
+                        registerFileNavigationAnchor(file.fileId, element, focusElement)
+                      }
+                      onRetry={() => void loadSnapshotFiles([file.fileId])}
+                      onRefresh={onReload}
+                      onVisible={() => void loadSnapshotFiles([file.fileId])}
+                    />
+                  ) : (
+                    <OpenDiffCard
+                      key={file.reviewKey}
+                      diffOptions={reviewDiffOptions}
+                      expanded={
+                        sidebarTab === "walkthrough" && activeWalkthroughStep !== null
+                          ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
+                          : expandedFileKeys.has(file.reviewKey)
+                      }
+                      expandedLineAnchor={navigationThreadAnchor ?? expandedLineAnchor}
+                      file={parsedFile}
+                      forceExpanded={
+                        activeSearchReviewKey === file.reviewKey ||
+                        expandedLineAnchor?.fileId === file.fileId ||
+                        navigationPresentation.forceExpandedFileIds.includes(file.fileId)
+                      }
+                      reviewThreads={reviewThreads}
+                      selected={
+                        activeSearchReviewKey === file.reviewKey ||
+                        selectedVisiblePath === file.path
+                      }
+                      viewed={viewedFileKeys.has(file.reviewKey)}
+                      onDiffRendered={(node, instance, phase) =>
+                        handleDiffRendered(file.reviewKey, node, instance, phase)
+                      }
+                      onFileAnchorChange={(element, focusElement) =>
+                        registerFileNavigationAnchor(file.fileId, element, focusElement)
+                      }
+                      onOpenFile={() => void openRepositoryFile(file.path)}
+                      onOpenThread={openReviewThreadDetail}
+                      onSelect={() => selectPathAndScroll(file.path)}
+                      onSetViewed={(viewed) => setViewedPreservingViewport(file.reviewKey, viewed)}
+                      onToggleLine={toggleExpandedLine}
+                      onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
+                    />
+                  )
+                })}
+              </main>
+              <div
+                data-review-scroll-past-end
+                aria-hidden="true"
+                style={{ height: scrollPastEndHeight }}
+              />
+            </div>
           </div>
-        </div>
-      </section>
+        }
+      />
       <CommandPaletteDialog
         items={reviewGoToItems}
         open={goToPaletteOpen}
@@ -1829,19 +1906,34 @@ export const ReviewDetailView = ({
         title="Review actions"
         onOpenChange={setActionPaletteOpen}
       />
+      <WorkbenchContextActions>
+        <ReviewActionsMenu items={reviewActionItems} />
+      </WorkbenchContextActions>
     </>
   )
 
   return (
     <WorkerPoolContextProvider
-      highlighterOptions={REVIEW_DIFF_HIGHLIGHTER_OPTIONS}
+      highlighterOptions={reviewDiffHighlighterOptions(aiSettings.codeThemes)}
       poolOptions={REVIEW_DIFF_WORKER_POOL_OPTIONS}
     >
+      <ReviewDiffThemeSync codeThemes={aiSettings.codeThemes} />
       <VirtualizerContext.Provider value={diffVirtualizer}>
         {reviewContent}
       </VirtualizerContext.Provider>
     </WorkerPoolContextProvider>
   )
+}
+
+const ReviewDiffThemeSync = ({ codeThemes }: { readonly codeThemes: CodeThemePreferences }) => {
+  const workerPool = useWorkerPool()
+
+  useEffect(() => {
+    if (workerPool === undefined) return
+    void workerPool.setRenderOptions({ theme: codeThemes }).catch(() => undefined)
+  }, [codeThemes, workerPool])
+
+  return null
 }
 
 const approvalButtonLabel = (state: PullRequestApprovalState) => {
@@ -1860,15 +1952,16 @@ const ReviewActionsMenu = ({ items }: { readonly items: readonly CommandPaletteI
       <DropdownMenu.Trigger asChild>
         <Button
           type="button"
-          size="sm"
-          variant="outline"
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Review actions"
+          title="Review actions"
+          className="workbench-titlebar-interactive text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg"
           onClick={(event) => {
             if (event.detail === 0) setOpen((value) => !value)
           }}
         >
-          <Command className="size-3" />
-          Actions
-          <ChevronDown className="size-3" />
+          <Ellipsis className="size-4" />
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -1876,7 +1969,7 @@ const ReviewActionsMenu = ({ items }: { readonly items: readonly CommandPaletteI
           aria-label="Review actions"
           align="end"
           sideOffset={8}
-          className="bg-popover text-popover-foreground z-30 w-72 overflow-hidden rounded-xl border p-1 shadow-lg"
+          className="bg-popover text-popover-foreground z-50 w-72 overflow-hidden rounded-xl border p-1 shadow-lg"
         >
           {items.map((item) => {
             const Icon = reviewActionIcon(item.id)
@@ -1916,6 +2009,103 @@ const reviewActionIcon = (id: string) => {
   if (id === "action:mark-all-viewed") return Check
   return Search
 }
+
+const DiffViewSettingsMenu = ({
+  settings,
+  onChange,
+}: {
+  readonly settings: AISettings
+  readonly onChange: (settings: AISettings) => void
+}) => {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger asChild>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Diff view settings"
+          title="Diff view settings"
+          className="text-muted-foreground hover:bg-accent hover:text-accent-foreground shrink-0"
+          onClick={(event) => {
+            if (event.detail === 0) setOpen((value) => !value)
+          }}
+        >
+          <Settings2 className="size-3" />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          aria-label="Diff view settings"
+          align="end"
+          sideOffset={8}
+          className="bg-popover text-popover-foreground z-50 w-56 space-y-1 rounded-xl border p-2 text-xs shadow-lg"
+        >
+          <DropdownMenu.RadioGroup
+            value={settings.diffViewMode}
+            onValueChange={(mode) => {
+              if (mode !== "auto" && mode !== "unified" && mode !== "split") return
+              onChange(AISettings.make({ ...settings, diffViewMode: mode }))
+            }}
+          >
+            <DropdownMenu.Label className="text-muted-foreground px-2 pb-1 text-caption font-semibold tracking-wide uppercase">
+              Diff layout
+            </DropdownMenu.Label>
+            <DiffViewSettingsMenuItem
+              detail="Split when space allows"
+              label="Auto"
+              selected={settings.diffViewMode === "auto"}
+              value="auto"
+            />
+            <DiffViewSettingsMenuItem
+              detail="Show changes in one column"
+              label="Unified"
+              selected={settings.diffViewMode === "unified"}
+              value="unified"
+            />
+            <DiffViewSettingsMenuItem
+              detail="Show changes side by side"
+              label="Split"
+              selected={settings.diffViewMode === "split"}
+              value="split"
+            />
+          </DropdownMenu.RadioGroup>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
+const DiffViewSettingsMenuItem = ({
+  detail,
+  label,
+  selected,
+  value,
+}: {
+  readonly detail: string
+  readonly label: string
+  readonly selected: boolean
+  readonly value: DiffViewMode
+}) => (
+  <DropdownMenu.RadioItem asChild value={value}>
+    <button
+      type="button"
+      className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition ${
+        selected
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      }`}
+    >
+      <span className="min-w-0">
+        <span className="block">{label}</span>
+        <span className="block text-caption opacity-75">{detail}</span>
+      </span>
+      {selected ? <Check className="size-3 shrink-0" /> : null}
+    </button>
+  </DropdownMenu.RadioItem>
+)
 
 const WalkthroughSettingsMenu = ({
   catalog,
@@ -2083,13 +2273,6 @@ const WalkthroughSettingsMenuItem = ({
   </DropdownMenu.RadioItem>
 )
 
-const Metric = ({ label, value }: { readonly label: string; readonly value: string }) => (
-  <div className="bg-background rounded-lg border p-2">
-    <div className="text-muted-foreground text-caption">{label}</div>
-    <div className="mt-0.5 truncate font-mono text-xs">{value}</div>
-  </div>
-)
-
 const matchesReviewFileFilter = (
   file: Pick<ReviewSnapshotFileInventory, "path" | "oldPath">,
   normalizedFilter: string,
@@ -2097,8 +2280,18 @@ const matchesReviewFileFilter = (
   file.path.toLowerCase().includes(normalizedFilter) ||
   (file.oldPath?.toLowerCase().includes(normalizedFilter) ?? false)
 
-const reviewDiffOptionsForTheme = (theme: ResolvedTheme): FileDiffOptions<ReviewThreadAnnotation> =>
-  REVIEW_DIFF_OPTIONS_BY_THEME[theme]
+const reviewDiffOptionsForTheme = (
+  codeThemes: CodeThemePreferences,
+  colorScheme: ColorScheme,
+  mode: ResolvedDiffViewMode,
+): FileDiffOptions<ReviewThreadAnnotation> => {
+  return {
+    ...REVIEW_DIFF_OPTIONS,
+    diffStyle: mode,
+    theme: codeThemes,
+    themeType: colorScheme,
+  }
+}
 
 const isModKey = (event: KeyboardEvent) => event.metaKey || event.ctrlKey
 
@@ -2126,7 +2319,7 @@ const reviewGoToPaletteItems = ({
   steps,
 }: {
   readonly files: readonly ReviewSnapshotFileInventory[]
-  readonly mode: ReviewSidebarTab
+  readonly mode: "tree" | "walkthrough"
   readonly onSelectFile: (file: ReviewSnapshotFileInventory) => void
   readonly onSelectWalkthroughStep: (index: number) => void
   readonly steps: readonly WalkthroughReviewStep[]
@@ -2229,21 +2422,6 @@ const reviewActionPaletteItems = ({
     : []),
 ]
 
-const alignDiffCardInPane = (
-  container: HTMLElement,
-  target: HTMLElement,
-  stickyHeaderOffset = 56,
-) => {
-  const containerRect = container.getBoundingClientRect()
-  const targetRect = target.getBoundingClientRect()
-  const rawScrollTop = container.scrollTop + targetRect.top - containerRect.top - stickyHeaderOffset
-  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
-  const scrollTop = Math.min(Math.max(0, rawScrollTop), maxScrollTop)
-
-  container.scrollTop = scrollTop
-  container.dispatchEvent(new Event("scroll"))
-}
-
 const isDiffCardVisible = (container: HTMLElement, card: HTMLElement, stickyHeaderOffset = 56) => {
   const containerRect = container.getBoundingClientRect()
   const cardRect = card.getBoundingClientRect()
@@ -2313,17 +2491,11 @@ const captureReviewSearchAnchor = (
   return ReviewSnapshotSearchFileAnchor.make({ fileId: inventoryFile.fileId })
 }
 
-const isDiffCardRendered = (card: HTMLElement) => {
-  const body = card.querySelector<HTMLElement>("[data-diff-card-body]")
-  if (body === null) return true
-  const host = body.querySelector("diffs-container")
-  return (
-    body.getAttribute("aria-busy") === "false" &&
-    (host?.shadowRoot?.querySelector("[data-line]") ?? null) !== null
-  )
-}
-
 const resultValue = <A,>(result: Result.Result<A, unknown>, fallback: A) =>
   Result.getOrElse(result, () => fallback)
 
-const shortSha = (sha: string | null) => (sha ? sha.slice(0, 8) : "unknown")
+const projectRibbonToSidebarTab = (ribbon: ProjectWorkspaceRibbon): ReviewSidebarTab =>
+  ribbon === "files" ? "tree" : ribbon
+
+const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ProjectWorkspaceRibbon =>
+  tab === "tree" ? "files" : tab

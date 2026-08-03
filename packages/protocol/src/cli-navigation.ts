@@ -3,7 +3,12 @@ import { Schema } from "effect"
 /** Maximum commands returned by one transactional renderer drain. */
 export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
 
-/** Open working-tree changes for a local checkout. */
+/** Open one local checkout as a project workspace. */
+export class OpenProjectCommand extends Schema.TaggedClass<OpenProjectCommand>()("openProject", {
+  localPath: Schema.NonEmptyString,
+}) {}
+
+/** Open working-tree changes for a legacy private integration. */
 export class OpenWorkingTreeCommand extends Schema.TaggedClass<OpenWorkingTreeCommand>()(
   "openWorkingTree",
   { localPath: Schema.NonEmptyString },
@@ -33,6 +38,12 @@ export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffComm
   },
 ) {}
 
+/** Run one resumable repository identity repair pass. */
+export class RepairRepositoryIdentitiesCommand extends Schema.TaggedClass<RepairRepositoryIdentitiesCommand>()(
+  "repairRepositoryIdentities",
+  {},
+) {}
+
 /** Surface invalid CLI syntax in the desktop application. */
 export class CliNavigationErrorCommand extends Schema.TaggedClass<CliNavigationErrorCommand>()(
   "error",
@@ -41,10 +52,12 @@ export class CliNavigationErrorCommand extends Schema.TaggedClass<CliNavigationE
 
 /** One command forwarded by a DiffDash launcher to the running desktop app. */
 export const CliNavigationCommand = Schema.Union(
+  OpenProjectCommand,
   OpenWorkingTreeCommand,
   LinkRepositoryCommand,
   OpenPullRequestCommand,
   OpenBranchDiffCommand,
+  RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,
 )
 

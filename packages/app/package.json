@@ -16,6 +16,7 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@catppuccin/palette": "^1.8.0",
     "@diffdash/domain": "workspace:*",
     "@diffdash/protocol": "workspace:*",
     "@effect-atom/atom-react": "^0.5.0",
@@ -29,6 +30,7 @@
     "radix-ui": "^1.6.2",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-resizable-panels": "^4.12.2",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.2",
     "unicode-animations": "^1.0.3"

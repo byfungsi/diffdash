@@ -15,7 +15,12 @@ import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
-import { ReviewKey, ReviewRevision, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewKey,
+  ReviewProjectId,
+  ReviewRevision,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 
 /** Creates coherent hosted and local manifests for app review unit tests. */
 export const makeReviewSelectionFixtures = () => {
@@ -40,6 +45,7 @@ export const makeReviewSelectionFixtures = () => {
     url: "https://example.test/review/12",
   })
   const hostedManifest = HostedReviewSnapshotManifest.make({
+    projectId: ReviewProjectId.make("github:fungsi/diffdash"),
     snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000000"),
     reviewKey: ReviewKey.make("github:fungsi/diffdash#12"),
     baseRevision: ReviewRevision.make("base"),
@@ -49,6 +55,7 @@ export const makeReviewSelectionFixtures = () => {
   })
   const localTarget = workingTreeReviewTarget("/workspace/diffdash")
   const localManifest = LocalReviewSnapshotManifest.make({
+    projectId: ReviewProjectId.make("local:local/diffdash"),
     snapshotId: ReviewSnapshotId.make("snapshot:v1:11111111111111111111111111111111"),
     reviewKey: ReviewKey.make("local:/workspace/diffdash"),
     baseRevision: ReviewRevision.make("base"),

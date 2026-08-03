@@ -1,9 +1,11 @@
 import type { AISettings } from "@diffdash/domain/ai-settings"
 
 import type { AppState } from "@diffdash/domain/app-state"
-import type { HostedRepository } from "@diffdash/domain/git-provider"
+import type { HostedRepository, HostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReviewThreadId, ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import type { DiffDashApi } from "@diffdash/protocol/api"
@@ -58,6 +60,7 @@ const api: DiffDashApi = {
       transport.subscribe(EventChannel.updateStateChanged, listener),
   },
   navigation: {
+    activateWindow: () => transport.invoke(InvokeChannel.appActivateWindow, {}),
     drainCommands: () => transport.invoke(InvokeChannel.drainNavigationCommands, {}),
     onCommandsAvailable: (listener: () => void) =>
       transport.subscribe(EventChannel.navigationCommandsAvailable, listener),
@@ -83,7 +86,21 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.installRepository, { localPath }),
     link: (input: LinkRepositoryCheckoutRequest) =>
       transport.invoke(InvokeChannel.linkRepository, input),
+    openProject: (localPath: string, selectedRepository?: HostedRepositoryLocator) =>
+      transport.invoke(InvokeChannel.openProject, {
+        localPath,
+        selectedRepository: selectedRepository ?? null,
+      }),
+    repairIdentities: () => transport.invoke(InvokeChannel.repairRepositoryIdentities, {}),
+    forget: (projectId: ReviewProjectId) =>
+      transport.invoke(InvokeChannel.forgetRepository, { projectId }),
     selectLocalFolder: () => transport.invoke(InvokeChannel.selectLocalFolder, {}),
+  },
+  projectWorkspace: {
+    get: (projectId: ReviewProjectId) =>
+      transport.invoke(InvokeChannel.projectWorkspaceGet, { projectId }),
+    save: (input: ProjectWorkspaceStateInput) =>
+      transport.invoke(InvokeChannel.projectWorkspaceSave, { input }),
   },
   reviewThreads: {
     list: (target: ReviewThreadTarget) =>

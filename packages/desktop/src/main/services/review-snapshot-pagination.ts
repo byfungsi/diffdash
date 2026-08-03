@@ -1,7 +1,9 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
-import type { ReviewSnapshot } from "@diffdash/domain/review-context"
-import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
+import {
+  makeReviewSnapshotFileInventory,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import {
   assertJsonPayloadWithinBudget,
@@ -67,12 +69,7 @@ export const paginateReviewSnapshot = (
     if (file === undefined) {
       return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
     }
-    const inventory = makeReviewSnapshotManifest(snapshot).files.find(
-      (candidate) => candidate.fileId === file.fileId,
-    )
-    if (inventory === undefined) {
-      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
-    }
+    const inventory = makeReviewSnapshotFileInventory(file)
     const response = ReviewSnapshotFileTooLarge.make({
       snapshotId: snapshot.snapshotId,
       file: inventory,
@@ -177,6 +174,7 @@ const allSearchMatches = (snapshot: ReviewSnapshot, query: string) => {
               filePath: file.path,
               reviewKey: file.reviewKey,
               hunkId: hunk.id,
+              hunkFingerprint: hunk.fingerprint,
               hunkLineIndex: line.index,
               newLineNumber: line.newLineNumber,
               oldLineNumber: line.oldLineNumber,

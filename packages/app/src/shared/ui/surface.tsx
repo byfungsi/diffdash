@@ -12,7 +12,7 @@ const surfaceVariants = cva("border bg-card text-card-foreground", {
     },
     active: {
       true: "shadow-search-floating",
-      false: "shadow-sm",
+      false: "shadow-none",
     },
   },
   defaultVariants: {

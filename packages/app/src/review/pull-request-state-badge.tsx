@@ -13,7 +13,10 @@ export const PullRequestStateBadge = ({
 }) => {
   if (isDraft) {
     return (
-      <Badge variant="ghost" className={`${className} bg-pr-draft text-pr-status-fg`}>
+      <Badge
+        variant="ghost"
+        className={`${className} border-pr-draft/30 bg-pr-draft/15 text-muted-foreground border`}
+      >
         <GitPullRequestDraft />
         Draft
       </Badge>
@@ -22,7 +25,10 @@ export const PullRequestStateBadge = ({
   const normalizedState = state.toUpperCase()
   if (normalizedState === "OPEN") {
     return (
-      <Badge variant="ghost" className={`${className} bg-pr-open text-pr-status-fg`}>
+      <Badge
+        variant="ghost"
+        className={`${className} border-pr-open/30 bg-pr-open/15 text-pr-open border`}
+      >
         <GitPullRequest />
         Open
       </Badge>
@@ -30,7 +36,10 @@ export const PullRequestStateBadge = ({
   }
   if (normalizedState === "MERGED") {
     return (
-      <Badge variant="ghost" className={`${className} bg-pr-merged text-pr-status-fg`}>
+      <Badge
+        variant="ghost"
+        className={`${className} border-pr-merged/30 bg-pr-merged/15 text-pr-merged border`}
+      >
         <GitMerge />
         Merged
       </Badge>
@@ -38,7 +47,10 @@ export const PullRequestStateBadge = ({
   }
   if (normalizedState === "CLOSED") {
     return (
-      <Badge variant="ghost" className={`${className} bg-pr-closed text-pr-status-fg`}>
+      <Badge
+        variant="ghost"
+        className={`${className} border-pr-closed/30 bg-pr-closed/15 text-pr-closed border`}
+      >
         <GitPullRequestClosed />
         Closed
       </Badge>

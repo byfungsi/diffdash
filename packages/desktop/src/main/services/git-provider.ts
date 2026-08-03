@@ -6,6 +6,7 @@ import {
   type GitProviderId,
   type HostedRepository,
   type HostedRepositoryLocator,
+  ResolvedHostedRepository,
   type HostedReviewLocator,
   type HostedReviewDetail,
   type HostedReviewDiff,
@@ -33,6 +34,9 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
     readonly parseRemoteUrl: (
       remoteUrl: string,
     ) => Effect.Effect<HostedRepositoryLocator, GitProviderRemoteParseError>
+    readonly resolveRepository: (
+      repository: HostedRepositoryLocator,
+    ) => Effect.Effect<ResolvedHostedRepository, unknown>
     readonly repositoryUrl: (repository: HostedRepositoryLocator) => Effect.Effect<string, unknown>
     readonly fileUrl: (
       repository: HostedRepositoryLocator,
@@ -114,6 +118,20 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
                 : Effect.succeed(locator),
             ),
             Effect.mapError(() => GitProviderRemoteParseError.make({ remoteUrl })),
+          ),
+        resolveRepository: (repository) =>
+          provider(repository.providerId).pipe(
+            Effect.flatMap((registration) =>
+              registration.resolveRepository === undefined
+                ? Effect.map(registration.repositoryUrl(repository), (url) =>
+                    ResolvedHostedRepository.make({
+                      locator: repository,
+                      providerRepositoryId: null,
+                      url,
+                    }),
+                  )
+                : registration.resolveRepository(repository),
+            ),
           ),
         repositoryUrl: (repository) =>
           provider(repository.providerId).pipe(

@@ -12,6 +12,7 @@ import {
 } from "./ipc"
 import { AddReviewThreadUserMessageRequest, RunReviewThreadAgentRequest } from "./review-threads"
 import {
+  isTransientTransportError,
   safeTransportErrorMessage,
   TransportError,
   toTransportError,
@@ -25,9 +26,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(48)
+    expect(new Set(invokeChannels).size).toBe(54)
     expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(51)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(57)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",
@@ -53,6 +54,42 @@ describe("protocol boundaries", () => {
       expect(Number.isSafeInteger(contract.maxPayloadBytes)).toBe(true)
       expect(contract.maxPayloadBytes).toBeGreaterThan(0)
     }
+  })
+
+  it("validates project opening and workspace identities at the IPC boundary", () => {
+    const opening = Schema.decodeUnknownEither(InvokeContract[InvokeChannel.openProject].request)({
+      localPath: "/workspace/diffdash",
+      selectedRepository: {
+        providerId: "github",
+        namespace: "fungsi",
+        name: "diffdash",
+      },
+    })
+    const ambiguous = Schema.decodeUnknownEither(
+      InvokeContract[InvokeChannel.openProject].response,
+    )({
+      _tag: "remoteSelectionRequired",
+      rootPath: "/workspace/diffdash",
+      candidates: [
+        {
+          remoteName: "origin",
+          repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+        },
+      ],
+    })
+    const forgotten = Schema.decodeUnknownEither(
+      InvokeContract[InvokeChannel.forgetRepository].request,
+    )({ projectId: "" })
+    const workspace = Schema.decodeUnknownEither(
+      InvokeContract[InvokeChannel.projectWorkspaceSave].request,
+    )({
+      input: { projectId: "", activeRibbon: "files", selectedReviewTarget: null },
+    })
+
+    expect(Either.isRight(opening)).toBe(true)
+    expect(Either.isLeft(ambiguous)).toBe(true)
+    expect(Either.isLeft(forgotten)).toBe(true)
+    expect(Either.isLeft(workspace)).toBe(true)
   })
 
   it("rejects malformed review-thread requests", () => {
@@ -148,6 +185,16 @@ describe("protocol boundaries", () => {
     expect(safeTransportErrorMessage(new Error("/private/path and stderr"))).toBe(
       UNKNOWN_TRANSPORT_ERROR_MESSAGE,
     )
+  })
+
+  it("classifies only typed IPC failures as transient", () => {
+    expect(
+      isTransientTransportError(transportError("IPC_FAILURE", "Temporarily unavailable")),
+    ).toBe(true)
+    expect(
+      isTransientTransportError(transportError("INVALID_RESPONSE", "Malformed response")),
+    ).toBe(false)
+    expect(isTransientTransportError({ code: "IPC_FAILURE" })).toBe(false)
   })
 
   it("rejects unknown invoke and event channels with typed errors", () => {

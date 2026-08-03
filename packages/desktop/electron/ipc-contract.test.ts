@@ -30,7 +30,16 @@ import { createShutdown } from "./main/shutdown"
 import type { RendererIpc } from "./preload/transport"
 import { createRendererTransport } from "./preload/transport"
 
-vi.mock("electron", () => ({ ipcMain: { handle: vi.fn<IpcMain["handle"]>() } }))
+const electronHostMocks = vi.hoisted(() => ({
+  focusApplication: vi.fn<() => void>(),
+  fromWebContents: vi.fn<(sender: unknown) => unknown>(),
+}))
+
+vi.mock("electron", () => ({
+  app: { focus: electronHostMocks.focusApplication },
+  BrowserWindow: { fromWebContents: electronHostMocks.fromWebContents },
+  ipcMain: { handle: vi.fn<IpcMain["handle"]>() },
+}))
 
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
@@ -60,6 +69,49 @@ describe("IPC contract", () => {
 
     expect([...host.installed.keys()]).toEqual(Object.values(InvokeChannel))
     expect(host.handle).toHaveBeenCalledTimes(Object.values(InvokeChannel).length)
+  })
+
+  it("FUN-212 AC: activates the requesting Electron window through the navigation IPC", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const runtime: ApplicationRuntime = {
+      dispose: async () => undefined,
+      runPromise: async () => {
+        throw new Error("Window activation must not access application services")
+      },
+    }
+    const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
+    const targetWindow = {
+      isMinimized: vi.fn<() => boolean>(() => true),
+      restore: vi.fn<() => void>(),
+      show: vi.fn<() => void>(),
+      focus: vi.fn<() => void>(),
+    }
+    electronHostMocks.fromWebContents.mockReturnValue(targetWindow)
+
+    defineIpcHandlers(
+      runtime,
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      shutdown,
+    )
+    registry.install()
+    const event = trustedEvent()
+    const response = await host.installed.get(InvokeChannel.appActivateWindow)?.(event, {})
+    const envelope = Schema.decodeUnknownSync(
+      successEnvelope(invokeResponseSchema(InvokeChannel.appActivateWindow)),
+    )(response)
+
+    expect(envelope.value).toBeUndefined()
+    expect(electronHostMocks.fromWebContents).toHaveBeenCalledWith(event.sender)
+    expect(targetWindow.restore).toHaveBeenCalledOnce()
+    expect(targetWindow.show).toHaveBeenCalledOnce()
+    expect(electronHostMocks.focusApplication.mock.calls).toEqual(
+      process.platform === "darwin" ? [[{ steal: true }]] : [],
+    )
+    expect(targetWindow.focus).toHaveBeenCalledTimes(process.platform === "darwin" ? 0 : 1)
   })
 
   it("rejects malformed renderer requests before invoking Electron", async () => {

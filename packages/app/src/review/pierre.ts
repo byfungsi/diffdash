@@ -1,3 +1,7 @@
+import { registerDiffDashSyntax } from "./diffdash-syntax"
+
+registerDiffDashSyntax()
+
 export {
   type DiffLineAnnotation,
   type FileDiffMetadata,
@@ -15,6 +19,7 @@ export {
   type WorkerInitializationRenderOptions,
   WorkerPoolContextProvider,
   type WorkerPoolOptions,
+  useWorkerPool,
   VirtualizerContext,
   useStableCallback,
 } from "@pierre/diffs/react"

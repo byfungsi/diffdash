@@ -6,7 +6,12 @@ import {
   LocalReviewSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
-import { ReviewFileId, ReviewHunkId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewHunkFingerprint,
+  ReviewHunkId,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
 /** Maximum files that one explicit renderer page request may select. */
@@ -140,6 +145,7 @@ export class ReviewSnapshotSearchMatch extends Schema.Class<ReviewSnapshotSearch
   filePath: Schema.String,
   reviewKey: Schema.String,
   hunkId: ReviewHunkId,
+  hunkFingerprint: ReviewHunkFingerprint,
   hunkLineIndex: Schema.Int.pipe(Schema.nonNegative()),
   newLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
   oldLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),

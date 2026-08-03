@@ -13,6 +13,7 @@ import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   HostedReviewTarget,
   MarkdownBody,
+  type ReviewThread,
   type ReviewThreadAnchor,
   ReviewThreadDetails,
   type ReviewThreadId,
@@ -25,7 +26,7 @@ import {
   CreateReviewThreadRequest,
   RunReviewThreadAgentRequest,
 } from "@diffdash/protocol/review-threads"
-import { AlertCircle, Bot, Loader2, UserRound } from "lucide-react"
+import { AlertCircle, Bot, Loader2, MessageSquare, UserRound } from "lucide-react"
 import {
   Fragment,
   type KeyboardEvent,
@@ -360,6 +361,7 @@ export function ReviewThreadComposer({
   readonly onSubmit: (bodyMarkdown: string) => Promise<void>
 }) {
   const labelId = useId()
+  const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [body, setBody] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -395,8 +397,40 @@ export function ReviewThreadComposer({
     textareaRef.current?.focus()
   }, [])
 
+  useEffect(() => {
+    const form = formRef.current
+    const textarea = textareaRef.current
+    if (
+      form === null ||
+      textarea === null ||
+      form.closest("[data-review-thread-annotation]") === null
+    ) {
+      return undefined
+    }
+
+    const scrollContainer = form.ownerDocument.querySelector<HTMLElement>(
+      "[data-review-diff-scroll-container]",
+    )
+    if (scrollContainer === null) return undefined
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.target === form && !entry.isIntersecting)) {
+          const root = textarea.getRootNode()
+          const activeElement =
+            root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null
+          if (activeElement === textarea) textarea.blur()
+        }
+      },
+      { root: scrollContainer },
+    )
+    observer.observe(form)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <form
+      ref={formRef}
       className="bg-card w-full min-w-0 space-y-2 rounded-lg border p-2.5 shadow-xs"
       aria-labelledby={labelId}
       onSubmit={(event) => {
@@ -440,104 +474,6 @@ export function ReviewThreadComposer({
   )
 }
 
-/** Compact review-wide index that keeps every persisted thread reachable. */
-export function ReviewThreadSummary({
-  controller,
-  navigableThreadIds,
-  onSelectThread,
-}: {
-  readonly controller: ReviewThreadsController
-  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
-  readonly onSelectThread: (details: ReviewThreadDetails) => void
-}) {
-  const [expandedFallbackThreadId, setExpandedFallbackThreadId] = useState<ReviewThreadId | null>(
-    null,
-  )
-  const count = controller.details.length
-
-  return (
-    <section aria-label="Review threads" className="mt-3 border-t pt-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium">
-            {count} review thread{count === 1 ? "" : "s"}
-          </span>
-          {controller.loading ? (
-            <UnicodeLoadingText className="text-muted-foreground text-caption" text="Loading" />
-          ) : null}
-        </div>
-        {controller.error === null ? null : (
-          <div role="alert" className="text-destructive flex items-center gap-2 text-caption">
-            <span>{controller.error}</span>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              disabled={controller.loading}
-              onClick={() => void controller.reload()}
-            >
-              Retry
-            </Button>
-          </div>
-        )}
-      </div>
-      {controller.details.length === 0 ? null : (
-        <div className="mt-2 space-y-1.5">
-          {controller.details.map((details) => {
-            const { thread } = details
-            const anchor = thread.currentAnchor ?? thread.originalAnchor
-            const navigable = navigableThreadIds.has(thread.id)
-            const fallbackExpanded = expandedFallbackThreadId === thread.id
-            const fallbackContentId = `review-thread-summary-${thread.id}`
-            return (
-              <div key={thread.id} className="min-w-0">
-                <button
-                  type="button"
-                  className="bg-muted/35 hover:bg-muted/65 focus-visible:ring-ring flex min-h-8 w-full min-w-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition focus-visible:ring-2 focus-visible:outline-none"
-                  aria-controls={navigable ? undefined : fallbackContentId}
-                  aria-expanded={navigable ? undefined : fallbackExpanded}
-                  onClick={() => {
-                    if (navigable) {
-                      onSelectThread(details)
-                      return
-                    }
-                    setExpandedFallbackThreadId((current) =>
-                      current === thread.id ? null : thread.id,
-                    )
-                  }}
-                >
-                  <span className="min-w-0 truncate font-mono" title={anchor.filePath}>
-                    {anchor.filePath}
-                  </span>
-                  <span className="text-muted-foreground shrink-0">
-                    {navigable ? reviewLineLabel(anchor) : fallbackThreadLabel(details)}
-                  </span>
-                </button>
-                {navigable || !fallbackExpanded ? null : (
-                  <div id={fallbackContentId} className="mt-1.5">
-                    <ReviewThreadPanel
-                      agentRunning={controller.runningThreadIds.includes(thread.id)}
-                      agentProgress={
-                        controller.agentProgress.find((progress) => progress.threadId === thread.id)
-                          ?.stage ?? null
-                      }
-                      agentError={controller.agentErrors[thread.id] ?? null}
-                      details={details}
-                      orchestration={{ retryAgentMessage: controller.runAgent }}
-                      onAddUserMessage={controller.addUserMessage}
-                      onRefresh={controller.refreshThread}
-                    />
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </section>
-  )
-}
-
 /** Restores pinned or reader-controlled scroll positions after inline annotation rendering. */
 export const syncPinnedReviewThreadHistories = (root: ParentNode) => {
   const histories = [...root.querySelectorAll<HTMLElement>("[data-review-thread-history]")]
@@ -561,19 +497,23 @@ export const syncPinnedReviewThreadHistories = (root: ParentNode) => {
 export function ReviewThreadPanel({
   details,
   embedded = false,
+  fullHeight = false,
   agentRunning,
   agentProgress = null,
   agentError = null,
   orchestration,
+  onOpenDetail,
   onAddUserMessage,
   onRefresh,
 }: {
   readonly details: ReviewThreadDetails
   readonly embedded?: boolean
+  readonly fullHeight?: boolean
   readonly agentRunning: boolean
   readonly agentProgress?: ReviewAgentProgressStage | null
   readonly agentError?: string | null
   readonly orchestration?: ReviewThreadOrchestration
+  readonly onOpenDetail?: () => void
   readonly onAddUserMessage: (threadId: ReviewThreadId, bodyMarkdown: string) => Promise<void>
   readonly onRefresh: (threadId: ReviewThreadId) => Promise<void>
 }) {
@@ -583,7 +523,7 @@ export function ReviewThreadPanel({
   const historyPinnedToBottomRef = useRef(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const previousRevision = thread.headRevision !== thread.currentHeadRevision
+  const previousRevision = reviewThreadIsPreviousRevision(thread)
   const hasPendingAgentMessage = messages.some(
     (message) => message.author === "agent" && message.status === "pending",
   )
@@ -642,6 +582,20 @@ export function ReviewThreadPanel({
       aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} review thread`}
       data-review-thread-id={thread.id}
     >
+      {onOpenDetail === undefined ? null : (
+        <div className="flex shrink-0 justify-end border-b px-2 py-1">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Open thread details"
+            title="Open thread details"
+            onClick={onOpenDetail}
+          >
+            <MessageSquare />
+          </Button>
+        </div>
+      )}
       <div
         ref={historyRef}
         role="log"
@@ -649,7 +603,10 @@ export function ReviewThreadPanel({
         aria-relevant="additions text"
         tabIndex={0}
         data-review-thread-history
-        className="max-h-review-thread-history space-y-2.5 overflow-y-auto p-3"
+        className={cn(
+          "space-y-2.5 overflow-y-auto p-3",
+          fullHeight ? "min-h-0 flex-1" : "max-h-review-thread-history",
+        )}
         onScroll={(event) => {
           const history = event.currentTarget
           const pinned = history.scrollHeight - history.clientHeight - history.scrollTop <= 48
@@ -910,7 +867,7 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
           <a
             key={key}
             href={link[2]}
-            className="text-primary underline underline-offset-2"
+            className="text-link underline underline-offset-2"
             onClick={(event) => {
               event.preventDefault()
               if (link[2] !== undefined) void window.diffDash.openExternalUrl(link[2])
@@ -960,11 +917,18 @@ const anchorLabel = (anchor: ReviewThreadAnchor) => {
   return `${anchor.filePath}:${anchor.lineNumber} · ${anchor.side}`
 }
 
-const fallbackThreadLabel = (details: ReviewThreadDetails) => {
+/** Explains why a persisted thread cannot navigate to the current diff. */
+export const fallbackThreadLabel = (details: ReviewThreadDetails) => {
   if (details.thread.anchorStatus === "outdated") return "Outdated"
   if (details.thread.anchorStatus === "unresolved_anchor") return "Anchor unavailable"
+  if (reviewThreadIsPreviousRevision(details.thread)) return "Previous revision"
   return "Location unavailable"
 }
+
+/** Whether a thread originated on a revision older than its latest mapped review snapshot. */
+export const reviewThreadIsPreviousRevision = (thread: ReviewThread) =>
+  thread.baseRevision !== thread.currentBaseRevision ||
+  thread.headRevision !== thread.currentHeadRevision
 
 /** Compact GitHub-style side and line label for an inline review disclosure. */
 export const reviewLineLabel = (anchor: ReviewThreadAnchor) =>

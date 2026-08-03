@@ -68,9 +68,7 @@ export class ReviewPageCache {
     }
 
     while (this.#entries.size > this.#config.maxFiles || this.#bytes > this.#config.maxBytes) {
-      const evicted = [...this.#entries].find(([fileId]) => !pinnedFileIds.has(fileId))
-      const fallback = this.#entries.entries().next().value
-      const candidate = evicted ?? fallback
+      const candidate = [...this.#entries].find(([fileId]) => !pinnedFileIds.has(fileId))
       if (candidate === undefined) break
       this.#entries.delete(candidate[0])
       this.#bytes -= candidate[1].bytes

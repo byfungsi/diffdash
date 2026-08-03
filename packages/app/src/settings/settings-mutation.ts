@@ -1,4 +1,8 @@
-import type { AISettings } from "@diffdash/domain/ai-settings"
+import { AISettings } from "@diffdash/domain/ai-settings"
+import { Schema } from "effect"
+
+/** Restores domain classes after Electron structured-clones settings across IPC. */
+export const parseRendererSettings = Schema.decodeUnknownSync(AISettings)
 
 /** Side effects used by the serialized settings mutation coordinator. */
 type SettingsMutationDependencies = {
@@ -10,7 +14,9 @@ type SettingsMutationDependencies = {
 
 /** Serialized last-write-wins settings mutation API. */
 export type SettingsMutationCoordinator = {
-  readonly update: (settings: AISettings) => Promise<AISettings>
+  readonly update: (
+    update: AISettings | ((current: AISettings) => AISettings),
+  ) => Promise<AISettings>
   readonly replaceConfirmed: (settings: AISettings) => boolean
   readonly whenIdle: () => Promise<void>
 }
@@ -24,10 +30,16 @@ export const createSettingsMutationCoordinator = (
   dependencies: SettingsMutationDependencies,
 ): SettingsMutationCoordinator => {
   let confirmedSettings = initialSettings
+  let optimisticSettings = initialSettings
   let latestVersion = 0
   let tail: Promise<void> = Promise.resolve()
 
-  const update = (settings: AISettings): Promise<AISettings> => {
+  const update = (
+    updateValue: AISettings | ((current: AISettings) => AISettings),
+  ): Promise<AISettings> => {
+    const settings =
+      typeof updateValue === "function" ? updateValue(optimisticSettings) : updateValue
+    optimisticSettings = settings
     const version = latestVersion + 1
     latestVersion = version
     dependencies.onOptimistic(settings)
@@ -38,11 +50,17 @@ export const createSettingsMutationCoordinator = (
       .then(
         (savedSettings) => {
           confirmedSettings = savedSettings
-          if (version === latestVersion) dependencies.onConfirmed(savedSettings)
+          if (version === latestVersion) {
+            optimisticSettings = savedSettings
+            dependencies.onConfirmed(savedSettings)
+          }
           return savedSettings
         },
         (error: unknown) => {
-          if (version === latestVersion) dependencies.onRollback(confirmedSettings, error)
+          if (version === latestVersion) {
+            optimisticSettings = confirmedSettings
+            dependencies.onRollback(confirmedSettings, error)
+          }
           throw error
         },
       )
@@ -56,8 +74,10 @@ export const createSettingsMutationCoordinator = (
   return {
     update,
     replaceConfirmed: (settings) => {
+      if (latestVersion !== 0) return false
       confirmedSettings = settings
-      return latestVersion === 0
+      optimisticSettings = settings
+      return true
     },
     whenIdle: () => tail,
   }

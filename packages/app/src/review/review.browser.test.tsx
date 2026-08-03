@@ -17,7 +17,12 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("fileTreeSelection")()
   })
 
-  it("middle-truncates long paths without overflowing review cards", async () => {
+  it("FUN-212 AC: owns viewport input through supersession, Escape, and stale completion", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("reviewNavigationLifecycle")()
+  }, 45_000)
+
+  it("uses native tree truncation for long file labels without overflowing review cards", async () => {
     expect.hasAssertions()
     await appBrowserScenario("longReviewPaths")()
   })
@@ -37,9 +42,29 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("largeDiffVirtualization")()
   })
 
+  it("keeps continuous fast scrolling within the review rendering budget", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("fastScrollPerformance")()
+  }, 30_000)
+
   it("bounds long review threads without blanking virtualized diffs", async () => {
     expect.hasAssertions()
     await appBrowserScenario("longThreadVirtualization")()
+  }, 30_000)
+
+  it("blurs an offscreen thread composer before handling review shortcuts", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("threadComposerShortcut")()
+  }, 30_000)
+
+  it("converges on the exact mounted thread line after virtualized layout changes", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("threadNavigationConvergence")()
+  }, 30_000)
+
+  it("keeps custom file headers below dynamic review chrome and within their cards", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("stickyDiffCardHeaders")()
   }, 30_000)
 
   it("removes stale trailing buffers after navigating across many wrapped files", async () => {
@@ -47,9 +72,24 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("wrappedFileBuffers")()
   }, 45_000)
 
+  it("wraps search backward across many virtualized file placeholders", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("multiFileSearchWrap")()
+  }, 45_000)
+
+  it("keeps the active search file resident while paginated files cross the cache bound", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("snapshotPageResidency")()
+  }, 45_000)
+
   it("finds and highlights exact case-insensitive substrings across diff lines", async () => {
     expect.hasAssertions()
     await appBrowserScenario("diffSearchSubstrings")()
+  })
+
+  it("FUN-213 AC: ignores delayed old queries and close-during-search completions", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffSearchLatestWork")()
   })
 
   it("starts search from the active file instead of the first file", async () => {
@@ -62,9 +102,9 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("diffSearchImmutableAnchor")()
   })
 
-  it("opens active persisted threads and keeps unmappable threads available in the header", async () => {
+  it("opens full-height attached thread panes and keeps unmappable threads available", async () => {
     expect.hasAssertions()
-    await appBrowserScenario("reviewThreadSummary")()
+    await appBrowserScenario("reviewThreadSidebar")()
   })
 
   it("toggles viewed state for the file under the pointer", async () => {

@@ -9,6 +9,7 @@ import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-wor
 import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { DatabaseService } from "@diffdash/persistence/database"
+import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
@@ -224,6 +225,7 @@ export const createAppLayer = () => {
 
   return Layer.mergeAll(
     repositoryLinkerLayer,
+    ProjectWorkspaceStore.layer,
     analyticsLayer,
     reviewSnapshotLayer,
     reviewTurnStoreLayer,

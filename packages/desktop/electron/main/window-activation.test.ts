@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { revealAppWindow, type ActivatableWindow } from "./window-activation"
+import { isHiddenE2EWindow, revealAppWindow, type ActivatableWindow } from "./window-activation"
 
 const makeWindow = (minimized: boolean): ActivatableWindow => ({
   isMinimized: vi.fn<() => boolean>(() => minimized),
@@ -10,6 +10,12 @@ const makeWindow = (minimized: boolean): ActivatableWindow => ({
 })
 
 describe("revealAppWindow", () => {
+  it("derives hidden-window behavior only from the explicit E2E switch", () => {
+    expect(isHiddenE2EWindow({ DIFFDASH_E2E_HIDDEN: "1" })).toBe(true)
+    expect(isHiddenE2EWindow({ DIFFDASH_E2E_HIDDEN: "0" })).toBe(false)
+    expect(isHiddenE2EWindow({})).toBe(false)
+  })
+
   it("restores a minimized window before showing and focusing it", () => {
     const targetWindow = makeWindow(true)
     const focusApplication = vi.fn<() => void>()

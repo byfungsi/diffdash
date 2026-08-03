@@ -36,6 +36,15 @@ export const HostedRepositoryName = Schema.String.pipe(
 /** Repository name within a hosted namespace. */
 export type HostedRepositoryName = typeof HostedRepositoryName.Type
 
+/** Stable provider-owned repository identifier that survives owner and repository renames. */
+export const ProviderRepositoryId = Schema.String.pipe(
+  Schema.minLength(1),
+  Schema.brand("ProviderRepositoryId"),
+)
+
+/** Stable provider-owned repository identifier that survives owner and repository renames. */
+export type ProviderRepositoryId = typeof ProviderRepositoryId.Type
+
 /** Positive provider-owned review number. */
 export const HostedReviewNumber = Schema.Int.pipe(
   Schema.positive(),
@@ -197,6 +206,15 @@ export class HostedRepository extends Schema.Class<HostedRepository>("HostedRepo
   description: Schema.NullOr(Schema.String),
   isPrivate: Schema.Boolean,
   updatedAt: Schema.NullOr(Schema.String),
+}) {}
+
+/** Authoritative hosted repository identity resolved by its provider. */
+export class ResolvedHostedRepository extends Schema.Class<ResolvedHostedRepository>(
+  "ResolvedHostedRepository",
+)({
+  locator: HostedRepositoryLocator,
+  providerRepositoryId: Schema.NullOr(ProviderRepositoryId),
+  url: Schema.String,
 }) {}
 
 /** Provider-neutral hosted review summary. */

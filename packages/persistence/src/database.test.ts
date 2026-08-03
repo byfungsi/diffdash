@@ -80,6 +80,7 @@ const CompatibilityCountsRow = Schema.Struct({
   local_viewed_files: Schema.Number,
   walkthroughs: Schema.Number,
 })
+const TableSqlRow = Schema.Struct({ sql: Schema.String })
 
 const decodeColumnNameRows = Schema.decodeUnknownSync(ColumnNameRows)
 const decodeCountRow = Schema.decodeUnknownSync(CountRow)
@@ -90,6 +91,7 @@ const decodeThreadIdRows = Schema.decodeUnknownSync(ThreadIdRows)
 const decodeThreadLifecycleMigrationRow = Schema.decodeUnknownSync(ThreadLifecycleMigrationRow)
 const decodePullRequestFixtureRow = Schema.decodeUnknownSync(PullRequestFixtureRow)
 const decodeCompatibilityCountsRow = Schema.decodeUnknownSync(CompatibilityCountsRow)
+const decodeTableSqlRow = Schema.decodeUnknownSync(TableSqlRow)
 
 describe("DatabaseService", () => {
   it.scoped("FUN-82 AC: creates and versions a fresh database", () =>
@@ -105,10 +107,16 @@ describe("DatabaseService", () => {
         expect(tables.map(({ name }) => name)).toEqual([
           "agent_run_artifacts",
           "agent_runs",
+          "diffdash_capabilities",
           "hosted_viewed_files",
           "local_viewed_files",
+          "project_workspace_state",
           "pull_requests",
           "repos",
+          "repository_aliases",
+          "repository_checkouts",
+          "repository_identities",
+          "repository_identity_jobs",
           "review_thread_messages",
           "review_threads",
           "thread_memory",
@@ -140,6 +148,15 @@ describe("DatabaseService", () => {
           "agent_runs_one_running_per_thread_idx",
           "review_thread_messages_one_pending_agent_per_thread_idx",
         ])
+        const workspaceTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
+          ),
+        )
+        expect(workspaceTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
+        expect(workspaceTable.sql).toContain(
+          "active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')",
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
@@ -263,7 +280,7 @@ describe("DatabaseService", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.pragma("user_version = 12")
+      sqlite.pragma("user_version = 13")
       sqlite.close()
 
       const result = yield* Effect.either(
@@ -277,12 +294,12 @@ describe("DatabaseService", () => {
       )
       if (Either.isLeft(result)) {
         expect(String(result.left.cause)).toContain(
-          "Database schema version 12 is newer than supported version 11",
+          "Database schema version 13 is newer than supported version 12",
         )
       }
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(12)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })

@@ -1,0 +1,182 @@
+@import "@catppuccin/palette/css/catppuccin.css";
+
+:root,
+:root[data-theme="diffdash-light"] {
+  --theme-rosewater: oklch(0.72 0.08 30);
+  --theme-flamingo: oklch(0.68 0.11 20);
+  --theme-pink: oklch(0.7 0.13 338);
+  --theme-mauve: oklch(0.56 0.18 297);
+  --theme-red: oklch(0.56 0.2 20);
+  --theme-maroon: oklch(0.62 0.16 18);
+  --theme-peach: oklch(0.68 0.16 48);
+  --theme-yellow: oklch(0.72 0.13 80);
+  --theme-green: oklch(0.62 0.15 145);
+  --theme-teal: oklch(0.6 0.1 190);
+  --theme-sky: oklch(0.64 0.11 220);
+  --theme-sapphire: oklch(0.6 0.13 245);
+  --theme-blue: oklch(0.55 0.18 265);
+  --theme-lavender: oklch(0.66 0.14 285);
+  --theme-text: oklch(0.22 0.025 280);
+  --theme-subtext-1: oklch(0.42 0.028 280);
+  --theme-subtext-0: oklch(0.5 0.025 280);
+  --theme-overlay-2: oklch(0.58 0.022 280);
+  --theme-overlay-1: oklch(0.65 0.02 280);
+  --theme-overlay-0: oklch(0.72 0.018 280);
+  --theme-surface-2: oklch(0.79 0.016 280);
+  --theme-surface-1: oklch(0.84 0.014 280);
+  --theme-surface-0: oklch(0.89 0.012 280);
+  --theme-base: oklch(0.975 0.006 280);
+  --theme-mantle: oklch(0.95 0.008 280);
+  --theme-crust: oklch(0.925 0.01 280);
+  --theme-on-accent: var(--theme-base);
+}
+
+:root[data-theme="diffdash-dark"] {
+  --theme-rosewater: oklch(0.86 0.045 30);
+  --theme-flamingo: oklch(0.8 0.075 18);
+  --theme-pink: oklch(0.8 0.095 336);
+  --theme-mauve: oklch(0.72 0.13 297);
+  --theme-red: oklch(0.72 0.13 18);
+  --theme-maroon: oklch(0.76 0.1 15);
+  --theme-peach: oklch(0.78 0.11 50);
+  --theme-yellow: oklch(0.82 0.09 84);
+  --theme-green: oklch(0.76 0.11 145);
+  --theme-teal: oklch(0.75 0.08 190);
+  --theme-sky: oklch(0.77 0.08 215);
+  --theme-sapphire: oklch(0.72 0.1 240);
+  --theme-blue: oklch(0.7 0.12 265);
+  --theme-lavender: oklch(0.76 0.1 285);
+  --theme-text: oklch(0.9 0.015 280);
+  --theme-subtext-1: oklch(0.78 0.025 280);
+  --theme-subtext-0: oklch(0.68 0.024 280);
+  --theme-overlay-2: oklch(0.6 0.022 280);
+  --theme-overlay-1: oklch(0.53 0.02 280);
+  --theme-overlay-0: oklch(0.46 0.018 280);
+  --theme-surface-2: oklch(0.38 0.017 280);
+  --theme-surface-1: oklch(0.31 0.016 280);
+  --theme-surface-0: oklch(0.25 0.014 280);
+  --theme-base: oklch(0.195 0.012 280);
+  --theme-mantle: oklch(0.18 0.011 280);
+  --theme-crust: oklch(0.16 0.01 280);
+  --theme-on-accent: var(--theme-crust);
+}
+
+:root[data-theme="catppuccin-latte"] {
+  --theme-rosewater: var(--ctp-latte-rosewater);
+  --theme-flamingo: var(--ctp-latte-flamingo);
+  --theme-pink: var(--ctp-latte-pink);
+  --theme-mauve: var(--ctp-latte-mauve);
+  --theme-red: var(--ctp-latte-red);
+  --theme-maroon: var(--ctp-latte-maroon);
+  --theme-peach: var(--ctp-latte-peach);
+  --theme-yellow: var(--ctp-latte-yellow);
+  --theme-green: var(--ctp-latte-green);
+  --theme-teal: var(--ctp-latte-teal);
+  --theme-sky: var(--ctp-latte-sky);
+  --theme-sapphire: var(--ctp-latte-sapphire);
+  --theme-blue: var(--ctp-latte-blue);
+  --theme-lavender: var(--ctp-latte-lavender);
+  --theme-text: var(--ctp-latte-text);
+  --theme-subtext-1: var(--ctp-latte-subtext1);
+  --theme-subtext-0: var(--ctp-latte-subtext0);
+  --theme-overlay-2: var(--ctp-latte-overlay2);
+  --theme-overlay-1: var(--ctp-latte-overlay1);
+  --theme-overlay-0: var(--ctp-latte-overlay0);
+  --theme-surface-2: var(--ctp-latte-surface2);
+  --theme-surface-1: var(--ctp-latte-surface1);
+  --theme-surface-0: var(--ctp-latte-surface0);
+  --theme-base: var(--ctp-latte-base);
+  --theme-mantle: var(--ctp-latte-mantle);
+  --theme-crust: var(--ctp-latte-crust);
+  --theme-on-accent: var(--theme-base);
+}
+
+:root[data-theme="catppuccin-frappe"] {
+  --theme-rosewater: var(--ctp-frappe-rosewater);
+  --theme-flamingo: var(--ctp-frappe-flamingo);
+  --theme-pink: var(--ctp-frappe-pink);
+  --theme-mauve: var(--ctp-frappe-mauve);
+  --theme-red: var(--ctp-frappe-red);
+  --theme-maroon: var(--ctp-frappe-maroon);
+  --theme-peach: var(--ctp-frappe-peach);
+  --theme-yellow: var(--ctp-frappe-yellow);
+  --theme-green: var(--ctp-frappe-green);
+  --theme-teal: var(--ctp-frappe-teal);
+  --theme-sky: var(--ctp-frappe-sky);
+  --theme-sapphire: var(--ctp-frappe-sapphire);
+  --theme-blue: var(--ctp-frappe-blue);
+  --theme-lavender: var(--ctp-frappe-lavender);
+  --theme-text: var(--ctp-frappe-text);
+  --theme-subtext-1: var(--ctp-frappe-subtext1);
+  --theme-subtext-0: var(--ctp-frappe-subtext0);
+  --theme-overlay-2: var(--ctp-frappe-overlay2);
+  --theme-overlay-1: var(--ctp-frappe-overlay1);
+  --theme-overlay-0: var(--ctp-frappe-overlay0);
+  --theme-surface-2: var(--ctp-frappe-surface2);
+  --theme-surface-1: var(--ctp-frappe-surface1);
+  --theme-surface-0: var(--ctp-frappe-surface0);
+  --theme-base: var(--ctp-frappe-base);
+  --theme-mantle: var(--ctp-frappe-mantle);
+  --theme-crust: var(--ctp-frappe-crust);
+  --theme-on-accent: var(--theme-crust);
+}
+
+:root[data-theme="catppuccin-macchiato"] {
+  --theme-rosewater: var(--ctp-macchiato-rosewater);
+  --theme-flamingo: var(--ctp-macchiato-flamingo);
+  --theme-pink: var(--ctp-macchiato-pink);
+  --theme-mauve: var(--ctp-macchiato-mauve);
+  --theme-red: var(--ctp-macchiato-red);
+  --theme-maroon: var(--ctp-macchiato-maroon);
+  --theme-peach: var(--ctp-macchiato-peach);
+  --theme-yellow: var(--ctp-macchiato-yellow);
+  --theme-green: var(--ctp-macchiato-green);
+  --theme-teal: var(--ctp-macchiato-teal);
+  --theme-sky: var(--ctp-macchiato-sky);
+  --theme-sapphire: var(--ctp-macchiato-sapphire);
+  --theme-blue: var(--ctp-macchiato-blue);
+  --theme-lavender: var(--ctp-macchiato-lavender);
+  --theme-text: var(--ctp-macchiato-text);
+  --theme-subtext-1: var(--ctp-macchiato-subtext1);
+  --theme-subtext-0: var(--ctp-macchiato-subtext0);
+  --theme-overlay-2: var(--ctp-macchiato-overlay2);
+  --theme-overlay-1: var(--ctp-macchiato-overlay1);
+  --theme-overlay-0: var(--ctp-macchiato-overlay0);
+  --theme-surface-2: var(--ctp-macchiato-surface2);
+  --theme-surface-1: var(--ctp-macchiato-surface1);
+  --theme-surface-0: var(--ctp-macchiato-surface0);
+  --theme-base: var(--ctp-macchiato-base);
+  --theme-mantle: var(--ctp-macchiato-mantle);
+  --theme-crust: var(--ctp-macchiato-crust);
+  --theme-on-accent: var(--theme-crust);
+}
+
+:root[data-theme="catppuccin-mocha"] {
+  --theme-rosewater: var(--ctp-mocha-rosewater);
+  --theme-flamingo: var(--ctp-mocha-flamingo);
+  --theme-pink: var(--ctp-mocha-pink);
+  --theme-mauve: var(--ctp-mocha-mauve);
+  --theme-red: var(--ctp-mocha-red);
+  --theme-maroon: var(--ctp-mocha-maroon);
+  --theme-peach: var(--ctp-mocha-peach);
+  --theme-yellow: var(--ctp-mocha-yellow);
+  --theme-green: var(--ctp-mocha-green);
+  --theme-teal: var(--ctp-mocha-teal);
+  --theme-sky: var(--ctp-mocha-sky);
+  --theme-sapphire: var(--ctp-mocha-sapphire);
+  --theme-blue: var(--ctp-mocha-blue);
+  --theme-lavender: var(--ctp-mocha-lavender);
+  --theme-text: var(--ctp-mocha-text);
+  --theme-subtext-1: var(--ctp-mocha-subtext1);
+  --theme-subtext-0: var(--ctp-mocha-subtext0);
+  --theme-overlay-2: var(--ctp-mocha-overlay2);
+  --theme-overlay-1: var(--ctp-mocha-overlay1);
+  --theme-overlay-0: var(--ctp-mocha-overlay0);
+  --theme-surface-2: var(--ctp-mocha-surface2);
+  --theme-surface-1: var(--ctp-mocha-surface1);
+  --theme-surface-0: var(--ctp-mocha-surface0);
+  --theme-base: var(--ctp-mocha-base);
+  --theme-mantle: var(--ctp-mocha-mantle);
+  --theme-crust: var(--ctp-mocha-crust);
+  --theme-on-accent: var(--theme-crust);
+}

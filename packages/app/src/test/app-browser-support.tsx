@@ -1,5 +1,10 @@
 /* oxlint-disable vitest/no-standalone-expect, eslint/no-underscore-dangle -- Shared callbacks use Effect-compatible tagged unions. */
-import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import {
+  AISettings,
+  CodeThemePreferences,
+  DEFAULT_AI_SETTINGS,
+  ThemePreferences,
+} from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -26,7 +31,21 @@ import {
   LocalReviewTarget,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
-import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import {
+  RendererLayoutSettings,
+  ReviewPaneSettings,
+} from "@diffdash/domain/renderer-layout-settings"
+import {
+  ProjectOpened,
+  ProjectRemoteCandidate,
+  ProjectRemoteSelectionRequired,
+  ProjectWorkspaceState,
+} from "@diffdash/domain/project-workspace"
+import {
+  Repo,
+  RepositoryIdentityRepairSummary,
+  RepositorySearchScope,
+} from "@diffdash/domain/repository"
 import {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
@@ -37,12 +56,15 @@ import {
   makeReviewDiffIdentity,
   makeReviewSnapshotId,
   ReviewDiffIdentity,
+  ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
+  ReviewProjectId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
   MarkdownBody,
+  HostedReviewTarget,
   type ReviewThreadAnchor,
   ReviewThread,
   ReviewThreadDetails,
@@ -85,11 +107,13 @@ import {
   OpenBranchDiffCommand,
   OpenPullRequestCommand,
   OpenWorkingTreeCommand,
+  RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
 import { AppPrerequisites, SetupRequirement } from "@diffdash/protocol/prerequisites"
 import {
   ReviewSnapshotExpired,
   ReviewSnapshotPageAvailable,
+  ReviewSnapshotPageCursor,
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
@@ -344,24 +368,32 @@ ${tailChangedLines}`,
   return { largeDetail, largeDiff, largePath, largePullRequest, tailPath }
 }
 
-const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>) => {
+const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>, lineNumber = 5) => {
   const file = parseUnifiedDiff(fixture.largeDiff.diff).files[0]
   if (file === undefined) throw new Error("Expected a parsed large diff file")
-  const anchor = lineReviewAnchor(file, "additions", 5)
+  const anchor = lineReviewAnchor(file, "additions", lineNumber)
   if (anchor === null) throw new Error("Expected a reviewable line in the large diff")
   const threadId = ReviewThreadId.make("thread-long-virtualized")
   const createdAt = "2026-07-23T09:00:00Z"
+  const currentBaseRevision = ReviewRevision.make(
+    fixture.largeDetail.summary.base.revision ?? "unknown-base",
+  )
+  const currentHeadRevision = ReviewRevision.make(
+    fixture.largeDetail.summary.head.revision ?? "unknown-head",
+  )
 
   return ReviewThreadDetails.make({
     thread: ReviewThread.make({
       id: threadId,
       repoId: repo.id,
-      reviewKey: ReviewKey.make(file.reviewKey),
+      reviewKey: ReviewKey.make(
+        `${fixture.largePullRequest.locator.repository.providerId}:${fixture.largePullRequest.locator.repository.namespace}/${fixture.largePullRequest.locator.repository.name}#${fixture.largePullRequest.locator.number}`,
+      ),
       prNumber: fixture.largePullRequest.locator.number,
-      baseRevision: ReviewRevision.make("base-long-thread"),
-      headRevision: ReviewRevision.make("head-long-thread"),
-      currentBaseRevision: ReviewRevision.make("base-long-thread"),
-      currentHeadRevision: ReviewRevision.make("head-long-thread"),
+      baseRevision: currentBaseRevision,
+      headRevision: currentHeadRevision,
+      currentBaseRevision,
+      currentHeadRevision,
       originalAnchor: anchor,
       currentAnchor: anchor,
       anchorStatus: "active",
@@ -393,24 +425,30 @@ const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>) 
 const makeReviewThreadDetails = ({
   anchor,
   id,
+  previousRevision = false,
   status = "active",
 }: {
   readonly anchor: ReviewThreadAnchor
   readonly id: string
+  readonly previousRevision?: boolean
   readonly status?: "active" | "outdated" | "unresolved_anchor"
 }) => {
   const threadId = ReviewThreadId.make(id)
   const createdAt = "2026-07-23T09:00:00Z"
+  const currentBaseRevision = ReviewRevision.make(pullRequest.base.revision ?? "unknown-base")
+  const currentHeadRevision = ReviewRevision.make(pullRequest.head.revision ?? "unknown-head")
   return ReviewThreadDetails.make({
     thread: ReviewThread.make({
       id: threadId,
       repoId: repo.id,
       reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
       prNumber: pullRequest.locator.number,
-      baseRevision: ReviewRevision.make("base-thread-summary"),
-      headRevision: ReviewRevision.make("head-thread-summary"),
-      currentBaseRevision: ReviewRevision.make("base-thread-summary"),
-      currentHeadRevision: ReviewRevision.make("head-thread-summary"),
+      baseRevision: currentBaseRevision,
+      headRevision: previousRevision
+        ? ReviewRevision.make("head-thread-summary-previous")
+        : currentHeadRevision,
+      currentBaseRevision,
+      currentHeadRevision,
       originalAnchor: anchor,
       currentAnchor: status === "active" ? anchor : null,
       anchorStatus: status,
@@ -481,10 +519,12 @@ const makeManyFileDiffFixture = () => {
         )
         const changedLines = Array.from({ length: lineCount }, (_, lineIndex) => {
           const lineNumber = lineIndex + 1
+          const searchMarker =
+            (fileIndex === 0 || fileIndex >= 7) && lineNumber <= 21 ? " SEARCH_WRAP_MATCH" : ""
           const nextValue =
             fileIndex === targetIndex && lineNumber === lineCount
               ? "TARGET_FINAL_691"
-              : `after ${padding}`
+              : `after ${padding}${searchMarker}`
           return `-const row${lineNumber} = "before ${padding}"\n+const row${lineNumber} = "${nextValue}"`
         }).join("\n")
         return `diff --git a/${path} b/${path}
@@ -505,6 +545,47 @@ ${changedLines}`
     sentinelPath,
     targetPath,
   }
+}
+
+const makeCachePressureDiffFixture = () => {
+  const number = 59
+  const paths = Array.from(
+    { length: 36 },
+    (_, index) => `src/cache/file-${String(index + 1).padStart(2, "0")}.tsx`,
+  )
+  const cachePullRequest = HostedReviewSummary.make({
+    ...pullRequest,
+    locator: makeHostedReviewLocator("github", "fungsi", "diffdash", number),
+    title: "Large paginated review",
+  })
+  const cacheDetail = HostedReviewDetail.make({
+    summary: cachePullRequest,
+    commits: [],
+    files: paths.map((path) =>
+      ChangedFile.make({
+        additions: 1,
+        changeType: "modified",
+        deletions: 1,
+        path,
+      }),
+    ),
+  })
+  const cacheDiff = HostedReviewDiff.make({
+    ...diff,
+    locator: cachePullRequest.locator,
+    diff: paths
+      .map(
+        (path, index) => `diff --git a/${path} b/${path}
+index 1111111..2222222 100644
+--- a/${path}
++++ b/${path}
+@@ -1 +1 @@
+-const value = "before ${index}"
++const value = "after ${index}${index === 0 ? " CACHE_PIN_MATCH" : ""}"`,
+      )
+      .join("\n"),
+  })
+  return { cacheDetail, cacheDiff, cachePullRequest, paths }
 }
 
 const localReview = LocalReviewDetail.make({
@@ -771,6 +852,7 @@ afterEach(() => {
   root = null
   vi.restoreAllMocks()
   document.documentElement.classList.remove("dark")
+  delete document.documentElement.dataset.theme
   document.documentElement.style.colorScheme = ""
   document.body.replaceChildren()
   window.scrollTo(0, 0)
@@ -788,13 +870,17 @@ type AppBrowserScenarioId =
   | "cliNumberedPullRequest"
   | "cliPathSetup"
   | "cliPullRequestFailure"
+  | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
+  | "diffSearchLatestWork"
   | "diffSearchImmutableAnchor"
   | "diffSearchViewportAnchor"
   | "diffSearchVisibility"
+  | "diffViewSettings"
   | "dismissRepositoryBanner"
   | "explicitProviderRouting"
+  | "fastScrollPerformance"
   | "fileTreeSelection"
   | "firstRunOnboarding"
   | "homeToReview"
@@ -806,17 +892,27 @@ type AppBrowserScenarioId =
   | "longReviewPaths"
   | "markAllViewedViewport"
   | "missingSetupHomeBanner"
+  | "multiFileSearchWrap"
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
+  | "projectOpenChooser"
+  | "projectStateRestoration"
+  | "cleanProjectReviews"
+  | "failedProjectReviews"
+  | "reviewNavigationLifecycle"
   | "remoteRepositorySearch"
   | "repositoryInvalidation"
   | "repositorySearchFailure"
-  | "reviewThreadSummary"
+  | "reviewThreadSidebar"
   | "sampledWalkthrough"
   | "shortcutReferenceHome"
   | "shortcutReferenceReview"
   | "snapshotExpiryReload"
+  | "snapshotPageResidency"
   | "staleLocalFavorites"
+  | "stickyDiffCardHeaders"
+  | "threadComposerShortcut"
+  | "threadNavigationConvergence"
   | "unavailableProviderRoute"
   | "unsupportedGitHubCli"
   | "updateDownloadRestart"
@@ -829,6 +925,7 @@ type AppBrowserScenarioId =
   | "virtualizedSearch"
   | "walkthroughNoAgent"
   | "walkthroughSettingsPersistence"
+  | "workbenchTitlebar"
   | "rapidSettingsOrdering"
   | "wrappedFileBuffers"
   | "wrappedSearchConvergence"
@@ -837,9 +934,22 @@ const appBrowserScenarios = new Map<AppBrowserScenarioId, AppBrowserScenario>()
 const ignoreRejection = (_error: unknown): void => undefined
 const ignoreSettingsResolution = (_settings: AISettings): void => undefined
 
+const makeBrowserWait = () => {
+  let release: (() => void) | null = null
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { promise, release: () => release?.() }
+}
+
 const findSettingsRadio = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(
     (button) => button.textContent === label,
+  )
+
+const findDiffViewRadio = (menu: HTMLElement, label: string) =>
+  [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find(
+    (button) => button.textContent?.startsWith(label) ?? false,
   )
 
 const scenario = (id: AppBrowserScenarioId, test: AppBrowserScenario): void => {
@@ -854,17 +964,328 @@ export const appBrowserScenario = (id: AppBrowserScenarioId): AppBrowserScenario
   return test
 }
 
-scenario("appearance", async () => {
-  installDiffDashApi({
-    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, appearance: "dark" }),
+const openDefaultProject = async () => {
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
   })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Reviews"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("Open pull requests")
+  })
+}
+
+const openDefaultHostedReview = async () => {
+  await openHostedReview(51)
+}
+
+const openHostedReview = async (number: number) => {
+  await openDefaultProject()
+  const reviewButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `button[aria-label^="Open review #${number}:"]`,
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  reviewButton?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+  })
+}
+
+scenario("appearance", async () => {
+  const longCommand = Array.from(
+    { length: 30 },
+    (_, index) => `--filter @diffdash/package-${index + 1} test`,
+  ).join(" && pnpm ")
+  const longSyntaxLine = `  "changedField": "DIFFDASH_GREEN_STRING ${longCommand}",`
+  expect(longSyntaxLine.length).toBeGreaterThan(1_000)
+  expect(longSyntaxLine.length).toBeLessThan(2_000)
+  const configuredSettings = AISettings.make({
+    ...DEFAULT_AI_SETTINGS,
+    appearance: "dark",
+    themes: ThemePreferences.make({
+      light: "catppuccin-latte",
+      dark: "catppuccin-mocha",
+    }),
+    codeThemes: CodeThemePreferences.make({
+      light: "github-light-default",
+      dark: "diffdash-dark",
+    }),
+  })
+  installDiffDashApi({
+    pullRequestDetail: HostedReviewDetail.make({
+      summary: pullRequest,
+      commits: [],
+      files: [
+        ChangedFile.make({
+          additions: 1,
+          changeType: "modified",
+          deletions: 1,
+          path: "package.json",
+        }),
+        ChangedFile.make({
+          additions: 1,
+          changeType: "modified",
+          deletions: 1,
+          path: "config/syntax.yaml",
+        }),
+        ChangedFile.make({
+          additions: 1,
+          changeType: "modified",
+          deletions: 1,
+          path: "config/alias.yml",
+        }),
+        ChangedFile.make({
+          additions: 1,
+          changeType: "modified",
+          deletions: 1,
+          path: "src/syntax.tsx",
+        }),
+      ],
+    }),
+    pullRequestDiff: HostedReviewDiff.make({
+      ...diff,
+      diff: `diff --git a/package.json b/package.json
+index 1111111..2222222 100644
+--- a/package.json
++++ b/package.json
+@@ -20,3 +20,3 @@
+   "contextField": "context value",
+-  "changedField": "before",
++${longSyntaxLine}
+   "tailField": "tail value"
+diff --git a/config/syntax.yaml b/config/syntax.yaml
+index 3333333..4444444 100644
+--- a/config/syntax.yaml
++++ b/config/syntax.yaml
+@@ -1,4 +1,4 @@
+ plainKey: plain value
+-"double key": "before"
++"double key": "double value"
+ 'single key': 'single value'
+ enabled: true
+diff --git a/config/alias.yml b/config/alias.yml
+index 5555555..6666666 100644
+--- a/config/alias.yml
++++ b/config/alias.yml
+@@ -1,2 +1,2 @@
+ aliasKey: alias value
+-changedKey: before
++changedKey: after
+diff --git a/src/syntax.tsx b/src/syntax.tsx
+index 7777777..8888888 100644
+--- a/src/syntax.tsx
++++ b/src/syntax.tsx
+@@ -1 +1 @@
+-<section className="before"><Widget value={file.path} /></section>
++<section className="clear string"><Widget value={file.path} /></section>`,
+    }),
+    settings: configuredSettings,
+  })
+  expect((await window.diffDash.settings.get()).themes.dark).toBe("catppuccin-mocha")
+  expect((await window.diffDash.settings.get()).codeThemes.dark).toBe("diffdash-dark")
   renderApp()
 
   await vi.waitFor(() => {
     expect(document.documentElement.classList.contains("dark")).toBe(true)
+    expect(document.documentElement.dataset.theme).toBe("catppuccin-mocha")
     expect(document.documentElement.style.colorScheme).toBe("dark")
+    expect(getComputedStyle(document.body).backgroundColor).toBe("rgb(30, 30, 46)")
+  })
+  await openDefaultHostedReview()
+  await vi.waitFor(() => {
+    const review = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const card = document.querySelector<HTMLElement>('[data-diff-card-path="package.json"]')
+    const diffBody = card?.querySelector<HTMLElement>("[data-diff-card-body]") ?? null
+    const diffRoot = getDiffShadowRoot("package.json")
+    const yamlRoot = getDiffShadowRoot("config/syntax.yaml")
+    const ymlRoot = getDiffShadowRoot("config/alias.yml")
+    const tsxRoot = getDiffShadowRoot("src/syntax.tsx")
+    expect(review).not.toBeNull()
+    expect(document.querySelector("#review-thread-summary")).toBeNull()
+    expect(card).not.toBeNull()
+    expect(diffBody).not.toBeNull()
+    if (review === null || card === null || diffBody === null) return
+    expect(review?.dataset.codeThemeDark).toBe("diffdash-dark")
+    expect(review?.dataset.colorScheme).toBe("dark")
+    expect(card?.dataset.diffFileStatus).toBe("modified")
+    expect(diffRoot).not.toBeNull()
+    expect(yamlRoot).not.toBeNull()
+    expect(ymlRoot).not.toBeNull()
+    expect(tsxRoot).not.toBeNull()
+    expect(card.querySelector("[data-diff-loading-skeleton]")).toBeNull()
+    expect(getComputedStyle(review).backgroundColor).not.toBe(
+      getComputedStyle(diffBody).backgroundColor,
+    )
+
+    const longLine = [
+      ...(diffRoot?.querySelectorAll<HTMLElement>(
+        '[data-content] > [data-line][data-line-type="change-addition"]',
+      ) ?? []),
+    ].find((line) => line.textContent?.includes("DIFFDASH_GREEN_STRING") ?? false)
+    const syntaxTokens = [...(longLine?.querySelectorAll<HTMLElement>("span[style]") ?? [])]
+    const stringToken = syntaxTokens.find(
+      (token) => token.textContent?.includes("DIFFDASH_GREEN_STRING") ?? false,
+    )
+    expect(syntaxTokens.length).toBeGreaterThan(1)
+    expect(stringToken).not.toBeUndefined()
+    expect(getComputedStyle(stringToken!).color).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(diffRoot!, "changedField")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(diffRoot!, "contextField")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(diffRoot!, "context value")).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(yamlRoot!, "plainKey")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(yamlRoot!, "plain value")).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(yamlRoot!, "double key")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(yamlRoot!, "double value")).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(yamlRoot!, "single key")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(yamlRoot!, "single value")).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(ymlRoot!, "aliasKey")).toBe("rgb(255, 166, 133)")
+    expect(getSyntaxTokenColor(ymlRoot!, "alias value")).toBe("rgb(140, 218, 148)")
+    expect(getSyntaxTokenColor(tsxRoot!, "section")).toBe("rgb(104, 205, 242)")
+    expect(getSyntaxTokenColor(tsxRoot!, "Widget")).toBe("rgb(226, 144, 240)")
+    expect(getSyntaxTokenColor(tsxRoot!, "className")).toBe("rgb(255, 222, 128)")
+    expect(getSyntaxTokenColor(tsxRoot!, "value")).toBe("rgb(255, 222, 128)")
+    expect(getSyntaxTokenColor(tsxRoot!, "clear string")).toBe("rgb(140, 218, 148)")
+    expect(getComputedStyle(diffRoot!.host).color).toBe("rgb(188, 188, 196)")
+
+    const additionMarker = diffRoot?.querySelector<HTMLElement>(
+      '[data-line-type="change-addition"][data-column-number]',
+    )
+    const hunkSeparator = diffRoot?.querySelector<HTMLElement>('[data-separator="line-info-basic"]')
+    const hunkSeparatorContent = hunkSeparator?.querySelector<HTMLElement>(
+      "[data-separator-content]",
+    )
+    expect(additionMarker).not.toBeNull()
+    expect(hunkSeparator).not.toBeNull()
+    expect(hunkSeparatorContent).not.toBeNull()
+    expect(getComputedStyle(additionMarker!, "::before").opacity).toBe("0.55")
+
+    const expectedBorder = document.createElement("div")
+    const expectedSeparator = document.createElement("div")
+    const expectedSeparatorBorder = document.createElement("div")
+    const expectedSeparatorForeground = document.createElement("div")
+    const expectedSuccess = document.createElement("div")
+    expectedBorder.style.color = "var(--review-sidebar-border)"
+    expectedSeparator.style.color = "var(--diff-separator)"
+    expectedSeparatorBorder.style.color = "var(--diff-separator-border)"
+    expectedSeparatorForeground.style.color = "var(--diff-separator-foreground)"
+    expectedSuccess.style.color = "var(--review-success)"
+    document.body.append(
+      expectedBorder,
+      expectedSeparator,
+      expectedSeparatorBorder,
+      expectedSeparatorForeground,
+      expectedSuccess,
+    )
+    expect(getComputedStyle(card).borderTopColor).toBe(getComputedStyle(expectedBorder).color)
+    expect(getComputedStyle(additionMarker!, "::before").backgroundColor).toBe(
+      getComputedStyle(expectedSuccess).color,
+    )
+    expect(getComputedStyle(hunkSeparator!).backgroundColor).toBe(
+      getComputedStyle(expectedSeparator).color,
+    )
+    expect(getComputedStyle(hunkSeparator!).boxShadow).toContain(
+      getComputedStyle(expectedSeparatorBorder).color,
+    )
+    expect(getComputedStyle(hunkSeparatorContent!).color).toBe(
+      getComputedStyle(expectedSeparatorForeground).color,
+    )
+    expect(getComputedStyle(hunkSeparatorContent!).fontWeight).toBe("500")
+    expectedBorder.remove()
+    expectedSeparator.remove()
+    expectedSeparatorBorder.remove()
+    expectedSeparatorForeground.remove()
+    expectedSuccess.remove()
   })
   expect(document.querySelector('button[aria-label^="Use "][aria-label$=" theme"]')).toBeNull()
+})
+
+scenario("diffViewSettings", async () => {
+  const calls = installDiffDashApi()
+  renderApp()
+
+  await openDefaultHostedReview()
+  const content = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>("[data-review-diff-content]")
+    expect(element).not.toBeNull()
+    expect(getDiffShadowRoot("src/app.tsx")).not.toBeNull()
+    return element!
+  })
+  const settingsButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Diff view settings"]',
+  )
+  expect(settingsButton).not.toBeNull()
+  expect(document.querySelector("[data-review-editor-header]")?.contains(settingsButton)).toBe(true)
+
+  content.style.width = "700px"
+  await vi.waitFor(() => {
+    expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  })
+
+  const openMenu = async () => {
+    settingsButton?.click()
+    return vi.waitFor(() => {
+      const menu = document.querySelector<HTMLElement>(
+        '[role="menu"][aria-label="Diff view settings"]',
+      )
+      expect(menu).not.toBeNull()
+      return menu!
+    })
+  }
+  let menu = await openMenu()
+  expect(findDiffViewRadio(menu, "Auto")?.getAttribute("aria-checked")).toBe("true")
+  findDiffViewRadio(menu, "Split")?.click()
+  await vi.waitFor(() => {
+    expect(calls.updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ diffViewMode: "split" }),
+    )
+    expect(
+      getDiffShadowRoot("src/app.tsx")?.querySelector('[data-diff-type="split"]'),
+    ).not.toBeNull()
+  })
+
+  menu = await openMenu()
+  findDiffViewRadio(menu, "Unified")?.click()
+  content.style.width = "1000px"
+  await vi.waitFor(() => {
+    expect(calls.updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ diffViewMode: "unified" }),
+    )
+    expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  })
+
+  content.style.width = "1120px"
+  await new Promise((resolve) => window.setTimeout(resolve, 50))
+  menu = await openMenu()
+  findDiffViewRadio(menu, "Auto")?.click()
+  await vi.waitFor(() => {
+    expect(calls.updateSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ diffViewMode: "auto" }),
+    )
+    expect(
+      getDiffShadowRoot("src/app.tsx")?.querySelector('[data-diff-type="split"]'),
+    ).not.toBeNull()
+  })
+
+  content.style.width = "1060px"
+  await vi.waitFor(() => {
+    expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  })
+  content.style.width = "1090px"
+  await new Promise((resolve) => window.setTimeout(resolve, 50))
+  expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  content.style.width = "1120px"
+  await vi.waitFor(() => {
+    expect(
+      getDiffShadowRoot("src/app.tsx")?.querySelector('[data-diff-type="split"]'),
+    ).not.toBeNull()
+  })
 })
 
 scenario("firstRunOnboarding", async () => {
@@ -880,6 +1301,10 @@ scenario("firstRunOnboarding", async () => {
     expect(document.body.textContent).toContain("Coding agent installed")
     expect(document.body.textContent).not.toContain("Bookmarked Repos")
   })
+  expect(document.querySelector("[data-workbench-titlebar]")).not.toBeNull()
+  expect(
+    document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")?.disabled,
+  ).toBe(true)
 
   const docsButton = [...document.querySelectorAll("button")].find(
     (button) => button.textContent === "Setup docs",
@@ -909,7 +1334,83 @@ scenario("firstRunOnboarding", async () => {
     )
     expect(calls.startAnalytics).toHaveBeenCalled()
     expect(calls.captureAnalytics).toHaveBeenCalledWith({ event: "onboarding_completed" })
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
+  })
+})
+
+scenario("workbenchTitlebar", async () => {
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  expect(document.body.textContent).not.toContain("Repair projects")
+  const titlebar = document.querySelector<HTMLElement>("[data-workbench-titlebar]")
+  const viewport = document.querySelector<HTMLElement>("[data-workbench-viewport]")
+  const frame = document.querySelector<HTMLElement>("[data-workbench-frame]")
+  const globalRail = document.querySelector<HTMLElement>("[data-workbench-global-rail]")
+  const content = document.querySelector<HTMLElement>("[data-workbench-content]")
+  const commandCenter = document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")
+  const back = titlebar?.querySelector<HTMLButtonElement>('button[aria-label="Back"]')
+  expect(titlebar).not.toBeNull()
+  expect(viewport).not.toBeNull()
+  expect(frame).not.toBeNull()
+  expect(globalRail).not.toBeNull()
+  expect(content).not.toBeNull()
+  expect(commandCenter?.textContent).toContain("DiffDash")
+  expect(commandCenter?.disabled).toBe(false)
+  expect(back).toBeNull()
+  expect(titlebar?.querySelector('button[aria-label="Review actions"]')).toBeNull()
+  if (
+    titlebar === null ||
+    viewport === null ||
+    frame === null ||
+    globalRail === null ||
+    content === null ||
+    commandCenter === null
+  )
+    return
+
+  const titlebarRect = titlebar.getBoundingClientRect()
+  const viewportRect = viewport.getBoundingClientRect()
+  const frameRect = frame.getBoundingClientRect()
+  const globalRailRect = globalRail.getBoundingClientRect()
+  const contentRect = content.getBoundingClientRect()
+  const commandRect = commandCenter.getBoundingClientRect()
+  expect(titlebarRect.height).toBe(48)
+  expect(titlebarRect.bottom).toBe(frameRect.top)
+  expect(frameRect.left).toBe(viewportRect.left + 8)
+  expect(frameRect.right).toBe(viewportRect.right - 8)
+  expect(frameRect.bottom).toBe(globalRailRect.top)
+  expect(globalRailRect.height).toBe(8)
+  expect(globalRailRect.bottom).toBe(viewportRect.bottom)
+  expect(contentRect.top).toBe(frameRect.top)
+  expect(contentRect.right).toBe(frameRect.right)
+  expect(contentRect.bottom).toBe(frameRect.bottom)
+  expect(contentRect.left).toBe(frameRect.left)
+  expect(frame.dataset.workbenchFrameMode).toBe("route")
+  expect(getComputedStyle(frame).borderRadius).toBe("12px")
+  expect(getComputedStyle(frame).boxShadow).toBe("none")
+  expect(getComputedStyle(frame).clipPath).toBe("inset(0px round 12px)")
+  expect(getComputedStyle(frame).overflow).toBe("hidden")
+  expect(Math.round(commandRect.left + commandRect.width / 2)).toBe(
+    Math.round(titlebarRect.left + titlebarRect.width / 2),
+  )
+  commandCenter.focus()
+  commandCenter.click()
+  const palette = await vi.waitFor(() => {
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="Go anywhere"]')
+    expect(dialog).not.toBeNull()
+    expect(
+      dialog?.querySelector<HTMLInputElement>('input[placeholder="Search projects and reviews"]'),
+    ).not.toBeNull()
+    return dialog!
+  })
+  palette.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('dialog[aria-label="Go anywhere"]')).toBeNull()
+    expect(document.activeElement).toBe(commandCenter)
   })
 })
 
@@ -937,10 +1438,141 @@ scenario("appStateRecovery", async () => {
   retryButton?.click()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
     expect(document.body.textContent).not.toContain("Set up DiffDash")
   })
   expect(calls.getAppState).toHaveBeenCalledTimes(2)
+})
+
+scenario("projectOpenChooser", async () => {
+  const candidates = [
+    ProjectRemoteCandidate.make({
+      remoteName: "origin",
+      repository: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+    }),
+    ProjectRemoteCandidate.make({
+      remoteName: "upstream",
+      repository: makeHostedRepositoryLocator("github", "upstream", "diffdash"),
+    }),
+  ] as const
+  const calls = installDiffDashApi({
+    selectLocalFolder: "/workspace/diffdash",
+    openProject: async (localPath, selectedRepository) =>
+      selectedRepository === undefined
+        ? ProjectRemoteSelectionRequired.make({ rootPath: localPath, candidates })
+        : ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) }),
+  })
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  const openProjectButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Open project",
+  )
+  calls.selectLocalFolder.mockResolvedValueOnce(null)
+  openProjectButton?.click()
+  await vi.waitFor(() => expect(calls.selectLocalFolder).toHaveBeenCalledOnce())
+  expect(calls.openProject).not.toHaveBeenCalled()
+  expect(document.body.textContent).toContain("Pinned projects")
+
+  openProjectButton?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="project-remote-chooser-title"]'),
+    ).not.toBeNull()
+    expect(document.body.textContent).toContain("origin · github")
+    expect(document.body.textContent).toContain("upstream · github")
+  })
+  document.querySelector<HTMLButtonElement>('button[aria-label="Cancel opening project"]')?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="project-remote-chooser-title"]'),
+    ).toBeNull()
+    expect(document.body.textContent).toContain("Pinned projects")
+  })
+
+  openProjectButton?.click()
+  const selectedCandidate = await vi.waitFor(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(
+      (candidate) => candidate.textContent?.includes("fungsi/diffdash") ?? false,
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  selectedCandidate?.click()
+  await vi.waitFor(() => {
+    expect(calls.openProject).toHaveBeenLastCalledWith(
+      "/workspace/diffdash",
+      expect.objectContaining({ namespace: "fungsi", name: "diffdash" }),
+    )
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+  })
+})
+
+scenario("projectStateRestoration", async () => {
+  const persisted = ProjectWorkspaceState.make({
+    projectId: ReviewProjectId.make(repo.id),
+    activeRibbon: "reviews",
+    selectedReviewTarget: HostedReviewTarget.make({
+      kind: "hosted",
+      review: pullRequest.locator,
+    }),
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({ projectWorkspaceState: persisted })
+  renderApp()
+
+  await openDefaultProject()
+  await vi.waitFor(() => {
+    expect(calls.getProjectWorkspace).toHaveBeenCalledWith(ReviewProjectId.make(repo.id))
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+    expect(document.body.textContent).toContain("Opened PR #51")
+    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+  })
+})
+
+scenario("cleanProjectReviews", async () => {
+  const localRepo = Repo.make({ ...repo, localPath: localReview.rootPath })
+  installDiffDashApi({
+    repositories: [localRepo],
+    pullRequests: [],
+    localReviewDiff: LocalReviewDiff.make({
+      ...localDiff,
+      diff: "",
+      diffHash: "0000000000000000000000000000000000000000000000000000000000000000",
+    }),
+  })
+  renderApp()
+
+  await openDefaultProject()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Clean working tree")
+    expect(document.body.textContent).toContain("No open pull requests")
+    expect(document.body.textContent).not.toContain("Hosted reviews unavailable")
+  })
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Open working tree review"]')
+    ?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("No changed files in this review")
+  })
+})
+
+scenario("failedProjectReviews", async () => {
+  const calls = installDiffDashApi()
+  calls.listPullRequests.mockRejectedValue(new Error("Hosted provider unavailable"))
+  renderApp()
+
+  await openDefaultProject()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Hosted reviews unavailable")
+    expect(document.body.textContent).toContain("Could not load pull requests")
+    expect(document.body.textContent).not.toContain("No open pull requests")
+  })
 })
 
 scenario("cliPathSetup", async () => {
@@ -1087,10 +1719,10 @@ scenario("remoteRepositorySearch", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
   })
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search bookmarked and accessible repositories"]',
+    'input[placeholder="Search local and hosted projects"]',
   )
   expect(searchInput).not.toBeNull()
   if (searchInput === null) return
@@ -1131,10 +1763,10 @@ scenario("repositorySearchFailure", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
   })
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search bookmarked and accessible repositories"]',
+    'input[placeholder="Search local and hosted projects"]',
   )
   expect(searchInput).not.toBeNull()
   if (searchInput === null) return
@@ -1144,16 +1776,16 @@ scenario("repositorySearchFailure", async () => {
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("GitHub search is unavailable")
   })
-  expect(document.body.textContent).toContain("Bookmarked repo")
-  expect(document.body.textContent).not.toContain("No matching repos found")
+  expect(document.body.textContent).toContain("Hosted")
+  expect(document.body.textContent).not.toContain("No matching projects found")
 })
 
 scenario("repositoryInvalidation", async () => {
   const calls = installDiffDashApi()
   renderApp()
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search bookmarked and accessible repositories"]',
+    'input[placeholder="Search local and hosted projects"]',
   )
   expect(searchInput).not.toBeNull()
   if (searchInput === null) return
@@ -1165,7 +1797,7 @@ scenario("repositoryInvalidation", async () => {
   calls.listRepositories.mockClear()
   calls.searchRepositories.mockClear()
   const bookmarkButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Bookmark",
+    (button) => button.textContent?.trim() === "Pin",
   )
   expect(bookmarkButton).toBeDefined()
   bookmarkButton?.click()
@@ -1188,27 +1820,22 @@ scenario("walkthroughNoAgent", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
-  })
-
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
 
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Opened PR #51")
-    expect(document.body.textContent).toContain("Walkthroughs require an available agent provider")
   })
 
   const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent === "Walkthrough",
   )
   expect(walkthroughTab).toBeDefined()
-  expect(walkthroughTab?.disabled).toBe(true)
+  expect(walkthroughTab?.disabled).toBe(false)
   walkthroughTab?.click()
-  expect(calls.getWalkthrough).not.toHaveBeenCalled()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Walkthroughs require an available agent provider")
+    expect(calls.getWalkthrough).toHaveBeenCalled()
+  })
 })
 
 scenario("unavailableProviderRoute", async () => {
@@ -1242,16 +1869,23 @@ scenario("unavailableProviderRoute", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
+  await showWideReviewLayout()
+  const treeButton = document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')
+  if (treeButton?.getAttribute("aria-expanded") !== "true") treeButton?.click()
+  await vi.waitFor(() =>
+    expect(
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Files"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true"),
+  )
   const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent === "Walkthrough",
   )
-  expect(walkthroughTab?.disabled).toBe(true)
+  expect(walkthroughTab?.disabled).toBe(false)
+  walkthroughTab?.click()
   const settingsButton = document.querySelector<HTMLButtonElement>(
     'button[aria-label="Agent settings"]',
   )
@@ -1277,15 +1911,12 @@ scenario("agentMenusKeyboard", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
+  await showWideReviewLayout()
 
-  const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Actions") ?? false,
+  const actionsButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Review actions"]',
   )
   actionsButton?.click()
   await vi.waitFor(() => {
@@ -1346,11 +1977,7 @@ scenario("explicitProviderRouting", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
   const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent === "Walkthrough",
@@ -1362,13 +1989,7 @@ scenario("sampledWalkthrough", async () => {
   installDiffDashApi({ walkthrough: sampledWalkthrough })
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
 
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Opened PR #51")
@@ -1395,11 +2016,7 @@ scenario("walkthroughSettingsPersistence", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
   const walkthroughTab = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent === "Walkthrough",
@@ -1454,11 +2071,7 @@ scenario("rapidSettingsOrdering", async () => {
     },
   })
   renderApp()
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(document.body.textContent).toContain("Opened PR #51"))
   document.querySelector<HTMLButtonElement>('button[aria-label="Agent settings"]')?.click()
   await vi.waitFor(() => expect(document.querySelector('[role="menuitemradio"]')).not.toBeNull())
@@ -1485,9 +2098,10 @@ scenario("staleLocalFavorites", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
     expect(document.body.textContent).toContain("fungsi/diffdash")
-    expect(document.body.textContent).not.toContain("local/diffdash-fe11f30a1061")
+    expect(document.body.textContent).toContain("local/diffdash-fe11f30a1061")
+    expect(document.body.textContent).toContain("Local only")
   })
 
   calls.listPullRequests.mockClear()
@@ -1514,13 +2128,7 @@ scenario("linkRepositoryBanner", async () => {
   calls.selectLocalFolder.mockResolvedValue("/workspace/diffdash")
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
 
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Link a checkout for isolated agent review")
@@ -1544,7 +2152,8 @@ scenario("linkRepositoryBanner", async () => {
 
   calls.openLocalReview()
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Opened local changes")
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("Local changes")
     expect(document.body.textContent).not.toContain("Link a checkout for isolated agent review")
   })
 })
@@ -1553,13 +2162,7 @@ scenario("dismissRepositoryBanner", async () => {
   const calls = installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Link a checkout for isolated agent review")
   })
@@ -1579,13 +2182,28 @@ scenario("cliLinkRepository", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
   })
   calls.linkRepositoryFromCli("/workspace/diffdash")
 
   await vi.waitFor(() => {
     expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
-    expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    expect(document.body.textContent).toContain("Open pull requests")
+  })
+})
+
+scenario("cliRepairRepositories", async () => {
+  const calls = installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  const listCallsBeforeRepair = calls.listRepositories.mock.calls.length
+  calls.repairRepositoriesFromCli()
+
+  await vi.waitFor(() => {
+    expect(calls.repairRepositoryIdentities).toHaveBeenCalledOnce()
+    expect(calls.listRepositories.mock.calls.length).toBeGreaterThan(listCallsBeforeRepair)
+    expect(document.body.textContent).toContain("Repaired 1 project identities; 0 will retry")
   })
 })
 
@@ -1593,12 +2211,17 @@ scenario("cliRepositoryPullRequests", async () => {
   const calls = installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   calls.openPullRequest(null, "/workspace/diffdash")
 
   await vi.waitFor(() => {
-    expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
-    expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    expect(calls.openProject).toHaveBeenCalledWith("/workspace/diffdash", undefined)
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+    expect(document.body.textContent).toContain(
+      "Local changes and hosted pull requests stay together in this workspace.",
+    )
   })
 })
 
@@ -1606,25 +2229,26 @@ scenario("cliNumberedPullRequest", async () => {
   const calls = installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   calls.openPullRequest(51, "/workspace/diffdash")
 
   await vi.waitFor(() => {
-    expect(calls.installRepository).toHaveBeenCalledWith("/workspace/diffdash")
+    expect(calls.openProject).toHaveBeenCalledWith("/workspace/diffdash", undefined)
     expect(document.body.textContent).toContain("Opened PR #51")
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
   })
 })
 
 scenario("cliPullRequestFailure", async () => {
   const calls = installDiffDashApi()
-  calls.installRepository.mockRejectedValueOnce(
+  calls.openProject.mockRejectedValueOnce(
     new Error(
       `repositories:install failed: (FiberFailure) RepositoryLinkError: { "operation": "detectRepository", "reason": "Select a Git repository with a GitHub origin.", "cause": {} } at internal stack`,
     ),
   )
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   calls.openPullRequest(3, "/workspace/diffdash")
 
   await vi.waitFor(() => {
@@ -1639,7 +2263,7 @@ scenario("cliBranchComparison", async () => {
   const calls = installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   calls.openBranchDiff("dev")
 
   await vi.waitFor(() => {
@@ -1650,7 +2274,7 @@ scenario("cliBranchComparison", async () => {
       }),
     )
     expect(document.body.textContent).toContain("Changes vs dev")
-    expect(document.body.textContent).toContain("vs dev")
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
   })
 })
 
@@ -1663,7 +2287,7 @@ scenario("cliBranchNoAncestor", async () => {
   )
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   calls.openBranchDiff("dev")
 
   await vi.waitFor(() => {
@@ -1678,13 +2302,7 @@ scenario("fileTreeSelection", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
 
   await vi.waitFor(() => {
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
@@ -1721,6 +2339,159 @@ scenario("fileTreeSelection", async () => {
   expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
     "docs/readme.md",
   )
+  await vi.waitFor(() => {
+    expect(diffPane.dataset.reviewNavigationPhase).toBe("idle")
+    expect(diffPane.dataset.reviewNavigationOutcome).toBe("completed::")
+  })
+  diffPane.scrollTop = Math.max(0, diffPane.scrollHeight - diffPane.clientHeight)
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await waitForAnimationFrames(2)
+  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  expect(stickyChrome).not.toBeNull()
+  if (stickyChrome !== null) {
+    const expectedTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
+    expect(Math.abs(docsCard.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(1)
+  }
+})
+
+scenario("reviewNavigationLifecycle", async () => {
+  const fixture = makeManyFileDiffFixture()
+  const parsedFiles = parseUnifiedDiff(fixture.manyDiff.diff).files
+  const firstTarget = parsedFiles[12]
+  const secondTarget = parsedFiles[13]
+  if (firstTarget === undefined || secondTarget === undefined) {
+    throw new Error("Expected distant navigation targets")
+  }
+  const releases = new Map<string, () => void>()
+  const waits = new Map(
+    [firstTarget, secondTarget].map((file) => {
+      let release!: () => void
+      const wait = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      releases.set(file.fileId, release)
+      return [file.fileId, wait] as const
+    }),
+  )
+  installDiffDashApi({
+    pullRequestDetail: fixture.manyDetail,
+    pullRequestDiff: fixture.manyDiff,
+    reviewRequests: [fixture.manyPullRequest],
+    beforeReviewSnapshotPage: async (request) => {
+      const wait = request.fileIds.flatMap((fileId) => {
+        const pending = waits.get(fileId)
+        return pending === undefined ? [] : [pending]
+      })[0]
+      if (wait !== undefined) await wait
+    },
+  })
+  renderApp()
+
+  await openHostedReview(58)
+  await showResponsiveDiffPane()
+  await vi.waitFor(() => expect(getChangedFilesTreeItem(firstTarget.path)).not.toBeNull())
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  expect(diffPane).not.toBeNull()
+  if (diffPane === null) return
+
+  getChangedFilesTreeItem(firstTarget.path)?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, composed: true }),
+  )
+  await vi.waitFor(() => {
+    expect(diffPane.hasAttribute("data-review-navigation-locked")).toBe(true)
+    expect(diffPane.getAttribute("aria-busy")).toBe("true")
+    expect(diffPane.style.overflowY).toBe("hidden")
+  })
+  expect(diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true }))).toBe(
+    false,
+  )
+  expect(
+    diffPane.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true })),
+  ).toBe(false)
+  expect(
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "PageDown" }),
+    ),
+  ).toBe(false)
+
+  getChangedFilesTreeItem(secondTarget.path)?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, composed: true }),
+  )
+  await vi.waitFor(() => {
+    expect(diffPane.hasAttribute("data-review-navigation-locked")).toBe(true)
+    expect(getSelectedChangedFileTreeItems()[0]?.dataset.itemPath).toBe(secondTarget.path)
+  })
+  releases.get(firstTarget.fileId)?.()
+  await waitForAnimationFrames(2)
+  expect(diffPane.hasAttribute("data-review-navigation-locked")).toBe(true)
+  expect(getSelectedChangedFileTreeItems()[0]?.dataset.itemPath).toBe(secondTarget.path)
+
+  dispatchKeyboardShortcut("k", { metaKey: true })
+  await vi.waitFor(() => {
+    expect(document.querySelector('dialog[aria-label="Go anywhere"]')).not.toBeNull()
+  })
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('dialog[aria-label="Go anywhere"]')).toBeNull()
+    expect(diffPane.dataset.reviewNavigationOutcome).toBe("cancelled:user:")
+    expect(diffPane.dataset.reviewNavigationPhase).toBe("idle")
+    expect(diffPane.hasAttribute("data-review-navigation-locked")).toBe(false)
+  })
+  const terminalScrollTop = diffPane.scrollTop
+  releases.get(secondTarget.fileId)?.()
+  await waitForAnimationFrames(3)
+  expect(diffPane.dataset.reviewNavigationOutcome).toBe("cancelled:user:")
+  expect(diffPane.scrollTop).toBe(terminalScrollTop)
+
+  getChangedFilesTreeItem(secondTarget.path)?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, composed: true }),
+  )
+  await vi.waitFor(
+    () => {
+      expect(diffPane.dataset.reviewNavigationPhase).toBe("idle")
+      expect(diffPane.dataset.reviewNavigationOutcome).toBe("completed::")
+      expect(diffPane.hasAttribute("data-review-navigation-locked")).toBe(false)
+      expect(diffPane.getAttribute("aria-busy")).toBe("false")
+      const card = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${secondTarget.path}"]`,
+      )
+      const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+      const content = document.querySelector<HTMLElement>("[data-review-diff-content]")
+      const spacer = document.querySelector<HTMLElement>("[data-review-scroll-past-end]")
+      expect(card).not.toBeNull()
+      expect(stickyChrome).not.toBeNull()
+      expect(content).not.toBeNull()
+      expect(spacer).not.toBeNull()
+      if (card === null || stickyChrome === null || content === null || spacer === null) return
+      const expectedTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
+      expect(Math.abs(card.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(1)
+      const trailingContentHeight =
+        content.getBoundingClientRect().bottom - card.getBoundingClientRect().top
+      expect(Number.parseFloat(spacer.style.height)).toBeCloseTo(
+        Math.max(0, diffPane.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
+        5,
+      )
+    },
+    { timeout: 20_000 },
+  )
+  diffPane.scrollTop = Math.max(0, diffPane.scrollHeight - diffPane.clientHeight)
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await waitForAnimationFrames(2)
+  const finalCard = document.querySelector<HTMLElement>(
+    `[data-diff-card-path="${secondTarget.path}"]`,
+  )
+  const finalStickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  expect(finalCard).not.toBeNull()
+  expect(finalStickyChrome).not.toBeNull()
+  if (finalCard !== null && finalStickyChrome !== null) {
+    const paneRect = diffPane.getBoundingClientRect()
+    const cardRect = finalCard.getBoundingClientRect()
+    const visibleTop = paneRect.top + finalStickyChrome.offsetHeight
+    expect(cardRect.bottom).toBeGreaterThan(visibleTop)
+    expect(cardRect.top).toBeLessThan(paneRect.bottom)
+  }
 })
 
 scenario("longReviewPaths", async () => {
@@ -1739,11 +2510,7 @@ scenario("longReviewPaths", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
 
   const card = await vi.waitFor(() => {
     const element = document.querySelector<HTMLElement>(`[data-diff-card-path="${longPath}"]`)
@@ -1760,7 +2527,16 @@ scenario("longReviewPaths", async () => {
   expect(treeItem?.getAttribute("aria-label")).toContain(
     "atomic-webhook-replay-story-with-an-extremely-long-name.test.ts",
   )
-  expect(treeItem?.querySelector("[data-truncate-marker]")).not.toBeNull()
+  const visibleTruncationMarker = await vi.waitFor(() => {
+    const marker = [
+      ...(treeItem?.querySelectorAll<HTMLElement>("[data-truncate-marker]") ?? []),
+    ].find((candidate) => getComputedStyle(candidate).opacity === "1")
+    expect(marker).not.toBeUndefined()
+    return marker!
+  })
+  expect(visibleTruncationMarker.textContent).toContain("…")
+  expect(getComputedStyle(visibleTruncationMarker).backgroundColor).not.toBe("rgba(0, 0, 0, 0)")
+  expect(treeItem!.scrollHeight).toBe(treeItem!.clientHeight)
 })
 
 scenario("incrementalSnapshotPages", async () => {
@@ -1772,11 +2548,7 @@ scenario("incrementalSnapshotPages", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #58"),
-  )
-  reviewButton?.click()
+  await openHostedReview(58)
 
   await vi.waitFor(() => {
     expect(calls.getReviewSnapshotPage).toHaveBeenCalled()
@@ -1818,11 +2590,7 @@ scenario("snapshotExpiryReload", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #59"),
-  )
-  reviewButton?.click()
+  await openHostedReview(59)
 
   await vi.waitFor(() => expect(calls.getReviewSnapshotPage).toHaveBeenCalled())
   const firstPageResponse = await calls.getReviewSnapshotPage.mock.results[0]?.value
@@ -1845,13 +2613,7 @@ scenario("largeDiffVirtualization", async () => {
   })
   renderApp({ strictMode: true })
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #52"),
-  )
-  reviewButton?.click()
+  await openHostedReview(52)
 
   await vi.waitFor(() => {
     expect(getDiffCardPaths()).toEqual([fixture.largePath, fixture.tailPath])
@@ -1918,6 +2680,79 @@ scenario("largeDiffVirtualization", async () => {
   })
 })
 
+scenario("fastScrollPerformance", async () => {
+  const frameCount = 48
+  const fixture = makeLargeDiffFixture(3_000, 83)
+  installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(83)
+  await showResponsiveDiffPane()
+  const diffPane = await vi.waitFor(() => {
+    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const body = document.querySelector<HTMLElement>(
+      `[data-diff-card-path="${fixture.largePath}"] [data-diff-card-body]`,
+    )
+    expect(pane).not.toBeNull()
+    expect(body?.getAttribute("aria-busy")).toBe("false")
+    expect(getMountedDiffLineCount()).toBeGreaterThan(0)
+    return pane!
+  })
+  await waitForAnimationFrames(8)
+
+  type InstrumentedVirtualizer = {
+    readonly markDOMDirty: () => void
+    readonly requestHeightReconcile: (instance: object) => void
+  }
+  const virtualizer = (window as typeof window & { readonly __INSTANCE?: InstrumentedVirtualizer })
+    .__INSTANCE
+  expect(virtualizer).not.toBeUndefined()
+  if (virtualizer === undefined) return
+
+  const markDOMDirty = vi.spyOn(virtualizer, "markDOMDirty")
+  const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
+  const replaceHighlight = vi.spyOn(CSS.highlights, "set")
+  const removeHighlight = vi.spyOn(CSS.highlights, "delete")
+  const longTaskDurations: number[] = []
+  const longTaskObserver = PerformanceObserver.supportedEntryTypes.includes("longtask")
+    ? new PerformanceObserver((entries) => {
+        entries.getEntries().forEach((entry) => longTaskDurations.push(entry.duration))
+      })
+    : null
+  longTaskObserver?.observe({ entryTypes: ["longtask"] })
+
+  const frameDurations = await runContinuousReviewScroll(diffPane, frameCount)
+  longTaskObserver?.disconnect()
+  await waitForAnimationFrames(4)
+
+  const longFrames = frameDurations.filter((duration) => duration > 50)
+  const metrics = {
+    frames: frameDurations.length,
+    globalInvalidations: markDOMDirty.mock.calls.length,
+    longFrames: longFrames.length,
+    longTasks: longTaskDurations.length,
+    maxFrameDuration: Math.max(...frameDurations),
+    reconciliations: requestHeightReconcile.mock.calls.length,
+    searchHighlightRemovals: removeHighlight.mock.calls.length,
+    searchHighlightReplacements: replaceHighlight.mock.calls.length,
+  }
+  expect(metrics.frames).toBe(frameCount)
+  expect(metrics.globalInvalidations).toBeLessThan(frameCount * 2)
+  expect(metrics.reconciliations).toBeLessThan(frameCount * 2)
+  expect(metrics.longFrames).toBeLessThanOrEqual(4)
+  expect(metrics.longTasks).toBeLessThanOrEqual(4)
+  expect(metrics.maxFrameDuration).toBeLessThan(150)
+  expect(metrics.searchHighlightRemovals).toBe(0)
+  expect(metrics.searchHighlightReplacements).toBe(0)
+  expect(diffPane.scrollTop).toBeGreaterThan(0)
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+  expect(window.scrollY).toBe(0)
+})
+
 scenario("longThreadVirtualization", async () => {
   const fixture = makeLargeDiffFixture(3_000, 75, 20)
   const reviewThreadDetails = [makeLongReviewThread(fixture)]
@@ -1926,24 +2761,14 @@ scenario("longThreadVirtualization", async () => {
     pullRequestDiff: fixture.largeDiff,
     reviewRequests: [fixture.largePullRequest],
     reviewThreadDetails,
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
   })
   renderApp({ strictMode: true })
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #75"),
-  )
-  reviewButton?.click()
+  await openHostedReview(75)
+  await showResponsiveDiffPane()
 
-  const annotationButton = await vi.waitFor(() => {
-    const button = document.querySelector<HTMLButtonElement>(
-      `[data-diff-card-path="${fixture.largePath}"] [data-review-thread-annotation] button`,
-    )
-    expect(button).not.toBeNull()
-    if (button === null) throw new Error("Expected the long review thread annotation")
-    return button
-  })
-  annotationButton.click()
+  await openOnlyReviewThreadInDiff(fixture.largePath, "R5")
 
   const { chatBox, conversation, history } = await vi.waitFor(() => {
     const diffCard = document.querySelector<HTMLElement>(
@@ -2018,8 +2843,262 @@ scenario("longThreadVirtualization", async () => {
   expect(getMountedDiffLineCount()).toBeLessThan(1_000)
 })
 
-scenario("reviewThreadSummary", async () => {
-  const paths = ["src/app.tsx", "docs/readme.md", "src/extra.ts", "pnpm-lock.yaml"] as const
+scenario("threadNavigationConvergence", async () => {
+  const targetLineNumber = 2_400
+  const fixture = makeLargeDiffFixture(3_000, 77, 20)
+  const longThread = makeLongReviewThread(fixture, targetLineNumber)
+  const details = ReviewThreadDetails.make({
+    thread: longThread.thread,
+    messages: longThread.messages.slice(0, 6),
+  })
+  const calls = installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+    reviewThreadDetails: [details],
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "unified" }),
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(77)
+  const threadsButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    expect(button).not.toBeNull()
+    return button!
+  })
+  threadsButton.click()
+  const threadButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="Open thread details for ${fixture.largePath} R${targetLineNumber}"]`,
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  threadButton.click()
+  const goToDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-review-thread-detail] button[aria-label="Go to thread in diff"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  goToDiff.click()
+
+  const mountedLine = await vi.waitFor(
+    () => {
+      const shadowRoot = getDiffShadowRoot(fixture.largePath)
+      const line =
+        shadowRoot === null
+          ? undefined
+          : getDiffLine(shadowRoot, `const value${targetLineNumber} = "after"`)
+      const card = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${fixture.largePath}"]`,
+      )
+      const panel = card?.querySelector<HTMLElement>(
+        `[data-review-thread-id="${details.thread.id}"]`,
+      )
+      const composer = panel?.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Thread message"]',
+      )
+      const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+      const fileHeader = card?.querySelector<HTMLElement>("[data-diff-card-header]")
+      expect(line).not.toBeNull()
+      expect(panel).not.toBeNull()
+      expect(composer).not.toBeNull()
+      expect(document.activeElement).toBe(composer)
+      expect(calls.activateWindow).toHaveBeenCalledOnce()
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationOutcome,
+      ).toBe("completed::")
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationPhase,
+      ).toBe("idle")
+      expect(diffPane).not.toBeNull()
+      expect(stickyChrome).not.toBeNull()
+      expect(fileHeader).not.toBeNull()
+      const lineRect = line!.getBoundingClientRect()
+      const paneRect = diffPane!.getBoundingClientRect()
+      const visibleTop = paneRect.top + stickyChrome!.offsetHeight + fileHeader!.offsetHeight
+      const visibleCenter = visibleTop + (paneRect.bottom - visibleTop) / 2
+      expect(Math.abs(lineRect.top + lineRect.height / 2 - visibleCenter)).toBeLessThanOrEqual(1)
+      return line!
+    },
+    { timeout: 20_000 },
+  )
+  const stableTop = mountedLine.getBoundingClientRect().top
+  await waitForAnimationFrames(4)
+  expect(Math.abs(mountedLine.getBoundingClientRect().top - stableTop)).toBeLessThanOrEqual(1)
+  expect(getMountedDiffLineCount()).toBeLessThan(1_000)
+})
+
+scenario("stickyDiffCardHeaders", async () => {
+  const fixture = makeLargeDiffFixture(500, 82, 120)
+  installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(82)
+  await showResponsiveDiffPane()
+  await vi.waitFor(() => {
+    expect(getDiffShadowRoot(fixture.largePath)?.querySelector("[data-line]")).not.toBeNull()
+    expect(document.querySelector(`[data-diff-card-path="${fixture.tailPath}"]`)).not.toBeNull()
+  })
+
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+  const largeCard = document.querySelector<HTMLElement>(
+    `[data-diff-card-path="${fixture.largePath}"]`,
+  )
+  const tailCard = document.querySelector<HTMLElement>(
+    `[data-diff-card-path="${fixture.tailPath}"]`,
+  )
+  const largeHeader = largeCard?.querySelector<HTMLElement>("[data-diff-card-header]") ?? null
+  const tailHeader = tailCard?.querySelector<HTMLElement>("[data-diff-card-header]") ?? null
+  expect(diffPane).not.toBeNull()
+  expect(stickyChrome).not.toBeNull()
+  expect(largeCard).not.toBeNull()
+  expect(tailCard).not.toBeNull()
+  expect(largeHeader).not.toBeNull()
+  expect(tailHeader).not.toBeNull()
+  if (
+    diffPane === null ||
+    stickyChrome === null ||
+    largeCard === null ||
+    tailCard === null ||
+    largeHeader === null ||
+    tailHeader === null
+  ) {
+    return
+  }
+
+  const visibleTop = () => diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
+  await vi.waitFor(() => {
+    expect(diffPane.style.getPropertyValue("--review-sticky-chrome-height")).toBe(
+      `${stickyChrome.offsetHeight}px`,
+    )
+  })
+
+  diffPane.scrollTop += largeCard.getBoundingClientRect().top - visibleTop() + 600
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(largeCard.getBoundingClientRect().top).toBeLessThan(visibleTop() - 500)
+    expect(Math.abs(largeHeader.getBoundingClientRect().top - visibleTop())).toBeLessThanOrEqual(1)
+  })
+  const headerRect = largeHeader.getBoundingClientRect()
+  const headerHit = document.elementFromPoint(headerRect.left + 8, headerRect.top + 8)
+  expect(headerHit === largeHeader || largeHeader.contains(headerHit)).toBe(true)
+
+  const chromeHeightBeforeSearch = stickyChrome.offsetHeight
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")).not.toBeNull()
+    expect(stickyChrome.offsetHeight).toBeGreaterThan(chromeHeightBeforeSearch)
+    expect(diffPane.style.getPropertyValue("--review-sticky-chrome-height")).toBe(
+      `${stickyChrome.offsetHeight}px`,
+    )
+    expect(Math.abs(largeHeader.getBoundingClientRect().top - visibleTop())).toBeLessThanOrEqual(1)
+  })
+  dispatchKeyboardShortcut("Escape")
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")).toBeNull()
+    expect(stickyChrome.offsetHeight).toBe(chromeHeightBeforeSearch)
+    expect(Math.abs(largeHeader.getBoundingClientRect().top - visibleTop())).toBeLessThanOrEqual(1)
+  })
+
+  largeHeader.querySelector<HTMLButtonElement>('button[aria-label="Collapse diff"]')?.click()
+  await vi.waitFor(() => {
+    expect(largeCard.querySelector("[data-diff-card-body]")).toBeNull()
+    expect(Math.abs(largeCard.getBoundingClientRect().top - visibleTop())).toBeLessThanOrEqual(1)
+  })
+  largeHeader.querySelector<HTMLButtonElement>('button[aria-label="Expand diff"]')?.click()
+  await vi.waitFor(() => {
+    expect(largeCard.querySelector("[data-diff-card-body]")).not.toBeNull()
+    expect(getDiffShadowRoot(fixture.largePath)?.querySelector("[data-line]")).not.toBeNull()
+  })
+
+  const boundaryTarget = visibleTop() + largeHeader.offsetHeight / 2
+  diffPane.scrollTop += tailCard.getBoundingClientRect().top - boundaryTarget
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    const largeHeaderRect = largeHeader.getBoundingClientRect()
+    const tailHeaderRect = tailHeader.getBoundingClientRect()
+    expect(largeHeaderRect.bottom).toBeLessThanOrEqual(largeCard.getBoundingClientRect().bottom + 1)
+    expect(largeHeaderRect.bottom).toBeLessThanOrEqual(tailHeaderRect.top)
+  })
+
+  diffPane.scrollTop += tailCard.getBoundingClientRect().top - visibleTop()
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(Math.abs(tailHeader.getBoundingClientRect().top - visibleTop())).toBeLessThanOrEqual(1)
+    expect(largeCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleTop())
+  })
+  expect(window.scrollY).toBe(0)
+})
+
+scenario("threadComposerShortcut", async () => {
+  const fixture = makeLargeDiffFixture(3_000, 76, 20)
+  const longThread = makeLongReviewThread(fixture)
+  installDiffDashApi({
+    pullRequestDetail: fixture.largeDetail,
+    pullRequestDiff: fixture.largeDiff,
+    reviewRequests: [fixture.largePullRequest],
+    reviewThreadDetails: [
+      ReviewThreadDetails.make({
+        thread: longThread.thread,
+        messages: longThread.messages.slice(0, 2),
+      }),
+    ],
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(76)
+  await showResponsiveDiffPane()
+  await openOnlyReviewThreadInDiff(fixture.largePath, "R5")
+
+  const textarea = await vi.waitFor(() => {
+    const element = [
+      ...document.querySelectorAll<HTMLTextAreaElement>(
+        '[data-review-thread-annotation] textarea[aria-label="Thread message"]',
+      ),
+    ].find((candidate) => candidate.getBoundingClientRect().height > 0)
+    expect(element).toBeDefined()
+    return element!
+  })
+  await vi.waitFor(
+    () => {
+      const navigation = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(navigation?.dataset.reviewNavigationPhase).toBe("idle")
+      expect(navigation?.dataset.reviewNavigationOutcome).toBe("completed::")
+    },
+    { timeout: 5_000 },
+  )
+  textarea.scrollIntoView({ block: "center" })
+  textarea.focus()
+  await vi.waitFor(() => expect(textarea.matches(":focus")).toBe(true))
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  expect(diffPane).not.toBeNull()
+  if (diffPane === null) return
+  diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 1 }))
+  diffPane.scrollTop = diffPane.scrollHeight
+  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+
+  await vi.waitFor(() => expect(textarea.matches(":focus")).toBe(false))
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "v" }),
+  )
+  await vi.waitFor(() => expect(document.body.textContent).toContain("with shortcut v."))
+})
+
+scenario("reviewThreadSidebar", async () => {
+  const previousRevisionPath = "src/features/thread-sidebar/components/extra-review-thread.ts"
+  const paths = ["src/app.tsx", "docs/readme.md", previousRevisionPath, "pnpm-lock.yaml"] as const
   const summaryDiffText = paths
     .map(
       (path) => `diff --git a/${path} b/${path}
@@ -2032,17 +3111,24 @@ scenario("reviewThreadSummary", async () => {
     .join("\n")
   const parsed = parseUnifiedDiff(summaryDiffText)
   const docsFile = parsed.files.find((file) => file.path === "docs/readme.md")
+  const extraFile = parsed.files.find((file) => file.path === previousRevisionPath)
   const lockFile = parsed.files.find((file) => file.path === "pnpm-lock.yaml")
   const appFile = parsed.files.find((file) => file.path === "src/app.tsx")
   const docsAnchor = docsFile === undefined ? null : lineReviewAnchor(docsFile, "additions", 1)
+  const extraAnchor = extraFile === undefined ? null : lineReviewAnchor(extraFile, "additions", 1)
   const lockAnchor = lockFile === undefined ? null : lineReviewAnchor(lockFile, "additions", 1)
   const appAnchor = appFile === undefined ? null : lineReviewAnchor(appFile, "additions", 1)
-  if (docsAnchor === null || lockAnchor === null || appAnchor === null) {
+  if (docsAnchor === null || extraAnchor === null || lockAnchor === null || appAnchor === null) {
     throw new Error("Expected summary review anchors")
   }
   const reviewThreadDetails = [
     makeReviewThreadDetails({ anchor: docsAnchor, id: "thread-summary-docs" }),
     makeReviewThreadDetails({ anchor: lockAnchor, id: "thread-summary-lock" }),
+    makeReviewThreadDetails({
+      anchor: extraAnchor,
+      id: "thread-summary-previous-revision",
+      previousRevision: true,
+    }),
     makeReviewThreadDetails({
       anchor: appAnchor,
       id: "thread-summary-outdated",
@@ -2066,32 +3152,409 @@ scenario("reviewThreadSummary", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  document
-    .querySelector<HTMLButtonElement>('button[aria-label*="Open requested review #51"]')
-    ?.click()
-  const summary = await vi.waitFor(() => {
-    const element = document.querySelector<HTMLElement>('[aria-label="Review threads"]')
-    expect(element?.textContent).toContain("3 review threads")
-    return element!
+  await openDefaultHostedReview()
+  await showWideReviewLayout()
+  const railButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    expect(button).not.toBeNull()
+    return button!
   })
-  const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
-  expect(filterInput).not.toBeNull()
-  if (filterInput === null) return
+  const activityRail = document.querySelector<HTMLElement>("[data-review-activity-rail]")
+  const treeActivity = document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')
+  const titlebar = document.querySelector<HTMLElement>("[data-workbench-titlebar]")
+  const workbenchFrame = document.querySelector<HTMLElement>("[data-workbench-frame]")
+  const reviewWorkspaceFrame = document.querySelector<HTMLElement>("[data-review-workspace-frame]")
+  const workbenchContent = document.querySelector<HTMLElement>("[data-workbench-content]")
+  const commandCenter = document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")
+  expect(activityRail).not.toBeNull()
+  expect(treeActivity).not.toBeNull()
+  expect(railButton.textContent).toBe("Threads")
+  expect(titlebar).not.toBeNull()
+  expect(workbenchFrame).not.toBeNull()
+  expect(reviewWorkspaceFrame).not.toBeNull()
+  expect(workbenchContent).not.toBeNull()
+  expect(commandCenter?.textContent).toContain("fungsi/diffdash")
+  if (
+    activityRail === null ||
+    treeActivity === null ||
+    titlebar === null ||
+    workbenchFrame === null ||
+    reviewWorkspaceFrame === null ||
+    workbenchContent === null ||
+    commandCenter === null
+  )
+    return
+  const titlebarRect = titlebar.getBoundingClientRect()
+  const frameRect = workbenchFrame.getBoundingClientRect()
+  const workspaceRect = reviewWorkspaceFrame.getBoundingClientRect()
+  const contentRect = workbenchContent.getBoundingClientRect()
+  const commandCenterRect = commandCenter.getBoundingClientRect()
+  const backButton = titlebar.querySelector<HTMLButtonElement>('button[aria-label="Back"]')
+  const reviewActions = titlebar.querySelector<HTMLButtonElement>(
+    'button[aria-label="Review actions"]',
+  )
+  expect(backButton).not.toBeNull()
+  expect(reviewActions).not.toBeNull()
+  expect(reviewActions?.textContent).toBe("")
+  expect(getComputedStyle(backButton!).getPropertyValue("-webkit-app-region")).toBe("no-drag")
+  expect(getComputedStyle(commandCenter).getPropertyValue("-webkit-app-region")).toBe("no-drag")
+  expect(getComputedStyle(reviewActions!).getPropertyValue("-webkit-app-region")).toBe("no-drag")
+  expect(getComputedStyle(reviewActions!).borderTopWidth).toBe("0px")
+  expect(titlebarRect.height).toBe(48)
+  expect(titlebarRect.width).toBe(document.documentElement.getBoundingClientRect().width)
+  expect(titlebarRect.bottom).toBe(contentRect.top)
+  expect(frameRect.left).toBe(8)
+  expect(frameRect.right).toBe(titlebarRect.right - 8)
+  expect(contentRect.top).toBe(frameRect.top)
+  expect(contentRect.right).toBe(frameRect.right)
+  expect(contentRect.bottom).toBe(frameRect.bottom)
+  expect(contentRect.left).toBe(frameRect.left)
+  expect(workbenchFrame.dataset.workbenchFrameMode).toBe("project")
+  expect(getComputedStyle(workbenchFrame).borderRadius).toBe("0px")
+  expect(getComputedStyle(workbenchFrame).clipPath).toBe("none")
+  expect(activityRail.getBoundingClientRect().top).toBe(contentRect.top)
+  expect(activityRail.getBoundingClientRect().left).toBe(frameRect.left)
+  expect(workspaceRect.top).toBe(contentRect.top)
+  expect(workspaceRect.right).toBe(activityRail.parentElement?.getBoundingClientRect().right)
+  expect(workspaceRect.bottom).toBe(contentRect.bottom)
+  expect(workspaceRect.left).toBe(activityRail.getBoundingClientRect().right)
+  expect(getComputedStyle(reviewWorkspaceFrame).borderRadius).toBe("12px")
+  expect(getComputedStyle(reviewWorkspaceFrame).clipPath).toBe("inset(0px round 12px)")
+  expect(Math.round(commandCenterRect.left + commandCenterRect.width / 2)).toBe(
+    Math.round(titlebarRect.left + titlebarRect.width / 2),
+  )
+  expect(backButton!.getBoundingClientRect().right).toBeLessThanOrEqual(commandCenterRect.left)
+  expect(reviewActions!.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+    commandCenterRect.right,
+  )
+  expect(activityRail?.getBoundingClientRect().height).toBe(
+    activityRail?.parentElement?.getBoundingClientRect().height,
+  )
+  expect(activityRail?.getBoundingClientRect().width).toBe(52)
+  expect(treeActivity?.getBoundingClientRect().width).toBe(40)
+  expect(getComputedStyle(treeActivity).cursor).toBe("pointer")
+  expect(treeActivity?.querySelector("svg")?.getBoundingClientRect().width).toBe(24)
+  expect(activityRail.querySelector('button[aria-label="Back"]')).toBeNull()
+  commandCenter.focus()
+  commandCenter.click()
+  const commandPalette = await vi.waitFor(() => {
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="Go anywhere"]')
+    expect(dialog).not.toBeNull()
+    expect(
+      dialog?.querySelector<HTMLInputElement>('input[placeholder="Search files"]'),
+    ).not.toBeNull()
+    return dialog!
+  })
+  commandPalette.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('dialog[aria-label="Go anywhere"]')).toBeNull()
+    expect(document.activeElement).toBe(commandCenter)
+  })
+  expect(document.querySelector("[data-review-context-panel]")).not.toBeNull()
+  expect(treeActivity.getAttribute("aria-pressed")).toBe("true")
+  expect(treeActivity.getAttribute("aria-expanded")).toBe("true")
+  expect(treeActivity.className).toContain("text-primary")
+  expect(treeActivity.className).not.toContain("bg-shell-activity-rail-active")
+  treeActivity.focus()
+  treeActivity.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-context-panel]")).toBeNull()
+    expect(treeActivity.getAttribute("aria-pressed")).toBe("true")
+    expect(treeActivity.getAttribute("aria-expanded")).toBe("false")
+    expect(document.activeElement).toBe(treeActivity)
+    expect(
+      document
+        .querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+        ?.getBoundingClientRect().left,
+    ).toBe(reviewWorkspaceFrame.getBoundingClientRect().left)
+  })
+  treeActivity.click()
+  await vi.waitFor(() =>
+    expect(document.querySelector("[data-review-context-panel]")).not.toBeNull(),
+  )
+  const collapseSidebar = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Collapse sidebar"]',
+  )
+  expect(collapseSidebar).not.toBeNull()
+  expect(titlebar.contains(collapseSidebar)).toBe(true)
+  expect(document.querySelector("[data-review-context-header]")?.textContent).toContain("Files")
+  expect(document.querySelector("[data-review-context-header]")?.textContent).not.toContain(
+    "fungsi/diffdash",
+  )
+  collapseSidebar?.focus()
+  collapseSidebar?.click()
+  await vi.waitFor(() => expect(document.querySelector("[data-review-context-panel]")).toBeNull())
+  const expandSidebar = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand sidebar"]',
+  )
+  expect(expandSidebar).not.toBeNull()
+  expect(document.activeElement).toBe(expandSidebar)
+  expandSidebar?.click()
+  const filterInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+    expect(input).not.toBeNull()
+    return input!
+  })
+  const contextPanel = document.querySelector<HTMLElement>("[data-review-context-panel]")
+  expect(contextPanel).not.toBeNull()
+  if (contextPanel === null) return
+  expect(getComputedStyle(activityRail).backgroundColor).not.toBe(
+    getComputedStyle(contextPanel).backgroundColor,
+  )
+  expect(getComputedStyle(titlebar).backgroundColor).not.toBe(
+    getComputedStyle(contextPanel).backgroundColor,
+  )
+  expect(getComputedStyle(activityRail).backgroundColor).toBe(
+    getComputedStyle(workbenchFrame).backgroundColor,
+  )
+  expect(getComputedStyle(titlebar).backgroundColor).toBe(
+    getComputedStyle(activityRail).backgroundColor,
+  )
+  expect(getComputedStyle(activityRail).borderRightWidth).toBe("0px")
+  expect(getComputedStyle(contextPanel).borderRightWidth).toBe("0px")
+  expect(getComputedStyle(activityRail).boxShadow).toBe("none")
+  expect(getComputedStyle(contextPanel).boxShadow).toBe("none")
+
+  const resizer = document.querySelector<HTMLElement>("[data-review-sidebar-resizer]")
+  expect(resizer).not.toBeNull()
+  if (resizer !== null) {
+    const initialWidth = contextPanel.getBoundingClientRect().width
+    resizer.focus()
+    resizer.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" }),
+    )
+    await vi.waitFor(() =>
+      expect(contextPanel.getBoundingClientRect().width).toBeGreaterThan(initialWidth),
+    )
+    await vi.waitFor(() =>
+      expect(calls.updateSettings.mock.calls.at(-1)?.[0].layout.review.contextWidth).toBe(
+        Math.round(contextPanel.getBoundingClientRect().width),
+      ),
+    )
+    resizer.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))
+    await vi.waitFor(() => expect(contextPanel.getBoundingClientRect().width).toBe(304))
+  }
   setInputValue(filterInput, "app")
   filterInput.dispatchEvent(new Event("input", { bubbles: true }))
   await vi.waitFor(() => expect(getDiffCardPaths()).toEqual(["src/app.tsx"]))
 
-  const lockThreadButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("pnpm-lock.yaml") ?? false,
+  expect(document.querySelector("[data-review-thread-list]")).toBeNull()
+  railButton.click()
+  const threadList = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>("[data-review-thread-list]")
+    expect(element?.textContent).toContain("4 threads")
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    const rootRect = element?.parentElement?.getBoundingClientRect()
+    const listRect = element?.getBoundingClientRect()
+    expect(listRect?.top).toBe(rootRect?.top)
+    expect(listRect?.bottom).toBe(rootRect?.bottom)
+    expect(getComputedStyle(element!).borderRightWidth).toBe("0px")
+    expect(getComputedStyle(element!).boxShadow).toBe("none")
+    expect(
+      element?.querySelector<HTMLButtonElement>('button[aria-label="Collapse sidebar"]'),
+    ).toBeNull()
+    expect(titlebar.querySelector('button[aria-label="Collapse sidebar"]')).not.toBeNull()
+    return element!
+  })
+  const diffControl = document.querySelector<HTMLButtonElement>(
+    '[data-diff-card-path="src/app.tsx"] button[aria-label="Collapse diff"]',
   )
-  expect(lockThreadButton).not.toBeUndefined()
+  diffControl?.focus()
+  expect(document.activeElement).toBe(diffControl)
+
+  const previousRevisionButton = threadList.querySelector<HTMLButtonElement>(
+    `button[aria-label="Open thread details for ${previousRevisionPath} R1"]`,
+  )
+  const previousRevisionRow = previousRevisionButton?.closest("[data-review-thread-list-item]")
+  const previousRevisionPathText = previousRevisionRow?.querySelector<HTMLElement>(
+    `[aria-label="${previousRevisionPath}"]`,
+  )
+  const previousRevisionGoToDiff = previousRevisionRow?.querySelector<HTMLButtonElement>(
+    `button[aria-label="Go to ${previousRevisionPath} R1 in diff"]`,
+  )
+  const lockThreadButton = threadList.querySelector<HTMLButtonElement>(
+    'button[aria-label="Open thread details for pnpm-lock.yaml R1"]',
+  )
+  expect(previousRevisionButton).not.toBeNull()
+  expect(lockThreadButton).not.toBeNull()
+  expect(previousRevisionRow?.textContent).toContain("Previous revision")
+  expect(previousRevisionPathText?.children).toHaveLength(2)
+  expect(getComputedStyle(previousRevisionPathText!).overflowX).toBe("hidden")
+  expect(getComputedStyle(previousRevisionRow!).borderBottomWidth).toBe("1px")
+  expect(previousRevisionGoToDiff?.querySelector(".lucide-move-right")).not.toBeNull()
+  previousRevisionButton?.click()
+  const previousRevisionDetail = await vi.waitFor(() => {
+    const selectedDetailElement = document.querySelector<HTMLElement>("[data-review-thread-detail]")
+    expect(selectedDetailElement?.textContent).toContain("Previous revision")
+    expect(
+      selectedDetailElement?.querySelector('button[aria-label="Go to thread in diff"]'),
+    ).not.toBeNull()
+    return selectedDetailElement!
+  })
   lockThreadButton?.click()
+  const lockDetail = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>("[data-review-thread-detail]")
+    expect(element).toBe(previousRevisionDetail)
+    expect(element?.tagName).toBe("ASIDE")
+    expect(element?.getAttribute("aria-label")).toBe("Thread details")
+    expect(element?.textContent).toContain("pnpm-lock.yaml")
+    expect(element?.textContent).not.toContain(previousRevisionPath)
+    expect(document.querySelector("[data-review-thread-list]")).not.toBeNull()
+    expect(lockThreadButton?.getAttribute("aria-current")).toBe("true")
+    expect(previousRevisionButton?.getAttribute("aria-current")).toBeNull()
+    const listRect = threadList.getBoundingClientRect()
+    const detailRect = element?.getBoundingClientRect()
+    expect(detailRect?.left).toBe(listRect.right)
+    expect(detailRect?.top).toBe(listRect.top)
+    expect(detailRect?.bottom).toBe(listRect.bottom)
+    expect(getComputedStyle(element!).borderRightWidth).toBe("0px")
+    expect(getComputedStyle(element!).boxShadow).toBe("none")
+    return element!
+  })
+  const detailResizer = document.querySelector<HTMLElement>("[data-review-thread-detail-resizer]")
+  expect(detailResizer).not.toBeNull()
+  if (detailResizer !== null) {
+    const initialDetailWidth = lockDetail.getBoundingClientRect().width
+    detailResizer.focus()
+    detailResizer.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowLeft" }),
+    )
+    await vi.waitFor(() =>
+      expect(lockDetail.getBoundingClientRect().width).toBeLessThan(initialDetailWidth),
+    )
+    await vi.waitFor(() =>
+      expect(calls.updateSettings.mock.calls.at(-1)?.[0].layout.review.threadDetailWidth).toBe(
+        Math.round(lockDetail.getBoundingClientRect().width),
+      ),
+    )
+    detailResizer.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))
+    await vi.waitFor(() =>
+      expect(calls.updateSettings.mock.calls.at(-1)?.[0].layout.review.threadDetailWidth).toBe(432),
+    )
+  }
+
+  const reviewLayout = document.querySelector<HTMLElement>("[data-review-layout]")
+  expect(reviewLayout).not.toBeNull()
+  if (reviewLayout !== null) {
+    reviewLayout.style.width = "950px"
+    await vi.waitFor(() => {
+      expect(reviewLayout.dataset.reviewPaneMode).toBe("compact")
+      expect(threadList.parentElement?.getAttribute("aria-hidden")).toBe("true")
+      expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("false")
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+          ?.closest("[aria-hidden]")
+          ?.getAttribute("aria-hidden"),
+      ).toBe("false")
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-review-activity-rail]")
+          ?.getAttribute("data-review-activity-placement"),
+      ).toBe("rail")
+      expect(reviewWorkspaceFrame.getBoundingClientRect().left).toBe(
+        document.querySelector<HTMLElement>("[data-review-activity-rail]")?.getBoundingClientRect()
+          .right,
+      )
+    })
+
+    reviewLayout.style.width = "800px"
+    await vi.waitFor(() => {
+      expect(reviewLayout.dataset.reviewPaneMode).toBe("single")
+      expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("false")
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+          ?.closest("[aria-hidden]")
+          ?.getAttribute("aria-hidden"),
+      ).toBe("true")
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-review-activity-rail]")
+          ?.getAttribute("data-review-activity-placement"),
+      ).toBe("bottom")
+      const bottomRail = document.querySelector<HTMLElement>("[data-review-activity-rail]")
+      expect(reviewWorkspaceFrame.getBoundingClientRect().bottom).toBe(
+        bottomRail?.getBoundingClientRect().top,
+      )
+      expect(getComputedStyle(bottomRail!).borderTopWidth).toBe("0px")
+    })
+
+    document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+    await vi.waitFor(() => {
+      expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("true")
+      expect(
+        document
+          .querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+          ?.closest("[aria-hidden]")
+          ?.getAttribute("aria-hidden"),
+      ).toBe("false")
+    })
+
+    reviewLayout.style.width = "1400px"
+    await vi.waitFor(() => {
+      expect(reviewLayout.dataset.reviewPaneMode).toBe("wide")
+      expect(threadList.parentElement?.getAttribute("aria-hidden")).toBe("false")
+      expect(lockDetail.parentElement?.getAttribute("aria-hidden")).toBe("false")
+      expect(Math.round(lockDetail.getBoundingClientRect().width)).toBe(432)
+    })
+  }
+  const closeLockDetail = lockDetail.querySelector<HTMLButtonElement>(
+    'button[aria-label="Close thread details"]',
+  )
+  expect(closeLockDetail).not.toBeNull()
+  closeLockDetail?.focus()
+  await vi.waitFor(() => expect(lockDetail.contains(document.activeElement)).toBe(true))
+  document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    expect(document.querySelector("[data-review-thread-list]")).not.toBeNull()
+    expect(document.activeElement).toBe(lockThreadButton)
+  })
+
+  lockThreadButton?.click()
+  const goToLockDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-review-thread-detail] button[aria-label="Go to thread in diff"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  goToLockDiff.click()
   await vi.waitFor(
     () => {
-      expect(filterInput.value).toBe("")
+      expect(
+        document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')?.value,
+      ).toBe("app")
       expect(getDiffCardPaths()).toContain("pnpm-lock.yaml")
       expect(document.querySelector('[data-review-thread-id="thread-summary-lock"]')).not.toBeNull()
+      const composer = document.querySelector<HTMLTextAreaElement>(
+        '[data-review-thread-id="thread-summary-lock"] textarea[aria-label="Thread message"]',
+      )
+      expect(composer).not.toBeNull()
+      expect(document.activeElement).toBe(composer)
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationOutcome,
+      ).toBe("completed::")
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationPhase,
+      ).toBe("idle")
+      const lockShadowRoot = getDiffShadowRoot("pnpm-lock.yaml")
+      const lockLine =
+        lockShadowRoot === null ? undefined : getDiffLine(lockShadowRoot, "new pnpm-lock.yaml")
+      const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(lockLine).not.toBeNull()
+      expect(diffPane).not.toBeNull()
+      expect(lockLine!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        diffPane!.getBoundingClientRect().top,
+      )
+      expect(document.querySelector("[data-review-thread-list]")).toBeNull()
       expect(
         document.querySelector('[data-diff-card-path="pnpm-lock.yaml"] [data-diff-card-body]'),
       ).not.toBeNull()
@@ -2104,37 +3567,126 @@ scenario("reviewThreadSummary", async () => {
     ),
   ).toBe(true)
 
-  const docsViewed = getViewedCheckbox("docs/readme.md")
-  expect(docsViewed).not.toBeNull()
+  const preservedFilterInput = document.querySelector<HTMLInputElement>(
+    'input[placeholder="Filter files"]',
+  )
+  expect(preservedFilterInput?.value).toBe("app")
+  if (preservedFilterInput !== null) {
+    setInputValue(preservedFilterInput, "")
+    preservedFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const docsViewed = await vi.waitFor(() => {
+    const checkbox = getViewedCheckbox("docs/readme.md")
+    expect(checkbox).not.toBeNull()
+    return checkbox!
+  })
   docsViewed?.click()
   await vi.waitFor(() => expect(getDiffShadowRoot("docs/readme.md")).toBeNull())
-  setInputValue(filterInput, "app")
-  filterInput.dispatchEvent(new Event("input", { bubbles: true }))
-  const docsThreadButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("docs/readme.md") ?? false,
+  const restoredFilterInput = document.querySelector<HTMLInputElement>(
+    'input[placeholder="Filter files"]',
   )
-  expect(docsThreadButton).not.toBeUndefined()
-  docsThreadButton?.click()
+  expect(restoredFilterInput).not.toBeNull()
+  if (restoredFilterInput !== null) {
+    setInputValue(restoredFilterInput, "app")
+    restoredFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  const docsGoToDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Go to docs/readme.md R1 in diff"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  docsGoToDiff.click()
   await vi.waitFor(
     () => {
-      expect(filterInput.value).toBe("")
+      expect(
+        document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')?.value,
+      ).toBe("app")
       expect(getViewedCheckbox("docs/readme.md")?.checked).toBe(true)
       expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
       expect(document.querySelector('[data-review-thread-id="thread-summary-docs"]')).not.toBeNull()
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationOutcome,
+      ).toBe("completed::")
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationPhase,
+      ).toBe("idle")
     },
     { timeout: 10_000 },
   )
 
-  const outdatedButton = [...summary.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Outdated") ?? false,
-  )
-  expect(outdatedButton).not.toBeUndefined()
-  outdatedButton?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  const outdatedButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open thread details for src/app.tsx R1"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  outdatedButton.click()
   await vi.waitFor(() => {
+    const outdatedDetail = document.querySelector<HTMLElement>("[data-review-thread-detail]")
+    expect(outdatedDetail?.textContent).toContain("Response for src/app.tsx")
+    expect(outdatedDetail?.textContent).toContain("Outdated")
     expect(
-      summary.querySelector('[data-review-thread-id="thread-summary-outdated"]'),
-    ).not.toBeNull()
-    expect(summary.textContent).toContain("Response for src/app.tsx")
+      outdatedDetail?.querySelector<HTMLButtonElement>('button[aria-label="Go to thread in diff"]'),
+    ).toBeNull()
+  })
+  document
+    .querySelector<HTMLButtonElement>(
+      '[data-review-thread-detail] button[aria-label="Close thread details"]',
+    )
+    ?.click()
+
+  const lockGoToDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Go to pnpm-lock.yaml R1 in diff"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  expect(lockGoToDiff.querySelector(".lucide-move-right")).not.toBeNull()
+  lockGoToDiff.click()
+  const inlineOpenDetail = await vi.waitFor(
+    () => {
+      const button = document.querySelector<HTMLButtonElement>(
+        '[data-diff-card-path="pnpm-lock.yaml"] [data-review-thread-annotation] button[aria-label="Open R1 thread details"]',
+      )
+      expect(button).not.toBeNull()
+      expect(
+        document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")?.dataset
+          .reviewNavigationPhase,
+      ).toBe("idle")
+      return button!
+    },
+    { timeout: 10_000 },
+  )
+  inlineOpenDetail.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-list]")).not.toBeNull()
+    expect(document.querySelector("[data-review-thread-detail]")?.textContent).toContain(
+      "pnpm-lock.yaml",
+    )
+  })
+  document
+    .querySelector<HTMLButtonElement>(
+      '[data-review-thread-detail] button[aria-label="Close thread details"]',
+    )
+    ?.click()
+  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-detail]")).toBeNull())
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    const collapsedRailButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Threads"]',
+    )
+    expect(document.querySelector("[data-review-thread-list]")).toBeNull()
+    expect(document.activeElement).toBe(collapsedRailButton)
   })
 })
 
@@ -2147,11 +3699,8 @@ scenario("wrappedFileBuffers", async () => {
   })
   renderApp({ strictMode: true })
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #58"),
-  )
-  reviewButton?.click()
+  await openHostedReview(58)
+  await showResponsiveDiffPane()
   await vi.waitFor(() => expect(getDiffCardPaths()).toHaveLength(fixture.paths.length))
 
   const visitFile = async (path: string) => {
@@ -2190,6 +3739,10 @@ scenario("wrappedFileBuffers", async () => {
 
   await vi.waitFor(
     () => {
+      const navigation = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(
+        `${navigation?.dataset.reviewNavigationPhase}|${navigation?.dataset.reviewNavigationOutcome}`,
+      ).toBe("idle|completed::")
       expect(getHighlightTexts(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toEqual(["TARGET_FINAL_691"])
       const activeLine = getActiveHighlightLine()
       const targetRoot = getDiffShadowRoot(fixture.targetPath)
@@ -2219,6 +3772,187 @@ scenario("wrappedFileBuffers", async () => {
   )
 })
 
+scenario("multiFileSearchWrap", async () => {
+  const fixture = makeManyFileDiffFixture()
+  installDiffDashApi({
+    pullRequestDetail: fixture.manyDetail,
+    pullRequestDiff: fixture.manyDiff,
+    reviewRequests: [fixture.manyPullRequest],
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(58)
+  await vi.waitFor(() => expect(getDiffCardPaths()).toHaveLength(fixture.paths.length))
+
+  const visitFile = async (path: string) => {
+    const treeItem = await vi.waitFor(() => {
+      const item = getChangedFilesTreeItem(path)
+      expect(item).not.toBeNull()
+      if (item === null) throw new Error(`Missing file-tree item for ${path}`)
+      return item
+    })
+    treeItem.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+    await vi.waitFor(
+      () => expect(getDiffShadowRoot(path)?.querySelector("[data-line]")).not.toBeNull(),
+      { timeout: 20_000 },
+    )
+  }
+
+  const wrapTargetPath = fixture.paths[0] ?? ""
+  const anchorPath = fixture.paths[7] ?? ""
+  expect(wrapTargetPath).not.toBe("")
+  expect(anchorPath).not.toBe("")
+  await visitFile(wrapTargetPath)
+  await visitFile(anchorPath)
+  await vi.waitFor(
+    () =>
+      expect(getDiffShadowRoot(wrapTargetPath)?.querySelector("[data-placeholder]")).not.toBeNull(),
+    { timeout: 20_000 },
+  )
+
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
+    expect(input).not.toBeNull()
+    return input!
+  })
+  setInputValue(searchInput, "SEARCH_WRAP_MATCH")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(
+    () => {
+      expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain(
+        "1 / 168",
+      )
+      expect(getDiffShadowRoot(anchorPath)?.contains(getActiveHighlightLine())).toBe(true)
+    },
+    { timeout: 20_000 },
+  )
+
+  searchInput.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      shiftKey: true,
+    }),
+  )
+
+  await vi.waitFor(
+    () => {
+      expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain(
+        "168 / 168",
+      )
+      const activeLine = getActiveHighlightLine()
+      const targetRoot = getDiffShadowRoot(wrapTargetPath)
+      const targetHeader = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${wrapTargetPath}"] [data-diff-card-header]`,
+      )
+      const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+      expect(activeLine?.getAttribute("data-line")).toBe("21")
+      expect(targetRoot?.contains(activeLine ?? null)).toBe(true)
+      expect(targetRoot?.querySelector("[data-placeholder]")).toBeNull()
+      expect(diffPane).not.toBeNull()
+      expect(stickyChrome).not.toBeNull()
+      expect(targetHeader).not.toBeNull()
+      if (
+        activeLine === null ||
+        diffPane === null ||
+        stickyChrome === null ||
+        targetHeader === null
+      ) {
+        return
+      }
+      const activeRect = activeLine.getBoundingClientRect()
+      const paneRect = diffPane.getBoundingClientRect()
+      expect(activeRect.bottom).toBeGreaterThan(
+        paneRect.top + stickyChrome.offsetHeight + targetHeader.offsetHeight,
+      )
+      expect(activeRect.top).toBeLessThan(paneRect.bottom)
+      expect(getMountedDiffLineCount()).toBeLessThan(1_500)
+    },
+    { timeout: 20_000 },
+  )
+})
+
+scenario("snapshotPageResidency", async () => {
+  const fixture = makeCachePressureDiffFixture()
+  const api = installDiffDashApi({
+    pullRequestDetail: fixture.cacheDetail,
+    pullRequestDiff: fixture.cacheDiff,
+    reviewRequests: [fixture.cachePullRequest],
+    snapshotPageFileLimit: 1,
+  })
+  renderApp({ strictMode: true })
+
+  await openHostedReview(59)
+  await vi.waitFor(() => expect(getDiffCardPaths()).toHaveLength(fixture.paths.length))
+  await vi.waitFor(
+    () => {
+      fixture.paths.slice(0, 3).forEach((path) => {
+        expect(getDiffShadowRoot(path)).not.toBeNull()
+      })
+    },
+    { timeout: 20_000 },
+  )
+  expect(api.getReviewSnapshotPage.mock.calls.some(([request]) => request.cursor !== null)).toBe(
+    true,
+  )
+
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
+    expect(input).not.toBeNull()
+    return input!
+  })
+  setInputValue(searchInput, "CACHE_PIN_MATCH")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  const activePath = fixture.paths[0] ?? ""
+  await vi.waitFor(
+    () => {
+      expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 1")
+      expect(getDiffShadowRoot(activePath)?.contains(getActiveHighlightLine())).toBe(true)
+    },
+    { timeout: 20_000 },
+  )
+
+  const selectedPath = fixture.paths[1] ?? ""
+  const selectedTreeItem = getChangedFilesTreeItem(selectedPath)
+  expect(selectedTreeItem).not.toBeNull()
+  selectedTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  await vi.waitFor(() => {
+    expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(selectedPath)
+    expect(selectedPath).not.toBe(activePath)
+  })
+
+  const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  expect(diffPane).not.toBeNull()
+  if (diffPane === null) return
+  diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 1 }))
+  for (const path of fixture.paths.slice(3)) {
+    const card = document.querySelector<HTMLElement>(`[data-diff-card-path="${path}"]`)
+    expect(card).not.toBeNull()
+    if (card === null) continue
+    const paneRect = diffPane.getBoundingClientRect()
+    const cardRect = card.getBoundingClientRect()
+    diffPane.scrollTop += cardRect.top - paneRect.top
+    diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+    // oxlint-disable-next-line eslint/no-await-in-loop -- Sequential navigation intentionally crosses the cache residency bound.
+    await vi.waitFor(
+      () => {
+        if (getDiffShadowRoot(path) === null) throw new Error(`Queued diff did not load: ${path}`)
+      },
+      { timeout: 20_000 },
+    )
+  }
+
+  await vi.waitFor(() => {
+    const activeCard = document.querySelector<HTMLElement>(`[data-diff-card-path="${activePath}"]`)
+    expect(activeCard?.querySelector("diffs-container")).not.toBeNull()
+    expect(activeCard?.textContent).not.toContain("Queued")
+  })
+})
+
 scenario("diffSearchSubstrings", async () => {
   installDiffDashApi({
     pullRequestDiff: HostedReviewDiff.make({
@@ -2231,12 +3965,11 @@ scenario("diffSearchSubstrings", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
-  await vi.waitFor(() => expect(getDiffShadowRoot("src/app.tsx")).not.toBeNull())
+  await openDefaultHostedReview()
+  await vi.waitFor(() => {
+    expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  })
+  await waitForAnimationFrames(4)
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -2281,10 +4014,76 @@ scenario("diffSearchSubstrings", async () => {
   })
 })
 
+scenario("diffSearchLatestWork", async () => {
+  const oldWait = makeBrowserWait()
+  const closingWait = makeBrowserWait()
+  const api = installDiffDashApi({
+    beforeReviewSnapshotSearch: async (request) => {
+      if (request.query === "old") await oldWait.promise
+      if (request.query === "lock new") await closingWait.promise
+    },
+  })
+  renderApp()
+
+  await openDefaultHostedReview()
+  await vi.waitFor(() => {
+    expect(getDiffShadowRoot("src/app.tsx")?.querySelector("[data-unified]")).not.toBeNull()
+  })
+  await waitForAnimationFrames(4)
+
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>("[data-review-search-input]")
+    expect(input).not.toBeNull()
+    if (input === null) throw new Error("Missing review search input")
+    return input
+  })
+  setInputValue(searchInput, "old")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(api.searchReviewSnapshot.mock.calls.some(([request]) => request.query === "old")).toBe(
+      true,
+    )
+  })
+
+  setInputValue(searchInput, "docs update")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 1")
+    expect(getHighlightTexts(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toEqual(["docs update"])
+  })
+  oldWait.release()
+  await waitForAnimationFrames(2)
+  expect(searchInput.value).toBe("docs update")
+  expect(getHighlightTexts(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toEqual(["docs update"])
+
+  setInputValue(searchInput, "lock new")
+  searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  await vi.waitFor(() => {
+    expect(
+      api.searchReviewSnapshot.mock.calls.some(([request]) => request.query === "lock new"),
+    ).toBe(true)
+  })
+  dispatchKeyboardShortcut("Escape")
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-search-toolbar]")).toBeNull()
+  })
+  closingWait.release()
+  await waitForAnimationFrames(2)
+
+  expect(CSS.highlights.has(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toBe(false)
+  expect(CSS.highlights.has(REVIEW_SEARCH_MATCH_HIGHLIGHT)).toBe(false)
+  expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
+})
+
 scenario("diffSearchViewportAnchor", async () => {
   const fillerLines = Array.from({ length: 80 }, (_, index) => `+const filler${index} = true`).join(
     "\n",
   )
+  const docsFillerLines = Array.from(
+    { length: 40 },
+    (_, index) => `+docs filler line ${index + 1}`,
+  ).join("\n")
   const lockFileStart = diff.diff.indexOf("diff --git a/pnpm-lock.yaml")
   installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
@@ -2299,17 +4098,18 @@ scenario("diffSearchViewportAnchor", async () => {
           "@@ -1,1 +1,1 @@\n-old\n+new",
           `@@ -1,1 +1,81 @@\n-shared app old\n+shared app new\n${fillerLines}`,
         )
-        .replace("-docs\n+docs update", "-shared docs old\n+shared docs update")
+        .replace(
+          "@@ -1,1 +1,1 @@\n-docs\n+docs update",
+          `@@ -1,1 +1,41 @@\n-shared docs old\n+shared docs update\n${docsFillerLines}`,
+        )
         .replace("-lock old\n+lock new", "-shared lock old\n+shared lock new"),
     }),
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
+  await showResponsiveDiffPane()
   const docsCard = await vi.waitFor(() => {
     const card = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
     expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
@@ -2324,17 +4124,15 @@ scenario("diffSearchViewportAnchor", async () => {
   expect(appCard).not.toBeNull()
   if (diffPane === null || stickyChrome === null || appCard === null) return
 
-  await vi.waitFor(() => {
-    expect(diffPane.scrollHeight - diffPane.clientHeight).toBeGreaterThan(1_000)
-  })
-  diffPane.scrollTop = diffPane.scrollHeight - diffPane.clientHeight
-  diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
-  await vi.waitFor(() => {
-    const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
-    expect(appCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleTop)
-    expect(docsCard.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
-    expect(docsCard.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
-  })
+  appCard.querySelector<HTMLButtonElement>('button[aria-label="Collapse diff"]')?.click()
+  await vi.waitFor(() => expect(getDiffShadowRoot("src/app.tsx")).toBeNull())
+  getChangedFilesTreeItem("docs/readme.md")?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, composed: true }),
+  )
+  await alignReviewCardAtVisibleTop("docs/readme.md")
+  const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
+  expect(appCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(visibleTop)
+  expect(docsCard.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -2371,6 +4169,10 @@ scenario("diffSearchImmutableAnchor", async () => {
   const appMatches = Array.from({ length: 205 }, (_, index) => `+needle result ${index + 1}`).join(
     "\n",
   )
+  const docsFillerLines = Array.from(
+    { length: 40 },
+    (_, index) => `+docs filler line ${index + 1}`,
+  ).join("\n")
   const searchDiffText = `diff --git a/src/app.tsx b/src/app.tsx
 --- a/src/app.tsx
 +++ b/src/app.tsx
@@ -2380,9 +4182,10 @@ ${appMatches}
 diff --git a/docs/readme.md b/docs/readme.md
 --- a/docs/readme.md
 +++ b/docs/readme.md
-@@ -1 +1 @@
+@@ -1 +1,41 @@
 -old docs
-+needle docs result`
++needle docs result
+${docsFillerLines}`
   const parsed = parseUnifiedDiff(searchDiffText)
   const calls = installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
@@ -2397,13 +4200,19 @@ diff --git a/docs/readme.md b/docs/readme.md
       ),
     }),
     pullRequestDiff: HostedReviewDiff.make({ ...diff, diff: searchDiffText }),
+    settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  document
-    .querySelector<HTMLButtonElement>('button[aria-label*="Open requested review #51"]')
-    ?.click()
+  await openDefaultHostedReview()
+  await showResponsiveDiffPane()
+  const appCard = await vi.waitFor(() => {
+    const card = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
+    expect(card).not.toBeNull()
+    return card!
+  })
+  appCard.querySelector<HTMLButtonElement>('button[aria-label="Collapse diff"]')?.click()
+  await vi.waitFor(() => expect(getDiffShadowRoot("src/app.tsx")).toBeNull())
   const docsTreeItem = await vi.waitFor(() => {
     const item = getChangedFilesTreeItem("docs/readme.md")
     expect(item).not.toBeNull()
@@ -2414,17 +4223,8 @@ diff --git a/docs/readme.md b/docs/readme.md
     expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe(
       "docs/readme.md",
     )
-    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
-    const sticky = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
-    const card = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
-    expect(pane).not.toBeNull()
-    expect(sticky).not.toBeNull()
-    expect(card).not.toBeNull()
-    if (pane === null || sticky === null || card === null) return
-    const visibleTop = pane.getBoundingClientRect().top + sticky.offsetHeight
-    expect(card.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
-    expect(card.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
   })
+  await alignReviewCardAtVisibleTop("docs/readme.md")
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -2446,17 +4246,8 @@ diff --git a/docs/readme.md b/docs/readme.md
   appTreeItem?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(getSelectedChangedFileTreeItems()[0]?.getAttribute("data-item-path")).toBe("src/app.tsx")
-    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
-    const sticky = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
-    const card = document.querySelector<HTMLElement>('[data-diff-card-path="src/app.tsx"]')
-    expect(pane).not.toBeNull()
-    expect(sticky).not.toBeNull()
-    expect(card).not.toBeNull()
-    if (pane === null || sticky === null || card === null) return
-    const visibleTop = pane.getBoundingClientRect().top + sticky.offsetHeight
-    expect(card.getBoundingClientRect().top).toBeLessThanOrEqual(visibleTop + 1)
-    expect(card.getBoundingClientRect().bottom).toBeGreaterThan(visibleTop)
   })
+  await alignReviewCardAtVisibleTop("src/app.tsx")
   dispatchKeyboardShortcut("f", { metaKey: true })
   await vi.waitFor(() => {
     expect(document.activeElement).toBe(searchInput)
@@ -2492,11 +4283,7 @@ scenario("diffSearchVisibility", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"]))
 
   dispatchKeyboardShortcut("f", { metaKey: true })
@@ -2562,11 +4349,7 @@ scenario("virtualizedSearch", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #56"),
-  )
-  reviewButton?.click()
+  await openHostedReview(56)
   await vi.waitFor(() => expect(getMountedDiffLineCount()).toBeGreaterThan(0))
 
   dispatchKeyboardShortcut("f", { metaKey: true })
@@ -2579,6 +4362,8 @@ scenario("virtualizedSearch", async () => {
   searchInput.dispatchEvent(new Event("input", { bubbles: true }))
   await vi.waitFor(
     () => {
+      const navigation = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+      expect(navigation?.dataset.reviewNavigationOutcome).toBe("completed::")
       expect(getHighlightTexts(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)).toEqual(["tail after"])
       const activeLine = getActiveHighlightLine()
       expect(getDiffShadowRoot(fixture.tailPath)?.contains(activeLine ?? null)).toBe(true)
@@ -2628,12 +4413,19 @@ scenario("virtualizedSearch", async () => {
 
       const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
       const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+      const fileHeader = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${fixture.tailPath}"] [data-diff-card-header]`,
+      )
       expect(diffPane).not.toBeNull()
       expect(stickyChrome).not.toBeNull()
-      if (activeLine === null || diffPane === null || stickyChrome === null) return
+      expect(fileHeader).not.toBeNull()
+      if (activeLine === null || diffPane === null || stickyChrome === null || fileHeader === null)
+        return
       const activeRect = activeLine.getBoundingClientRect()
       const paneRect = diffPane.getBoundingClientRect()
-      expect(activeRect.bottom).toBeGreaterThan(paneRect.top + stickyChrome.offsetHeight)
+      expect(activeRect.bottom).toBeGreaterThan(
+        paneRect.top + stickyChrome.offsetHeight + fileHeader.offsetHeight,
+      )
       expect(activeRect.top).toBeLessThan(paneRect.bottom)
       expect(getMountedDiffLineCount()).toBeLessThan(500)
     },
@@ -2705,11 +4497,7 @@ scenario("wrappedSearchConvergence", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #57"),
-  )
-  reviewButton?.click()
+  await openHostedReview(57)
   await vi.waitFor(() => expect(getMountedDiffLineCount()).toBeGreaterThan(0))
 
   dispatchKeyboardShortcut("f", { metaKey: true })
@@ -2727,13 +4515,20 @@ scenario("wrappedSearchConvergence", async () => {
       const activeLine = getActiveHighlightLine()
       const diffPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
       const stickyChrome = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+      const fileHeader = document.querySelector<HTMLElement>(
+        `[data-diff-card-path="${fixture.largePath}"] [data-diff-card-header]`,
+      )
       expect(activeLine?.getAttribute("data-line")).toBe("300")
       expect(diffPane).not.toBeNull()
       expect(stickyChrome).not.toBeNull()
-      if (activeLine === null || diffPane === null || stickyChrome === null) return
+      expect(fileHeader).not.toBeNull()
+      if (activeLine === null || diffPane === null || stickyChrome === null || fileHeader === null)
+        return
       const activeRect = activeLine.getBoundingClientRect()
       const paneRect = diffPane.getBoundingClientRect()
-      expect(activeRect.bottom).toBeGreaterThan(paneRect.top + stickyChrome.offsetHeight)
+      expect(activeRect.bottom).toBeGreaterThan(
+        paneRect.top + stickyChrome.offsetHeight + fileHeader.offsetHeight,
+      )
       expect(activeRect.top).toBeLessThan(paneRect.bottom)
     },
     { timeout: 10_000 },
@@ -2749,13 +4544,7 @@ scenario("veryLargePlainDiff", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #53"),
-  )
-  reviewButton?.click()
+  await openHostedReview(53)
 
   await vi.waitFor(
     () => {
@@ -2780,13 +4569,7 @@ scenario("viewedViewportAnchor", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #54"),
-  )
-  reviewButton?.click()
+  await openHostedReview(54)
 
   await vi.waitFor(() => {
     expect(getMountedDiffLineCount()).toBeGreaterThan(0)
@@ -2854,11 +4637,7 @@ scenario("viewedShortcutPointerTarget", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => {
     expect(getViewedCheckbox("src/app.tsx")).not.toBeNull()
     expect(getViewedCheckbox("docs/readme.md")).not.toBeNull()
@@ -2916,13 +4695,7 @@ scenario("markAllViewedViewport", async () => {
   })
   renderApp()
 
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Recent Review Requests")
-  })
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #55"),
-  )
-  reviewButton?.click()
+  await openHostedReview(55)
 
   await vi.waitFor(() => {
     expect(getMountedDiffLineCount()).toBeGreaterThan(0)
@@ -2940,8 +4713,8 @@ scenario("markAllViewedViewport", async () => {
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
   await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
 
-  const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Actions") ?? false,
+  const actionsButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Review actions"]',
   )
   actionsButton?.click()
   await vi.waitFor(() => {
@@ -2957,7 +4730,14 @@ scenario("markAllViewedViewport", async () => {
   await vi.waitFor(() => {
     expect(getViewedCheckbox(fixture.largePath)?.checked).toBe(true)
     expect(getViewedCheckbox(fixture.tailPath)?.checked).toBe(true)
-    expect(diffPane.scrollTop).toBe(Math.max(0, diffPane.scrollHeight - diffPane.clientHeight))
+    const tailCard = document.querySelector<HTMLElement>(
+      `[data-diff-card-path="${fixture.tailPath}"]`,
+    )
+    expect(diffPane.scrollTop).toBeGreaterThan(0)
+    expect(diffPane.scrollTop).toBeLessThanOrEqual(diffPane.scrollHeight - diffPane.clientHeight)
+    expect(tailCard?.getBoundingClientRect().top).toBeLessThan(
+      diffPane.getBoundingClientRect().bottom,
+    )
     expect(window.scrollY).toBe(0)
   })
 })
@@ -2966,12 +4746,16 @@ scenario("viewedAcrossPushes", async () => {
   const calls = installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+  document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')?.click()
+  await vi.waitFor(() =>
+    expect(
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="Files"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true"),
+  )
 
   dispatchKeyboardShortcut("v")
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true))
@@ -2995,7 +4779,7 @@ scenario("viewedAcrossPushes", async () => {
   )
   await reloadReviewDiff()
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Headccccccc")
+    expect(getDiffShadowRoot("docs/readme.md")?.textContent).toContain("docs update again")
     expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
   })
 
@@ -3035,11 +4819,7 @@ scenario("viewedPersistenceRollback", async () => {
     },
   })
   renderApp()
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
   const checkbox = getViewedCheckbox("src/app.tsx")
   expect(checkbox).not.toBeNull()
@@ -3062,9 +4842,9 @@ scenario("shortcutReferenceHome", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Bookmarked Repos"))
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search bookmarked and accessible repositories"]',
+    'input[placeholder="Search local and hosted projects"]',
   )
   expect(searchInput).not.toBeNull()
   searchInput?.focus()
@@ -3108,12 +4888,9 @@ scenario("shortcutReferenceReview", async () => {
   installDiffDashApi()
   renderApp()
 
-  await vi.waitFor(() => expect(document.body.textContent).toContain("Recent Review Requests"))
-  const reviewButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-    button.getAttribute("aria-label")?.includes("Open requested review #51"),
-  )
-  reviewButton?.click()
+  await openDefaultHostedReview()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+  await showWideReviewLayout()
 
   const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
   expect(filterInput).not.toBeNull()
@@ -3146,15 +4923,48 @@ scenario("homeToReview", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
-    expect(document.body.textContent).toContain("Recent Review Requests")
+    expect(document.body.textContent).toContain("Pinned projects")
+    expect(document.body.textContent).toContain("Recent projects")
+    expect(document.body.textContent).not.toContain("PR Preview")
+    expect(document.body.textContent).not.toContain("Review Requests")
     expect(document.body.textContent).not.toContain("Recently Reviewed")
-    expect(document.body.textContent).toContain("Request review flow")
-    expect(document.body.textContent).toContain("fungsi/diffdash #51")
   })
+  expect(
+    [...document.querySelectorAll<HTMLElement>("[data-home-section]")].map(
+      (section) => section.dataset.homeSection,
+    ),
+  ).toEqual(["pinned", "recent"])
+  const homeFrame = document.querySelector<HTMLElement>('[data-workbench-frame-mode="route"]')
+  const pinned = document.querySelector<HTMLElement>('[data-home-section="pinned"]')
+  const versionBadge = document.querySelector<HTMLElement>("[data-home-version]")
+  expect(homeFrame).not.toBeNull()
+  expect(pinned).not.toBeNull()
+  expect(versionBadge).not.toBeNull()
+  if (versionBadge !== null) {
+    const expectedVersionBadge = document.createElement("div")
+    expectedVersionBadge.className = "border-primary/40 text-primary"
+    document.body.append(expectedVersionBadge)
+    expect(getComputedStyle(versionBadge).color).toBe(getComputedStyle(expectedVersionBadge).color)
+    expect(getComputedStyle(versionBadge).borderTopColor).toBe(
+      getComputedStyle(expectedVersionBadge).borderTopColor,
+    )
+    expectedVersionBadge.remove()
+  }
+  if (homeFrame !== null && pinned !== null) {
+    const expectedBorder = document.createElement("div")
+    expectedBorder.style.color = "var(--border)"
+    document.body.append(expectedBorder)
+
+    expect(getComputedStyle(homeFrame).backgroundColor).not.toBe(
+      getComputedStyle(pinned).backgroundColor,
+    )
+    expect(getComputedStyle(pinned).borderTopColor).toBe(getComputedStyle(expectedBorder).color)
+    expect(getComputedStyle(pinned).boxShadow).toBe("none")
+    expectedBorder.remove()
+  }
 
   const searchInput = document.querySelector<HTMLInputElement>(
-    'input[placeholder="Search bookmarked and accessible repositories"]',
+    'input[placeholder="Search local and hosted projects"]',
   )
   expect(searchInput).not.toBeNull()
   if (searchInput !== null) {
@@ -3163,23 +4973,15 @@ scenario("homeToReview", async () => {
   }
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked repo")
+    expect(document.body.textContent).toContain("Hosted")
     expect(document.body.textContent).toContain("fungsi/remote-review")
     expect(document.body.textContent).not.toContain("Search Results")
   })
 
   calls.listPullRequests.mockClear()
-  dispatchKeyboardShortcut("k", { metaKey: true })
+  await openDefaultProject()
   await vi.waitFor(() => {
-    expect(document.querySelector('dialog[aria-label="Go anywhere"]')).not.toBeNull()
-  })
-  const repoPaletteButton = [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find(
-    (button) => button.textContent?.includes("Remote bookmarked repository") ?? false,
-  )
-  expect(repoPaletteButton).toBeDefined()
-  repoPaletteButton?.click()
-
-  await vi.waitFor(() => {
+    expect(calls.getProjectWorkspace).toHaveBeenCalledWith(ReviewProjectId.make(repo.id))
     expect(calls.listPullRequests).toHaveBeenCalledWith({
       repository: expect.objectContaining({
         providerId: "github",
@@ -3187,26 +4989,15 @@ scenario("homeToReview", async () => {
         name: "diffdash",
       }),
     })
-    expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    expect(
+      document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
+    ).not.toBeNull()
+    expect(document.body.textContent).toContain(
+      "Local changes and hosted pull requests stay together in this workspace.",
+    )
   })
 
-  dispatchKeyboardShortcut("k", { metaKey: true })
-  await vi.waitFor(() => {
-    expect(
-      document.querySelector<HTMLInputElement>('dialog input[placeholder="Search repos and PRs"]'),
-    ).not.toBeNull()
-  })
-  const commandInput = document.querySelector<HTMLInputElement>("dialog input")
-  expect(commandInput).not.toBeNull()
-  if (commandInput !== null) {
-    setInputValue(commandInput, "Request")
-    commandInput.dispatchEvent(new Event("input", { bubbles: true }))
-  }
-  const reviewPaletteButton = [
-    ...document.querySelectorAll<HTMLButtonElement>("dialog button"),
-  ].find((button) => button.textContent?.includes("#51 Request review flow") ?? false)
-  expect(reviewPaletteButton).toBeDefined()
-  reviewPaletteButton?.click()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
 
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Opened PR #51")
@@ -3220,6 +5011,7 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).not.toContain("Select a line number to comment inline")
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
     expect(getDiffCardPaths()).not.toContain("pnpm-lock.yaml")
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
   })
 
   await new Promise((resolve) => window.setTimeout(resolve, 100))
@@ -3267,8 +5059,8 @@ scenario("homeToReview", async () => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
 
-  const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Actions") ?? false,
+  const actionsButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Review actions"]',
   )
   expect(actionsButton).toBeDefined()
   actionsButton?.click()
@@ -3297,17 +5089,26 @@ scenario("homeToReview", async () => {
   reloadAction?.click()
 
   await vi.waitFor(() => {
+    expect(document.querySelector('dialog[aria-label="Review actions"]')).toBeNull()
     expect(calls.getHostedReviewSnapshot).toHaveBeenCalledWith({ review: expect.anything() })
     expect(calls.getPullRequestDetail).toHaveBeenCalledWith({ review: expect.anything() })
     expect(calls.getPullRequestDiff).toHaveBeenCalledWith({ review: expect.anything() })
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
   })
 
+  const reviewPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+  expect(reviewPane).not.toBeNull()
+  if (reviewPane !== null) {
+    reviewPane.scrollTop = 0
+    reviewPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+    await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  }
   dispatchKeyboardShortcut("v")
   await vi.waitFor(() => {
-    expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
-    expect(document.body.textContent).toContain("Marked src/app.tsx as viewed")
+    expect(document.body.textContent).toContain("with shortcut v.")
   })
+  expect(document.body.textContent).toContain("Marked src/app.tsx as viewed")
+  expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
 
   const reviewFilterInput = document.querySelector<HTMLInputElement>(
     'input[placeholder="Filter files"]',
@@ -3393,12 +5194,10 @@ scenario("homeToReview", async () => {
   getViewedCheckbox("src/app.tsx")?.click()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(false))
 
-  const walkthroughTab = [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      'input[placeholder="Filter files"] + div button',
-    ),
-  ].find((button) => button.textContent === "Walkthrough")
-  expect(walkthroughTab).toBeDefined()
+  const walkthroughTab = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Walkthrough"]',
+  )
+  expect(walkthroughTab).not.toBeNull()
   walkthroughTab?.click()
 
   await vi.waitFor(() => {
@@ -3409,7 +5208,7 @@ scenario("homeToReview", async () => {
     })
     expect(calls.generateWalkthrough).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain("Review focus")
-    expect(document.body.textContent).toContain("Diff-only")
+    expect(document.body.textContent).not.toContain("Diff-only")
     expect(document.body.textContent).toContain("Entry point")
     expect(document.body.textContent).toContain("CRITICAL")
     expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
@@ -3420,6 +5219,20 @@ scenario("homeToReview", async () => {
     ).not.toBeNull()
     expect(getDiffShadowRoot("src/app.tsx")?.textContent ?? "").toContain("new")
   })
+  const criticalHeader = document.querySelector<HTMLElement>(
+    '[data-walkthrough-main-risk="critical"]',
+  )
+  const expectedCriticalBorder = document.createElement("div")
+  expectedCriticalBorder.className = "border-risk-critical/25 border-l-risk-critical"
+  document.body.append(expectedCriticalBorder)
+  expect(criticalHeader).not.toBeNull()
+  expect(getComputedStyle(criticalHeader!).borderTopColor).toBe(
+    getComputedStyle(expectedCriticalBorder).borderTopColor,
+  )
+  expect(getComputedStyle(criticalHeader!).borderLeftColor).toBe(
+    getComputedStyle(expectedCriticalBorder).borderLeftColor,
+  )
+  expectedCriticalBorder.remove()
 
   dispatchKeyboardShortcut("k", { metaKey: true })
   await vi.waitFor(() => {
@@ -3455,13 +5268,23 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).toContain("SUPPORT")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
   })
+  const supportHeader = document.querySelector<HTMLElement>(
+    '[data-walkthrough-main-risk="support"]',
+  )
+  const expectedSupportBorder = document.createElement("div")
+  expectedSupportBorder.className = "border-risk-support/25 border-l-risk-support"
+  document.body.append(expectedSupportBorder)
+  expect(supportHeader).not.toBeNull()
+  expect(getComputedStyle(supportHeader!).borderTopColor).toBe(
+    getComputedStyle(expectedSupportBorder).borderTopColor,
+  )
+  expect(getComputedStyle(supportHeader!).borderLeftColor).toBe(
+    getComputedStyle(expectedSupportBorder).borderLeftColor,
+  )
+  expectedSupportBorder.remove()
 
-  const paletteTreeTab = [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      'input[placeholder="Filter files"] + div button',
-    ),
-  ].find((button) => button.textContent === "Tree")
-  expect(paletteTreeTab).toBeDefined()
+  const paletteTreeTab = document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')
+  expect(paletteTreeTab).not.toBeNull()
   paletteTreeTab?.click()
   dispatchKeyboardShortcut("k", { metaKey: true })
   await vi.waitFor(() => {
@@ -3477,12 +5300,10 @@ scenario("homeToReview", async () => {
   document
     .querySelector<HTMLButtonElement>('dialog button[aria-label="Close command palette"]')
     ?.click()
-  const paletteWalkthroughTab = [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      'input[placeholder="Filter files"] + div button',
-    ),
-  ].find((button) => button.textContent === "Walkthrough")
-  expect(paletteWalkthroughTab).toBeDefined()
+  const paletteWalkthroughTab = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Walkthrough"]',
+  )
+  expect(paletteWalkthroughTab).not.toBeNull()
   paletteWalkthroughTab?.click()
 
   let entryStepButton: HTMLButtonElement | undefined
@@ -3608,7 +5429,7 @@ scenario("homeToReview", async () => {
   })
 
   const treeTab = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Tree",
+    (button) => button.getAttribute("aria-label") === "Files",
   )
   expect(treeTab).toBeDefined()
   treeTab?.click()
@@ -3623,7 +5444,19 @@ scenario("homeToReview", async () => {
   const firstDiffOpenButton = [
     ...document.querySelectorAll<HTMLButtonElement>('[data-diff-card-path="src/app.tsx"] button'),
   ].find((button) => button.textContent === "Open")
+  const firstDiffViewedControl = getViewedCheckbox("src/app.tsx")?.closest("label") ?? null
   expect(firstDiffOpenButton).toBeDefined()
+  expect(firstDiffViewedControl).not.toBeNull()
+  if (firstDiffOpenButton !== undefined && firstDiffViewedControl !== null) {
+    const openStyle = getComputedStyle(firstDiffOpenButton)
+    const viewedStyle = getComputedStyle(firstDiffViewedControl)
+    expect(firstDiffOpenButton.getBoundingClientRect().height).toBe(
+      firstDiffViewedControl.getBoundingClientRect().height,
+    )
+    expect(openStyle.paddingLeft).toBe(viewedStyle.paddingLeft)
+    expect(openStyle.paddingRight).toBe(viewedStyle.paddingRight)
+    expect(openStyle.borderRadius).toBe(viewedStyle.borderRadius)
+  }
   firstDiffOpenButton?.click()
 
   await vi.waitFor(() => {
@@ -3653,17 +5486,18 @@ scenario("homeToReview", async () => {
   dispatchSideMouseButton(3)
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
-    expect(document.body.textContent).toContain("Recently Reviewed")
-    expect(document.body.textContent).toContain("1 open PR in fungsi/diffdash")
+    expect(document.body.textContent).toContain("Pinned projects")
+    expect(document.body.textContent).not.toContain("Recently Reviewed")
+    expect(document.body.textContent).not.toContain("PR Preview")
     expect(document.body.textContent).not.toContain("Opened PR #51")
   })
 
   dispatchSideMouseButton(4)
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Opened PR #51")
-    expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+    expect(document.body.textContent).toContain("Pinned projects")
+    expect(document.body.textContent).not.toContain("Opened PR #51")
+    expect(document.querySelector('button[aria-label="Back"]')).toBeNull()
   })
 })
 
@@ -3672,7 +5506,7 @@ scenario("localReview", async () => {
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Bookmarked Repos")
+    expect(document.body.textContent).toContain("Pinned projects")
   })
 
   calls.openLocalReview()
@@ -3680,11 +5514,19 @@ scenario("localReview", async () => {
   const localTarget = workingTreeReviewTarget(localReview.rootPath)
 
   await vi.waitFor(() => {
+    expect(calls.openProject).toHaveBeenCalledWith(localReview.rootPath, undefined)
     expect(calls.getLocalReviewDetail).toHaveBeenCalledWith(localTarget)
     expect(calls.getLocalReviewDiff).toHaveBeenCalledWith(localTarget)
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+  })
+
+  await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Local changes")
     expect(document.body.textContent).toContain("src/local.ts")
     expect(document.body.textContent).not.toContain("Approve")
+    expect(document.querySelector("[data-review-editor-header]")?.textContent).toContain(
+      "Local (feature/local-review)",
+    )
   })
 
   const walkthroughTab = [...document.querySelectorAll("button")].find(
@@ -3705,9 +5547,7 @@ scenario("localReview", async () => {
     expect(getDiffCardPaths()).toEqual(["src/local.ts"])
   })
 
-  const treeTab = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Tree",
-  )
+  const treeTab = document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')
   treeTab?.click()
 
   const localOpenButton = [
@@ -3726,15 +5566,17 @@ scenario("providerTerminology", async () => {
     providers: [fixtureProvider],
     pullRequestDetail: fixtureDetail,
     pullRequestDiff: fixtureDiff,
+    pullRequests: [fixturePullRequest],
     reviewRequests: [fixturePullRequest],
   })
   renderApp()
 
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("open a merge request")
+    expect(document.body.textContent).toContain("hosted merge request")
   })
+  await openDefaultProject()
   const openReview = document.querySelector<HTMLButtonElement>(
-    'button[aria-label^="Open requested review #73"]',
+    'button[aria-label^="Open review #73"]',
   )
   expect(openReview).not.toBeNull()
   openReview?.click()
@@ -3743,9 +5585,7 @@ scenario("providerTerminology", async () => {
     expect(document.body.textContent).toContain("Opened MR #73")
     expect(document.body.textContent).toContain("Fixture merge request flow")
   })
-  const actions = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent === "Actions",
-  )
+  const actions = document.querySelector<HTMLButtonElement>('button[aria-label="Review actions"]')
   actions?.click()
   await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
   expect(document.querySelector('[role="menu"]')?.textContent).not.toContain("Approve")
@@ -3783,6 +5623,23 @@ const getViewedCheckbox = (path: string) =>
 const getDiffShadowRoot = (path: string) =>
   document.querySelector(`[data-diff-card-path="${path}"] diffs-container`)?.shadowRoot ?? null
 
+const getSyntaxTokenColor = (shadowRoot: ShadowRoot, text: string) => {
+  const token = [...shadowRoot.querySelectorAll<HTMLElement>("span[style]")].find((candidate) => {
+    const candidateText = candidate.textContent?.trim()
+    if (candidateText === text) return true
+    return (
+      candidateText !== undefined &&
+      candidateText.length >= 2 &&
+      candidateText.slice(1, -1) === text &&
+      (candidateText.startsWith('"') || candidateText.startsWith("'")) &&
+      candidateText.at(-1) === candidateText[0]
+    )
+  })
+  expect(token).not.toBeUndefined()
+  if (token === undefined) throw new Error(`Missing syntax token: ${text}`)
+  return getComputedStyle(token).color
+}
+
 const getMountedDiffLineCount = () =>
   [...document.querySelectorAll("diffs-container")].reduce(
     (count, element) => count + (element.shadowRoot?.querySelectorAll("[data-line]").length ?? 0),
@@ -3793,6 +5650,109 @@ const getDiffLine = (shadowRoot: ShadowRoot, content: string) =>
   [...shadowRoot.querySelectorAll<HTMLElement>("[data-line]")].find(
     (element) => element.textContent?.trim() === content,
   )
+
+const waitForAnimationFrames = (count: number) =>
+  new Promise<void>((resolve) => {
+    let remaining = count
+    const wait = () => {
+      remaining -= 1
+      if (remaining <= 0) {
+        resolve()
+        return
+      }
+      window.requestAnimationFrame(wait)
+    }
+    window.requestAnimationFrame(wait)
+  })
+
+const runContinuousReviewScroll = (pane: HTMLElement, frameCount: number) =>
+  new Promise<readonly number[]>((resolve) => {
+    const frameDurations: number[] = []
+    const targetScrollTop = Math.min(30_000, Math.max(0, pane.scrollHeight - pane.clientHeight))
+    let frame = 0
+    let previousTime = performance.now()
+    const scrollFrame = (time: number) => {
+      frameDurations.push(time - previousTime)
+      previousTime = time
+      frame += 1
+      pane.scrollTop = targetScrollTop * (frame / frameCount)
+      pane.dispatchEvent(new Event("scroll", { bubbles: true }))
+      if (frame < frameCount) {
+        window.requestAnimationFrame(scrollFrame)
+        return
+      }
+      window.requestAnimationFrame(() => resolve(frameDurations))
+    }
+    window.requestAnimationFrame(scrollFrame)
+  })
+
+const showResponsiveDiffPane = async () => {
+  await vi.waitFor(() => expect(document.querySelector("[data-review-layout]")).not.toBeNull())
+  await waitForAnimationFrames(2)
+  await vi.waitFor(() => {
+    const pane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    expect(pane).not.toBeNull()
+    expect(pane?.getBoundingClientRect().width).toBeGreaterThan(0)
+    expect(pane?.getBoundingClientRect().height).toBeGreaterThan(0)
+  })
+  await waitForAnimationFrames(2)
+}
+
+const openOnlyReviewThreadInDiff = async (path: string, lineLabel: string) => {
+  const threadsButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')
+    expect(button).not.toBeNull()
+    return button!
+  })
+  threadsButton.click()
+  const goToDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="Go to ${path} ${lineLabel} in diff"]`,
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  goToDiff.click()
+  await waitForAnimationFrames(4)
+}
+
+const showWideReviewLayout = async () => {
+  const layout = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>("[data-review-layout]")
+    expect(element).not.toBeNull()
+    return element!
+  })
+  layout.style.width = "1200px"
+  layout.style.flex = "none"
+  await vi.waitFor(() => expect(layout.dataset.reviewPaneMode).toBe("wide"))
+  await waitForAnimationFrames(2)
+}
+
+const alignReviewCardAtVisibleTop = async (path: string) => {
+  const { card, pane, sticky } = await vi.waitFor(() => {
+    const nextPane = document.querySelector<HTMLElement>("[data-review-diff-scroll-container]")
+    const nextSticky = document.querySelector<HTMLElement>("[data-review-sticky-chrome]")
+    const nextCard = document.querySelector<HTMLElement>(`[data-diff-card-path="${path}"]`)
+    expect(nextPane).not.toBeNull()
+    expect(nextSticky).not.toBeNull()
+    expect(nextCard).not.toBeNull()
+    return { card: nextCard!, pane: nextPane!, sticky: nextSticky! }
+  })
+  const visibleTop = pane.getBoundingClientRect().top + sticky.offsetHeight
+  await vi.waitFor(
+    () => {
+      let cardRect = card.getBoundingClientRect()
+      if (Math.abs(cardRect.top - visibleTop) > 1) {
+        pane.scrollTop += cardRect.top - visibleTop
+        pane.dispatchEvent(new Event("scroll", { bubbles: true }))
+        cardRect = card.getBoundingClientRect()
+      }
+      expect(cardRect.top).toBeLessThanOrEqual(visibleTop + 1)
+      expect(cardRect.bottom).toBeGreaterThan(visibleTop)
+    },
+    { timeout: 10_000 },
+  )
+}
 
 const scrollDiffCardAboveViewport = async (
   diffPane: HTMLElement,
@@ -3882,8 +5842,8 @@ const dispatchKeyboardShortcut = (
 }
 
 const reloadReviewDiff = async () => {
-  const actionsButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.includes("Actions") ?? false,
+  const actionsButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Review actions"]',
   )
   actionsButton?.click()
   await vi.waitFor(() => {
@@ -3936,19 +5896,31 @@ const installDiffDashApi = (
   options: {
     readonly appState?: AppState
     readonly agentProviderCatalog?: AgentProviderCatalog
+    readonly beforeReviewSnapshotPage?: (
+      request: Parameters<DiffDashApi["reviewSnapshots"]["getPage"]>[0],
+    ) => Promise<void>
+    readonly beforeReviewSnapshotSearch?: (
+      request: Parameters<DiffDashApi["reviewSnapshots"]["search"]>[0],
+    ) => Promise<void>
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
+    readonly localReviewDiff?: LocalReviewDiff
+    readonly openProject?: DiffDashApi["repositories"]["openProject"]
+    readonly projectWorkspaceState?: ProjectWorkspaceState | null
     readonly pullRequestDetail?: HostedReviewDetail
     readonly pullRequestDiff?: HostedReviewDiff
+    readonly pullRequests?: readonly HostedReviewSummary[]
     readonly providers?: readonly GitProviderDescriptor[]
     readonly repositories?: readonly Repo[]
     readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
+    readonly snapshotPageFileLimit?: number
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
     readonly settings?: AISettings
+    readonly selectLocalFolder?: string | null
     readonly updateSettings?: DiffDashApi["settings"]["update"]
     readonly updateState?: AppUpdateState
     readonly walkthrough?: StoredWalkthrough
@@ -3969,6 +5941,13 @@ const installDiffDashApi = (
   let approved = false
   let expireNextSnapshotPage = options.expireFirstSnapshotPage ?? false
   const snapshots = new Map<string, ReviewSnapshot>()
+  const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
+  if (options.projectWorkspaceState !== undefined && options.projectWorkspaceState !== null) {
+    projectWorkspaceStates.set(
+      options.projectWorkspaceState.projectId,
+      options.projectWorkspaceState,
+    )
+  }
   const getLocalReviewDetail = vi.fn<(target: LocalReviewTarget) => Promise<LocalReviewDetail>>(
     async (target) =>
       LocalReviewDetail.make({
@@ -3981,7 +5960,11 @@ const installDiffDashApi = (
       }),
   )
   const getLocalReviewDiff = vi.fn<(target: LocalReviewTarget) => Promise<LocalReviewDiff>>(
-    async (target) => LocalReviewDiff.make({ ...localDiff, comparison: target.comparison }),
+    async (target) =>
+      LocalReviewDiff.make({
+        ...(options.localReviewDiff ?? localDiff),
+        comparison: target.comparison,
+      }),
   )
   const acquireLocalReviewSnapshot = vi.fn<DiffDashApi["reviewSnapshots"]["acquireLocal"]>(
     async (target) => {
@@ -4005,7 +5988,7 @@ const installDiffDashApi = (
         parsedDiff: parseUnifiedDiff(localReviewPatch.diff),
       })
       snapshots.set(snapshot.snapshotId, snapshot)
-      return makeReviewSnapshotManifest(snapshot)
+      return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make("local-repo-1"))
     },
   )
   const calls = {
@@ -4044,7 +6027,9 @@ const installDiffDashApi = (
     setLocalViewedFile: vi.fn<DiffDashApi["viewedFiles"]["setLocal"]>(
       options.setLocalViewedFile ?? (async () => undefined),
     ),
-    listPullRequests: vi.fn<DiffDashApi["hostedReviews"]["list"]>(async () => [pullRequest]),
+    listPullRequests: vi.fn<DiffDashApi["hostedReviews"]["list"]>(
+      async () => options.pullRequests ?? options.reviewRequests ?? [pullRequest],
+    ),
     getLocalWalkthrough: vi.fn<
       (
         target: LocalReviewTarget,
@@ -4070,7 +6055,31 @@ const installDiffDashApi = (
     linkRepository: vi.fn<DiffDashApi["repositories"]["link"]>(async (input) =>
       Repo.make({ ...repo, localPath: input.localPath }),
     ),
-    selectLocalFolder: vi.fn<() => Promise<string | null>>(async () => null),
+    selectLocalFolder: vi.fn<() => Promise<string | null>>(
+      async () => options.selectLocalFolder ?? null,
+    ),
+    openProject: vi.fn<DiffDashApi["repositories"]["openProject"]>(
+      options.openProject ??
+        (async (localPath) => ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) })),
+    ),
+    repairRepositoryIdentities: vi.fn<DiffDashApi["repositories"]["repairIdentities"]>(async () =>
+      RepositoryIdentityRepairSummary.make({
+        resolvedCount: repositories.filter((repository) => repository.provider !== "local").length,
+        unresolvedCount: 0,
+        localAliasCount: 0,
+      }),
+    ),
+    getProjectWorkspace: vi.fn<DiffDashApi["projectWorkspace"]["get"]>(
+      async (projectId) => projectWorkspaceStates.get(projectId) ?? null,
+    ),
+    saveProjectWorkspace: vi.fn<DiffDashApi["projectWorkspace"]["save"]>(async (input) => {
+      const state = ProjectWorkspaceState.make({
+        ...input,
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      })
+      projectWorkspaceStates.set(input.projectId, state)
+      return state
+    }),
     openExternalUrl: vi.fn<(url: string) => Promise<void>>(async () => undefined),
     updateAppState: vi.fn<(state: AppState) => Promise<AppState>>(async (state) => state),
     checkForUpdates: vi.fn<() => Promise<void>>(async () => undefined),
@@ -4108,6 +6117,7 @@ const installDiffDashApi = (
       async () => undefined,
     ),
     openRepositoryFile: vi.fn<DiffDashApi["openRepositoryFile"]>(async () => undefined),
+    activateWindow: vi.fn<() => Promise<void>>(async () => undefined),
     approvePullRequest: vi.fn<DiffDashApi["hostedReviews"]["submitDecision"]>(async () => {
       approved = true
     }),
@@ -4136,21 +6146,22 @@ const installDiffDashApi = (
         parsedDiff: parseUnifiedDiff(pullRequestDiff.diff),
       })
       snapshots.set(snapshot.snapshotId, snapshot)
-      return makeReviewSnapshotManifest(snapshot)
+      return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(repo.id))
     },
   )
   const getReviewSnapshotPage = vi.fn<DiffDashApi["reviewSnapshots"]["getPage"]>(
     async (request) => {
+      await options.beforeReviewSnapshotPage?.(request)
       const snapshot = snapshots.get(request.snapshotId)
       if (expireNextSnapshotPage) {
         expireNextSnapshotPage = false
         snapshots.delete(request.snapshotId)
         return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "evicted" })
       }
-      if (snapshot === undefined || request.cursor !== null) {
+      if (snapshot === undefined) {
         return ReviewSnapshotExpired.make({
           snapshotId: request.snapshotId,
-          reason: snapshot === undefined ? "evicted" : "mismatched",
+          reason: "evicted",
         })
       }
       const selected =
@@ -4168,6 +6179,40 @@ const installDiffDashApi = (
           reason: "mismatched",
         })
       }
+      const pageFileLimit = options.snapshotPageFileLimit
+      if (pageFileLimit !== undefined) {
+        const selectionHash = stableBrowserCursorHash(selected.map((file) => file.fileId))
+        const cursorMatch =
+          request.cursor === null ? null : /^page:v1:([0-9]+):([0-9a-f]{8})$/u.exec(request.cursor)
+        if (request.cursor !== null && cursorMatch?.[2] !== selectionHash) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "mismatched",
+          })
+        }
+        const offset = cursorMatch === null ? 0 : Number(cursorMatch[1])
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset > selected.length) {
+          return ReviewSnapshotExpired.make({
+            snapshotId: request.snapshotId,
+            reason: "mismatched",
+          })
+        }
+        const nextOffset = Math.min(selected.length, offset + pageFileLimit)
+        return ReviewSnapshotPageAvailable.make({
+          snapshotId: request.snapshotId,
+          files: selected.slice(offset, nextOffset),
+          nextCursor:
+            nextOffset < selected.length
+              ? ReviewSnapshotPageCursor.make(`page:v1:${nextOffset}:${selectionHash}`)
+              : null,
+        })
+      }
+      if (request.cursor !== null) {
+        return ReviewSnapshotExpired.make({
+          snapshotId: request.snapshotId,
+          reason: "mismatched",
+        })
+      }
       return ReviewSnapshotPageAvailable.make({
         snapshotId: request.snapshotId,
         files: selected,
@@ -4176,6 +6221,7 @@ const installDiffDashApi = (
     },
   )
   const searchReviewSnapshot = vi.fn<DiffDashApi["reviewSnapshots"]["search"]>(async (request) => {
+    await options.beforeReviewSnapshotSearch?.(request)
     const snapshot = snapshots.get(request.snapshotId)
     if (snapshot === undefined) {
       return ReviewSnapshotExpired.make({
@@ -4244,6 +6290,7 @@ const installDiffDashApi = (
           filePath: occurrence.filePath,
           reviewKey: occurrence.reviewKey,
           hunkId: ReviewHunkId.make(occurrence.hunkId),
+          hunkFingerprint: ReviewHunkFingerprint.make(occurrence.hunkFingerprint),
           hunkLineIndex: occurrence.hunkLineIndex,
           newLineNumber: occurrence.newLineNumber,
           oldLineNumber: occurrence.oldLineNumber,
@@ -4282,6 +6329,7 @@ const installDiffDashApi = (
       },
     },
     navigation: {
+      activateWindow: calls.activateWindow,
       drainCommands: async () => {
         const commands = pendingCommands
         pendingCommands = []
@@ -4328,10 +6376,21 @@ const installDiffDashApi = (
     repositories: {
       install: calls.installRepository,
       link: calls.linkRepository,
+      openProject: calls.openProject,
+      repairIdentities: calls.repairRepositoryIdentities,
+      forget: async (projectId) => {
+        const project = repositories.find((candidate) => candidate.id === projectId)
+        if (project === undefined) throw new Error(`Repository not found: ${projectId}`)
+        return Repo.make({ ...project, isFavorite: false, lastOpenedAt: null })
+      },
       favoriteRemote: calls.favoriteRemoteRepository,
       list: calls.listRepositories,
       selectLocalFolder: calls.selectLocalFolder,
       setFavorite: calls.setRepositoryFavorite,
+    },
+    projectWorkspace: {
+      get: calls.getProjectWorkspace,
+      save: calls.saveProjectWorkspace,
     },
     reviewThreads: {
       list: async () => reviewThreadDetails.map((item) => item.thread),
@@ -4422,17 +6481,37 @@ const installDiffDashApi = (
       pendingCommands.push(OpenBranchDiffCommand.make({ localPath, branchName }))
       commandsAvailableListener?.()
     },
+    repairRepositoriesFromCli: () => {
+      pendingCommands.push(RepairRepositoryIdentitiesCommand.make({}))
+      commandsAvailableListener?.()
+    },
   }
 }
 
-const plainAISettings = (settings: AISettings): AISettings => ({
-  version: settings.version,
-  appearance: settings.appearance,
-  routes: {
-    walkthrough: settings.routes.walkthrough,
-    reviewThread: settings.routes.reviewThread,
-  },
-  telemetryEnabled: settings.telemetryEnabled,
-  autoQuality: settings.autoQuality,
-  models: { ...settings.models },
-})
+const plainAISettings = (settings: AISettings): AISettings =>
+  AISettings.make({
+    version: settings.version,
+    appearance: settings.appearance,
+    themes: ThemePreferences.make({
+      light: settings.themes.light,
+      dark: settings.themes.dark,
+    }),
+    codeThemes: CodeThemePreferences.make({
+      light: settings.codeThemes.light,
+      dark: settings.codeThemes.dark,
+    }),
+    diffViewMode: settings.diffViewMode,
+    layout: RendererLayoutSettings.make({
+      review: ReviewPaneSettings.make({
+        contextWidth: settings.layout.review.contextWidth,
+        threadDetailWidth: settings.layout.review.threadDetailWidth,
+      }),
+    }),
+    routes: {
+      walkthrough: settings.routes.walkthrough,
+      reviewThread: settings.routes.reviewThread,
+    },
+    telemetryEnabled: settings.telemetryEnabled,
+    autoQuality: settings.autoQuality,
+    models: { ...settings.models },
+  })

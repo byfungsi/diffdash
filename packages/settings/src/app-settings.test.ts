@@ -6,7 +6,12 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import {
+  AISettings,
+  CodeThemePreferences,
+  DEFAULT_AI_SETTINGS,
+  ThemePreferences,
+} from "@diffdash/domain/ai-settings"
 import { AppSettings, AppSettingsError } from "./app-settings"
 import { FileStorage } from "./file-storage"
 
@@ -97,8 +102,14 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual({
-        version: 2,
+        version: 7,
         appearance: "dark",
+        themes: { light: "diffdash", dark: "diffdash" },
+        codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
+        diffViewMode: "auto",
+        layout: {
+          review: { contextWidth: 304, threadDetailWidth: 432 },
+        },
         routes: { walkthrough: "codex", reviewThread: "codex" },
         models: {
           codex: "gpt-5.6-luna",
@@ -121,6 +132,15 @@ describe("AppSettings", () => {
       const customSettings = AISettings.make({
         ...DEFAULT_AI_SETTINGS,
         appearance: "dark",
+        themes: ThemePreferences.make({
+          light: "catppuccin-latte",
+          dark: "catppuccin-mocha",
+        }),
+        codeThemes: CodeThemePreferences.make({
+          light: "github-light-default",
+          dark: "pierre-dark-soft",
+        }),
+        diffViewMode: "split",
         routes: { walkthrough: "claude", reviewThread: "opencode" },
         autoQuality: "best",
         models: {
@@ -139,7 +159,13 @@ describe("AppSettings", () => {
       expect(loaded).toEqual(customSettings)
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
         appearance: "dark",
-        version: 2,
+        themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
+        codeThemes: { light: "github-light-default", dark: "pierre-dark-soft" },
+        diffViewMode: "split",
+        layout: {
+          review: { contextWidth: 304, threadDetailWidth: 432 },
+        },
+        version: 7,
         routes: { walkthrough: "claude", reviewThread: "opencode" },
         telemetryEnabled: true,
         autoQuality: "best",
@@ -163,6 +189,220 @@ describe("AppSettings", () => {
       expect(settings.models.codex).toBe("gpt-5.5")
       expect(settings.appearance).toBe("system")
       expect(settings.telemetryEnabled).toBe(true)
+    }),
+  )
+
+  it.scoped("migrates version 2 settings without losing capability routes", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          version: 2,
+          appearance: "dark",
+          routes: { walkthrough: "future", reviewThread: "claude" },
+          models: { future: "future-model", claude: "claude-opus-4-8" },
+          autoQuality: "best",
+          telemetryEnabled: false,
+          futureProvider: { enabled: true },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings).toEqual({
+        version: 7,
+        appearance: "dark",
+        themes: { light: "diffdash", dark: "diffdash" },
+        codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
+        diffViewMode: "auto",
+        layout: {
+          review: { contextWidth: 304, threadDetailWidth: 432 },
+        },
+        routes: { walkthrough: "future", reviewThread: "claude" },
+        models: { future: "future-model", claude: "claude-opus-4-8" },
+        autoQuality: "best",
+        telemetryEnabled: false,
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        version: 7,
+        diffViewMode: "auto",
+        layout: {
+          review: { contextWidth: 304, threadDetailWidth: 432 },
+        },
+        routes: { walkthrough: "future", reviewThread: "claude" },
+        models: { future: "future-model", claude: "claude-opus-4-8" },
+        futureProvider: { enabled: true },
+      })
+    }),
+  )
+
+  it.scoped("decodes light and dark theme preferences independently", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          themes: {
+            light: "future-light-theme",
+            dark: "catppuccin-macchiato",
+            futureThemeSetting: true,
+          },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        const loaded = yield* appSettings.get
+        yield* appSettings.save(loaded)
+        return loaded
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.themes).toEqual({
+        light: "diffdash",
+        dark: "catppuccin-macchiato",
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        themes: {
+          light: "diffdash",
+          dark: "catppuccin-macchiato",
+          futureThemeSetting: true,
+        },
+      })
+    }),
+  )
+
+  it.scoped("migrates and decodes light and dark code themes independently", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          version: 5,
+          themes: {
+            light: "catppuccin-latte",
+            dark: "catppuccin-macchiato",
+          },
+          codeThemes: {
+            light: "future-light-code-theme",
+            dark: "github-dark-default",
+            futureCodeThemeSetting: true,
+          },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.codeThemes).toEqual({
+        light: "catppuccin-latte",
+        dark: "github-dark-default",
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        version: 7,
+        codeThemes: {
+          light: "catppuccin-latte",
+          dark: "github-dark-default",
+          futureCodeThemeSetting: true,
+        },
+      })
+    }),
+  )
+
+  it.scoped("migrates the version 6 dark code-theme default without replacing other choices", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          version: 6,
+          codeThemes: {
+            light: "github-light-default",
+            dark: "rose-pine-moon",
+            futureCodeThemeSetting: true,
+          },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.version).toBe(7)
+      expect(settings.codeThemes).toEqual({
+        light: "github-light-default",
+        dark: "diffdash-dark",
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        version: 7,
+        codeThemes: {
+          light: "github-light-default",
+          dark: "diffdash-dark",
+          futureCodeThemeSetting: true,
+        },
+      })
+    }),
+  )
+
+  it.scoped("defaults malformed pane widths without resetting unrelated settings", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        join(settingsDirectory, "settings.json"),
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          appearance: "dark",
+          layout: {
+            futureLayout: { enabled: true },
+            review: {
+              contextWidth: 12,
+              threadDetailWidth: 512,
+              futurePane: 777,
+            },
+          },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        const loaded = yield* appSettings.get
+        yield* appSettings.save(loaded)
+        return loaded
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.appearance).toBe("dark")
+      expect(settings.layout.review).toEqual({ contextWidth: 304, threadDetailWidth: 512 })
+      expect(
+        JSON.parse(readFileSync(join(settingsDirectory, "settings.json"), "utf8")),
+      ).toMatchObject({
+        layout: {
+          futureLayout: { enabled: true },
+          review: { contextWidth: 304, threadDetailWidth: 512, futurePane: 777 },
+        },
+      })
     }),
   )
 
@@ -190,6 +430,7 @@ describe("AppSettings", () => {
         JSON.stringify({
           version: 2,
           appearance: "dark",
+          diffViewMode: "side-by-side",
           telemetryEnabled: false,
           routes: { walkthrough: 42, reviewThread: "missing-provider" },
           models: { "missing-provider": null },
@@ -203,6 +444,7 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings.appearance).toBe("dark")
+      expect(settings.diffViewMode).toBe("auto")
       expect(settings.telemetryEnabled).toBe(false)
       expect(settings.routes).toEqual(DEFAULT_AI_SETTINGS.routes)
       expect(settings.models).toEqual(DEFAULT_AI_SETTINGS.models)

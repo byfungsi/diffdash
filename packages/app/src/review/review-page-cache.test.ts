@@ -41,4 +41,38 @@ describe("ReviewPageCache", () => {
     expect(cache.get(third.fileId)).toBe(third)
     expect(cache.stats().files).toBe(2)
   })
+
+  it("evicts an unpinned entry instead of a least-recent pinned entry", () => {
+    const cache = new ReviewPageCache({ maxBytes: 1_000_000, maxFiles: 2 })
+    const first = files[0]
+    const second = files[1]
+    const third = files[2]
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(third).toBeDefined()
+    if (first === undefined || second === undefined || third === undefined) return
+
+    cache.put([first, second])
+    cache.put([third], new Set([first.fileId, third.fileId]))
+
+    expect(cache.get(first.fileId)).toBe(first)
+    expect(cache.get(second.fileId)).toBeNull()
+    expect(cache.get(third.fileId)).toBe(third)
+    expect(cache.stats().files).toBe(2)
+  })
+
+  it("never falls back to evicting a pinned entry", () => {
+    const cache = new ReviewPageCache({ maxBytes: 1_000_000, maxFiles: 1 })
+    const first = files[0]
+    const second = files[1]
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    if (first === undefined || second === undefined) return
+
+    cache.put([first, second], new Set([first.fileId, second.fileId]))
+
+    expect(cache.get(first.fileId)).toBe(first)
+    expect(cache.get(second.fileId)).toBe(second)
+    expect(cache.stats().files).toBe(2)
+  })
 })

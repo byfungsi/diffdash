@@ -15,6 +15,7 @@
       "outputs": [".cache/host/**"]
     },
     "@diffdash/desktop#build": {
+      "dependsOn": ["^build"],
       "outputs": ["out/**"]
     },
     "@diffdash/web#build": {

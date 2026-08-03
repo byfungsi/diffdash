@@ -1,4 +1,13 @@
-import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import {
+  AISettings,
+  CodeThemePreferences,
+  DEFAULT_AI_SETTINGS,
+  ThemePreferences,
+} from "@diffdash/domain/ai-settings"
+import {
+  RendererLayoutSettings,
+  ReviewPaneSettings,
+} from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import {
@@ -9,12 +18,18 @@ import {
   GitProviderTerminology,
   HostedRepository,
   makeHostedRepositoryLocator,
+  sameHostedRepository,
 } from "@diffdash/domain/git-provider"
 import { localReviewTargetKey, type LocalReviewTarget } from "@diffdash/domain/local-review"
-import { Repo } from "@diffdash/domain/repository"
+import {
+  ProjectOpened,
+  ProjectWorkspaceState,
+  type ProjectWorkspaceStateInput,
+} from "@diffdash/domain/project-workspace"
+import { Repo, RepositoryIdentityRepairSummary } from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
-import { type ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, type ReviewFilePatchHash } from "@diffdash/domain/review-identity"
 import {
   MarkdownBody,
   ReviewThread,
@@ -112,6 +127,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const actions: DemoAction[] = []
   const pendingRuns = new Map<string, PendingAgentRun>()
   const snapshotCache = new Map<string, ReviewSnapshot>()
+  const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
   let repositories: Repo[] = []
   let currentRevision = firstRevision
   let approved = false
@@ -163,6 +179,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     pendingRuns.clear()
     currentRevision = firstRevision
     snapshotCache.clear()
+    projectWorkspaceStates.clear()
     snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
     repositories = [scenario.repository]
     approved = false
@@ -409,6 +426,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       onStateChanged: (listener) => listenerSubscription(updateListeners, listener),
     },
     navigation: {
+      activateWindow: async () => undefined,
       drainCommands: async () => navigationCommands.splice(0, navigationCommands.length),
       onCommandsAvailable: (listener) => {
         const unsubscribe = listenerSubscription(navigationListeners, listener)
@@ -511,7 +529,60 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         )
         return linkLocalPath(input.localPath)
       },
+      openProject: async (localPath, selectedRepository) => {
+        const demoRepository = makeHostedRepositoryLocator(
+          provider.id,
+          scenario.repository.owner,
+          scenario.repository.name,
+        )
+        if (
+          selectedRepository !== undefined &&
+          !sameHostedRepository(selectedRepository, demoRepository)
+        ) {
+          throw new Error("Unknown demo project remote selection")
+        }
+        const linked = linkLocalPath(localPath)
+        record("repositories.openProject", { localPath })
+        return ProjectOpened.make({ repo: linked })
+      },
+      repairIdentities: async () =>
+        RepositoryIdentityRepairSummary.make({
+          resolvedCount: repositories.filter((repo) => repo.provider !== "local").length,
+          unresolvedCount: 0,
+          localAliasCount: 0,
+        }),
+      forget: async (projectId) => {
+        const current = repositories.find((repo) => repo.id === projectId)
+        if (current === undefined) throw new Error(`Unknown demo repository: ${projectId}`)
+        const forgotten = Repo.make({
+          ...current,
+          isFavorite: false,
+          lastOpenedAt: null,
+          updatedAt: scenario.manifest.pullRequest.createdAt,
+        })
+        repositories = repositories.map((repo) => (repo.id === projectId ? forgotten : repo))
+        record("repositories.forget", { projectId })
+        return forgotten
+      },
       selectLocalFolder: async () => null,
+    },
+    projectWorkspace: {
+      get: async (projectId) => projectWorkspaceStates.get(projectId) ?? null,
+      save: async (input: ProjectWorkspaceStateInput) => {
+        if (!repositories.some((repo) => repo.id === input.projectId)) {
+          throw new Error(`Unknown demo repository: ${input.projectId}`)
+        }
+        const state = ProjectWorkspaceState.make({
+          ...input,
+          updatedAt: scenario.manifest.pullRequest.createdAt,
+        })
+        projectWorkspaceStates.set(input.projectId, state)
+        record("projectWorkspace.save", {
+          projectId: input.projectId,
+          activeRibbon: input.activeRibbon,
+        })
+        return state
+      },
     },
     reviewThreads: {
       list: async (target) => {
@@ -726,12 +797,15 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.number,
         )
         snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
-        return makeReviewSnapshotManifest(currentRevision.snapshot)
+        return makeReviewSnapshotManifest(
+          currentRevision.snapshot,
+          ReviewProjectId.make(scenario.repository.id),
+        )
       },
       acquireLocal: async (target) => {
         const snapshot = requireLocalFixture(target).snapshot
         snapshotCache.set(snapshot.snapshotId, snapshot)
-        return makeReviewSnapshotManifest(snapshot)
+        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(scenario.repository.id))
       },
       getPage: async (request) => {
         const snapshot = snapshotCache.get(request.snapshotId)
@@ -956,6 +1030,11 @@ const listenerSubscription = <A>(
 const cloneSettings = (settings: AISettings) =>
   AISettings.make({
     ...settings,
+    themes: ThemePreferences.make({ ...settings.themes }),
+    codeThemes: CodeThemePreferences.make({ ...settings.codeThemes }),
+    layout: RendererLayoutSettings.make({
+      review: ReviewPaneSettings.make({ ...settings.layout.review }),
+    }),
     routes: { ...settings.routes },
     models: { ...settings.models },
   })
@@ -982,6 +1061,7 @@ const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
               filePath: file.path,
               reviewKey: file.reviewKey,
               hunkId: hunk.id,
+              hunkFingerprint: hunk.fingerprint,
               hunkLineIndex: line.index,
               newLineNumber: line.newLineNumber,
               oldLineNumber: line.oldLineNumber,

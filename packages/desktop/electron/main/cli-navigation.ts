@@ -4,8 +4,10 @@ import {
   CliNavigationErrorCommand,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
+  OpenProjectCommand,
   OpenPullRequestCommand,
   OpenWorkingTreeCommand,
+  RepairRepositoryIdentitiesCommand,
   type CliNavigationCommand,
 } from "@diffdash/protocol/cli-navigation"
 
@@ -106,13 +108,19 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
     })
   }
 
+  if (command === "repair") {
+    return args.length === 1
+      ? RepairRepositoryIdentitiesCommand.make({})
+      : cliError("Too many arguments.\nUsage: diffdash repair")
+  }
+
   if (args.length > 1) {
     return cliError("diffdash accepts at most one path.\nUsage: diffdash [path]")
   }
   if (command?.startsWith("-") === true) {
     return cliError(`Unknown option: ${command}\nUsage: diffdash [path]`)
   }
-  return OpenWorkingTreeCommand.make({ localPath: resolve(cwd, command ?? ".") })
+  return OpenProjectCommand.make({ localPath: resolve(cwd, command ?? ".") })
 }
 
 const validateOptionalArgument = (
@@ -127,6 +135,10 @@ const validateOptionalArgument = (
 }
 
 const cliError = (message: string) => CliNavigationErrorCommand.make({ message })
+
+/** Reports whether a queued command explicitly requests repository identity repair. */
+export const hasRepositoryIdentityRepairCommand = (commands: readonly CliNavigationCommand[]) =>
+  commands.some((command) => command["_tag"] === "repairRepositoryIdentities")
 
 const parseLegacyPathArg = (argv: readonly string[], cwd: string, argumentName: string) => {
   for (let index = 0; index < argv.length; index += 1) {

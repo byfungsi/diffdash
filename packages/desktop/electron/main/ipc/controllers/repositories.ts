@@ -1,4 +1,5 @@
 import type { HostedRepository } from "@diffdash/domain/git-provider"
+import type { ProjectOpenResult } from "@diffdash/domain/project-workspace"
 import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import { RepositorySearchRequest } from "@diffdash/domain/repository"
 import { InvokeChannel } from "@diffdash/protocol/channels"
@@ -47,6 +48,24 @@ export const defineRepositoryHandlers = (
   handlers.define(InvokeChannel.linkRepository, async (_event, request): Promise<Repo> => {
     const linker = await run(RepositoryLinker)
     return run(linker.link(request))
+  })
+
+  handlers.define(
+    InvokeChannel.openProject,
+    async (_event, { localPath, selectedRepository }): Promise<ProjectOpenResult> => {
+      const linker = await run(RepositoryLinker)
+      return run(linker.openProject(localPath, selectedRepository ?? undefined))
+    },
+  )
+
+  handlers.define(InvokeChannel.repairRepositoryIdentities, async () => {
+    const linker = await run(RepositoryLinker)
+    return run(linker.repairIdentities())
+  })
+
+  handlers.define(InvokeChannel.forgetRepository, async (_event, { projectId }): Promise<Repo> => {
+    const linker = await run(RepositoryLinker)
+    return run(linker.forget(projectId))
   })
 
   handlers.define(InvokeChannel.selectLocalFolder, async (): Promise<string | null> => {

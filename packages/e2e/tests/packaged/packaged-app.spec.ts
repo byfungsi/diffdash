@@ -38,6 +38,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     JSON.stringify({
       version: 2,
       appearance: "dark",
+      themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
       routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
       models: { "fixture-agent": "fixture-model" },
       autoQuality: "balanced",
@@ -120,10 +121,13 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         const updater = await globalThis.window.diffDash.updates.getState()
         return {
           agent: catalog.providers.find(({ id }) => id === "fixture-agent"),
+          codeThemes: settings.codeThemes,
+          diffViewMode: settings.diffViewMode,
           git: fixtureGit,
           opencode: catalog.providers.find(({ id }) => id === "opencode"),
           repository: repositories.find(({ provider }) => provider === "fixture"),
           routes: settings.routes,
+          themes: settings.themes,
           updater,
         }
       }),
@@ -135,6 +139,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         ]),
         defaults: { reviewThreadModel: "fixture-model", walkthroughModel: "fixture-model" },
       }),
+      codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
+      diffViewMode: "auto",
       git: expect.objectContaining({
         id: "fixture",
         displayName: "Fixture Forge",
@@ -154,35 +160,37 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         isFavorite: true,
       }),
       routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
+      themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
       updater: expect.not.objectContaining({ reason: "development" }),
     })
 
+    await window.getByRole("combobox", { name: "Hosted provider" }).selectOption({
+      label: "Fixture Forge",
+    })
+    await window.getByPlaceholder("Search local and hosted projects").fill("service")
+    const fixtureProject = window.getByRole("button", {
+      name: "platform/backend/service Hosted",
+      exact: true,
+    })
+    await expect(fixtureProject).toBeVisible()
+    await fixtureProject.click()
+
     const fixtureReview = window.getByRole("button", {
-      name: /Open requested review #73: Fixture merge request flow/,
+      name: /Open review #73: Fixture merge request flow/,
     })
     await expect(fixtureReview).toBeVisible()
     await fixtureReview.click()
-    await expect(window.getByRole("heading", { name: "Fixture merge request flow" })).toBeVisible()
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      "Fixture merge request flow",
+    )
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
 
-    const gutterNumber = window
-      .locator("diffs-container [data-column-number]")
-      .filter({ hasText: "1" })
+    const addedLine = window
+      .locator('diffs-container [data-content] > [data-line-type="change-addition"]')
+      .filter({ hasText: "new fixture" })
       .first()
-    await gutterNumber.hover()
-    const utility = window.locator("diffs-container [data-utility-button]")
-    await expect(utility).toBeVisible()
-    await utility.evaluate((button) => {
-      const pointerEvent = {
-        bubbles: true,
-        button: 0,
-        composed: true,
-        pointerId: 1,
-        pointerType: "mouse",
-      }
-      button.dispatchEvent(new PointerEvent("pointerdown", pointerEvent))
-      button.dispatchEvent(new PointerEvent("pointerup", pointerEvent))
-    })
+    await expect(addedLine).toBeVisible()
+    await addedLine.click()
     const composer = window.getByRole("textbox", { name: "Thread message" })
     await expect(composer).toBeVisible()
     await composer.fill("Review fixture line")
@@ -201,6 +209,13 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     ) as unknown
     expect(persistedSettings).toEqual(
       expect.objectContaining({
+        diffViewMode: "auto",
+        layout: {
+          review: { contextWidth: 304, threadDetailWidth: 432 },
+        },
+        version: 7,
+        themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
+        codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
         models: expect.objectContaining({ "fixture-agent": "fixture-model" }),
       }),
@@ -214,6 +229,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         const repositories = await globalThis.window.diffDash.repositories.list()
         return {
           onboardingCompleted: appState.onboardingCompleted,
+          codeThemes: settings.codeThemes,
+          diffViewMode: settings.diffViewMode,
           routes: settings.routes,
           repositories: repositories.map((repository) => ({
             provider: repository.provider,
@@ -225,6 +242,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       }),
     ).toEqual({
       onboardingCompleted: true,
+      codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
+      diffViewMode: "auto",
       routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
       repositories: [
         {
@@ -235,13 +254,16 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         },
       ],
     })
-    const reopenedReview = restartedWindow.getByRole("button", {
-      name: /Open (?:requested review|MR) #73/,
+    const reopenedProject = restartedWindow.getByRole("button", {
+      name: "Open project platform/backend/service",
     })
-    await expect(reopenedReview).toBeVisible()
-    await reopenedReview.click()
+    await expect(reopenedProject).toBeVisible()
+    await reopenedProject.click()
+    await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
+      "Fixture merge request flow",
+    )
     const persistedReviewDisclosure = restartedWindow.getByRole("button", {
-      name: "Review on L1",
+      name: "Review on R1",
     })
     await expect(persistedReviewDisclosure).toBeVisible()
     await persistedReviewDisclosure.click()

@@ -9,8 +9,10 @@ import {
 } from "electron"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { Effect } from "effect"
+import { RepositoryLinker } from "../../src/main/services/repository-linker"
 import { resolveApplicationIdentity } from "./application-identity"
 import { createApplicationRuntime } from "./application-runtime"
+import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
 import { createRendererSecurityPolicy } from "./electron-policy"
 import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
@@ -19,11 +21,10 @@ import { applicationPaths } from "./paths"
 import { installSingleInstanceHandling } from "./single-instance"
 import { logStartupStage } from "./startup-logging"
 import { createMainWindow } from "./window"
-import { revealAppWindow } from "./window-activation"
+import { isHiddenE2EWindow, revealAppWindow } from "./window-activation"
 
 logStartupStage("main module loaded")
 
-const isHiddenE2EWindow = () => process.env.DIFFDASH_E2E_HIDDEN === "1"
 const revealWindow = (targetWindow: BrowserWindowType) => {
   revealAppWindow(targetWindow, {
     hidden: isHiddenE2EWindow(),
@@ -98,7 +99,24 @@ const start = async () => {
   )
   installIpcControllers(applicationRuntime, navigation.commands, rendererSecurityPolicy)
   activeRendererSecurityPolicy = rendererSecurityPolicy
+  const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()
+  if (shouldRepairOnStartup) {
+    void applicationRuntime
+      .runPromise(
+        Effect.flatMap(RepositoryLinker, (repositories) => repositories.repairIdentities()),
+      )
+      .then((result) => {
+        console.info(
+          `[repositories:repair] resolved=${result.resolvedCount} unresolved=${result.unresolvedCount} localAliases=${result.localAliasCount}`,
+        )
+        return undefined
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[repositories:repair] ${message}`)
+      })
+  }
   app.on("activate", () => {
     activateMainWindow()
   })

@@ -22,7 +22,7 @@ const executablePath = fileURLToPath(import.meta.url)
 const packageRoot = resolve(dirname(executablePath), "..")
 const mainEntry = resolve(packageRoot, "out/main/index.js")
 const usage =
-  "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash pr [pr-number]\n       diffdash diff [branch-name]\n       diffdash --install-cli [directory]\n"
+  "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash pr [pr-number]\n       diffdash diff [branch-name]\n       diffdash repair\n       diffdash --install-cli [directory]\n"
 const CLI_ARGUMENT = "--diffdash-cli-v1"
 const ELECTRON_NATIVE_DEPENDENCY_CHECK = `
 const Database = require("better-sqlite3")

@@ -2,6 +2,15 @@ import { Schema } from "effect"
 
 import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
 
+/** Workspace-local identity for one managed review project. */
+export const ReviewProjectId = Schema.String.pipe(
+  Schema.minLength(1),
+  Schema.brand("ReviewProjectId"),
+)
+
+/** Workspace-local identity for one managed review project. */
+export type ReviewProjectId = typeof ReviewProjectId.Type
+
 /** Canonical identity for one repository review across revisions. */
 export const ReviewKey = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewKey"))
 

@@ -42,6 +42,12 @@ export const safeTransportErrorMessage = (error: unknown) => {
     : UNKNOWN_TRANSPORT_ERROR_MESSAGE
 }
 
+/** Identifies the narrow transport failures that are safe to retry idempotently. */
+export const isTransientTransportError = (error: unknown): boolean => {
+  const decoded = Schema.decodeUnknownEither(TransportError)(error)
+  return Either.isRight(decoded) && decoded.right.code === "IPC_FAILURE"
+}
+
 /** Removes control characters and bounds an explicitly public transport message. */
 export const sanitizeTransportErrorMessage = (message: string) => {
   const sanitized = [...message]

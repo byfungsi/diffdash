@@ -1,4 +1,9 @@
-import { ReviewFileId, ReviewHunkId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewHunkFingerprint,
+  ReviewHunkId,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import {
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
@@ -29,6 +34,7 @@ const makePage = (
           filePath: `src/file-${globalIndex}.ts`,
           reviewKey: `review-${globalIndex}`,
           hunkId: ReviewHunkId.make(`hunk-${globalIndex}`),
+          hunkFingerprint: ReviewHunkFingerprint.make(`fingerprint-${globalIndex}`),
           hunkLineIndex: globalIndex,
           newLineNumber: globalIndex + 1,
           oldLineNumber: null,

@@ -18,12 +18,12 @@ import type { ReactNode } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { ReviewThreadListPane } from "./review-thread-sidebar"
 import {
   ReviewMarkdown,
   ReviewThreadComposer,
   type ReviewThreadOrchestration,
   ReviewThreadPanel,
-  ReviewThreadSummary,
   type ReviewThreadsController,
   reviewLineLabel,
 } from "./review-threads"
@@ -305,10 +305,12 @@ describe("review thread UI", () => {
     expect(history.scrollTop).toBe(1_000)
   })
 
-  it("shows summary loading, count, and retryable load errors", async () => {
+  it("shows sidebar loading, count, and retryable load errors", async () => {
     const reload = vi.fn<() => Promise<void>>(async () => undefined)
-    const summary = (loading: boolean, error: string | null) => (
-      <ReviewThreadSummary
+    const buttonRefs = { current: new Map<ReviewThreadId, HTMLButtonElement>() }
+    const sidebar = (loading: boolean, error: string | null) => (
+      <ReviewThreadListPane
+        buttonRefs={buttonRefs}
         controller={threadController({
           details: [threadDetails({ pending: false })],
           error,
@@ -316,14 +318,17 @@ describe("review thread UI", () => {
           reload,
         })}
         navigableThreadIds={new Set()}
-        onSelectThread={() => undefined}
+        state={{ _tag: "list" }}
+        onCollapse={() => undefined}
+        onGoToDiff={() => undefined}
+        onOpenDetail={() => undefined}
       />
     )
-    render(summary(true, null))
-    expect(document.body.textContent).toContain("1 review thread")
+    render(sidebar(true, null))
+    expect(document.body.textContent).toContain("1 thread")
     expect(document.querySelector("output")?.textContent).toContain("Loading")
 
-    flushSync(() => root?.render(summary(false, "Could not load review threads")))
+    flushSync(() => root?.render(sidebar(false, "Could not load review threads")))
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not load review threads",
     )

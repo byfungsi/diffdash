@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
+import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import {
   AddReviewThreadUserMessageRequest,
   RunReviewThreadAgentRequest,
@@ -36,6 +38,36 @@ const review = HostedReviewLocator.make({
 })
 
 describe("scenario-backed DiffDash API", () => {
+  it.effect("opens, remembers workspace state, and forgets projects deterministically", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const { api } = createDemoRuntime(scenario)
+      const projectId = ReviewProjectId.make(scenario.repository.id)
+
+      const opened = yield* Effect.promise(() =>
+        api.repositories.openProject("/Users/demo/emberline-dispatch"),
+      )
+      expect(opened["_tag"]).toBe("opened")
+      if (opened["_tag"] !== "opened") return
+      expect(opened.repo.localPath).toBe("/Users/demo/emberline-dispatch")
+
+      const saved = yield* Effect.promise(() =>
+        api.projectWorkspace.save(
+          ProjectWorkspaceStateInput.make({
+            projectId,
+            activeRibbon: "files",
+            selectedReviewTarget: null,
+          }),
+        ),
+      )
+      expect(yield* Effect.promise(() => api.projectWorkspace.get(projectId))).toEqual(saved)
+
+      const forgotten = yield* Effect.promise(() => api.repositories.forget(projectId))
+      expect(forgotten.isFavorite).toBe(false)
+      expect(forgotten.lastOpenedAt).toBeNull()
+    }),
+  )
+
   it.effect("serves the real renderer contract without external services", () =>
     Effect.gen(function* () {
       const scenario = yield* loadAtomicWebhookReplayScenario

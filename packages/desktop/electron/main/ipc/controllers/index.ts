@@ -7,6 +7,7 @@ import { startUpdaterLifecycle } from "../../updater-lifecycle"
 import { defineAnalyticsHandlers } from "./analytics"
 import { IpcControllerRegistry } from "./controller-registry"
 import { defineNavigationHandlers } from "./navigation"
+import { defineProjectWorkspaceHandlers } from "./project-workspace"
 import { defineRepositoryHandlers } from "./repositories"
 import { defineReviewHandlers } from "./reviews"
 import { defineSettingsHandlers } from "./settings"
@@ -26,6 +27,7 @@ export const defineIpcHandlers = (
   shutdown: ReturnType<typeof createShutdown>,
 ) => {
   defineRepositoryHandlers(runtime, handlers)
+  defineProjectWorkspaceHandlers(runtime, handlers)
   defineReviewHandlers(runtime, handlers)
   defineThreadHandlers(runtime, handlers)
   defineWalkthroughHandlers(runtime, handlers)

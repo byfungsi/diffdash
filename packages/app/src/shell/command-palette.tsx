@@ -28,6 +28,7 @@ export const CommandPaletteDialog = ({
   readonly onOpenChange: (open: boolean) => void
 }) => {
   const inputRef = useRef<HTMLInputElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
   const normalizedQuery = query.trim().toLowerCase()
@@ -43,7 +44,15 @@ export const CommandPaletteDialog = ({
     if (!open) {
       setQuery("")
       setActiveIndex(0)
+      const previousFocus = previousFocusRef.current
+      previousFocusRef.current = null
+      if (previousFocus?.isConnected === true) {
+        window.requestAnimationFrame(() => previousFocus.focus())
+      }
       return
+    }
+    if (document.activeElement instanceof HTMLElement) {
+      previousFocusRef.current = document.activeElement
     }
     window.requestAnimationFrame(() => inputRef.current?.focus())
   }, [open])
@@ -101,7 +110,7 @@ export const CommandPaletteDialog = ({
           <button
             type="button"
             aria-label="Close command palette"
-            className="text-muted-foreground hover:text-foreground rounded-full p-1"
+            className="text-muted-foreground hover:text-foreground rounded-md p-1"
             onClick={() => onOpenChange(false)}
           >
             <X className="size-4" />

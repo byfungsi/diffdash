@@ -10,7 +10,6 @@ const makeInvalidations = () =>
     repositories: vi.fn<() => void>(),
     localSearch: vi.fn<() => void>(),
     remoteSearch: vi.fn<() => void>(),
-    counts: vi.fn<() => void>(),
     selectedReviews: vi.fn<() => void>(),
   }) satisfies RepositoryQueryInvalidations
 
@@ -18,17 +17,25 @@ const expectedTargets: Record<
   RepositoryMutationKind,
   readonly (keyof RepositoryQueryInvalidations)[]
 > = {
-  favorite: ["repositories", "localSearch", "remoteSearch", "counts"],
-  install: ["repositories", "localSearch", "counts"],
-  link: ["repositories", "localSearch", "counts"],
-  remove: ["repositories", "localSearch", "remoteSearch", "counts", "selectedReviews"],
+  favorite: ["repositories", "localSearch", "remoteSearch"],
+  rememberRemote: ["repositories", "localSearch", "remoteSearch"],
+  setFavorite: ["repositories", "localSearch", "remoteSearch"],
+  install: ["repositories", "localSearch"],
+  link: ["repositories", "localSearch"],
+  forget: ["repositories", "localSearch", "remoteSearch", "selectedReviews"],
 }
-const mutationKinds = ["favorite", "install", "link", "remove"] as const
+const mutationKinds = [
+  "favorite",
+  "rememberRemote",
+  "setFavorite",
+  "install",
+  "link",
+  "forget",
+] as const
 const invalidationTargets = [
   "repositories",
   "localSearch",
   "remoteSearch",
-  "counts",
   "selectedReviews",
 ] as const
 

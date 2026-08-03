@@ -6,6 +6,7 @@ import {
   GitProviderId,
   HostedRepository,
   HostedRepositoryLocator,
+  ResolvedHostedRepository,
   HostedReviewDetail,
   HostedReviewDiff,
   HostedReviewLocator,
@@ -25,6 +26,8 @@ export {
   HostedRepository,
   HostedRepositoryLocator,
   HostedRepositoryName,
+  ProviderRepositoryId,
+  ResolvedHostedRepository,
   HostedReviewDetail,
   HostedReviewDiff,
   HostedReviewLocator,
@@ -116,6 +119,9 @@ export interface GitProviderRegistration {
   readonly parseRemote: (
     remoteUrl: string,
   ) => Effect.Effect<HostedRepositoryLocator | null, GitProviderOperationError>
+  readonly resolveRepository?: (
+    repository: HostedRepositoryLocator,
+  ) => Effect.Effect<ResolvedHostedRepository, GitProviderOperationError>
   readonly searchRepositories: (
     input: GitRepositorySearchInput,
   ) => Effect.Effect<readonly HostedRepository[], GitProviderOperationError>
@@ -288,6 +294,7 @@ const validateRegistration = (registration: GitProviderRegistration) =>
     const listSearchScopes = registration.listSearchScopes
     const listAssignedReviews = registration.listAssignedReviews
     const checkoutSpecAtRevision = registration.checkoutSpecAtRevision
+    const resolveRepository = registration.resolveRepository
 
     return {
       descriptor,
@@ -313,6 +320,26 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongProviderResult(providerId, "parseRemote"),
           ),
         ),
+      ...(resolveRepository === undefined
+        ? {}
+        : {
+            resolveRepository: (repository) =>
+              requireRepositoryProvider(providerId, "resolveRepository", repository).pipe(
+                Effect.andThen(
+                  invokeProvider(providerId, "resolveRepository", () =>
+                    resolveRepository(repository),
+                  ),
+                ),
+                Effect.flatMap((result) =>
+                  decodeResult(providerId, "resolveRepository", ResolvedHostedRepository, result),
+                ),
+                Effect.flatMap((result) =>
+                  result.locator.providerId === providerId
+                    ? Effect.succeed(result)
+                    : wrongProviderResult(providerId, "resolveRepository"),
+                ),
+              ),
+          }),
       searchRepositories: (input) =>
         invokeProvider(providerId, "searchRepositories", () =>
           registration.searchRepositories(input),

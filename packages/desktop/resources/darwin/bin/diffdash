@@ -6,7 +6,8 @@ usage() {
     'Usage: diffdash [path]' \
     '       diffdash install [path]' \
     '       diffdash pr [pr-number]' \
-    '       diffdash diff [branch-name]'
+    '       diffdash diff [branch-name]' \
+    '       diffdash repair'
 }
 
 for argument in "$@"; do

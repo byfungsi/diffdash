@@ -420,7 +420,7 @@ The deb package installs:
 /usr/bin/diffdash
 ```
 
-as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository, `diffdash /path/to/repo`, `diffdash pr [pr-number]`, or `diffdash diff [branch-name]`.
+as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository, `diffdash /path/to/repo`, `diffdash pr [pr-number]`, `diffdash diff [branch-name]`, or `diffdash repair`.
 
 ## Windows
 
