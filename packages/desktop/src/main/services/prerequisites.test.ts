@@ -167,6 +167,38 @@ describe("Prerequisites", () => {
     }),
   )
 
+  it.scoped("detects a user-local diffdash CLI outside inherited PATH", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const home = join(directory, "home")
+      const restrictedBin = join(directory, "restricted-bin")
+      const diffDashPath = join(home, ".local", "bin", "diffdash")
+      yield* Effect.sync(() => {
+        mkdirSync(join(home, ".local", "bin"), { recursive: true })
+        mkdirSync(restrictedBin, { recursive: true })
+        writeFileSync(diffDashPath, "#!/bin/sh\n", "utf8")
+        chmodSync(diffDashPath, 0o755)
+      })
+      yield* withPath(restrictedBin)
+      yield* withHome(home)
+
+      const status = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.get
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            availableCommands: new Set(),
+          }),
+        ),
+      )
+
+      expect(status.diffDashCliInstalled).toBe(true)
+      expect(status.diffDashCliInPath).toBe(false)
+      expect(status.diffDashCliPath).toBe(diffDashPath)
+    }),
+  )
+
   it.scoped("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory

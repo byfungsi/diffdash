@@ -806,17 +806,17 @@ export function AppShell() {
   }
 
   const installDiffDashCli = async () => {
-    setSetupActionStatus("Installing diffdash in PATH...")
+    setSetupActionStatus("Installing the DiffDash CLI...")
     try {
       const result = await window.diffDash.installDiffDashCli()
       setSetupActionStatus(
         result.pathSetupCommand === null
-          ? `Installed diffdash at ${result.path}`
-          : `Installed diffdash at ${result.path}. Add it to this shell with: ${result.pathSetupCommand}`,
+          ? `Installed the DiffDash CLI at ${result.path}`
+          : `Installed the DiffDash CLI at ${result.path}. For terminal access, add it to your shell with: ${result.pathSetupCommand}`,
       )
       refreshDiagnostics()
     } catch (error) {
-      setSetupActionStatus(formatError(error, "Could not install diffdash in PATH"))
+      setSetupActionStatus(formatError(error, "Could not install the DiffDash CLI"))
     }
   }
 

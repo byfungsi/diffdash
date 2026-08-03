@@ -12,6 +12,16 @@ describe("App onboarding browser interactions", () => {
     await appBrowserScenario("cliPathSetup")()
   })
 
+  it("marks a user-local CLI ready immediately after installation", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("cliInstallReadiness")()
+  })
+
+  it("marks a user-local CLI ready after rechecking setup", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("cliRecheckReadiness")()
+  })
+
   it("persists an onboarding telemetry opt-out without sending events", async () => {
     expect.hasAssertions()
     await appBrowserScenario("onboardingTelemetryOptOut")()

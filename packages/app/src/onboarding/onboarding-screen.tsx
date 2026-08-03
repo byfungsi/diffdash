@@ -252,7 +252,7 @@ const PrerequisiteAction = ({
   if (requirement.key === "diffdash-cli") {
     return (
       <Button size="sm" className="self-start" onClick={onInstallDiffDashCli}>
-        Install in PATH
+        Install CLI
       </Button>
     )
   }
@@ -284,14 +284,14 @@ const prerequisiteRows = (diagnostics: AppPrerequisites): readonly SetupRequirem
   },
   {
     key: "diffdash-cli",
-    title: "DiffDash CLI installed in PATH",
-    description: "Install the diffdash command so you can open local reviews from any terminal.",
-    detail: diagnostics.diffDashCliInPath
-      ? (diagnostics.diffDashCliPath ?? "diffdash is available in PATH.")
-      : diagnostics.diffDashCliInstalled
-        ? `${diagnostics.diffDashCliPath} exists, but its directory is not in PATH.`
-        : "diffdash was not found in PATH.",
-    done: diagnostics.diffDashCliInPath,
+    title: "DiffDash CLI available",
+    description: "Install the diffdash command to open local reviews from a terminal.",
+    detail: diagnostics.diffDashCliInstalled
+      ? diagnostics.diffDashCliInPath
+        ? (diagnostics.diffDashCliPath ?? "diffdash is available to DiffDash.")
+        : `${diagnostics.diffDashCliPath ?? "diffdash"} is available to DiffDash. Configure your terminal PATH separately if needed.`
+      : "diffdash is not available to DiffDash.",
+    done: diagnostics.diffDashCliInstalled,
   },
 ]
 

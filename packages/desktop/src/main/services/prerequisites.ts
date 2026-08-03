@@ -262,7 +262,7 @@ const installDiffDashCli = (sourcePath: string, appImagePath: string) =>
       if (cause instanceof PrerequisiteInstallError) return cause
       return PrerequisiteInstallError.make({
         cause,
-        message: "Could not install the DiffDash CLI into PATH.",
+        message: "Could not install the DiffDash CLI.",
         operation: "installDiffDashCli",
       })
     },
@@ -279,7 +279,7 @@ const installResult = (path: string, targetDirectory: string) =>
 const linkExistsError = (linkPath: string) =>
   PrerequisiteInstallError.make({
     cause: null,
-    message: `${linkPath} already exists. Remove it or choose another PATH directory.`,
+    message: `${linkPath} already exists. Remove it or choose another installation directory.`,
     operation: "installDiffDashCli.linkExists",
   })
 
