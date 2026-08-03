@@ -12,6 +12,32 @@ export const requiredEnvironment = (name, environment = process.env) => {
   return value
 }
 
+/** Returns the public PostHog configuration required in every packaged release. */
+export const requiredAnalyticsEnvironment = (environment = process.env) => ({
+  host: requiredEnvironment("VITE_POSTHOG_HOST", environment),
+  key: requiredEnvironment("VITE_POSTHOG_KEY", environment),
+})
+
+/** Requires analytics only when a local macOS release compiles new application code. */
+export const requiredMacReleaseAnalyticsEnvironment = (
+  packageExisting,
+  environment = process.env,
+) => (packageExisting ? undefined : requiredAnalyticsEnvironment(environment))
+
+/** Builds secure Docker wiring for the public analytics build environment. */
+export const createLinuxDockerAnalyticsConfiguration = (environment = process.env) => {
+  const analytics = requiredAnalyticsEnvironment(environment)
+
+  return {
+    arguments: ["-e", "VITE_POSTHOG_HOST", "-e", "VITE_POSTHOG_KEY"],
+    environment: {
+      ...environment,
+      VITE_POSTHOG_HOST: analytics.host,
+      VITE_POSTHOG_KEY: analytics.key,
+    },
+  }
+}
+
 /** Builds the shared R2 endpoint and credential environment used by the AWS CLI. */
 export const createR2ClientConfiguration = (
   environment = process.env,

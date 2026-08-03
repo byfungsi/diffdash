@@ -54,7 +54,7 @@ import {
 } from "@diffdash/agent-provider/runtime"
 import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
 import { processRequest, type ProcessRunner } from "@diffdash/process"
-import { makeTempFileScoped } from "@diffdash/process/temp-resource"
+import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("claude")
 const executable = "claude"
@@ -83,14 +83,14 @@ export const CLAUDE_DEFAULT_MODEL = AgentModelId.make("claude-sonnet-5")
 
 /** Claude models and quality metadata owned by this provider. */
 export const CLAUDE_MODELS = [
-  modelDescriptor("claude-opus-4-8", "Opus 4.8", "best"),
-  modelDescriptor("claude-sonnet-5", "Sonnet 5.0", "balanced"),
+  modelDescriptor("claude-opus-5", "Opus 5", "best"),
+  modelDescriptor("claude-sonnet-5", "Sonnet 5", "balanced"),
   modelDescriptor("claude-haiku-4-5", "Haiku 4.5", "fast"),
 ] as const
 
 /** Claude candidates used by automatic quality routing. */
 export const CLAUDE_AUTO_MODELS = {
-  best: AgentModelId.make("claude-opus-4-8"),
+  best: AgentModelId.make("claude-opus-5"),
   balanced: CLAUDE_DEFAULT_MODEL,
   fast: AgentModelId.make("claude-haiku-4-5"),
 } as const
@@ -158,6 +158,7 @@ const defaultPermissionControls: ClaudePermissionControls = {
 /** Host dependencies required to construct the Claude leaf provider. */
 export interface ClaudeProviderDependencies {
   readonly processes: ProcessRunner
+  readonly tempResources: TempResourceOperations
   readonly tempDirectory?: string
   readonly permissionControls?: ClaudePermissionControls
 }
@@ -294,48 +295,52 @@ const executeReview = (
         "Scoped MCP access includes tools outside the execution policy",
       )
     }
-    return yield* withMcpConfigPath(dependencies.tempDirectory, request, (mcpConfigPath) =>
-      Effect.gen(function* () {
-        const state: ClaudeTurnState = {
-          sessionId: null,
-          finalResponse: null,
-          sawResult: false,
-          usage: null,
-          toolUses: new Map(),
-          artifacts: [],
-        }
-        yield* dependencies.processes
-          .streamLines(
-            processRequest(executable, makeReviewArgs(request, mcpConfigPath), {
-              cwd: request.workingDirectory,
-              env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
-              stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
-              timeoutMs: request.timeoutMs,
-            }),
-          )
-          .pipe(
-            Stream.mapError(operationErrors.fromCause("review-thread")),
-            Stream.runForEach((event) => {
-              const { _tag: tag } = event
-              return tag === "ProcessLine" && event.source === "stdout"
-                ? consumeClaudeLine(state, event.line)
-                : Effect.void
-            }),
-          )
-        if (!state.sawResult) {
-          return yield* operationErrors.fromReason(
-            "review-thread",
-            "Claude stream ended without a result event",
-          )
-        }
-        const response = yield* decodeReviewResponse(state.finalResponse)
-        return ReviewThreadResult.make({
-          response,
-          usage: state.usage,
-          artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
-          sessionId: state.sessionId === null ? null : AgentSessionId.make(state.sessionId),
-        })
-      }),
+    return yield* withMcpConfigPath(
+      dependencies.tempResources,
+      dependencies.tempDirectory,
+      request,
+      (mcpConfigPath) =>
+        Effect.gen(function* () {
+          const state: ClaudeTurnState = {
+            sessionId: null,
+            finalResponse: null,
+            sawResult: false,
+            usage: null,
+            toolUses: new Map(),
+            artifacts: [],
+          }
+          yield* dependencies.processes
+            .streamLines(
+              processRequest(executable, makeReviewArgs(request, mcpConfigPath), {
+                cwd: request.workingDirectory,
+                env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
+                stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
+                timeoutMs: request.timeoutMs,
+              }),
+            )
+            .pipe(
+              Stream.mapError(operationErrors.fromCause("review-thread")),
+              Stream.runForEach((event) => {
+                const { _tag: tag } = event
+                return tag === "ProcessLine" && event.source === "stdout"
+                  ? consumeClaudeLine(state, event.line)
+                  : Effect.void
+              }),
+            )
+          if (!state.sawResult) {
+            return yield* operationErrors.fromReason(
+              "review-thread",
+              "Claude stream ended without a result event",
+            )
+          }
+          const response = yield* decodeReviewResponse(state.finalResponse)
+          return ReviewThreadResult.make({
+            response,
+            usage: state.usage,
+            artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
+            sessionId: state.sessionId === null ? null : AgentSessionId.make(state.sessionId),
+          })
+        }),
     )
   })
 
@@ -522,16 +527,19 @@ const parseClaudeUsage = (
       })
 
 const withMcpConfigPath = <A, E, R>(
+  tempResources: TempResourceOperations,
   tempDirectory: string | undefined,
   request: ReviewThreadRequest,
   use: (path: string) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
   Effect.scoped(
-    makeTempFileScoped(JSON.stringify(makeMcpConfig(request)), {
-      ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
-      prefix: "diffdash-claude-",
-      fileName: "mcp.json",
-    }).pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
+    tempResources
+      .makeTempFileScoped(JSON.stringify(makeMcpConfig(request)), {
+        ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
+        prefix: "diffdash-claude-",
+        fileName: "mcp.json",
+      })
+      .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 
 const makeMcpConfig = (request: ReviewThreadRequest) => ({

@@ -1,7 +1,6 @@
-import { Effect, Schema, type Scope } from "effect"
-import { chmod, mkdir, mkdtemp, open, rm } from "node:fs/promises"
+import { FileSystem, Path } from "@effect/platform"
+import { Context, Effect, Layer, Schema, type Scope } from "effect"
 import { tmpdir } from "node:os"
-import { basename, join } from "node:path"
 
 /** A typed failure while creating a secure temporary resource. */
 export class TempResourceError extends Schema.TaggedError<TempResourceError>()(
@@ -24,80 +23,111 @@ export interface TempFileOptions extends TempDirectoryOptions {
   readonly fileName: string
 }
 
-/** Creates a mode-0700 temporary directory and removes it when the enclosing scope closes. */
-export const makeTempDirectoryScoped = (
-  options: TempDirectoryOptions = {},
-): Effect.Effect<string, TempResourceError, Scope.Scope> =>
-  Effect.acquireRelease(createTempDirectory(options), removeTempDirectory)
+/** Scoped temporary-resource operations consumed by local CLI providers. */
+export interface TempResourceOperations {
+  readonly makeTempDirectoryScoped: (
+    options?: TempDirectoryOptions,
+  ) => Effect.Effect<string, TempResourceError, Scope.Scope>
+  readonly makeTempFileScoped: (
+    content: string | Uint8Array,
+    options: TempFileOptions,
+  ) => Effect.Effect<string, TempResourceError, Scope.Scope>
+  readonly makeTempOutputPathScoped: (
+    options: TempFileOptions,
+  ) => Effect.Effect<string, TempResourceError, Scope.Scope>
+}
 
-/** Creates an exclusive mode-0600 file and removes its private directory when the scope closes. */
-export const makeTempFileScoped = (
-  content: string | Uint8Array,
-  options: TempFileOptions,
-): Effect.Effect<string, TempResourceError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const fileName = yield* validatePathComponent(options.fileName, "create-file")
-    const directory = yield* makeTempDirectoryScoped(options)
-    const path = join(directory, fileName)
-    yield* writePrivateFile(path, content)
-    return path
-  })
+/** Effect Platform-backed service for private scoped temporary resources. */
+export class TempResources extends Context.Tag("@diffdash/process/TempResources")<
+  TempResources,
+  TempResourceOperations
+>() {
+  static readonly layer = Layer.effect(
+    TempResources,
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const pathService = yield* Path.Path
 
-/** Reserves an absent path in a private directory for an external CLI to create. */
-export const makeTempOutputPathScoped = (
-  options: TempFileOptions,
-): Effect.Effect<string, TempResourceError, Scope.Scope> =>
-  Effect.gen(function* () {
-    const fileName = yield* validatePathComponent(options.fileName, "prepare-output-path")
-    const directory = yield* makeTempDirectoryScoped(options)
-    return join(directory, fileName)
-  })
+      const makeTempDirectoryScoped = (
+        options: TempDirectoryOptions = {},
+      ): Effect.Effect<string, TempResourceError, Scope.Scope> => {
+        const parentDirectory = options.parentDirectory ?? tmpdir()
+        return Effect.gen(function* () {
+          const prefix = yield* validatePathComponent(
+            pathService,
+            options.prefix ?? "diffdash-",
+            "create-directory",
+          )
+          yield* fileSystem.makeDirectory(parentDirectory, { recursive: true, mode: 0o700 })
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            directory: parentDirectory,
+            prefix,
+          })
+          yield* fileSystem.chmod(directory, 0o700)
+          return directory
+        }).pipe(
+          Effect.mapError((cause) =>
+            TempResourceError.make({ operation: "create-directory", path: parentDirectory, cause }),
+          ),
+        )
+      }
 
-const createTempDirectory = (options: TempDirectoryOptions) =>
-  Effect.gen(function* () {
-    const prefix = yield* validatePathComponent(options.prefix ?? "diffdash-", "create-directory")
-    const parentDirectory = options.parentDirectory ?? tmpdir()
-    yield* fsEffect("create-directory", parentDirectory, () =>
-      mkdir(parentDirectory, { recursive: true }),
-    )
-    const directory = yield* fsEffect("create-directory", parentDirectory, () =>
-      mkdtemp(join(parentDirectory, prefix)),
-    )
-    return yield* fsEffect("create-directory", directory, () => chmod(directory, 0o700)).pipe(
-      Effect.as(directory),
-      Effect.tapError(() => removeTempDirectory(directory)),
-    )
-  })
+      const makeTempFileScoped = (
+        content: string | Uint8Array,
+        options: TempFileOptions,
+      ): Effect.Effect<string, TempResourceError, Scope.Scope> =>
+        Effect.gen(function* () {
+          const fileName = yield* validatePathComponent(
+            pathService,
+            options.fileName,
+            "create-file",
+          )
+          const directory = yield* makeTempDirectoryScoped(options)
+          const path = pathService.join(directory, fileName)
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const file = yield* fileSystem.open(path, { flag: "wx", mode: 0o600 })
+              yield* file.writeAll(
+                typeof content === "string" ? new TextEncoder().encode(content) : content,
+              )
+              yield* fileSystem.chmod(path, 0o600)
+            }),
+          ).pipe(
+            Effect.mapError((cause) =>
+              TempResourceError.make({ operation: "create-file", path, cause }),
+            ),
+          )
+          return path
+        })
 
-const writePrivateFile = (path: string, content: string | Uint8Array) =>
-  Effect.acquireUseRelease(
-    fsEffect("create-file", path, () => open(path, "wx", 0o600)),
-    (handle) =>
-      Effect.gen(function* () {
-        yield* fsEffect("create-file", path, () => handle.writeFile(content))
-        yield* fsEffect("create-file", path, () => handle.chmod(0o600))
-      }),
-    (handle) => Effect.promise(() => handle.close()),
+      const makeTempOutputPathScoped = (
+        options: TempFileOptions,
+      ): Effect.Effect<string, TempResourceError, Scope.Scope> =>
+        Effect.gen(function* () {
+          const fileName = yield* validatePathComponent(
+            pathService,
+            options.fileName,
+            "prepare-output-path",
+          )
+          const directory = yield* makeTempDirectoryScoped(options)
+          return pathService.join(directory, fileName)
+        })
+
+      return TempResources.of({
+        makeTempDirectoryScoped,
+        makeTempFileScoped,
+        makeTempOutputPathScoped,
+      })
+    }),
   )
-
-const fsEffect = <A>(
-  operation: TempResourceError["operation"],
-  path: string,
-  run: () => PromiseLike<A>,
-) =>
-  Effect.tryPromise({
-    try: run,
-    catch: (cause) => TempResourceError.make({ operation, path, cause }),
-  })
-
-const removeTempDirectory = (directory: string) =>
-  Effect.promise(() => rm(directory, { force: true, recursive: true }))
+}
 
 const validatePathComponent = (
+  pathService: Path.Path,
   value: string,
   operation: TempResourceError["operation"],
 ): Effect.Effect<string, TempResourceError> =>
-  value.length > 0 && value !== "." && value !== ".." && basename(value) === value
+  value.length > 0 && value !== "." && value !== ".." && pathService.basename(value) === value
     ? Effect.succeed(value)
     : TempResourceError.make({
         operation,

@@ -11,17 +11,15 @@
     "@diffdash/demo#build": {
       "outputs": []
     },
-    "@diffdash/promo-capture#build": {
+    "@diffdash/demo-video#build": {
       "outputs": [".cache/host/**"]
     },
     "@diffdash/desktop#build": {
+      "dependsOn": ["^build"],
       "outputs": ["out/**"]
     },
     "@diffdash/web#build": {
       "outputs": ["dist/**"]
-    },
-    "@diffdash/promo-media#build": {
-      "outputs": []
     },
     "@diffdash/app#build": {
       "outputs": []
@@ -71,21 +69,6 @@
     "dev": {
       "cache": false,
       "persistent": true
-    },
-    "capture": {
-      "cache": false
-    },
-    "render": {
-      "dependsOn": ["@diffdash/promo-capture#capture"],
-      "cache": false
-    },
-    "render:vertical": {
-      "dependsOn": ["@diffdash/promo-capture#capture"],
-      "cache": false
-    },
-    "render:all": {
-      "dependsOn": ["@diffdash/promo-capture#capture"],
-      "cache": false
     },
     "e2e": {
       "dependsOn": ["@diffdash/desktop#build"],

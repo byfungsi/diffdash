@@ -2,7 +2,7 @@ import { GitService } from "@diffdash/local-git/local-git"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { transportError } from "@diffdash/protocol/transport-error"
-import { shell } from "electron"
+import { app, BrowserWindow, shell } from "electron"
 import { isAbsolute } from "node:path"
 import { GitProvider } from "../../../../src/main/services/git-provider"
 import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
@@ -10,6 +10,7 @@ import type { ApplicationRuntime } from "../../application-runtime"
 import { normalizeReviewFilePath, resolveContainedRepositoryPath } from "../../electron-policy"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { openLocalPath, openProviderFile } from "../../file-opening"
+import { isHiddenE2EWindow, revealAppWindow } from "../../window-activation"
 import { IpcControllerRegistry } from "./controller-registry"
 
 /** Defines navigation IPC handler implementations. */
@@ -23,6 +24,17 @@ export const defineNavigationHandlers = (
   rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
   const run = runtime.runPromise
+
+  handlers.define(InvokeChannel.appActivateWindow, async (event): Promise<void> => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender)
+    if (targetWindow === null)
+      throw transportError("WINDOW_UNAVAILABLE", "DiffDash window is unavailable.")
+    revealAppWindow(targetWindow, {
+      hidden: isHiddenE2EWindow(),
+      platform: process.platform,
+      focusApplication: () => app.focus({ steal: true }),
+    })
+  })
 
   handlers.defineTransactional(InvokeChannel.drainNavigationCommands, async () => {
     const commands = navigationCommands.peek()

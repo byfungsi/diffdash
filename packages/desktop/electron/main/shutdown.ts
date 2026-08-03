@@ -39,7 +39,12 @@ export const createShutdown = ({
     restartAndInstall: async (install: () => Promise<void> | void) => {
       await disposeOnce()
       quitAllowed = true
-      await install()
+      try {
+        await install()
+      } catch (cause) {
+        quit()
+        throw cause
+      }
     },
   }
 }

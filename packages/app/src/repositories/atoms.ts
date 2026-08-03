@@ -1,15 +1,15 @@
 import { Atom } from "@effect-atom/atom-react"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 
 import {
   type GitProviderDescriptor,
   GitProviderId,
-  type HostedRepository,
+  HostedRepository,
 } from "@diffdash/domain/git-provider"
 import type { RepositorySearchScope } from "@diffdash/domain/repository"
 import { type Repo } from "@diffdash/domain/repository"
 import { HostedProviderRequest, HostedRepositorySearchRequest } from "@diffdash/protocol/hosted-git"
-import { fetchEffect } from "@/shared/effect-api"
+import { fetchEffect, fetchSchemaEffect } from "@/shared/effect-api"
 import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
 
 const remoteSearchAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositorySearchRequest)
@@ -30,18 +30,12 @@ export const providersAtom = Atom.make(
   },
 ).pipe(Atom.keepAlive)
 
-/** Whether a repository belongs in the hosted-review bookmark list. */
-export const isBookmarkedPullRequestRepo = (repo: Repo) =>
-  repo.provider !== "local" && repo.isFavorite
-
 /** Locally persisted repository search. */
 export const repositorySearchAtom = Atom.family((query: string) =>
   Atom.make(
     query.length === 0
       ? Effect.succeed([] as readonly Repo[])
-      : fetchEffect(() => window.diffDash.repositories.list(query)).pipe(
-          Effect.map((repos) => repos.filter(isBookmarkedPullRequestRepo)),
-        ),
+      : fetchEffect(() => window.diffDash.repositories.list(query)),
     { initialValue: [] as readonly Repo[] },
   ),
 )
@@ -51,10 +45,10 @@ export const remoteRepositorySearchAtom = Atom.family((key: string) =>
   Atom.make(
     Effect.gen(function* () {
       const request = parseRemoteSearchAtomKey(key)
-      if (request === null || request.query.length === 0 || request.namespaces.length === 0) {
+      if (request === null || request.query.length === 0) {
         return [] as readonly HostedRepository[]
       }
-      return yield* fetchEffect(() =>
+      return yield* fetchSchemaEffect(Schema.Array(HostedRepository), () =>
         window.diffDash.hostedRepositories.searchRepositories(request),
       )
     }),

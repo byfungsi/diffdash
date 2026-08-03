@@ -1,4 +1,5 @@
 import type { GitService } from "@diffdash/local-git/local-git"
+import type { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
 import type { RepositoryStore } from "@diffdash/persistence/repository-store"
 import type { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import type { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
@@ -24,6 +25,7 @@ import { createAppLayer } from "./composition"
 /** Services provided once to all desktop application programs. */
 type ApplicationServices =
   | RepositoryStore
+  | ProjectWorkspaceStore
   | Analytics
   | RepositoryLinker
   | GitService

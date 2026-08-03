@@ -482,6 +482,7 @@ const fakeGitProviderLayer = (options: {
       listProviders: Effect.succeed([descriptor]),
       diagnoseProviders: Effect.succeed([diagnostic]),
       parseRemoteUrl: () => unavailableProviderMethod(),
+      resolveRepository: () => unavailableProviderMethod(),
       repositoryUrl: () => unavailableProviderMethod(),
       fileUrl: () => unavailableProviderMethod(),
       searchRepositories: () => unavailableProviderMethod(),

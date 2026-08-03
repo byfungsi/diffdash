@@ -22,6 +22,11 @@ describe("App repositories browser interactions", () => {
     await appBrowserScenario("cliLinkRepository")()
   })
 
+  it("repairs repository identities requested by the diffdash repair command", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("cliRepairRepositories")()
+  })
+
   it("opens a repository PR list from the CLI command", async () => {
     expect.hasAssertions()
     await appBrowserScenario("cliRepositoryPullRequests")()

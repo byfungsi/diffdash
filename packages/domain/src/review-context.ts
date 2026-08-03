@@ -8,6 +8,7 @@ import {
   ReviewFileId,
   ReviewFilePatchHash,
   ReviewKey,
+  ReviewProjectId,
   ReviewRevision,
   ReviewSnapshotId,
 } from "./review-identity"
@@ -59,6 +60,7 @@ export class ReviewSnapshotFileInventory extends Schema.Class<ReviewSnapshotFile
 export class HostedReviewSnapshotManifest extends Schema.TaggedClass<HostedReviewSnapshotManifest>()(
   "hosted",
   {
+    projectId: ReviewProjectId,
     snapshotId: ReviewSnapshotId,
     reviewKey: ReviewKey,
     baseRevision: ReviewRevision,
@@ -72,6 +74,7 @@ export class HostedReviewSnapshotManifest extends Schema.TaggedClass<HostedRevie
 export class LocalReviewSnapshotManifest extends Schema.TaggedClass<LocalReviewSnapshotManifest>()(
   "local",
   {
+    projectId: ReviewProjectId,
     snapshotId: ReviewSnapshotId,
     reviewKey: ReviewKey,
     baseRevision: ReviewRevision,
@@ -93,31 +96,41 @@ export type ReviewSnapshotManifest = typeof ReviewSnapshotManifest.Type
 /** Projects an internally coherent hosted snapshot into renderer-safe manifest metadata. */
 export function makeReviewSnapshotManifest(
   snapshot: HostedReviewSnapshot,
+  projectId: ReviewProjectId,
 ): HostedReviewSnapshotManifest
 
 /** Projects an internally coherent local snapshot into renderer-safe manifest metadata. */
 export function makeReviewSnapshotManifest(
   snapshot: LocalReviewSnapshot,
+  projectId: ReviewProjectId,
 ): LocalReviewSnapshotManifest
 
 /** Projects an internally coherent snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(snapshot: ReviewSnapshot): ReviewSnapshotManifest
+export function makeReviewSnapshotManifest(
+  snapshot: ReviewSnapshot,
+  projectId: ReviewProjectId,
+): ReviewSnapshotManifest
 
 /** Projects an internally coherent snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(snapshot: ReviewSnapshot): ReviewSnapshotManifest {
+export function makeReviewSnapshotManifest(
+  snapshot: ReviewSnapshot,
+  projectId: ReviewProjectId,
+): ReviewSnapshotManifest {
   const identity = {
+    projectId,
     snapshotId: snapshot.snapshotId,
     reviewKey: snapshot.reviewKey,
     baseRevision: snapshot.baseRevision,
     headRevision: snapshot.headRevision,
-    files: snapshot.parsedDiff.files.map(reviewSnapshotFileInventory),
+    files: snapshot.parsedDiff.files.map(makeReviewSnapshotFileInventory),
   }
   return snapshot instanceof HostedReviewSnapshot
     ? HostedReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
     : LocalReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
 }
 
-const reviewSnapshotFileInventory = (file: ParsedDiffFile) =>
+/** Projects one parsed file into renderer-safe inventory metadata. */
+export const makeReviewSnapshotFileInventory = (file: ParsedDiffFile) =>
   ReviewSnapshotFileInventory.make({
     fileId: file.fileId,
     patchHash: file.patchHash,

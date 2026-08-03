@@ -20,6 +20,8 @@ export type WalkthroughState =
   | { readonly status: "idle" }
   | { readonly status: "loading"; readonly message: string }
   | { readonly status: "ready"; readonly stored: StoredWalkthrough }
+  | { readonly status: "empty"; readonly message: string }
+  | { readonly status: "unavailable"; readonly message: string }
   | { readonly status: "error"; readonly message: string }
 
 /** Flattened walkthrough step used by review navigation and palettes. */
@@ -73,6 +75,14 @@ export const WalkthroughSidebar = ({
   }
   if (state.status === "error") {
     return <WalkthroughErrorNotice message={state.message} variant="sidebar" onRetry={onRetry} />
+  }
+  if (state.status === "empty" || state.status === "unavailable") {
+    return (
+      <SidebarMessage
+        title={state.status === "empty" ? "No walkthrough available" : "Walkthrough unavailable"}
+        message={state.message}
+      />
+    )
   }
   if (state.status !== "ready") {
     return <SidebarMessage title="Walkthrough" message="Preparing walkthrough generation..." />
@@ -142,12 +152,12 @@ export const WalkthroughSidebar = ({
                     return (
                       <li key={`${index}:${step.id}`} className="relative">
                         <span
-                          className={`absolute top-[10px] -left-[17px] z-10 flex size-3.5 items-center justify-center rounded-full border text-[9px] ${visited ? "border-review-success bg-review-success text-review-success-foreground" : selected ? "border-primary bg-walkthrough-marker-surface text-primary shadow-[0_0_0_3px_var(--color-review-sidebar)]" : "border-primary/70 bg-walkthrough-marker-surface text-primary"}`}
+                          className={`absolute top-[10px] -left-[17px] z-10 flex size-3.5 items-center justify-center rounded-sm border text-[9px] ${visited ? "border-review-success bg-review-success text-review-success-foreground" : selected ? "border-review-tree-selected-border bg-review-tree-selected text-review-sidebar-emphasis" : "border-review-sidebar-border bg-walkthrough-marker-surface text-review-sidebar-muted"}`}
                         >
                           {visited ? <Check className="size-2.5" /> : null}
                         </span>
                         <div
-                          className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${selected ? "border-primary bg-review-tree-selected text-review-sidebar-emphasis" : "border-transparent text-review-sidebar-fg hover:bg-review-sidebar-control-hover"}`}
+                          className={`w-full rounded-xl border px-2.5 py-2 text-left transition ${selected ? "border-review-tree-selected-border bg-review-tree-selected text-review-sidebar-emphasis" : "border-transparent text-review-sidebar-fg hover:bg-review-sidebar-control-hover"}`}
                         >
                           <button
                             type="button"
@@ -198,8 +208,12 @@ export const WalkthroughSidebar = ({
                                       {reviewPathBasename(file.path)}
                                     </span>
                                     <span className="shrink-0">
-                                      <span className="text-review-success">+{file.additions}</span>{" "}
-                                      <span className="text-review-danger">-{file.deletions}</span>
+                                      <span className="text-review-success-text">
+                                        +{file.additions}
+                                      </span>{" "}
+                                      <span className="text-review-danger-text">
+                                        -{file.deletions}
+                                      </span>
                                     </span>
                                   </button>
                                 )
@@ -207,8 +221,8 @@ export const WalkthroughSidebar = ({
                             )}
                           </div>
                           <div className="text-caption mt-1 text-right">
-                            <span className="text-review-success">+{additions}</span>{" "}
-                            <span className="text-review-danger">-{deletions}</span>
+                            <span className="text-review-success-text">+{additions}</span>{" "}
+                            <span className="text-review-danger-text">-{deletions}</span>
                           </div>
                         </div>
                       </li>
@@ -244,9 +258,22 @@ export const WalkthroughMainHeader = ({
     return <UnicodeLoadingText className="text-muted-foreground text-sm" text={state.message} />
   if (state.status === "error")
     return <WalkthroughErrorNotice message={state.message} variant="main" onRetry={onRetry} />
+  if (state.status === "empty" || state.status === "unavailable") {
+    return (
+      <section className="bg-card rounded-2xl border p-5">
+        <h2 className="text-base font-semibold">
+          {state.status === "empty" ? "No walkthrough available" : "Walkthrough unavailable"}
+        </h2>
+        <p className="text-muted-foreground mt-2 text-sm leading-6">{state.message}</p>
+      </section>
+    )
+  }
   if (state.status !== "ready" || step === null) return null
   return (
-    <section className="bg-card border-l-primary rounded-2xl border border-l-4 p-5 shadow-xs">
+    <section
+      data-walkthrough-main-risk={step.risk}
+      className={`bg-card rounded-2xl border border-l-2 p-5 ${WALKTHROUGH_RISK_STYLES[step.risk].border}`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-2">
           <RiskBadge risk={step.risk} />
@@ -361,15 +388,27 @@ const WalkthroughErrorNotice = ({
   )
 }
 
+const WALKTHROUGH_RISK_STYLES = {
+  critical: {
+    badge: "border-risk-critical/30 bg-risk-critical/10 text-risk-critical",
+    border: "border-risk-critical/25 border-l-risk-critical",
+  },
+  review: {
+    badge: "border-risk-review/30 bg-risk-review/10 text-risk-review",
+    border: "border-risk-review/25 border-l-risk-review",
+  },
+  support: {
+    badge: "border-risk-support/30 bg-risk-support/10 text-risk-support",
+    border: "border-risk-support/25 border-l-risk-support",
+  },
+} satisfies Record<WalkthroughRisk, { readonly badge: string; readonly border: string }>
+
 const RiskBadge = ({ risk }: { readonly risk: WalkthroughRisk }) => {
-  const className =
-    risk === "critical"
-      ? "border-risk-critical/30 bg-risk-critical/10 text-risk-critical"
-      : risk === "review"
-        ? "border-risk-review/30 bg-risk-review/10 text-risk-review"
-        : "border-risk-support/30 bg-risk-support/10 text-risk-support"
   return (
-    <Badge variant="outline" className={`text-caption uppercase tracking-[0.18em] ${className}`}>
+    <Badge
+      variant="outline"
+      className={`text-caption uppercase tracking-[0.18em] ${WALKTHROUGH_RISK_STYLES[risk].badge}`}
+    >
       {risk.toUpperCase()}
     </Badge>
   )

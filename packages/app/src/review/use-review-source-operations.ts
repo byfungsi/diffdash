@@ -1,6 +1,5 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { useAtomRefresh, useAtomSet } from "@effect-atom/atom-react"
-import { repoPrCountsAtom, reviewRequestsAtom } from "@/home/atoms"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
@@ -26,8 +25,6 @@ export const useReviewSourceOperations = (
   const refreshHostedManifest = useAtomRefresh(hostedReviewManifestAtom(hostedKey))
   const refreshLocalManifest = useAtomRefresh(localReviewManifestAtom(localKey))
   const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
-  const refreshReviewRequests = useAtomRefresh(reviewRequestsAtom)
-  const refreshRepoPrCounts = useAtomRefresh(repoPrCountsAtom)
 
   if (selection._tag !== "ready") return { _tag: "unavailable" }
 
@@ -46,8 +43,6 @@ export const useReviewSourceOperations = (
             ),
           )
         }
-        refreshReviewRequests()
-        refreshRepoPrCounts()
       },
       refreshLocal: refreshLocalManifest,
     }),

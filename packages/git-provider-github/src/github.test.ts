@@ -67,6 +67,16 @@ const fakeProcesses = (calls: Call[] = []): ProcessRunner =>
       if (args[0] === "auth") return result("", request)
       if (args[0] === "search" && args.includes("--help")) return result("help", request)
       if (args[0] === "search") return result(repositorySearchJson, request)
+      if (args[0] === "repo" && args[1] === "view") {
+        return result(
+          JSON.stringify({
+            id: "R_diffdash",
+            nameWithOwner: "byfungsi/diffdash",
+            url: "https://github.com/byfungsi/diffdash",
+          }),
+          request,
+        )
+      }
       if (args[0] === "repo") return result("", request)
       if (args[0] === "pr" && args[1] === "list") return result(pullRequestListJson, request)
       if (args[0] === "pr" && args[1] === "diff") return result(pullRequestDiffText, request)
@@ -146,6 +156,28 @@ describe("GitHub provider", () => {
       expect(yield* provider.fileUrl(locator, "src/a file.ts", "feature/x")).toBe(
         "https://git.acme.test/fungsi/diffdash/blob/feature%2Fx/src/a%20file.ts",
       )
+    }),
+  )
+
+  it.effect("resolves repository renames to the stable provider identity", () =>
+    Effect.gen(function* () {
+      const calls: Call[] = []
+      const provider = createGitHubProvider({}, fakeProcesses(calls))
+
+      const resolved = yield* provider.resolveRepository(repository())
+
+      expect(resolved).toMatchObject({
+        locator: { providerId: "github", namespace: "byfungsi", name: "diffdash" },
+        providerRepositoryId: "R_diffdash",
+        url: "https://github.com/byfungsi/diffdash",
+      })
+      expect(calls.at(-1)?.args).toEqual([
+        "repo",
+        "view",
+        "fungsi/diffdash",
+        "--json",
+        "id,nameWithOwner,url",
+      ])
     }),
   )
 

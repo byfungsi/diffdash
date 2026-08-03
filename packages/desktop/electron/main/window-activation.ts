@@ -6,6 +6,11 @@ export interface ActivatableWindow {
   readonly focus: () => void
 }
 
+/** Keeps real Electron windows hidden while Playwright drives their renderer offscreen. */
+export const isHiddenE2EWindow = (
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): boolean => environment.DIFFDASH_E2E_HIDDEN === "1"
+
 /** Restores and reveals a window using the platform's foreground-focus behavior. */
 export const revealAppWindow = (
   targetWindow: ActivatableWindow,

@@ -163,6 +163,13 @@ node scripts/release/publish-release-assets.mjs --metadata-only
 
 Local release scripts load `.env` from the repository root automatically. Existing shell environment variables take precedence over values in `.env`. To use another file, set `DIFFDASH_ENV_FILE=/path/to/file`.
 
+Public analytics configuration is required for local macOS builds that compile new app code and for all local Linux builds. `--package-existing` reuses the analytics configuration already compiled into the existing macOS app, so the local script does not infer or validate it from the current environment.
+
+```dotenv
+VITE_POSTHOG_HOST=https://us.i.posthog.com
+VITE_POSTHOG_KEY=phc_...
+```
+
 Apple signing and notarization:
 
 ```dotenv
@@ -242,6 +249,8 @@ Variables:
 
 - `R2_BUCKET`, for example `diffdash`
 - `R2_PUBLIC_BASE_URL`, for example `https://download.usediffdash.com`
+- `VITE_POSTHOG_HOST`, the public PostHog ingestion host compiled into desktop releases
+- `VITE_POSTHOG_KEY`, the public PostHog project key compiled into desktop releases
 
 The R2 access key must be able to list, upload, and delete objects in the release bucket.
 
@@ -411,7 +420,7 @@ The deb package installs:
 /usr/bin/diffdash
 ```
 
-as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository, `diffdash /path/to/repo`, `diffdash pr [pr-number]`, or `diffdash diff [branch-name]`.
+as a symlink to the bundled CLI helper. Users can run `diffdash` inside a Git repository, `diffdash /path/to/repo`, `diffdash pr [pr-number]`, `diffdash diff [branch-name]`, or `diffdash repair`.
 
 ## Windows
 

@@ -6,7 +6,12 @@ import {
   LocalReviewSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
-import { ReviewFileId, ReviewHunkId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewHunkFingerprint,
+  ReviewHunkId,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
 /** Maximum files that one explicit renderer page request may select. */
@@ -104,6 +109,14 @@ export const ReviewSnapshotPageResponse = Schema.Union(
 /** Bounded parsed-file page, explicit too-large-file state, or stale snapshot state. */
 export type ReviewSnapshotPageResponse = typeof ReviewSnapshotPageResponse.Type
 
+/** Starts review search at the beginning of one file in snapshot order. */
+export class ReviewSnapshotSearchFileAnchor extends Schema.TaggedClass<ReviewSnapshotSearchFileAnchor>()(
+  "file",
+  {
+    fileId: ReviewFileId,
+  },
+) {}
+
 /** Bounded revision-keyed literal search request. */
 export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSearchRequest>(
   "ReviewSnapshotSearchRequest",
@@ -112,6 +125,9 @@ export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSear
   query: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(512)),
   cursor: Schema.NullOr(ReviewSnapshotSearchCursor),
   limit: Schema.Int.pipe(Schema.between(1, REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT)),
+  anchor: Schema.optionalWith(Schema.NullOr(ReviewSnapshotSearchFileAnchor), {
+    default: () => null,
+  }),
 }) {}
 
 /** Semantic side occupied by one immutable parsed-diff search match. */
@@ -129,6 +145,7 @@ export class ReviewSnapshotSearchMatch extends Schema.Class<ReviewSnapshotSearch
   filePath: Schema.String,
   reviewKey: Schema.String,
   hunkId: ReviewHunkId,
+  hunkFingerprint: ReviewHunkFingerprint,
   hunkLineIndex: Schema.Int.pipe(Schema.nonNegative()),
   newLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
   oldLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),

@@ -9,6 +9,10 @@ interface DatabaseMigration {
   readonly migrate: (database: BetterSqliteDatabase) => void
 }
 
+const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 12
+const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
+const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
+
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
   id TEXT PRIMARY KEY,
@@ -593,8 +597,11 @@ const migrations: readonly DatabaseMigration[] = [
   },
 ]
 
-/** Highest schema version applied by DiffDash migrations. */
+/** Highest core schema version written for rollback-compatible installations. */
 export const latestDatabaseSchemaVersion = () => migrations.at(-1)?.version ?? 0
+
+/** Highest historical or current schema version this build can safely open. */
+export const maxSupportedDatabaseSchemaVersion = () => MAX_SUPPORTED_DATABASE_SCHEMA_VERSION
 
 /** Reads the durable SQLite schema version stored in `PRAGMA user_version`. */
 export const readDatabaseUserVersion = (database: BetterSqliteDatabase) => {
@@ -608,10 +615,10 @@ export const readDatabaseUserVersion = (database: BetterSqliteDatabase) => {
 /** Runs pending SQLite schema migrations atomically in ascending version order. */
 export const runDatabaseMigrations = (database: BetterSqliteDatabase) => {
   const currentVersion = readDatabaseUserVersion(database)
-  const latestVersion = latestDatabaseSchemaVersion()
-  if (currentVersion > latestVersion) {
+  const maxSupportedVersion = maxSupportedDatabaseSchemaVersion()
+  if (currentVersion > maxSupportedVersion) {
     throw new Error(
-      `Database schema version ${currentVersion} is newer than supported version ${latestVersion}`,
+      `Database schema version ${currentVersion} is newer than supported version ${maxSupportedVersion}`,
     )
   }
 
@@ -622,6 +629,149 @@ export const runDatabaseMigrations = (database: BetterSqliteDatabase) => {
       database.pragma(`user_version = ${migration.version}`)
     })()
   }
+
+  runDatabaseCapabilityMigrations(database)
+}
+
+/** Returns whether opening this database would install core or additive capabilities. */
+export const databaseRequiresMigration = (database: BetterSqliteDatabase) => {
+  const currentVersion = readDatabaseUserVersion(database)
+  if (currentVersion > maxSupportedDatabaseSchemaVersion()) return false
+  return (
+    currentVersion < latestDatabaseSchemaVersion() ||
+    readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY) <
+      REPOSITORY_IDENTITY_CAPABILITY_VERSION
+  )
+}
+
+const runDatabaseCapabilityMigrations = (database: BetterSqliteDatabase) => {
+  if (!tableExists(database, "repos")) return
+  if (
+    readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY) >=
+    REPOSITORY_IDENTITY_CAPABILITY_VERSION
+  ) {
+    return
+  }
+
+  database.transaction(() => {
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS diffdash_capabilities (
+        name TEXT PRIMARY KEY,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        installed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS project_workspace_state (
+        repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+        active_ribbon TEXT NOT NULL CHECK (
+          active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')
+        ),
+        selected_review_target_json TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS repository_identities (
+        repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+        provider_id TEXT NOT NULL,
+        provider_repository_id TEXT,
+        canonical_owner TEXT NOT NULL,
+        canonical_name TEXT NOT NULL,
+        canonical_url TEXT NOT NULL,
+        resolution_state TEXT NOT NULL CHECK (resolution_state IN ('parsed', 'resolved')),
+        resolved_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS repository_identities_provider_repository_idx
+        ON repository_identities(provider_id, provider_repository_id)
+        WHERE provider_repository_id IS NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS repository_identities_locator_idx
+        ON repository_identities(
+          provider_id,
+          canonical_owner COLLATE NOCASE,
+          canonical_name COLLATE NOCASE
+        );
+
+      CREATE TABLE IF NOT EXISTS repository_aliases (
+        alias_repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+        canonical_repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL CHECK (reason IN ('checkout', 'locator', 'provider')),
+        created_at TEXT NOT NULL,
+        CHECK (alias_repo_id <> canonical_repo_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS repository_aliases_canonical_idx
+        ON repository_aliases(canonical_repo_id, alias_repo_id);
+
+      CREATE TABLE IF NOT EXISTS repository_checkouts (
+        local_path TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        remote_url TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS repository_checkouts_repo_idx
+        ON repository_checkouts(repo_id, last_seen_at DESC, local_path);
+
+      CREATE TABLE IF NOT EXISTS repository_identity_jobs (
+        job_name TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+        cursor_repo_id TEXT,
+        error TEXT,
+        updated_at TEXT NOT NULL
+      );
+    `)
+
+    const now = new Date().toISOString()
+    database
+      .prepare(
+        `INSERT INTO repository_identities (
+           repo_id, provider_id, provider_repository_id, canonical_owner, canonical_name,
+           canonical_url, resolution_state, resolved_at, updated_at
+         )
+         SELECT id, provider, NULL, owner, name, remote_url, 'parsed', NULL, ?
+         FROM repos
+         WHERE provider <> 'local'
+         ON CONFLICT(repo_id) DO NOTHING`,
+      )
+      .run(now)
+    database
+      .prepare(
+        `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
+         SELECT local_path, id, remote_url, COALESCE(last_opened_at, updated_at)
+         FROM repos
+         WHERE local_path IS NOT NULL
+         ORDER BY CASE WHEN provider = 'local' THEN 1 ELSE 0 END, updated_at DESC
+         ON CONFLICT(local_path) DO NOTHING`,
+      )
+      .run()
+    database
+      .prepare(
+        `INSERT INTO repository_identity_jobs (
+           job_name, status, cursor_repo_id, error, updated_at
+         ) VALUES ('provider-backfill', 'pending', NULL, NULL, ?)
+         ON CONFLICT(job_name) DO NOTHING`,
+      )
+      .run(now)
+    database
+      .prepare(
+        `INSERT INTO diffdash_capabilities (name, version, installed_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           version = excluded.version,
+           installed_at = excluded.installed_at`,
+      )
+      .run(REPOSITORY_IDENTITY_CAPABILITY, REPOSITORY_IDENTITY_CAPABILITY_VERSION, now)
+  })()
+}
+
+const readCapabilityVersion = (database: BetterSqliteDatabase, name: string) => {
+  if (!tableExists(database, "diffdash_capabilities")) return 0
+  const row = database
+    .prepare("SELECT version FROM diffdash_capabilities WHERE name = ?")
+    .get(name) as { readonly version?: unknown } | undefined
+  return typeof row?.version === "number" && Number.isSafeInteger(row.version) ? row.version : 0
 }
 
 const migrateLegacyWalkthroughs = (database: BetterSqliteDatabase) => {

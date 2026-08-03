@@ -51,16 +51,18 @@ const waitForCapture = (
 }
 
 describe("diffdash CLI", () => {
-  it("documents install in source and packaged help", () => {
+  it("documents install and repair in source and packaged help", () => {
     const sourceResult = runSourceCli(["--help"])
     expect(sourceResult.status).toBe(0)
     expect(sourceResult.stdout).toContain("diffdash install [path]")
+    expect(sourceResult.stdout).toContain("diffdash repair")
     expect(sourceResult.stdout).toContain("diffdash --install-cli [directory]")
 
     for (const cli of packagedClis) {
       const result = runPackagedCli(cli, ["--help"])
       expect(result.status).toBe(0)
       expect(result.stdout).toContain("diffdash install [path]")
+      expect(result.stdout).toContain("diffdash repair")
     }
   })
 
@@ -135,6 +137,12 @@ describe("diffdash CLI", () => {
         "--",
         "pr",
         "42",
+      ])
+      await expect(runHarness(["repair"])).resolves.toEqual([
+        resolvedHarnessRoot,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--",
+        "repair",
       ])
     } finally {
       rmSync(harnessRoot, { force: true, recursive: true })

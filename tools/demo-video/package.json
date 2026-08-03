@@ -1,0 +1,40 @@
+{
+  "name": "@diffdash/demo-video",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "record": "vite-node --script src/cli.ts record",
+    "combine": "vite-node --script src/cli.ts combine",
+    "video": "vite-node --script src/cli.ts video",
+    "verify": "vite-node --script src/cli.ts verify",
+    "dashboard": "vite-node --script src/cli.ts dashboard",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src test vite.config.ts --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/app": "workspace:*",
+    "@diffdash/demo": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "oxlint": "catalog:",
+    "playwright": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-node": "^3.2.4",
+    "vitest": "catalog:"
+  }
+}

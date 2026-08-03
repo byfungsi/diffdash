@@ -1,10 +1,10 @@
 import { Atom } from "@effect-atom/atom-react"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 
 import {
   HostedRepositoryLocator,
   HostedReviewLocator,
-  type HostedReviewSummary,
+  HostedReviewSummary,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
@@ -14,7 +14,7 @@ import {
   LocalReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import { HostedRepositoryRequest, HostedReviewRequest } from "@diffdash/protocol/hosted-git"
-import { fetchEffect, fetchSchemaEffect } from "@/shared/effect-api"
+import { fetchSchemaEffect } from "@/shared/effect-api"
 import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
 
 const localReviewAtomKeyCodec = makeSchemaAtomKeyCodec(LocalReviewTarget)
@@ -27,7 +27,7 @@ export const pullRequestsAtom = Atom.family((key: string) =>
     Effect.gen(function* () {
       const parsedKey = parseRepoAtomKey(key)
       if (parsedKey === null) return [] as readonly HostedReviewSummary[]
-      return yield* fetchEffect(() =>
+      return yield* fetchSchemaEffect(Schema.Array(HostedReviewSummary), () =>
         window.diffDash.hostedReviews.list(
           HostedRepositoryRequest.make({
             repository: parsedKey,

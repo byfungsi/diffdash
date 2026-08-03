@@ -19,7 +19,9 @@ import {
   HostedReviewNumber,
   HostedReviewSummary,
   ProviderActor,
+  ProviderRepositoryId,
   RepositoryNamespace,
+  ResolvedHostedRepository,
   ChangedFile,
   ReviewCommit,
   type GitProviderRegistration,
@@ -61,6 +63,7 @@ export interface GitHubCliInspection {
 
 /** GitHub provider extensions needed by the current desktop compatibility adapter. */
 export interface GitHubProviderRegistration extends GitProviderRegistration {
+  readonly resolveRepository: NonNullable<GitProviderRegistration["resolveRepository"]>
   readonly listSearchScopes: () => Effect.Effect<
     readonly GitHubSearchScope[],
     GitProviderOperationError
@@ -94,6 +97,7 @@ const GhRepoOwnerJson = Schema.Union(
   Schema.Struct({ login: Schema.optional(Schema.String) }),
 )
 const GhRepoJson = Schema.Struct({
+  id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   nameWithOwner: Schema.optional(Schema.String),
   fullName: Schema.optional(Schema.String),
@@ -104,6 +108,11 @@ const GhRepoJson = Schema.Struct({
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 })
 type GhRepoJson = typeof GhRepoJson.Type
+const GhResolvedRepositoryJson = Schema.Struct({
+  id: Schema.String,
+  nameWithOwner: Schema.String,
+  url: Schema.String,
+})
 
 const GhActorJson = Schema.Struct({ login: Schema.String })
 const GhPullRequestJson = Schema.Struct({
@@ -620,6 +629,34 @@ export const createGitHubProvider = (
     ),
     parseRemote: (remoteUrl) =>
       Effect.succeed(parseGitHubRemote(remoteUrl, { id: providerId, host })),
+    resolveRepository: Effect.fn("GitHub.resolveRepository")(function* (repositoryLocator) {
+      yield* requireProvider(repositoryLocator, "resolveRepository")
+      const result = yield* run("resolveRepository", [
+        "repo",
+        "view",
+        repositoryArgument(host, repositoryLocator.namespace, repositoryLocator.name),
+        "--json",
+        "id,nameWithOwner,url",
+      ])
+      const resolved = yield* decode("resolveRepository", result.stdout, GhResolvedRepositoryJson)
+      const separator = resolved.nameWithOwner.lastIndexOf("/")
+      if (separator <= 0 || separator === resolved.nameWithOwner.length - 1) {
+        return yield* GitProviderOperationError.make({
+          providerId,
+          operation: "resolveRepository",
+          message: "GitHub returned an invalid repository nameWithOwner",
+        })
+      }
+      return ResolvedHostedRepository.make({
+        locator: locator(
+          providerId,
+          resolved.nameWithOwner.slice(0, separator),
+          resolved.nameWithOwner.slice(separator + 1),
+        ),
+        providerRepositoryId: ProviderRepositoryId.make(resolved.id),
+        url: resolved.url,
+      })
+    }),
     searchRepositories: Effect.fn("GitHub.searchRepositories")(function* (input) {
       const query = input.query.trim()
       const namespaces = [...new Set(input.namespaces.map((value) => value.trim()).filter(Boolean))]

@@ -52,7 +52,9 @@ pnpm preview
 
 ## CLI
 
-After building from source, run `pnpm exec diffdash [path]` to open DiffDash on a local repository review. When `[path]` is omitted, the CLI uses the current directory. If DiffDash is already running, the existing window is focused and navigated to that local diff.
+After building from source, run `pnpm exec diffdash [path]` to open that project in DiffDash with its local changes and hosted pull requests in one workspace. When `[path]` is omitted, the CLI uses the current directory. If DiffDash is already running, the existing window is focused and navigated to the project's Reviews ribbon. Use `diffdash diff [branch-name]` when you want to open an explicit local branch comparison directly.
+
+DiffDash identifies a project from its resolved Git `origin`, not the checkout folder name. Provider resolution follows hosted repository renames and stores the provider's stable repository ID, so renamed repositories and multiple local checkouts converge into one project. Run `diffdash repair` to retry offline resolution and restore legacy local aliases without rewriting existing review records. The command opens or focuses DiffDash, runs the repair there, and reports the result in the app.
 
 Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. The path defaults to the current directory. For PR reviews, DiffDash copies committed Git data into an isolated worktree pool under `~/.diffdash/worktree-pool`, fetches the exact PR head, and runs the agent there without switching or cleaning your checkout.
 
@@ -78,13 +80,31 @@ See `docs/release.md` for production packaging, signing, and publishing notes.
 
 DiffDash follows the system appearance by default. To select a fixed appearance, add
 `appearance` to `~/.config/diffdash/settings.json` with a value of `"light"`, `"dark"`, or
-`"system"`, then restart DiffDash:
+`"system"`. The `themes` object independently selects the palette used for each color scheme:
 
 ```json
 {
-  "appearance": "dark"
+  "appearance": "system",
+  "themes": {
+    "light": "catppuccin-latte",
+    "dark": "catppuccin-mocha"
+  },
+  "codeThemes": {
+    "light": "rose-pine-dawn",
+    "dark": "diffdash-dark"
+  }
 }
 ```
+
+Light themes are `"diffdash"` and `"catppuccin-latte"`. Dark themes are `"diffdash"`,
+`"catppuccin-frappe"`, `"catppuccin-macchiato"`, and `"catppuccin-mocha"`. Restart DiffDash after
+editing the file.
+
+`codeThemes` controls source highlighting independently from the application palette. Supported
+light code themes are `"rose-pine-dawn"`, `"catppuccin-latte"`, `"github-light-default"`, and
+`"pierre-light-soft"`. Supported dark code themes are `"rose-pine-moon"`,
+`"catppuccin-frappe"`, `"catppuccin-macchiato"`, `"catppuccin-mocha"`,
+`"github-dark-default"`, `"pierre-dark-soft"`, and `"diffdash-dark"`.
 
 Keep the existing `provider`, `models`, and telemetry fields when editing the file. If
 `XDG_CONFIG_HOME` is set, DiffDash reads `$XDG_CONFIG_HOME/diffdash/settings.json` instead.

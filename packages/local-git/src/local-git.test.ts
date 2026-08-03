@@ -85,9 +85,9 @@ describe("GitService", () => {
       const processesLayer = makeProcessLayer((_command, args) => {
         const stdout = args.includes("rev-parse")
           ? "/workspace/repo\n"
-          : args.at(-1) === "remote.origin.url"
+          : args.at(-1) === "origin"
             ? "git@example.com:group/repo.git\nhttps://example.com/group/repo.git\n"
-            : args.at(-1) === "remote.upstream.url"
+            : args.at(-1) === "upstream"
               ? "https://upstream.example/group/repo.git\n"
               : "origin\nupstream\n"
         return Effect.succeed(makeProcessResult(stdout, args))

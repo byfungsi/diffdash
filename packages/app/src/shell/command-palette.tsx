@@ -1,5 +1,5 @@
 import { Command, X } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 
@@ -28,8 +28,10 @@ export const CommandPaletteDialog = ({
   readonly onOpenChange: (open: boolean) => void
 }) => {
   const inputRef = useRef<HTMLInputElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
+  const closeFromEffect = useEffectEvent(() => onOpenChange(false))
   const normalizedQuery = query.trim().toLowerCase()
   const filteredItems =
     normalizedQuery.length === 0
@@ -43,9 +45,28 @@ export const CommandPaletteDialog = ({
     if (!open) {
       setQuery("")
       setActiveIndex(0)
+      const previousFocus = previousFocusRef.current
+      previousFocusRef.current = null
+      if (previousFocus?.isConnected === true) {
+        window.requestAnimationFrame(() => previousFocus.focus())
+      }
       return
     }
+    if (document.activeElement instanceof HTMLElement) {
+      previousFocusRef.current = document.activeElement
+    }
     window.requestAnimationFrame(() => inputRef.current?.focus())
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      event.preventDefault()
+      closeFromEffect()
+    }
+    window.addEventListener("keydown", closeOnEscape)
+    return () => window.removeEventListener("keydown", closeOnEscape)
   }, [open])
 
   if (!open) return null
@@ -101,7 +122,7 @@ export const CommandPaletteDialog = ({
           <button
             type="button"
             aria-label="Close command palette"
-            className="text-muted-foreground hover:text-foreground rounded-full p-1"
+            className="text-muted-foreground hover:text-foreground rounded-md p-1"
             onClick={() => onOpenChange(false)}
           >
             <X className="size-4" />

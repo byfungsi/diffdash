@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Redacted, Stream } from "effect"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
+import { Effect, Layer, Redacted, Stream } from "effect"
 import { mkdtempSync, readFileSync } from "node:fs"
 import { readdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -31,13 +33,23 @@ import {
   type ProcessRequest,
   type ProcessRunner,
 } from "@diffdash/process"
+import { TempResources } from "@diffdash/process/temp-resource"
 import {
   CLAUDE_AUTO_MODELS,
   CLAUDE_DEFAULT_MODEL,
+  CLAUDE_MODELS,
   CLAUDE_REVIEW_POLICY,
   CLAUDE_WALKTHROUGH_POLICY,
   makeClaudeProvider,
 } from "./claude"
+
+const tempResources = Effect.runSync(
+  TempResources.pipe(
+    Effect.provide(
+      TempResources.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ),
+  ),
+)
 
 interface Call {
   readonly command: string
@@ -111,7 +123,7 @@ const makeHarness = (
       )
     },
   }
-  return { calls, registration: makeClaudeProvider({ processes }) }
+  return { calls, registration: makeClaudeProvider({ processes, tempResources }) }
 }
 
 const result = (request: ProcessRequest, stdout: string): ProcessResult =>
@@ -219,6 +231,7 @@ agentCancellationConformance("Claude", {
     let released = false
     const root = mkdtempSync(join(tmpdir(), "diffdash-claude-test-"))
     const registration = makeClaudeProvider({
+      tempResources,
       processes: {
         run: (request) => Effect.succeed(result(request, "2.1.205")),
         streamLines: () =>
@@ -268,6 +281,7 @@ describe("Claude provider", () => {
     Effect.gen(function* () {
       const harness = makeHarness()
       const registration = makeClaudeProvider({
+        tempResources,
         processes: {
           run: (request) => Effect.succeed(result(request, "2.1.205")),
           streamLines: () => Stream.empty,
@@ -349,8 +363,13 @@ describe("Claude provider", () => {
 
   it("owns defaults and all automatic quality candidates", () => {
     expect(CLAUDE_DEFAULT_MODEL).toBe(AgentModelId.make("claude-sonnet-5"))
+    expect(CLAUDE_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
+      { id: "claude-opus-5", displayName: "Opus 5" },
+      { id: "claude-sonnet-5", displayName: "Sonnet 5" },
+      { id: "claude-haiku-4-5", displayName: "Haiku 4.5" },
+    ])
     expect(CLAUDE_AUTO_MODELS).toEqual({
-      best: "claude-opus-4-8",
+      best: "claude-opus-5",
       balanced: "claude-sonnet-5",
       fast: "claude-haiku-4-5",
     })

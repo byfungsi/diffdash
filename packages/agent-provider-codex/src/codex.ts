@@ -53,7 +53,7 @@ import {
 } from "@diffdash/agent-provider/runtime"
 import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
 import { processRequest, type ProcessResult, type ProcessRunner } from "@diffdash/process"
-import { makeTempFileScoped, makeTempOutputPathScoped } from "@diffdash/process/temp-resource"
+import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("codex")
 const executable = "codex"
@@ -67,25 +67,25 @@ const operationErrors = makeAgentProviderOperationErrorFactory({
 export const CODEX_PROVIDER_ID = providerId
 
 /** Codex model selected for new installations. */
-export const CODEX_DEFAULT_MODEL = AgentModelId.make("gpt-5.3-codex-spark")
+export const CODEX_DEFAULT_MODEL = AgentModelId.make("gpt-5.6-terra")
 
 /** Codex models and quality metadata owned by this provider. */
 export const CODEX_MODELS = [
   AgentModelDescriptor.make({
-    id: AgentModelId.make("gpt-5.5"),
-    displayName: "GPT 5.5",
+    id: AgentModelId.make("gpt-5.6-sol"),
+    displayName: "GPT 5.6 Sol",
     capabilities: ["walkthrough", "review-thread"],
     quality: "best",
   }),
   AgentModelDescriptor.make({
     id: CODEX_DEFAULT_MODEL,
-    displayName: "GPT 5.3 Codex Spark",
+    displayName: "GPT 5.6 Terra",
     capabilities: ["walkthrough", "review-thread"],
     quality: "balanced",
   }),
   AgentModelDescriptor.make({
-    id: AgentModelId.make("gpt-5.4-mini"),
-    displayName: "GPT 5.4 Mini",
+    id: AgentModelId.make("gpt-5.6-luna"),
+    displayName: "GPT 5.6 Luna",
     capabilities: ["walkthrough", "review-thread"],
     quality: "fast",
   }),
@@ -93,9 +93,9 @@ export const CODEX_MODELS = [
 
 /** Codex candidates used by automatic quality routing. */
 export const CODEX_AUTO_MODELS = {
-  best: AgentModelId.make("gpt-5.5"),
+  best: AgentModelId.make("gpt-5.6-sol"),
   balanced: CODEX_DEFAULT_MODEL,
-  fast: AgentModelId.make("gpt-5.4-mini"),
+  fast: AgentModelId.make("gpt-5.6-luna"),
 } as const
 
 /** Static Codex provider contribution. */
@@ -142,6 +142,7 @@ function makeCodexExecutionPolicy(repository: AgentExecutionPolicy["repository"]
 /** Host dependencies required to construct the Codex leaf provider. */
 export interface CodexProviderDependencies {
   readonly processes: ProcessRunner
+  readonly tempResources: TempResourceOperations
   readonly tempDirectory?: string
 }
 
@@ -190,11 +191,13 @@ const executeWalkthrough = (
     const tempDirectory = dependencies.tempDirectory ?? tmpdir()
     return yield* Effect.scoped(
       Effect.gen(function* () {
-        const outputPath = yield* makeTempOutputPathScoped({
-          parentDirectory: tempDirectory,
-          prefix: "codex-output-",
-          fileName: "output.txt",
-        }).pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
+        const outputPath = yield* dependencies.tempResources
+          .makeTempOutputPathScoped({
+            parentDirectory: tempDirectory,
+            prefix: "codex-output-",
+            fileName: "output.txt",
+          })
+          .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
         const result = yield* dependencies.processes
           .run(
             processRequest(
@@ -300,48 +303,51 @@ const executeReview = (
       )
     }
 
-    return yield* withOutputSchemaPath(dependencies.tempDirectory, (outputSchemaPath) =>
-      Effect.gen(function* () {
-        const state: CodexTurnState = {
-          lifecycle: { stage: "AwaitingThreadStart" },
-          nextAgentMessageSequence: 0,
-          usage: null,
-          agentMessages: [],
-          artifacts: [],
-        }
-        yield* dependencies.processes
-          .streamLines(
-            processRequest(executable, makeReviewArgs(request, outputSchemaPath), {
-              cwd: request.workingDirectory,
-              env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
-              stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
-              timeoutMs: request.timeoutMs,
-            }),
-          )
-          .pipe(
-            Stream.mapError(operationErrors.fromCause("review-thread")),
-            Stream.runForEach((event) => {
-              const { _tag: tag } = event
-              return tag === "ProcessLine" && event.source === "stdout"
-                ? consumeCodexLine(state, event.line)
-                : Effect.void
-            }),
-          )
+    return yield* withOutputSchemaPath(
+      dependencies.tempResources,
+      dependencies.tempDirectory,
+      (outputSchemaPath) =>
+        Effect.gen(function* () {
+          const state: CodexTurnState = {
+            lifecycle: { stage: "AwaitingThreadStart" },
+            nextAgentMessageSequence: 0,
+            usage: null,
+            agentMessages: [],
+            artifacts: [],
+          }
+          yield* dependencies.processes
+            .streamLines(
+              processRequest(executable, makeReviewArgs(request, outputSchemaPath), {
+                cwd: request.workingDirectory,
+                env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
+                stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
+                timeoutMs: request.timeoutMs,
+              }),
+            )
+            .pipe(
+              Stream.mapError(operationErrors.fromCause("review-thread")),
+              Stream.runForEach((event) => {
+                const { _tag: tag } = event
+                return tag === "ProcessLine" && event.source === "stdout"
+                  ? consumeCodexLine(state, event.line)
+                  : Effect.void
+              }),
+            )
 
-        if (state.lifecycle.stage !== "TurnCompleted") {
-          return yield* operationErrors.fromReason(
-            "review-thread",
-            `Codex stream ended without a complete turn lifecycle (stopped at ${state.lifecycle.stage})`,
-          )
-        }
-        const response = yield* decodeReviewResponse(selectFinalAgentMessage(state.agentMessages))
-        return ReviewThreadResult.make({
-          response,
-          usage: state.usage,
-          artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
-          sessionId: null,
-        })
-      }),
+          if (state.lifecycle.stage !== "TurnCompleted") {
+            return yield* operationErrors.fromReason(
+              "review-thread",
+              `Codex stream ended without a complete turn lifecycle (stopped at ${state.lifecycle.stage})`,
+            )
+          }
+          const response = yield* decodeReviewResponse(selectFinalAgentMessage(state.agentMessages))
+          return ReviewThreadResult.make({
+            response,
+            usage: state.usage,
+            artifacts: state.artifacts.map((artifact) => AgentArtifactCandidate.make(artifact)),
+            sessionId: null,
+          })
+        }),
     )
   })
 
@@ -960,15 +966,18 @@ const parseCodexUsage = (usage: Readonly<Record<string, unknown>> | null): Agent
       })
 
 const withOutputSchemaPath = <A, E, R>(
+  tempResources: TempResourceOperations,
   tempDirectory: string | undefined,
   use: (path: string) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
   Effect.scoped(
-    makeTempFileScoped(JSON.stringify(reviewResponseJsonSchema), {
-      ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
-      prefix: "diffdash-codex-",
-      fileName: "review-thread-response.schema.json",
-    }).pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
+    tempResources
+      .makeTempFileScoped(JSON.stringify(reviewResponseJsonSchema), {
+        ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
+        prefix: "diffdash-codex-",
+        fileName: "review-thread-response.schema.json",
+      })
+      .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 
 const requirePolicy = (

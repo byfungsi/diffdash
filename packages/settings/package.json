@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./app-settings": "./src/app-settings.ts",
-    "./app-state": "./src/app-state.ts"
+    "./app-state": "./src/app-state.ts",
+    "./file-storage": "./src/file-storage.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -15,9 +16,11 @@
   },
   "dependencies": {
     "@diffdash/domain": "workspace:*",
+    "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "oxlint": "catalog:",

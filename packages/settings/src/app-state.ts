@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
 import { AppState as SharedAppState, DEFAULT_APP_STATE } from "@diffdash/domain/app-state"
-import { readOptionalTextFile, writePrettyJsonFile } from "./file-storage"
+import { FileStorage, type FileStorageOperations } from "./file-storage"
 
 const AppStateFromJson = Schema.parseJson(SharedAppState)
 
@@ -20,31 +20,41 @@ export class AppState extends Context.Tag("@diffdash/AppState")<
   }
 >() {
   static readonly layer = (path: string) =>
-    Layer.succeed(
+    Layer.effect(
       AppState,
-      AppState.of({
-        get: readStateFile(path).pipe(
-          Effect.flatMap((content) => {
-            if (content === null) return Effect.succeed(DEFAULT_APP_STATE)
+      Effect.gen(function* () {
+        const storage = yield* FileStorage
+        return AppState.of({
+          get: readStateFile(storage, path).pipe(
+            Effect.flatMap((content) => {
+              if (content === null) return Effect.succeed(DEFAULT_APP_STATE)
 
-            return Schema.decodeUnknown(AppStateFromJson)(content).pipe(
-              Effect.catchAll(() => Effect.succeed(DEFAULT_APP_STATE)),
-            )
+              return Schema.decodeUnknown(AppStateFromJson)(content).pipe(
+                Effect.mapError((cause) => AppStateError.make({ operation: "read", cause })),
+              )
+            }),
+          ),
+          save: Effect.fn("AppState.save")(function (state) {
+            return writeStateFile(storage, path, state).pipe(Effect.as(state))
           }),
-        ),
-        save: Effect.fn("AppState.save")(function (state) {
-          return writeStateFile(path, state).pipe(Effect.as(state))
-        }),
+        })
       }),
     )
 }
 
-const readStateFile = (path: string): Effect.Effect<string | null, AppStateError> =>
-  readOptionalTextFile(path).pipe(
-    Effect.mapError((error) => AppStateError.make({ operation: "read", cause: error.error })),
-  )
+const readStateFile = (
+  storage: FileStorageOperations,
+  path: string,
+): Effect.Effect<string | null, AppStateError> =>
+  storage
+    .readOptionalTextFile(path)
+    .pipe(Effect.mapError((error) => AppStateError.make({ operation: "read", cause: error })))
 
-const writeStateFile = (path: string, state: SharedAppState): Effect.Effect<void, AppStateError> =>
-  writePrettyJsonFile(path, state).pipe(
-    Effect.mapError((error) => AppStateError.make({ operation: "write", cause: error.error })),
-  )
+const writeStateFile = (
+  storage: FileStorageOperations,
+  path: string,
+  state: SharedAppState,
+): Effect.Effect<void, AppStateError> =>
+  storage
+    .writePrettyJsonFile(path, state)
+    .pipe(Effect.mapError((error) => AppStateError.make({ operation: "write", cause: error })))

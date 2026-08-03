@@ -41,7 +41,7 @@ export const OnboardingScreen = ({
   const [telemetryEnabled, setTelemetryEnabled] = useState(true)
 
   return (
-    <section className="mx-auto flex min-h-screen max-w-5xl flex-col justify-center px-6 py-10 text-sm">
+    <section className="mx-auto flex min-h-full max-w-5xl flex-col justify-center px-6 py-10 text-sm">
       <div className="mb-6 space-y-3">
         <Badge variant="secondary" className="text-caption w-fit gap-1.5">
           <Sparkles className="size-3" />
@@ -181,9 +181,9 @@ const PrerequisiteRow = ({
   >
     <div className="flex min-w-0 gap-3">
       <span
-        className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+        className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md border text-xs font-semibold ${
           requirement.done
-            ? "border-review-success bg-review-success/10 text-review-success"
+            ? "border-review-success bg-review-success/10 text-review-success-text"
             : "border-primary/30 bg-primary/10 text-primary"
         }`}
       >

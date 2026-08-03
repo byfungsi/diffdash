@@ -13,6 +13,7 @@ import path from "node:path"
 import "./load-local-env.mjs"
 import { parseLinuxReleaseArguments } from "./release-arguments.mjs"
 import { assertCommandAvailable, runSyncCommand } from "./release-command.mjs"
+import { createLinuxDockerAnalyticsConfiguration } from "./release-environment.mjs"
 
 const cli = parseLinuxReleaseArguments()
 const workspacePackageJson = JSON.parse(readFileSync("package.json", "utf8"))
@@ -23,6 +24,7 @@ const image = cli.image ?? process.env.RELEASE_LINUX_IMAGE ?? "node:22-trixie"
 const pnpmVersion = workspacePackageJson.packageManager?.startsWith("pnpm@")
   ? workspacePackageJson.packageManager.slice("pnpm@".length)
   : "10.26.1"
+const dockerAnalytics = createLinuxDockerAnalyticsConfiguration()
 
 assertCommandAvailable("docker", ["--version"])
 mkdirSync(releaseAssetsDir, { recursive: true })
@@ -57,26 +59,31 @@ try {
     "pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never",
   ].join(" && ")
 
-  runSyncCommand("docker", [
-    "run",
-    "--rm",
-    "--platform",
-    platform,
-    "-v",
-    `${sourceDir}:/workspace`,
-    "-w",
-    "/workspace",
-    "-e",
-    "CI=1",
-    "-e",
-    "ELECTRON_CACHE=/tmp/electron-cache",
-    "-e",
-    "ELECTRON_BUILDER_CACHE=/tmp/electron-builder-cache",
-    image,
-    "bash",
-    "-lc",
-    dockerCommand,
-  ])
+  runSyncCommand(
+    "docker",
+    [
+      "run",
+      "--rm",
+      "--platform",
+      platform,
+      "-v",
+      `${sourceDir}:/workspace`,
+      "-w",
+      "/workspace",
+      "-e",
+      "CI=1",
+      "-e",
+      "ELECTRON_CACHE=/tmp/electron-cache",
+      "-e",
+      "ELECTRON_BUILDER_CACHE=/tmp/electron-builder-cache",
+      ...dockerAnalytics.arguments,
+      image,
+      "bash",
+      "-lc",
+      dockerCommand,
+    ],
+    { env: dockerAnalytics.environment },
+  )
 
   const distDir = path.join(sourceDir, "packages/desktop/dist")
   if (!existsSync(distDir)) {

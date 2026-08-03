@@ -3,11 +3,21 @@ import { AppState } from "@diffdash/domain/app-state"
 import {
   GitProviderDescriptor,
   HostedRepository,
+  HostedRepositoryLocator,
   HostedReviewSummary,
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
-import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import {
+  ProjectOpenResult,
+  ProjectWorkspaceState,
+  ProjectWorkspaceStateInput,
+} from "@diffdash/domain/project-workspace"
+import {
+  Repo,
+  RepositoryIdentityRepairSummary,
+  RepositorySearchScope,
+} from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import {
   HostedReviewSnapshotManifest,
@@ -18,6 +28,7 @@ import {
   ReviewThreadDetails,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { Schema } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
@@ -140,6 +151,11 @@ export const InvokeContract = {
     EmptyRequest,
     DiffDashCliInstallResult,
   ),
+  [InvokeChannel.appActivateWindow]: defineInvoke(
+    InvokeChannel.appActivateWindow,
+    EmptyRequest,
+    EmptyResponse,
+  ),
   [InvokeChannel.appOpenExternalUrl]: defineInvoke(
     InvokeChannel.appOpenExternalUrl,
     Schema.Struct({ url: Schema.String }),
@@ -251,6 +267,11 @@ export const InvokeContract = {
     Schema.Struct({ repository: HostedRepository }),
     Repo,
   ),
+  [InvokeChannel.forgetRepository]: defineInvoke(
+    InvokeChannel.forgetRepository,
+    Schema.Struct({ projectId: ReviewProjectId }),
+    Repo,
+  ),
   [InvokeChannel.installRepository]: defineInvoke(
     InvokeChannel.installRepository,
     Schema.Struct({ localPath: Schema.String }),
@@ -266,6 +287,19 @@ export const InvokeContract = {
     Schema.Struct({ query: NullableString }),
     Schema.Array(Repo),
   ),
+  [InvokeChannel.openProject]: defineInvoke(
+    InvokeChannel.openProject,
+    Schema.Struct({
+      localPath: Schema.String,
+      selectedRepository: Schema.NullOr(HostedRepositoryLocator),
+    }),
+    ProjectOpenResult,
+  ),
+  [InvokeChannel.repairRepositoryIdentities]: defineInvoke(
+    InvokeChannel.repairRepositoryIdentities,
+    EmptyRequest,
+    RepositoryIdentityRepairSummary,
+  ),
   [InvokeChannel.selectLocalFolder]: defineInvoke(
     InvokeChannel.selectLocalFolder,
     EmptyRequest,
@@ -275,6 +309,16 @@ export const InvokeContract = {
     InvokeChannel.setRepositoryFavorite,
     Schema.Struct({ id: Schema.String, isFavorite: Schema.Boolean }),
     Repo,
+  ),
+  [InvokeChannel.projectWorkspaceGet]: defineInvoke(
+    InvokeChannel.projectWorkspaceGet,
+    Schema.Struct({ projectId: ReviewProjectId }),
+    Schema.NullOr(ProjectWorkspaceState),
+  ),
+  [InvokeChannel.projectWorkspaceSave]: defineInvoke(
+    InvokeChannel.projectWorkspaceSave,
+    Schema.Struct({ input: ProjectWorkspaceStateInput }),
+    ProjectWorkspaceState,
   ),
   [InvokeChannel.addReviewThreadUserMessage]: defineInvoke(
     InvokeChannel.addReviewThreadUserMessage,

@@ -587,9 +587,7 @@ const canonicalTarget = (
       reviewKey: ReviewKey.make(makeHostedReviewKey(target.review)),
     }
   }
-  if (repository.provider !== "local" || repository.local_path === null) {
-    throw targetError("A local review cannot use a hosted repository identity.")
-  }
+  if (repository.local_path === null) throw targetError("A local review requires a local checkout.")
   const targetRoot = resolve(target.rootPath)
   if (resolve(repository.local_path) !== targetRoot) {
     throw targetError("The local review thread belongs to a different repository path.")

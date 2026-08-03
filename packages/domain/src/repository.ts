@@ -69,6 +69,15 @@ export interface ProviderRepositoryReference {
   readonly name: string
 }
 
+/** Result of one resumable repository identity repair pass. */
+export class RepositoryIdentityRepairSummary extends Schema.Class<RepositoryIdentityRepairSummary>(
+  "RepositoryIdentityRepairSummary",
+)({
+  resolvedCount: Schema.NonNegativeInt,
+  unresolvedCount: Schema.NonNegativeInt,
+  localAliasCount: Schema.NonNegativeInt,
+}) {}
+
 /** Interprets the compatibility persistence shape as a local or hosted source. */
 export const repositorySource = (
   repo: Pick<Repo, "provider" | "owner" | "name">,

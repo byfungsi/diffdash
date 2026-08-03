@@ -1,10 +1,11 @@
 import BetterSqlite3, { type Database as BetterSqliteDatabase } from "better-sqlite3"
 import { Context, Effect, Layer, Schema } from "effect"
 import { basename, dirname, join } from "node:path"
-import { existsSync, mkdirSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync } from "node:fs"
 
 import {
-  latestDatabaseSchemaVersion,
+  databaseRequiresMigration,
+  maxSupportedDatabaseSchemaVersion,
   readDatabaseUserVersion,
   runDatabaseMigrations,
 } from "./database-migrations"
@@ -51,6 +52,13 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
               const existedBeforeOpen = existsSync(databasePath)
               const database = new BetterSqlite3(databasePath)
               try {
+                const currentVersion = readDatabaseUserVersion(database)
+                const maxSupportedVersion = maxSupportedDatabaseSchemaVersion()
+                if (currentVersion > maxSupportedVersion) {
+                  throw new Error(
+                    `Database schema version ${currentVersion} is newer than supported version ${maxSupportedVersion}`,
+                  )
+                }
                 database.pragma("journal_mode = WAL")
                 database.pragma("foreign_keys = ON")
                 await backupDatabaseBeforeMigration(database, databasePath, existedBeforeOpen)
@@ -101,13 +109,22 @@ export const backupDatabaseBeforeMigration = async (
     `${basename(databasePath)}.pre-migration-v${currentVersion}-${stamp}`,
   )
   await database.backup(backupPath)
+  const backup = new BetterSqlite3(backupPath, { fileMustExist: true, readonly: true })
+  try {
+    const integrity: unknown = backup.pragma("quick_check", { simple: true })
+    if (integrity !== "ok")
+      throw new Error(`SQLite backup integrity check failed: ${String(integrity)}`)
+  } finally {
+    backup.close()
+    rmSync(`${backupPath}-shm`, { force: true })
+    rmSync(`${backupPath}-wal`, { force: true })
+  }
   return backupPath
 }
 
 const shouldBackupDatabase = (database: BetterSqliteDatabase, existedBeforeOpen: boolean) => {
   const currentVersion = readDatabaseUserVersion(database)
-  const latestVersion = latestDatabaseSchemaVersion()
-  if (currentVersion >= latestVersion) return false
+  if (!databaseRequiresMigration(database)) return false
   if (currentVersion > 0) return true
   if (!existedBeforeOpen) return false
   const tables = database

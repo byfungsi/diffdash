@@ -8,10 +8,12 @@ import { makeCodexProvider } from "@diffdash/agent-provider-codex"
 import { makeFixtureAgentProvider } from "@diffdash/agent-provider-fixture"
 import { makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
 import type { ProcessRunner } from "@diffdash/process"
+import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 /** Dependencies supplied once by the desktop application boundary. */
 interface AgentProviderCompositionDependencies {
   readonly processes: ProcessRunner
+  readonly tempResources: TempResourceOperations
   readonly tempDirectory: string
   readonly includeFixture: boolean
 }
@@ -28,6 +30,7 @@ export const createAgentProviderComposition = (
 ): AgentProviderComposition => {
   const shared = {
     processes: dependencies.processes,
+    tempResources: dependencies.tempResources,
     tempDirectory: dependencies.tempDirectory,
   }
   const registrations: readonly AgentProviderRegistration[] = [

@@ -79,6 +79,7 @@ const makeLayer = (input: {
       listProviders: Effect.succeed([]),
       diagnoseProviders: Effect.succeed([]),
       parseRemoteUrl: () => unavailable(),
+      resolveRepository: () => unavailable(),
       repositoryUrl: () => Effect.succeed(""),
       fileUrl: () => Effect.succeed(""),
       searchRepositories: () => unavailable(),

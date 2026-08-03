@@ -5,6 +5,7 @@ import {
   type LocalReviewSnapshotManifest,
   makeReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { GitService } from "@diffdash/local-git/local-git"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
@@ -80,7 +81,12 @@ export const defineReviewHandlers = (
     InvokeChannel.acquireHostedReviewSnapshot,
     async (_event, { review }): Promise<HostedReviewSnapshotManifest> => {
       const snapshots = await run(ReviewSnapshotService)
-      return makeReviewSnapshotManifest(await run(snapshots.acquireHosted(review)))
+      const repositories = await run(RepositoryLinker)
+      const project = await run(repositories.ensureHosted(review.repository))
+      return makeReviewSnapshotManifest(
+        await run(snapshots.acquireHosted(review)),
+        ReviewProjectId.make(project.id),
+      )
     },
   )
 
@@ -90,8 +96,8 @@ export const defineReviewHandlers = (
       const snapshots = await run(ReviewSnapshotService)
       const repositories = await run(RepositoryLinker)
       const snapshot = await run(snapshots.acquireLocal(target))
-      await run(repositories.ensureLocal(snapshot.detail.rootPath))
-      return makeReviewSnapshotManifest(snapshot)
+      const project = await run(repositories.ensureLocal(snapshot.detail.rootPath))
+      return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(project.id))
     },
   )
 

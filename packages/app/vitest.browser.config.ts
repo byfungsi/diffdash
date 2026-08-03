@@ -8,7 +8,7 @@ export default defineConfig({
     format: "es",
   },
   optimizeDeps: {
-    include: ["@pierre/diffs/worker/worker.js"],
+    include: ["@pierre/diffs/worker/worker.js", "react-resizable-panels"],
   },
   plugins: [react(), tailwindcss()],
   resolve: {

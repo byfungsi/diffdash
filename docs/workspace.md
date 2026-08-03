@@ -6,8 +6,8 @@ DiffDash uses one pnpm workspace and Turborepo task graph.
 
 - `packages/*` contains shipped products and reusable runtime packages. Product packages own their
   manifests, runtime dependencies, build configuration, and distributable assets.
-- `tools/*` contains maintained private tooling such as deterministic demos, capture hosts, and
-  media generation. Tool output is never shipped with a product.
+- `tools/*` contains maintained private tooling such as deterministic fixtures and Playwright demo
+  video generation. Tool output is never shipped with a product.
 - `scripts/*` contains repository orchestration only. Product runtime code and reusable libraries do
   not live in scripts.
 
@@ -19,10 +19,9 @@ platform or dependency primitive; otherwise place it in the closest domain, prov
 or infrastructure package. Add a new package only for a cohesive runtime-neutral API needed across
 multiple owners. Do not create catch-all utility packages.
 
-Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime,
-`@diffdash/promo-capture` for browser capture and recording, and `@diffdash/promo-media` for
-Remotion, audio, storyboard, and verification work. Capture and render ordering is declared in
-`turbo.json`; generated media and tool caches remain ignored.
+Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime and
+`@diffdash/demo-video` for independent Playwright clips, branded HTML covers, FFmpeg assembly,
+verification, and local playback. Generated recordings and tool caches remain ignored.
 
 `@diffdash/e2e` owns full-product Playwright projects and deterministic Electron fixtures. Browser
 component tests remain with `@diffdash/app`; full-product development and packaged flows run through
@@ -34,7 +33,7 @@ API, canonical IPC channels, request contracts, and serializable transport error
 only on domain, the browser-safe agent-provider manifest schemas, and Effect. It reuses manifest
 model, defaults, and runtime-requirement schemas rather than copying their structures. `@diffdash/app`
 owns the reusable React application, theme, UI primitives, renderer adapters, and browser tests.
-Electron and promotional capture are thin hosts that consume its explicit package exports.
+Electron and the demo-video recorder are thin hosts that consume its explicit package exports.
 
 `@diffdash/process` owns one Effect service for captured and line-streaming subprocess execution,
 generic executable discovery, and scoped private temporary resources. Node callbacks and process
@@ -73,8 +72,8 @@ React, TypeScript, Vite, Vitest, Playwright, Electron, Wrangler, and lint/toolin
 default catalog in `pnpm-workspace.yaml`. Runtime dependencies remain in the package that consumes
 them.
 
-Root desktop development, unit, browser, Electron E2E, packaged E2E, web deployment, promo, and
-release commands are stable convenience wrappers around package-owned scripts.
+Root desktop development, unit, browser, Electron E2E, packaged E2E, web deployment, demo-video,
+and release commands are stable convenience wrappers around package-owned scripts.
 
 Pull-request CI uses Turbo's affected package graph for lint, typecheck, unit, and build tasks. It
 always runs architecture bundles, browser tests, download-worker tests, and Electron E2E; provider or

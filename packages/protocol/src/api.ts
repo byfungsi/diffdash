@@ -3,11 +3,21 @@ import type { AppState } from "@diffdash/domain/app-state"
 import type {
   GitProviderDescriptor,
   HostedRepository,
+  HostedRepositoryLocator,
   HostedReviewSummary,
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
-import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import type {
+  ProjectOpenResult,
+  ProjectWorkspaceState,
+  ProjectWorkspaceStateInput,
+} from "@diffdash/domain/project-workspace"
+import type {
+  Repo,
+  RepositoryIdentityRepairSummary,
+  RepositorySearchScope,
+} from "@diffdash/domain/repository"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type {
   HostedReviewSnapshotManifest,
@@ -19,6 +29,7 @@ import type {
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
@@ -69,6 +80,7 @@ export interface DiffDashApi {
     readonly onStateChanged: (listener: (state: AppUpdateState) => void) => () => void
   }
   readonly navigation: {
+    readonly activateWindow: () => Promise<void>
     readonly drainCommands: () => Promise<readonly CliNavigationCommand[]>
     readonly onCommandsAvailable: (listener: () => void) => () => void
   }
@@ -86,7 +98,17 @@ export interface DiffDashApi {
     readonly favoriteRemote: (repo: HostedRepository) => Promise<Repo>
     readonly install: (localPath: string) => Promise<Repo>
     readonly link: (input: LinkRepositoryCheckoutRequest) => Promise<Repo>
+    readonly openProject: (
+      localPath: string,
+      selectedRepository?: HostedRepositoryLocator,
+    ) => Promise<ProjectOpenResult>
+    readonly repairIdentities: () => Promise<RepositoryIdentityRepairSummary>
+    readonly forget: (projectId: ReviewProjectId) => Promise<Repo>
     readonly selectLocalFolder: () => Promise<string | null>
+  }
+  readonly projectWorkspace: {
+    readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>
+    readonly save: (input: ProjectWorkspaceStateInput) => Promise<ProjectWorkspaceState>
   }
   readonly reviewThreads: {
     readonly list: (target: ReviewThreadTarget) => Promise<readonly ReviewThread[]>

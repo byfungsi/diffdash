@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest"
+import {
+  OpenBranchDiffCommand,
+  RepairRepositoryIdentitiesCommand,
+} from "@diffdash/protocol/cli-navigation"
 
-import { parseCliNavigationCommand } from "./cli-navigation"
+import { hasRepositoryIdentityRepairCommand, parseCliNavigationCommand } from "./cli-navigation"
 
 const parse = (args: readonly string[]) =>
   parseCliNavigationCommand(
@@ -9,10 +13,10 @@ const parse = (args: readonly string[]) =>
   )
 
 describe("parseCliNavigationCommand", () => {
-  it("parses working-tree, repository, PR, and branch commands", () => {
-    expect(parse([])).toMatchObject({ _tag: "openWorkingTree", localPath: "/workspace/repo" })
+  it("parses project, repository, PR, branch, and repair commands", () => {
+    expect(parse([])).toMatchObject({ _tag: "openProject", localPath: "/workspace/repo" })
     expect(parse(["src"])).toMatchObject({
-      _tag: "openWorkingTree",
+      _tag: "openProject",
       localPath: "/workspace/repo/src",
     })
     expect(parse(["install"])).toMatchObject({
@@ -30,6 +34,15 @@ describe("parseCliNavigationCommand", () => {
       _tag: "openBranchDiff",
       branchName: "release/next",
     })
+    expect(parse(["repair"])).toMatchObject({ _tag: "repairRepositoryIdentities" })
+    expect(hasRepositoryIdentityRepairCommand([RepairRepositoryIdentitiesCommand.make({})])).toBe(
+      true,
+    )
+    expect(
+      hasRepositoryIdentityRepairCommand([
+        OpenBranchDiffCommand.make({ localPath: "/workspace/repo", branchName: null }),
+      ]),
+    ).toBe(false)
   })
 
   it("returns navigation errors for invalid public syntax", () => {
@@ -40,6 +53,10 @@ describe("parseCliNavigationCommand", () => {
     expect(parse(["diff", "dev", "extra"])).toMatchObject({
       _tag: "error",
       message: expect.stringContaining("Too many arguments"),
+    })
+    expect(parse(["repair", "extra"])).toMatchObject({
+      _tag: "error",
+      message: expect.stringContaining("Usage: diffdash repair"),
     })
   })
 

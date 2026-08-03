@@ -4,13 +4,16 @@ import { formatError } from "@/shared/errors"
 import {
   type SettingsMutationCoordinator,
   createSettingsMutationCoordinator,
+  parseRendererSettings,
 } from "./settings-mutation"
 
 /** State and operations for renderer settings persistence. */
 type SettingsMutationController = {
   readonly settings: AISettings
   readonly status: string | null
-  readonly update: (settings: AISettings) => Promise<AISettings>
+  readonly update: (
+    update: AISettings | ((current: AISettings) => AISettings),
+  ) => Promise<AISettings>
 }
 
 /** Loads settings and coordinates optimistic serialized updates with last-write-wins rendering. */
@@ -19,18 +22,19 @@ export const useSettingsMutation = (): SettingsMutationController => {
   const [status, setStatus] = useState<string | null>(null)
   const [coordinator] = useState<SettingsMutationCoordinator>(() =>
     createSettingsMutationCoordinator(DEFAULT_AI_SETTINGS, {
-      write: (nextSettings) => window.diffDash.settings.update(nextSettings),
+      write: async (nextSettings) =>
+        parseRendererSettings(await window.diffDash.settings.update(nextSettings)),
       onOptimistic: (nextSettings) => {
         setSettings(nextSettings)
         setStatus(null)
       },
       onConfirmed: (savedSettings) => {
         setSettings(savedSettings)
-        setStatus("Saved walkthrough AI settings.")
+        setStatus("Saved settings.")
       },
       onRollback: (confirmedSettings, error) => {
         setSettings(confirmedSettings)
-        setStatus(formatError(error, "Could not save walkthrough AI settings"))
+        setStatus(formatError(error, "Could not save settings"))
       },
     }),
   )
@@ -40,7 +44,8 @@ export const useSettingsMutation = (): SettingsMutationController => {
     window.diffDash.settings
       .get()
       .then((savedSettings) => {
-        if (!cancelled && coordinator.replaceConfirmed(savedSettings)) setSettings(savedSettings)
+        const parsedSettings = parseRendererSettings(savedSettings)
+        if (!cancelled && coordinator.replaceConfirmed(parsedSettings)) setSettings(parsedSettings)
         return undefined
       })
       .catch(() => undefined)

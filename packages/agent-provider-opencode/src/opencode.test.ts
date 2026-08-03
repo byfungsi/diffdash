@@ -4,8 +4,10 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import { afterAll, describe, expect, it } from "@effect/vitest"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
 import type { OpencodeClient } from "@opencode-ai/sdk/v2"
-import { Effect, Option, Redacted, Stream } from "effect"
+import { Effect, Layer, Option, Redacted, Stream } from "effect"
 
 import {
   AgentExecutionPolicy,
@@ -30,15 +32,25 @@ import {
   type ProcessRequest,
   type ProcessRunner,
 } from "@diffdash/process"
+import { TempResources } from "@diffdash/process/temp-resource"
 import {
   makeOpenCodeProvider,
   makeOpenCodeServerConfig,
   OPENCODE_AUTO_MODELS,
   OPENCODE_DEFAULT_MODEL,
+  OPENCODE_MODELS,
   OPENCODE_REVIEW_POLICY,
   OPENCODE_WALKTHROUGH_POLICY,
   resolveOpenCodeExecutable,
 } from "./opencode"
+
+const tempResources = Effect.runSync(
+  TempResources.pipe(
+    Effect.provide(
+      TempResources.layer.pipe(Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer))),
+    ),
+  ),
+)
 
 interface Call {
   readonly command: string
@@ -154,6 +166,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     return { session } as unknown as OpencodeClient
   }
   const registration = makeOpenCodeProvider({
+    tempResources,
     processes,
     tempDirectory: directory,
     executablePath: "opencode",
@@ -404,10 +417,18 @@ describe("OpenCode provider", () => {
 
   it.effect("owns defaults, automatic tiers, executable resolution, and scoped server config", () =>
     Effect.gen(function* () {
-      expect(OPENCODE_DEFAULT_MODEL).toBe("openai/gpt-5.3-codex-spark")
+      expect(OPENCODE_DEFAULT_MODEL).toBe("openai/gpt-5.6-terra")
+      expect(OPENCODE_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
+        { id: "openai/gpt-5.6-sol", displayName: "GPT 5.6 Sol" },
+        { id: "openai/gpt-5.6-terra", displayName: "GPT 5.6 Terra" },
+        { id: "openai/gpt-5.6-luna", displayName: "GPT 5.6 Luna" },
+        { id: "anthropic/claude-opus-5", displayName: "Claude Opus 5" },
+        { id: "anthropic/claude-sonnet-5", displayName: "Claude Sonnet 5" },
+        { id: "anthropic/claude-haiku-4-5", displayName: "Claude Haiku 4.5" },
+      ])
       expect(OPENCODE_AUTO_MODELS.balanced).toEqual([
         "anthropic/claude-sonnet-5",
-        "openai/gpt-5.3-codex-spark",
+        "openai/gpt-5.6-terra",
       ])
       expect(OPENCODE_WALKTHROUGH_POLICY).toMatchObject({
         repository: "local-working-copy",
@@ -459,6 +480,7 @@ describe("OpenCode provider", () => {
         streamLines: () => Stream.empty,
       }
       const registration = makeOpenCodeProvider({
+        tempResources,
         processes,
         tempDirectory: directory,
       })

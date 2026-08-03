@@ -1,4 +1,5 @@
 import { type PostRenderPhase, type SelectionSide, VirtualizedFileDiff } from "./pierre"
+import { findRenderedDiffLine } from "./review-rendered-line"
 import type { ReviewSearchOccurrence } from "./review-search"
 
 /** CSS Custom Highlight registry key for non-active review search matches. */
@@ -26,6 +27,8 @@ export class ReviewSearchHighlightManager {
   private activeOccurrenceId: string | null = null
   private readonly registrations = new Map<string, SearchDiffRegistration>()
   private occurrencesByFile = new Map<string, readonly ReviewSearchOccurrence[]>()
+  private rebuildFrame: number | null = null
+  private highlightsRegistered = false
 
   /** Updates the ranges painted in every currently mounted diff. */
   setSearch(occurrences: readonly ReviewSearchOccurrence[], activeOccurrenceId: string | null) {
@@ -40,21 +43,35 @@ export class ReviewSearchHighlightManager {
     })
     this.occurrencesByFile = occurrencesByFile
     this.activeOccurrenceId = activeOccurrenceId
-    this.rebuildHighlights()
+    this.activeElement = null
+    this.activeRange = null
+    if (occurrencesByFile.size === 0) {
+      this.cancelScheduledRebuild()
+      this.clearHighlights()
+      return
+    }
+    this.scheduleRebuild()
   }
 
   /** Tracks a Pierre host as virtualization mounts, updates, or removes its rows. */
   handlePostRender(reviewKey: string, host: HTMLElement, instance: object, phase: PostRenderPhase) {
     if (phase === "unmount") {
       const registration = this.registrations.get(reviewKey)
-      if (registration?.host === host) this.registrations.delete(reviewKey)
-      this.rebuildHighlights()
+      if (registration?.host === host) {
+        queueMicrotask(() => {
+          const current = this.registrations.get(reviewKey)
+          if (current?.host === host && !host.isConnected) {
+            this.registrations.delete(reviewKey)
+          }
+          this.scheduleRebuild()
+        })
+      }
       return
     }
 
     if (!(instance instanceof VirtualizedFileDiff)) return
     this.registrations.set(reviewKey, { host, instance })
-    this.rebuildHighlights()
+    this.scheduleRebuild()
   }
 
   /** Returns Pierre's estimated virtual position for an occurrence. */
@@ -92,53 +109,74 @@ export class ReviewSearchHighlightManager {
 
   /** Removes all registered hosts and document-level highlight ranges. */
   dispose() {
+    this.cancelScheduledRebuild()
     this.registrations.clear()
     this.occurrencesByFile.clear()
     this.activeElement = null
     this.activeRange = null
+    this.clearHighlights()
+  }
+
+  private scheduleRebuild() {
+    if (this.occurrencesByFile.size === 0 || this.rebuildFrame !== null) return
+    this.rebuildFrame = window.requestAnimationFrame(() => {
+      this.rebuildFrame = null
+      this.rebuildHighlights()
+    })
+  }
+
+  private cancelScheduledRebuild() {
+    if (this.rebuildFrame === null) return
+    window.cancelAnimationFrame(this.rebuildFrame)
+    this.rebuildFrame = null
+  }
+
+  private clearHighlights() {
+    if (!this.highlightsRegistered) return
     clearRegisteredHighlights()
+    this.highlightsRegistered = false
   }
 
   private rebuildHighlights() {
-    if (!supportsCustomHighlights()) return
+    if (!supportsCustomHighlights() || this.occurrencesByFile.size === 0) return
 
     const matchRanges: StaticRange[] = []
     const activeRanges: StaticRange[] = []
     this.activeElement = null
     this.activeRange = null
 
-    this.registrations.forEach(({ host }, reviewKey) => {
+    this.registrations.forEach(({ host, instance }, reviewKey) => {
       const shadowRoot = host.shadowRoot
       const occurrences = this.occurrencesByFile.get(reviewKey)
       if (shadowRoot === null || occurrences === undefined) return
 
-      const occurrencesByRow = indexOccurrencesByRenderedRow(occurrences)
-      for (const side of ["deletions", "additions"] as const) {
-        const rows = shadowRoot.querySelectorAll<HTMLElement>(
-          `[data-${side}] [data-content] > [data-line]`,
-        )
-        rows.forEach((row) => {
-          const lineNumber = Number(row.dataset.line)
-          if (!Number.isSafeInteger(lineNumber)) return
-          const rowOccurrences = occurrencesByRow.get(`${side}:${lineNumber}`)
-          if (rowOccurrences === undefined || rowOccurrences.length === 0) return
-          if (!renderedTextMatchesSource(row, rowOccurrences[0]?.text ?? "")) return
+      occurrences.forEach((occurrence) => {
+        const seenRows = new Set<HTMLElement>()
+        for (const [side, lineNumber] of renderedSearchCoordinates(occurrence)) {
+          if (lineNumber === null) continue
+          const row = findRenderedDiffLine(host, instance, lineNumber, side)
+          if (
+            row === null ||
+            seenRows.has(row) ||
+            !renderedTextMatchesSource(row, occurrence.text)
+          ) {
+            continue
+          }
+          seenRows.add(row)
 
-          rowOccurrences.forEach((occurrence) => {
-            const range = createStaticTextRange(row, occurrence.start, occurrence.end)
-            if (range === null) return
-            if (occurrence.id === this.activeOccurrenceId) {
-              activeRanges.push(range)
-              if (this.activeRange === null || side === "additions") {
-                this.activeElement = row
-                this.activeRange = range
-              }
-            } else {
-              matchRanges.push(range)
+          const range = createStaticTextRange(row, occurrence.start, occurrence.end)
+          if (range === null) continue
+          if (occurrence.id === this.activeOccurrenceId) {
+            activeRanges.push(range)
+            if (this.activeRange === null) {
+              this.activeElement = row
+              this.activeRange = range
             }
-          })
-        })
-      }
+          } else {
+            matchRanges.push(range)
+          }
+        }
+      })
     })
 
     clearRegisteredHighlights()
@@ -150,38 +188,24 @@ export class ReviewSearchHighlightManager {
       activeHighlight.priority = 1
       CSS.highlights.set(REVIEW_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
     }
+    this.highlightsRegistered = matchRanges.length > 0 || activeRanges.length > 0
   }
 }
 
-const indexOccurrencesByRenderedRow = (occurrences: readonly ReviewSearchOccurrence[]) => {
-  const byRow = new Map<string, ReviewSearchOccurrence[]>()
-  occurrences.forEach((occurrence) => {
-    const rows =
-      occurrence.side === "context"
-        ? ([
-            ["deletions", occurrence.oldLineNumber],
-            ["additions", occurrence.newLineNumber],
-          ] as const)
-        : ([
-            [
-              occurrence.side,
-              occurrence.side === "deletions" ? occurrence.oldLineNumber : occurrence.newLineNumber,
-            ],
-          ] as const)
-
-    rows.forEach(([side, lineNumber]) => {
-      if (lineNumber === null) return
-      const key = `${side}:${lineNumber}`
-      const rowOccurrences = byRow.get(key)
-      if (rowOccurrences === undefined) {
-        byRow.set(key, [occurrence])
-      } else {
-        rowOccurrences.push(occurrence)
-      }
-    })
-  })
-  return byRow
-}
+const renderedSearchCoordinates = (
+  occurrence: ReviewSearchOccurrence,
+): readonly (readonly [SelectionSide, number | null])[] =>
+  occurrence.side === "context"
+    ? [
+        ["additions", occurrence.newLineNumber],
+        ["deletions", occurrence.oldLineNumber],
+      ]
+    : [
+        [
+          occurrence.side,
+          occurrence.side === "deletions" ? occurrence.oldLineNumber : occurrence.newLineNumber,
+        ],
+      ]
 
 const renderedTextMatchesSource = (row: HTMLElement, source: string) => {
   const rendered = row.textContent ?? ""

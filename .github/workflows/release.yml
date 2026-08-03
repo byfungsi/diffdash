@@ -41,6 +41,8 @@ env:
   NODE_VERSION: "22"
   PNPM_VERSION: "10.26.1"
   RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+  VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
 
 jobs:
   resolve:
@@ -136,6 +138,9 @@ jobs:
         run: |
           corepack enable
           corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Validate analytics configuration
+        run: node --input-type=module -e 'import { requiredAnalyticsEnvironment } from "./scripts/release/release-environment.mjs"; requiredAnalyticsEnvironment()'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
 import { Effect, Layer } from "effect"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -8,6 +10,7 @@ import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
 import { AppConfig } from "./app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
+import { FileStorage } from "@diffdash/settings/file-storage"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-analytics-test-"))),
@@ -33,7 +36,12 @@ const makeLayer = (directory: string, events: CapturedEvent[]) => {
     settingsPath: join(directory, "diffdash", "settings.json"),
     tempDir: directory,
   })
-  const settingsLayer = AppSettings.layer(join(directory, "diffdash", "settings.json"))
+  const fileStorageLayer = FileStorage.layer.pipe(
+    Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+  )
+  const settingsLayer = AppSettings.layer(join(directory, "diffdash", "settings.json")).pipe(
+    Layer.provide(fileStorageLayer),
+  )
   return Analytics.makeLayer({
     clientFactory: () => ({
       capture: (event) => events.push(event),

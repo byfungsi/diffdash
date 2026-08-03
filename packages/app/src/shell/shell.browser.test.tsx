@@ -2,6 +2,46 @@ import { describe, expect, it } from "vitest"
 import { appBrowserScenario } from "@/test/app-browser-support"
 
 describe("App shell browser interactions", () => {
+  it("renders full-width workbench chrome and opens global navigation from its centered command field", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("workbenchTitlebar")()
+  })
+
+  it("shows a retryable error instead of onboarding when application state is unavailable", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("appStateRecovery")()
+  })
+
+  it("cancels or completes project opening through the accessible remote chooser", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectOpenChooser")()
+  })
+
+  it("restores a selected review while keeping Reviews active", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectStateRestoration")()
+  })
+
+  it("shows a clean working tree independently from an empty hosted review list", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("cleanProjectReviews")()
+  })
+
+  it("does not render an empty hosted state when the provider fails", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("failedProjectReviews")()
+  })
+
+  it("opens the complete macOS shortcut reference from Home and restores focus", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceHome")()
+  })
+
+  it("opens the Windows shortcut reference from an editable Review control", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceReview")()
+  })
+
   it("asks before downloading an update and restarts only after it is ready", async () => {
     expect.hasAssertions()
     await appBrowserScenario("updateDownloadRestart")()

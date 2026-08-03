@@ -76,6 +76,22 @@ describe("createShutdown", () => {
     expect(install).toHaveBeenCalledTimes(1)
   })
 
+  it("quits instead of leaving a disposed runtime alive when installation fails", async () => {
+    const failure = new Error("install failed")
+    const quit = vi.fn<() => void>()
+    const lifecycle = createShutdown({
+      dispose: vi.fn<() => Promise<void>>(async () => undefined),
+      quit,
+    })
+
+    await expect(lifecycle.restartAndInstall(() => Promise.reject(failure))).rejects.toBe(failure)
+
+    expect(quit).toHaveBeenCalledTimes(1)
+    const preventDefault = vi.fn<() => void>()
+    lifecycle.beforeQuit({ preventDefault })
+    expect(preventDefault).not.toHaveBeenCalled()
+  })
+
   it("reports disposal failures and still permits an ordinary quit", async () => {
     const failure = new Error("dispose failed")
     const onDisposalError = vi.fn<(cause: unknown) => void>()

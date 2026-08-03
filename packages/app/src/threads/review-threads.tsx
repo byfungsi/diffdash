@@ -13,6 +13,7 @@ import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   HostedReviewTarget,
   MarkdownBody,
+  type ReviewThread,
   type ReviewThreadAnchor,
   ReviewThreadDetails,
   type ReviewThreadId,
@@ -25,7 +26,7 @@ import {
   CreateReviewThreadRequest,
   RunReviewThreadAgentRequest,
 } from "@diffdash/protocol/review-threads"
-import { AlertCircle, Bot, Loader2, UserRound } from "lucide-react"
+import { AlertCircle, Bot, Loader2, MessageSquare, UserRound } from "lucide-react"
 import {
   Fragment,
   type KeyboardEvent,
@@ -44,6 +45,15 @@ import { Button } from "@/shared/ui/button"
 import { Textarea } from "@/shared/ui/textarea"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { cn } from "@/shared/utils"
+
+/* oxlint-disable jsx-a11y/no-noninteractive-tabindex -- Scrollable conversation logs need keyboard focus. */
+
+type ReviewThreadHistoryScrollState = {
+  readonly pinned: boolean
+  readonly scrollTop: number
+}
+
+const reviewThreadHistoryScrollStates = new Map<string, ReviewThreadHistoryScrollState>()
 
 /** Renderer-owned review scope used to derive typed preload requests. */
 export type ReviewThreadScope =
@@ -351,6 +361,7 @@ export function ReviewThreadComposer({
   readonly onSubmit: (bodyMarkdown: string) => Promise<void>
 }) {
   const labelId = useId()
+  const formRef = useRef<HTMLFormElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [body, setBody] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -386,8 +397,40 @@ export function ReviewThreadComposer({
     textareaRef.current?.focus()
   }, [])
 
+  useEffect(() => {
+    const form = formRef.current
+    const textarea = textareaRef.current
+    if (
+      form === null ||
+      textarea === null ||
+      form.closest("[data-review-thread-annotation]") === null
+    ) {
+      return undefined
+    }
+
+    const scrollContainer = form.ownerDocument.querySelector<HTMLElement>(
+      "[data-review-diff-scroll-container]",
+    )
+    if (scrollContainer === null) return undefined
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.target === form && !entry.isIntersecting)) {
+          const root = textarea.getRootNode()
+          const activeElement =
+            root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null
+          if (activeElement === textarea) textarea.blur()
+        }
+      },
+      { root: scrollContainer },
+    )
+    observer.observe(form)
+    return () => observer.disconnect()
+  }, [])
+
   return (
     <form
+      ref={formRef}
       className="bg-card w-full min-w-0 space-y-2 rounded-lg border p-2.5 shadow-xs"
       aria-labelledby={labelId}
       onSubmit={(event) => {
@@ -402,6 +445,7 @@ export function ReviewThreadComposer({
         value={body}
         ref={textareaRef}
         aria-label="Thread message"
+        className="resize-none"
         placeholder={placeholder}
         onChange={(event) => setBody(event.currentTarget.value)}
         onKeyDown={onKeyDown}
@@ -430,30 +474,56 @@ export function ReviewThreadComposer({
   )
 }
 
+/** Restores pinned or reader-controlled scroll positions after inline annotation rendering. */
+export const syncPinnedReviewThreadHistories = (root: ParentNode) => {
+  const histories = [...root.querySelectorAll<HTMLElement>("[data-review-thread-history]")]
+  histories.forEach((history) => {
+    const threadId = history.closest<HTMLElement>("[data-review-thread-id]")?.dataset.reviewThreadId
+    if (threadId === undefined) return
+    const state = reviewThreadHistoryScrollStates.get(threadId)
+    if (state?.pinned === false) {
+      history.scrollTop = state.scrollTop
+      return
+    }
+    history.scrollTop = history.scrollHeight
+    reviewThreadHistoryScrollStates.set(threadId, {
+      pinned: true,
+      scrollTop: history.scrollTop,
+    })
+  })
+}
+
 /** One persisted line thread with its full local conversation. */
 export function ReviewThreadPanel({
   details,
   embedded = false,
+  fullHeight = false,
   agentRunning,
   agentProgress = null,
   agentError = null,
   orchestration,
+  onOpenDetail,
   onAddUserMessage,
   onRefresh,
 }: {
   readonly details: ReviewThreadDetails
   readonly embedded?: boolean
+  readonly fullHeight?: boolean
   readonly agentRunning: boolean
   readonly agentProgress?: ReviewAgentProgressStage | null
   readonly agentError?: string | null
   readonly orchestration?: ReviewThreadOrchestration
+  readonly onOpenDetail?: () => void
   readonly onAddUserMessage: (threadId: ReviewThreadId, bodyMarkdown: string) => Promise<void>
   readonly onRefresh: (threadId: ReviewThreadId) => Promise<void>
 }) {
   const { thread, messages } = details
+  const historyRef = useRef<HTMLDivElement>(null)
+  const historyInitializedRef = useRef(false)
+  const historyPinnedToBottomRef = useRef(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const previousRevision = thread.headRevision !== thread.currentHeadRevision
+  const previousRevision = reviewThreadIsPreviousRevision(thread)
   const hasPendingAgentMessage = messages.some(
     (message) => message.author === "agent" && message.status === "pending",
   )
@@ -468,6 +538,27 @@ export function ReviewThreadPanel({
     : (error ??
       visibleAgentError ??
       (interruptedTurn ? "The agent response did not start. Retry to try again." : null))
+  const historyUpdateKey = `${messages
+    .map((message) => `${message.id}:${message.status}:${message.updatedAt}`)
+    .join("\u0000")}\u0001${agentRunning ? agentProgress : "idle"}`
+
+  useEffect(() => {
+    const history = historyRef.current
+    if (history === null) return
+    const shouldScroll = !historyInitializedRef.current || historyPinnedToBottomRef.current
+    historyInitializedRef.current = true
+    if (!shouldScroll) return
+    const scrollToBottom = () => {
+      if (!history.isConnected || !historyPinnedToBottomRef.current) return
+      syncPinnedReviewThreadHistories(history.parentElement ?? history)
+    }
+    scrollToBottom()
+    const frame = window.requestAnimationFrame(() => {
+      if (!historyPinnedToBottomRef.current) return
+      scrollToBottom()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [historyUpdateKey])
 
   const run = async (action: () => Promise<void>, fallback: string) => {
     setBusy(true)
@@ -484,12 +575,48 @@ export function ReviewThreadPanel({
     <article
       className={cn(
         "bg-card min-w-0 overflow-hidden",
-        embedded ? "rounded-none border-0 shadow-none" : "my-2 rounded-lg border shadow-xs",
+        embedded
+          ? "flex min-h-0 flex-1 flex-col rounded-none border-0 shadow-none"
+          : "my-2 rounded-lg border shadow-xs",
       )}
       aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} review thread`}
       data-review-thread-id={thread.id}
     >
-      <div className="space-y-2.5 p-3">
+      {onOpenDetail === undefined ? null : (
+        <div className="flex shrink-0 justify-end border-b px-2 py-1">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Open thread details"
+            title="Open thread details"
+            onClick={onOpenDetail}
+          >
+            <MessageSquare />
+          </Button>
+        </div>
+      )}
+      <div
+        ref={historyRef}
+        role="log"
+        aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} conversation history`}
+        aria-relevant="additions text"
+        tabIndex={0}
+        data-review-thread-history
+        className={cn(
+          "space-y-2.5 overflow-y-auto p-3",
+          fullHeight ? "min-h-0 flex-1" : "max-h-review-thread-history",
+        )}
+        onScroll={(event) => {
+          const history = event.currentTarget
+          const pinned = history.scrollHeight - history.clientHeight - history.scrollTop <= 48
+          historyPinnedToBottomRef.current = pinned
+          reviewThreadHistoryScrollStates.set(thread.id, {
+            pinned,
+            scrollTop: history.scrollTop,
+          })
+        }}
+      >
         {previousRevision ||
         thread.anchorStatus === "outdated" ||
         thread.anchorStatus === "unresolved_anchor" ? (
@@ -524,14 +651,6 @@ export function ReviewThreadPanel({
         {agentRunning && !hasPendingAgentMessage ? (
           <UnicodeLoadingText className="text-muted-foreground text-xs" text={progressLabel} />
         ) : null}
-        {agentRunning || hasPendingAgentMessage || hasUnansweredUserMessage ? null : (
-          <ReviewThreadComposer
-            label="Continue conversation"
-            placeholder="Ask a follow-up question"
-            submitLabel="Send"
-            onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
-          />
-        )}
         {displayedError === null ? null : (
           <div role="alert" className="text-destructive flex items-center gap-1 text-xs">
             <AlertCircle className="size-3.5" />
@@ -555,66 +674,17 @@ export function ReviewThreadPanel({
           </div>
         )}
       </div>
-    </article>
-  )
-}
-
-/** Compact navigation for persisted review threads. */
-export function ReviewThreadIndex({
-  items,
-  loading,
-  error,
-  onReload,
-  onSelect,
-}: {
-  readonly items: readonly ReviewThreadDetails[]
-  readonly loading: boolean
-  readonly error: string | null
-  readonly onReload: () => Promise<void>
-  readonly onSelect: (details: ReviewThreadDetails) => void
-}) {
-  if (!loading && error === null && items.length === 0) return null
-
-  return (
-    <section
-      className="bg-card rounded-xl border px-3 py-2.5 shadow-xs"
-      aria-labelledby="thread-index-title"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="thread-index-title" className="text-xs font-semibold">
-          Review threads
-        </h2>
-        <Badge variant="secondary" className="text-caption">
-          {items.length}
-        </Badge>
-      </div>
-      {loading ? (
-        <output className="text-muted-foreground mt-2 flex items-center gap-1.5 text-xs">
-          <Loader2 className="size-3 animate-spin" /> Loading threads
-        </output>
-      ) : null}
-      {error === null ? null : (
-        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-          <span role="alert" className="text-destructive truncate">
-            {error}
-          </span>
-          <Button size="xs" variant="outline" onClick={() => void onReload()}>
-            Retry
-          </Button>
+      {agentRunning || hasPendingAgentMessage || hasUnansweredUserMessage ? null : (
+        <div className={cn("shrink-0", embedded ? "border-t p-3" : "px-3 pb-3")}>
+          <ReviewThreadComposer
+            label="Continue conversation"
+            placeholder="Ask a follow-up question"
+            submitLabel="Send"
+            onSubmit={(bodyMarkdown) => onAddUserMessage(thread.id, bodyMarkdown)}
+          />
         </div>
       )}
-      {items.length === 0 ? null : (
-        <ol className="mt-2 flex flex-wrap gap-1.5">
-          {items.map((details) => (
-            <li key={details.thread.id}>
-              <Button size="xs" variant="outline" onClick={() => onSelect(details)}>
-                {anchorLabel(details.thread.currentAnchor ?? details.thread.originalAnchor)}
-              </Button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </section>
+    </article>
   )
 }
 
@@ -797,7 +867,7 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
           <a
             key={key}
             href={link[2]}
-            className="text-primary underline underline-offset-2"
+            className="text-link underline underline-offset-2"
             onClick={(event) => {
               event.preventDefault()
               if (link[2] !== undefined) void window.diffDash.openExternalUrl(link[2])
@@ -846,6 +916,19 @@ const reviewThreadTarget = (
 const anchorLabel = (anchor: ReviewThreadAnchor) => {
   return `${anchor.filePath}:${anchor.lineNumber} · ${anchor.side}`
 }
+
+/** Explains why a persisted thread cannot navigate to the current diff. */
+export const fallbackThreadLabel = (details: ReviewThreadDetails) => {
+  if (details.thread.anchorStatus === "outdated") return "Outdated"
+  if (details.thread.anchorStatus === "unresolved_anchor") return "Anchor unavailable"
+  if (reviewThreadIsPreviousRevision(details.thread)) return "Previous revision"
+  return "Location unavailable"
+}
+
+/** Whether a thread originated on a revision older than its latest mapped review snapshot. */
+export const reviewThreadIsPreviousRevision = (thread: ReviewThread) =>
+  thread.baseRevision !== thread.currentBaseRevision ||
+  thread.headRevision !== thread.currentHeadRevision
 
 /** Compact GitHub-style side and line label for an inline review disclosure. */
 export const reviewLineLabel = (anchor: ReviewThreadAnchor) =>

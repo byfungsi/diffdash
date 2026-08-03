@@ -18,12 +18,13 @@ import type { ReactNode } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { ReviewThreadListPane } from "./review-thread-sidebar"
 import {
   ReviewMarkdown,
   ReviewThreadComposer,
-  ReviewThreadIndex,
   type ReviewThreadOrchestration,
   ReviewThreadPanel,
+  type ReviewThreadsController,
   reviewLineLabel,
 } from "./review-threads"
 
@@ -111,31 +112,18 @@ describe("review thread UI", () => {
     expect(document.querySelector("button")?.textContent).not.toContain("Close")
   })
 
-  it("labels revision context and exposes compact index navigation", () => {
+  it("labels revision context", () => {
     const details = threadDetails({ previousRevision: true })
-    const onSelect = vi.fn<(details: ReviewThreadDetails) => void>()
     render(
-      <>
-        <ReviewThreadIndex
-          items={[details]}
-          loading={false}
-          error={null}
-          onReload={vi.fn<() => Promise<void>>(async () => undefined)}
-          onSelect={onSelect}
-        />
-        <ReviewThreadPanel
-          agentRunning={false}
-          details={details}
-          onAddUserMessage={threadMessageActionMock()}
-          onRefresh={threadActionMock()}
-        />
-      </>,
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={details}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
     )
 
-    expect(document.querySelector("#thread-index-title")?.textContent).toBe("Review threads")
     expect(document.body.textContent).toContain("Previous revision")
-    buttonNamed("src/example.ts:7 · new").click()
-    expect(onSelect).toHaveBeenCalledWith(details)
   })
 
   it("labels inline reviews by diff side and line instead of internal hunk identity", () => {
@@ -281,6 +269,73 @@ describe("review thread UI", () => {
     )
   })
 
+  it("keeps conversation updates pinned only while the reader remains near the bottom", async () => {
+    const initial = threadDetails({ pending: false })
+    const panel = (details: ReviewThreadDetails) => (
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={details}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />
+    )
+    render(panel(initial))
+    const history = document.querySelector<HTMLElement>('[role="log"]')
+    expect(history).not.toBeNull()
+    if (history === null) return
+    expect(history.getAttribute("aria-label")).toContain("conversation history")
+    expect(history.tabIndex).toBe(0)
+    Object.defineProperties(history, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+      scrollTop: { configurable: true, value: 700, writable: true },
+    })
+    history.dispatchEvent(new Event("scroll", { bubbles: true }))
+
+    const whileReading = appendMessage(initial, "message-new-user", "user")
+    flushSync(() => root?.render(panel(whileReading)))
+    await nextAnimationFrame()
+    expect(history.scrollTop).toBe(700)
+
+    history.scrollTop = 760
+    history.dispatchEvent(new Event("scroll", { bubbles: true }))
+    const whilePinned = appendMessage(whileReading, "message-new-agent", "agent")
+    flushSync(() => root?.render(panel(whilePinned)))
+    await nextAnimationFrame()
+    expect(history.scrollTop).toBe(1_000)
+  })
+
+  it("shows sidebar loading, count, and retryable load errors", async () => {
+    const reload = vi.fn<() => Promise<void>>(async () => undefined)
+    const buttonRefs = { current: new Map<ReviewThreadId, HTMLButtonElement>() }
+    const sidebar = (loading: boolean, error: string | null) => (
+      <ReviewThreadListPane
+        buttonRefs={buttonRefs}
+        controller={threadController({
+          details: [threadDetails({ pending: false })],
+          error,
+          loading,
+          reload,
+        })}
+        navigableThreadIds={new Set()}
+        state={{ _tag: "list" }}
+        onCollapse={() => undefined}
+        onGoToDiff={() => undefined}
+        onOpenDetail={() => undefined}
+      />
+    )
+    render(sidebar(true, null))
+    expect(document.body.textContent).toContain("1 thread")
+    expect(document.querySelector("output")?.textContent).toContain("Loading")
+
+    flushSync(() => root?.render(sidebar(false, "Could not load review threads")))
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not load review threads",
+    )
+    buttonNamed("Retry").click()
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
+  })
+
   it("renders semantic Markdown blocks without injecting HTML", () => {
     render(
       <div data-testid="markdown-under-test">
@@ -389,6 +444,43 @@ const userOnlyThreadDetails = () => {
   })
 }
 
+const appendMessage = (details: ReviewThreadDetails, id: string, author: "agent" | "user") =>
+  ReviewThreadDetails.make({
+    thread: details.thread,
+    messages: [
+      ...details.messages,
+      ReviewThreadMessage.make({
+        id: ReviewThreadMessageId.make(id),
+        threadId: details.thread.id,
+        sequence: details.messages.length + 1,
+        author,
+        bodyMarkdown: MarkdownBody.make(`New ${author} message`),
+        status: "complete",
+        agentRunId: author === "agent" ? `${id}-run` : null,
+        createdAt: "2026-07-12T09:02:00Z",
+        updatedAt: "2026-07-12T09:02:00Z",
+      }),
+    ],
+  })
+
+const threadController = (
+  overrides: Partial<ReviewThreadsController> = {},
+): ReviewThreadsController => ({
+  details: [],
+  error: null,
+  loading: false,
+  available: true,
+  createThread: async () => undefined,
+  addUserMessage: async () => undefined,
+  runAgent: async () => undefined,
+  runningThreadIds: [],
+  agentProgress: [],
+  agentErrors: {},
+  refreshThread: async () => undefined,
+  reload: async () => undefined,
+  ...overrides,
+})
+
 const render = (node: ReactNode) => {
   const element = document.createElement("div")
   document.body.append(element)
@@ -414,6 +506,9 @@ const setTextareaValue = (textarea: HTMLTextAreaElement, value: string) => {
   setter?.call(textarea, value)
   textarea.dispatchEvent(new Event("input", { bubbles: true }))
 }
+
+const nextAnimationFrame = () =>
+  new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
 
 const threadActionMock = () =>
   vi.fn<(threadId: ReviewThreadId) => Promise<void>>(async () => undefined)
