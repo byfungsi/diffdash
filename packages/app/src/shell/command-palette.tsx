@@ -1,5 +1,5 @@
 import { Command, X } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 
@@ -31,6 +31,7 @@ export const CommandPaletteDialog = ({
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
+  const closeFromEffect = useEffectEvent(() => onOpenChange(false))
   const normalizedQuery = query.trim().toLowerCase()
   const filteredItems =
     normalizedQuery.length === 0
@@ -55,6 +56,17 @@ export const CommandPaletteDialog = ({
       previousFocusRef.current = document.activeElement
     }
     window.requestAnimationFrame(() => inputRef.current?.focus())
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      event.preventDefault()
+      closeFromEffect()
+    }
+    window.addEventListener("keydown", closeOnEscape)
+    return () => window.removeEventListener("keydown", closeOnEscape)
   }, [open])
 
   if (!open) return null

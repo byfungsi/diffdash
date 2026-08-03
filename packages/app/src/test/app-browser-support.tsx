@@ -3237,15 +3237,14 @@ scenario("reviewThreadSidebar", async () => {
   expect(activityRail.querySelector('button[aria-label="Back"]')).toBeNull()
   commandCenter.focus()
   commandCenter.click()
-  const commandPalette = await vi.waitFor(() => {
+  await vi.waitFor(() => {
     const dialog = document.querySelector<HTMLDialogElement>('dialog[aria-label="Go anywhere"]')
     expect(dialog).not.toBeNull()
     expect(
       dialog?.querySelector<HTMLInputElement>('input[placeholder="Search files"]'),
     ).not.toBeNull()
-    return dialog!
   })
-  commandPalette.dispatchEvent(
+  window.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
   )
   await vi.waitFor(() => {
