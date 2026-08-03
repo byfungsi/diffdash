@@ -3930,16 +3930,16 @@ scenario("snapshotPageResidency", async () => {
   if (diffPane === null) return
   diffPane.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 1 }))
   for (const path of fixture.paths.slice(3)) {
-    const card = document.querySelector<HTMLElement>(`[data-diff-card-path="${path}"]`)
-    expect(card).not.toBeNull()
-    if (card === null) continue
-    const paneRect = diffPane.getBoundingClientRect()
-    const cardRect = card.getBoundingClientRect()
-    diffPane.scrollTop += cardRect.top - paneRect.top
-    diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
     // oxlint-disable-next-line eslint/no-await-in-loop -- Sequential navigation intentionally crosses the cache residency bound.
     await vi.waitFor(
       () => {
+        const card = document.querySelector<HTMLElement>(`[data-diff-card-path="${path}"]`)
+        expect(card).not.toBeNull()
+        if (card === null) return
+        const paneRect = diffPane.getBoundingClientRect()
+        const cardRect = card.getBoundingClientRect()
+        diffPane.scrollTop += cardRect.top - paneRect.top
+        diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
         if (getDiffShadowRoot(path) === null) throw new Error(`Queued diff did not load: ${path}`)
       },
       { timeout: 20_000 },
