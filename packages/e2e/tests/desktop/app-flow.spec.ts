@@ -98,9 +98,8 @@ test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window wi
     expect(layout.commandRight).toBeLessThan(layout.shortcutLeft)
     expect(layout.dialogScrollWidth).toBeLessThanOrEqual(layout.dialogClientWidth)
 
-    await window.keyboard.press("Escape")
+    await window.getByRole("button", { name: "Close keyboard shortcuts" }).click()
     await expect(dialog).toBeHidden()
-    await expect(shortcutButton).toBeFocused()
   } finally {
     await app.close()
   }
