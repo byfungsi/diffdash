@@ -368,6 +368,7 @@ const makeLayer = (
   const worktrees = Layer.succeed(
     HostedReviewWorkspacePool,
     HostedReviewWorkspacePool.of({
+      pinComparison: () => Effect.dieMessage("Unexpected comparison pinning in review-agent test"),
       use: (_input, run, onProgress) =>
         released.workspaceFailure === undefined
           ? Effect.acquireUseRelease(

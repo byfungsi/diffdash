@@ -36,6 +36,7 @@ import { AppConfig } from "../../src/main/services/app-config"
 import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
 import { GitProvider } from "../../src/main/services/git-provider"
 import { Prerequisites } from "../../src/main/services/prerequisites"
+import { RepositoryComparisonSource } from "../../src/main/services/repository-comparison-source"
 import { RepositoryLinker } from "../../src/main/services/repository-linker"
 import { ReviewContextService } from "../../src/main/services/review-context"
 import { ReviewSnapshotService } from "../../src/main/services/review-snapshot"
@@ -194,6 +195,10 @@ export const createAppLayer = () => {
     Layer.provideMerge(threadStoreLayer),
     Layer.provideMerge(artifactStoreLayer),
   )
+  const hostedReviewWorkspacePoolLayer = HostedReviewWorkspacePool.layer({
+    remoteWorktreePoolPath,
+    worktreePoolPath,
+  })
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
     Layer.provideMerge(reviewAgentRoutingLayer),
     Layer.provideMerge(agentProviderRegistryLayer),
@@ -202,9 +207,7 @@ export const createAppLayer = () => {
     Layer.provideMerge(ReviewContextBuilder.layer),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
     Layer.provideMerge(reviewTurnStoreLayer),
-    Layer.provideMerge(
-      HostedReviewWorkspacePool.layer({ remoteWorktreePoolPath, worktreePoolPath }),
-    ),
+    Layer.provideMerge(hostedReviewWorkspacePoolLayer),
   )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
@@ -213,6 +216,11 @@ export const createAppLayer = () => {
     Layer.provideMerge(RepositoryStore.layer),
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
+  )
+  const repositoryComparisonSourceLayer = RepositoryComparisonSource.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(repositoryLinkerLayer, gitProviderLayer, hostedReviewWorkspacePoolLayer),
+    ),
   )
   const updaterLayer = AppUpdater.layer({
     adapter: nativeUpdaterAdapter(),
@@ -225,6 +233,7 @@ export const createAppLayer = () => {
 
   return Layer.mergeAll(
     repositoryLinkerLayer,
+    repositoryComparisonSourceLayer,
     ProjectWorkspaceStore.layer,
     analyticsLayer,
     reviewSnapshotLayer,

@@ -5,6 +5,7 @@ import {
   HostedRepositoryName,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 
 /** Maximum commands returned by one transactional renderer drain. */
 export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
@@ -53,44 +54,11 @@ export class CliRepositorySelector extends Schema.Class<CliRepositorySelector>(
   name: HostedRepositoryName,
 }) {}
 
-const forbiddenGitRevisionCharacters = new Set(["~", "^", ":", "?", "*", "[", "\\"])
-
-const isSafeGitRevisionInput = (input: string): boolean => {
-  if (
-    input.length === 0 ||
-    input.length > 255 ||
-    input === "@" ||
-    input.startsWith("-") ||
-    input.startsWith(".") ||
-    input.endsWith(".") ||
-    input.endsWith("/") ||
-    input.includes("..") ||
-    input.includes("//") ||
-    input.includes("@{") ||
-    input.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock"))
-  ) {
-    return false
-  }
-
-  return [...input].every((character) => {
-    const codePoint = character.codePointAt(0)
-    return (
-      codePoint !== undefined &&
-      codePoint > 0x20 &&
-      codePoint !== 0x7f &&
-      !forbiddenGitRevisionCharacters.has(character)
-    )
-  })
-}
+/** Safe branch, tag, or full commit input accepted by the public CLI. */
+export const CliGitRevision = RepositoryComparisonRef
 
 /** Safe branch, tag, or full commit input accepted by the public CLI. */
-export const CliGitRevision = Schema.String.pipe(
-  Schema.filter(isSafeGitRevisionInput, { message: () => "Invalid Git revision" }),
-  Schema.brand("CliGitRevision"),
-)
-
-/** Safe branch, tag, or full commit input accepted by the public CLI. */
-export type CliGitRevision = typeof CliGitRevision.Type
+export type CliGitRevision = RepositoryComparisonRef
 
 /** Open an immutable comparison from the invocation checkout or an explicit saved repository. */
 export class OpenRepositoryComparisonCommand extends Schema.TaggedClass<OpenRepositoryComparisonCommand>()(

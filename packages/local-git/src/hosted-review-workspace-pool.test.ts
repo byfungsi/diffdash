@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer, TestLive } from "effect"
+import { Cause, Effect, Fiber, Layer, Stream, TestLive } from "effect"
 
 import {
   GitProviderId,
@@ -25,10 +25,11 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { AgentRunId } from "@diffdash/domain/review-agent"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
-import { ProcessService } from "@diffdash/process"
+import { ProcessService, type ProcessRunner } from "@diffdash/process"
 import {
   HostedReviewWorkspacePool as ReviewWorktreePool,
   HostedReviewWorkspacePoolError as ReviewWorktreePoolError,
@@ -44,6 +45,7 @@ interface GitFixture {
   readonly baseSha: string
   readonly headSha: string
   readonly secondHeadSha: string
+  readonly disconnectedSha: string
   readonly snapshot: HostedReviewCheckoutSpec
   readonly secondSnapshot: HostedReviewCheckoutSpec
 }
@@ -751,6 +753,161 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
+  it.scoped("pins branch, tag, SHA, and merge-base identities without a worktree", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const wrongRemote = join(value.root, "wrong-origin.git")
+      git(value.root, "init", "--bare", wrongRemote)
+      git(value.source, "remote", "set-url", "origin", wrongRemote)
+      const pinned = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const branch = yield* pool.pinComparison(comparisonInput(value, "base", "feature"))
+        const explicitTag = yield* pool.pinComparison(
+          comparisonInput(value, "refs/tags/base-tag", value.secondHeadSha.toUpperCase()),
+        )
+        return { branch, explicitTag }
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(pinned.branch).toEqual({
+        baseSha: value.baseSha,
+        headSha: value.headSha,
+        mergeBaseSha: value.baseSha,
+      })
+      expect(pinned.explicitTag).toEqual({
+        baseSha: value.baseSha,
+        headSha: value.secondHeadSha,
+        mergeBaseSha: value.baseSha,
+      })
+      expect(existsSync(join(value.pool, "manifest.json"))).toBe(false)
+    }),
+  )
+
+  it.scoped("deepens a shallow linked checkout before resolving merge-base", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const shallow = join(value.root, "shallow")
+      git(
+        value.root,
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        "feature",
+        `file://${value.remote}`,
+        shallow,
+      )
+
+      const pinned = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool.pinComparison({
+          ...comparisonInput(value, "base", "feature"),
+          sourcePath: shallow,
+        })
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(pinned).toEqual({
+        baseSha: value.baseSha,
+        headSha: value.headSha,
+        mergeBaseSha: value.baseSha,
+      })
+    }),
+  )
+
+  it.scoped("requires explicit ref namespaces when a branch and tag share a name", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const error = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .pinComparison(comparisonInput(value, "release", "feature"))
+          .pipe(Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(error).toMatchObject({
+        code: "revision-ambiguous",
+        operation: "comparison.resolve.base",
+      })
+    }),
+  )
+
+  it.scoped("reports missing revisions and unrelated histories distinctly", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const errors = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const missing = yield* pool
+          .pinComparison(comparisonInput(value, "missing", "feature"))
+          .pipe(Effect.flip)
+        const unrelated = yield* pool
+          .pinComparison(comparisonInput(value, "base", "disconnected"))
+          .pipe(Effect.flip)
+        const missingSha = yield* pool
+          .pinComparison(comparisonInput(value, "base", "f".repeat(40)))
+          .pipe(Effect.flip)
+        return { missing, missingSha, unrelated }
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(errors.missing).toMatchObject({
+        code: "revision-not-found",
+        operation: "comparison.resolve.base",
+      })
+      expect(errors.unrelated).toMatchObject({
+        code: "no-common-ancestor",
+        operation: "comparison.mergeBase",
+      })
+      expect(errors.missingSha).toMatchObject({
+        code: "revision-not-found",
+        operation: "comparison.resolve.head",
+      })
+    }),
+  )
+
+  it.scoped("rejects a comparison when a ref moves between acquisition passes", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const processes = yield* ProcessService.pipe(Effect.provide(ProcessService.layer))
+      const observedRequests: string[][] = []
+      const result = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* Effect.either(pool.pinComparison(comparisonInput(value, "base", "feature")))
+      }).pipe(
+        Effect.provide(poolLayer(value, movingProcessLayer(value, processes, observedRequests))),
+      )
+
+      expect(observedRequests.filter((args) => args.includes("fetch"))).toHaveLength(2)
+      expect(result).toMatchObject({
+        _tag: "Left",
+        left: {
+          code: "revision-changed",
+          operation: "comparison.verify",
+        },
+      })
+    }),
+  )
+
+  it.scoped("classifies a ref deleted between acquisition passes as changed", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const processes = yield* ProcessService.pipe(Effect.provide(ProcessService.layer))
+      const observedRequests: string[][] = []
+      const error = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .pinComparison(comparisonInput(value, "base", "feature"))
+          .pipe(Effect.flip)
+      }).pipe(
+        Effect.provide(
+          poolLayer(value, movingProcessLayer(value, processes, observedRequests, null)),
+        ),
+      )
+
+      expect(error).toMatchObject({
+        code: "revision-changed",
+        operation: "comparison.verify",
+      })
+    }),
+  )
+
   it.scoped("uses authenticated remote bootstrap and reuses it across hosted reviews", () =>
     Effect.gen(function* () {
       const value = yield* fixture
@@ -957,11 +1114,11 @@ describe("HostedReviewWorkspacePool", () => {
   )
 })
 
-const poolLayer = (value: GitFixture) =>
+const poolLayer = (value: GitFixture, processLayer = ProcessService.layer) =>
   ReviewWorktreePool.layer({
     remoteWorktreePoolPath: value.remotePool,
     worktreePoolPath: value.pool,
-  }).pipe(Layer.provideMerge(ProcessService.layer))
+  }).pipe(Layer.provide(processLayer))
 
 const workspaceInput = (value: GitFixture, suffix: string) => ({
   runId: AgentRunId.make(`run-${suffix}`),
@@ -970,6 +1127,52 @@ const workspaceInput = (value: GitFixture, suffix: string) => ({
   sourcePath: value.source,
   bootstrapBareRepository: () => Effect.void,
 })
+
+const comparisonInput = (value: GitFixture, baseRef: string, headRef: string) => ({
+  repository: value.snapshot.repository,
+  sourcePath: value.source,
+  remoteUrl: value.remote,
+  baseRef: RepositoryComparisonRef.make(baseRef),
+  headRef: RepositoryComparisonRef.make(headRef),
+  bootstrapBareRepository: () => Effect.void,
+})
+
+const movingProcessLayer = (
+  value: GitFixture,
+  processes: ProcessRunner,
+  observedRequests: string[][],
+  nextHead: string | null = value.secondHeadSha,
+) =>
+  Layer.succeed(
+    ProcessService,
+    (() => {
+      let comparisonFetches = 0
+      const afterCompletion = (args: readonly string[]) =>
+        Effect.sync(() => {
+          observedRequests.push([...args])
+          if (args.includes("fetch") && ++comparisonFetches === 1) {
+            git(
+              value.source,
+              "push",
+              "--force",
+              "origin",
+              nextHead === null ? ":refs/heads/feature" : `${nextHead}:refs/heads/feature`,
+            )
+          }
+        })
+      return ProcessService.of({
+        run: (request) =>
+          processes.run(request).pipe(Effect.tap(() => afterCompletion(request.args))),
+        streamLines: (request) =>
+          processes.streamLines(request).pipe(
+            Stream.tap((event) => {
+              const { _tag: tag } = event
+              return tag === "ProcessExit" ? afterCompletion(request.args) : Effect.void
+            }),
+          ),
+      })
+    })(),
+  )
 
 function makeGitFixture(): GitFixture {
   const root = mkdtempSync(join(tmpdir(), "diffdash-worktree-pool-"))
@@ -984,6 +1187,7 @@ function makeGitFixture(): GitFixture {
   git(source, "add", ".")
   commit(source, "base")
   const baseSha = git(source, "rev-parse", "HEAD")
+  const sourceBranch = git(source, "branch", "--show-current")
   git(root, "clone", "--bare", source, remote)
   git(source, "remote", "add", "origin", remote)
 
@@ -992,12 +1196,25 @@ function makeGitFixture(): GitFixture {
   commit(source, "feature")
   const headSha = git(source, "rev-parse", "HEAD")
   git(source, "push", "origin", `HEAD:refs/pull/1/head`)
+  git(source, "push", "origin", `${baseSha}:refs/heads/base`)
+  git(source, "push", "origin", `${baseSha}:refs/tags/base-tag`)
+  git(source, "push", "origin", `${baseSha}:refs/tags/release`)
+  git(source, "push", "origin", `${headSha}:refs/heads/feature`)
+  git(source, "push", "origin", `${headSha}:refs/heads/release`)
 
   writeFileSync(join(source, "tracked.txt"), "feature two\n")
   git(source, "add", "tracked.txt")
   commit(source, "feature two")
   const secondHeadSha = git(source, "rev-parse", "HEAD")
   git(source, "push", "origin", `HEAD:refs/pull/2/head`)
+  git(source, "checkout", "--orphan", "disconnected")
+  git(source, "rm", "-rf", ".")
+  writeFileSync(join(source, "disconnected.txt"), "disconnected\n")
+  git(source, "add", "disconnected.txt")
+  commit(source, "disconnected")
+  const disconnectedSha = git(source, "rev-parse", "HEAD")
+  git(source, "push", "origin", "HEAD:refs/heads/disconnected")
+  git(source, "checkout", sourceBranch)
   git(source, "reset", "--hard", baseSha)
   writeFileSync(join(source, "user-local.txt"), "preserve me\n")
 
@@ -1037,6 +1254,7 @@ function makeGitFixture(): GitFixture {
     baseSha,
     headSha,
     secondHeadSha,
+    disconnectedSha,
     snapshot,
     secondSnapshot,
   }
