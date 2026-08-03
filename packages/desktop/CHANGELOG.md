@@ -1,5 +1,13 @@
 # DiffDash Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- [#17](https://github.com/byfungsi/diffdash/pull/17) [`ae5782c`](https://github.com/byfungsi/diffdash/commit/ae5782c11ffdc3b95bb3fcb9d2a3d24f104df867) Thanks [@hanipcode](https://github.com/hanipcode)! - Restore anonymous product analytics configuration in automated desktop release builds.
+  Start review search from the active file, target the viewed shortcut at the file under the pointer, stabilize collapsed-file navigation, and middle-truncate long review paths.
+  Add an application-wide, platform-aware keyboard shortcut reference.
+
 ## 0.4.3
 
 ### Patch Changes
