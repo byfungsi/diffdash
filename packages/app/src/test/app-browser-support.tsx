@@ -930,6 +930,8 @@ type AppBrowserScenarioId =
   | "sampledWalkthrough"
   | "shortcutReferenceHome"
   | "shortcutReferenceReview"
+  | "shortcutReferenceTitlebarHome"
+  | "shortcutReferenceTitlebarReview"
   | "snapshotExpiryReload"
   | "snapshotPageResidency"
   | "staleLocalFavorites"
@@ -1325,6 +1327,7 @@ scenario("firstRunOnboarding", async () => {
     expect(document.body.textContent).not.toContain("Bookmarked Repos")
   })
   expect(document.querySelector("[data-workbench-titlebar]")).not.toBeNull()
+  expect(document.querySelector("[data-workbench-keyboard-shortcuts]")).not.toBeNull()
   expect(
     document.querySelector<HTMLButtonElement>("[data-workbench-command-center]")?.disabled,
   ).toBe(true)
@@ -1532,6 +1535,7 @@ scenario("projectOpenChooser", async () => {
     expect(
       document.querySelector('button[aria-label="Reviews"][aria-pressed="true"]'),
     ).not.toBeNull()
+    expect(document.querySelector("[data-workbench-keyboard-shortcuts]")).not.toBeNull()
   })
 })
 
@@ -4988,6 +4992,99 @@ scenario("shortcutReferenceReview", async () => {
       document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
     ).toBeNull()
     expect(document.activeElement).toBe(filterInput)
+  })
+})
+
+scenario("shortcutReferenceTitlebarHome", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  const shortcutButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Keyboard shortcuts (Cmd + /)"]',
+  )
+  expect(shortcutButton).not.toBeNull()
+  const shortcutChord = shortcutButton?.querySelector<HTMLElement>(
+    "[data-workbench-shortcut-chord]",
+  )
+  if (shortcutChord === null || shortcutChord === undefined) {
+    throw new Error("Keyboard shortcut chord was not found")
+  }
+  expect(shortcutChord?.textContent).toBe("Cmd + /")
+  shortcutButton?.focus()
+  shortcutButton?.click()
+
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
+    ).not.toBeNull()
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Close keyboard shortcuts")
+  })
+  document.activeElement?.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
+  )
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
+    ).toBeNull()
+    expect(document.activeElement).toBe(shortcutButton)
+  })
+})
+
+scenario("shortcutReferenceTitlebarReview", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("Win32")
+  installDiffDashApi()
+  renderApp()
+
+  await openDefaultHostedReview()
+  await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+  const shell = document.querySelector<HTMLElement>("[data-workbench-shell]")
+  if (shell !== null) shell.style.width = "720px"
+  const shortcutButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Keyboard shortcuts (Ctrl + /)"]',
+  )
+  expect(shortcutButton).not.toBeNull()
+  const shortcutChord = shortcutButton?.querySelector<HTMLElement>(
+    "[data-workbench-shortcut-chord]",
+  )
+  const commandCenter = document.querySelector<HTMLElement>("[data-workbench-command-center]")
+  const reviewActions = document.querySelector<HTMLElement>('button[aria-label="Review actions"]')
+  if (
+    shortcutButton === null ||
+    shortcutChord === null ||
+    shortcutChord === undefined ||
+    commandCenter === null ||
+    reviewActions === null
+  ) {
+    throw new Error("Narrow Review titlebar controls were not found")
+  }
+  expect(shortcutChord.textContent).toBe("Ctrl + /")
+  expect(getComputedStyle(shortcutChord).display).toBe("none")
+  expect(commandCenter.getBoundingClientRect().right).toBeLessThan(
+    reviewActions.getBoundingClientRect().left,
+  )
+  expect(reviewActions.getBoundingClientRect().right).toBeLessThan(
+    shortcutButton.getBoundingClientRect().left,
+  )
+  shortcutButton?.focus()
+  shortcutButton?.click()
+
+  await vi.waitFor(() => {
+    const dialog = document.querySelector<HTMLDialogElement>(
+      'dialog[aria-labelledby="keyboard-shortcut-reference-title"]',
+    )
+    expect(dialog?.textContent).toContain("Ctrl")
+    expect(dialog?.textContent).not.toContain("Cmd")
+  })
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Close keyboard shortcuts"]')
+    ?.click()
+  await vi.waitFor(() => {
+    expect(
+      document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
+    ).toBeNull()
+    expect(document.activeElement).toBe(shortcutButton)
   })
 })
 

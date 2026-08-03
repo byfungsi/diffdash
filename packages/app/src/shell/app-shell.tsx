@@ -867,6 +867,7 @@ export function AppShell() {
           sidebarExpanded={reviewSidebarExpanded}
           onContextActionsHostChange={setContextActionsHost}
           onNavigateBack={navigateBack}
+          onOpenKeyboardShortcuts={() => setShortcutReferenceOpen(true)}
           onOpenQuickNavigation={openQuickNavigation}
           onToggleSidebar={() => setReviewSidebarExpanded((expanded) => !expanded)}
         />

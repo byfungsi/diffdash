@@ -42,6 +42,16 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("shortcutReferenceReview")()
   })
 
+  it("opens the macOS shortcut reference from the Home titlebar and restores focus", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceTitlebarHome")()
+  })
+
+  it("opens the Windows shortcut reference from the Review titlebar and restores focus", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("shortcutReferenceTitlebarReview")()
+  })
+
   it("asks before downloading an update and restarts only after it is ready", async () => {
     expect.hasAssertions()
     await appBrowserScenario("updateDownloadRestart")()
