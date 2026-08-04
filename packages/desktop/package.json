@@ -60,6 +60,7 @@
     "@effect/printer-ansi": "catalog:",
     "@effect/rpc": "catalog:",
     "@effect/sql": "catalog:",
+    "@effect/typeclass": "catalog:",
     "@effect/workflow": "catalog:",
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "^12.11.1",

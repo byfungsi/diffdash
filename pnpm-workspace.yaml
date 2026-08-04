@@ -13,6 +13,7 @@ catalog:
   "@effect/printer-ansi": ^0.47.0
   "@effect/rpc": ^0.73.2
   "@effect/sql": ^0.49.0
+  "@effect/typeclass": ^0.38.0
   "@effect/vitest": ^0.29.0
   "@effect/workflow": ^0.16.0
   "@playwright/test": ^1.61.1
