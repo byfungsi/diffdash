@@ -207,7 +207,7 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
         isAvailable: (providerId) =>
           provider(providerId).pipe(
             Effect.flatMap((registration) => registration.diagnose),
-            Effect.map((diagnostic) => diagnostic.available),
+            Effect.map((diagnostic) => diagnostic.available && diagnostic.authenticated),
             Effect.catchAll(() => Effect.succeed(false)),
           ),
       })
