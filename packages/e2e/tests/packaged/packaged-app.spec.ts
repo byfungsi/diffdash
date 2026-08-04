@@ -268,6 +268,25 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(persistedReviewDisclosure).toBeVisible()
     await persistedReviewDisclosure.click()
     await expect(restartedWindow.getByText("Fixture review response")).toBeVisible()
+
+    await app.close()
+    app = await electron.launch({
+      ...launchOptions,
+      args: [
+        ...launchOptions.args,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        revisions.base,
+        revisions.head,
+        "--repository=fixture:platform/backend/service",
+      ],
+    })
+    const comparisonWindow = await app.firstWindow()
+    await expect(comparisonWindow.locator("[data-review-editor-header]")).toContainText(
+      `${revisions.base}...${revisions.head}`,
+    )
+    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible()
   } finally {
     await app.close().catch(() => undefined)
   }

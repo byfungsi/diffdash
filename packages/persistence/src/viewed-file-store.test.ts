@@ -127,6 +127,53 @@ describe("ViewedFileStore", () => {
     }),
   )
 
+  it.scoped("isolates repository-comparison viewed state by immutable head identity", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const repositoryStore = yield* RepositoryStore
+        const viewedFiles = yield* ViewedFileStore
+        const repo = yield* repositoryStore.upsertRepository({
+          localPath: "/repo",
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+        })
+        const scope: LocalViewedFileScope = {
+          comparisonKind: "repositoryComparison",
+          comparisonTarget: "b".repeat(40),
+          repoId: repo.id,
+          sourceIdentity: `comparison:repository-comparison:v1:${repo.id}:${"a".repeat(40)}:${"b".repeat(40)}:${"c".repeat(40)}`,
+        }
+
+        yield* viewedFiles.setLocal({
+          ...scope,
+          patchHash: patchA,
+          reviewKey: "src/app.tsx",
+          viewed: true,
+        })
+
+        expect(yield* viewedFiles.listLocal(scope)).toEqual([
+          { patchHash: patchA, reviewKey: "src/app.tsx" },
+        ])
+        expect(
+          yield* viewedFiles.listLocal({ ...scope, comparisonTarget: "d".repeat(40) }),
+        ).toEqual([])
+        expect(
+          yield* viewedFiles.listLocal({
+            ...scope,
+            sourceIdentity: scope.sourceIdentity.replace(
+              `:${"c".repeat(40)}`,
+              `:${"d".repeat(40)}`,
+            ),
+          }),
+        ).toEqual([])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.scoped("fully decodes hosted and local viewed-file rows", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath

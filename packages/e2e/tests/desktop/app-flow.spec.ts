@@ -831,6 +831,121 @@ test("forwards a CLI command to the running DiffDash instance", async ({
   }
 })
 
+test("opens and forwards immutable repository comparisons through Electron", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(90_000)
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const remoteRepo = testInfo.outputPath("comparison.git")
+  const sourceRepo = testInfo.outputPath("comparison-source")
+  const worktreePool = testInfo.outputPath("worktree-pool")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+  const revisions = await installComparisonRepository(sourceRepo, remoteRepo)
+
+  const appEnvironment = {
+    ...process.env,
+    DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
+    DIFFDASH_E2E_FAKE_GIT_REMOTE: remoteRepo,
+    DIFFDASH_E2E_HIDDEN: "1",
+    DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
+    FAKE_USE_REAL_GIT: "1",
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    REAL_GIT_PATH: "/usr/bin/git",
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
+  const launchArgs = [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`]
+  let app = await electron.launch({ args: launchArgs, env: appEnvironment })
+
+  try {
+    const setupWindow = await app.firstWindow()
+    await dismissOnboardingIfPresent(setupWindow)
+    await setupWindow.evaluate(async () => {
+      const providers = await globalThis.window.diffDash.providers.list()
+      const fixture = providers.find(({ id }) => id === "fixture")
+      if (fixture === undefined) throw new Error("Fixture provider was not registered")
+      const results = await globalThis.window.diffDash.hostedRepositories.searchRepositories({
+        providerId: fixture.id,
+        query: "service",
+        namespaces: [],
+      })
+      const repository = results[0]
+      if (repository === undefined) throw new Error("Fixture comparison repository was not found")
+      await globalThis.window.diffDash.repositories.favoriteRemote(repository)
+    })
+    await app.close()
+
+    app = await electron.launch({
+      args: [
+        ...launchArgs,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        "comparison-base",
+        "comparison-head",
+        "--repository=fixture:platform/backend/service",
+      ],
+      env: appEnvironment,
+    })
+    const window = await app.firstWindow()
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      "comparison-base...comparison-head",
+    )
+    await expect(window.getByText("src/comparison.ts").first()).toBeVisible()
+    await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
+
+    const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
+      cwd: desktopRoot,
+      encoding: "utf8",
+    }).trim()
+    execFileSync(
+      electronExecutable,
+      [
+        ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+        ...launchArgs,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        revisions.base,
+        revisions.head,
+        "--repository=fixture:platform/backend/service",
+      ],
+      { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
+    )
+
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      `${revisions.base}...${revisions.head}`,
+    )
+    await expect
+      .poll(async () => ({
+        alerts: await window.getByRole("alert").allTextContents(),
+        notices: await window.locator("output").allTextContents(),
+        workspaceStates: readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+          .workspaceStates.length,
+      }))
+      .toEqual({ alerts: [], notices: [], workspaceStates: 1 })
+  } finally {
+    await app.close().catch(() => undefined)
+  }
+
+  const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+  expect(persisted.workspaceStates).toHaveLength(1)
+  expect(
+    JSON.parse(String(persisted.workspaceStates[0]?.selected_review_target_json)) as unknown,
+  ).toMatchObject({
+    kind: "repositoryComparison",
+    baseSha: revisions.base,
+    headSha: revisions.head,
+    mergeBaseSha: revisions.base,
+  })
+})
+
 test("shows a reloadable Electron fallback when the renderer cannot load", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -1204,6 +1319,23 @@ const installPullRequestRepository = async (source: string, remote: string) => {
   realGit(source, "reset", "--hard", baseSha)
   await writeFile(join(source, "user-local.txt"), "preserve\n")
   return { baseSha, headSha, remote }
+}
+
+const installComparisonRepository = async (source: string, remote: string) => {
+  await mkdir(join(source, "src"), { recursive: true })
+  realGit(source, "init")
+  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'base'\n")
+  realGit(source, "add", ".")
+  commit(source, "comparison base")
+  const base = realGit(source, "rev-parse", "HEAD")
+  realGit(source, "tag", "comparison-base")
+  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'head'\n")
+  realGit(source, "add", ".")
+  commit(source, "comparison head")
+  const head = realGit(source, "rev-parse", "HEAD")
+  realGit(source, "tag", "comparison-head")
+  realGit(process.cwd(), "clone", "--bare", source, remote)
+  return { base, head }
 }
 
 const commit = (cwd: string, message: string) =>

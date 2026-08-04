@@ -782,6 +782,45 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
+  it.scoped("reads and materializes the pinned comparison after its head ref moves", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const result = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const requested = comparisonInput(value, "base", "feature")
+        const pinned = yield* pool.pinComparison(requested)
+        const comparison = { ...requested, ...pinned }
+
+        git(value.source, "push", "--force", "origin", `${value.secondHeadSha}:refs/heads/feature`)
+
+        const diff = yield* pool.readComparisonDiff(comparison)
+        let workspacePath = ""
+        const workspace = yield* pool.useComparison(comparison, (localPath) =>
+          Effect.sync(() => {
+            workspacePath = localPath
+            return {
+              branch: git(localPath, "branch", "--show-current"),
+              content: readFileSync(join(localPath, "tracked.txt"), "utf8"),
+              head: git(localPath, "rev-parse", "HEAD"),
+            }
+          }),
+        )
+        return { diff, workspace, workspacePath }
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(result.diff).toContain("-base")
+      expect(result.diff).toContain("+feature")
+      expect(result.diff).not.toContain("feature two")
+      expect(result.workspace).toEqual({
+        branch: "",
+        content: "feature\n",
+        head: value.headSha,
+      })
+      expect(existsSync(result.workspacePath)).toBe(false)
+      expect(readFileSync(join(value.source, "tracked.txt"), "utf8")).toBe("base\n")
+    }),
+  )
+
   it.scoped("deepens a shallow linked checkout before resolving merge-base", () =>
     Effect.gen(function* () {
       const value = yield* fixture

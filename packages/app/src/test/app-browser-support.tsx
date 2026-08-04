@@ -2404,6 +2404,12 @@ scenario("cliRepositoryComparison", async () => {
     expect(document.body.textContent).not.toContain("Approve pull request")
     expect(calls.openProject).not.toHaveBeenCalled()
     expect(calls.resolveBranch).not.toHaveBeenCalled()
+    expect(calls.saveProjectWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRibbon: "files",
+        selectedReviewTarget: expect.objectContaining({ kind: "repositoryComparison" }),
+      }),
+    )
   })
 })
 

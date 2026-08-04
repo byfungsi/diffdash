@@ -1,8 +1,13 @@
-import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { makeHostedRepositoryLocator, makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
 import { Repo } from "@diffdash/domain/repository"
+import {
+  GitCommitSha,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "vitest"
@@ -61,6 +66,26 @@ describe("project workspace state", () => {
       selectedReview: { kind: "hosted", review: hosted.review },
     })
     expect(selectedReviewTargetForPersistence({ kind: "localDiff", target: local })).toEqual(local)
+  })
+
+  it("rehydrates structural repository comparisons at the persistence boundary", () => {
+    const target = {
+      kind: "repositoryComparison" as const,
+      repository: { ...makeHostedRepositoryLocator("github", "fungsi", "diffdash") },
+      baseRef: RepositoryComparisonRef.make("v1.0.0"),
+      headRef: RepositoryComparisonRef.make("v1.1.0"),
+      baseSha: GitCommitSha.make("a".repeat(40)),
+      headSha: GitCommitSha.make("b".repeat(40)),
+      mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+    }
+
+    const persisted = selectedReviewTargetForPersistence({
+      kind: "repositoryComparison",
+      target,
+    })
+
+    expect(persisted).toBeInstanceOf(RepositoryComparisonTarget)
+    expect(persisted).toEqual(target)
   })
 
   it("falls back visibly for malformed, mismatched, and foreign targets", () => {

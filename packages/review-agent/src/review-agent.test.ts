@@ -32,8 +32,17 @@ import {
 } from "@diffdash/domain/local-review"
 import { ReviewAgentArtifact, ReviewAgentUsage } from "@diffdash/domain/review-agent"
 import {
+  GitCommitSha,
+  makeRepositoryComparisonReviewKey,
+  RepositoryComparisonDetail,
+  RepositoryComparisonDiff,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
+import {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
   type ReviewSnapshot,
 } from "@diffdash/domain/review-context"
 import {
@@ -69,6 +78,7 @@ import {
 import {
   HostedReviewWorkspacePool,
   HostedReviewWorkspacePoolError,
+  type PinnedRepositoryComparisonInput,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import { AgentRunStore } from "@diffdash/persistence/agent-run-store"
@@ -169,6 +179,33 @@ const pullRequestSnapshot = HostedReviewSnapshot.make({
   }),
   parsedDiff: parseUnifiedDiff(diff),
 })
+const comparisonTarget = RepositoryComparisonTarget.make({
+  kind: "repositoryComparison",
+  repository: pullRequestLocator.repository,
+  baseRef: RepositoryComparisonRef.make("v1.0.0"),
+  headRef: RepositoryComparisonRef.make("v1.1.0"),
+  baseSha: GitCommitSha.make("a".repeat(40)),
+  headSha: GitCommitSha.make("b".repeat(40)),
+  mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+})
+const comparisonSnapshot = RepositoryComparisonSnapshot.make({
+  snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000003"),
+  reviewKey: makeRepositoryComparisonReviewKey(comparisonTarget),
+  baseRevision: ReviewRevision.make(comparisonTarget.mergeBaseSha),
+  headRevision: ReviewRevision.make(comparisonTarget.headSha),
+  detail: RepositoryComparisonDetail.make({
+    target: comparisonTarget,
+    title: "v1.0.0...v1.1.0",
+    files: [],
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  }),
+  diff: RepositoryComparisonDiff.make({
+    target: comparisonTarget,
+    diff,
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  }),
+  parsedDiff: parseUnifiedDiff(diff),
+})
 const lineAnchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-agent"),
   filePath: "src/a.ts",
@@ -220,9 +257,10 @@ const turnIdentity = (details: ReviewThreadDetails, reviewSnapshot: ReviewSnapsh
   if (currentAnchor === null) throw new Error("Test review thread requires an active anchor")
   if (
     !(reviewSnapshot instanceof HostedReviewSnapshot) &&
-    !(reviewSnapshot instanceof LocalReviewSnapshot)
+    !(reviewSnapshot instanceof LocalReviewSnapshot) &&
+    !(reviewSnapshot instanceof RepositoryComparisonSnapshot)
   ) {
-    throw new Error("Test review turn requires a hosted or local snapshot")
+    throw new Error("Test review turn requires a supported snapshot")
   }
   return {
     repoId: details.thread.repoId,
@@ -232,11 +270,13 @@ const turnIdentity = (details: ReviewThreadDetails, reviewSnapshot: ReviewSnapsh
             kind: "hosted",
             review: reviewSnapshot.detail.summary.locator,
           })
-        : LocalReviewTarget.make({
-            kind: "local",
-            rootPath: reviewSnapshot.detail.rootPath,
-            comparison: reviewSnapshot.detail.comparison,
-          }),
+        : reviewSnapshot instanceof RepositoryComparisonSnapshot
+          ? reviewSnapshot.detail.target
+          : LocalReviewTarget.make({
+              kind: "local",
+              rootPath: reviewSnapshot.detail.rootPath,
+              comparison: reviewSnapshot.detail.comparison,
+            }),
     mapping: ReviewTurnMappingToken.make({
       threadId: details.thread.id,
       repoId: details.thread.repoId,
@@ -282,6 +322,7 @@ const makeLayer = (
     count: number
     events?: string[]
     mcpPaths?: Array<string | null>
+    comparisonInputs?: PinnedRepositoryComparisonInput[]
     workspaceFailure?: HostedReviewWorkspacePoolError
     turnFailure?: ReviewTurnWriteStep
   },
@@ -377,8 +418,16 @@ const makeLayer = (
       pinComparison: () => Effect.dieMessage("Unexpected comparison pinning in review-agent test"),
       readComparisonDiff: () =>
         Effect.dieMessage("Unexpected comparison diff read in review-agent test"),
-      useComparison: () =>
-        Effect.dieMessage("Unexpected comparison workspace use in review-agent test"),
+      useComparison: (input, run) =>
+        Effect.acquireUseRelease(
+          Effect.sync(() => {
+            released.comparisonInputs?.push(input)
+            released.events?.push("comparison.acquire")
+            return "/workspace/comparison"
+          }),
+          run,
+          () => Effect.sync(() => released.events?.push("comparison.release")),
+        ),
       use: (_input, run, onProgress) =>
         released.workspaceFailure === undefined
           ? Effect.acquireUseRelease(
@@ -527,6 +576,68 @@ describe("ReviewAgentService", () => {
         "mcp.release",
         "progress.restoring-workspace",
         "worktree.release",
+      ])
+    }),
+  )
+
+  it.scoped("runs repository-comparison agents in the pinned head workspace", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const released = {
+        count: 0,
+        events: [] as string[],
+        mcpPaths: [] as Array<string | null>,
+        comparisonInputs: [] as PinnedRepositoryComparisonInput[],
+      }
+      const layer = makeLayer(
+        databasePath,
+        (input) =>
+          Effect.sync(() => {
+            expect(input.workingDirectory).toBe("/workspace/comparison")
+          }).pipe(Effect.as(makeProviderResult({ bodyMarkdown: "Reviewed pinned comparison." }))),
+        released,
+      )
+
+      yield* Effect.gen(function* () {
+        const repo = yield* (yield* RepositoryStore).upsertRepository({
+          provider: "github",
+          owner: "fungsi",
+          name: "diffdash",
+          remoteUrl: "git@github.com:fungsi/diffdash.git",
+          localPath: "/workspace/user-checkout",
+        })
+        const created = yield* (yield* ReviewThreadStore).create({
+          repoId: repo.id,
+          reviewKey: comparisonSnapshot.reviewKey,
+          prNumber: null,
+          baseRevision: comparisonSnapshot.baseRevision,
+          headRevision: comparisonSnapshot.headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Inspect the immutable comparison."),
+        })
+        yield* (yield* ReviewAgentService).runThreadTurn({
+          threadId: created.thread.id,
+          ...turnIdentity(created, comparisonSnapshot),
+          snapshot: comparisonSnapshot,
+          cwd: repo.localPath,
+          walkthrough: null,
+        })
+      }).pipe(Effect.provide(layer))
+
+      expect(released.comparisonInputs).toEqual([
+        expect.objectContaining({
+          sourcePath: "/workspace/user-checkout",
+          baseSha: comparisonTarget.baseSha,
+          headSha: comparisonTarget.headSha,
+          mergeBaseSha: comparisonTarget.mergeBaseSha,
+        }),
+      ])
+      expect(released.mcpPaths).toEqual(["/workspace/comparison"])
+      expect(released.events).toEqual([
+        "comparison.acquire",
+        "mcp.acquire",
+        "mcp.release",
+        "comparison.release",
       ])
     }),
   )

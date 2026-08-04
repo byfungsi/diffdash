@@ -513,6 +513,6 @@ const RESPONSE_SCHEMA = JSON.stringify(REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
 const MCP_INSTRUCTIONS = `DiffDash provides getReviewContext, getChangedFiles, searchReviewDiff, getDiffHunk, getDiffFile, searchRepository, readRepositoryFile, getThreadContext, getOlderThreadMessages, getPriorArtifact, and getWalkthroughContext.
 Use getChangedFiles with offset and limit to page through the complete, deterministically ordered changed-file inventory.
 Use searchReviewDiff for fixed-string discovery across immutable parsed hunk lines, optionally scoped to a path. Use getDiffHunk or getDiffFile when exact surrounding patch text is needed.
-For linked pull-request reviews, use searchRepository and readRepositoryFile to inspect unchanged source at the exact review head. If they are unavailable, do not substitute default-branch GitHub search for revision-correct evidence.
+For hosted and repository-comparison reviews, use searchRepository and readRepositoryFile to inspect unchanged source at the exact review head. If they are unavailable, do not substitute default-branch provider search for revision-correct evidence.
 A DIFFDASH_HUNK_SLICE marker means the current anchor hunk was hard-bounded; page through getDiffHunk before making claims about omitted lines.
 Tools expand available context; they must not be used to silently classify changed files or hunks as irrelevant.`

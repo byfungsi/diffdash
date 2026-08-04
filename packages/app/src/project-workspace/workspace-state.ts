@@ -5,6 +5,7 @@ import type {
 } from "@diffdash/domain/project-workspace"
 import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { Either, Schema } from "effect"
@@ -39,8 +40,18 @@ export const enqueueProjectWorkspaceSave = (
 /** Converts renderer selection into the lossless persisted review-target representation. */
 export const selectedReviewTargetForPersistence = (selection: SelectedReviewTarget | null) => {
   if (selection === null) return null
-  return selection.kind === "hosted"
-    ? HostedReviewTarget.make({ kind: "hosted", review: selection.review })
+  if (selection.kind === "hosted") {
+    return HostedReviewTarget.make({ kind: "hosted", review: selection.review })
+  }
+  return selection.kind === "repositoryComparison"
+    ? RepositoryComparisonTarget.make({
+        ...selection.target,
+        repository: makeHostedRepositoryLocator(
+          selection.target.repository.providerId,
+          selection.target.repository.namespace,
+          selection.target.repository.name,
+        ),
+      })
     : selection.target
 }
 

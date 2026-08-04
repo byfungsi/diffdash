@@ -719,12 +719,14 @@ export function AppShell() {
       setActionStatus("Resolving repository comparison...")
       try {
         const comparison = await window.diffDash.repositoryComparisons.resolve(command)
-        showProject(
-          comparison.repo,
-          "files",
-          { kind: "repositoryComparison", target: comparison.target },
-          null,
-          true,
+        const selection = { kind: "repositoryComparison", target: comparison.target } as const
+        showProject(comparison.repo, "files", selection, null, false)
+        await window.diffDash.projectWorkspace.save(
+          ProjectWorkspaceStateInput.make({
+            projectId: projectIdForRepo(comparison.repo),
+            activeRibbon: "files",
+            selectedReviewTarget: selectedReviewTargetForPersistence(selection),
+          }),
         )
         captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
       } catch (error) {
