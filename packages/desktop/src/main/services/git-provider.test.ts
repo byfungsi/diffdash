@@ -12,10 +12,11 @@ import { Effect, Layer } from "effect"
 
 import { GitProvider } from "./git-provider"
 
+const unexpectedProviderOperation = () => Effect.dieMessage("Unexpected provider operation")
+
 describe("GitProvider", () => {
   it.effect("requires provider support and authentication for remote acquisition", () => {
     const providerId = GitProviderId.make("test")
-    const unexpectedOperation = () => Effect.dieMessage("Unexpected provider operation")
     const provider = {
       descriptor: GitProviderDescriptor.make({
         id: providerId,
@@ -46,17 +47,17 @@ describe("GitProvider", () => {
           message: "Authenticate the test provider.",
         }),
       ),
-      parseRemote: unexpectedOperation,
-      searchRepositories: unexpectedOperation,
-      listReviews: unexpectedOperation,
-      getReview: unexpectedOperation,
-      getReviewDiff: unexpectedOperation,
-      getReviewDecision: unexpectedOperation,
-      submitReviewDecision: unexpectedOperation,
-      repositoryUrl: unexpectedOperation,
-      fileUrl: unexpectedOperation,
-      bootstrapBareRepository: unexpectedOperation,
-      checkoutSpec: unexpectedOperation,
+      parseRemote: unexpectedProviderOperation,
+      searchRepositories: unexpectedProviderOperation,
+      listReviews: unexpectedProviderOperation,
+      getReview: unexpectedProviderOperation,
+      getReviewDiff: unexpectedProviderOperation,
+      getReviewDecision: unexpectedProviderOperation,
+      submitReviewDecision: unexpectedProviderOperation,
+      repositoryUrl: unexpectedProviderOperation,
+      fileUrl: unexpectedProviderOperation,
+      bootstrapBareRepository: unexpectedProviderOperation,
+      checkoutSpec: unexpectedProviderOperation,
     } satisfies GitProviderRegistration
     const layer = GitProvider.layer.pipe(Layer.provide(GitProviderRegistry.layer([provider])))
 
