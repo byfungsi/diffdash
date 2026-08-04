@@ -1,5 +1,7 @@
 import { isAbsolute, resolve } from "node:path"
-import { Schema } from "effect"
+import { Args, Command, HelpDoc, Options } from "@effect/cli"
+import * as NodeContext from "@effect/platform-node/NodeContext"
+import { Console, Effect, Option } from "effect"
 
 import {
   GitProviderId,
@@ -85,129 +87,216 @@ const parseLegacyEnvelopeCwd = (
   return undefined
 }
 
-const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigationCommand => {
-  const command = args[0]
-  if (command === "install") {
-    const error = validateOptionalArgument(args, "diffdash install [path]")
-    return error ?? LinkRepositoryCommand.make({ localPath: resolve(cwd, args[1] ?? ".") })
-  }
-
-  if (command === "pr") {
-    const error = validateOptionalArgument(args, "diffdash pr [pr-number]")
-    if (error !== null) return error
-    const rawNumber = args[1]
-    if (rawNumber === undefined) {
-      return OpenPullRequestCommand.make({ localPath: resolve(cwd), number: null })
-    }
-    const number = Number(rawNumber)
-    if (!Number.isSafeInteger(number) || number <= 0) {
-      return cliError(
-        "Pull request number must be a positive integer.\nUsage: diffdash pr [pr-number]",
-      )
-    }
-    return OpenPullRequestCommand.make({ localPath: resolve(cwd), number })
-  }
-
-  if (command === "diff") {
-    const error = validateOptionalArgument(args, "diffdash diff [branch-name]")
-    if (error !== null) return error
-    return OpenBranchDiffCommand.make({
-      localPath: resolve(cwd),
-      branchName: args[1] ?? null,
-    })
-  }
-
-  if (command === "compare") return parseCompareCommand(args, cwd)
-
-  if (command === "repair") {
-    return args.length === 1
-      ? RepairRepositoryIdentitiesCommand.make({})
-      : cliError("Too many arguments.\nUsage: diffdash repair")
-  }
-
-  if (args.length > 1) {
-    return cliError("diffdash accepts at most one path.\nUsage: diffdash [path]")
-  }
-  if (command?.startsWith("-") === true) {
-    return cliError(`Unknown option: ${command}\nUsage: diffdash [path]`)
-  }
-  return OpenProjectCommand.make({ localPath: resolve(cwd, command ?? ".") })
-}
-
-const validateOptionalArgument = (
-  args: readonly string[],
-  usage: string,
-): CliNavigationErrorCommand | null => {
-  const argument = args[1]
-  if (argument?.startsWith("-") === true) {
-    return cliError(`Unknown option: ${argument}\nUsage: ${usage}`)
-  }
-  return args.length > 2 ? cliError(`Too many arguments.\nUsage: ${usage}`) : null
-}
-
 const cliError = (message: string) => CliNavigationErrorCommand.make({ message })
 
-const COMPARE_USAGE =
-  "diffdash compare <base> <head> [--repository=<provider:namespace/name|namespace/name>]"
+const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigationCommand | null => {
+  const compatibilityError = validatePublicArgumentCompatibility(args)
+  if (compatibilityError !== null) return compatibilityError
+  let result: CliNavigationCommand | null = null
+  const select = (command: CliNavigationCommand) =>
+    Effect.sync(() => {
+      result = command
+    })
 
-const parseCompareCommand = (args: readonly string[], cwd: string): CliNavigationCommand => {
+  const optionalPath = Args.text({ name: "path" }).pipe(Args.optional)
+  const install = Command.make("install", { path: optionalPath }, ({ path }) =>
+    select(
+      LinkRepositoryCommand.make({
+        localPath: resolve(
+          cwd,
+          Option.getOrElse(path, () => "."),
+        ),
+      }),
+    ),
+  ).pipe(Command.withDescription("Save a local Git repository in DiffDash"))
+  const pullRequestNumber = Args.text({ name: "pr-number" }).pipe(
+    Args.mapTryCatch(
+      (input) => {
+        const number = Number(input)
+        if (!Number.isSafeInteger(number) || number <= 0) throw new Error("invalid PR number")
+        return number
+      },
+      () => HelpDoc.p("Pull request number must be a positive integer."),
+    ),
+    Args.optional,
+  )
+  const pullRequest = Command.make("pr", { number: pullRequestNumber }, ({ number }) =>
+    select(
+      OpenPullRequestCommand.make({
+        localPath: resolve(cwd),
+        number: Option.getOrNull(number),
+      }),
+    ),
+  ).pipe(Command.withDescription("Open a repository's pull requests"))
+  const branch = Args.text({ name: "branch-name" }).pipe(Args.optional)
+  const diff = Command.make("diff", { branch }, ({ branch: branchName }) =>
+    select(
+      OpenBranchDiffCommand.make({
+        localPath: resolve(cwd),
+        branchName: Option.getOrNull(branchName),
+      }),
+    ),
+  ).pipe(Command.withDescription("Open local changes against a branch"))
+  const baseRef = gitRevisionArgument("base")
+  const headRef = gitRevisionArgument("head")
+  const repository = Options.text("repository").pipe(
+    Options.mapTryCatch(
+      (input) => {
+        const selector = parseRepositorySelector(input)
+        if (selector === null) throw new Error("invalid repository selector")
+        return selector
+      },
+      () => HelpDoc.p("Repository must be provider:namespace/name or namespace/name."),
+    ),
+    Options.withDescription("Saved repository to compare"),
+    Options.optional,
+  )
+  const compare = Command.make(
+    "compare",
+    { baseRef, headRef, repository },
+    ({ baseRef: parsedBaseRef, headRef: parsedHeadRef, repository: parsedRepository }) =>
+      select(
+        OpenRepositoryComparisonCommand.make({
+          localPath: resolve(cwd),
+          repository: Option.getOrNull(parsedRepository),
+          baseRef: parsedBaseRef,
+          headRef: parsedHeadRef,
+        }),
+      ),
+  ).pipe(Command.withDescription("Open an immutable repository comparison"))
+  const repair = Command.make("repair", {}, () =>
+    select(RepairRepositoryIdentitiesCommand.make({})),
+  ).pipe(Command.withDescription("Repair saved repository identities"))
+  const root = Command.make("diffdash", { path: optionalPath }, ({ path }) =>
+    select(
+      OpenProjectCommand.make({
+        localPath: resolve(
+          cwd,
+          Option.getOrElse(path, () => "."),
+        ),
+      }),
+    ),
+  ).pipe(
+    Command.withDescription("Desktop code review for local and hosted Git repositories"),
+    Command.withSubcommands([install, pullRequest, diff, compare, repair]),
+  )
+
+  const normalizedArgs = normalizePublicArguments(args)
+  const program = Command.run(root, { name: "diffdash", version: "0.0.0" })([
+    "node",
+    "diffdash",
+    ...normalizedArgs,
+  ]).pipe(
+    Effect.catchAll((error) =>
+      select(cliError(stripAnsi(HelpDoc.toAnsiText(error.error)).trim() || "Invalid command.")),
+    ),
+    silenceConsole,
+    Effect.provide(NodeContext.layer),
+  )
+  Effect.runSync(program)
+  return result
+}
+
+const gitRevisionArgument = (name: "base" | "head") =>
+  Args.text({ name }).pipe(
+    Args.mapTryCatch(
+      (input) => CliGitRevision.make(input),
+      () => HelpDoc.p(`Invalid ${name} revision.`),
+    ),
+  )
+
+const normalizePublicArguments = (args: readonly string[]): readonly string[] => {
+  if (args[0] !== "compare") return args
+  const options: string[] = []
   const positionals: string[] = []
-  let repositoryInput: string | null = null
-
   for (let index = 1; index < args.length; index += 1) {
     const argument = args[index]
     if (argument === undefined) continue
     if (argument === "--repository") {
-      if (repositoryInput !== null)
-        return cliError(`Duplicate option: --repository\nUsage: ${COMPARE_USAGE}`)
+      options.push(argument)
       const value = args[index + 1]
-      if (value === undefined || value.length === 0 || value.startsWith("-")) {
-        return cliError(`--repository requires a value.\nUsage: ${COMPARE_USAGE}`)
+      if (value !== undefined) {
+        options.push(value)
+        index += 1
       }
-      repositoryInput = value
-      index += 1
-      continue
+    } else if (argument.startsWith("-")) {
+      options.push(argument)
+    } else {
+      positionals.push(argument)
     }
-    if (argument.startsWith("--repository=")) {
-      if (repositoryInput !== null)
-        return cliError(`Duplicate option: --repository\nUsage: ${COMPARE_USAGE}`)
-      repositoryInput = argument.slice("--repository=".length)
-      if (repositoryInput.length === 0) {
-        return cliError(`--repository requires a value.\nUsage: ${COMPARE_USAGE}`)
-      }
-      continue
-    }
-    if (argument.startsWith("-")) {
-      return cliError(`Unknown option: ${argument}\nUsage: ${COMPARE_USAGE}`)
-    }
-    positionals.push(argument)
   }
-
-  if (positionals.length !== 2) {
-    const message =
-      positionals.length < 2 ? "Base and head revisions are required." : "Too many arguments."
-    return cliError(`${message}\nUsage: ${COMPARE_USAGE}`)
-  }
-  const [baseRef, headRef] = positionals
-  if (baseRef === undefined || !Schema.is(CliGitRevision)(baseRef)) {
-    return cliError(`Invalid base revision.\nUsage: ${COMPARE_USAGE}`)
-  }
-  if (headRef === undefined || !Schema.is(CliGitRevision)(headRef)) {
-    return cliError(`Invalid head revision.\nUsage: ${COMPARE_USAGE}`)
-  }
-
-  const repository = repositoryInput === null ? null : parseRepositorySelector(repositoryInput)
-  if (repositoryInput !== null && repository === null) {
-    return cliError(`Invalid repository selector.\nUsage: ${COMPARE_USAGE}`)
-  }
-
-  return OpenRepositoryComparisonCommand.make({
-    localPath: resolve(cwd),
-    repository,
-    baseRef: CliGitRevision.make(baseRef),
-    headRef: CliGitRevision.make(headRef),
-  })
+  return ["compare", ...options, ...positionals]
 }
+
+const comparisonPositionalCount = (args: readonly string[]) => {
+  if (args[0] !== "compare") return 0
+  let count = 0
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (argument === "--repository") {
+      index += 1
+    } else if (argument?.startsWith("-") !== true) {
+      count += 1
+    }
+  }
+  return count
+}
+
+const validatePublicArgumentCompatibility = (
+  args: readonly string[],
+): CliNavigationErrorCommand | null => {
+  if (args[0] !== "compare") {
+    const unsupportedOption = args.find(
+      (argument) => argument.startsWith("-") && argument !== "--help" && argument !== "-h",
+    )
+    if (unsupportedOption !== undefined) {
+      return cliError(`Unrecognized option '${unsupportedOption}'.`)
+    }
+    const maximumArguments = args[0] === "install" || args[0] === "pr" || args[0] === "diff" ? 2 : 1
+    return args.length > maximumArguments ? cliError("Too many arguments.") : null
+  }
+  let repositoryOptions = 0
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (argument === undefined) continue
+    if (argument === "--repository" || argument.startsWith("--repository=")) {
+      repositoryOptions += 1
+      if (argument === "--repository" && args[index + 1] === undefined) {
+        return cliError("Option '--repository' requires a value.")
+      }
+    } else if (argument === "--help" || argument === "-h") {
+      continue
+    } else if (argument.startsWith("-")) {
+      return cliError(`Unrecognized option '${argument}'.`)
+    }
+  }
+  if (repositoryOptions > 1) {
+    return cliError("Option '--repository' may only be specified once.")
+  }
+  return comparisonPositionalCount(args) > 2
+    ? cliError("Received an unexpected comparison argument.")
+    : null
+}
+
+const silenceConsole = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+  Console.consoleWith((current) =>
+    program.pipe(
+      Console.withConsole({
+        ...current,
+        error: () => Effect.void,
+        log: () => Effect.void,
+        unsafe: {
+          ...current.unsafe,
+          error: () => undefined,
+          log: () => undefined,
+        },
+      }),
+    ),
+  )
+
+const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g")
+
+const stripAnsi = (input: string) => input.replace(ansiEscapePattern, "")
 
 const parseRepositorySelector = (input: string): CliRepositorySelector | null => {
   const separator = input.indexOf(":")

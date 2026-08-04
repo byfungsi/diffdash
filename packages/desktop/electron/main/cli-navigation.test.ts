@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest"
+import { describe, expect, it, vi } from "@effect/vitest"
 import {
   OpenBranchDiffCommand,
   RepairRepositoryIdentitiesCommand,
@@ -92,14 +92,26 @@ describe("parseCliNavigationCommand", () => {
     })
     expect(parse(["repair", "extra"])).toMatchObject({
       _tag: "error",
-      message: expect.stringContaining("Usage: diffdash repair"),
+      message: expect.stringContaining("Too many arguments"),
+    })
+    expect(parse(["--unknown"])).toMatchObject({
+      _tag: "error",
+      message: expect.stringContaining("Unrecognized option"),
+    })
+    expect(parse(["--version"])).toMatchObject({
+      _tag: "error",
+      message: expect.stringContaining("Unrecognized option"),
     })
   })
 
   it.each([
     {
+      args: ["compare", "v6.0", "v6.1", "--repository"],
+      message: "requires a value",
+    },
+    {
       args: ["compare", "v6.0", "--repository=torvalds/linux"],
-      message: "Base and head revisions are required",
+      message: "Missing argument <head>",
     },
     {
       args: [
@@ -109,15 +121,15 @@ describe("parseCliNavigationCommand", () => {
         "--repository=torvalds/linux",
         "--repository=github:torvalds/linux",
       ],
-      message: "Duplicate option",
+      message: "may only be specified once",
     },
     {
       args: ["compare", "v6.0", "v6.1", "--repo=torvalds/linux"],
-      message: "Unknown option",
+      message: "Unrecognized option",
     },
     {
       args: ["compare", "v6.0", "v6.1", "--repository=torvalds"],
-      message: "Invalid repository selector",
+      message: "Repository must be",
     },
     {
       args: ["compare", "v6..0", "v6.1", "--repository=torvalds/linux"],
@@ -129,10 +141,25 @@ describe("parseCliNavigationCommand", () => {
     },
     {
       args: ["compare", "v6.0", "v6.1", "extra", "--repository=torvalds/linux"],
-      message: "Too many arguments",
+      message: "unexpected comparison argument",
     },
   ])("returns a navigation error for invalid comparison syntax", ({ args, message }) => {
     expect(parse(args)).toMatchObject({ _tag: "error", message: expect.stringContaining(message) })
+  })
+
+  it("handles built-in help without enqueueing a navigation command", () => {
+    expect(parse(["--help"])).toBeNull()
+    expect(parse(["compare", "--help"])).toBeNull()
+  })
+
+  it("captures parser diagnostics instead of writing them from the Electron process", () => {
+    const writeError = vi.spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      expect(parse(["pr", "zero"])).toMatchObject({ _tag: "error" })
+      expect(writeError).not.toHaveBeenCalled()
+    } finally {
+      writeError.mockRestore()
+    }
   })
 
   it("keeps legacy packaged launcher arguments working", () => {
