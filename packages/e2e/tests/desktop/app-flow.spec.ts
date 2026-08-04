@@ -6,6 +6,105 @@ import { _electron as electron, expect, type Locator, type Page, test } from "@p
 
 const desktopRoot = join(process.cwd(), "../desktop")
 
+test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window width", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+
+  const app = await electron.launch({
+    args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_FAKE_AGENT_PROVIDER: "1",
+      DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    const shortcutButton = window.getByRole("button", {
+      name: /Keyboard shortcuts \((?:Cmd|Ctrl) \+ \/\)/,
+    })
+    const shortcutChord = window.locator("[data-workbench-shortcut-chord]")
+    await expect(shortcutButton).toBeVisible()
+    await expect(shortcutChord).toBeVisible()
+    await expect(shortcutChord).toHaveText(/^(?:Cmd|Ctrl) \+ \/$/)
+
+    await app.evaluate(({ BrowserWindow }) => {
+      const targetWindow = BrowserWindow.getAllWindows()[0]
+      if (targetWindow === undefined) throw new Error("BrowserWindow was not found")
+      targetWindow.setSize(720, 720)
+    })
+
+    await expect(shortcutButton).toBeVisible()
+    await expect(shortcutChord).toBeHidden()
+    await shortcutButton.click()
+    const dialog = window.getByRole("dialog", { name: "Keyboard shortcuts" })
+    await expect(dialog).toBeVisible()
+
+    const readShortcutLayout = () =>
+      window.evaluate(() => {
+        const commandCenter = document.querySelector<HTMLElement>("[data-workbench-command-center]")
+        const shortcutControl = document.querySelector<HTMLElement>(
+          "[data-workbench-keyboard-shortcuts]",
+        )
+        const shortcutChordElement = document.querySelector<HTMLElement>(
+          "[data-workbench-shortcut-chord]",
+        )
+        const shortcutDialog = document.querySelector<HTMLDialogElement>(
+          'dialog[aria-labelledby="keyboard-shortcut-reference-title"]',
+        )
+        if (
+          commandCenter === null ||
+          shortcutControl === null ||
+          shortcutChordElement === null ||
+          shortcutDialog === null
+        ) {
+          throw new Error("Shortcut layout was not found")
+        }
+        return {
+          commandRight: commandCenter.getBoundingClientRect().right,
+          dialogClientWidth: shortcutDialog.clientWidth,
+          dialogScrollWidth: shortcutDialog.scrollWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
+          innerWidth: globalThis.innerWidth,
+          shortcutChordDisplay: getComputedStyle(shortcutChordElement).display,
+          shortcutLeft: shortcutControl.getBoundingClientRect().left,
+        }
+      })
+
+    await expect.poll(readShortcutLayout).toMatchObject({
+      dialogClientWidth: expect.any(Number),
+      dialogScrollWidth: expect.any(Number),
+      documentScrollWidth: 720,
+      innerWidth: 720,
+      shortcutChordDisplay: "none",
+    })
+
+    const layout = await readShortcutLayout()
+    expect(layout.commandRight).toBeLessThan(layout.shortcutLeft)
+    expect(layout.dialogScrollWidth).toBeLessThanOrEqual(layout.dialogClientWidth)
+
+    await window.getByRole("button", { name: "Close keyboard shortcuts" }).click()
+    await expect(dialog).toBeHidden()
+  } finally {
+    await app.close()
+  }
+})
+
 test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider", async ({
   browserName: _browserName,
 }, testInfo) => {

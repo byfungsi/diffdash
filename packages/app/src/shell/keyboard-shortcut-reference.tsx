@@ -1,6 +1,7 @@
 import { Keyboard, X } from "lucide-react"
 import { useEffect, useRef } from "react"
 import { Button } from "@/shared/ui/button"
+import { keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
 
 type ShortcutToken = "mod" | "shift" | "enter" | "escape" | "slash" | "f" | "g" | "k" | "v"
 
@@ -72,7 +73,7 @@ export function KeyboardShortcutReference({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const wasOpenRef = useRef(false)
-  const modifierLabel = isMacPlatform() ? "Cmd" : "Ctrl"
+  const modifierLabel = keyboardShortcutModifierLabel()
 
   useEffect(() => {
     if (open) {
@@ -176,5 +177,3 @@ export function KeyboardShortcutReference({
     </div>
   )
 }
-
-const isMacPlatform = () => /Mac|iPhone|iPad|iPod/i.test(window.navigator.platform)

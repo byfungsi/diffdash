@@ -1,6 +1,7 @@
-import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react"
+import { ArrowLeft, Keyboard, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react"
 import { Button } from "@/shared/ui/button"
 import { cn } from "@/shared/utils"
+import { isMacPlatform, keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
 
 /** Application-level window chrome shared by every renderer screen. */
 export const WorkbenchTitlebar = ({
@@ -10,6 +11,7 @@ export const WorkbenchTitlebar = ({
   showSidebarToggle,
   sidebarExpanded,
   onNavigateBack,
+  onOpenKeyboardShortcuts,
   onOpenQuickNavigation,
   onContextActionsHostChange,
   onToggleSidebar,
@@ -20,11 +22,14 @@ export const WorkbenchTitlebar = ({
   readonly showSidebarToggle: boolean
   readonly sidebarExpanded: boolean
   readonly onNavigateBack: () => void
+  readonly onOpenKeyboardShortcuts: () => void
   readonly onOpenQuickNavigation: () => void
   readonly onContextActionsHostChange: (host: HTMLDivElement | null) => void
   readonly onToggleSidebar: () => void
 }) => {
   const isMac = isMacPlatform()
+  const shortcutModifier = keyboardShortcutModifierLabel()
+  const shortcutTitle = `Keyboard shortcuts (${shortcutModifier} + /)`
 
   return (
     <header
@@ -99,8 +104,27 @@ export const WorkbenchTitlebar = ({
           className="workbench-titlebar-interactive absolute top-0 left-full ml-1 flex h-7 items-center"
         />
       </div>
+
+      <div className="workbench-titlebar-interactive ml-auto flex items-center pr-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-workbench-keyboard-shortcuts
+          aria-label={shortcutTitle}
+          title={shortcutTitle}
+          className="text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg"
+          onClick={onOpenKeyboardShortcuts}
+        >
+          <Keyboard className="size-4" />
+          <kbd
+            data-workbench-shortcut-chord
+            className="border-shell-titlebar-border bg-shell-titlebar/55 hidden rounded border px-1.5 py-0.5 font-sans text-[10px] md:inline"
+          >
+            {isMac ? "Cmd + /" : "Ctrl + /"}
+          </kbd>
+        </Button>
+      </div>
     </header>
   )
 }
-
-const isMacPlatform = () => /Mac|iPhone|iPad|iPod/i.test(window.navigator.platform)
