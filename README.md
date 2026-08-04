@@ -62,6 +62,8 @@ Run `diffdash pr` inside a GitHub checkout to save it as a favorite and open its
 
 Run `diffdash diff [branch-name]` to review the current branch and local changes relative to another branch. When the target differs from the checked-out branch, DiffDash fetches the target from `origin` without checking it out, finds its merge base with the current `HEAD`, and shows current-branch commits plus staged, unstaged, and untracked changes. Changes that exist only on the target branch are excluded. With no branch name, DiffDash uses the default branch reported by `origin/HEAD`.
 
+Run `diffdash compare <base> <head> --repository=<namespace/name>` to review an immutable merge-base-to-head comparison from a saved or linked repository. Both revisions may be branch names, tags, or full commit SHAs. The unqualified `namespace/name` shorthand is accepted only when exactly one configured provider matches; DiffDash never assumes GitHub. Qualify ambiguous repositories explicitly, for example `diffdash compare v6.0 v6.1 --repository=github:torvalds/linux`.
+
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 
 Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install CLI** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward. Updated apps refresh marker-owned launchers found in the desktop environment's `PATH`, `~/.local/bin`, or `~/bin`; reinstall the CLI after updating if it lives in another custom directory.
