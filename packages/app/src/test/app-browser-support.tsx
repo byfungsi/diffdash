@@ -845,6 +845,27 @@ const noAgentPrerequisites = AppPrerequisites.make({
   installedCodingAgents: [],
 })
 
+const cliOnlyMissingPrerequisites = AppPrerequisites.make({
+  ...readyPrerequisites,
+  diffDashCliInstalled: false,
+  diffDashCliInPath: false,
+  diffDashCliPath: null,
+})
+
+const userLocalCliReadyPrerequisites = AppPrerequisites.make({
+  ...readyPrerequisites,
+  diffDashCliInstalled: true,
+  diffDashCliInPath: false,
+  diffDashCliPath: "/home/user/.local/bin/diffdash",
+})
+
+const userLocalCliReadyWithOtherMissing = AppPrerequisites.make({
+  ...missingPrerequisites,
+  diffDashCliInstalled: true,
+  diffDashCliInPath: false,
+  diffDashCliPath: "/home/user/.local/bin/diffdash",
+})
+
 let root: Root | null = null
 
 afterEach(() => {
@@ -868,8 +889,10 @@ type AppBrowserScenarioId =
   | "cliBranchNoAncestor"
   | "cliLinkRepository"
   | "cliNumberedPullRequest"
+  | "cliInstallReadiness"
   | "cliPathSetup"
   | "cliPullRequestFailure"
+  | "cliRecheckReadiness"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
@@ -1313,12 +1336,14 @@ scenario("firstRunOnboarding", async () => {
   expect(calls.openExternalUrl).toHaveBeenCalledWith("https://cli.github.com/manual/gh_auth_login")
 
   const installButton = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Install in PATH",
+    (button) => button.textContent === "Install CLI",
   )
   installButton?.click()
   await vi.waitFor(() => {
     expect(calls.installDiffDashCli).toHaveBeenCalled()
-    expect(document.body.textContent).toContain("Installed diffdash at /usr/local/bin/diffdash")
+    expect(document.body.textContent).toContain(
+      "Installed the DiffDash CLI at /usr/local/bin/diffdash",
+    )
   })
 
   const continueButton = [...document.querySelectorAll("button")].find(
@@ -1586,11 +1611,60 @@ scenario("cliPathSetup", async () => {
 
   await vi.waitFor(() => expect(document.body.textContent).toContain("Set up DiffDash"))
   const installButton = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Install in PATH",
+    (button) => button.textContent === "Install CLI",
   )
   installButton?.click()
 
   await vi.waitFor(() => expect(document.body.textContent).toContain(pathSetupCommand))
+})
+
+scenario("cliInstallReadiness", async () => {
+  let currentDiagnostics = cliOnlyMissingPrerequisites
+  const calls = installDiffDashApi({ getDiagnostics: async () => currentDiagnostics })
+  renderApp()
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Finish setup")
+    expect(document.body.textContent).toContain("DiffDash CLI available")
+    expect(document.body.textContent).toContain("diffdash is not available to DiffDash")
+  })
+
+  currentDiagnostics = userLocalCliReadyPrerequisites
+  const installButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Install CLI",
+  )
+  installButton?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.installDiffDashCli).toHaveBeenCalledOnce()
+    expect(document.body.textContent).not.toContain("Finish setup")
+    expect(document.body.textContent).not.toContain("DiffDash CLI available")
+  })
+})
+
+scenario("cliRecheckReadiness", async () => {
+  let currentDiagnostics = missingPrerequisites
+  const calls = installDiffDashApi({ getDiagnostics: async () => currentDiagnostics })
+  renderApp()
+
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Finish setup")
+    expect(document.body.textContent).toContain("DiffDash CLI available")
+    expect(document.body.textContent).toContain("git was not found in PATH")
+  })
+  const diagnosticsCallsBeforeRecheck = calls.getDiagnostics.mock.calls.length
+  currentDiagnostics = userLocalCliReadyWithOtherMissing
+  const recheckButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Recheck",
+  )
+  recheckButton?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.getDiagnostics.mock.calls.length).toBeGreaterThan(diagnosticsCallsBeforeRecheck)
+    expect(document.body.textContent).toContain("Finish setup")
+    expect(document.body.textContent).toContain("git was not found in PATH")
+    expect(document.body.textContent).not.toContain("DiffDash CLI available")
+  })
 })
 
 scenario("onboardingTelemetryOptOut", async () => {
@@ -5905,6 +5979,7 @@ const installDiffDashApi = (
     readonly diagnostics?: AppPrerequisites
     readonly expireFirstSnapshotPage?: boolean
     readonly getAppState?: DiffDashApi["appState"]["get"]
+    readonly getDiagnostics?: DiffDashApi["diagnostics"]
     readonly localReviewDiff?: LocalReviewDiff
     readonly openProject?: DiffDashApi["repositories"]["openProject"]
     readonly projectWorkspaceState?: ProjectWorkspaceState | null
@@ -6001,6 +6076,9 @@ const installDiffDashApi = (
     ),
     getAppState: vi.fn<DiffDashApi["appState"]["get"]>(
       options.getAppState ?? (async () => appState),
+    ),
+    getDiagnostics: vi.fn<DiffDashApi["diagnostics"]>(
+      options.getDiagnostics ?? (async () => diagnostics),
     ),
     regenerateWalkthrough: vi.fn<DiffDashApi["walkthroughs"]["generate"]>(
       async () => options.walkthrough ?? walkthrough,
@@ -6341,7 +6419,7 @@ const installDiffDashApi = (
         }
       },
     },
-    diagnostics: async () => diagnostics,
+    diagnostics: calls.getDiagnostics,
     agentProviders: {
       getCatalog: async () => options.agentProviderCatalog ?? readyAgentProviderCatalog,
     },

@@ -64,7 +64,7 @@ Run `diffdash diff [branch-name]` to review the current branch and local changes
 
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 
-Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install in PATH** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward. Updated apps refresh marker-owned launchers found in the desktop environment's `PATH`, `~/.local/bin`, or `~/bin`; reinstall the CLI after updating if it lives in another custom directory.
+Linux AppImages are portable and do not install a CLI automatically. Use the in-app **Install CLI** action to create a user-local `diffdash` launcher, and keep the AppImage at the same path afterward. Updated apps refresh marker-owned launchers found in the desktop environment's `PATH`, `~/.local/bin`, or `~/bin`; reinstall the CLI after updating if it lives in another custom directory.
 
 Build both Linux packages with:
 
