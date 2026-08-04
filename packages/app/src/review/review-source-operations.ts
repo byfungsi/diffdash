@@ -10,11 +10,14 @@ import {
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "@diffdash/protocol/hosted-git"
+import { OpenRepositoryComparisonFileRequest } from "@diffdash/protocol/review-snapshot"
 import {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
+  RepositoryComparisonViewedFilesRequest,
   SetHostedViewedFileRequest,
   SetLocalViewedFileRequest,
+  SetRepositoryComparisonViewedFileRequest,
   type ViewedFileRecord,
 } from "@diffdash/protocol/viewed-files"
 import type { ReviewSelectionProjection } from "./review-selection"
@@ -38,7 +41,7 @@ type ReviewDecisionOperations =
 
 /** Review-source operations consumed by review UI without hosted/local branching. */
 export type ReviewSourceOperations = {
-  readonly source: "hosted" | "local"
+  readonly source: "hosted" | "local" | "repositoryComparison"
   readonly refresh: () => void
   readonly listViewedFiles: () => Promise<readonly ViewedFileRecord[]>
   readonly setViewedFile: (write: ReviewViewedFileWrite) => Promise<void>
@@ -54,6 +57,8 @@ export type ReviewSourceOperationApi = {
   readonly localWalkthroughs: DiffDashApi["localWalkthroughs"]
   readonly openLocalRepositoryFile: DiffDashApi["openLocalRepositoryFile"]
   readonly openRepositoryFile: DiffDashApi["openRepositoryFile"]
+  readonly repositoryComparisons: Pick<DiffDashApi["repositoryComparisons"], "openFile">
+  readonly repositoryComparisonWalkthroughs: DiffDashApi["repositoryComparisonWalkthroughs"]
   readonly viewedFiles: DiffDashApi["viewedFiles"]
   readonly walkthroughs: DiffDashApi["walkthroughs"]
 }
@@ -63,6 +68,7 @@ type ReviewSourceOperationDependencies = {
   readonly api: ReviewSourceOperationApi
   readonly refreshHosted: () => void
   readonly refreshLocal: () => void
+  readonly refreshRepositoryComparison?: () => void
 }
 
 /** Purely maps a ready review projection to its supported source operations. */
@@ -131,6 +137,32 @@ export const mapReviewSourceOperations = (
           }),
         ),
       decision,
+    }
+  }
+
+  if (selection.subject.kind === "repositoryComparison") {
+    const target = selection.subject.comparison.target
+    return {
+      source: "repositoryComparison",
+      refresh: dependencies.refreshRepositoryComparison ?? (() => undefined),
+      listViewedFiles: () =>
+        dependencies.api.viewedFiles.listRepositoryComparison(
+          RepositoryComparisonViewedFilesRequest.make({ target }),
+        ),
+      setViewedFile: (write) =>
+        dependencies.api.viewedFiles.setRepositoryComparison(
+          SetRepositoryComparisonViewedFileRequest.make({ target, ...write }),
+        ),
+      getWalkthrough: () => dependencies.api.repositoryComparisonWalkthroughs.get(target),
+      generateWalkthrough: (regenerate) =>
+        regenerate
+          ? dependencies.api.repositoryComparisonWalkthroughs.regenerate(target)
+          : dependencies.api.repositoryComparisonWalkthroughs.generate(target),
+      openFile: (filePath) =>
+        dependencies.api.repositoryComparisons.openFile(
+          OpenRepositoryComparisonFileRequest.make({ target, filePath }),
+        ),
+      decision: { _tag: "unsupported" },
     }
   }
 

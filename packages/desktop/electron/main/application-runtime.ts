@@ -18,6 +18,7 @@ import type { AppUpdater } from "../../src/main/services/app-updater"
 import type { GitProvider } from "../../src/main/services/git-provider"
 import type { Prerequisites } from "../../src/main/services/prerequisites"
 import type { RepositoryLinker } from "../../src/main/services/repository-linker"
+import type { RepositoryComparisonSource } from "../../src/main/services/repository-comparison-source"
 import type { ReviewContextService } from "../../src/main/services/review-context"
 import type { ReviewSnapshotService } from "../../src/main/services/review-snapshot"
 import { createAppLayer } from "./composition"
@@ -28,6 +29,7 @@ type ApplicationServices =
   | ProjectWorkspaceStore
   | Analytics
   | RepositoryLinker
+  | RepositoryComparisonSource
   | GitService
   | ProcessService
   | GitProvider

@@ -1,9 +1,12 @@
 import { ParsedDiffFile } from "@diffdash/domain/diff"
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
+import { Repo } from "@diffdash/domain/repository"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
@@ -13,6 +16,7 @@ import {
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
+import { OpenRepositoryComparisonCommand } from "./cli-navigation"
 
 /** Maximum files that one explicit renderer page request may select. */
 export const REVIEW_SNAPSHOT_PAGE_FILE_LIMIT = 8
@@ -82,6 +86,44 @@ export class ReviewSnapshotPageAvailable extends Schema.TaggedClass<ReviewSnapsh
     nextCursor: Schema.NullOr(ReviewSnapshotPageCursor),
   },
 ) {}
+
+/** Exact saved repository and immutable target resolved from one CLI command. */
+export class ResolvedRepositoryComparison extends Schema.Class<ResolvedRepositoryComparison>(
+  "ResolvedRepositoryComparison",
+)({
+  repo: Repo,
+  target: RepositoryComparisonTarget,
+}) {}
+
+/** Renderer request to resolve and pin one repository comparison command. */
+export class ResolveRepositoryComparisonRequest extends Schema.Class<ResolveRepositoryComparisonRequest>(
+  "ResolveRepositoryComparisonRequest",
+)({
+  command: OpenRepositoryComparisonCommand,
+}) {}
+
+/** Renderer request for an immutable repository comparison manifest. */
+export class AcquireRepositoryComparisonSnapshotRequest extends Schema.Class<AcquireRepositoryComparisonSnapshotRequest>(
+  "AcquireRepositoryComparisonSnapshotRequest",
+)({
+  target: RepositoryComparisonTarget,
+}) {}
+
+/** Opens one file at the comparison's immutable head revision. */
+export class OpenRepositoryComparisonFileRequest extends Schema.Class<OpenRepositoryComparisonFileRequest>(
+  "OpenRepositoryComparisonFileRequest",
+)({
+  target: RepositoryComparisonTarget,
+  filePath: Schema.String,
+}) {}
+
+/** Gets or generates a walkthrough for one immutable repository comparison. */
+export class RepositoryComparisonWalkthroughRequest extends Schema.Class<RepositoryComparisonWalkthroughRequest>(
+  "RepositoryComparisonWalkthroughRequest",
+)({
+  target: RepositoryComparisonTarget,
+  regenerate: Schema.Boolean,
+}) {}
 
 /** Typed state for a single parsed file that cannot fit one complete response. */
 export class ReviewSnapshotFileTooLarge extends Schema.TaggedClass<ReviewSnapshotFileTooLarge>()(
@@ -181,6 +223,7 @@ export type ReviewSnapshotSearchResponse = typeof ReviewSnapshotSearchResponse.T
 export const AcquiredReviewSnapshotManifest = Schema.Union(
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
 )
 
 /** Hosted or local manifest returned by the acquisition channels. */

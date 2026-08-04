@@ -153,6 +153,10 @@ export const walkthroughHostedReviewScope = (review: HostedReviewLocator) =>
 /** Review scope segment used in deterministic hunk IDs for local working tree changes. */
 export const walkthroughLocalDiffScope = (headSha: string) => `local-diff:${headSha}`
 
+/** Stable walkthrough scope for one immutable repository comparison. */
+export const walkthroughRepositoryComparisonScope = (reviewKey: string) =>
+  `repository-comparison:${reviewKey}`
+
 /** Recoverable validation failure for generated walkthrough output. */
 export class WalkthroughValidationError extends Schema.TaggedError<WalkthroughValidationError>()(
   "WalkthroughValidationError",

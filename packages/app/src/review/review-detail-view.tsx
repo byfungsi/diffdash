@@ -1268,7 +1268,12 @@ export const ReviewDetailView = ({
       setWalkthroughState({ status: "ready", stored })
       captureAnalytics({
         event: "walkthrough_generated",
-        reviewType: reviewSubject.kind === "hosted" ? "pull_request" : "local_diff",
+        reviewType:
+          reviewSubject.kind === "hosted"
+            ? "pull_request"
+            : reviewSubject.kind === "localDiff"
+              ? "local_diff"
+              : "repository_comparison",
         regenerated: regenerate,
         provider: aiSettings.routes.walkthrough,
       })
@@ -1699,7 +1704,7 @@ export const ReviewDetailView = ({
                       <span className="shrink-0 font-medium">
                         #{reviewSubject.hostedReview.summary.locator.number}
                       </span>
-                    ) : (
+                    ) : reviewSubject.kind === "localDiff" ? (
                       <span
                         className="max-w-56 shrink-0 truncate font-medium"
                         title={
@@ -1711,6 +1716,11 @@ export const ReviewDetailView = ({
                         {reviewSubject.localReview.branchName === null
                           ? "Local"
                           : `Local (${reviewSubject.localReview.branchName})`}
+                      </span>
+                    ) : (
+                      <span className="max-w-56 shrink-0 truncate font-medium">
+                        {reviewSubject.comparison.target.baseRef}...
+                        {reviewSubject.comparison.target.headRef}
                       </span>
                     )}
                     <span

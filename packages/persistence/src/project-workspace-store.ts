@@ -2,14 +2,14 @@ import { Context, Effect, Layer, Schema } from "effect"
 
 import {
   ProjectWorkspaceRibbon,
+  ProjectWorkspaceReviewTarget,
   ProjectWorkspaceState,
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { DatabaseService } from "./database"
 
-const ReviewTargetJson = Schema.parseJson(ReviewThreadTarget)
+const ReviewTargetJson = Schema.parseJson(ProjectWorkspaceReviewTarget)
 
 const ProjectWorkspaceStateRow = Schema.Struct({
   repo_id: ReviewProjectId,

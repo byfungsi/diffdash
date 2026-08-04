@@ -88,6 +88,24 @@ export const resolveProjectWorkspaceState = (
         )
   }
 
+  if (target.kind === "repositoryComparison") {
+    const belongsToProject =
+      repo.provider !== "local" &&
+      sameHostedRepository(
+        target.repository,
+        makeHostedRepositoryLocator(repo.provider, repo.owner, repo.name),
+      )
+    return belongsToProject
+      ? {
+          activeRibbon: state.activeRibbon,
+          notice: null,
+          selectedReview: { kind: "repositoryComparison", target },
+        }
+      : defaultProjectWorkspaceState(
+          "The saved repository comparison no longer belongs to this project. Reviews opened without a selection.",
+        )
+  }
+
   return repo.localPath === target.rootPath
     ? {
         activeRibbon: state.activeRibbon,

@@ -8,6 +8,7 @@ import type {
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type {
   ProjectOpenResult,
   ProjectWorkspaceState,
@@ -22,6 +23,7 @@ import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import type {
   ReviewThread,
@@ -35,6 +37,7 @@ import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
+import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
   GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
@@ -57,12 +60,16 @@ import type {
   ReviewSnapshotPageResponse,
   ReviewSnapshotSearchRequest,
   ReviewSnapshotSearchResponse,
+  ResolvedRepositoryComparison,
+  OpenRepositoryComparisonFileRequest,
 } from "./review-snapshot"
 import type {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
+  RepositoryComparisonViewedFilesRequest,
   SetHostedViewedFileRequest,
   SetLocalViewedFileRequest,
+  SetRepositoryComparisonViewedFileRequest,
   ViewedFileRecord,
 } from "./viewed-files"
 
@@ -153,9 +160,18 @@ export interface DiffDashApi {
       branchName: string | null,
     ) => Promise<LocalReviewTarget>
   }
+  readonly repositoryComparisons: {
+    readonly resolve: (
+      command: OpenRepositoryComparisonCommand,
+    ) => Promise<ResolvedRepositoryComparison>
+    readonly openFile: (request: OpenRepositoryComparisonFileRequest) => Promise<void>
+  }
   readonly reviewSnapshots: {
     readonly acquireHosted: (request: HostedReviewRequest) => Promise<HostedReviewSnapshotManifest>
     readonly acquireLocal: (target: LocalReviewTarget) => Promise<LocalReviewSnapshotManifest>
+    readonly acquireRepositoryComparison: (
+      target: RepositoryComparisonTarget,
+    ) => Promise<RepositoryComparisonSnapshotManifest>
     readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
     readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
   }
@@ -164,6 +180,12 @@ export interface DiffDashApi {
     readonly set: (request: SetHostedViewedFileRequest) => Promise<void>
     readonly listLocal: (request: LocalViewedFilesRequest) => Promise<readonly ViewedFileRecord[]>
     readonly setLocal: (request: SetLocalViewedFileRequest) => Promise<void>
+    readonly listRepositoryComparison: (
+      request: RepositoryComparisonViewedFilesRequest,
+    ) => Promise<readonly ViewedFileRecord[]>
+    readonly setRepositoryComparison: (
+      request: SetRepositoryComparisonViewedFileRequest,
+    ) => Promise<void>
   }
   readonly walkthroughs: {
     readonly get: (request: HostedWalkthroughRequest) => Promise<StoredWalkthrough | null>
@@ -177,5 +199,10 @@ export interface DiffDashApi {
     ) => Promise<StoredWalkthrough | null>
     readonly generate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
     readonly regenerate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
+  }
+  readonly repositoryComparisonWalkthroughs: {
+    readonly get: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough | null>
+    readonly generate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
+    readonly regenerate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
   }
 }

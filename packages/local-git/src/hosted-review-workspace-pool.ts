@@ -5,6 +5,7 @@ import {
   makeHostedRepositoryKey,
   type HostedRepositoryLocator,
 } from "@diffdash/domain/git-provider"
+import { VERY_LARGE_DIFF_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
 import { GitCommitSha, type RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
@@ -63,6 +64,17 @@ export interface PinnedRepositoryComparison {
   readonly mergeBaseSha: GitCommitSha
 }
 
+/** Input required to read or materialize an already pinned comparison. */
+export interface PinnedRepositoryComparisonInput {
+  readonly repository: HostedRepositoryLocator
+  readonly sourcePath: string | null
+  readonly remoteUrl: string | null
+  readonly baseSha: GitCommitSha
+  readonly headSha: GitCommitSha
+  readonly mergeBaseSha: GitCommitSha
+  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
+}
+
 export { HostedReviewWorkspacePoolError } from "./hosted-review-workspace-pool-error"
 
 /** Executes hosted-review agent work inside an exclusively leased managed worktree. */
@@ -77,6 +89,13 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
     readonly pinComparison: (
       input: HostedRepositoryComparisonInput,
     ) => Effect.Effect<PinnedRepositoryComparison, HostedReviewWorkspacePoolError>
+    readonly readComparisonDiff: (
+      input: PinnedRepositoryComparisonInput,
+    ) => Effect.Effect<string, HostedReviewWorkspacePoolError>
+    readonly useComparison: <A, E>(
+      input: PinnedRepositoryComparisonInput,
+      run: (localPath: string) => Effect.Effect<A, E>,
+    ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError>
   }
 >() {
   static readonly layer = (config: {
@@ -162,6 +181,7 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
                     new Error("Repository comparison revisions changed during acquisition"),
                   )
                 }
+                yield* retainComparisonCommits(filesystem, processes, barePath, second)
                 if (input.sourcePath === null) {
                   yield* recordRemoteRepositoryUse(filesystem, input.repository, false)
                 }
@@ -171,7 +191,112 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
           )
         }
 
-        return HostedReviewWorkspacePool.of({ pinComparison, use })
+        const readComparisonDiff = (input: PinnedRepositoryComparisonInput) => {
+          const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
+          const repositoryRoot = pathForRepository(
+            filesystem,
+            makeHostedRepositoryKey(input.repository),
+          )
+          return withFileLock(
+            filesystem,
+            filesystem.child(repositoryRoot, "repository.lock"),
+            () =>
+              Effect.gen(function* () {
+                const barePath = yield* prepareBareRepository(filesystem, processes, input)
+                yield* verifyPinnedComparison(filesystem, processes, barePath, input)
+                yield* retainComparisonCommits(filesystem, processes, barePath, input)
+                yield* filesystem.validate(barePath, "comparison.diff.path")
+                return yield* processes
+                  .run(
+                    gitProcessRequest(
+                      [
+                        "--git-dir",
+                        barePath,
+                        "diff",
+                        "--no-ext-diff",
+                        input.mergeBaseSha,
+                        input.headSha,
+                        "--",
+                      ],
+                      {
+                        timeoutMs: GIT_TIMEOUT_MS,
+                        stdout: {
+                          maxBytes: VERY_LARGE_DIFF_CHARACTER_THRESHOLD * 4,
+                          overflow: "error",
+                        },
+                      },
+                    ),
+                  )
+                  .pipe(
+                    Effect.map((result) => result.stdout),
+                    Effect.mapError((cause) =>
+                      poolError(
+                        "git",
+                        "comparison.diff",
+                        "DiffDash could not read the pinned repository comparison.",
+                        cause,
+                      ),
+                    ),
+                  )
+              }),
+            REPOSITORY_LOCK_TIMEOUT_MS,
+          )
+        }
+
+        const useComparison = <A, E>(
+          input: PinnedRepositoryComparisonInput,
+          run: (localPath: string) => Effect.Effect<A, E>,
+        ): Effect.Effect<A, E | HostedReviewWorkspacePoolError> => {
+          const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
+          const repositoryRoot = pathForRepository(
+            filesystem,
+            makeHostedRepositoryKey(input.repository),
+          )
+          const workspaceRoot = filesystem.child(repositoryRoot, "comparison-workspaces")
+          const workspacePath = filesystem.child(workspaceRoot, randomUUID())
+
+          return Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const barePath = yield* withFileLock(
+                filesystem,
+                filesystem.child(repositoryRoot, "repository.lock"),
+                () =>
+                  Effect.gen(function* () {
+                    const bare = yield* prepareBareRepository(filesystem, processes, input)
+                    yield* verifyPinnedComparison(filesystem, processes, bare, input)
+                    yield* retainComparisonCommits(filesystem, processes, bare, input)
+                    yield* filesystem.ensureDirectory(workspaceRoot, "comparison.workspace.mkdir")
+                    yield* recreateWorktree(
+                      filesystem,
+                      processes,
+                      bare,
+                      workspacePath,
+                      input.headSha,
+                    )
+                    return bare
+                  }),
+                REPOSITORY_LOCK_TIMEOUT_MS,
+              )
+              const result = yield* restore(run(workspacePath)).pipe(Effect.exit)
+              const cleanup = yield* withFileLock(
+                filesystem,
+                filesystem.child(repositoryRoot, "repository.lock"),
+                () => removeWorktree(filesystem, processes, barePath, workspacePath),
+                REPOSITORY_LOCK_TIMEOUT_MS,
+              ).pipe(Effect.exit)
+              if (Exit.isFailure(cleanup)) return yield* Effect.failCause(cleanup.cause)
+              if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause)
+              return result.value
+            }),
+          )
+        }
+
+        return HostedReviewWorkspacePool.of({
+          pinComparison,
+          readComparisonDiff,
+          use,
+          useComparison,
+        })
       }),
     )
 }
@@ -589,6 +714,46 @@ const comparisonChanged = (cause: HostedReviewWorkspacePoolError) =>
     cause,
   )
 
+const retainComparisonCommits = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+  comparison: PinnedRepositoryComparison,
+) =>
+  Effect.forEach(
+    [comparison.baseSha, comparison.headSha, comparison.mergeBaseSha],
+    (sha) =>
+      runManagedGit(filesystem, [barePath], processes, [
+        "--git-dir",
+        barePath,
+        "update-ref",
+        `${COMPARISON_COMMIT_PREFIX}${sha}`,
+        sha,
+      ]),
+    { discard: true },
+  )
+
+const verifyPinnedComparison = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+  comparison: PinnedRepositoryComparison,
+) =>
+  Effect.forEach(
+    [comparison.baseSha, comparison.headSha, comparison.mergeBaseSha],
+    (sha) => resolveCommit(filesystem, processes, barePath, sha),
+    { discard: true },
+  ).pipe(
+    Effect.mapError((cause) =>
+      poolError(
+        "revision-not-found",
+        "comparison.verifyPinned",
+        "A pinned repository comparison revision is no longer available.",
+        cause,
+      ),
+    ),
+  )
+
 const restoreAndRelease = (
   filesystem: ManagedWorkspaceFilesystem,
   processes: ProcessRunner,
@@ -699,6 +864,34 @@ const recreateWorktree = (
     ])
     yield* filesystem.validate(worktreePath, "worktree.created.path")
     yield* verifyWorktree(filesystem, processes, worktreePath, headSha)
+  })
+
+const removeWorktree = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+  worktreePath: ManagedWorkspacePath,
+) =>
+  Effect.gen(function* () {
+    if (yield* filesystem.exists(worktreePath, "comparison.workspace.exists")) {
+      yield* runManagedGit(filesystem, [barePath, worktreePath], processes, [
+        "--git-dir",
+        barePath,
+        "worktree",
+        "remove",
+        "--force",
+        worktreePath,
+      ]).pipe(Effect.catchAll(() => Effect.void))
+      yield* filesystem.remove(worktreePath, "comparison.workspace.remove")
+    }
+    yield* runManagedGit(filesystem, [barePath], processes, [
+      "--git-dir",
+      barePath,
+      "worktree",
+      "prune",
+      "--expire",
+      "now",
+    ]).pipe(Effect.catchAll(() => Effect.void))
   })
 
 const verifyWorktree = (

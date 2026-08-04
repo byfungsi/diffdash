@@ -84,6 +84,6 @@ describe("App shell browser interactions", () => {
 
   it("does not misroute a repository comparison before its source layer is available", async () => {
     expect.hasAssertions()
-    await appBrowserScenario("cliRepositoryComparisonPending")()
+    await appBrowserScenario("cliRepositoryComparison")()
   })
 })

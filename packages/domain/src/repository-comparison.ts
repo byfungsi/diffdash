@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-import { HostedRepositoryLocator, makeHostedRepositoryKey } from "./git-provider"
+import { ChangedFile, HostedRepositoryLocator, makeHostedRepositoryKey } from "./git-provider"
 import { ReviewKey, ReviewRevision } from "./review-identity"
 
 const forbiddenGitRevisionCharacters = new Set(["~", "^", ":", "?", "*", "[", "\\"])
@@ -62,6 +62,25 @@ export class RepositoryComparisonTarget extends Schema.Class<RepositoryCompariso
   baseSha: GitCommitSha,
   headSha: GitCommitSha,
   mergeBaseSha: GitCommitSha,
+}) {}
+
+/** Renderer-safe metadata for one exact immutable repository comparison. */
+export class RepositoryComparisonDetail extends Schema.Class<RepositoryComparisonDetail>(
+  "RepositoryComparisonDetail",
+)({
+  target: RepositoryComparisonTarget,
+  title: Schema.String,
+  files: Schema.Array(ChangedFile),
+  fetchedAt: Schema.String,
+}) {}
+
+/** Raw unified diff captured from one exact immutable repository comparison. */
+export class RepositoryComparisonDiff extends Schema.Class<RepositoryComparisonDiff>(
+  "RepositoryComparisonDiff",
+)({
+  target: RepositoryComparisonTarget,
+  diff: Schema.String,
+  fetchedAt: Schema.String,
 }) {}
 
 /** Creates the durable identity for one exact repository comparison. */

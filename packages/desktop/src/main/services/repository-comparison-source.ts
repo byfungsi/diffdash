@@ -1,12 +1,22 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
-import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { ChangedFile, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import { ProjectRemoteSelectionRequired } from "@diffdash/domain/project-workspace"
-import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
+import {
+  makeRepositoryComparisonReviewKey,
+  RepositoryComparisonDetail,
+  RepositoryComparisonDiff,
+  repositoryComparisonBaseRevision,
+  repositoryComparisonHeadRevision,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
 import type { Repo } from "@diffdash/domain/repository"
+import { RepositoryComparisonSnapshot } from "@diffdash/domain/review-context"
+import { makeReviewDiffIdentity, makeReviewSnapshotId } from "@diffdash/domain/review-identity"
 import {
   HostedReviewWorkspacePool,
-  type HostedReviewWorkspacePoolError,
+  HostedReviewWorkspacePoolError,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import { GitProvider } from "./git-provider"
@@ -39,6 +49,16 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
     readonly resolve: (
       command: OpenRepositoryComparisonCommand,
     ) => Effect.Effect<RepositoryComparisonTarget, RepositoryComparisonSourceError>
+    readonly repository: (
+      target: RepositoryComparisonTarget,
+    ) => Effect.Effect<Repo, RepositoryComparisonSourceError>
+    readonly acquire: (
+      target: RepositoryComparisonTarget,
+    ) => Effect.Effect<RepositoryComparisonSnapshot, RepositoryComparisonSourceError>
+    readonly useWorkspace: <A, E>(
+      target: RepositoryComparisonTarget,
+      run: (localPath: string) => Effect.Effect<A, E>,
+    ) => Effect.Effect<A, E | RepositoryComparisonSourceError>
   }
 >() {
   static readonly layer = Layer.effect(
@@ -89,7 +109,102 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
         })
       })
 
-      return RepositoryComparisonSource.of({ resolve })
+      const repository = Effect.fn("RepositoryComparisonSource.repository")(function* (
+        target: RepositoryComparisonTarget,
+      ) {
+        const saved = yield* repositories
+          .findHosted(target.repository)
+          .pipe(
+            Effect.mapError((cause) =>
+              sourceError(
+                "acquisition-failed",
+                "acquire.repository",
+                "DiffDash could not load the saved comparison repository.",
+                cause,
+              ),
+            ),
+          )
+        if (saved !== null) return saved
+        return yield* sourceError(
+          "repository-not-found",
+          "acquire.repository",
+          "The comparison repository is no longer saved or linked in DiffDash.",
+          new Error("Saved comparison repository was not found"),
+        )
+      })
+
+      const comparisonInput = Effect.fn("RepositoryComparisonSource.comparisonInput")(function* (
+        target: RepositoryComparisonTarget,
+      ) {
+        const saved = yield* repository(target)
+        return {
+          saved,
+          input: {
+            repository: target.repository,
+            sourcePath: saved.localPath,
+            remoteUrl: saved.remoteUrl,
+            baseSha: target.baseSha,
+            headSha: target.headSha,
+            mergeBaseSha: target.mergeBaseSha,
+            bootstrapBareRepository: (destination: string) =>
+              providers.bootstrapBareRepository(target.repository, destination),
+          },
+        } as const
+      })
+
+      const acquire = Effect.fn("RepositoryComparisonSource.acquire")(function* (
+        target: RepositoryComparisonTarget,
+      ) {
+        const { input } = yield* comparisonInput(target)
+        const diff = yield* workspaces
+          .readComparisonDiff(input)
+          .pipe(Effect.mapError(mapWorkspaceError))
+        const parsedDiff = parseUnifiedDiff(diff)
+        const fetchedAt = new Date().toISOString()
+        const reviewKey = makeRepositoryComparisonReviewKey(target)
+        const baseRevision = repositoryComparisonBaseRevision(target)
+        const headRevision = repositoryComparisonHeadRevision(target)
+        const diffIdentity = makeReviewDiffIdentity(diff)
+        return RepositoryComparisonSnapshot.make({
+          snapshotId: makeReviewSnapshotId({
+            reviewKey,
+            baseRevision,
+            headRevision,
+            diffIdentity,
+          }),
+          reviewKey,
+          baseRevision,
+          headRevision,
+          detail: RepositoryComparisonDetail.make({
+            target,
+            title: `${target.baseRef}...${target.headRef}`,
+            files: parsedDiff.files.map((file) =>
+              ChangedFile.make({
+                path: file.path,
+                additions: file.additions,
+                deletions: file.deletions,
+                changeType: file.status,
+              }),
+            ),
+            fetchedAt,
+          }),
+          diff: RepositoryComparisonDiff.make({ target, diff, fetchedAt }),
+          parsedDiff,
+        })
+      })
+
+      const useWorkspace = <A, E>(
+        target: RepositoryComparisonTarget,
+        run: (localPath: string) => Effect.Effect<A, E>,
+      ): Effect.Effect<A, E | RepositoryComparisonSourceError> =>
+        comparisonInput(target).pipe(
+          Effect.flatMap(({ input }) => workspaces.useComparison(input, run)),
+          Effect.mapError((cause) =>
+            cause instanceof HostedReviewWorkspacePoolError ? mapWorkspaceError(cause) : cause,
+          ),
+        )
+
+      return RepositoryComparisonSource.of({ acquire, repository, resolve, useWorkspace })
     }),
   )
 }

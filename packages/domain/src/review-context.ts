@@ -4,6 +4,7 @@ import { ParsedDiff } from "./diff"
 import { ParsedDiffFile } from "./diff"
 import { HostedReviewDetail, HostedReviewDiff } from "./git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "./local-review"
+import { RepositoryComparisonDetail, RepositoryComparisonDiff } from "./repository-comparison"
 import {
   ReviewFileId,
   ReviewFilePatchHash,
@@ -35,8 +36,26 @@ export class LocalReviewSnapshot extends Schema.TaggedClass<LocalReviewSnapshot>
   parsedDiff: ParsedDiff,
 }) {}
 
+/** Coherent metadata and diff content for one immutable repository comparison. */
+export class RepositoryComparisonSnapshot extends Schema.TaggedClass<RepositoryComparisonSnapshot>()(
+  "repositoryComparison",
+  {
+    snapshotId: ReviewSnapshotId,
+    reviewKey: ReviewKey,
+    baseRevision: ReviewRevision,
+    headRevision: ReviewRevision,
+    detail: RepositoryComparisonDetail,
+    diff: RepositoryComparisonDiff,
+    parsedDiff: ParsedDiff,
+  },
+) {}
+
 /** A coherent local or provider-backed review revision. */
-export const ReviewSnapshot = Schema.Union(HostedReviewSnapshot, LocalReviewSnapshot)
+export const ReviewSnapshot = Schema.Union(
+  HostedReviewSnapshot,
+  LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
+)
 
 /** A coherent local or provider-backed review revision. */
 export type ReviewSnapshot = typeof ReviewSnapshot.Type
@@ -84,10 +103,25 @@ export class LocalReviewSnapshotManifest extends Schema.TaggedClass<LocalReviewS
   },
 ) {}
 
+/** Renderer-safe immutable comparison metadata and complete file inventory. */
+export class RepositoryComparisonSnapshotManifest extends Schema.TaggedClass<RepositoryComparisonSnapshotManifest>()(
+  "repositoryComparison",
+  {
+    projectId: ReviewProjectId,
+    snapshotId: ReviewSnapshotId,
+    reviewKey: ReviewKey,
+    baseRevision: ReviewRevision,
+    headRevision: ReviewRevision,
+    detail: RepositoryComparisonDetail,
+    files: Schema.Array(ReviewSnapshotFileInventory),
+  },
+) {}
+
 /** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
 export const ReviewSnapshotManifest = Schema.Union(
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
 )
 
 /** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
@@ -104,6 +138,12 @@ export function makeReviewSnapshotManifest(
   snapshot: LocalReviewSnapshot,
   projectId: ReviewProjectId,
 ): LocalReviewSnapshotManifest
+
+/** Projects an immutable comparison snapshot into renderer-safe manifest metadata. */
+export function makeReviewSnapshotManifest(
+  snapshot: RepositoryComparisonSnapshot,
+  projectId: ReviewProjectId,
+): RepositoryComparisonSnapshotManifest
 
 /** Projects an internally coherent snapshot into renderer-safe manifest metadata. */
 export function makeReviewSnapshotManifest(
@@ -124,9 +164,13 @@ export function makeReviewSnapshotManifest(
     headRevision: snapshot.headRevision,
     files: snapshot.parsedDiff.files.map(makeReviewSnapshotFileInventory),
   }
-  return snapshot instanceof HostedReviewSnapshot
-    ? HostedReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
-    : LocalReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
+  if (snapshot instanceof HostedReviewSnapshot) {
+    return HostedReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
+  }
+  if (snapshot instanceof LocalReviewSnapshot) {
+    return LocalReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
+  }
+  return RepositoryComparisonSnapshotManifest.make({ ...identity, detail: snapshot.detail })
 }
 
 /** Projects one parsed file into renderer-safe inventory metadata. */

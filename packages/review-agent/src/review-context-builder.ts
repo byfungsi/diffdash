@@ -1,7 +1,11 @@
 import { REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA } from "@diffdash/agent-provider/review-output"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import type { ReviewAgentArtifact, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
-import { HostedReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshot,
+  RepositoryComparisonSnapshot,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import type { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
 import type {
   ReviewThread,
@@ -181,6 +185,21 @@ const reviewMetadata = (snapshot: ReviewSnapshot) => {
       baseRef: summary.base.name,
       headRef: summary.head.name,
       url: summary.url,
+    }
+  }
+  if (snapshot instanceof RepositoryComparisonSnapshot) {
+    const target = snapshot.detail.target
+    return {
+      ...identity,
+      kind: "repositoryComparison",
+      providerId: target.repository.providerId,
+      repository: `${target.repository.namespace}/${target.repository.name}`,
+      title: snapshot.detail.title,
+      baseRef: target.baseRef,
+      baseSha: target.baseSha,
+      mergeBaseSha: target.mergeBaseSha,
+      headRef: target.headRef,
+      headSha: target.headSha,
     }
   }
   return {

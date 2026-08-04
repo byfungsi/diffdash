@@ -42,11 +42,19 @@ const makeApi = () => {
     },
     openLocalRepositoryFile: openLocal,
     openRepositoryFile: openHosted,
+    repositoryComparisons: { openFile: async () => undefined },
+    repositoryComparisonWalkthroughs: {
+      get: async () => null,
+      generate: unavailable,
+      regenerate: unavailable,
+    },
     viewedFiles: {
       list: async () => [],
       listLocal: async () => [],
+      listRepositoryComparison: async () => [],
       set: setHosted,
       setLocal,
+      setRepositoryComparison: async () => undefined,
     },
     walkthroughs: { get: getHostedWalkthrough, generate: generateHostedWalkthrough },
   }

@@ -15,6 +15,7 @@ import { ReviewAgentService } from "@diffdash/review-agent"
 import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
 import { Effect } from "effect"
 import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
+import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { sendProtocolEvent } from "../transport"
@@ -33,6 +34,12 @@ export const defineThreadHandlers = (
       const snapshot = await run(snapshots.acquireHosted(target.review))
       const repo = await run(repositories.ensureHosted(target.review.repository))
       return { repo, snapshot, prNumber: target.review.number } as const
+    }
+    if (target.kind === "repositoryComparison") {
+      const comparisons = await run(RepositoryComparisonSource)
+      const snapshot = await run(snapshots.acquireComparison(target))
+      const repo = await run(comparisons.repository(target))
+      return { repo, snapshot, prNumber: null } as const
     }
 
     const snapshot = await run(snapshots.acquireLocal(target))

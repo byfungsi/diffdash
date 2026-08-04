@@ -4,6 +4,16 @@ import { HostedRepositoryLocator } from "./git-provider"
 import { Repo } from "./repository"
 import { ReviewProjectId } from "./review-identity"
 import { ReviewThreadTarget } from "./review-thread"
+import { RepositoryComparisonTarget } from "./repository-comparison"
+
+/** Durable review selection restored when a project is reopened. */
+export const ProjectWorkspaceReviewTarget = Schema.Union(
+  ReviewThreadTarget,
+  RepositoryComparisonTarget,
+)
+
+/** Durable review selection restored when a project is reopened. */
+export type ProjectWorkspaceReviewTarget = typeof ProjectWorkspaceReviewTarget.Type
 
 /** Renderer-safe identity for one recognized named Git remote. */
 export class ProjectRemoteCandidate extends Schema.Class<ProjectRemoteCandidate>(
@@ -45,7 +55,7 @@ export class ProjectWorkspaceStateInput extends Schema.Class<ProjectWorkspaceSta
 )({
   projectId: ReviewProjectId,
   activeRibbon: ProjectWorkspaceRibbon,
-  selectedReviewTarget: Schema.NullOr(ReviewThreadTarget),
+  selectedReviewTarget: Schema.NullOr(ProjectWorkspaceReviewTarget),
 }) {}
 
 /** Persisted workspace state returned with its last-write timestamp. */
@@ -54,6 +64,6 @@ export class ProjectWorkspaceState extends Schema.Class<ProjectWorkspaceState>(
 )({
   projectId: ReviewProjectId,
   activeRibbon: ProjectWorkspaceRibbon,
-  selectedReviewTarget: Schema.NullOr(ReviewThreadTarget),
+  selectedReviewTarget: Schema.NullOr(ProjectWorkspaceReviewTarget),
   updatedAt: Schema.String,
 }) {}

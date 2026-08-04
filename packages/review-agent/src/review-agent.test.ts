@@ -218,6 +218,12 @@ const makeProviderResult = (input: {
 const turnIdentity = (details: ReviewThreadDetails, reviewSnapshot: ReviewSnapshot) => {
   const currentAnchor = details.thread.currentAnchor
   if (currentAnchor === null) throw new Error("Test review thread requires an active anchor")
+  if (
+    !(reviewSnapshot instanceof HostedReviewSnapshot) &&
+    !(reviewSnapshot instanceof LocalReviewSnapshot)
+  ) {
+    throw new Error("Test review turn requires a hosted or local snapshot")
+  }
   return {
     repoId: details.thread.repoId,
     target:
@@ -369,6 +375,10 @@ const makeLayer = (
     HostedReviewWorkspacePool,
     HostedReviewWorkspacePool.of({
       pinComparison: () => Effect.dieMessage("Unexpected comparison pinning in review-agent test"),
+      readComparisonDiff: () =>
+        Effect.dieMessage("Unexpected comparison diff read in review-agent test"),
+      useComparison: () =>
+        Effect.dieMessage("Unexpected comparison workspace use in review-agent test"),
       use: (_input, run, onProgress) =>
         released.workspaceFailure === undefined
           ? Effect.acquireUseRelease(

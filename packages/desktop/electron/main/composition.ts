@@ -163,9 +163,6 @@ export const createAppLayer = () => {
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
   )
-  const reviewSnapshotLayer = ReviewSnapshotService.layer().pipe(
-    Layer.provideMerge(reviewContextLayer),
-  )
   const threadStoreLayer = ReviewThreadStore.layer
   const reviewTurnStoreLayer = ReviewTurnStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
@@ -221,6 +218,10 @@ export const createAppLayer = () => {
     Layer.provide(
       Layer.mergeAll(repositoryLinkerLayer, gitProviderLayer, hostedReviewWorkspacePoolLayer),
     ),
+  )
+  const reviewSnapshotLayer = ReviewSnapshotService.layer().pipe(
+    Layer.provideMerge(reviewContextLayer),
+    Layer.provideMerge(repositoryComparisonSourceLayer),
   )
   const updaterLayer = AppUpdater.layer({
     adapter: nativeUpdaterAdapter(),

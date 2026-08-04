@@ -18,6 +18,7 @@ import {
 } from "@diffdash/agent-provider/registry"
 import type { LocalReviewDetail } from "@diffdash/domain/local-review"
 import type { HostedReviewDetail } from "@diffdash/domain/git-provider"
+import type { RepositoryComparisonDetail } from "@diffdash/domain/repository-comparison"
 import {
   Walkthrough,
   WalkthroughGenerationDetails,
@@ -69,12 +70,17 @@ export interface WalkthroughGenerationInput {
   readonly changedFileTree: string
   readonly generation: WalkthroughGenerationDetails
   readonly promptStats?: WalkthroughPromptStats
+  readonly workingDirectory?: string
 }
 
 /** Review metadata variants supported by walkthrough generation. */
 export type WalkthroughReviewContext =
   | { readonly kind: "hosted"; readonly hostedReview: HostedReviewDetail }
   | { readonly kind: "localDiff"; readonly localReview: LocalReviewDetail }
+  | {
+      readonly kind: "repositoryComparison"
+      readonly comparison: RepositoryComparisonDetail
+    }
 
 /** A typed failure for walkthrough generation and model-output parsing. */
 export class WalkthroughGenerationError extends Schema.TaggedError<WalkthroughGenerationError>()(
@@ -120,6 +126,7 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
                 workingDirectory: walkthroughWorkingDirectory(
                   input.review,
                   options.remoteWorkingDirectory,
+                  input.workingDirectory,
                 ),
                 reasoningEffort: "low",
                 timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
@@ -152,7 +159,10 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
 const walkthroughWorkingDirectory = (
   review: WalkthroughReviewContext,
   remoteWorkingDirectory: string,
-): string => (review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory)
+  explicitWorkingDirectory?: string,
+): string =>
+  explicitWorkingDirectory ??
+  (review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory)
 
 type Registry = Context.Tag.Service<AgentProviderRegistry>
 type WalkthroughRouteError =
@@ -387,6 +397,25 @@ const walkthroughReviewPayload = (
       base: localReview.baseSha,
       head: localReview.headSha,
       files: compactReviewFiles(localReview.files, hunkDigest),
+    }
+  }
+
+  if (review.kind === "repositoryComparison") {
+    const comparison = review.comparison
+    const target = comparison.target
+    return {
+      type: "repository-comparison",
+      context: "diff-only",
+      provider: target.repository.providerId,
+      namespace: target.repository.namespace,
+      repository: target.repository.name,
+      title: comparison.title,
+      base: target.baseRef,
+      baseSha: target.baseSha,
+      mergeBaseSha: target.mergeBaseSha,
+      head: target.headRef,
+      headSha: target.headSha,
+      files: compactReviewFiles(comparison.files, hunkDigest),
     }
   }
 

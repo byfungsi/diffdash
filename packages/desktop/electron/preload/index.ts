@@ -3,12 +3,14 @@ import type { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import type { HostedRepository, HostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReviewThreadId, ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import type { DiffDashApi } from "@diffdash/protocol/api"
+import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import type {
@@ -28,14 +30,17 @@ import type {
   RunReviewThreadAgentRequest,
 } from "@diffdash/protocol/review-threads"
 import type {
+  OpenRepositoryComparisonFileRequest,
   ReviewSnapshotPageRequest,
   ReviewSnapshotSearchRequest,
 } from "@diffdash/protocol/review-snapshot"
 import type {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
+  RepositoryComparisonViewedFilesRequest,
   SetHostedViewedFileRequest,
   SetLocalViewedFileRequest,
+  SetRepositoryComparisonViewedFileRequest,
 } from "@diffdash/protocol/viewed-files"
 import { contextBridge, ipcRenderer } from "electron"
 import { createRendererTransport } from "./transport"
@@ -147,11 +152,19 @@ const api: DiffDashApi = {
     resolveBranch: (localPath: string, branchName: string | null) =>
       transport.invoke(InvokeChannel.resolveLocalBranch, { localPath, branchName }),
   },
+  repositoryComparisons: {
+    resolve: (command: OpenRepositoryComparisonCommand) =>
+      transport.invoke(InvokeChannel.resolveRepositoryComparison, { command }),
+    openFile: (request: OpenRepositoryComparisonFileRequest) =>
+      transport.invoke(InvokeChannel.appOpenRepositoryComparisonFile, request),
+  },
   reviewSnapshots: {
     acquireHosted: (request: HostedReviewRequest) =>
       transport.invoke(InvokeChannel.acquireHostedReviewSnapshot, request),
     acquireLocal: (target: LocalReviewTarget) =>
       transport.invoke(InvokeChannel.acquireLocalReviewSnapshot, { target }),
+    acquireRepositoryComparison: (target: RepositoryComparisonTarget) =>
+      transport.invoke(InvokeChannel.acquireRepositoryComparisonSnapshot, { target }),
     getPage: (request: ReviewSnapshotPageRequest) =>
       transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
     search: (request: ReviewSnapshotSearchRequest) =>
@@ -166,6 +179,10 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.listLocalViewedFiles, request),
     setLocal: (request: SetLocalViewedFileRequest) =>
       transport.invoke(InvokeChannel.setLocalViewedFile, request),
+    listRepositoryComparison: (request: RepositoryComparisonViewedFilesRequest) =>
+      transport.invoke(InvokeChannel.listRepositoryComparisonViewedFiles, request),
+    setRepositoryComparison: (request: SetRepositoryComparisonViewedFileRequest) =>
+      transport.invoke(InvokeChannel.setRepositoryComparisonViewedFile, request),
   },
   walkthroughs: {
     get: (request: HostedWalkthroughRequest) =>
@@ -180,6 +197,23 @@ const api: DiffDashApi = {
       transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: false }),
     regenerate: (target: LocalReviewTarget) =>
       transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: true }),
+  },
+  repositoryComparisonWalkthroughs: {
+    get: (target: RepositoryComparisonTarget) =>
+      transport.invoke(InvokeChannel.getRepositoryComparisonWalkthrough, {
+        target,
+        regenerate: false,
+      }),
+    generate: (target: RepositoryComparisonTarget) =>
+      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
+        target,
+        regenerate: false,
+      }),
+    regenerate: (target: RepositoryComparisonTarget) =>
+      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
+        target,
+        regenerate: true,
+      }),
   },
 }
 

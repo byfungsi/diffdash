@@ -1,8 +1,13 @@
 import type { HostedReviewSummary, ReviewDecision } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import {
+  makeRepositoryComparisonReviewKey,
+  type RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
+import {
   type HostedReviewSnapshotManifest,
   type LocalReviewSnapshotManifest,
+  type RepositoryComparisonSnapshotManifest,
   makeReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
@@ -15,10 +20,12 @@ import {
   ReviewSnapshotExpired,
   type ReviewSnapshotPageResponse,
   type ReviewSnapshotSearchResponse,
+  ResolvedRepositoryComparison,
 } from "@diffdash/protocol/review-snapshot"
 import type { ViewedFileRecord } from "@diffdash/protocol/viewed-files"
 import { GitProvider } from "../../../../src/main/services/git-provider"
 import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
+import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import {
   ReviewSnapshotService,
   ReviewSnapshotUnavailableError,
@@ -78,6 +85,16 @@ export const defineReviewHandlers = (
   )
 
   handlers.define(
+    InvokeChannel.resolveRepositoryComparison,
+    async (_event, { command }): Promise<ResolvedRepositoryComparison> => {
+      const comparisons = await run(RepositoryComparisonSource)
+      const target = await run(comparisons.resolve(command))
+      const repo = await run(comparisons.repository(target))
+      return ResolvedRepositoryComparison.make({ repo, target })
+    },
+  )
+
+  handlers.define(
     InvokeChannel.acquireHostedReviewSnapshot,
     async (_event, { review }): Promise<HostedReviewSnapshotManifest> => {
       const snapshots = await run(ReviewSnapshotService)
@@ -98,6 +115,17 @@ export const defineReviewHandlers = (
       const snapshot = await run(snapshots.acquireLocal(target))
       const project = await run(repositories.ensureLocal(snapshot.detail.rootPath))
       return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(project.id))
+    },
+  )
+
+  handlers.define(
+    InvokeChannel.acquireRepositoryComparisonSnapshot,
+    async (_event, { target }): Promise<RepositoryComparisonSnapshotManifest> => {
+      const snapshots = await run(ReviewSnapshotService)
+      const comparisons = await run(RepositoryComparisonSource)
+      const repo = await run(comparisons.repository(target))
+      const snapshot = await run(snapshots.acquireComparison(target))
+      return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(repo.id))
     },
   )
 
@@ -198,6 +226,33 @@ export const defineReviewHandlers = (
       }),
     )
   })
+
+  handlers.define(
+    InvokeChannel.listRepositoryComparisonViewedFiles,
+    async (_event, { target }): Promise<readonly ViewedFileRecord[]> => {
+      const comparisons = await run(RepositoryComparisonSource)
+      const viewedFiles = await run(ViewedFileStore)
+      const repo = await run(comparisons.repository(target))
+      return run(viewedFiles.listLocal(comparisonViewedFileScope(repo.id, target)))
+    },
+  )
+
+  handlers.define(
+    InvokeChannel.setRepositoryComparisonViewedFile,
+    async (_event, request): Promise<void> => {
+      const comparisons = await run(RepositoryComparisonSource)
+      const viewedFiles = await run(ViewedFileStore)
+      const repo = await run(comparisons.repository(request.target))
+      return run(
+        viewedFiles.setLocal({
+          ...comparisonViewedFileScope(repo.id, request.target),
+          reviewKey: request.reviewKey,
+          patchHash: request.patchHash,
+          viewed: request.viewed,
+        }),
+      )
+    },
+  )
 }
 
 const localViewedFileScope = (
@@ -210,4 +265,12 @@ const localViewedFileScope = (
     sourceIdentity: sourceBranch === null ? "detached" : `branch:${sourceBranch}`,
     comparisonKind: target.comparison["_tag"],
     comparisonTarget: target.comparison["_tag"] === "branch" ? target.comparison.branchName : "",
+  }) as const
+
+const comparisonViewedFileScope = (repoId: string, target: RepositoryComparisonTarget) =>
+  ({
+    repoId,
+    sourceIdentity: `comparison:${makeRepositoryComparisonReviewKey(target)}`,
+    comparisonKind: "repositoryComparison",
+    comparisonTarget: target.headSha,
   }) as const

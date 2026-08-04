@@ -58,6 +58,7 @@ import {
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
+  repositoryComparisonManifestAtom,
   pullRequestsAtom,
   refreshPullRequestsAtom,
   repoKey,
@@ -256,6 +257,9 @@ export function AppShell() {
   )
   const refreshSelectedLocalReview = useAtomRefresh(
     localReviewManifestAtom(selectedReviewSourceKeys.local),
+  )
+  const refreshSelectedRepositoryComparison = useAtomRefresh(
+    repositoryComparisonManifestAtom(selectedReviewSourceKeys.comparison),
   )
   const isLoadingDiagnostics = Result.isWaiting(diagnosticsResult)
   const pullRequests = resultValue(pullRequestsResult, [] as readonly HostedReviewSummary[])
@@ -535,7 +539,12 @@ export function AppShell() {
     if (selectedRepo !== null) persistWorkspace(selectedRepo, "files", selection)
     captureAnalytics({
       event: "review_opened",
-      reviewType: selection.kind === "hosted" ? "pull_request" : "local_diff",
+      reviewType:
+        selection.kind === "hosted"
+          ? "pull_request"
+          : selection.kind === "localDiff"
+            ? "local_diff"
+            : "repository_comparison",
     })
   }
 
@@ -707,9 +716,22 @@ export function AppShell() {
       return
     }
     if (command["_tag"] === "openRepositoryComparison") {
-      const message = "Repository comparisons are not available in this build yet."
-      setActionStatus(message)
-      setCliNavigationError(message)
+      setActionStatus("Resolving repository comparison...")
+      try {
+        const comparison = await window.diffDash.repositoryComparisons.resolve(command)
+        showProject(
+          comparison.repo,
+          "files",
+          { kind: "repositoryComparison", target: comparison.target },
+          null,
+          true,
+        )
+        captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
+      } catch (error) {
+        const message = formatError(error, "Could not open repository comparison")
+        setActionStatus(message)
+        setCliNavigationError(message)
+      }
       return
     }
     await openProjectPath(
@@ -1012,6 +1034,7 @@ export function AppShell() {
                   onRetrySelection={() => {
                     refreshSelectedHostedReview()
                     refreshSelectedLocalReview()
+                    refreshSelectedRepositoryComparison()
                   }}
                 />
               ) : (
@@ -1102,6 +1125,9 @@ const workbenchCommandLabel = (
     return `${selectedReview.review.repository.namespace}/${selectedReview.review.repository.name}`
   }
   if (selectedReview?.kind === "localDiff") return selectedReview.target.rootPath
+  if (selectedReview?.kind === "repositoryComparison") {
+    return `${selectedReview.target.repository.namespace}/${selectedReview.target.repository.name}`
+  }
   return "DiffDash"
 }
 

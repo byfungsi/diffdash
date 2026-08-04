@@ -3,6 +3,7 @@ import { useAtomRefresh, useAtomSet } from "@effect-atom/atom-react"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
+  repositoryComparisonManifestAtom,
   refreshPullRequestsAtom,
   repoKey,
 } from "./atoms"
@@ -24,6 +25,13 @@ export const useReviewSourceOperations = (
     selection._tag === "ready" && selection.target.kind === "localDiff" ? selection.sourceKey : ""
   const refreshHostedManifest = useAtomRefresh(hostedReviewManifestAtom(hostedKey))
   const refreshLocalManifest = useAtomRefresh(localReviewManifestAtom(localKey))
+  const comparisonKey =
+    selection._tag === "ready" && selection.target.kind === "repositoryComparison"
+      ? selection.sourceKey
+      : ""
+  const refreshRepositoryComparisonManifest = useAtomRefresh(
+    repositoryComparisonManifestAtom(comparisonKey),
+  )
   const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
 
   if (selection._tag !== "ready") return { _tag: "unavailable" }
@@ -45,6 +53,7 @@ export const useReviewSourceOperations = (
         }
       },
       refreshLocal: refreshLocalManifest,
+      refreshRepositoryComparison: refreshRepositoryComparisonManifest,
     }),
   }
 }

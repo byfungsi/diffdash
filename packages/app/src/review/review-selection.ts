@@ -3,11 +3,16 @@ import type { GitProviderDescriptor } from "@diffdash/domain/git-provider"
 import type {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
   ReviewSnapshotFileInventory,
   ReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import { formatError } from "@/shared/errors"
-import { pullRequestAtomKey, serializeLocalReviewAtomKey } from "./atoms"
+import {
+  pullRequestAtomKey,
+  serializeLocalReviewAtomKey,
+  serializeRepositoryComparisonAtomKey,
+} from "./atoms"
 import {
   type ReviewSubject,
   type SelectedReviewTarget,
@@ -28,6 +33,7 @@ type ReadyReviewSource =
       readonly provider: GitProviderDescriptor | null
     }
   | { readonly _tag: "local" }
+  | { readonly _tag: "repositoryComparison" }
 
 /** One normalized projection of review navigation and source loading state. */
 export type ReviewSelectionProjection =
@@ -60,6 +66,7 @@ export type ReviewSelectionProjection =
 
 /** Stable source keys used by the hosted and local manifest atoms. */
 type ReviewSelectionSourceKeys = {
+  readonly comparison: string
   readonly hosted: string
   readonly local: string
 }
@@ -69,6 +76,7 @@ type ReviewSelectionProjectionInput = {
   readonly target: SelectedReviewTarget | null
   readonly hosted: ReviewManifestLoadState<HostedReviewSnapshotManifest>
   readonly local: ReviewManifestLoadState<LocalReviewSnapshotManifest>
+  readonly comparison?: ReviewManifestLoadState<RepositoryComparisonSnapshotManifest>
   readonly providers: readonly GitProviderDescriptor[]
 }
 
@@ -76,21 +84,27 @@ type ReviewSelectionProjectionInput = {
 export const reviewSelectionSourceKeys = (
   target: SelectedReviewTarget | null,
 ): ReviewSelectionSourceKeys => {
-  if (target === null) return { hosted: "", local: "" }
-  return target.kind === "hosted"
-    ? {
-        hosted: pullRequestAtomKey(
-          target.review.repository.providerId,
-          target.review.repository.namespace,
-          target.review.repository.name,
-          target.review.number,
-        ),
-        local: "",
-      }
-    : {
-        hosted: "",
-        local: serializeLocalReviewAtomKey(target.target),
-      }
+  if (target === null) return { comparison: "", hosted: "", local: "" }
+  if (target.kind === "hosted") {
+    return {
+      comparison: "",
+      hosted: pullRequestAtomKey(
+        target.review.repository.providerId,
+        target.review.repository.namespace,
+        target.review.repository.name,
+        target.review.number,
+      ),
+      local: "",
+    }
+  }
+  if (target.kind === "localDiff") {
+    return { comparison: "", hosted: "", local: serializeLocalReviewAtomKey(target.target) }
+  }
+  return {
+    comparison: serializeRepositoryComparisonAtomKey(target.target),
+    hosted: "",
+    local: "",
+  }
 }
 
 /** Normalizes hosted and local selection state into one tagged projection. */
@@ -98,6 +112,7 @@ export const projectReviewSelection = ({
   target,
   hosted,
   local,
+  comparison = { _tag: "loading" },
   providers,
 }: ReviewSelectionProjectionInput): ReviewSelectionProjection => {
   if (target === null) return { _tag: "none" }
@@ -140,6 +155,39 @@ export const projectReviewSelection = ({
       source: { _tag: "hosted", provider },
       status: `Opened ${provider?.terminology.reviewAbbreviation ?? "review"} #${subject.hostedReview.summary.locator.number}: ${subject.hostedReview.summary.title}`,
       inventory: hosted.manifest.files,
+      repositoryLabel: reviewSubjectRepositoryLabel(subject),
+      title: reviewSubjectTitle(subject),
+    }
+  }
+
+  if (target.kind === "repositoryComparison") {
+    const sourceKey = sourceKeys.comparison
+    if (comparison._tag === "loading") {
+      return { _tag: "loading", sourceKey, target, status: "Opening repository comparison..." }
+    }
+    if (comparison._tag === "failure") {
+      return {
+        _tag: "failure",
+        sourceKey,
+        target,
+        status: formatError(comparison.error, "Could not open repository comparison"),
+      }
+    }
+
+    const subject: ReviewSubject = {
+      kind: "repositoryComparison",
+      comparison: comparison.manifest.detail,
+    }
+    return {
+      _tag: "ready",
+      sourceKey,
+      target,
+      manifest: comparison.manifest,
+      refreshing: comparison.refreshing,
+      subject,
+      source: { _tag: "repositoryComparison" },
+      status: `Opened ${subject.comparison.target.baseRef}...${subject.comparison.target.headRef}`,
+      inventory: comparison.manifest.files,
       repositoryLabel: reviewSubjectRepositoryLabel(subject),
       title: reviewSubjectTitle(subject),
     }

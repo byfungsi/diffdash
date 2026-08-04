@@ -2,6 +2,7 @@ import { Schema } from "effect"
 
 import { LocalReviewTarget } from "./local-review"
 import { HostedReviewLocator } from "./git-provider"
+import { RepositoryComparisonTarget } from "./repository-comparison"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "./diff-hunk-lines"
 
 export { LocalReviewTarget } from "./local-review"
@@ -196,7 +197,11 @@ export class HostedReviewTarget extends Schema.Class<HostedReviewTarget>("Hosted
 }) {}
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
-export const ReviewThreadTarget = Schema.Union(HostedReviewTarget, LocalReviewTarget)
+export const ReviewThreadTarget = Schema.Union(
+  HostedReviewTarget,
+  LocalReviewTarget,
+  RepositoryComparisonTarget,
+)
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
 export type ReviewThreadTarget = typeof ReviewThreadTarget.Type

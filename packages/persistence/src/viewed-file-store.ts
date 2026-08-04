@@ -42,7 +42,7 @@ interface HostedViewedFileScope {
 
 /** Local review scope shared by viewed-file reads and writes. */
 export interface LocalViewedFileScope {
-  readonly comparisonKind: "workingTree" | "branch"
+  readonly comparisonKind: "workingTree" | "branch" | "repositoryComparison"
   readonly comparisonTarget: string
   readonly repoId: string
   readonly sourceIdentity: string

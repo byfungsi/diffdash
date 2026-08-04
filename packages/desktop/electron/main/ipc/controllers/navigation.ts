@@ -111,6 +111,27 @@ export const defineNavigationHandlers = (
   })
 
   handlers.define(
+    InvokeChannel.appOpenRepositoryComparisonFile,
+    async (_event, { target, filePath }): Promise<void> => {
+      if (isAbsolute(filePath)) {
+        throw transportError(
+          "INVALID_REVIEW_FILE_PATH",
+          "Cannot open an absolute file path from a review.",
+        )
+      }
+      const gitProvider = await run(GitProvider)
+      await openProviderFile(
+        (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
+        rendererSecurityPolicy.openExternalUrl,
+        target.repository,
+        normalizeReviewFilePath(filePath),
+        target.headSha,
+        target.headSha,
+      )
+    },
+  )
+
+  handlers.define(
     InvokeChannel.appOpenLocalRepositoryFile,
     async (_event, { rootPath, filePath }): Promise<void> => {
       const git = await run(GitService)

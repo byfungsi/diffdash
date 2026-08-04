@@ -15,6 +15,7 @@ import {
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer, TestClock } from "effect"
 import { ReviewContextError, ReviewContextService } from "./review-context"
+import { RepositoryComparisonSource } from "./repository-comparison-source"
 import { ReviewSnapshotService } from "./review-snapshot"
 
 const target = workingTreeReviewTarget("/repo")
@@ -82,6 +83,17 @@ const layerFor = (
         ReviewContextService.of({
           getHostedReviewSnapshot: () => Effect.die(new Error("Hosted acquisition is unused")),
           getLocalReviewSnapshot: acquireLocal,
+        }),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.succeed(
+        RepositoryComparisonSource,
+        RepositoryComparisonSource.of({
+          acquire: () => Effect.die(new Error("Comparison acquisition is unused")),
+          repository: () => Effect.die(new Error("Comparison repository lookup is unused")),
+          resolve: () => Effect.die(new Error("Comparison resolution is unused")),
+          useWorkspace: (_target, run) => run("/unused-comparison-workspace"),
         }),
       ),
     ),
