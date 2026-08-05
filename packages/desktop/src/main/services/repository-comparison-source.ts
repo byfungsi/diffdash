@@ -69,7 +69,10 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
           .pinComparison({
             repository,
             sourcePath: saved.localPath,
-            remoteUrl: saved.remoteUrl,
+            remoteUrl:
+              command.repository === null && saved.localPath !== null
+                ? saved.localPath
+                : saved.remoteUrl,
             baseRef: command.baseRef,
             headRef: command.headRef,
             bootstrapBareRepository: (destination) =>

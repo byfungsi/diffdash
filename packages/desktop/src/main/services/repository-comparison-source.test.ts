@@ -52,7 +52,7 @@ describe("RepositoryComparisonSource", () => {
       })
       expect(pinnedInputs[0]).toMatchObject({
         sourcePath: "/repos/linux",
-        remoteUrl: "https://github.com/torvalds/linux.git",
+        remoteUrl: "/repos/linux",
       })
     }),
   )
