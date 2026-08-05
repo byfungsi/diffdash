@@ -1,7 +1,7 @@
 import { StoredWalkthrough, Walkthrough, type WalkthroughRisk } from "@diffdash/domain/walkthrough"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import "../styles.css"
 import {
   WalkthroughMainHeader,
@@ -42,12 +42,79 @@ const WALKTHROUGH_RISKS = [
 let root: Root | null = null
 
 afterEach(() => {
+  vi.restoreAllMocks()
   root?.unmount()
   root = null
   document.body.replaceChildren()
 })
 
 describe("WalkthroughMainHeader", () => {
+  it("copies structured error details and confirms success", async () => {
+    const writeText = vi.spyOn(window.navigator.clipboard, "writeText").mockResolvedValue()
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    flushSync(() => {
+      root?.render(
+        <WalkthroughMainHeader
+          activeStepComplete={false}
+          step={null}
+          state={{
+            status: "error",
+            message: "Check that Codex is signed in and online, then retry.",
+            report: "DiffDash walkthrough error\nError code: AgentProviderOperationError",
+          }}
+          onMarkComplete={() => undefined}
+          onNextStep={() => undefined}
+          onRetry={() => undefined}
+        />,
+      )
+    })
+
+    const copyButton = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Copy error details"),
+    )
+    expect(copyButton).not.toBeUndefined()
+    copyButton?.click()
+
+    await expect
+      .poll(() => writeText.mock.calls[0]?.[0])
+      .toBe("DiffDash walkthrough error\nError code: AgentProviderOperationError")
+    await expect.poll(() => copyButton?.textContent).toContain("Copied")
+    expect(document.body.textContent).toContain("Check that Codex is signed in")
+    expect(document.querySelector(".truncate")).toBeNull()
+  })
+
+  it("shows when copying error details fails", async () => {
+    vi.spyOn(window.navigator.clipboard, "writeText").mockRejectedValue(
+      new Error("Clipboard unavailable"),
+    )
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    flushSync(() => {
+      root?.render(
+        <WalkthroughMainHeader
+          activeStepComplete={false}
+          step={null}
+          state={{ status: "error", message: "Walkthrough failed.", report: "Safe report" }}
+          onMarkComplete={() => undefined}
+          onNextStep={() => undefined}
+          onRetry={() => undefined}
+        />,
+      )
+    })
+
+    const copyButton = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Copy error details"),
+    )
+    copyButton?.click()
+
+    await expect.poll(() => copyButton?.textContent).toContain("Copy failed")
+  })
+
   it.each([
     { status: "empty", title: "No walkthrough available" },
     { status: "unavailable", title: "Walkthrough unavailable" },
