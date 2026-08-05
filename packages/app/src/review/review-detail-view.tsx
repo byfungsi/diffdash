@@ -1503,7 +1503,6 @@ export const ReviewDetailView = ({
     reviewSubject.kind === "hosted" &&
     repositoryLinkState === "unlinked" &&
     !repositoryBannerDismissed
-
   const reviewContent = (
     <>
       <ReviewWorkbenchLayout
@@ -1540,9 +1539,14 @@ export const ReviewDetailView = ({
                 navigableThreadIds={navigableThreadIds}
                 state={threadSidebarState}
                 onCollapse={() => updateThreadSidebarState({ _tag: "collapsed" })}
-                onGoToDiff={goToReviewThread}
                 onOpenDetail={(threadId) => updateThreadSidebarState({ _tag: "detail", threadId })}
-              />
+              >
+                <WalkthroughSettingsMenu
+                  catalog={agentProviderCatalog}
+                  settings={aiSettings}
+                  onChange={onAISettingsChange}
+                />
+              </ReviewThreadListPane>
             ) : (
               <aside
                 data-review-context-panel

@@ -1,7 +1,7 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Sidebar states use the project-standard tagged-union discriminant. */
 import type { ReviewThreadDetails, ReviewThreadId } from "@diffdash/domain/review-thread"
-import { Loader2, MoveRight, X } from "lucide-react"
-import { type RefObject, useEffect, useEffectEvent, useRef } from "react"
+import { Loader2, X } from "lucide-react"
+import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef } from "react"
 import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -28,19 +28,19 @@ export type ReviewThreadButtonRefs = RefObject<Map<ReviewThreadId, HTMLButtonEle
 /** Full-height thread list pane content. */
 export function ReviewThreadListPane({
   buttonRefs,
+  children,
   controller,
   navigableThreadIds,
   state,
   onCollapse,
-  onGoToDiff,
   onOpenDetail,
 }: {
   readonly buttonRefs: ReviewThreadButtonRefs
+  readonly children?: ReactNode
   readonly controller: ReviewThreadsController
   readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
   readonly state: ReviewThreadSidebarState
   readonly onCollapse: () => void
-  readonly onGoToDiff: (details: ReviewThreadDetails) => void
   readonly onOpenDetail: (threadId: ReviewThreadId) => void
 }) {
   const count = controller.details.length
@@ -64,12 +64,10 @@ export function ReviewThreadListPane({
       className="bg-review-sidebar text-review-sidebar-fg relative z-20 flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
     >
       <header className="border-review-sidebar-divider flex h-9 shrink-0 items-center gap-3 border-b px-3">
-        <div className="min-w-0">
-          <h2 className="text-caption font-semibold tracking-wide uppercase">Threads</h2>
-        </div>
-        <span className="text-review-sidebar-muted ml-auto text-caption">
-          {count} thread{count === 1 ? "" : "s"}
-        </span>
+        <h2 className="text-caption min-w-0 flex-1 font-semibold tracking-wide uppercase">
+          Threads
+        </h2>
+        {children}
       </header>
 
       {controller.error === null ? null : (
@@ -128,17 +126,17 @@ export function ReviewThreadListPane({
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onOpenDetail(thread.id)}
                 >
-                  <span className="flex min-w-0 items-center justify-between gap-2 text-xs">
+                  <span className="flex min-w-0 items-center gap-2 text-xs">
                     <MiddleTruncatedText value={anchor.filePath} className="font-mono" />
-                    <span className="text-review-sidebar-muted shrink-0">
-                      {thread.anchorStatus !== "active"
-                        ? fallbackThreadLabel(details)
-                        : previousRevision
-                          ? "Previous revision"
-                          : navigable
-                            ? reviewLineLabel(anchor)
+                    {thread.anchorStatus !== "active" || previousRevision || !navigable ? (
+                      <span className="text-review-sidebar-muted shrink-0">
+                        {thread.anchorStatus !== "active"
+                          ? fallbackThreadLabel(details)
+                          : previousRevision
+                            ? "Previous revision"
                             : fallbackThreadLabel(details)}
-                    </span>
+                      </span>
+                    ) : null}
                   </span>
                   {initialMessage === undefined ? null : (
                     <span className="text-review-sidebar-muted mt-1 block truncate text-caption">
@@ -146,22 +144,11 @@ export function ReviewThreadListPane({
                     </span>
                   )}
                 </button>
-                <div className="flex shrink-0 items-center px-2">
+                <div className="text-review-sidebar-muted flex shrink-0 items-center gap-1.5 px-3 text-caption">
                   {controller.runningThreadIds.includes(thread.id) ? (
-                    <Loader2 className="text-review-sidebar-muted mr-1 size-3 animate-spin" />
+                    <Loader2 className="size-3 animate-spin" />
                   ) : null}
-                  {navigable ? (
-                    <Button
-                      type="button"
-                      size="icon-xs"
-                      variant="ghost"
-                      aria-label={`Go to ${anchor.filePath} ${reviewLineLabel(anchor)} in diff`}
-                      title="Go to diff"
-                      onClick={() => onGoToDiff(details)}
-                    >
-                      <MoveRight className="size-3.5" />
-                    </Button>
-                  ) : null}
+                  <span data-review-thread-line-label>{reviewLineLabel(anchor)}</span>
                 </div>
               </div>
             )
@@ -234,18 +221,6 @@ export function ReviewThreadDetailPane({
             value={selectedAnchor.filePath}
             className="flex-1 font-mono text-xs"
           />
-          {navigableThreadIds.has(selectedDetails.thread.id) ? (
-            <Button
-              type="button"
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Go to thread in diff"
-              title="Go to diff"
-              onClick={() => onGoToDiff(selectedDetails)}
-            >
-              <MoveRight className="size-4" />
-            </Button>
-          ) : null}
           <Button
             ref={closeButtonRef}
             type="button"
@@ -257,8 +232,20 @@ export function ReviewThreadDetailPane({
             <X />
           </Button>
         </div>
-        <div className="text-muted-foreground mt-1.5 flex min-h-5 flex-wrap items-center gap-1.5 text-caption">
+        <div className="text-muted-foreground mt-0.5 flex min-h-5 flex-wrap items-center gap-1.5 text-caption">
           <span>{reviewLineLabel(selectedAnchor)}</span>
+          {navigableThreadIds.has(selectedDetails.thread.id) ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="link"
+              aria-label="Go to thread in diff"
+              className="h-auto px-0 py-0 text-caption underline decoration-dashed"
+              onClick={() => onGoToDiff(selectedDetails)}
+            >
+              go to diff
+            </Button>
+          ) : null}
           {reviewThreadIsPreviousRevision(selectedDetails.thread) ? (
             <Badge variant="outline" className="h-5 px-1.5 text-caption">
               Previous revision
@@ -295,13 +282,11 @@ export function ReviewThreadSidebar({
   controller,
   navigableThreadIds,
   state,
-  onGoToDiff,
   onStateChange,
 }: {
   readonly controller: ReviewThreadsController
   readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
   readonly state: ReviewThreadSidebarState
-  readonly onGoToDiff: (details: ReviewThreadDetails) => void
   readonly onStateChange: (state: ReviewThreadSidebarState) => void
 }) {
   const buttonRefs = useRef(new Map<ReviewThreadId, HTMLButtonElement>())
@@ -312,7 +297,6 @@ export function ReviewThreadSidebar({
       navigableThreadIds={navigableThreadIds}
       state={state}
       onCollapse={() => onStateChange({ _tag: "collapsed" })}
-      onGoToDiff={onGoToDiff}
       onOpenDetail={(threadId) => onStateChange({ _tag: "detail", threadId })}
     />
   )
