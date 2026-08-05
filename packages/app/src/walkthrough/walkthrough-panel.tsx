@@ -173,14 +173,29 @@ export const WalkthroughSidebar = ({
                             className="w-full text-left"
                             onClick={() => onSelectStep(index)}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-semibold">
-                                {index + 1} {step.title}
+                            <div className="flex min-w-0 items-start justify-between gap-2">
+                              <span className="min-w-0 flex-1 font-semibold">
+                                <span className="block">{index + 1}</span>
+                                <span
+                                  data-walkthrough-step-title
+                                  className="block truncate"
+                                  title={step.title}
+                                >
+                                  {step.title}
+                                </span>
                               </span>
-                              <span className="text-caption text-review-sidebar-muted">
-                                {complete
-                                  ? "Done"
-                                  : `${fileSummaries.length} file${fileSummaries.length === 1 ? "" : "s"}`}
+                              <span
+                                data-walkthrough-step-file-count
+                                className="text-caption text-review-sidebar-muted flex shrink-0 flex-col items-end leading-tight"
+                              >
+                                {complete ? (
+                                  <span>Done</span>
+                                ) : (
+                                  <>
+                                    <span>{fileSummaries.length}</span>
+                                    <span>file{fileSummaries.length === 1 ? "" : "s"}</span>
+                                  </>
+                                )}
                               </span>
                             </div>
                           </button>

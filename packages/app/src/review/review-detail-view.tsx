@@ -1513,7 +1513,6 @@ export const ReviewDetailView = ({
     reviewSubject.kind === "hosted" &&
     repositoryLinkState === "unlinked" &&
     !repositoryBannerDismissed
-
   const reviewContent = (
     <>
       <ReviewWorkbenchLayout
@@ -1550,9 +1549,14 @@ export const ReviewDetailView = ({
                 navigableThreadIds={navigableThreadIds}
                 state={threadSidebarState}
                 onCollapse={() => updateThreadSidebarState({ _tag: "collapsed" })}
-                onGoToDiff={goToReviewThread}
                 onOpenDetail={(threadId) => updateThreadSidebarState({ _tag: "detail", threadId })}
-              />
+              >
+                <WalkthroughSettingsMenu
+                  catalog={agentProviderCatalog}
+                  settings={aiSettings}
+                  onChange={onAISettingsChange}
+                />
+              </ReviewThreadListPane>
             ) : (
               <aside
                 data-review-context-panel
@@ -1565,6 +1569,22 @@ export const ReviewDetailView = ({
                   <h2 className="text-caption min-w-0 flex-1 truncate font-semibold tracking-wide uppercase">
                     {sidebarTab === "walkthrough" ? "Walkthrough" : "Files"}
                   </h2>
+                  {sidebarTab === "walkthrough" ? (
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Refresh walkthrough"
+                      title="Refresh walkthrough"
+                      className="text-review-sidebar-muted hover:bg-review-sidebar-control-hover hover:text-review-sidebar-fg"
+                      disabled={walkthroughState.status === "loading"}
+                      onClick={() => void loadWalkthrough(true)}
+                    >
+                      <RefreshCw
+                        className={`size-3 ${walkthroughState.status === "loading" ? "animate-spin" : ""}`}
+                      />
+                    </Button>
+                  ) : null}
                   <WalkthroughSettingsMenu
                     catalog={agentProviderCatalog}
                     settings={aiSettings}

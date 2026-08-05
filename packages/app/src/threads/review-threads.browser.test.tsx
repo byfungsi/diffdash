@@ -305,7 +305,7 @@ describe("review thread UI", () => {
     expect(history.scrollTop).toBe(1_000)
   })
 
-  it("shows sidebar loading, count, and retryable load errors", async () => {
+  it("shows a sidebar header action, loading state, and retryable load errors", async () => {
     const reload = vi.fn<() => Promise<void>>(async () => undefined)
     const buttonRefs = { current: new Map<ReviewThreadId, HTMLButtonElement>() }
     const sidebar = (loading: boolean, error: string | null) => (
@@ -320,12 +320,16 @@ describe("review thread UI", () => {
         navigableThreadIds={new Set()}
         state={{ _tag: "list" }}
         onCollapse={() => undefined}
-        onGoToDiff={() => undefined}
         onOpenDetail={() => undefined}
-      />
+      >
+        <button type="button">Agent settings</button>
+      </ReviewThreadListPane>
     )
     render(sidebar(true, null))
-    expect(document.body.textContent).toContain("1 thread")
+    expect(document.body.textContent).not.toContain("1 thread")
+    expect(buttonNamed("Agent settings")).not.toBeNull()
+    expect(document.querySelector("[data-review-thread-line-label]")?.textContent).toBe("R7")
+    expect(document.querySelector(".lucide-move-right")).toBeNull()
     expect(document.querySelector("output")?.textContent).toContain("Loading")
 
     flushSync(() => root?.render(sidebar(false, "Could not load review threads")))
