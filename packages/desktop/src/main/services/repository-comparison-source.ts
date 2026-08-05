@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect"
 
 import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import { ProjectRemoteSelectionRequired } from "@diffdash/domain/project-workspace"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type { Repo } from "@diffdash/domain/repository"
 import {
@@ -95,6 +96,36 @@ const resolveSavedRepository = (
   command: OpenRepositoryComparisonCommand,
 ) => {
   const selector = command.repository
+  if (selector === null) {
+    return repositories.openProject(command.localPath).pipe(
+      Effect.mapError((cause) =>
+        sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
+      ),
+      Effect.flatMap((result) => {
+        if (result instanceof ProjectRemoteSelectionRequired) {
+          return sourceError(
+            "repository-ambiguous",
+            "resolve.currentRepository",
+            "The current repository has multiple recognized remotes. Pass --repository=provider:namespace/name.",
+            new Error(
+              `Ambiguous current repository remotes: ${result.candidates
+                .map(({ remoteName }) => remoteName)
+                .join(", ")}`,
+            ),
+          )
+        }
+        if (result.repo.provider === "local") {
+          return sourceError(
+            "repository-not-found",
+            "resolve.currentRepository",
+            "The current repository has no recognized hosted remote. Save a hosted repository and pass --repository=provider:namespace/name.",
+            new Error("Current repository has no hosted identity"),
+          )
+        }
+        return Effect.succeed(result.repo)
+      }),
+    )
+  }
   if (selector.providerId !== null) {
     const requested = makeHostedRepositoryLocator(
       selector.providerId,
