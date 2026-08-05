@@ -77,6 +77,7 @@ import {
 } from "@/threads/review-thread-sidebar"
 import { useReviewThreads } from "@/threads/review-threads"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
+import { walkthroughErrorPresentation } from "@/walkthrough/walkthrough-error-report"
 import {
   WalkthroughMainHeader,
   type WalkthroughReviewStep,
@@ -1273,7 +1274,16 @@ export const ReviewDetailView = ({
         provider: aiSettings.routes.walkthrough,
       })
     } catch (error) {
-      setWalkthroughState({ status: "error", message: formatError(error, "Walkthrough failed") })
+      const presentation = walkthroughErrorPresentation(error, {
+        action: regenerate ? "regenerate" : "generate",
+        appVersion: import.meta.env.VITE_APP_VERSION,
+        model: selectedAIModelLabel(aiSettings, agentProviderCatalog),
+        occurredAt: new Date().toISOString(),
+        platform: window.navigator.platform,
+        provider: aiProviderLabel(aiSettings.routes.walkthrough, agentProviderCatalog),
+        reviewType: reviewSubject.kind === "hosted" ? "Pull request" : "Local changes",
+      })
+      setWalkthroughState({ status: "error", ...presentation })
     }
   }
 

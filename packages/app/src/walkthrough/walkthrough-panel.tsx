@@ -10,6 +10,7 @@ import {
   type WalkthroughRisk,
 } from "@diffdash/domain/walkthrough"
 import { Check, Copy, FolderGit2, GitBranch, GitPullRequest, Sparkles, Star } from "lucide-react"
+import { useState } from "react"
 import { stableStringHash32 } from "@/shared/stable-string-hash"
 import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
@@ -22,7 +23,7 @@ export type WalkthroughState =
   | { readonly status: "ready"; readonly stored: StoredWalkthrough }
   | { readonly status: "empty"; readonly message: string }
   | { readonly status: "unavailable"; readonly message: string }
-  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "error"; readonly message: string; readonly report: string }
 
 /** Flattened walkthrough step used by review navigation and palettes. */
 export type WalkthroughReviewStep = {
@@ -74,7 +75,14 @@ export const WalkthroughSidebar = ({
     )
   }
   if (state.status === "error") {
-    return <WalkthroughErrorNotice message={state.message} variant="sidebar" onRetry={onRetry} />
+    return (
+      <WalkthroughErrorNotice
+        message={state.message}
+        report={state.report}
+        variant="sidebar"
+        onRetry={onRetry}
+      />
+    )
   }
   if (state.status === "empty" || state.status === "unavailable") {
     return (
@@ -257,7 +265,14 @@ export const WalkthroughMainHeader = ({
   if (state.status === "loading")
     return <UnicodeLoadingText className="text-muted-foreground text-sm" text={state.message} />
   if (state.status === "error")
-    return <WalkthroughErrorNotice message={state.message} variant="main" onRetry={onRetry} />
+    return (
+      <WalkthroughErrorNotice
+        message={state.message}
+        report={state.report}
+        variant="main"
+        onRetry={onRetry}
+      />
+    )
   if (state.status === "empty" || state.status === "unavailable") {
     return (
       <section className="bg-card rounded-2xl border p-5">
@@ -337,15 +352,23 @@ const SidebarMessage = ({
 
 const WalkthroughErrorNotice = ({
   message,
+  report,
   variant,
   onRetry,
 }: {
   readonly message: string
+  readonly report: string
   readonly variant: "main" | "sidebar"
   readonly onRetry: () => void
 }) => {
-  const copyError = () => {
-    void navigator.clipboard.writeText(message).catch(() => undefined)
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle")
+  const copyError = async () => {
+    try {
+      await navigator.clipboard.writeText(report)
+      setCopyStatus("copied")
+    } catch {
+      setCopyStatus("failed")
+    }
   }
   return (
     <section
@@ -360,17 +383,16 @@ const WalkthroughErrorNotice = ({
       >
         Walkthrough unavailable
       </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <div
-          className={
-            variant === "sidebar"
-              ? "text-review-sidebar-muted min-w-0 flex-1 truncate"
-              : "text-muted-foreground min-w-0 flex-1 truncate"
-          }
-          title={message}
-        >
-          {message}
-        </div>
+      <div
+        className={
+          variant === "sidebar"
+            ? "text-review-sidebar-muted break-words leading-5"
+            : "text-muted-foreground break-words leading-6"
+        }
+      >
+        {message}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" variant="secondary" className="h-8 shrink-0 rounded-lg" onClick={onRetry}>
           Retry
         </Button>
@@ -378,10 +400,14 @@ const WalkthroughErrorNotice = ({
           size="sm"
           variant="outline"
           className="text-foreground hover:text-foreground h-8 shrink-0 gap-1 rounded-lg"
-          onClick={copyError}
+          onClick={() => void copyError()}
         >
-          <Copy className="size-3" />
-          Copy error
+          {copyStatus === "copied" ? <Check className="size-3" /> : <Copy className="size-3" />}
+          {copyStatus === "copied"
+            ? "Copied"
+            : copyStatus === "failed"
+              ? "Copy failed"
+              : "Copy error details"}
         </Button>
       </div>
     </section>

@@ -16,6 +16,7 @@ import type { RendererSecurityPolicy } from "../../electron-policy"
 import { toPublicIpcError } from "../public-error"
 
 type InvokeHandler = Parameters<typeof ipcMain.handle>[1]
+type ControllerErrorAdapter = (error: unknown, operation: string) => TransportError
 type ControllerHandler<Channel extends InvokeChannel> = (
   event: IpcMainInvokeEvent,
   request: InvokeRequest<Channel>,
@@ -48,11 +49,16 @@ export class IpcControllerRegistry {
   readonly define = <Channel extends InvokeChannel>(
     channel: Channel,
     handler: ControllerHandler<Channel>,
+    errorAdapter: ControllerErrorAdapter = toPublicIpcError,
   ) => {
-    this.#define(channel, async (event, request) => ({
-      response: await handler(event, request),
-      commit: null,
-    }))
+    this.#define(
+      channel,
+      async (event, request) => ({
+        response: await handler(event, request),
+        commit: null,
+      }),
+      errorAdapter,
+    )
   }
 
   /** Defines a handler whose state mutation occurs only after its response passes encoding. */
@@ -62,8 +68,9 @@ export class IpcControllerRegistry {
       event: IpcMainInvokeEvent,
       request: InvokeRequest<Channel>,
     ) => Promise<TransactionalControllerResponse<InvokeResponse<Channel>>>,
+    errorAdapter: ControllerErrorAdapter = toPublicIpcError,
   ) => {
-    this.#define(channel, handler)
+    this.#define(channel, handler, errorAdapter)
   }
 
   readonly #define = <Channel extends InvokeChannel>(
@@ -75,6 +82,7 @@ export class IpcControllerRegistry {
       readonly response: InvokeResponse<Channel>
       readonly commit: (() => void) | null
     }>,
+    errorAdapter: ControllerErrorAdapter,
   ) => {
     if (this.#handlers.has(channel)) throw new Error(`Duplicate IPC handler: ${channel}`)
     this.#handlers.set(channel, async (event, rawRequest) => {
@@ -116,7 +124,7 @@ export class IpcControllerRegistry {
       try {
         prepared = await handler(event, request)
       } catch (error) {
-        return encodeFailure(toPublicIpcError(error, channel))
+        return encodeFailure(errorAdapter(error, channel))
       }
 
       try {
