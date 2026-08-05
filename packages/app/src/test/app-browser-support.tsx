@@ -5413,6 +5413,16 @@ scenario("homeToReview", async () => {
     ).not.toBeNull()
     expect(getDiffShadowRoot("src/app.tsx")?.textContent ?? "").toContain("new")
   })
+  const walkthroughStepTitle = document.querySelector<HTMLElement>("[data-walkthrough-step-title]")
+  const walkthroughStepFileCount = document.querySelector<HTMLElement>(
+    "[data-walkthrough-step-file-count]",
+  )
+  expect(walkthroughStepTitle).not.toBeNull()
+  expect(getComputedStyle(walkthroughStepTitle!).overflowX).toBe("hidden")
+  expect(getComputedStyle(walkthroughStepTitle!).textOverflow).toBe("ellipsis")
+  expect(getComputedStyle(walkthroughStepTitle!).whiteSpace).toBe("nowrap")
+  expect(walkthroughStepFileCount?.children).toHaveLength(2)
+  expect(getComputedStyle(walkthroughStepFileCount!).flexDirection).toBe("column")
   const criticalHeader = document.querySelector<HTMLElement>(
     '[data-walkthrough-main-risk="critical"]',
   )
@@ -5608,8 +5618,8 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).toContain("Complete")
   })
 
-  const regenerateButton = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Regenerate",
+  const regenerateButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Refresh walkthrough"]',
   )
   expect(regenerateButton).toBeDefined()
   regenerateButton?.click()
