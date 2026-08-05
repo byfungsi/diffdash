@@ -388,13 +388,7 @@ const installFixtureRepository = async (source: string, remote: string) => {
   commit(source, "fixture head")
   const head = execGit(source, "rev-parse", "HEAD")
   execGit(process.cwd(), "clone", "--bare", source, remote)
-  execGit(
-    source,
-    "remote",
-    "add",
-    "origin",
-    "https://git.fixture.test/platform/backend/service",
-  )
+  execGit(source, "remote", "add", "origin", "https://git.fixture.test/platform/backend/service")
   execGit(source, "push", remote, `HEAD:refs/merge-requests/73/head`)
   return { base, head }
 }
