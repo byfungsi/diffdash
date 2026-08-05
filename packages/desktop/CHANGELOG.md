@@ -1,5 +1,19 @@
 # DiffDash Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- [#54](https://github.com/byfungsi/diffdash/pull/54) [`c74db1f`](https://github.com/byfungsi/diffdash/commit/c74db1faf8200bfda72770aff3eb6cbd5021c935) Thanks [@hanipcode](https://github.com/hanipcode)! - Add a permanent titlebar control for discovering and opening the global keyboard shortcut reference.
+
+### Patch Changes
+
+- [#60](https://github.com/byfungsi/diffdash/pull/60) [`3fa2689`](https://github.com/byfungsi/diffdash/commit/3fa268981d27cb111ee21b40cd8197015f2593e1) Thanks [@hanipcode](https://github.com/hanipcode)! - Refine review thread navigation and walkthrough sidebar controls for clearer, responsive review workflows.
+
+- [#62](https://github.com/byfungsi/diffdash/pull/62) [`fad3724`](https://github.com/byfungsi/diffdash/commit/fad3724a5a52b259e2908e00049d62de090bb95f) Thanks [@hanipcode](https://github.com/hanipcode)! - Show actionable walkthrough failure messages and let users copy privacy-safe error details for support.
+
+- [#53](https://github.com/byfungsi/diffdash/pull/53) [`597cba0`](https://github.com/byfungsi/diffdash/commit/597cba008a5fdb78e1d53be210051d451cd90a1d) Thanks [@hanipcode](https://github.com/hanipcode)! - Recognize supported user-local DiffDash CLI installations as setup-ready even when Electron inherits a restricted PATH.
+
 ## 0.5.0
 
 ### Minor Changes
