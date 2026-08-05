@@ -17,6 +17,7 @@ import {
 describe("CliNavigationCommand", () => {
   it("round-trips a qualified immutable repository comparison", () => {
     const command = OpenRepositoryComparisonCommand.make({
+      localPath: "/workspace/linux",
       repository: CliRepositorySelector.make({
         providerId: GitProviderId.make("github"),
         namespace: RepositoryNamespace.make("torvalds"),
@@ -31,10 +32,24 @@ describe("CliNavigationCommand", () => {
     expect(Schema.decodeUnknownSync(CliNavigationCommand)(encoded)).toEqual(command)
   })
 
+  it("round-trips a current-checkout repository comparison", () => {
+    const command = OpenRepositoryComparisonCommand.make({
+      localPath: "/workspace/linux",
+      repository: null,
+      baseRef: CliGitRevision.make("v6.0"),
+      headRef: CliGitRevision.make("v6.1"),
+    })
+
+    const encoded = Schema.encodeSync(CliNavigationCommand)(command)
+
+    expect(Schema.decodeUnknownSync(CliNavigationCommand)(encoded)).toEqual(command)
+  })
+
   it("rejects malformed repository selector fields", () => {
     expect(() =>
       Schema.decodeUnknownSync(CliNavigationCommand)({
         _tag: "openRepositoryComparison",
+        localPath: "/workspace/linux",
         repository: { providerId: "local", namespace: "torvalds", name: "linux" },
         baseRef: "v6.0",
         headRef: "v6.1",

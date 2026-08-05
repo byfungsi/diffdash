@@ -6679,6 +6679,7 @@ const installDiffDashApi = (
       const repository = makeHostedRepositoryLocator("github", "torvalds", "linux")
       pendingCommands.push(
         OpenRepositoryComparisonCommand.make({
+          localPath: "/workspace/local-repo",
           repository: CliRepositorySelector.make({
             providerId: repository.providerId,
             namespace: repository.namespace,

@@ -36,6 +36,7 @@ describe("parseCliNavigationCommand", () => {
     })
     expect(parse(["compare", "v6.0", "v6.1", "--repository=torvalds/linux"])).toMatchObject({
       _tag: "openRepositoryComparison",
+      localPath: "/workspace/repo",
       baseRef: "v6.0",
       headRef: "v6.1",
       repository: {
@@ -43,6 +44,13 @@ describe("parseCliNavigationCommand", () => {
         namespace: "torvalds",
         name: "linux",
       },
+    })
+    expect(parse(["compare", "v6.0", "v6.1"])).toMatchObject({
+      _tag: "openRepositoryComparison",
+      localPath: "/workspace/repo",
+      repository: null,
+      baseRef: "v6.0",
+      headRef: "v6.1",
     })
     expect(
       parse([
@@ -89,10 +97,6 @@ describe("parseCliNavigationCommand", () => {
   })
 
   it.each([
-    {
-      args: ["compare", "v6.0", "v6.1"],
-      message: "--repository is required",
-    },
     {
       args: ["compare", "v6.0", "--repository=torvalds/linux"],
       message: "Base and head revisions are required",

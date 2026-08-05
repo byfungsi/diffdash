@@ -117,7 +117,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
     })
   }
 
-  if (command === "compare") return parseCompareCommand(args)
+  if (command === "compare") return parseCompareCommand(args, cwd)
 
   if (command === "repair") {
     return args.length === 1
@@ -148,9 +148,9 @@ const validateOptionalArgument = (
 const cliError = (message: string) => CliNavigationErrorCommand.make({ message })
 
 const COMPARE_USAGE =
-  "diffdash compare <base> <head> --repository=<provider:namespace/name|namespace/name>"
+  "diffdash compare <base> <head> [--repository=<provider:namespace/name|namespace/name>]"
 
-const parseCompareCommand = (args: readonly string[]): CliNavigationCommand => {
+const parseCompareCommand = (args: readonly string[], cwd: string): CliNavigationCommand => {
   const positionals: string[] = []
   let repositoryInput: string | null = null
 
@@ -188,10 +188,6 @@ const parseCompareCommand = (args: readonly string[]): CliNavigationCommand => {
       positionals.length < 2 ? "Base and head revisions are required." : "Too many arguments."
     return cliError(`${message}\nUsage: ${COMPARE_USAGE}`)
   }
-  if (repositoryInput === null) {
-    return cliError(`--repository is required.\nUsage: ${COMPARE_USAGE}`)
-  }
-
   const [baseRef, headRef] = positionals
   if (baseRef === undefined || !Schema.is(CliGitRevision)(baseRef)) {
     return cliError(`Invalid base revision.\nUsage: ${COMPARE_USAGE}`)
@@ -200,12 +196,13 @@ const parseCompareCommand = (args: readonly string[]): CliNavigationCommand => {
     return cliError(`Invalid head revision.\nUsage: ${COMPARE_USAGE}`)
   }
 
-  const repository = parseRepositorySelector(repositoryInput)
-  if (repository === null) {
+  const repository = repositoryInput === null ? null : parseRepositorySelector(repositoryInput)
+  if (repositoryInput !== null && repository === null) {
     return cliError(`Invalid repository selector.\nUsage: ${COMPARE_USAGE}`)
   }
 
   return OpenRepositoryComparisonCommand.make({
+    localPath: resolve(cwd),
     repository,
     baseRef: CliGitRevision.make(baseRef),
     headRef: CliGitRevision.make(headRef),

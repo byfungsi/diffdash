@@ -92,11 +92,12 @@ export const CliGitRevision = Schema.String.pipe(
 /** Safe branch, tag, or full commit input accepted by the public CLI. */
 export type CliGitRevision = typeof CliGitRevision.Type
 
-/** Open an immutable comparison between two requested repository revisions. */
+/** Open an immutable comparison from the invocation checkout or an explicit saved repository. */
 export class OpenRepositoryComparisonCommand extends Schema.TaggedClass<OpenRepositoryComparisonCommand>()(
   "openRepositoryComparison",
   {
-    repository: CliRepositorySelector,
+    localPath: Schema.NonEmptyString,
+    repository: Schema.NullOr(CliRepositorySelector),
     baseRef: CliGitRevision,
     headRef: CliGitRevision,
   },
