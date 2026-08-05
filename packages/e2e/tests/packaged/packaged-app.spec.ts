@@ -279,7 +279,6 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         "compare",
         revisions.base,
         revisions.head,
-        "--repository=fixture:platform/backend/service",
       ],
     })
     const comparisonWindow = await app.firstWindow()
@@ -389,6 +388,13 @@ const installFixtureRepository = async (source: string, remote: string) => {
   commit(source, "fixture head")
   const head = execGit(source, "rev-parse", "HEAD")
   execGit(process.cwd(), "clone", "--bare", source, remote)
+  execGit(
+    source,
+    "remote",
+    "add",
+    "origin",
+    "https://git.fixture.test/platform/backend/service",
+  )
   execGit(source, "push", remote, `HEAD:refs/merge-requests/73/head`)
   return { base, head }
 }

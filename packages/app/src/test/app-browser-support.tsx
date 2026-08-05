@@ -112,7 +112,6 @@ import {
 } from "@diffdash/protocol/app-update"
 import {
   CliGitRevision,
-  CliRepositorySelector,
   type CliNavigationCommand,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
@@ -6779,15 +6778,10 @@ const installDiffDashApi = (
       commandsAvailableListener?.()
     },
     openRepositoryComparison: (baseRef: string, headRef: string) => {
-      const repository = makeHostedRepositoryLocator("github", "torvalds", "linux")
       pendingCommands.push(
         OpenRepositoryComparisonCommand.make({
           localPath: "/workspace/local-repo",
-          repository: CliRepositorySelector.make({
-            providerId: repository.providerId,
-            namespace: repository.namespace,
-            name: repository.name,
-          }),
+          repository: null,
           baseRef: CliGitRevision.make(baseRef),
           headRef: CliGitRevision.make(headRef),
         }),

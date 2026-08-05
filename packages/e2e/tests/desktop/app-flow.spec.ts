@@ -866,19 +866,6 @@ test("opens and forwards immutable repository comparisons through Electron", asy
   try {
     const setupWindow = await app.firstWindow()
     await dismissOnboardingIfPresent(setupWindow)
-    await setupWindow.evaluate(async () => {
-      const providers = await globalThis.window.diffDash.providers.list()
-      const fixture = providers.find(({ id }) => id === "fixture")
-      if (fixture === undefined) throw new Error("Fixture provider was not registered")
-      const results = await globalThis.window.diffDash.hostedRepositories.searchRepositories({
-        providerId: fixture.id,
-        query: "service",
-        namespaces: [],
-      })
-      const repository = results[0]
-      if (repository === undefined) throw new Error("Fixture comparison repository was not found")
-      await globalThis.window.diffDash.repositories.favoriteRemote(repository)
-    })
     await app.close()
 
     app = await electron.launch({
@@ -889,7 +876,6 @@ test("opens and forwards immutable repository comparisons through Electron", asy
         "compare",
         "comparison-base",
         "comparison-head",
-        "--repository=fixture:platform/backend/service",
       ],
       env: appEnvironment,
     })
@@ -914,7 +900,6 @@ test("opens and forwards immutable repository comparisons through Electron", asy
         "compare",
         revisions.base,
         revisions.head,
-        "--repository=fixture:platform/backend/service",
       ],
       { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
     )
@@ -1335,6 +1320,7 @@ const installComparisonRepository = async (source: string, remote: string) => {
   const head = realGit(source, "rev-parse", "HEAD")
   realGit(source, "tag", "comparison-head")
   realGit(process.cwd(), "clone", "--bare", source, remote)
+  realGit(source, "remote", "add", "origin", remote)
   return { base, head }
 }
 
