@@ -662,16 +662,14 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
 
     await expect(
       window
-        .getByText(
-          "The AI provider stopped before finishing the walkthrough. Check sign-in, connection, and quota, then retry.",
-        )
+        .getByText("Provider claude authentication failed or expired. Sign in again, then retry.")
         .first(),
     ).toBeVisible()
     await window.getByRole("button", { name: "Copy error details" }).first().click()
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
-    expect(report).toContain("Error code: AgentProviderExitError")
+    expect(report).toContain("Error code: AgentProviderAuthenticationError")
     expect(report).toContain("Operation: localWalkthroughs:generate")
     expect(report).toContain("Provider tag: claude")
     expect(report).toContain("Cause tag: ProcessExitError")

@@ -1,4 +1,5 @@
 import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
+import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import {
   BranchComparison,
   LocalReviewTarget,
@@ -829,6 +830,7 @@ const ThreadMessage = ({
   const agent = message.author === "agent"
   const pending = message.status === "pending"
   const failed = message.status === "failed"
+  const failurePresentation = reviewFailurePresentation(message.failure)
   return (
     <section
       className={cn(
@@ -842,29 +844,129 @@ const ThreadMessage = ({
         <span>{agent ? "Agent" : "You"}</span>
         <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
       </div>
-      {message.bodyMarkdown.length > 0 && !pending ? (
+      {message.bodyMarkdown.length > 0 && !pending && !failed ? (
         <ReviewMarkdown>{message.bodyMarkdown}</ReviewMarkdown>
       ) : null}
       {pending ? (
         <UnicodeLoadingText className="text-muted-foreground mt-1.5 text-xs" text={progressLabel} />
       ) : null}
       {failed ? (
-        <div className="text-destructive mt-1.5 flex flex-wrap items-center gap-1.5">
-          <AlertCircle className="size-3" />
-          <span role="alert">Agent response failed.</span>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={!retryAvailable}
-            title={retryAvailable ? undefined : "Agent retry API is not available in this build"}
-            onClick={onRetry}
-          >
-            Retry
-          </Button>
+        <div className="text-destructive mt-1.5 space-y-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <AlertCircle className="size-3" />
+            <span role="alert">{failurePresentation.title}</span>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!retryAvailable}
+              title={retryAvailable ? undefined : "Agent retry API is not available in this build"}
+              onClick={onRetry}
+            >
+              Retry
+            </Button>
+          </div>
+          <p className="text-muted-foreground">{failurePresentation.guidance}</p>
         </div>
       ) : null}
     </section>
   )
+}
+
+const reviewFailurePresentation = (
+  failure: AgentProviderFailure | null,
+): { readonly title: string; readonly guidance: string } => {
+  if (failure === null) {
+    return {
+      title: "Agent response failed.",
+      guidance: "Retry the response. If it fails again, check the configured AI provider.",
+    }
+  }
+  if (failure.providerId === "unavailable") {
+    return {
+      title: "No configured AI provider is available.",
+      guidance: "Configure a review provider in AI Settings, then retry.",
+    }
+  }
+  const provider = providerDisplayName(failure.providerId)
+  switch (failure.category) {
+    case "authentication":
+      return {
+        title: `${provider} authentication failed or expired.`,
+        guidance: `Sign in to ${provider} again, then retry.`,
+      }
+    case "authorization":
+      return {
+        title: `${provider} denied access.`,
+        guidance: "Check access to the selected model and provider account, then retry.",
+      }
+    case "rate-limited":
+      return {
+        title: `${provider} is temporarily rate limited.`,
+        guidance: "Wait briefly, then retry.",
+      }
+    case "usage-limited":
+      return {
+        title: `${provider} reached a session or usage limit.`,
+        guidance: "Retry after the provider limit resets.",
+      }
+    case "quota-exhausted":
+      return {
+        title: `${provider} reached an account quota or billing limit.`,
+        guidance: "Check the provider account before retrying.",
+      }
+    case "timeout":
+      return {
+        title: `${provider} timed out.`,
+        guidance: "Retry the response or select a faster model.",
+      }
+    case "network":
+      return {
+        title: `${provider} could not connect to its service.`,
+        guidance: "Check the network connection, then retry.",
+      }
+    case "model-unavailable":
+      return {
+        title: `${provider} could not use the selected model.`,
+        guidance: "Choose another model in AI Settings, then retry.",
+      }
+    case "provider-unavailable":
+      return {
+        title: `${provider} is temporarily unavailable.`,
+        guidance: "Retry shortly.",
+      }
+    case "configuration":
+      return {
+        title: `${provider} is not configured correctly.`,
+        guidance: "Check AI Settings and the provider installation, then retry.",
+      }
+    case "invalid-response":
+      return {
+        title: `${provider} returned an unusable response.`,
+        guidance: "Retry or choose another model.",
+      }
+    case "policy-violation":
+      return {
+        title: `${provider} could not satisfy the read-only policy.`,
+        guidance: "Check the provider version and configuration, then retry.",
+      }
+    case "process-failure":
+      return {
+        title: `${provider} stopped before completing the response.`,
+        guidance: "Check the provider installation, then retry.",
+      }
+    case "unknown":
+      return {
+        title: `${provider} could not complete the response.`,
+        guidance: "Retry the response. If it fails again, check the provider directly.",
+      }
+  }
+}
+
+const providerDisplayName = (providerId: string): string => {
+  if (providerId === "claude") return "Claude"
+  if (providerId === "codex") return "Codex"
+  if (providerId === "opencode") return "OpenCode"
+  return providerId
 }
 
 const inlineMarkdown = (value: string): readonly ReactNode[] => {

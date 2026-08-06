@@ -8,8 +8,6 @@ const SAFE_REASON_TAGS = new Set([
   "LocalReviewTargetError",
   "RepositoryLinkError",
   "RepositoryComparisonSourceError",
-  "ReviewAgentFinalizeError",
-  "ReviewAgentServiceError",
   "ReviewTurnRejectedError",
   "ReviewTurnTargetError",
 ])

@@ -18,6 +18,7 @@ import { RepositoryLinker } from "../../../../src/main/services/repository-linke
 import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
+import { toPublicReviewThreadError } from "../review-thread-public-error"
 import { sendProtocolEvent } from "../transport"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -161,5 +162,6 @@ export const defineThreadHandlers = (
         }),
       )
     },
+    toPublicReviewThreadError,
   )
 }

@@ -16,6 +16,7 @@ import {
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
   agentManifestConformance,
@@ -37,10 +38,16 @@ import {
   CODEX_AUTO_MODELS,
   CODEX_DEFAULT_MODEL,
   CODEX_MODELS,
+  CODEX_PROVIDER_ID,
   CODEX_REVIEW_POLICY,
   CODEX_WALKTHROUGH_POLICY,
   makeCodexProvider,
 } from "./codex"
+
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: CODEX_PROVIDER_ID,
+  fallbackReason: "Codex test execution failed",
+})
 
 const tempResources = Effect.runSync(
   TempResources.pipe(
@@ -233,11 +240,7 @@ agentSecurityConformance("Codex", {
         Effect.mapError((cause) =>
           cause instanceof AgentProviderOperationError
             ? cause
-            : AgentProviderOperationError.make({
-                providerId: harness.registration.manifest.descriptor.id,
-                capability: "review-thread",
-                reason: cause.reason,
-              }),
+            : operationErrors.fromReason("review-thread", cause.reason),
         ),
       )
   },
@@ -278,11 +281,7 @@ agentCancellationConformance("Codex", {
           Effect.mapError((cause) =>
             cause instanceof AgentProviderOperationError
               ? cause
-              : AgentProviderOperationError.make({
-                  providerId: registration.manifest.descriptor.id,
-                  capability: "review-thread",
-                  reason: cause.reason,
-                }),
+              : operationErrors.fromReason("review-thread", cause.reason),
           ),
         ),
       cleanedUp: Effect.promise(async () => {

@@ -1,4 +1,5 @@
 import { AgentProviderId } from "@diffdash/agent-provider"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { Either, Schema } from "effect"
 
 const MAX_PUBLIC_ERROR_MESSAGE_LENGTH = 500
@@ -49,6 +50,7 @@ export class TransportError extends Schema.TaggedError<TransportError>()("Transp
   message: Schema.String,
   operation: Schema.optional(Schema.String),
   diagnostic: Schema.optional(TransportErrorDiagnosticTrace),
+  providerFailure: Schema.optional(AgentProviderFailure),
 }) {}
 
 /** Converts an unknown boundary failure without exposing its stack or cause. */
@@ -65,6 +67,9 @@ export const toTransportError = (error: unknown, operation?: string) => {
         message: decoded.message,
         operation: decoded.operation ?? operation,
         ...(decoded.diagnostic === undefined ? {} : { diagnostic: decoded.diagnostic }),
+        ...(decoded.providerFailure === undefined
+          ? {}
+          : { providerFailure: decoded.providerFailure }),
       })
 }
 
@@ -74,12 +79,14 @@ export const transportError = (
   message: string,
   operation?: string,
   diagnostic?: TransportErrorDiagnosticTrace,
+  providerFailure?: AgentProviderFailure,
 ) =>
   normalizedTransportError({
     code,
     message,
     ...(operation === undefined ? {} : { operation }),
     ...(diagnostic === undefined ? {} : { diagnostic }),
+    ...(providerFailure === undefined ? {} : { providerFailure }),
   })
 
 /** Encodes a protocol error into a standard Error whose message survives Electron contextBridge. */
@@ -145,6 +152,7 @@ const normalizedTransportError = (error: {
   readonly message: string
   readonly operation?: string | undefined
   readonly diagnostic?: TransportErrorDiagnosticTrace | undefined
+  readonly providerFailure?: AgentProviderFailure | undefined
 }) => {
   const operation =
     error.operation === undefined
@@ -157,6 +165,7 @@ const normalizedTransportError = (error: {
     message: sanitizeTransportErrorMessage(error.message),
     ...(operation === undefined ? {} : { operation }),
     ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
+    ...(error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }),
   })
 }
 

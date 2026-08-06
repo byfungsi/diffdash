@@ -313,6 +313,7 @@ describe("ReviewTurnStore", () => {
             runId: begun.run.id,
             messageId: begun.pendingMessage.id,
             diagnostic: MarkdownBody.make("Bounded failure."),
+            failure: null,
           })
 
         for (const step of ["fail.message", "fail.run", "fail.thread"] as const) {
@@ -416,6 +417,7 @@ describe("ReviewTurnStore", () => {
             runId: begun.run.id,
             messageId: wrongMessageId,
             diagnostic: MarkdownBody.make("Wrong owner."),
+            failure: null,
           }),
         )
         expect(Either.isLeft(completion)).toBe(true)

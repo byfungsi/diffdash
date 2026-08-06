@@ -14,7 +14,6 @@ import {
   AgentProviderDescriptor,
   AgentProviderId,
   AgentProviderManifest,
-  AgentProviderOperationError,
   type AgentProviderRegistration,
   AgentRuntimeRequirement,
   AgentSessionId,
@@ -39,11 +38,20 @@ import {
   walkthroughConformance,
 } from "./testing"
 import { isScopedMcpToolSubset } from "./security"
+import { makeAgentProviderOperationErrorFactory } from "./runtime"
 
 const walkthroughId = AgentProviderId.make("walkthrough-provider")
 const reviewId = AgentProviderId.make("review-provider")
 const modelId = AgentModelId.make("model")
 const allowedTool = McpToolName.make("getReviewContext")
+const walkthroughErrors = makeAgentProviderOperationErrorFactory({
+  providerId: walkthroughId,
+  fallbackReason: "fixture failure",
+})
+const reviewErrors = makeAgentProviderOperationErrorFactory({
+  providerId: reviewId,
+  fallbackReason: "fixture failure",
+})
 const policy = AgentExecutionPolicy.make({
   network: "deny",
   sensitiveFiles: "deny",
@@ -170,11 +178,11 @@ const reviewRegistration = (): AgentProviderRegistration => ({
     execute: (request) =>
       isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)
         ? Effect.succeed(reviewResult)
-        : AgentProviderOperationError.make({
-            providerId: reviewId,
-            capability: "review-thread",
-            reason: "Scoped MCP access includes tools outside the execution policy",
-          }),
+        : reviewErrors.fromReason(
+            "review-thread",
+            "Scoped MCP access includes tools outside the execution policy",
+            "policy-violation",
+          ),
   },
 })
 
@@ -183,13 +191,7 @@ walkthroughConformance("fixture", {
   create: walkthroughRegistration,
   request: () => walkthroughRequest,
   expectedFailure: () =>
-    Effect.fail(
-      AgentProviderOperationError.make({
-        providerId: walkthroughId,
-        capability: "walkthrough",
-        reason: "fixture failure",
-      }),
-    ),
+    Effect.fail(walkthroughErrors.fromReason("walkthrough", "fixture failure")),
   temporaryFiles: () => Effect.succeed([]),
 })
 reviewConformance("fixture", { create: reviewRegistration, request: reviewRequest })

@@ -5,6 +5,7 @@ import {
   ReviewKey,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import {
   LineReviewAnchor,
   MarkdownBody,
@@ -99,7 +100,11 @@ describe("review thread UI", () => {
     expect(document.body.textContent).not.toContain("src/example.ts:7")
     expect(document.body.textContent).not.toContain("Current revision")
     expect(document.querySelector("output")?.textContent).toContain("Preparing review context...")
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Agent response failed")
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Claude authentication failed or expired",
+    )
+    expect(document.body.textContent).toContain("Sign in to Claude again")
+    expect(document.body.textContent).not.toContain("private provider stderr")
 
     expect(document.querySelector('[aria-label="Reply to this line comment"]')).toBeNull()
     const retry = [...document.querySelectorAll("button")].find(
@@ -428,9 +433,21 @@ const threadDetails = ({ previousRevision = false, pending = true } = {}) => {
         threadId,
         sequence: 3,
         author: "agent",
-        bodyMarkdown: MarkdownBody.make(""),
+        bodyMarkdown: MarkdownBody.make("private provider stderr"),
         status: "failed",
         agentRunId: "run-2",
+        failure: AgentProviderFailure.make({
+          version: 1,
+          providerId: "claude",
+          capability: "review-thread",
+          category: "authentication",
+          processKind: "exit",
+          exitCode: 1,
+          signal: null,
+          httpStatus: null,
+          retryAfterSeconds: null,
+          resetsAt: null,
+        }),
         createdAt: "2026-07-12T09:01:00Z",
         updatedAt: "2026-07-12T09:01:00Z",
       }),

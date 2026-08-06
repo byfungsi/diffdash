@@ -12,6 +12,8 @@ interface DatabaseMigration {
 const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 12
 const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
 const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
+const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
+const REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -575,8 +577,12 @@ const migrations: readonly DatabaseMigration[] = [
           FOREIGN KEY(agent_run_id, thread_id) REFERENCES agent_runs(id, thread_id) ON DELETE CASCADE
         );
 
-        INSERT INTO review_thread_messages_v11
-        SELECT * FROM review_thread_messages;
+        INSERT INTO review_thread_messages_v11 (
+          id, thread_id, sequence, author, body_markdown, status, agent_run_id, created_at, updated_at
+        )
+        SELECT
+          id, thread_id, sequence, author, body_markdown, status, agent_run_id, created_at, updated_at
+        FROM review_thread_messages;
         DROP TABLE review_thread_messages;
         ALTER TABLE review_thread_messages_v11 RENAME TO review_thread_messages;
 
@@ -668,21 +674,21 @@ export const databaseRequiresMigration = (database: BetterSqliteDatabase) => {
   return (
     currentVersion < latestDatabaseSchemaVersion() ||
     readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY) <
-      REPOSITORY_IDENTITY_CAPABILITY_VERSION
+      REPOSITORY_IDENTITY_CAPABILITY_VERSION ||
+    readCapabilityVersion(database, REVIEW_PROVIDER_FAILURE_CAPABILITY) <
+      REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION
   )
 }
 
 const runDatabaseCapabilityMigrations = (database: BetterSqliteDatabase) => {
   if (!tableExists(database, "repos")) return
-  if (
+  const repositoryIdentityInstalled =
     readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY) >=
     REPOSITORY_IDENTITY_CAPABILITY_VERSION
-  ) {
-    return
-  }
 
-  database.transaction(() => {
-    database.exec(`
+  if (!repositoryIdentityInstalled)
+    database.transaction(() => {
+      database.exec(`
       CREATE TABLE IF NOT EXISTS diffdash_capabilities (
         name TEXT PRIMARY KEY,
         version INTEGER NOT NULL CHECK (version >= 1),
@@ -751,10 +757,10 @@ const runDatabaseCapabilityMigrations = (database: BetterSqliteDatabase) => {
       );
     `)
 
-    const now = new Date().toISOString()
-    database
-      .prepare(
-        `INSERT INTO repository_identities (
+      const now = new Date().toISOString()
+      database
+        .prepare(
+          `INSERT INTO repository_identities (
            repo_id, provider_id, provider_repository_id, canonical_owner, canonical_name,
            canonical_url, resolution_state, resolved_at, updated_at
          )
@@ -762,26 +768,63 @@ const runDatabaseCapabilityMigrations = (database: BetterSqliteDatabase) => {
          FROM repos
          WHERE provider <> 'local'
          ON CONFLICT(repo_id) DO NOTHING`,
-      )
-      .run(now)
-    database
-      .prepare(
-        `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
+        )
+        .run(now)
+      database
+        .prepare(
+          `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
          SELECT local_path, id, remote_url, COALESCE(last_opened_at, updated_at)
          FROM repos
          WHERE local_path IS NOT NULL
          ORDER BY CASE WHEN provider = 'local' THEN 1 ELSE 0 END, updated_at DESC
          ON CONFLICT(local_path) DO NOTHING`,
-      )
-      .run()
-    database
-      .prepare(
-        `INSERT INTO repository_identity_jobs (
+        )
+        .run()
+      database
+        .prepare(
+          `INSERT INTO repository_identity_jobs (
            job_name, status, cursor_repo_id, error, updated_at
          ) VALUES ('provider-backfill', 'pending', NULL, NULL, ?)
          ON CONFLICT(job_name) DO NOTHING`,
+        )
+        .run(now)
+      database
+        .prepare(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           version = excluded.version,
+           installed_at = excluded.installed_at`,
+        )
+        .run(REPOSITORY_IDENTITY_CAPABILITY, REPOSITORY_IDENTITY_CAPABILITY_VERSION, now)
+    })()
+
+  if (!tableExists(database, "review_thread_messages")) return
+
+  database.transaction(() => {
+    const columns = tableColumns(database, "review_thread_messages")
+    if (!columns.some((column) => column.name === "failure_json")) {
+      database.exec("ALTER TABLE review_thread_messages ADD COLUMN failure_json TEXT")
+    }
+    const legacyFailure =
+      "The local review agent could not complete this response. Retry to try again."
+    database
+      .prepare(
+        `UPDATE review_thread_messages
+         SET body_markdown = ?
+         WHERE author = 'agent' AND status = 'failed' AND body_markdown IS NOT ?`,
       )
-      .run(now)
+      .run(legacyFailure, legacyFailure)
+    database
+      .prepare("UPDATE agent_runs SET error = ? WHERE status = 'failed' AND error IS NOT ?")
+      .run(legacyFailure, legacyFailure)
+    if (
+      readCapabilityVersion(database, REVIEW_PROVIDER_FAILURE_CAPABILITY) >=
+      REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION
+    ) {
+      return
+    }
+    const now = new Date().toISOString()
     database
       .prepare(
         `INSERT INTO diffdash_capabilities (name, version, installed_at)
@@ -790,7 +833,7 @@ const runDatabaseCapabilityMigrations = (database: BetterSqliteDatabase) => {
            version = excluded.version,
            installed_at = excluded.installed_at`,
       )
-      .run(REPOSITORY_IDENTITY_CAPABILITY, REPOSITORY_IDENTITY_CAPABILITY_VERSION, now)
+      .run(REVIEW_PROVIDER_FAILURE_CAPABILITY, REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION, now)
   })()
 }
 

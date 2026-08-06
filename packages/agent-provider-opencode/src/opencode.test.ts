@@ -18,6 +18,7 @@ import {
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
   agentManifestConformance,
@@ -39,10 +40,16 @@ import {
   OPENCODE_AUTO_MODELS,
   OPENCODE_DEFAULT_MODEL,
   OPENCODE_MODELS,
+  OPENCODE_PROVIDER_ID,
   OPENCODE_REVIEW_POLICY,
   OPENCODE_WALKTHROUGH_POLICY,
   resolveOpenCodeExecutable,
 } from "./opencode"
+
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: OPENCODE_PROVIDER_ID,
+  fallbackReason: "OpenCode test execution failed",
+})
 
 const tempResources = Effect.runSync(
   TempResources.pipe(
@@ -286,11 +293,7 @@ agentSecurityConformance("OpenCode", {
         Effect.mapError((cause) =>
           cause instanceof AgentProviderOperationError
             ? cause
-            : AgentProviderOperationError.make({
-                providerId: harness.registration.manifest.descriptor.id,
-                capability: "review-thread",
-                reason: cause.reason,
-              }),
+            : operationErrors.fromReason("review-thread", cause.reason),
         ),
       )
   },
@@ -313,11 +316,7 @@ agentCancellationConformance("OpenCode", {
           Effect.mapError((cause) =>
             cause instanceof AgentProviderOperationError
               ? cause
-              : AgentProviderOperationError.make({
-                  providerId: harness.registration.manifest.descriptor.id,
-                  capability: "review-thread",
-                  reason: cause.reason,
-                }),
+              : operationErrors.fromReason("review-thread", cause.reason),
           ),
         ),
       cleanedUp: Effect.promise(async () => {
@@ -383,6 +382,21 @@ describe("OpenCode provider", () => {
         reusedSessions: 0,
         abortedSessions: 1,
       })
+      yield* Effect.promise(() => rm(harness.directory, { force: true, recursive: true }))
+    }),
+  )
+
+  it.live("enforces the review request timeout across SDK prompt execution", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ neverPrompt: true })
+      const error = yield* requireReview(harness.registration)
+        .execute({ ...reviewRequest(), timeoutMs: 10 })
+        .pipe(Effect.flip)
+      expect(error).toBeInstanceOf(AgentProviderOperationError)
+      if (error instanceof AgentProviderOperationError) {
+        expect(error.failure.category).toBe("timeout")
+      }
+      expect(harness.state().serverReleased).toBe(true)
       yield* Effect.promise(() => rm(harness.directory, { force: true, recursive: true }))
     }),
   )

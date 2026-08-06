@@ -15,6 +15,7 @@
     "./git-provider": "./src/git-provider.ts",
     "./local-review": "./src/local-review.ts",
     "./project-workspace": "./src/project-workspace.ts",
+    "./provider-failure": "./src/provider-failure.ts",
     "./repository": "./src/repository.ts",
     "./repository-comparison": "./src/repository-comparison.ts",
     "./renderer-layout-settings": "./src/renderer-layout-settings.ts",

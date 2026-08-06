@@ -18,6 +18,7 @@ import {
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
   agentManifestConformance,
@@ -38,10 +39,16 @@ import {
   CLAUDE_AUTO_MODELS,
   CLAUDE_DEFAULT_MODEL,
   CLAUDE_MODELS,
+  CLAUDE_PROVIDER_ID,
   CLAUDE_REVIEW_POLICY,
   CLAUDE_WALKTHROUGH_POLICY,
   makeClaudeProvider,
 } from "./claude"
+
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: CLAUDE_PROVIDER_ID,
+  fallbackReason: "Claude test execution failed",
+})
 
 const tempResources = Effect.runSync(
   TempResources.pipe(
@@ -210,11 +217,7 @@ agentSecurityConformance("Claude", {
         Effect.mapError((cause) =>
           cause instanceof AgentProviderOperationError
             ? cause
-            : AgentProviderOperationError.make({
-                providerId: makeHarness().registration.manifest.descriptor.id,
-                capability: "review-thread",
-                reason: cause.reason,
-              }),
+            : operationErrors.fromReason("review-thread", cause.reason),
         ),
       ),
   repositoryState: () => Effect.succeed("unchanged"),
@@ -250,11 +253,7 @@ agentCancellationConformance("Claude", {
           Effect.mapError((cause) =>
             cause instanceof AgentProviderOperationError
               ? cause
-              : AgentProviderOperationError.make({
-                  providerId: registration.manifest.descriptor.id,
-                  capability: "review-thread",
-                  reason: cause.reason,
-                }),
+              : operationErrors.fromReason("review-thread", cause.reason),
           ),
         ),
       cleanedUp: Effect.promise(async () => {
@@ -357,6 +356,23 @@ describe("Claude provider", () => {
           .execute(reviewRequest())
           .pipe(Effect.flip)
         expect(error.reason).toContain(reason)
+      }
+    }),
+  )
+
+  it.effect("classifies plain OAuth stdout and structured usage-limit events", () =>
+    Effect.gen(function* () {
+      for (const [fixture, category] of [
+        ["claude-review-oauth-stdout.jsonl", "authentication"],
+        ["claude-review-usage-limit.jsonl", "usage-limited"],
+      ] as const) {
+        const error = yield* requireReview(makeHarness({ reviewFixture: fixture }).registration)
+          .execute(reviewRequest())
+          .pipe(Effect.flip)
+        expect(error).toBeInstanceOf(AgentProviderOperationError)
+        if (error instanceof AgentProviderOperationError) {
+          expect(error.failure.category).toBe(category)
+        }
       }
     }),
   )
