@@ -14,6 +14,7 @@ import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   HostedReviewTarget,
   MarkdownBody,
+  normalizeMarkdownLineBreaks,
   type ReviewThread,
   type ReviewThreadAnchor,
   ReviewThreadDetails,
@@ -716,7 +717,7 @@ export function ReviewThreadPanel({
 
 /** Safe, dependency-free Markdown subset for persisted review messages. */
 export function ReviewMarkdown({ children }: { readonly children: string }) {
-  const lines = children.replaceAll("\r\n", "\n").split("\n")
+  const lines = normalizeMarkdownLineBreaks(children).split("\n")
   const blocks: ReactNode[] = []
   let index = 0
 
@@ -736,12 +737,19 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       }
       index += 1
       blocks.push(
-        <pre
+        <div
           key={`code-${index}`}
-          className="bg-muted whitespace-pre-wrap rounded-md border p-2 font-mono text-xs [overflow-wrap:anywhere]"
+          className="bg-surface-inset/60 overflow-hidden rounded-md border"
         >
-          <code data-language={language || undefined}>{code.join("\n")}</code>
-        </pre>,
+          {language.length === 0 ? null : (
+            <div className="text-review-file-reference border-b px-3 py-1 font-mono text-caption font-medium uppercase">
+              {language}
+            </div>
+          )}
+          <pre className="whitespace-pre-wrap px-3 py-2.5 font-mono text-xs leading-5 [overflow-wrap:anywhere]">
+            <code data-language={language || undefined}>{code.join("\n")}</code>
+          </pre>
+        </div>,
       )
       continue
     }
@@ -774,7 +782,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
         index += 1
       }
       blocks.push(
-        <ul key={`list-${index}`} className="list-disc space-y-0.5 pl-4">
+        <ul key={`list-${index}`} className="marker:text-muted-foreground list-disc space-y-1 pl-5">
           {items.map((item) => (
             <li key={item.key}>{inlineMarkdown(item.value)}</li>
           ))}
@@ -786,7 +794,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       blocks.push(
         <blockquote
           key={`quote-${index}`}
-          className="border-primary/50 text-muted-foreground border-l-2 pl-2"
+          className="border-primary/50 text-muted-foreground border-l-2 py-0.5 pl-3"
         >
           {inlineMarkdown(line.slice(2))}
         </blockquote>,
@@ -806,13 +814,13 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       index += 1
     }
     blocks.push(
-      <p key={`paragraph-${index}`} className="leading-5">
+      <p key={`paragraph-${index}`} className="leading-6">
         {inlineMarkdown(paragraph.join("\n"))}
       </p>,
     )
   }
 
-  return <div className="space-y-2 break-words">{blocks}</div>
+  return <div className="space-y-3 break-words text-sm leading-6">{blocks}</div>
 }
 
 const ThreadMessage = ({
@@ -873,23 +881,34 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
   return value
     .split(pattern)
     .filter(Boolean)
-    .map((part) => {
-      const key = `${offset}:${part}`
+    .flatMap((part) => {
+      const partOffset = offset
+      const key = `${partOffset}:${part}`
       offset += part.length
-      if (part === "\n") return <br key={key} />
+      if (part === "\n") return [<br key={key} />]
       if (part.startsWith("**") && part.endsWith("**")) {
-        return <strong key={key}>{part.slice(2, -2)}</strong>
+        return [<strong key={key}>{part.slice(2, -2)}</strong>]
       }
       if (part.startsWith("`") && part.endsWith("`")) {
-        return (
-          <code key={key} className="bg-muted rounded px-1 py-0.5 font-mono">
-            {part.slice(1, -1)}
-          </code>
-        )
+        const content = part.slice(1, -1)
+        const fileReference = reviewFileReference.test(content)
+        return [
+          <code
+            key={key}
+            className={cn(
+              "bg-muted rounded px-1 py-0.5 font-mono font-medium",
+              fileReference ? "text-review-file-reference" : "text-review-symbol-reference",
+            )}
+            data-review-file-reference={fileReference || undefined}
+            data-review-symbol-reference={!fileReference || undefined}
+          >
+            {content}
+          </code>,
+        ]
       }
       const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part)
       if (link !== null) {
-        return (
+        return [
           <a
             key={key}
             href={link[2]}
@@ -900,11 +919,51 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
             }}
           >
             {link[1]}
-          </a>
-        )
+          </a>,
+        ]
       }
       if (part.startsWith("*") && part.endsWith("*")) {
-        return <em key={key}>{part.slice(1, -1)}</em>
+        return [<em key={key}>{part.slice(1, -1)}</em>]
+      }
+      return renderTechnicalReferences(part, partOffset)
+    })
+}
+
+const fileReferenceSource = String.raw`(?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?`
+const symbolReferenceSource = String.raw`(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Z]{2,}[A-Za-z0-9]*|[a-z_$][a-z0-9_$]*(?:[A-Z][A-Za-z0-9_$]*)+`
+const reviewFileReference = new RegExp(`^${fileReferenceSource}$`, "u")
+const reviewSymbolReference = new RegExp(`^(?:${symbolReferenceSource})$`, "u")
+const technicalReference = new RegExp(`(${fileReferenceSource}|${symbolReferenceSource})`, "gu")
+
+const renderTechnicalReferences = (value: string, initialOffset: number): readonly ReactNode[] => {
+  let offset = initialOffset
+  return value
+    .split(technicalReference)
+    .filter(Boolean)
+    .map((part) => {
+      const key = `${offset}:${part}`
+      offset += part.length
+      if (reviewFileReference.test(part)) {
+        return (
+          <span
+            key={key}
+            className="text-review-file-reference font-mono font-medium"
+            data-review-file-reference="true"
+          >
+            {part}
+          </span>
+        )
+      }
+      if (reviewSymbolReference.test(part)) {
+        return (
+          <span
+            key={key}
+            className="text-review-symbol-reference font-mono font-medium"
+            data-review-symbol-reference="true"
+          >
+            {part}
+          </span>
+        )
       }
       return <Fragment key={key}>{part}</Fragment>
     })

@@ -58,7 +58,7 @@ import { ReviewContextBuilder, type SelectedReviewAgentArtifact } from "./review
 import { adaptProviderResult } from "./provider-result-adapter"
 import { createFallbackThreadMemoryUpdate, selectThreadMemoryWindow } from "./thread-memory"
 
-const REVIEW_THREAD_PROMPT_VERSION = AgentPromptVersion.make("review-thread-v3")
+const REVIEW_THREAD_PROMPT_VERSION = AgentPromptVersion.make("review-thread-v4")
 const PROVIDER_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgorithm.make("provider-summary")
 const REVIEW_THREAD_TIMEOUT_MS = 10 * 60 * 1_000
 

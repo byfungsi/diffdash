@@ -116,6 +116,14 @@
     color-mix(in oklch, var(--theme-teal) 68%, var(--theme-text)),
     var(--theme-teal)
   );
+  --review-file-reference-text: light-dark(
+    color-mix(in oklch, var(--theme-blue) 72%, var(--theme-text)),
+    var(--theme-blue)
+  );
+  --review-symbol-reference-text: light-dark(
+    color-mix(in oklch, var(--theme-mauve) 70%, var(--theme-text)),
+    var(--theme-mauve)
+  );
   --walkthrough-marker-surface: var(--card);
   --risk-critical: var(--theme-red);
   --risk-review: var(--theme-yellow);
@@ -215,6 +223,8 @@
   --color-review-danger-text: var(--review-danger-text);
   --color-review-modified-text: var(--review-modified-text);
   --color-review-renamed-text: var(--review-renamed-text);
+  --color-review-file-reference: var(--review-file-reference-text);
+  --color-review-symbol-reference: var(--review-symbol-reference-text);
   --color-diff-canvas: var(--diff-canvas);
   --color-walkthrough-marker-surface: var(--walkthrough-marker-surface);
   --color-risk-critical: var(--risk-critical);

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { parseUnifiedDiff } from "./diff-parser"
-import { LineReviewAnchor, isReviewAnchorInParsedDiff } from "./review-thread"
+import {
+  LineReviewAnchor,
+  isReviewAnchorInParsedDiff,
+  normalizeMarkdownLineBreaks,
+} from "./review-thread"
 
 const parsedDiff = parseUnifiedDiff(`diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
@@ -39,6 +43,23 @@ describe("review thread anchors", () => {
     )
     expect(isReviewAnchorInParsedDiff(makeLine("new", 'const value = "old"'), parsedDiff)).toBe(
       false,
+    )
+  })
+})
+
+describe("review thread Markdown", () => {
+  it("normalizes escaped Markdown structure without changing an isolated newline escape", () => {
+    expect(
+      normalizeMarkdownLineBreaks(
+        "Configuration changed.\\n- Read packages/core/src/configuration.ts:4\\n- Trace createCoreLayer.\\n\\nThen verify settings.",
+      ),
+    ).toBe(`Configuration changed.
+- Read packages/core/src/configuration.ts:4
+- Trace createCoreLayer.
+
+Then verify settings.`)
+    expect(normalizeMarkdownLineBreaks("Use `\\n` as the newline escape.")).toBe(
+      "Use `\\n` as the newline escape.",
     )
   })
 })

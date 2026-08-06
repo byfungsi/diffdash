@@ -5,7 +5,7 @@ import {
   ReviewAgentUsage,
   ReviewThreadAgentResponse,
 } from "@diffdash/domain/review-agent"
-import { ReviewAnchor } from "@diffdash/domain/review-thread"
+import { normalizeMarkdownLineBreaks, ReviewAnchor } from "@diffdash/domain/review-thread"
 import { Context, Effect, Either, Schema } from "effect"
 import { AgentArtifactNormalizer, normalizeAgentArtifactType } from "./agent-artifact-normalizer"
 
@@ -30,7 +30,7 @@ export const adaptProviderResult = (
     Effect.map((artifacts) =>
       ReviewAgentTurnResult.make({
         response: ReviewThreadAgentResponse.make({
-          bodyMarkdown: result.response.bodyMarkdown,
+          bodyMarkdown: normalizeMarkdownLineBreaks(result.response.bodyMarkdown),
           ...(result.response.threadSummary === null
             ? {}
             : { threadSummaryUpdate: result.response.threadSummary }),

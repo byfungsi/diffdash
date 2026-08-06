@@ -111,4 +111,29 @@ describe("adaptProviderResult", () => {
       expect(result.artifacts).toEqual([])
     }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
   )
+
+  it.effect("normalizes escaped Markdown structure before persistence", () =>
+    Effect.gen(function* () {
+      const normalizer = yield* AgentArtifactNormalizer
+      const result = yield* adaptProviderResult(
+        AgentProviderId.make("opencode"),
+        ReviewThreadResult.make({
+          response: ReviewThreadResponse.make({
+            bodyMarkdown:
+              "Configuration changed.\\n- Read packages/core/src/configuration.ts:4\\n- Trace createCoreLayer.",
+            threadSummary: null,
+            referencedLocations: [],
+          }),
+          artifacts: [],
+          usage: null,
+          sessionId: null,
+        }),
+        normalizer,
+      )
+
+      expect(result.response.bodyMarkdown).toBe(
+        "Configuration changed.\n- Read packages/core/src/configuration.ts:4\n- Trace createCoreLayer.",
+      )
+    }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
+  )
 })

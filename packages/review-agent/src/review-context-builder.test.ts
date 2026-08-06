@@ -214,9 +214,13 @@ describe("ReviewContextBuilder", () => {
         const anchor = input.thread.currentAnchor
         if (anchor === null) throw new Error("Expected current anchor")
 
-        expect(result.stablePromptPrefix).toContain("# DiffDash review thread context v2")
+        expect(result.stablePromptPrefix).toContain("# DiffDash review thread context v3")
         expect(result.stablePromptPrefix).toContain("## Thread-mode safety")
         expect(result.stablePromptPrefix).toContain("## Required response schema")
+        expect(result.stablePromptPrefix).toContain("## Response writing rules")
+        expect(result.stablePromptPrefix).toContain("Use one fact per sentence")
+        expect(result.stablePromptPrefix).toContain("Wrap technical references in backticks")
+        expect(result.stablePromptPrefix).toContain("Do not use visible `\\n` characters")
         expect(result.stablePromptPrefix).toContain("## Bounded changed-file inventory")
         for (const file of input.snapshot.parsedDiff.files) {
           expect(result.stablePromptPrefix).toContain(file.path)

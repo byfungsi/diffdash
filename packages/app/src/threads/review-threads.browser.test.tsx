@@ -358,6 +358,44 @@ const safe = true
     expect(document.querySelector('[data-testid="markdown-under-test"] script')).toBeNull()
     expect(document.body.textContent).toContain("<script>unsafe()</script>")
   })
+
+  it("repairs escaped structure and distinguishes technical references", () => {
+    render(
+      <div data-testid="markdown-under-test">
+        <ReviewMarkdown>
+          {
+            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4\\n- Trace createCoreLayer through paths.settings.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use `\\n` for a literal newline escape."
+          }
+        </ReviewMarkdown>
+      </div>,
+    )
+
+    expect(document.querySelectorAll("li")).toHaveLength(2)
+    expect(document.body.textContent).not.toContain("changed.\\n-")
+    expect(document.body.textContent).toContain("Use \\n for a literal newline escape.")
+    expect(
+      [...document.querySelectorAll('[data-review-file-reference="true"]')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "packages/core/src/core-configuration.ts:4",
+        "packages/app/src/app.tsx:12",
+      ]),
+    )
+    expect(
+      [...document.querySelectorAll('[data-review-symbol-reference="true"]')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "CoreConfiguration",
+        "createCoreLayer",
+        "paths.settings",
+        "AppSettings",
+      ]),
+    )
+  })
 })
 
 const threadDetails = ({ previousRevision = false, pending = true } = {}) => {

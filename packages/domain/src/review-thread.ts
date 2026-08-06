@@ -40,6 +40,25 @@ export const MarkdownBody = Schema.String.pipe(Schema.brand("MarkdownBody"))
 /** Markdown content stored as a review thread message. */
 export type MarkdownBody = typeof MarkdownBody.Type
 
+const escapedMarkdownStructure =
+  /\\(?:r\\n|n)(?:\\(?:r\\n|n)|[\t ]*(?:#{1,3}[\t ]|[-*][\t ]|>[\t ]|```))/u
+const inlineCodeSpan = /((?<!`)`(?!`)[^`]*?(?<!`)`(?!`))/gu
+
+/** Repairs provider-escaped Markdown line breaks while preserving literal escapes in inline code. */
+export const normalizeMarkdownLineBreaks = (value: string): string => {
+  const normalizedLineEndings = value.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
+  if (!escapedMarkdownStructure.test(normalizedLineEndings)) return normalizedLineEndings
+
+  return normalizedLineEndings
+    .split(inlineCodeSpan)
+    .map((part) =>
+      part.startsWith("`") && part.endsWith("`")
+        ? part
+        : part.replaceAll("\\r\\n", "\n").replaceAll("\\n", "\n"),
+    )
+    .join("")
+}
+
 /** Current relationship between an original anchor and the latest review revision. */
 export const ReviewAnchorStatus = Schema.Literal("active", "outdated", "unresolved_anchor")
 
