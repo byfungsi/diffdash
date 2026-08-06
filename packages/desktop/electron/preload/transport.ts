@@ -10,9 +10,11 @@ import {
 import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
 import type { EventPayload, InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+import type { TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import {
+  bridgeTransportError,
+  decodeTransportError,
   safeTransportErrorMessage,
-  TransportError,
   transportError,
 } from "@diffdash/protocol/transport-error"
 import { Schema } from "effect"
@@ -42,7 +44,8 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
         channel,
       )
     } catch (error) {
-      if (error instanceof TransportError) throw error
+      const transport = decodeTransportError(error)
+      if (transport !== null) throw bridgeTransportError(transport, channel)
       throw rendererTransportError("INVALID_REQUEST", "Invalid request", channel)
     }
 
@@ -60,7 +63,8 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
         Schema.Union(successEnvelope(invokeResponseSchema(channel)), FailureEnvelope),
       )(rawResponse)
     } catch (error) {
-      if (error instanceof TransportError) throw error
+      const transport = decodeTransportError(error)
+      if (transport !== null) throw bridgeTransportError(transport, channel)
       throw rendererTransportError("INVALID_RESPONSE", "Invalid response", channel)
     }
     if (envelope["_tag"] === "Failure") {
@@ -69,6 +73,7 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
         envelope.error.message,
         channel,
         envelope.error.operation,
+        envelope.error.diagnostic,
       )
     }
     return envelope.value
@@ -96,4 +101,6 @@ const rendererTransportError = (
   message: string,
   channel: InvokeChannel,
   operation: string = channel,
-) => transportError(code, `${channel} failed: ${message}`, operation)
+  diagnostic?: TransportErrorDiagnosticTrace,
+) =>
+  bridgeTransportError(transportError(code, `${channel} failed: ${message}`, operation, diagnostic))

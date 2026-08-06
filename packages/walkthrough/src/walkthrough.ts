@@ -26,7 +26,7 @@ import {
   type WalkthroughPromptStats,
   makeWalkthroughHunkAlias,
   validateWalkthrough,
-  type WalkthroughValidationError,
+  WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
 const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
 
@@ -117,38 +117,37 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
         const registry = yield* AgentProviderRegistry
         const routing = yield* WalkthroughRouting
 
-        const runAttempt = (input: WalkthroughGenerationInput) => {
-          const promptContext = buildWalkthroughPromptContext(input)
-          return routing.get.pipe(
-            Effect.flatMap((selection) =>
-              executeWalkthroughRoute(registry, selection, {
-                prompt: promptContext.prompt,
-                workingDirectory: walkthroughWorkingDirectory(
-                  input.review,
-                  options.remoteWorkingDirectory,
-                  input.workingDirectory,
-                ),
-                reasoningEffort: "low",
-                timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
-                policy: WALKTHROUGH_EXECUTION_POLICY,
-              }),
-            ),
-            Effect.flatMap((output) => parseModelJson(output)),
-            Effect.map((json) => expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId)),
-            Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
-            Effect.map((walkthrough) =>
-              Walkthrough.make({ ...walkthrough, generation: input.generation }),
-            ),
-          )
-        }
-
         return WalkthroughService.of({
           generate: Effect.fn("WalkthroughService.generate")(function (input) {
-            return runAttempt(input).pipe(
-              Effect.catchTags({
-                WalkthroughGenerationError: () => runAttempt(input),
-                WalkthroughValidationError: () => runAttempt(input),
-              }),
+            const promptContext = buildWalkthroughPromptContext(input)
+            return routing.get.pipe(
+              Effect.flatMap((selection) =>
+                executeWalkthroughRoute(
+                  registry,
+                  selection,
+                  {
+                    prompt: promptContext.prompt,
+                    workingDirectory: walkthroughWorkingDirectory(
+                      input.review,
+                      options.remoteWorkingDirectory,
+                      input.workingDirectory,
+                    ),
+                    reasoningEffort: "low",
+                    timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
+                    policy: WALKTHROUGH_EXECUTION_POLICY,
+                  },
+                  (output) =>
+                    parseModelJson(output).pipe(
+                      Effect.map((json) =>
+                        expandWalkthroughHunkAliases(json, promptContext.aliasToHunkId),
+                      ),
+                      Effect.flatMap((json) => validateWalkthrough(json, input.hunkDigest)),
+                      Effect.map((walkthrough) =>
+                        Walkthrough.make({ ...walkthrough, generation: input.generation }),
+                      ),
+                    ),
+                ),
+              ),
             )
           }),
         })
@@ -171,12 +170,22 @@ type WalkthroughRouteError =
   | NoAgentProviderAvailableError
   | AgentProviderOperationError
   | InvalidAgentProviderResponseError
+  | WalkthroughGenerationError
+  | WalkthroughValidationError
+
+type WalkthroughSubstantiveError = Exclude<
+  WalkthroughRouteError,
+  AgentProviderResolutionError | NoAgentProviderAvailableError
+>
 
 const executeWalkthroughRoute = (
   registry: Registry,
   selection: WalkthroughRouteSelection,
   request: Omit<WalkthroughRequest, "model">,
-): Effect.Effect<string, WalkthroughRouteError> => {
+  processOutput: (
+    output: string,
+  ) => Effect.Effect<Walkthrough, WalkthroughGenerationError | WalkthroughValidationError>,
+): Effect.Effect<Walkthrough, WalkthroughRouteError> => {
   const providerIds = registry.walkthroughRoute(selection.route)
 
   const executeProvider = (providerId: AgentProviderId) =>
@@ -192,20 +201,43 @@ const executeWalkthroughRoute = (
         })
       }
 
+      const executeCandidate = (
+        model: AgentModelId,
+        retryInvalidOutput: boolean,
+      ): Effect.Effect<
+        Walkthrough,
+        | AgentProviderOperationError
+        | InvalidAgentProviderResponseError
+        | WalkthroughGenerationError
+        | WalkthroughValidationError
+      > =>
+        capability.execute(WalkthroughRequest.make({ ...request, model })).pipe(
+          Effect.flatMap((result) => processOutput(result.text)),
+          Effect.catchTags({
+            InvalidAgentProviderResponseError: (error) =>
+              retryInvalidOutput ? executeCandidate(model, false) : Effect.fail(error),
+            WalkthroughGenerationError: (error) =>
+              retryInvalidOutput ? executeCandidate(model, false) : Effect.fail(error),
+            WalkthroughValidationError: (error) =>
+              retryInvalidOutput ? executeCandidate(model, false) : Effect.fail(error),
+          }),
+        )
+
       const executeModel = (
         remaining: readonly AgentModelId[],
       ): Effect.Effect<
-        string,
+        Walkthrough,
         | WalkthroughModelUnavailableError
         | AgentProviderOperationError
         | InvalidAgentProviderResponseError
+        | WalkthroughGenerationError
+        | WalkthroughValidationError
       > => {
         const [model, ...rest] = remaining
         if (model === undefined) {
           return WalkthroughModelUnavailableError.make({ providerId, modelId: null })
         }
-        return capability.execute(WalkthroughRequest.make({ ...request, model })).pipe(
-          Effect.map((result) => result.text),
+        return executeCandidate(model, true).pipe(
           Effect.catchAll((error) =>
             selection.route.mode === "auto" && rest.length > 0
               ? executeModel(rest)
@@ -221,32 +253,30 @@ const executeWalkthroughRoute = (
 
   const executeAutomatic = (
     remaining: readonly AgentProviderId[],
-    lastExecutionError:
-      | AgentProviderOperationError
-      | InvalidAgentProviderResponseError
-      | WalkthroughModelUnavailableError
-      | undefined,
-  ): Effect.Effect<string, WalkthroughRouteError> => {
+    lastExecutionError: WalkthroughSubstantiveError | undefined,
+  ): Effect.Effect<Walkthrough, WalkthroughRouteError> => {
     const [providerId, ...rest] = remaining
     if (providerId === undefined) {
       return lastExecutionError ?? NoAgentProviderAvailableError.make({ capability: "walkthrough" })
     }
     return executeProvider(providerId).pipe(
       Effect.catchAll((error) =>
-        executeAutomatic(
-          rest,
-          error instanceof AgentProviderOperationError ||
-            error instanceof InvalidAgentProviderResponseError ||
-            error instanceof WalkthroughModelUnavailableError
-            ? error
-            : lastExecutionError,
-        ),
+        executeAutomatic(rest, isWalkthroughSubstantiveError(error) ? error : lastExecutionError),
       ),
     )
   }
 
   return executeAutomatic(providerIds, undefined)
 }
+
+const isWalkthroughSubstantiveError = (
+  error: WalkthroughRouteError,
+): error is WalkthroughSubstantiveError =>
+  error instanceof AgentProviderOperationError ||
+  error instanceof InvalidAgentProviderResponseError ||
+  error instanceof WalkthroughGenerationError ||
+  error instanceof WalkthroughModelUnavailableError ||
+  error instanceof WalkthroughValidationError
 
 const walkthroughModels = (
   manifest: AgentProviderManifest,

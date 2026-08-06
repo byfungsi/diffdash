@@ -13,6 +13,7 @@ import { RepositoryLinker } from "../../../../src/main/services/repository-linke
 import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
+import { toPublicWalkthroughError } from "../walkthrough-public-error"
 import { IpcControllerRegistry } from "./controller-registry"
 
 /** Defines walkthroughs IPC handler implementations. */
@@ -118,6 +119,7 @@ export const defineWalkthroughHandlers = (
         }),
       )
     },
+    toPublicWalkthroughError,
   )
 
   handlers.define(
@@ -170,6 +172,7 @@ export const defineWalkthroughHandlers = (
         }),
       )
     },
+    toPublicWalkthroughError,
   )
 
   handlers.define(
@@ -239,5 +242,6 @@ export const defineWalkthroughHandlers = (
         }),
       )
     },
+    toPublicWalkthroughError,
   )
 }

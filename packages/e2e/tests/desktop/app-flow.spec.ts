@@ -571,6 +571,130 @@ test("opens local working tree review from CLI argument", async ({
   }
 })
 
+test("falls back from invalid Claude walkthrough output to Codex in Auto mode", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "auto")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_WALKTHROUGH_INVALID: "1",
+      FAKE_REPO_ROOT: localRepo,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+
+    await expect(window.getByText("Review focus")).toBeVisible()
+    await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    await expect(window.getByText("Walkthrough unavailable")).toBeHidden()
+  } finally {
+    await app.close()
+  }
+})
+
+test("reports an explicit Claude walkthrough failure through contextBridge and clipboard", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
+      FAKE_REPO_ROOT: localRepo,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+
+    await expect(
+      window
+        .getByText(
+          "The AI provider stopped before finishing the walkthrough. Check sign-in, connection, and quota, then retry.",
+        )
+        .first(),
+    ).toBeVisible()
+    await window.getByRole("button", { name: "Copy error details" }).first().click()
+    await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
+
+    const report = await app.evaluate(({ clipboard }) => clipboard.readText())
+    expect(report).toContain("Error code: AgentProviderExitError")
+    expect(report).toContain("Operation: localWalkthroughs:generate")
+    expect(report).toContain("Provider tag: claude")
+    expect(report).toContain("Cause tag: ProcessExitError")
+    expect(report).toContain("Exit code: 9")
+    expect(report).toContain("Reason: Authentication or authorization failure reported.")
+    expect(report).toContain("Stderr: Authentication or authorization failure reported.")
+    expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
+    expect(report).not.toContain("Operation: unknown")
+    for (const privateValue of [
+      "secret-repository",
+      "e2e-provider-secret",
+      "private prompt body",
+      "hunter2",
+      "cloud-secret",
+      "Unlabelled private prompt sentence",
+      "unchanged private diff context",
+      "private.ts",
+      "--print",
+    ]) {
+      expect(report).not.toContain(privateValue)
+    }
+  } finally {
+    await app.close()
+  }
+})
+
 test("opens the current project Reviews ribbon from the versioned CLI command", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -1555,7 +1679,24 @@ if (args.includes("stream-json")) {
   process.exit(0)
 }
 
-if (args[0] === "--print") {
+if (args.includes("--print")) {
+  if (process.env.FAKE_CLAUDE_WALKTHROUGH_FAILURE === "1") {
+    console.error([
+      "Claude authentication failed at /Users/example/secret-repository",
+      "Authorization: Bearer e2e-provider-secret",
+      "password=hunter2",
+      "AWS_SECRET_ACCESS_KEY=cloud-secret",
+      "prompt: private prompt body",
+      "diff --git a/private.ts b/private.ts",
+      "Unlabelled private prompt sentence",
+      " unchanged private diff context"
+    ].join("\\n"))
+    process.exit(9)
+  }
+  if (process.env.FAKE_CLAUDE_WALKTHROUGH_INVALID === "1") {
+    console.log("not valid walkthrough JSON")
+    process.exit(0)
+  }
   console.log(JSON.stringify({
     title: "Review path",
     summary: "Review the app entry point first.",
