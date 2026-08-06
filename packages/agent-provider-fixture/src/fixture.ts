@@ -29,8 +29,15 @@ const operationErrors = makeAgentProviderOperationErrorFactory({
   fallbackReason: "Fixture agent execution failed",
 })
 
+/** Optional deterministic execution controls for lifecycle tests. */
+export interface FixtureAgentProviderOptions {
+  readonly walkthroughNeverCompletes?: boolean
+}
+
 /** Creates a deterministic provider used only when desktop E2E composition requests it. */
-export const makeFixtureAgentProvider = (): AgentProviderRegistration => ({
+export const makeFixtureAgentProvider = (
+  options: FixtureAgentProviderOptions = {},
+): AgentProviderRegistration => ({
   manifest: AgentProviderManifest.make({
     descriptor: AgentProviderDescriptor.make({
       id: FIXTURE_AGENT_PROVIDER_ID,
@@ -67,7 +74,33 @@ export const makeFixtureAgentProvider = (): AgentProviderRegistration => ({
     probe: Effect.succeed(
       AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1.0.0" }),
     ),
-    execute: () => Effect.succeed(WalkthroughResult.make({ text: "Fixture walkthrough" })),
+    execute: () => {
+      const result = Effect.succeed(
+        WalkthroughResult.make({
+          text: JSON.stringify({
+            title: "Fixture review path",
+            summary: "Review the deterministic fixture change.",
+            chapters: [
+              {
+                id: "fixture-chapter",
+                title: "Fixture change",
+                summary: "Inspect the fixture hunk.",
+                stops: [
+                  {
+                    id: "fixture-stop",
+                    title: "Updated fixture",
+                    summary: "The fixture changes one deterministic line.",
+                    risk: "review",
+                    hunkIds: ["h1"],
+                  },
+                ],
+              },
+            ],
+          }),
+        }),
+      )
+      return options.walkthroughNeverCompletes === true ? Effect.never : result
+    },
   },
   reviewThread: {
     probe: Effect.succeed(

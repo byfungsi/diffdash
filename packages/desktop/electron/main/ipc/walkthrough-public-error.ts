@@ -31,7 +31,7 @@ import {
 import { transportError, TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { Either, Schema } from "effect"
-import { ReviewContextError } from "@diffdash/core/legacy"
+import { ReviewContextError, WalkthroughOperationCapacityExceeded } from "@diffdash/core"
 import { toPublicIpcError } from "./public-error"
 
 const KnownProviderProcessFailure = Schema.Union(
@@ -175,6 +175,14 @@ export const toPublicWalkthroughError = (error: unknown, operation: string) => {
       ? "DiffDash could not read the walkthrough cache."
       : "DiffDash could not save the generated walkthrough."
     return transportError("WalkthroughStoreError", message, operation)
+  }
+  const capacity = Schema.decodeUnknownEither(WalkthroughOperationCapacityExceeded)(error)
+  if (Either.isRight(capacity)) {
+    return transportError(
+      "WalkthroughOperationCapacityExceeded",
+      `DiffDash is already processing ${capacity.right.capacity} walkthrough operations. Try again after one finishes.`,
+      operation,
+    )
   }
 
   const publicError = toPublicIpcError(error, operation)

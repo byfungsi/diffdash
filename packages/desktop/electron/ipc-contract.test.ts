@@ -24,7 +24,7 @@ import {
 import { Effect, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
-import { RepositoryLinkError } from "@diffdash/core/legacy"
+import { RepositoryLinkError } from "@diffdash/core"
 import type { DesktopUpdater } from "../src/main/services/app-updater"
 import type { ApplicationRuntime } from "./main/application-runtime"
 import { createRendererSecurityPolicy } from "./main/electron-policy"
@@ -65,13 +65,7 @@ describe("IPC contract", () => {
     const host = hostIpc()
     const rendererSecurityPolicy = testRendererSecurityPolicy()
     const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
-    const runtime: ApplicationRuntime = {
-      start: async () => undefined,
-      dispose: async () => undefined,
-      runPromise: async () => {
-        throw new Error("Completeness test must not invoke handlers")
-      },
-    }
+    const runtime = testRuntime("Completeness test must not invoke handlers")
     const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
 
     defineIpcHandlers(
@@ -92,13 +86,7 @@ describe("IPC contract", () => {
     const host = hostIpc()
     const rendererSecurityPolicy = testRendererSecurityPolicy()
     const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
-    const runtime: ApplicationRuntime = {
-      start: async () => undefined,
-      dispose: async () => undefined,
-      runPromise: async () => {
-        throw new Error("Window activation must not access application services")
-      },
-    }
+    const runtime = testRuntime("Window activation must not access application services")
     const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
     const targetWindow = {
       isMinimized: vi.fn<() => boolean>(() => true),
@@ -794,4 +782,26 @@ const testUpdater = (): DesktopUpdater => ({
   startAutomaticChecks: () => Effect.void,
   subscribe: () => Effect.succeed(() => undefined),
   dispose: () => Effect.void,
+})
+
+const testRuntime = (message: string): ApplicationRuntime => ({
+  start: async () => undefined,
+  dispose: async () => undefined,
+  execute: async () => {
+    throw new Error(message)
+  },
+  walkthroughs: {
+    start: async () => {
+      throw new Error(message)
+    },
+    getOperation: async () => {
+      throw new Error(message)
+    },
+    cancel: async () => {
+      throw new Error(message)
+    },
+    getStored: async () => {
+      throw new Error(message)
+    },
+  },
 })

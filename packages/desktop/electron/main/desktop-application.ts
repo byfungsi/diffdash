@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { RepositoryLinker } from "@diffdash/core/legacy"
+import { CoreMethod } from "@diffdash/core"
+import { Effect } from "effect"
 import {
   app,
   BrowserWindow,
@@ -8,7 +9,6 @@ import {
   dialog,
   shell,
 } from "electron"
-import { Effect } from "effect"
 import { resolveApplicationIdentity } from "./application-identity"
 import { createApplicationRuntime } from "./application-runtime"
 import { createApplicationUpdater } from "./application-updater"
@@ -94,7 +94,9 @@ const start = async () => {
     openExternal: (url) => shell.openExternal(url),
     packagedRendererUrl: pathToFileURL(join(__dirname, "../renderer/index.html")).href,
   })
-  const applicationRuntime = createApplicationRuntime(resolveCoreConfiguration())
+  const applicationRuntime = createApplicationRuntime(
+    await Effect.runPromise(resolveCoreConfiguration()),
+  )
   let updater: ReturnType<typeof createApplicationUpdater>
   try {
     await applicationRuntime.start()
@@ -109,9 +111,7 @@ const start = async () => {
   activateMainWindow()
   if (shouldRepairOnStartup) {
     void applicationRuntime
-      .runPromise(
-        Effect.flatMap(RepositoryLinker, (repositories) => repositories.repairIdentities()),
-      )
+      .execute(CoreMethod.repairRepositoryIdentities, {})
       .then((result) => {
         console.info(
           `[repositories:repair] resolved=${result.resolvedCount} unresolved=${result.unresolvedCount} localAliases=${result.localAliasCount}`,

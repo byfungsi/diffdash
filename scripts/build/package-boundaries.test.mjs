@@ -402,36 +402,30 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
         readFileSync(file, "utf8").includes("ManagedRuntime.make("),
     )
   })
-  assert.deepEqual(managedRuntimeOwners, [
-    resolve(root, "packages/core/src/legacy-embedded-core.ts"),
-  ])
+  assert.deepEqual(managedRuntimeOwners, [resolve(root, "packages/core/src/embedded-core.ts")])
 
   const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
   assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
 })
 
-test("the temporary Core legacy entrypoint has a closed desktop import allowlist", () => {
+test("Electron controllers consume only the closed Core operation boundary", () => {
   const desktopDirectory = resolve(root, "packages/desktop")
-  const importsLegacyCore = [
+  const desktopSource = [
     ...sourceFiles(join(desktopDirectory, "src")),
     ...sourceFiles(join(desktopDirectory, "electron")),
   ]
-    .filter((file) => readFileSync(file, "utf8").includes('"@diffdash/core/legacy"'))
-    .map((file) => relative(desktopDirectory, file))
-    .toSorted()
+  for (const file of desktopSource) {
+    assert.doesNotMatch(readFileSync(file, "utf8"), /@diffdash\/core\/legacy|runLegacy/)
+  }
 
-  assert.deepEqual(importsLegacyCore, [
-    "electron/ipc-contract.test.ts",
-    "electron/main/application-runtime.ts",
-    "electron/main/desktop-application.ts",
-    "electron/main/ipc/controllers/analytics.ts",
-    "electron/main/ipc/controllers/navigation.ts",
-    "electron/main/ipc/controllers/repositories.ts",
-    "electron/main/ipc/controllers/reviews.ts",
-    "electron/main/ipc/controllers/settings.ts",
-    "electron/main/ipc/controllers/threads.ts",
-    "electron/main/ipc/controllers/walkthroughs.ts",
-    "electron/main/ipc/walkthrough-public-error.test.ts",
-    "electron/main/ipc/walkthrough-public-error.ts",
-  ])
+  const controllerDirectory = join(desktopDirectory, "electron/main/ipc/controllers")
+  for (const file of sourceFiles(controllerDirectory)) {
+    const source = readFileSync(file, "utf8")
+    assert.doesNotMatch(source, /runtime\.runPromise/)
+    assert.doesNotMatch(
+      source,
+      /from ["']@diffdash\/(?:local-git|persistence|review-agent|settings|walkthrough)(?:\/[^"']*)?["']/,
+      `${relative(desktopDirectory, file)} imports a Core-owned business service`,
+    )
+  }
 })

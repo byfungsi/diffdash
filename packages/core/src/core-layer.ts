@@ -26,9 +26,10 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer } from "effect"
 import type { CoreConfiguration } from "./core-configuration"
-import type { CoreServices } from "./core-services"
+import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
+import { CoreStartupError, type CoreStartupFailure } from "./core-startup-error"
 import {
   createAgentProviderComposition,
   createGitProviderComposition,
@@ -42,17 +43,10 @@ import { RepositoryLinker } from "./services/repository-linker"
 import { ReviewContextService } from "./services/review-context"
 import { ReviewSnapshotService } from "./services/review-snapshot"
 
-/** A recoverable failure while acquiring Core-owned runtime resources. */
-export class CoreStartupError extends Schema.TaggedError<CoreStartupError>()("CoreStartupError", {
-  operation: Schema.String,
-  message: Schema.String,
-  cause: Schema.Defect,
-}) {}
-
 /** Builds the runtime-neutral business service graph owned by DiffDash Core. */
 export const createCoreLayer = (
   configuration: CoreConfiguration,
-): Layer.Layer<CoreServices, unknown> => {
+): Layer.Layer<CoreOperationService, CoreStartupFailure> => {
   const agentWorkingDirectory = configuration.paths.temporaryDirectory
   const databasePath = configuration.paths.database
   const remoteWorktreePoolPath = configuration.paths.remoteWorktreePool
@@ -111,6 +105,7 @@ export const createCoreLayer = (
         tempResources,
         tempDirectory: agentWorkingDirectory,
         includeFixture: configuration.fixtures.agentProviderEnabled,
+        fixtureWalkthroughNeverCompletes: configuration.fixtures.agentProviderNeverCompletes,
       })
       return yield* AgentProviderRegistry.pipe(
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
@@ -211,10 +206,12 @@ export const createCoreLayer = (
     appImagePath: configuration.paths.appImage,
     diffDashCliPath: configuration.paths.diffDashCli,
     executableSearchPath: configuration.environment.executableSearchPath,
+    executablePathExtensions: configuration.environment.executablePathExtensions,
     homeDirectory: configuration.environment.homeDirectory,
+    platform: configuration.application.platform,
   }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
 
-  return Layer.mergeAll(
+  const businessServicesLayer = Layer.mergeAll(
     temporaryDirectoryLayer,
     repositoryLinkerLayer,
     repositoryComparisonSourceLayer,
@@ -231,5 +228,7 @@ export const createCoreLayer = (
     WalkthroughStore.layer,
     reviewAgentLayer,
     threadAnchorMapperLayer,
-  ).pipe(Layer.provideMerge(DatabaseService.layer(databasePath)), Layer.provideMerge(processLayer))
+  ).pipe(Layer.provide(DatabaseService.layer(databasePath)), Layer.provide(processLayer))
+
+  return coreOperationLayer.pipe(Layer.provide(businessServicesLayer))
 }

@@ -88,18 +88,28 @@ code.
 
 ## Embedded Core Migration
 
-The temporary `@diffdash/core/legacy` entrypoint keeps existing controllers working while cohesive
-Core operations replace direct service access. Its import allowlist is enforced and removed when the
-migration closes.
+Electron controllers call the closed `CoreMethod` catalog and the Core-owned walkthrough operation
+facade. Internal Effect tags, Layers, and the managed runtime are not exposed to Electron. Boundary
+tests reject direct business-service imports and generic runtime execution from controllers.
 
-| Remaining ownership | Migration layer |
+| Ownership | Current boundary |
 | --- | --- |
-| Repositories, project workspace, settings, prerequisites, analytics | Simple Core operations |
-| Review acquisition, paging, search, viewed state, navigation resolution | Review operations |
-| Review agents, threads, walkthrough execution and persistence | AI workflows |
-| Legacy executor and direct business-service imports | Boundary enforcement |
+| Repositories, project workspace, settings, prerequisites, analytics | Named Core operations |
+| Review acquisition, paging, search, viewed state, navigation resolution | Named Core operations |
+| Review agents and threads | Named Core operations with host progress callbacks |
+| Walkthrough execution and persistence | `start`, `getOperation`, `cancel`, and `getStored` |
 
 Updater, window, dialog, shell, IPC sender validation, and renderer transport remain Electron-owned.
+FUN-254 will replace the embedded walkthrough operation implementation with persisted idempotency,
+replay, and cross-process diagnostics without moving orchestration back into Electron.
+
+The remaining Electron imports of Core-owned error types are temporary transport adapters with
+explicit migration owners:
+
+| Electron adapter | Migration owner |
+| --- | --- |
+| `ipc/walkthrough-public-error.ts` | FUN-254 moves walkthrough failure classification and diagnostics behind the durable Core operation boundary |
+| `ipc/review-thread-public-error.ts` | FUN-215 moves review-thread failure envelopes behind external Core RPC during atomic cutover |
 
 See [Git provider authoring](git-provider-authoring.md) and
 [agent provider authoring](agent-provider-authoring.md) for extension contracts.

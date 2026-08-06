@@ -1,5 +1,5 @@
+import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { Analytics } from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -8,15 +8,13 @@ export const defineAnalyticsHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  const run = runtime.runPromise
+  handlers.define(
+    InvokeChannel.analyticsStart,
+    async (): Promise<void> => runtime.execute(CoreMethod.analyticsStart, {}),
+  )
 
-  handlers.define(InvokeChannel.analyticsStart, async (): Promise<void> => {
-    const analytics = await run(Analytics)
-    return run(analytics.start)
-  })
-
-  handlers.define(InvokeChannel.analyticsCapture, async (_event, { event }): Promise<void> => {
-    const analytics = await run(Analytics)
-    return run(analytics.capture(event))
-  })
+  handlers.define(
+    InvokeChannel.analyticsCapture,
+    async (_event, request): Promise<void> => runtime.execute(CoreMethod.analyticsCapture, request),
+  )
 }

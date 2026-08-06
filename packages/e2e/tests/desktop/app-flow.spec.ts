@@ -26,6 +26,7 @@ test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window wi
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_FAKE_AGENT_PROVIDER: "1",
       DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
+      DIFFDASH_E2E_FAKE_GIT_REMOTE: "https://git.fixture.test/platform/backend/service.git",
       DIFFDASH_E2E_HIDDEN: "1",
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       XDG_CONFIG_HOME: xdgConfigHome,

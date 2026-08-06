@@ -20,6 +20,7 @@ interface AgentProviderCompositionDependencies {
   readonly tempResources: TempResourceOperations
   readonly tempDirectory: string
   readonly includeFixture: boolean
+  readonly fixtureWalkthroughNeverCompletes: boolean
 }
 
 /** Complete agent provider composition consumed by registry and catalog services. */
@@ -41,7 +42,13 @@ export const createAgentProviderComposition = (
     makeClaudeProvider(shared),
     makeCodexProvider(shared),
     makeOpenCodeProvider(shared),
-    ...(dependencies.includeFixture ? [makeFixtureAgentProvider()] : []),
+    ...(dependencies.includeFixture
+      ? [
+          makeFixtureAgentProvider({
+            walkthroughNeverCompletes: dependencies.fixtureWalkthroughNeverCompletes,
+          }),
+        ]
+      : []),
   ]
   return { registrations, policies: agentAutoRoutingPolicies(registrations) }
 }
@@ -50,7 +57,7 @@ export const createAgentProviderComposition = (
 export const createGitProviderComposition = (
   processes: ProcessRunner,
   fixture: {
-    readonly remoteUrl: string | null
+    readonly remoteUrl: string
     readonly baseRevision: string | null
     readonly headRevision: string | null
   } | null,
@@ -60,21 +67,17 @@ export const createGitProviderComposition = (
     ? []
     : [
         createFixtureGitProvider({
-          ...(fixture.remoteUrl === null ? {} : { remoteUrl: fixture.remoteUrl }),
+          remoteUrl: fixture.remoteUrl,
           ...(fixture.baseRevision === null ? {} : { baseRevision: fixture.baseRevision }),
           ...(fixture.headRevision === null ? {} : { headRevision: fixture.headRevision }),
           bootstrapBareRepository: (destination) =>
-            fixture.remoteUrl === null
-              ? Effect.dieMessage("DIFFDASH_E2E_FAKE_GIT_REMOTE is required")
-              : processes
-                  .run(
-                    processRequest(
-                      "git",
-                      ["clone", "--bare", "--", fixture.remoteUrl, destination],
-                      { timeoutMs: 120_000 },
-                    ),
-                  )
-                  .pipe(Effect.asVoid),
+            processes
+              .run(
+                processRequest("git", ["clone", "--bare", "--", fixture.remoteUrl, destination], {
+                  timeoutMs: 120_000,
+                }),
+              )
+              .pipe(Effect.asVoid),
         }),
       ]),
 ]

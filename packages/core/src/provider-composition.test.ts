@@ -22,6 +22,7 @@ describe("provider composition", () => {
       },
       tempDirectory: "/tmp/diffdash-agent-composition",
       includeFixture: true,
+      fixtureWalkthroughNeverCompletes: false,
     })
 
     expect(composition.registrations.map(({ manifest }) => manifest.descriptor.id)).toEqual([

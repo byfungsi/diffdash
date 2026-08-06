@@ -1,14 +1,13 @@
-import { GitService } from "@diffdash/local-git/local-git"
+import { CoreMethod, type CoreFileOpenIntent } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { transportError } from "@diffdash/protocol/transport-error"
 import { app, BrowserWindow, shell } from "electron"
 import { isAbsolute } from "node:path"
-import { GitProvider, RepositoryLinker } from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { normalizeReviewFilePath, resolveContainedRepositoryPath } from "../../electron-policy"
 import type { RendererSecurityPolicy } from "../../electron-policy"
-import { openLocalPath, openProviderFile } from "../../file-opening"
+import { openLocalPath } from "../../file-opening"
 import { isHiddenE2EWindow, revealAppWindow } from "../../window-activation"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -22,7 +21,14 @@ export const defineNavigationHandlers = (
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
-  const run = runtime.runPromise
+  const openIntent = async (intent: CoreFileOpenIntent): Promise<void> => {
+    if ("url" in intent) {
+      await rendererSecurityPolicy.openExternalUrl(intent.url)
+      return
+    }
+    const targetPath = resolveContainedRepositoryPath(intent.rootPath, intent.filePath)
+    await openLocalPath((path) => shell.openPath(path), targetPath)
+  }
 
   handlers.define(InvokeChannel.appActivateWindow, async (event): Promise<void> => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender)
@@ -48,12 +54,6 @@ export const defineNavigationHandlers = (
   })
 
   handlers.define(InvokeChannel.appOpenRepositoryFile, async (_event, request): Promise<void> => {
-    const hostedRepository = request.review.repository
-    const git = await run(GitService)
-    const gitProvider = await run(GitProvider)
-    const repositories = await run(RepositoryLinker)
-    const linkedRepository = await run(repositories.findHosted(hostedRepository))
-
     if (isAbsolute(request.filePath)) {
       throw transportError(
         "INVALID_REVIEW_FILE_PATH",
@@ -62,51 +62,11 @@ export const defineNavigationHandlers = (
     }
 
     const normalizedFilePath = normalizeReviewFilePath(request.filePath)
-
-    if (linkedRepository?.localPath === null || linkedRepository?.localPath === undefined) {
-      await openProviderFile(
-        (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        rendererSecurityPolicy.openExternalUrl,
-        request.review.repository,
-        normalizedFilePath,
-        request.headRefName,
-        request.headRevision,
-      )
-      return
-    }
-
-    let currentBranch: string
-    try {
-      currentBranch = await run(git.currentBranch(linkedRepository.localPath))
-    } catch {
-      await openProviderFile(
-        (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        rendererSecurityPolicy.openExternalUrl,
-        request.review.repository,
-        normalizedFilePath,
-        request.headRefName,
-        request.headRevision,
-      )
-      return
-    }
-    if (currentBranch !== request.headRefName) {
-      await openProviderFile(
-        (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        rendererSecurityPolicy.openExternalUrl,
-        request.review.repository,
-        normalizedFilePath,
-        request.headRefName,
-        request.headRevision,
-      )
-      return
-    }
-
-    const targetPath = resolveContainedRepositoryPath(
-      linkedRepository.localPath,
-      normalizedFilePath,
-    )
-
-    await openLocalPath((path) => shell.openPath(path), targetPath)
+    const intent = await runtime.execute(CoreMethod.appOpenRepositoryFile, {
+      ...request,
+      filePath: normalizedFilePath,
+    })
+    await openIntent(intent)
   })
 
   handlers.define(
@@ -118,27 +78,22 @@ export const defineNavigationHandlers = (
           "Cannot open an absolute file path from a review.",
         )
       }
-      const gitProvider = await run(GitProvider)
-      await openProviderFile(
-        (locator, path, revision) => run(gitProvider.fileUrl(locator, path, revision)),
-        rendererSecurityPolicy.openExternalUrl,
-        target.repository,
-        normalizeReviewFilePath(filePath),
-        target.headSha,
-        target.headSha,
-      )
+      const intent = await runtime.execute(CoreMethod.appOpenRepositoryComparisonFile, {
+        target,
+        filePath: normalizeReviewFilePath(filePath),
+      })
+      await openIntent(intent)
     },
   )
 
   handlers.define(
     InvokeChannel.appOpenLocalRepositoryFile,
     async (_event, { rootPath, filePath }): Promise<void> => {
-      const git = await run(GitService)
-      const canonicalRootPath = await run(git.detectRoot(rootPath))
-
-      const targetPath = resolveContainedRepositoryPath(canonicalRootPath, filePath)
-
-      await openLocalPath((path) => shell.openPath(path), targetPath)
+      const intent = await runtime.execute(CoreMethod.appOpenLocalRepositoryFile, {
+        rootPath,
+        filePath: normalizeReviewFilePath(filePath),
+      })
+      await openIntent(intent)
     },
   )
 }

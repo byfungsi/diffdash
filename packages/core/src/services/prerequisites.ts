@@ -54,7 +54,9 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
     readonly appImagePath: string | null
     readonly diffDashCliPath: string
     readonly executableSearchPath: string
-    readonly homeDirectory: string
+    readonly executablePathExtensions: string | null
+    readonly homeDirectory: string | null
+    readonly platform: NodeJS.Platform
   }): Layer.Layer<Prerequisites, never, AgentProviders | GitProvider | ProcessService> {
     return Layer.effect(
       Prerequisites,
@@ -67,7 +69,9 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
             sourcePath: options.diffDashCliPath,
             appImagePath: options.appImagePath,
             executableSearchPath: options.executableSearchPath,
+            executablePathExtensions: options.executablePathExtensions,
             homeDirectory: options.homeDirectory,
+            platform: options.platform,
           })
           const [gitInstalled, providerDescriptors, providerDiagnostics, agentCatalog] =
             yield* Effect.all(
@@ -84,10 +88,27 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
             .map(({ id }) => id)
           const diffDashCliInPath = yield* findExecutableInPath("diffdash", {
             envPath: options.executableSearchPath,
+            ...(options.executablePathExtensions === null
+              ? {}
+              : { pathExt: options.executablePathExtensions }),
+            platform: options.platform,
           })
+          const userLocalSearchPath =
+            options.homeDirectory === null
+              ? ""
+              : [
+                  join(options.homeDirectory, ".local", "bin"),
+                  join(options.homeDirectory, "bin"),
+                ].join(delimiter)
           const diffDashCli = Option.isSome(diffDashCliInPath)
             ? diffDashCliInPath
-            : yield* findExecutableInPath("diffdash")
+            : yield* findExecutableInPath("diffdash", {
+                envPath: userLocalSearchPath,
+                ...(options.executablePathExtensions === null
+                  ? {}
+                  : { pathExt: options.executablePathExtensions }),
+                platform: options.platform,
+              })
 
           return AppPrerequisites.make({
             checkedAt: new Date().toISOString(),
@@ -222,7 +243,7 @@ const installDiffDashCli = ({
   readonly sourcePath: string
   readonly appImagePath: string | null
   readonly executableSearchPath: string
-  readonly homeDirectory: string
+  readonly homeDirectory: string | null
 }) =>
   Effect.try({
     try: () => {
@@ -341,23 +362,29 @@ export const refreshAppImageCliLaunchers = Effect.fn("refreshAppImageCliLauncher
   sourcePath,
   appImagePath,
   executableSearchPath,
+  executablePathExtensions,
   homeDirectory,
+  platform,
 }: {
   readonly sourcePath: string
   readonly appImagePath: string | null
   readonly executableSearchPath: string
-  readonly homeDirectory: string
+  readonly executablePathExtensions: string | null
+  readonly homeDirectory: string | null
+  readonly platform: NodeJS.Platform
 }) {
   if (appImagePath === null || !existsSync(sourcePath) || !existsSync(appImagePath)) return
 
   const diffDashInPath = yield* findExecutableInPath("diffdash", {
     envPath: executableSearchPath,
+    ...(executablePathExtensions === null ? {} : { pathExt: executablePathExtensions }),
+    platform,
   })
   yield* Effect.sync(() => {
     const candidates = new Set([
       Option.getOrNull(diffDashInPath),
-      join(homeDirectory, ".local", "bin", "diffdash"),
-      join(homeDirectory, "bin", "diffdash"),
+      homeDirectory === null ? null : join(homeDirectory, ".local", "bin", "diffdash"),
+      homeDirectory === null ? null : join(homeDirectory, "bin", "diffdash"),
     ])
     const source = readFileSync(sourcePath, "utf8")
     const launcher = makeAppImageCliLauncher(source, appImagePath)
@@ -376,11 +403,11 @@ export const refreshAppImageCliLaunchers = Effect.fn("refreshAppImageCliLauncher
   })
 })
 
-const firstWritablePathDirectory = (executableSearchPath: string, homeDirectory: string) => {
+const firstWritablePathDirectory = (executableSearchPath: string, homeDirectory: string | null) => {
   const pathDirectories = executableSearchPath.split(delimiter).filter((entry) => entry.length > 0)
   const preferredDirectories = [
-    homeDirectory.length > 0 ? join(homeDirectory, ".local", "bin") : "",
-    homeDirectory.length > 0 ? join(homeDirectory, "bin") : "",
+    homeDirectory === null ? "" : join(homeDirectory, ".local", "bin"),
+    homeDirectory === null ? "" : join(homeDirectory, "bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
   ]

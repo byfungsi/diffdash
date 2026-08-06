@@ -118,7 +118,9 @@ const makeLayer = (
     appImagePath: options.appImagePath ?? null,
     diffDashCliPath: options.diffDashCliPath ?? "",
     executableSearchPath: process.env.PATH ?? "",
-    homeDirectory: process.env.HOME ?? "",
+    executablePathExtensions: process.env.PATHEXT ?? null,
+    homeDirectory: process.env.HOME ?? null,
+    platform: process.platform,
   }).pipe(
     Layer.provideMerge(fakeProcessLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
@@ -430,7 +432,9 @@ describe("Prerequisites", () => {
         sourcePath,
         appImagePath,
         executableSearchPath: fakeBin,
+        executablePathExtensions: null,
         homeDirectory: directory,
+        platform: process.platform,
       })
 
       const launcher = readFileSync(launcherPath, "utf8")

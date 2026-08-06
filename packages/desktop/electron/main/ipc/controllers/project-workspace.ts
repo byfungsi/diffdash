@@ -1,5 +1,4 @@
-import type { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
-import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
+import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
@@ -9,21 +8,11 @@ export const defineProjectWorkspaceHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  const run = runtime.runPromise
-
-  handlers.define(
-    InvokeChannel.projectWorkspaceGet,
-    async (_event, { projectId }): Promise<ProjectWorkspaceState | null> => {
-      const workspace = await run(ProjectWorkspaceStore)
-      return run(workspace.get(projectId))
-    },
+  handlers.define(InvokeChannel.projectWorkspaceGet, async (_event, request) =>
+    runtime.execute(CoreMethod.projectWorkspaceGet, request),
   )
 
-  handlers.define(
-    InvokeChannel.projectWorkspaceSave,
-    async (_event, { input }): Promise<ProjectWorkspaceState> => {
-      const workspace = await run(ProjectWorkspaceStore)
-      return run(workspace.save(input))
-    },
+  handlers.define(InvokeChannel.projectWorkspaceSave, async (_event, request) =>
+    runtime.execute(CoreMethod.projectWorkspaceSave, request),
   )
 }
