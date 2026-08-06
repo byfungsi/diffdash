@@ -727,11 +727,13 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       index += 1
       continue
     }
-    if (line.startsWith("```")) {
-      const language = line.slice(3).trim()
+    const fence = /^(`{3,})(.*)$/u.exec(line)
+    if (fence !== null) {
+      const delimiter = fence[1] ?? "```"
+      const language = (fence[2] ?? "").trim()
       const code: string[] = []
       index += 1
-      while (index < lines.length && !(lines[index] ?? "").startsWith("```")) {
+      while (index < lines.length && !(lines[index] ?? "").startsWith(delimiter)) {
         code.push(lines[index] ?? "")
         index += 1
       }
@@ -876,7 +878,8 @@ const ThreadMessage = ({
 }
 
 const inlineMarkdown = (value: string): readonly ReactNode[] => {
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*[^*]+\*|\n)/g
+  const pattern =
+    /(\*\*[^*]+\*\*|```[^`]+```|``[^`]+``|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*[^*]+\*|\n)/g
   let offset = 0
   return value
     .split(pattern)
@@ -890,7 +893,8 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
         return [<strong key={key}>{part.slice(2, -2)}</strong>]
       }
       if (part.startsWith("`") && part.endsWith("`")) {
-        const content = part.slice(1, -1)
+        const delimiterLength = backtickDelimiterLength(part)
+        const content = part.slice(delimiterLength, -delimiterLength)
         const referenceKind = technicalReferenceKind(content)
         return [
           <TechnicalReference key={key} kind={referenceKind} inlineCode>
@@ -921,8 +925,14 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
     })
 }
 
+const backtickDelimiterLength = (value: string) => {
+  let length = 0
+  while (value[length] === "`") length += 1
+  return length
+}
+
 const pathSegmentSource = String.raw`[A-Za-z0-9_@-](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_@-])?`
-const rootFileReferenceSource = String.raw`(?:[A-Za-z0-9_@-]+\.(?:c|cc|cpp|css|cts|go|h|hpp|html|java|js|json|jsx|kt|kts|md|mdx|mjs|mts|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|xml|yaml|yml|zsh)|Dockerfile|Makefile|Procfile)`
+const rootFileReferenceSource = String.raw`(?:[A-Za-z0-9_@-]+\.(?:c|cc|cpp|css|cts|go|h|hpp|html|java|js|json|jsx|kt|kts|md|mdx|mjs|mts|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|xml|yaml|yml|zsh)|\.[A-Za-z0-9_.-]+|CHANGELOG|CODEOWNERS|CONTRIBUTING|Dockerfile|LICENSE|Makefile|Procfile|README|assets|config|docs|packages|public|scripts|src|test|tests|tools)`
 const fileReferenceSource = String.raw`(?:(?:${pathSegmentSource}\/)+${pathSegmentSource}|${rootFileReferenceSource})(?::\d+(?:-\d+)?)?`
 const symbolReferenceSource = String.raw`(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Z]{2,}[A-Za-z0-9]*|[a-z_$][a-z0-9_$]*(?:[A-Z][A-Za-z0-9_$]*)+`
 const reviewFileReference = new RegExp(`^${fileReferenceSource}$`, "u")
@@ -949,7 +959,8 @@ const TechnicalReference = ({
   const className = cn(
     "font-mono font-medium",
     inlineCode && "bg-muted rounded px-1 py-0.5",
-    kind === "file" ? "text-review-file-reference" : "text-review-symbol-reference",
+    kind === "file" && "text-review-file-reference",
+    kind === "symbol" && "text-review-symbol-reference",
   )
   const attributes = {
     className,

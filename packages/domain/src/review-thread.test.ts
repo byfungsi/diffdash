@@ -78,5 +78,12 @@ const value = "\\n"
 \`\`\`
 Continue.`)
     expect(normalizeMarkdownLineBreaks("Before.\\r\\n- After.")).toBe("Before.\n- After.")
+    const validFence = `Example.
+\`\`\`ts
+const value = "\\n"
+\`\`\`
+Continue.`
+    expect(normalizeMarkdownLineBreaks(validFence)).toBe(validFence)
+    expect(normalizeMarkdownLineBreaks(normalizeMarkdownLineBreaks(validFence))).toBe(validFence)
   })
 })

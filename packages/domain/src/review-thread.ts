@@ -66,7 +66,12 @@ export const normalizeMarkdownLineBreaks = (value: string): MarkdownBody => {
     normalized += repairEscapedLineBreaks(normalizedLineEndings.slice(plainTextStart, index))
     const codeEnd = closingIndex + delimiterLength
     const code = normalizedLineEndings.slice(index, codeEnd)
-    normalized += delimiterLength >= 3 ? repairFencedCodeBoundaries(code, delimiterLength) : code
+    normalized +=
+      delimiterLength >= 3 &&
+      isMarkdownLineStart(normalizedLineEndings, index) &&
+      isMarkdownLineStart(normalizedLineEndings, closingIndex)
+        ? repairFencedCodeBoundaries(code, delimiterLength)
+        : code
     plainTextStart = codeEnd
     index = codeEnd
   }
@@ -99,6 +104,9 @@ const findClosingBackticks = (value: string, start: number, delimiterLength: num
 const repairFencedCodeBoundaries = (value: string, delimiterLength: number) => {
   const closingIndex = value.length - delimiterLength
   const openingBreak = escapedLineBreakAtOrAfter(value, delimiterLength)
+  const openingActualBreak = value.indexOf("\n", delimiterLength)
+  if (openingActualBreak >= 0 && (openingBreak === null || openingActualBreak < openingBreak.start))
+    return value
   const closingBreak = escapedLineBreakBefore(value, closingIndex)
   const boundaries = [openingBreak, closingBreak]
     .filter((boundary): boundary is EscapedLineBreak => boundary !== null)
@@ -120,6 +128,12 @@ const repairFencedCodeBoundaries = (value: string, delimiterLength: number) => {
     value,
   )
 }
+
+const isMarkdownLineStart = (value: string, index: number) =>
+  index === 0 ||
+  value[index - 1] === "\n" ||
+  value.slice(Math.max(0, index - 4), index).endsWith("\\r\\n") ||
+  value.slice(Math.max(0, index - 2), index).endsWith("\\n")
 
 interface EscapedLineBreak {
   readonly start: number
