@@ -8,11 +8,24 @@ import {
   HostedReviewDiff,
   HostedReviewSummary,
   ProviderActor,
+  makeHostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { AgentRunId } from "@diffdash/domain/review-agent"
-import { HostedReviewSnapshot, LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  GitCommitSha,
+  makeRepositoryComparisonReviewKey,
+  RepositoryComparisonDetail,
+  RepositoryComparisonDiff,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
+import {
+  HostedReviewSnapshot,
+  LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
+} from "@diffdash/domain/review-context"
 import {
   makeReviewKey,
   ReviewFileId,
@@ -163,6 +176,33 @@ const localSnapshot = LocalReviewSnapshot.make({
   }),
   parsedDiff: parseUnifiedDiff(rawDiff),
 })
+const comparisonTarget = RepositoryComparisonTarget.make({
+  kind: "repositoryComparison",
+  repository: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+  baseRef: RepositoryComparisonRef.make("v1.0.0"),
+  headRef: RepositoryComparisonRef.make("v1.1.0"),
+  baseSha: GitCommitSha.make("a".repeat(40)),
+  headSha: GitCommitSha.make("b".repeat(40)),
+  mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+})
+const comparisonSnapshot = RepositoryComparisonSnapshot.make({
+  snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000005"),
+  reviewKey: makeRepositoryComparisonReviewKey(comparisonTarget),
+  baseRevision: ReviewRevision.make(comparisonTarget.mergeBaseSha),
+  headRevision: ReviewRevision.make(comparisonTarget.headSha),
+  detail: RepositoryComparisonDetail.make({
+    target: comparisonTarget,
+    title: "v1.0.0...v1.1.0",
+    files: [],
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  }),
+  diff: RepositoryComparisonDiff.make({
+    target: comparisonTarget,
+    diff: rawDiff,
+    fetchedAt: "2026-08-05T00:00:00.000Z",
+  }),
+  parsedDiff: parseUnifiedDiff(rawDiff),
+})
 
 const details = ReviewThreadDetails.make({
   thread: ReviewThread.make({
@@ -214,8 +254,10 @@ const makeTestLayer = (
   getThread: ContextThreadGetter = () => Effect.succeed(details),
   runProcess: ContextProcessRunner = (request) => {
     if (request.args.includes("grep")) {
+      const separator = request.args.indexOf("--")
+      const revision = separator > 0 ? request.args[separator - 1] : "head-sha"
       return Effect.succeed(
-        processResult(request, "head-sha:src/app.ts:7:export const linkedNeedle = true\n"),
+        processResult(request, `${revision}:src/app.ts:7:export const linkedNeedle = true\n`),
       )
     }
     if (request.args.includes("show")) {
@@ -606,6 +648,49 @@ describe("DiffDashMcpServer", () => {
       expect(toolText(search)).toContain('"source":"isolated-worktree"')
       expect(toolText(file)).toContain("linkedNeedle")
       expect(toolText(escaped)).toContain('"status":"unavailable"')
+    }).pipe(Effect.provide(testLayer)),
+  )
+
+  it.scoped("serves exact repository tools for an immutable comparison workspace", () =>
+    Effect.gen(function* () {
+      const server = yield* DiffDashMcpServer
+      const access = yield* server.acquireRun({
+        runId: AgentRunId.make("run-comparison-search"),
+        threadId,
+        repoId: "github:fungsi/diffdash",
+        snapshot: comparisonSnapshot,
+        localPath: "/workspace/comparison",
+        walkthrough: null,
+      })
+      const client = new Client({ name: "diffdash-comparison-search-test", version: "1" })
+      const transport = new StreamableHTTPClientTransport(new URL(access.url), {
+        requestInit: {
+          headers: { authorization: `Bearer ${Redacted.value(access.bearerToken)}` },
+        },
+      })
+      yield* Effect.acquireRelease(
+        Effect.promise(async () => {
+          await client.connect(transport as Transport)
+          return client
+        }),
+        (connected) => Effect.promise(() => connected.close()),
+      )
+
+      const context = yield* Effect.promise(() =>
+        client.callTool({ name: "getReviewContext", arguments: {} }),
+      )
+      const search = yield* Effect.promise(() =>
+        client.callTool({ name: "searchRepository", arguments: { query: "linkedNeedle" } }),
+      )
+      const file = yield* Effect.promise(() =>
+        client.callTool({ name: "readRepositoryFile", arguments: { path: "src/app.ts" } }),
+      )
+
+      expect(toolText(context)).toContain('"kind":"repositoryComparison"')
+      expect(toolText(context)).toContain('"title":"v1.0.0...v1.1.0"')
+      expect(toolText(search)).toContain(`"revision":"${comparisonTarget.headSha}"`)
+      expect(toolText(search)).toContain('"source":"isolated-worktree"')
+      expect(toolText(file)).toContain("linkedNeedle")
     }).pipe(Effect.provide(testLayer)),
   )
 

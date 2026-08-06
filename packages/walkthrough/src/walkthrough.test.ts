@@ -15,6 +15,7 @@ import {
   AgentProviderOperationError,
   AgentRuntimeRequirement,
   AgentSessionSupport,
+  InvalidAgentProviderResponseError,
   type AgentProviderRegistration,
   AgentPolicyEnforcementError,
   UnsupportedAgentCapabilityError,
@@ -36,6 +37,7 @@ import {
 import {
   WalkthroughGenerationDetails,
   type WalkthroughHunkDigest,
+  WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
 import { WalkthroughRouting, WalkthroughService } from "./walkthrough"
 
@@ -189,7 +191,10 @@ const invalidCoverageOutput = JSON.stringify({
 const primaryProviderId = AgentProviderId.make("primary")
 const fallbackProviderId = AgentProviderId.make("fallback")
 
-const providerManifest = (providerId: AgentProviderId) =>
+const providerManifest = (
+  providerId: AgentProviderId,
+  modelIds: readonly AgentModelId[] = [AgentModelId.make(`${providerId}-balanced`)],
+) =>
   AgentProviderManifest.make({
     descriptor: AgentProviderDescriptor.make({
       id: providerId,
@@ -197,16 +202,16 @@ const providerManifest = (providerId: AgentProviderId) =>
       description: "Walkthrough fixture",
       homepage: null,
     }),
-    models: [
+    models: modelIds.map((modelId) =>
       AgentModelDescriptor.make({
-        id: AgentModelId.make(`${providerId}-balanced`),
+        id: modelId,
         displayName: "Balanced",
         capabilities: ["walkthrough"],
         quality: "balanced",
       }),
-    ],
+    ),
     defaults: AgentProviderDefaults.make({
-      walkthroughModel: AgentModelId.make(`${providerId}-balanced`),
+      walkthroughModel: modelIds[0] ?? null,
       reviewThreadModel: null,
     }),
     requirements: [
@@ -218,6 +223,20 @@ const providerManifest = (providerId: AgentProviderId) =>
     }),
     session: AgentSessionSupport.make({ mode: "none" }),
   })
+
+const readyWalkthroughRegistration = (
+  providerId: AgentProviderId,
+  modelIds: readonly AgentModelId[],
+  execute: NonNullable<AgentProviderRegistration["walkthrough"]>["execute"],
+): AgentProviderRegistration => ({
+  manifest: providerManifest(providerId, modelIds),
+  walkthrough: {
+    probe: Effect.succeed(
+      AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
+    ),
+    execute,
+  },
+})
 
 const makeLayer = (outputs: readonly string[]) => {
   const calls: WalkthroughRequest[] = []
@@ -320,6 +339,174 @@ describe("WalkthroughService", () => {
 
       expect(walkthrough.summary).toContain("Review app entry")
       expect(calls).toHaveLength(2)
+    }),
+  )
+
+  it.effect("Auto retries invalid output on the same model before advancing models", () =>
+    Effect.gen(function* () {
+      const firstModel = AgentModelId.make("primary-first")
+      const secondModel = AgentModelId.make("primary-second")
+      const calls: AgentModelId[] = []
+      const registration = readyWalkthroughRegistration(
+        primaryProviderId,
+        [firstModel, secondModel],
+        (request) =>
+          Effect.sync(() => {
+            calls.push(request.model)
+            return WalkthroughResult.make({
+              text: request.model === firstModel ? "not json" : validOutput,
+            })
+          }),
+      )
+
+      const walkthrough = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(Effect.provide(serviceLayer([registration], { mode: "auto" }, [primaryProviderId])))
+
+      expect(walkthrough.title).toBe("Review path")
+      expect(calls).toEqual([firstModel, firstModel, secondModel])
+    }),
+  )
+
+  it.effect("Auto retries empty output but advances immediately after a process failure", () =>
+    Effect.gen(function* () {
+      const emptyModel = AgentModelId.make("primary-empty")
+      const failingModel = AgentModelId.make("primary-failing")
+      const fallbackModel = AgentModelId.make("fallback-balanced")
+      const calls: string[] = []
+      const primary = readyWalkthroughRegistration(
+        primaryProviderId,
+        [emptyModel, failingModel],
+        (request) => {
+          calls.push(`${primaryProviderId}:${request.model}`)
+          return request.model === emptyModel
+            ? Effect.fail(
+                InvalidAgentProviderResponseError.make({
+                  providerId: primaryProviderId,
+                  capability: "walkthrough",
+                  reason: "Provider returned empty output",
+                }),
+              )
+            : Effect.fail(
+                AgentProviderOperationError.make({
+                  providerId: primaryProviderId,
+                  capability: "walkthrough",
+                  reason: "primary process failed",
+                }),
+              )
+        },
+      )
+      const fallback = readyWalkthroughRegistration(
+        fallbackProviderId,
+        [fallbackModel],
+        (request) =>
+          Effect.sync(() => {
+            calls.push(`${fallbackProviderId}:${request.model}`)
+            return WalkthroughResult.make({ text: validOutput })
+          }),
+      )
+
+      const walkthrough = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(
+        Effect.provide(
+          serviceLayer([primary, fallback], { mode: "auto" }, [
+            primaryProviderId,
+            fallbackProviderId,
+          ]),
+        ),
+      )
+
+      expect(walkthrough.generation).toEqual(generationInput.generation)
+      expect(calls).toEqual([
+        `${primaryProviderId}:${emptyModel}`,
+        `${primaryProviderId}:${emptyModel}`,
+        `${primaryProviderId}:${failingModel}`,
+        `${fallbackProviderId}:${fallbackModel}`,
+      ])
+    }),
+  )
+
+  it.effect("an explicit provider retries invalid output once without changing candidates", () =>
+    Effect.gen(function* () {
+      const selectedModel = AgentModelId.make("primary-selected")
+      const unusedModel = AgentModelId.make("primary-unused")
+      const calls: string[] = []
+      const primary = readyWalkthroughRegistration(
+        primaryProviderId,
+        [selectedModel, unusedModel],
+        (request) =>
+          Effect.sync(() => {
+            calls.push(`${primaryProviderId}:${request.model}`)
+            return WalkthroughResult.make({ text: invalidCoverageOutput })
+          }),
+      )
+      const fallbackModel = AgentModelId.make("fallback-balanced")
+      const fallback = readyWalkthroughRegistration(
+        fallbackProviderId,
+        [fallbackModel],
+        (request) =>
+          Effect.sync(() => {
+            calls.push(`${fallbackProviderId}:${request.model}`)
+            return WalkthroughResult.make({ text: validOutput })
+          }),
+      )
+
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(
+        Effect.provide(
+          serviceLayer([primary, fallback], { mode: "provider", providerId: primaryProviderId }, [
+            fallbackProviderId,
+            primaryProviderId,
+          ]),
+        ),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(WalkthroughValidationError)
+      expect(calls).toEqual([
+        `${primaryProviderId}:${selectedModel}`,
+        `${primaryProviderId}:${selectedModel}`,
+      ])
+    }),
+  )
+
+  it.effect("Auto preserves the final substantive error past unavailable providers", () =>
+    Effect.gen(function* () {
+      const calls: string[] = []
+      const primaryModel = AgentModelId.make("primary-balanced")
+      const primary = readyWalkthroughRegistration(primaryProviderId, [primaryModel], (request) =>
+        Effect.sync(() => {
+          calls.push(`${primaryProviderId}:${request.model}`)
+          return WalkthroughResult.make({ text: invalidCoverageOutput })
+        }),
+      )
+      const unavailableFallback: AgentProviderRegistration = {
+        manifest: providerManifest(fallbackProviderId),
+      }
+
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate(generationInput)
+      }).pipe(
+        Effect.provide(
+          serviceLayer([primary, unavailableFallback], { mode: "auto" }, [
+            primaryProviderId,
+            fallbackProviderId,
+          ]),
+        ),
+        Effect.flip,
+      )
+
+      expect(error).toBeInstanceOf(WalkthroughValidationError)
+      expect(calls).toEqual([
+        `${primaryProviderId}:primary-balanced`,
+        `${primaryProviderId}:primary-balanced`,
+      ])
     }),
   )
 
@@ -527,7 +714,7 @@ describe("WalkthroughService", () => {
   it.effect("FUN-136 AC: interruption does not trigger automatic fallback", () =>
     Effect.gen(function* () {
       let interrupted = false
-      let fallbackCalls = 0
+      const calls: AgentProviderId[] = []
       const primary: AgentProviderRegistration = {
         manifest: providerManifest(primaryProviderId),
         walkthrough: {
@@ -535,7 +722,10 @@ describe("WalkthroughService", () => {
             AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" }),
           ),
           execute: () =>
-            Effect.never.pipe(Effect.ensuring(Effect.sync(() => void (interrupted = true)))),
+            Effect.sync(() => calls.push(primaryProviderId)).pipe(
+              Effect.flatMap(() => Effect.never),
+              Effect.ensuring(Effect.sync(() => void (interrupted = true))),
+            ),
         },
       }
       const fallback: AgentProviderRegistration = {
@@ -546,7 +736,7 @@ describe("WalkthroughService", () => {
           ),
           execute: () =>
             Effect.sync(() => {
-              fallbackCalls += 1
+              calls.push(fallbackProviderId)
               return WalkthroughResult.make({ text: validOutput })
             }),
         },
@@ -563,7 +753,7 @@ describe("WalkthroughService", () => {
       yield* Effect.yieldNow()
       yield* Fiber.interrupt(fiber)
       expect(interrupted).toBe(true)
-      expect(fallbackCalls).toBe(0)
+      expect(calls).toEqual([primaryProviderId])
     }),
   )
 

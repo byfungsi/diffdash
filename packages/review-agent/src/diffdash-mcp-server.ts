@@ -4,7 +4,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { DiffDashReviewMcpTool } from "@diffdash/agent-provider"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { type AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
-import { HostedReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshot,
+  RepositoryComparisonSnapshot,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
@@ -588,7 +592,7 @@ const createRunServer = (
   )
   register(
     DiffDashReviewMcpTool.searchRepository,
-    "Fixed-string search of the isolated worktree at the immutable pull-request head revision.",
+    "Fixed-string search of the isolated worktree at the immutable review head revision.",
     z.object({
       query: z.string().min(1).max(1024),
       path: z.string().min(1).optional(),
@@ -600,7 +604,7 @@ const createRunServer = (
   )
   register(
     DiffDashReviewMcpTool.readRepositoryFile,
-    "Read one file from the isolated worktree at the immutable pull-request head revision.",
+    "Read one file from the isolated worktree at the immutable review head revision.",
     z.object({ path: z.string().min(1).max(4096) }),
     ({ path }) => readLinkedRepositoryFile(context, processes, path),
   )
@@ -721,8 +725,10 @@ const searchLinkedRepository = (
   caseSensitive: boolean,
   maxResults: number,
 ): Effect.Effect<Envelope> => {
-  if (!(context.snapshot instanceof HostedReviewSnapshot)) {
-    return Effect.succeed(unavailable("Exact repository search is available for hosted reviews"))
+  if (!hasExactRepositoryWorkspace(context.snapshot)) {
+    return Effect.succeed(
+      unavailable("Exact repository search is available for immutable repository reviews"),
+    )
   }
   if (context.localPath === null) {
     return Effect.succeed(
@@ -795,8 +801,10 @@ const readLinkedRepositoryFile = (
   processes: ProcessRunner,
   path: string,
 ): Effect.Effect<Envelope> => {
-  if (!(context.snapshot instanceof HostedReviewSnapshot)) {
-    return Effect.succeed(unavailable("Exact repository reads are available for hosted reviews"))
+  if (!hasExactRepositoryWorkspace(context.snapshot)) {
+    return Effect.succeed(
+      unavailable("Exact repository reads are available for immutable repository reviews"),
+    )
   }
   if (context.localPath === null) {
     return Effect.succeed(
@@ -905,18 +913,46 @@ const boundedToolResult = (value: unknown, maxBytes = DEFAULT_TOOL_OUTPUT_BYTES)
 }
 
 const reviewContext = (snapshot: ReviewSnapshot) => {
-  const hosted = snapshot instanceof HostedReviewSnapshot
+  if (snapshot instanceof HostedReviewSnapshot) {
+    return {
+      status: "available" as const,
+      data: {
+        kind: "hosted",
+        reviewKey: snapshot.reviewKey,
+        baseRevision: snapshot.baseRevision,
+        headRevision: snapshot.headRevision,
+        title: snapshot.detail.summary.title,
+      },
+    }
+  }
+  if (snapshot instanceof RepositoryComparisonSnapshot) {
+    return {
+      status: "available" as const,
+      data: {
+        kind: "repositoryComparison",
+        reviewKey: snapshot.reviewKey,
+        baseRevision: snapshot.baseRevision,
+        headRevision: snapshot.headRevision,
+        title: snapshot.detail.title,
+      },
+    }
+  }
   return {
     status: "available" as const,
     data: {
-      kind: hosted ? "hosted" : "local",
+      kind: "local",
       reviewKey: snapshot.reviewKey,
       baseRevision: snapshot.baseRevision,
       headRevision: snapshot.headRevision,
-      title: hosted ? snapshot.detail.summary.title : snapshot.detail.title,
+      title: snapshot.detail.title,
     },
   }
 }
+
+const hasExactRepositoryWorkspace = (
+  snapshot: ReviewSnapshot,
+): snapshot is HostedReviewSnapshot | RepositoryComparisonSnapshot =>
+  snapshot instanceof HostedReviewSnapshot || snapshot instanceof RepositoryComparisonSnapshot
 
 const bearerToken = (authorization: string | undefined) => {
   if (authorization === undefined || !authorization.startsWith("Bearer ")) return null

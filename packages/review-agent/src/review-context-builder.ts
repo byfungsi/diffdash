@@ -1,7 +1,11 @@
 import { REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA } from "@diffdash/agent-provider/review-output"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import type { ReviewAgentArtifact, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
-import { HostedReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshot,
+  RepositoryComparisonSnapshot,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import type { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
 import type {
   ReviewThread,
@@ -181,6 +185,21 @@ const reviewMetadata = (snapshot: ReviewSnapshot) => {
       baseRef: summary.base.name,
       headRef: summary.head.name,
       url: summary.url,
+    }
+  }
+  if (snapshot instanceof RepositoryComparisonSnapshot) {
+    const target = snapshot.detail.target
+    return {
+      ...identity,
+      kind: "repositoryComparison",
+      providerId: target.repository.providerId,
+      repository: `${target.repository.namespace}/${target.repository.name}`,
+      title: snapshot.detail.title,
+      baseRef: target.baseRef,
+      baseSha: target.baseSha,
+      mergeBaseSha: target.mergeBaseSha,
+      headRef: target.headRef,
+      headSha: target.headSha,
     }
   }
   return {
@@ -494,6 +513,6 @@ const RESPONSE_SCHEMA = JSON.stringify(REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
 const MCP_INSTRUCTIONS = `DiffDash provides getReviewContext, getChangedFiles, searchReviewDiff, getDiffHunk, getDiffFile, searchRepository, readRepositoryFile, getThreadContext, getOlderThreadMessages, getPriorArtifact, and getWalkthroughContext.
 Use getChangedFiles with offset and limit to page through the complete, deterministically ordered changed-file inventory.
 Use searchReviewDiff for fixed-string discovery across immutable parsed hunk lines, optionally scoped to a path. Use getDiffHunk or getDiffFile when exact surrounding patch text is needed.
-For linked pull-request reviews, use searchRepository and readRepositoryFile to inspect unchanged source at the exact review head. If they are unavailable, do not substitute default-branch GitHub search for revision-correct evidence.
+For hosted and repository-comparison reviews, use searchRepository and readRepositoryFile to inspect unchanged source at the exact review head. If they are unavailable, do not substitute default-branch provider search for revision-correct evidence.
 A DIFFDASH_HUNK_SLICE marker means the current anchor hunk was hard-bounded; page through getDiffHunk before making claims about omitted lines.
 Tools expand available context; they must not be used to silently classify changed files or hunks as irrelevant.`

@@ -1,7 +1,11 @@
 import type { GitProviderDescriptor } from "@diffdash/domain/git-provider"
 import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { Result, useAtomValue } from "@effect-atom/atom-react"
-import { hostedReviewManifestAtom, localReviewManifestAtom } from "./atoms"
+import {
+  hostedReviewManifestAtom,
+  localReviewManifestAtom,
+  repositoryComparisonManifestAtom,
+} from "./atoms"
 import {
   type ReviewManifestLoadState,
   type ReviewSelectionProjection,
@@ -30,11 +34,13 @@ export const useReviewSelection = (
   const sourceKeys = reviewSelectionSourceKeys(target)
   const hostedResult = useAtomValue(hostedReviewManifestAtom(sourceKeys.hosted))
   const localResult = useAtomValue(localReviewManifestAtom(sourceKeys.local))
+  const comparisonResult = useAtomValue(repositoryComparisonManifestAtom(sourceKeys.comparison))
 
   return projectReviewSelection({
     target,
     hosted: manifestLoadState(hostedResult),
     local: manifestLoadState(localResult),
+    comparison: manifestLoadState(comparisonResult),
     providers,
   })
 }

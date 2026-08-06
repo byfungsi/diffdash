@@ -574,6 +574,130 @@ test("opens local working tree review from CLI argument", async ({
   }
 })
 
+test("falls back from invalid Claude walkthrough output to Codex in Auto mode", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "auto")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_WALKTHROUGH_INVALID: "1",
+      FAKE_REPO_ROOT: localRepo,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+
+    await expect(window.getByText("Review focus")).toBeVisible()
+    await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    await expect(window.getByText("Walkthrough unavailable")).toBeHidden()
+  } finally {
+    await app.close()
+  }
+})
+
+test("reports an explicit Claude walkthrough failure through contextBridge and clipboard", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
+      FAKE_REPO_ROOT: localRepo,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+
+    await expect(
+      window
+        .getByText(
+          "The AI provider stopped before finishing the walkthrough. Check sign-in, connection, and quota, then retry.",
+        )
+        .first(),
+    ).toBeVisible()
+    await window.getByRole("button", { name: "Copy error details" }).first().click()
+    await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
+
+    const report = await app.evaluate(({ clipboard }) => clipboard.readText())
+    expect(report).toContain("Error code: AgentProviderExitError")
+    expect(report).toContain("Operation: localWalkthroughs:generate")
+    expect(report).toContain("Provider tag: claude")
+    expect(report).toContain("Cause tag: ProcessExitError")
+    expect(report).toContain("Exit code: 9")
+    expect(report).toContain("Reason: Authentication or authorization failure reported.")
+    expect(report).toContain("Stderr: Authentication or authorization failure reported.")
+    expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
+    expect(report).not.toContain("Operation: unknown")
+    for (const privateValue of [
+      "secret-repository",
+      "e2e-provider-secret",
+      "private prompt body",
+      "hunter2",
+      "cloud-secret",
+      "Unlabelled private prompt sentence",
+      "unchanged private diff context",
+      "private.ts",
+      "--print",
+    ]) {
+      expect(report).not.toContain(privateValue)
+    }
+  } finally {
+    await app.close()
+  }
+})
+
 test("opens the current project Reviews ribbon from the versioned CLI command", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -832,6 +956,106 @@ test("forwards a CLI command to the running DiffDash instance", async ({
   } finally {
     await app.close()
   }
+})
+
+test("opens and forwards immutable repository comparisons through Electron", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(90_000)
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const remoteRepo = testInfo.outputPath("comparison.git")
+  const sourceRepo = testInfo.outputPath("comparison-source")
+  const worktreePool = testInfo.outputPath("worktree-pool")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
+  const revisions = await installComparisonRepository(sourceRepo, remoteRepo)
+
+  const appEnvironment = {
+    ...process.env,
+    DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
+    DIFFDASH_E2E_FAKE_GIT_REMOTE: remoteRepo,
+    DIFFDASH_E2E_HIDDEN: "1",
+    DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
+    FAKE_USE_REAL_GIT: "1",
+    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    REAL_GIT_PATH: "/usr/bin/git",
+    XDG_CONFIG_HOME: xdgConfigHome,
+  }
+  const launchArgs = [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`]
+  let app = await electron.launch({ args: launchArgs, env: appEnvironment })
+
+  try {
+    const setupWindow = await app.firstWindow()
+    await dismissOnboardingIfPresent(setupWindow)
+    await app.close()
+
+    app = await electron.launch({
+      args: [
+        ...launchArgs,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        "comparison-base",
+        "comparison-head",
+      ],
+      env: appEnvironment,
+    })
+    const window = await app.firstWindow()
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      "comparison-base...comparison-head",
+    )
+    await expect(window.getByText("src/comparison.ts").first()).toBeVisible()
+    await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
+
+    const electronExecutable = execFileSync(process.execPath, ["-p", "require('electron')"], {
+      cwd: desktopRoot,
+      encoding: "utf8",
+    }).trim()
+    execFileSync(
+      electronExecutable,
+      [
+        ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+        ...launchArgs,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        revisions.base,
+        revisions.head,
+      ],
+      { env: appEnvironment, stdio: "ignore", timeout: 10_000 },
+    )
+
+    await expect(window.locator("[data-review-editor-header]")).toContainText(
+      `${revisions.base}...${revisions.head}`,
+    )
+    await expect
+      .poll(async () => ({
+        alerts: await window.getByRole("alert").allTextContents(),
+        notices: await window.locator("output").allTextContents(),
+        workspaceStates: readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+          .workspaceStates.length,
+      }))
+      .toEqual({ alerts: [], notices: [], workspaceStates: 1 })
+  } finally {
+    await app.close().catch(() => undefined)
+  }
+
+  const persisted = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+  expect(persisted.workspaceStates).toHaveLength(1)
+  expect(
+    JSON.parse(String(persisted.workspaceStates[0]?.selected_review_target_json)) as unknown,
+  ).toMatchObject({
+    kind: "repositoryComparison",
+    baseSha: revisions.base,
+    headSha: revisions.head,
+    mergeBaseSha: revisions.base,
+  })
 })
 
 test("shows a reloadable Electron fallback when the renderer cannot load", async ({
@@ -1209,6 +1433,24 @@ const installPullRequestRepository = async (source: string, remote: string) => {
   return { baseSha, headSha, remote }
 }
 
+const installComparisonRepository = async (source: string, remote: string) => {
+  await mkdir(join(source, "src"), { recursive: true })
+  realGit(source, "init")
+  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'base'\n")
+  realGit(source, "add", ".")
+  commit(source, "comparison base")
+  const base = realGit(source, "rev-parse", "HEAD")
+  realGit(source, "tag", "comparison-base")
+  await writeFile(join(source, "src", "comparison.ts"), "export const value = 'head'\n")
+  realGit(source, "add", ".")
+  commit(source, "comparison head")
+  const head = realGit(source, "rev-parse", "HEAD")
+  realGit(source, "tag", "comparison-head")
+  realGit(process.cwd(), "clone", "--bare", source, remote)
+  realGit(source, "remote", "add", "origin", remote)
+  return { base, head }
+}
+
 const commit = (cwd: string, message: string) =>
   realGit(
     cwd,
@@ -1440,7 +1682,24 @@ if (args.includes("stream-json")) {
   process.exit(0)
 }
 
-if (args[0] === "--print") {
+if (args.includes("--print")) {
+  if (process.env.FAKE_CLAUDE_WALKTHROUGH_FAILURE === "1") {
+    console.error([
+      "Claude authentication failed at /Users/example/secret-repository",
+      "Authorization: Bearer e2e-provider-secret",
+      "password=hunter2",
+      "AWS_SECRET_ACCESS_KEY=cloud-secret",
+      "prompt: private prompt body",
+      "diff --git a/private.ts b/private.ts",
+      "Unlabelled private prompt sentence",
+      " unchanged private diff context"
+    ].join("\\n"))
+    process.exit(9)
+  }
+  if (process.env.FAKE_CLAUDE_WALKTHROUGH_INVALID === "1") {
+    console.log("not valid walkthrough JSON")
+    process.exit(0)
+  }
   console.log(JSON.stringify({
     title: "Review path",
     summary: "Review the app entry point first.",

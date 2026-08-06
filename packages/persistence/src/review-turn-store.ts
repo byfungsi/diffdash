@@ -33,6 +33,7 @@ import {
   ReviewThreadMessageStatus,
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
+import { makeRepositoryComparisonReviewKey } from "@diffdash/domain/repository-comparison"
 import { Context, Effect, Layer, Schema } from "effect"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
@@ -585,6 +586,15 @@ const canonicalTarget = (
     return {
       repoId: makeHostedRepositoryKey(target.review.repository),
       reviewKey: ReviewKey.make(makeHostedReviewKey(target.review)),
+    }
+  }
+  if (target.kind === "repositoryComparison") {
+    if (repository.provider === "local") {
+      throw targetError("A repository comparison cannot use a local-only repository identity.")
+    }
+    return {
+      repoId: makeHostedRepositoryKey(target.repository),
+      reviewKey: makeRepositoryComparisonReviewKey(target),
     }
   }
   if (repository.local_path === null) throw targetError("A local review requires a local checkout.")

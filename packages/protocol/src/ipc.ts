@@ -22,6 +22,7 @@ import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import {
   ReviewThread,
@@ -52,12 +53,17 @@ import { LinkRepositoryCheckoutRequest } from "./repository-link"
 import {
   AcquireHostedReviewSnapshotRequest,
   AcquireLocalReviewSnapshotRequest,
+  AcquireRepositoryComparisonSnapshotRequest,
+  OpenRepositoryComparisonFileRequest,
   REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
   REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
   ReviewSnapshotPageRequest,
   ReviewSnapshotPageResponse,
   ReviewSnapshotSearchRequest,
   ReviewSnapshotSearchResponse,
+  ResolvedRepositoryComparison,
+  ResolveRepositoryComparisonRequest,
+  RepositoryComparisonWalkthroughRequest,
 } from "./review-snapshot"
 import {
   AddReviewThreadUserMessageRequest,
@@ -69,8 +75,10 @@ import { TransportError, transportError } from "./transport-error"
 import {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
+  RepositoryComparisonViewedFilesRequest,
   SetHostedViewedFileRequest,
   SetLocalViewedFileRequest,
+  SetRepositoryComparisonViewedFileRequest,
   ViewedFileRecord,
 } from "./viewed-files"
 
@@ -171,6 +179,11 @@ export const InvokeContract = {
     OpenHostedReviewFileRequest,
     EmptyResponse,
   ),
+  [InvokeChannel.appOpenRepositoryComparisonFile]: defineInvoke(
+    InvokeChannel.appOpenRepositoryComparisonFile,
+    OpenRepositoryComparisonFileRequest,
+    EmptyResponse,
+  ),
   [InvokeChannel.appStateGet]: defineInvoke(InvokeChannel.appStateGet, EmptyRequest, AppState),
   [InvokeChannel.appStateUpdate]: defineInvoke(
     InvokeChannel.appStateUpdate,
@@ -217,6 +230,12 @@ export const InvokeContract = {
     Schema.Struct({ localPath: Schema.String, branchName: NullableString }),
     LocalReviewTarget,
   ),
+  [InvokeChannel.resolveRepositoryComparison]: defineInvoke(
+    InvokeChannel.resolveRepositoryComparison,
+    ResolveRepositoryComparisonRequest,
+    ResolvedRepositoryComparison,
+    { maxRequestBytes: 64 * KIB, maxResponseBytes: 64 * KIB },
+  ),
   [InvokeChannel.acquireHostedReviewSnapshot]: defineInvoke(
     InvokeChannel.acquireHostedReviewSnapshot,
     AcquireHostedReviewSnapshotRequest,
@@ -227,6 +246,12 @@ export const InvokeContract = {
     InvokeChannel.acquireLocalReviewSnapshot,
     AcquireLocalReviewSnapshotRequest,
     LocalReviewSnapshotManifest,
+    { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
+  ),
+  [InvokeChannel.acquireRepositoryComparisonSnapshot]: defineInvoke(
+    InvokeChannel.acquireRepositoryComparisonSnapshot,
+    AcquireRepositoryComparisonSnapshotRequest,
+    RepositoryComparisonSnapshotManifest,
     { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
   ),
   [InvokeChannel.getReviewSnapshotPage]: defineInvoke(
@@ -255,6 +280,16 @@ export const InvokeContract = {
   [InvokeChannel.getLocalWalkthrough]: defineInvoke(
     InvokeChannel.getLocalWalkthrough,
     Schema.Struct({ target: LocalReviewTarget, baseSha: Schema.String, headSha: Schema.String }),
+    Schema.NullOr(StoredWalkthrough),
+  ),
+  [InvokeChannel.generateRepositoryComparisonWalkthrough]: defineInvoke(
+    InvokeChannel.generateRepositoryComparisonWalkthrough,
+    RepositoryComparisonWalkthroughRequest,
+    StoredWalkthrough,
+  ),
+  [InvokeChannel.getRepositoryComparisonWalkthrough]: defineInvoke(
+    InvokeChannel.getRepositoryComparisonWalkthrough,
+    RepositoryComparisonWalkthroughRequest,
     Schema.NullOr(StoredWalkthrough),
   ),
   [InvokeChannel.drainNavigationCommands]: defineInvoke(
@@ -389,6 +424,16 @@ export const InvokeContract = {
   [InvokeChannel.setLocalViewedFile]: defineInvoke(
     InvokeChannel.setLocalViewedFile,
     SetLocalViewedFileRequest,
+    EmptyResponse,
+  ),
+  [InvokeChannel.listRepositoryComparisonViewedFiles]: defineInvoke(
+    InvokeChannel.listRepositoryComparisonViewedFiles,
+    RepositoryComparisonViewedFilesRequest,
+    Schema.Array(ViewedFileRecord),
+  ),
+  [InvokeChannel.setRepositoryComparisonViewedFile]: defineInvoke(
+    InvokeChannel.setRepositoryComparisonViewedFile,
+    SetRepositoryComparisonViewedFileRequest,
     EmptyResponse,
   ),
   [InvokeChannel.generateWalkthrough]: defineInvoke(

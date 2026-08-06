@@ -7,6 +7,7 @@ usage() {
     '       diffdash install [path]' \
     '       diffdash pr [pr-number]' \
     '       diffdash diff [branch-name]' \
+    '       diffdash compare <base> <head> [--repository=<repository>]' \
     '       diffdash repair'
 }
 

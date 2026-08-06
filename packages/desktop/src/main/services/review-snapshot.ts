@@ -1,8 +1,10 @@
 import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
   ReviewSnapshot,
 } from "@diffdash/domain/review-context"
 import {
@@ -11,6 +13,10 @@ import {
 } from "@diffdash/domain/review-identity"
 import { Clock, Context, Effect, Layer, Schema } from "effect"
 import { ReviewContextService, type ReviewContextError } from "./review-context"
+import {
+  RepositoryComparisonSource,
+  type RepositoryComparisonSourceError,
+} from "./repository-comparison-source"
 
 /** Default explicit memory and expiry bounds for immutable main-process snapshots. */
 const DEFAULT_REVIEW_SNAPSHOT_CACHE_CONFIG = {
@@ -62,6 +68,9 @@ export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshot
     readonly acquireLocal: (
       target: LocalReviewTarget,
     ) => Effect.Effect<LocalReviewSnapshot, ReviewContextError>
+    readonly acquireComparison: (
+      target: RepositoryComparisonTarget,
+    ) => Effect.Effect<RepositoryComparisonSnapshot, RepositoryComparisonSourceError>
     readonly get: (
       snapshotId: ReviewSnapshotIdType,
     ) => Effect.Effect<ReviewSnapshot, ReviewSnapshotUnavailableError>
@@ -77,6 +86,7 @@ export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshot
       Effect.gen(function* () {
         validateConfig(config)
         const contexts = yield* ReviewContextService
+        const comparisons = yield* RepositoryComparisonSource
         const entries = new Map<ReviewSnapshotIdType, SnapshotEntry>()
         const tombstones = new Map<ReviewSnapshotIdType, SnapshotTombstone>()
         const tombstoneCapacity = config.tombstoneCapacity ?? config.capacity * 4
@@ -157,6 +167,14 @@ export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshot
           return put(snapshot, now)
         })
 
+        const acquireComparison = Effect.fn("ReviewSnapshotService.acquireComparison")(function* (
+          target: RepositoryComparisonTarget,
+        ) {
+          const snapshot = yield* comparisons.acquire(target)
+          const now = yield* Clock.currentTimeMillis
+          return put(snapshot, now)
+        })
+
         const get = Effect.fn("ReviewSnapshotService.get")(function* (
           snapshotId: ReviewSnapshotIdType,
         ) {
@@ -175,6 +193,7 @@ export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshot
         })
 
         return ReviewSnapshotService.of({
+          acquireComparison,
           acquireHosted,
           acquireLocal,
           get,

@@ -268,6 +268,24 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(persistedReviewDisclosure).toBeVisible()
     await persistedReviewDisclosure.click()
     await expect(restartedWindow.getByText("Fixture review response")).toBeVisible()
+
+    await app.close()
+    app = await electron.launch({
+      ...launchOptions,
+      args: [
+        ...launchOptions.args,
+        `--diffdash-cli-v1=${sourceRepo}`,
+        "--",
+        "compare",
+        revisions.base,
+        revisions.head,
+      ],
+    })
+    const comparisonWindow = await app.firstWindow()
+    await expect(comparisonWindow.locator("[data-review-editor-header]")).toContainText(
+      `${revisions.base}...${revisions.head}`,
+    )
+    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible()
   } finally {
     await app.close().catch(() => undefined)
   }
@@ -370,6 +388,7 @@ const installFixtureRepository = async (source: string, remote: string) => {
   commit(source, "fixture head")
   const head = execGit(source, "rev-parse", "HEAD")
   execGit(process.cwd(), "clone", "--bare", source, remote)
+  execGit(source, "remote", "add", "origin", "https://git.fixture.test/platform/backend/service")
   execGit(source, "push", remote, `HEAD:refs/merge-requests/73/head`)
   return { base, head }
 }

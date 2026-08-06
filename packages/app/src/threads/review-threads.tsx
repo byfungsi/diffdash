@@ -4,6 +4,7 @@ import {
   LocalReviewTarget,
   WorkingTreeComparison,
 } from "@diffdash/domain/local-review"
+import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import {
   REVIEW_AGENT_PROGRESS_LABELS,
   ReviewAgentProgress,
@@ -69,6 +70,12 @@ export type ReviewThreadScope =
       readonly baseRevision: string
       readonly headRevision: string
     }
+  | {
+      readonly kind: "repositoryComparison"
+      readonly target: RepositoryComparisonTarget
+      readonly baseRevision: string
+      readonly headRevision: string
+    }
 
 /** Optional orchestration seam for an agent API that is not currently exposed through preload. */
 export type ReviewThreadOrchestration = {
@@ -106,6 +113,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const headRevision = scope.headRevision
   const hostedReview = scope.kind === "hosted" ? scope.review : null
   const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
+  const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
   const localBranchName =
     scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
       ? scope.target.comparison.branchName
@@ -154,7 +162,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setError(null)
     try {
       const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(hostedReview, localTarget),
+        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
       )
       const loaded = await Promise.all(
         threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
@@ -192,7 +200,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     window.diffDash.reviewThreads
-      .list(reviewThreadTarget(hostedReview, localTarget))
+      .list(reviewThreadTarget(hostedReview, localTarget, comparisonTarget))
       .then((threads) =>
         Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
       )
@@ -210,7 +218,15 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     return () => {
       cancelled = true
     }
-  }, [available, baseRevision, headRevision, localTarget, localTargetKey, hostedReview])
+  }, [
+    available,
+    baseRevision,
+    comparisonTarget,
+    headRevision,
+    hostedReview,
+    localTarget,
+    localTargetKey,
+  ])
 
   const refreshThreadDetails = async (threadId: ReviewThreadId) => {
     try {
@@ -249,7 +265,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const pending = window.diffDash.reviewThreads.runAgent(
         RunReviewThreadAgentRequest.make({
           threadId,
-          target: reviewThreadTarget(hostedReview, localTarget),
+          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
           repoId: currentDetails.thread.repoId,
           reviewKey: currentDetails.thread.reviewKey,
           expectedBaseRevision: ReviewRevision.make(baseRevision),
@@ -263,7 +279,12 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       )
       captureAnalytics({
         event: "review_agent_completed",
-        reviewType: localTarget === null ? "pull_request" : "local_diff",
+        reviewType:
+          comparisonTarget !== null
+            ? "repository_comparison"
+            : localTarget === null
+              ? "pull_request"
+              : "local_diff",
       })
       setError(null)
     } catch (cause) {
@@ -293,7 +314,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     try {
       const created = await window.diffDash.reviewThreads.create(
         CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(hostedReview, localTarget),
+          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
           expectedBaseRevision: ReviewRevision.make(baseRevision),
           expectedHeadRevision: ReviewRevision.make(headRevision),
           anchor,
@@ -303,7 +324,12 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       setDetails((current) => sortThreadDetails([...current, created]))
       captureAnalytics({
         event: "review_thread_created",
-        reviewType: localTarget === null ? "pull_request" : "local_diff",
+        reviewType:
+          comparisonTarget !== null
+            ? "repository_comparison"
+            : localTarget === null
+              ? "pull_request"
+              : "local_diff",
       })
       setError(null)
       void runAgent(created.thread.id, created).catch(() => undefined)
@@ -904,10 +930,12 @@ const sortThreadDetails = (details: readonly ReviewThreadDetails[]) => {
 const reviewThreadTarget = (
   hostedReview: HostedReviewLocator | null,
   localTarget: LocalReviewTarget | null,
+  comparisonTarget: RepositoryComparisonTarget | null,
 ): ReviewThreadTarget => {
   if (hostedReview !== null) {
     return HostedReviewTarget.make({ kind: "hosted", review: hostedReview })
   }
+  if (comparisonTarget !== null) return comparisonTarget
   if (localTarget === null) throw new Error("Local review target is unavailable")
   return localTarget
 }

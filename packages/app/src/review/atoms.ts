@@ -9,9 +9,11 @@ import {
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import { HostedRepositoryRequest, HostedReviewRequest } from "@diffdash/protocol/hosted-git"
 import { fetchSchemaEffect } from "@/shared/effect-api"
@@ -20,6 +22,7 @@ import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
 const localReviewAtomKeyCodec = makeSchemaAtomKeyCodec(LocalReviewTarget)
 const hostedRepositoryAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositoryLocator)
 const hostedReviewAtomKeyCodec = makeSchemaAtomKeyCodec(HostedReviewLocator)
+const repositoryComparisonAtomKeyCodec = makeSchemaAtomKeyCodec(RepositoryComparisonTarget)
 
 /** Open hosted reviews for one repository. */
 export const pullRequestsAtom = Atom.family((key: string) =>
@@ -69,6 +72,20 @@ export const localReviewManifestAtom = Atom.family((key: string) =>
   ),
 )
 
+/** Immutable repository comparison manifest backed by one coherent main-process snapshot. */
+export const repositoryComparisonManifestAtom = Atom.family((key: string) =>
+  Atom.make(
+    Effect.gen(function* () {
+      const target = parseRepositoryComparisonAtomKey(key)
+      if (target === null) return null
+      return yield* fetchSchemaEffect(RepositoryComparisonSnapshotManifest, () =>
+        window.diffDash.reviewSnapshots.acquireRepositoryComparison(target),
+      )
+    }),
+    { initialValue: null },
+  ),
+)
+
 /** Refreshes the selected repository review list. */
 export const refreshPullRequestsAtom = Atom.fnSync((key: string, get) => {
   get.refresh(pullRequestsAtom(key))
@@ -90,6 +107,10 @@ export const pullRequestAtomKey = (
 export const serializeLocalReviewAtomKey = (target: LocalReviewTarget) =>
   localReviewAtomKeyCodec.encode(target)
 
+/** Stable immutable repository comparison atom key. */
+export const serializeRepositoryComparisonAtomKey = (target: RepositoryComparisonTarget) =>
+  repositoryComparisonAtomKeyCodec.encode(target)
+
 const parseLocalReviewAtomKey = (key: string) =>
   key.length === 0 ? null : localReviewAtomKeyCodec.decode(key)
 
@@ -98,3 +119,6 @@ const parseRepoAtomKey = (key: string) =>
 
 const parseHostedReviewAtomKey = (key: string) =>
   key.length === 0 ? null : hostedReviewAtomKeyCodec.decode(key)
+
+const parseRepositoryComparisonAtomKey = (key: string) =>
+  key.length === 0 ? null : repositoryComparisonAtomKeyCodec.decode(key)

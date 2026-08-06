@@ -1,5 +1,9 @@
+import { decodeTransportError } from "@diffdash/protocol/transport-error"
+
 /** Formats an unknown renderer failure for user-facing status text. */
 export const formatError = (error: unknown, fallback: string) => {
+  const transport = decodeTransportError(error)
+  if (transport !== null) return transport.message
   if (error instanceof Error && error.message.length > 0) {
     return cleanErrorMessage(error.message, fallback)
   }

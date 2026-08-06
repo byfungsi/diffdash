@@ -62,8 +62,8 @@ describe("WalkthroughMainHeader", () => {
           step={null}
           state={{
             status: "error",
-            message: "Check that Codex is signed in and online, then retry.",
-            report: "DiffDash walkthrough error\nError code: AgentProviderOperationError",
+            message: "Check that Claude is signed in and online, then retry.",
+            report: "DiffDash walkthrough error\nError code: AgentProviderExitError",
           }}
           onMarkComplete={() => undefined}
           onNextStep={() => undefined}
@@ -80,9 +80,9 @@ describe("WalkthroughMainHeader", () => {
 
     await expect
       .poll(() => writeText.mock.calls[0]?.[0])
-      .toBe("DiffDash walkthrough error\nError code: AgentProviderOperationError")
+      .toBe("DiffDash walkthrough error\nError code: AgentProviderExitError")
     await expect.poll(() => copyButton?.textContent).toContain("Copied")
-    expect(document.body.textContent).toContain("Check that Codex is signed in")
+    expect(document.body.textContent).toContain("Check that Claude is signed in")
     expect(document.querySelector(".truncate")).toBeNull()
   })
 

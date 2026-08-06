@@ -137,7 +137,12 @@ export const useViewedFileMutations = (
     })
     captureAnalytics({
       event: "review_file_viewed",
-      reviewType: selection.subject.kind === "hosted" ? "pull_request" : "local_diff",
+      reviewType:
+        selection.subject.kind === "hosted"
+          ? "pull_request"
+          : selection.subject.kind === "localDiff"
+            ? "local_diff"
+            : "repository_comparison",
       viewed,
     })
   }

@@ -157,10 +157,16 @@ describe("DatabaseService", () => {
         expect(workspaceTable.sql).toContain(
           "active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')",
         )
+        const localViewedFilesTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_viewed_files'",
+          ),
+        )
+        expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
       sqlite.close()
     }),
   )
@@ -337,7 +343,7 @@ describe("DatabaseService", () => {
       backupSqlite.close()
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
       const agentRunsSql = sqlite
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'")
         .pluck()
@@ -526,7 +532,7 @@ describe("DatabaseService", () => {
       backupSqlite.close()
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(11)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(12)
       expect(
         reopened
           .prepare("SELECT is_favorite FROM repos WHERE id = ?")
@@ -554,7 +560,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
       sqlite.close()
     }),
   )
@@ -574,7 +580,7 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(11)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
       sqlite.close()
     }),
   )

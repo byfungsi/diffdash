@@ -4,11 +4,13 @@ import {
   WALKTHROUGH_PROMPT_VERSION,
   walkthroughLocalDiffScope,
   walkthroughHostedReviewScope,
+  walkthroughRepositoryComparisonScope,
 } from "@diffdash/domain/walkthrough"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { WalkthroughService } from "@diffdash/walkthrough"
 import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
+import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicWalkthroughError } from "../walkthrough-public-error"
@@ -162,6 +164,76 @@ export const defineWalkthroughHandlers = (
         }),
       )
 
+      return run(
+        walkthroughStore.save({
+          ...cacheKey,
+          prNumber: null,
+          walkthrough,
+        }),
+      )
+    },
+    toPublicWalkthroughError,
+  )
+
+  handlers.define(
+    InvokeChannel.getRepositoryComparisonWalkthrough,
+    async (_event, { target }): Promise<StoredWalkthrough | null> => {
+      const snapshots = await run(ReviewSnapshotService)
+      const comparisons = await run(RepositoryComparisonSource)
+      const walkthroughStore = await run(WalkthroughStore)
+      const snapshot = await run(snapshots.acquireComparison(target))
+      const repo = await run(comparisons.repository(target))
+      return run(
+        walkthroughStore.get({
+          repoId: repo.id,
+          reviewKey: snapshot.reviewKey,
+          baseSha: snapshot.baseRevision,
+          headSha: snapshot.headRevision,
+          promptVersion: WALKTHROUGH_PROMPT_VERSION,
+        }),
+      )
+    },
+  )
+
+  handlers.define(
+    InvokeChannel.generateRepositoryComparisonWalkthrough,
+    async (_event, { target, regenerate }): Promise<StoredWalkthrough> => {
+      const snapshots = await run(ReviewSnapshotService)
+      const comparisons = await run(RepositoryComparisonSource)
+      const walkthroughStore = await run(WalkthroughStore)
+      const walkthroughService = await run(WalkthroughService)
+      const snapshot = await run(snapshots.acquireComparison(target))
+      const repo = await run(comparisons.repository(target))
+      const cacheKey = {
+        repoId: repo.id,
+        reviewKey: snapshot.reviewKey,
+        baseSha: snapshot.baseRevision,
+        headSha: snapshot.headRevision,
+        promptVersion: WALKTHROUGH_PROMPT_VERSION,
+      }
+      if (!regenerate) {
+        const cached = await run(walkthroughStore.get(cacheKey))
+        if (cached !== null) return cached
+      }
+      const promptInput = await run(
+        prepareWalkthroughPromptInput(
+          snapshot.parsedDiff.files,
+          walkthroughRepositoryComparisonScope(snapshot.reviewKey),
+        ),
+      )
+      const walkthrough = await run(
+        comparisons.useWorkspace(target, (workingDirectory) =>
+          walkthroughService.generate({
+            review: { kind: "repositoryComparison", comparison: snapshot.detail },
+            diff: promptInput.diff,
+            hunkDigest: promptInput.hunkDigest,
+            changedFileTree: promptInput.changedFileTree,
+            generation: promptInput.generation,
+            promptStats: promptInput.stats,
+            workingDirectory,
+          }),
+        ),
+      )
       return run(
         walkthroughStore.save({
           ...cacheKey,

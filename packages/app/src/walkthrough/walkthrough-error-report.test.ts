@@ -1,95 +1,138 @@
-import { transportError } from "@diffdash/protocol/transport-error"
+import { AgentProviderId } from "@diffdash/protocol/agent-providers"
+import { InvokeChannel } from "@diffdash/protocol/channels"
+import {
+  bridgeTransportError,
+  transportError,
+  TransportErrorDiagnosticTrace,
+} from "@diffdash/protocol/transport-error"
 import { describe, expect, it } from "vitest"
 import { walkthroughErrorPresentation } from "./walkthrough-error-report"
 
 const context = {
   action: "generate",
   appVersion: "0.5.0",
-  model: "gpt-5",
+  model: "claude-sonnet-5",
   occurredAt: "2026-08-05T12:34:56.000Z",
   platform: "MacIntel",
-  provider: "Codex",
-  reviewType: "Local changes",
+  provider: "Claude",
+  reviewSource: "repositoryComparison",
 } as const
 
 describe("walkthroughErrorPresentation", () => {
-  it("builds actionable provider guidance and a structured report", () => {
+  it("decodes bridge-safe provider diagnostics into an actionable report", () => {
+    const error = bridgeTransportError(
+      transportError(
+        "AgentProviderExitError",
+        "Provider claude exited before completing the walkthrough.",
+        InvokeChannel.generateRepositoryComparisonWalkthrough,
+        new TransportErrorDiagnosticTrace({
+          provider: AgentProviderId.make("claude"),
+          errorTag: "AgentProviderOperationError",
+          causeTag: "ProcessExitError",
+          exitCode: 9,
+          signal: null,
+          reason: "Authentication or authorization failure reported.",
+          stderr: "Provider diagnostics were redacted.",
+          stackFrames: ["at runClaude", "at generateWalkthrough"],
+        }),
+      ),
+    )
+
+    const result = walkthroughErrorPresentation({ message: error.message }, context)
+
+    expect(result.message).toBe(
+      "The AI provider stopped before finishing the walkthrough. Check sign-in, connection, and quota, then retry.",
+    )
+    expect(result.report).toContain("Review type: Repository comparison")
+    expect(result.report).toContain(
+      `Operation: ${InvokeChannel.generateRepositoryComparisonWalkthrough}`,
+    )
+    expect(result.report).toContain("Error code: AgentProviderExitError")
+    expect(result.report).toContain("Cause tag: ProcessExitError")
+    expect(result.report).toContain("Exit code: 9")
+    expect(result.report).toContain("- at runClaude")
+  })
+
+  it.each([
+    ["hosted", InvokeChannel.generateWalkthrough],
+    ["local", InvokeChannel.generateLocalWalkthrough],
+    ["repositoryComparison", InvokeChannel.generateRepositoryComparisonWalkthrough],
+  ] as const)("derives the expected %s generation operation for renderer fallbacks", (source, operation) => {
+    const result = walkthroughErrorPresentation(new Error("private renderer failure"), {
+      ...context,
+      reviewSource: source,
+    })
+
+    expect(result.report).toContain("Error code: WALKTHROUGH_RENDERER_ERROR")
+    expect(result.report).toContain(`Operation: ${operation}`)
+    expect(result.report).not.toContain("UNKNOWN_RENDERER_ERROR")
+    expect(result.report).not.toContain("Operation: unknown")
+    expect(result.report).not.toContain("private renderer failure")
+  })
+
+  it("uses explicit internal and malformed transport fallback codes", () => {
+    const internal = walkthroughErrorPresentation(
+      bridgeTransportError(transportError("INTERNAL_ERROR", "Safe generic failure")),
+      context,
+    )
+    const malformed = walkthroughErrorPresentation(
+      new Error("DIFFDASH_TRANSPORT_ERROR_V1:not-json"),
+      context,
+    )
+
+    expect(internal.report).toContain("Error code: WALKTHROUGH_INTERNAL_ERROR")
+    expect(malformed.report).toContain("Error code: WALKTHROUGH_TRANSPORT_ERROR")
+    expect(internal.report).not.toContain("Operation: unknown")
+    expect(malformed.report).not.toContain("Operation: unknown")
+  })
+
+  it("builds actionable provider guidance", () => {
     const result = walkthroughErrorPresentation(
       transportError(
         "AgentProviderOperationError",
         "Provider codex could not complete walkthrough generation.",
-        "localWalkthroughs:generate",
+        InvokeChannel.generateLocalWalkthrough,
       ),
-      context,
+      { ...context, provider: "Codex", reviewSource: "local" },
     )
 
     expect(result.message).toBe(
       "The configured AI provider could not generate this walkthrough. Check its setup, then retry.",
     )
-    expect(result.report).toBe(`DiffDash walkthrough error
-
-App version: 0.5.0
-Occurred at: 2026-08-05T12:34:56.000Z
-Review type: Local changes
-Action: Generate
-Configured route: Codex
-Configured model or quality: gpt-5
-Platform: MacIntel
-Operation: localWalkthroughs:generate
-Error code: AgentProviderOperationError
-Details: Provider codex could not complete walkthrough generation.`)
+    expect(result.report).toContain("Review type: Local changes")
+    expect(result.report).toContain("Error code: AgentProviderOperationError")
   })
 
-  it("gives invalid model output a clean recovery message", () => {
-    const result = walkthroughErrorPresentation(
+  it("distinguishes invalid and empty provider output guidance", () => {
+    const invalid = walkthroughErrorPresentation(
       transportError(
         "WalkthroughValidationError",
         "The AI agent returned a walkthrough that did not pass validation after retrying.",
-        "localWalkthroughs:generate",
       ),
       context,
     )
-
-    expect(result.message).toBe(
-      "The AI agent returned an invalid walkthrough. DiffDash retried once; retry or select another model.",
-    )
-  })
-
-  it("does not claim an empty provider response was retried", () => {
-    const result = walkthroughErrorPresentation(
+    const empty = walkthroughErrorPresentation(
       transportError(
         "InvalidAgentProviderResponseError",
         "Provider codex completed without usable walkthrough text.",
-        "localWalkthroughs:generate",
       ),
       context,
     )
 
-    expect(result.message).toBe(
+    expect(invalid.message).toContain("DiffDash retried once")
+    expect(empty.message).toBe(
       "The AI provider returned no usable walkthrough. Retry or select another model.",
     )
-    expect(result.message).not.toContain("retried")
-  })
-
-  it("never copies unknown renderer error details", () => {
-    const result = walkthroughErrorPresentation(
-      new Error("private failure at /Users/example/secret-repository"),
-      context,
-    )
-
-    expect(result.message).toContain("unexpected walkthrough error")
-    expect(result.report).toContain("Error code: UNKNOWN_RENDERER_ERROR")
-    expect(result.report).toContain("Details: DiffDash could not complete the request.")
-    expect(result.report).not.toContain("secret-repository")
+    expect(empty.message).not.toContain("retried")
   })
 
   it("normalizes copied context to bounded single lines", () => {
     const result = walkthroughErrorPresentation(
-      transportError("EXPECTED", "Safe reason", "localWalkthroughs:generate"),
-      { ...context, model: `model\n${"x".repeat(300)}` },
+      bridgeTransportError(transportError("EXPECTED", "Safe reason")),
+      { ...context, model: `model\n${"x".repeat(600)}` },
     )
 
     expect(result.report).not.toContain("model\n")
-    expect(result.report).not.toContain("x".repeat(201))
+    expect(result.report).not.toContain("x".repeat(501))
   })
 })

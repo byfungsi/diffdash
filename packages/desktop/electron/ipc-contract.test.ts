@@ -1,5 +1,6 @@
 import { AgentProviderId, AgentProviderOperationError } from "@diffdash/agent-provider"
 import { Repo } from "@diffdash/domain/repository"
+import { ProcessExitError } from "@diffdash/process"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
@@ -14,6 +15,7 @@ import {
 } from "@diffdash/protocol/ipc"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import {
+  decodeTransportError,
   TransportError,
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
@@ -124,12 +126,9 @@ describe("IPC contract", () => {
       typeof InvokeChannel.analyticsCapture
     >
 
-    await expect(transport.invoke(InvokeChannel.analyticsCapture, malformed)).rejects.toMatchObject(
-      {
-        _tag: "TransportError",
-        code: "INVALID_REQUEST",
-      },
-    )
+    await expectTransportError(transport.invoke(InvokeChannel.analyticsCapture, malformed), {
+      code: "INVALID_REQUEST",
+    })
     expect(ipc.invoke).not.toHaveBeenCalled()
   })
 
@@ -137,40 +136,44 @@ describe("IPC contract", () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
 
-    await expect(
+    await expectTransportError(
       transport.invoke(InvokeChannel.appOpenExternalUrl, { url: "x".repeat(300_000) }),
-    ).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" })
+      { code: "PAYLOAD_TOO_LARGE" },
+    )
     expect(ipc.invoke).not.toHaveBeenCalled()
   })
 
   it("rejects malformed host responses", async () => {
+    expect.hasAssertions()
     const ipc = rendererIpc({ _tag: "Success", value: { currentVersion: 42 } })
     const transport = createRendererTransport(ipc.api)
 
-    await expect(transport.invoke(InvokeChannel.updatesGetState, {})).rejects.toMatchObject({
+    await expectTransportError(transport.invoke(InvokeChannel.updatesGetState, {}), {
       _tag: "TransportError",
       code: "INVALID_RESPONSE",
     })
   })
 
   it("rejects oversized raw host responses before deep schema decoding", async () => {
+    expect.hasAssertions()
     const transport = createRendererTransport(
       rendererIpc({ _tag: "Success", value: "x".repeat(2_100_000) }).api,
     )
 
-    await expect(transport.invoke(InvokeChannel.updatesGetState, {})).rejects.toMatchObject({
+    await expectTransportError(transport.invoke(InvokeChannel.updatesGetState, {}), {
       code: "PAYLOAD_TOO_LARGE",
     })
   })
 
   it("does not expose arbitrary ipcRenderer rejection details", async () => {
+    expect.hasAssertions()
     const ipc = rendererIpc()
     ipc.invoke.mockRejectedValueOnce(
       new Error("spawn failed in /Users/example/private-repository: raw stderr"),
     )
     const transport = createRendererTransport(ipc.api)
 
-    await expect(transport.invoke(InvokeChannel.analyticsStart, {})).rejects.toMatchObject({
+    await expectTransportError(transport.invoke(InvokeChannel.analyticsStart, {}), {
       code: "IPC_FAILURE",
       message: `${InvokeChannel.analyticsStart} failed: ${UNKNOWN_TRANSPORT_ERROR_MESSAGE}`,
     })
@@ -187,12 +190,96 @@ describe("IPC contract", () => {
       .invoke(InvokeChannel.selectLocalFolder, {})
       .catch((cause) => cause)
 
-    expect(error).toBeInstanceOf(TransportError)
-    expect(error).toMatchObject({
+    expect(error).toBeInstanceOf(Error)
+    expect(decodeTransportError(error)).toMatchObject({
       code: "RepositoryLinkError",
       message: "repositories:selectLocalFolder failed: Checkout does not match",
       operation: "repositories:link",
     })
+  })
+
+  it.each([
+    {
+      channel: InvokeChannel.generateWalkthrough,
+      request: {
+        review: {
+          repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+          number: 1,
+        },
+        regenerate: false,
+      },
+    },
+    {
+      channel: InvokeChannel.generateLocalWalkthrough,
+      request: {
+        target: {
+          kind: "local",
+          rootPath: "/workspace/repo",
+          comparison: { _tag: "workingTree" },
+        },
+        regenerate: false,
+      },
+    },
+    {
+      channel: InvokeChannel.generateRepositoryComparisonWalkthrough,
+      request: {
+        target: {
+          kind: "repositoryComparison",
+          repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+          baseRef: "main",
+          headRef: "feature",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+        },
+        regenerate: false,
+      },
+    },
+  ] as const)("applies safe walkthrough diagnostics to $channel", async ({ channel, request }) => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [channel])
+    registry.define(
+      channel,
+      async () => {
+        throw AgentProviderOperationError.make({
+          providerId: AgentProviderId.make("claude"),
+          capability: "walkthrough",
+          reason: "Authentication failed in /Users/example/secret-repository",
+          cause: ProcessExitError.make({
+            command: "claude",
+            args: ["--print", "private prompt"],
+            cwd: "/Users/example/secret-repository",
+            exitCode: 9,
+            signal: null,
+            stdout: "private stdout",
+            stderr: "Please sign in before retrying.",
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            outputTruncated: false,
+            message: "Command exited with code 9",
+          }),
+        })
+      },
+      toPublicWalkthroughError,
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), request)
+    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
+
+    expect(envelope.error).toMatchObject({
+      code: "AgentProviderExitError",
+      operation: channel,
+      diagnostic: {
+        provider: "claude",
+        causeTag: "ProcessExitError",
+        exitCode: 9,
+      },
+    })
+    const serialized = JSON.stringify(envelope)
+    expect(serialized).not.toContain("secret-repository")
+    expect(serialized).not.toContain("private prompt")
+    expect(serialized).not.toContain("private stdout")
   })
 
   it("accepts a failure envelope at the exact preload response boundary and rejects one byte over", async () => {
@@ -210,19 +297,21 @@ describe("IPC contract", () => {
     })
     expect(jsonSafeUtf8ByteLength(exact)).toBe(budget)
 
-    await expect(
+    await expectTransportError(
       createRendererTransport(rendererIpc(exact).api).invoke(InvokeChannel.analyticsStart, {}),
-    ).rejects.toMatchObject({ code: "EXPECTED_FAILURE" })
+      { code: "EXPECTED_FAILURE" },
+    )
     const oneByteOver = {
       ...exact,
       error: { ...exact.error, operation: `${operation}x` },
     }
-    await expect(
+    await expectTransportError(
       createRendererTransport(rendererIpc(oneByteOver).api).invoke(
         InvokeChannel.analyticsStart,
         {},
       ),
-    ).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" })
+      { code: "PAYLOAD_TOO_LARGE" },
+    )
   })
 
   it("decodes events, ignores malformed payloads, and removes the exact listener", () => {
@@ -521,7 +610,7 @@ describe("IPC contract", () => {
     expect(envelope.error.message).not.toContain("private cause")
   })
 
-  it("replaces an oversized public failure diagnostic with the bounded fallback", async () => {
+  it("bounds an oversized public failure operation before encoding", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
       InvokeChannel.analyticsStart,
@@ -539,10 +628,10 @@ describe("IPC contract", () => {
     const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
 
     expect(envelope.error).toMatchObject({
-      code: "PAYLOAD_TOO_LARGE",
-      message: "IPC response exceeded its byte limit.",
+      code: "EXPECTED_FAILURE",
+      message: "Safe failure detail",
     })
-    expect(envelope.error.operation).toBeUndefined()
+    expect(envelope.error.operation).toHaveLength(200)
     expect(jsonSafeUtf8ByteLength(response)).toBeLessThanOrEqual(
       InvokeContract[InvokeChannel.analyticsStart].maxResponseBytes,
     )
@@ -619,6 +708,15 @@ describe("IPC contract", () => {
     expect(envelope.value).toBeUndefined()
   })
 })
+
+const expectTransportError = async (promise: Promise<unknown>, expected: object) => {
+  const error = await promise.then(
+    () => null,
+    (cause: unknown) => cause,
+  )
+  expect(error).toBeInstanceOf(Error)
+  expect(decodeTransportError(error)).toMatchObject(expected)
+}
 
 const rendererIpc = (response: unknown = undefined) => {
   const listeners = new Map<string, (event: unknown, payload: unknown) => void>()

@@ -16,6 +16,7 @@
     "./local-review": "./src/local-review.ts",
     "./project-workspace": "./src/project-workspace.ts",
     "./repository": "./src/repository.ts",
+    "./repository-comparison": "./src/repository-comparison.ts",
     "./renderer-layout-settings": "./src/renderer-layout-settings.ts",
     "./review-agent": "./src/review-agent.ts",
     "./review-context": "./src/review-context.ts",

@@ -34,6 +34,7 @@
     "native:node": "node scripts/rebuild-better-sqlite3.mjs"
   },
   "dependencies": {
+    "@effect/cli": "catalog:",
     "@diffdash/agent-provider": "workspace:*",
     "@diffdash/agent-provider-claude": "workspace:*",
     "@diffdash/agent-provider-codex": "workspace:*",
@@ -55,8 +56,11 @@
     "@effect/experimental": "catalog:",
     "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@effect/printer": "catalog:",
+    "@effect/printer-ansi": "catalog:",
     "@effect/rpc": "catalog:",
     "@effect/sql": "catalog:",
+    "@effect/typeclass": "catalog:",
     "@effect/workflow": "catalog:",
     "@modelcontextprotocol/sdk": "1.29.0",
     "better-sqlite3": "^12.11.1",

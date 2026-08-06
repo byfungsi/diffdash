@@ -1,9 +1,13 @@
+import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
+  decodeTransportError,
+  hasBridgeTransportErrorEncoding,
   sanitizeTransportErrorMessage,
-  TransportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Either, Schema } from "effect"
+
+/** Review source used to derive the expected walkthrough generation operation. */
+export type WalkthroughErrorReviewSource = "hosted" | "local" | "repositoryComparison"
 
 /** Safe product context included when a user copies walkthrough error details. */
 export interface WalkthroughErrorReportContext {
@@ -13,7 +17,7 @@ export interface WalkthroughErrorReportContext {
   readonly occurredAt: string
   readonly platform: string
   readonly provider: string
-  readonly reviewType: string
+  readonly reviewSource: WalkthroughErrorReviewSource
 }
 
 /** Separate user guidance and support diagnostics for one walkthrough failure. */
@@ -27,14 +31,19 @@ export const walkthroughErrorPresentation = (
   error: unknown,
   context: WalkthroughErrorReportContext,
 ): WalkthroughErrorPresentation => {
-  const decoded = Schema.decodeUnknownEither(TransportError)(error)
-  const transport = Either.isRight(decoded) ? decoded.right : null
-  const code = transport?.code ?? "UNKNOWN_RENDERER_ERROR"
+  const transport = decodeTransportError(error)
+  const code =
+    transport?.code === "INTERNAL_ERROR"
+      ? "WALKTHROUGH_INTERNAL_ERROR"
+      : (transport?.code ??
+        (hasBridgeTransportErrorEncoding(error)
+          ? "WALKTHROUGH_TRANSPORT_ERROR"
+          : "WALKTHROUGH_RENDERER_ERROR"))
   const details = sanitizeTransportErrorMessage(
     transport?.message ?? UNKNOWN_TRANSPORT_ERROR_MESSAGE,
   )
-  const operation = safeReportLine(transport?.operation ?? "unknown")
-  const provider = safeReportLine(context.provider)
+  const operation = transport?.operation ?? walkthroughGenerationOperation(context.reviewSource)
+  const diagnostic = transport?.diagnostic
 
   return {
     message: walkthroughUserMessage(code, details),
@@ -43,16 +52,45 @@ export const walkthroughErrorPresentation = (
       "",
       `App version: ${safeReportLine(context.appVersion)}`,
       `Occurred at: ${safeReportLine(context.occurredAt)}`,
-      `Review type: ${safeReportLine(context.reviewType)}`,
+      `Review type: ${walkthroughReviewType(context.reviewSource)}`,
       `Action: ${context.action === "regenerate" ? "Regenerate" : "Generate"}`,
-      `Configured route: ${provider}`,
+      `Configured route: ${safeReportLine(context.provider)}`,
       `Configured model or quality: ${safeReportLine(context.model)}`,
       `Platform: ${safeReportLine(context.platform)}`,
-      `Operation: ${operation}`,
+      `Operation: ${safeReportLine(operation)}`,
       `Error code: ${safeReportLine(code)}`,
       `Details: ${details}`,
+      ...(diagnostic === undefined
+        ? []
+        : [
+            "",
+            "Diagnostic trace:",
+            `Provider tag: ${safeReportLine(diagnostic.provider)}`,
+            `Error tag: ${safeReportLine(diagnostic.errorTag)}`,
+            `Cause tag: ${safeReportLine(diagnostic.causeTag)}`,
+            `Exit code: ${diagnostic.exitCode ?? "none"}`,
+            `Signal: ${diagnostic.signal === null ? "none" : safeReportLine(diagnostic.signal)}`,
+            `Reason: ${safeReportLine(diagnostic.reason)}`,
+            `Stderr: ${safeReportLine(diagnostic.stderr)}`,
+            "Internal stack frames:",
+            ...(diagnostic.stackFrames.length === 0
+              ? ["- none"]
+              : diagnostic.stackFrames.map((frame) => `- ${safeReportLine(frame)}`)),
+          ]),
     ].join("\n"),
   }
+}
+
+const walkthroughGenerationOperation = (source: WalkthroughErrorReviewSource): string => {
+  if (source === "hosted") return InvokeChannel.generateWalkthrough
+  if (source === "local") return InvokeChannel.generateLocalWalkthrough
+  return InvokeChannel.generateRepositoryComparisonWalkthrough
+}
+
+const walkthroughReviewType = (source: WalkthroughErrorReviewSource): string => {
+  if (source === "hosted") return "Pull request"
+  if (source === "local") return "Local changes"
+  return "Repository comparison"
 }
 
 const walkthroughUserMessage = (code: string, details: string): string => {
@@ -98,11 +136,13 @@ const walkthroughUserMessage = (code: string, details: string): string => {
   if (code === "WalkthroughStoreError") {
     return "DiffDash could not access the walkthrough cache. Retry, then copy the error details if it continues."
   }
-  if (code === "IPC_FAILURE") {
+  if (code === "IPC_FAILURE" || code === "WALKTHROUGH_TRANSPORT_ERROR") {
     return "DiffDash lost contact with its main process. Retry the walkthrough."
   }
-  if (code !== "INTERNAL_ERROR" && code !== "UNKNOWN_RENDERER_ERROR") return details
-  return "DiffDash hit an unexpected walkthrough error. Retry, then copy the error details if it continues."
+  if (code === "WALKTHROUGH_INTERNAL_ERROR" || code === "WALKTHROUGH_RENDERER_ERROR") {
+    return "DiffDash hit an unexpected walkthrough error. Retry, then copy the error details if it continues."
+  }
+  return details
 }
 
 const safeReportLine = (value: string): string =>
@@ -114,4 +154,4 @@ const safeReportLine = (value: string): string =>
     .join("")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 200) || "unknown"
+    .slice(0, 500) || "unavailable"

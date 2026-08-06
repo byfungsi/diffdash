@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-const ReviewType = Schema.Literal("local_diff", "pull_request")
+const ReviewType = Schema.Literal("local_diff", "pull_request", "repository_comparison")
 
 /** Privacy-reviewed product events accepted from the renderer. */
 export const AnalyticsEvent = Schema.Union(

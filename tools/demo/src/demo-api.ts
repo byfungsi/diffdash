@@ -253,6 +253,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
 
   const requireTarget = (target: ReviewThreadTarget) => {
     if (target.kind === "local") return requireLocalFixture(target)
+    if (target.kind === "repositoryComparison") {
+      throw new Error("Repository comparisons are unavailable in the demo runtime")
+    }
     requireReview(
       target.review.repository.namespace,
       target.review.repository.name,
@@ -268,7 +271,13 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   }
 
   const targetReviewKey = (target: ReviewThreadTarget) =>
-    target.kind === "hosted" ? scenario.reviewKey : requireLocalFixture(target).snapshot.reviewKey
+    target.kind === "hosted"
+      ? scenario.reviewKey
+      : target.kind === "local"
+        ? requireLocalFixture(target).snapshot.reviewKey
+        : (() => {
+            throw new Error("Repository comparisons are unavailable in the demo runtime")
+          })()
 
   const requireThread = (threadId: ReviewThreadId) => {
     const details = threadDetails.get(threadId)
@@ -789,6 +798,14 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return branch.target
       },
     },
+    repositoryComparisons: {
+      resolve: async () => {
+        throw new Error("Repository comparisons are unavailable in the demo runtime")
+      },
+      openFile: async () => {
+        throw new Error("Repository comparisons are unavailable in the demo runtime")
+      },
+    },
     reviewSnapshots: {
       acquireHosted: async (request) => {
         requireReview(
@@ -806,6 +823,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const snapshot = requireLocalFixture(target).snapshot
         snapshotCache.set(snapshot.snapshotId, snapshot)
         return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(scenario.repository.id))
+      },
+      acquireRepositoryComparison: async () => {
+        throw new Error("Repository comparisons are unavailable in the demo runtime")
       },
       getPage: async (request) => {
         const snapshot = snapshotCache.get(request.snapshotId)
@@ -918,6 +938,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           viewed: request.viewed,
         })
       },
+      listRepositoryComparison: async () => [],
+      setRepositoryComparison: async () => undefined,
     },
     walkthroughs: {
       get: async (request) => {
@@ -948,6 +970,15 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
       generate: async (target) => requireLocalFixture(target).walkthrough,
       regenerate: async (target) => requireLocalFixture(target).walkthrough,
+    },
+    repositoryComparisonWalkthroughs: {
+      get: async () => null,
+      generate: async () => {
+        throw new Error("Repository comparisons are unavailable in the demo runtime")
+      },
+      regenerate: async () => {
+        throw new Error("Repository comparisons are unavailable in the demo runtime")
+      },
     },
   }
 

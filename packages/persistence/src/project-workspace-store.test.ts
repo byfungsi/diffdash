@@ -1,13 +1,18 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { makeHostedRepositoryLocator, makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import {
   BranchComparison,
   LocalReviewTarget,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import {
+  GitCommitSha,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
@@ -29,6 +34,15 @@ const branchTarget = LocalReviewTarget.make({
     baseRef: "refs/heads/main",
     baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   }),
+})
+const comparisonTarget = RepositoryComparisonTarget.make({
+  kind: "repositoryComparison",
+  repository: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+  baseRef: RepositoryComparisonRef.make("v1.0.0"),
+  headRef: RepositoryComparisonRef.make("v1.1.0"),
+  baseSha: GitCommitSha.make("a".repeat(40)),
+  headSha: GitCommitSha.make("b".repeat(40)),
+  mergeBaseSha: GitCommitSha.make("c".repeat(40)),
 })
 
 const CountRow = Schema.Struct({ count: Schema.Number })
@@ -56,7 +70,12 @@ const insertProject = Effect.gen(function* () {
 
 const saveInput = (
   activeRibbon: "reviews" | "files" | "walkthrough" | "threads",
-  selectedReviewTarget: typeof hostedTarget | typeof workingTreeTarget | typeof branchTarget | null,
+  selectedReviewTarget:
+    | typeof hostedTarget
+    | typeof workingTreeTarget
+    | typeof branchTarget
+    | typeof comparisonTarget
+    | null,
 ) =>
   ProjectWorkspaceStateInput.make({
     projectId,
@@ -141,6 +160,26 @@ describe("ProjectWorkspaceStore", () => {
         if (saved.selectedReviewTarget?.kind === "local") {
           expect(saved.selectedReviewTarget.comparison).toEqual(branchTarget.comparison)
         }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("round trips every immutable repository comparison revision", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        yield* insertProject
+        const store = yield* ProjectWorkspaceStore
+        yield* store.save(saveInput("files", comparisonTarget))
+
+        const restored = yield* store.get(projectId)
+        expect(restored?.selectedReviewTarget).toEqual(comparisonTarget)
+        expect(restored?.selectedReviewTarget).toMatchObject({
+          baseSha: comparisonTarget.baseSha,
+          headSha: comparisonTarget.headSha,
+          mergeBaseSha: comparisonTarget.mergeBaseSha,
+        })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

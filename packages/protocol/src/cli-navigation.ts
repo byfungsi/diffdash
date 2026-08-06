@@ -1,5 +1,12 @@
 import { Schema } from "effect"
 
+import {
+  GitProviderId,
+  HostedRepositoryName,
+  RepositoryNamespace,
+} from "@diffdash/domain/git-provider"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+
 /** Maximum commands returned by one transactional renderer drain. */
 export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
 
@@ -38,6 +45,32 @@ export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffComm
   },
 ) {}
 
+/** Hosted repository selector supplied by a public CLI invocation. */
+export class CliRepositorySelector extends Schema.Class<CliRepositorySelector>(
+  "CliRepositorySelector",
+)({
+  providerId: Schema.NullOr(GitProviderId),
+  namespace: RepositoryNamespace,
+  name: HostedRepositoryName,
+}) {}
+
+/** Safe branch, tag, or full commit input accepted by the public CLI. */
+export const CliGitRevision = RepositoryComparisonRef
+
+/** Safe branch, tag, or full commit input accepted by the public CLI. */
+export type CliGitRevision = RepositoryComparisonRef
+
+/** Open an immutable comparison from the invocation checkout or an explicit saved repository. */
+export class OpenRepositoryComparisonCommand extends Schema.TaggedClass<OpenRepositoryComparisonCommand>()(
+  "openRepositoryComparison",
+  {
+    localPath: Schema.NonEmptyString,
+    repository: Schema.NullOr(CliRepositorySelector),
+    baseRef: CliGitRevision,
+    headRef: CliGitRevision,
+  },
+) {}
+
 /** Run one resumable repository identity repair pass. */
 export class RepairRepositoryIdentitiesCommand extends Schema.TaggedClass<RepairRepositoryIdentitiesCommand>()(
   "repairRepositoryIdentities",
@@ -57,6 +90,7 @@ export const CliNavigationCommand = Schema.Union(
   LinkRepositoryCommand,
   OpenPullRequestCommand,
   OpenBranchDiffCommand,
+  OpenRepositoryComparisonCommand,
   RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,
 )

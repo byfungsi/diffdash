@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import { AgentProviderId } from "@diffdash/agent-provider"
 import { Either, Schema } from "effect"
 
 import { EventChannel, InvokeChannel } from "./channels"
@@ -12,9 +13,13 @@ import {
 } from "./ipc"
 import { AddReviewThreadUserMessageRequest, RunReviewThreadAgentRequest } from "./review-threads"
 import {
+  bridgeTransportError,
+  decodeTransportError,
+  hasBridgeTransportErrorEncoding,
   isTransientTransportError,
   safeTransportErrorMessage,
   TransportError,
+  TransportErrorDiagnosticTrace,
   toTransportError,
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
@@ -26,9 +31,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(54)
+    expect(new Set(invokeChannels).size).toBe(61)
     expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(57)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(64)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",
@@ -187,9 +192,76 @@ describe("protocol boundaries", () => {
     )
   })
 
+  it("preserves validated transport data through a standard Error bridge encoding", () => {
+    const diagnostic = new TransportErrorDiagnosticTrace({
+      provider: AgentProviderId.make("claude"),
+      errorTag: "AgentProviderOperationError",
+      causeTag: "ProcessExitError",
+      exitCode: 1,
+      signal: null,
+      reason: "Authentication or authorization failure reported.",
+      stderr: "Authentication or authorization failure reported.",
+      stackFrames: ["at generateWalkthrough", "at runProvider"],
+    })
+    const bridgeError = bridgeTransportError(
+      transportError(
+        "AgentProviderExitError",
+        "Provider claude exited before completing the walkthrough.",
+        InvokeChannel.generateRepositoryComparisonWalkthrough,
+        diagnostic,
+      ),
+    )
+    const contextBridgeClone = {
+      name: bridgeError.name,
+      message: bridgeError.message,
+      stack: bridgeError.stack,
+    }
+
+    expect(bridgeError).toBeInstanceOf(Error)
+    expect(decodeTransportError(contextBridgeClone)).toMatchObject({
+      code: "AgentProviderExitError",
+      message: "Provider claude exited before completing the walkthrough.",
+      operation: InvokeChannel.generateRepositoryComparisonWalkthrough,
+      diagnostic,
+    })
+    expect(safeTransportErrorMessage(contextBridgeClone)).toBe(
+      "Provider claude exited before completing the walkthrough.",
+    )
+  })
+
+  it("rejects free-form diagnostic text and stack locations", () => {
+    const unsafe = Schema.decodeUnknownEither(TransportErrorDiagnosticTrace)({
+      provider: "claude",
+      errorTag: "AgentProviderOperationError",
+      causeTag: "ProcessExitError",
+      exitCode: 1,
+      signal: null,
+      reason: "password=hunter2",
+      stderr: "private prompt and diff content",
+      stackFrames: ["at runProvider (/Users/example/private.ts:10:2)"],
+    })
+
+    expect(Either.isLeft(unsafe)).toBe(true)
+  })
+
+  it("rejects malformed bridge payloads instead of trusting error text", () => {
+    const malformed = new Error(
+      'Error invoking remote method: DIFFDASH_TRANSPORT_ERROR_V1:{"_tag":"TransportError","code":"SAFE"}',
+    )
+
+    expect(hasBridgeTransportErrorEncoding(malformed)).toBe(true)
+    expect(decodeTransportError(malformed)).toBeNull()
+    expect(safeTransportErrorMessage(malformed)).toBe(UNKNOWN_TRANSPORT_ERROR_MESSAGE)
+  })
+
   it("classifies only typed IPC failures as transient", () => {
     expect(
       isTransientTransportError(transportError("IPC_FAILURE", "Temporarily unavailable")),
+    ).toBe(true)
+    expect(
+      isTransientTransportError(
+        bridgeTransportError(transportError("IPC_FAILURE", "Temporarily unavailable")),
+      ),
     ).toBe(true)
     expect(
       isTransientTransportError(transportError("INVALID_RESPONSE", "Malformed response")),

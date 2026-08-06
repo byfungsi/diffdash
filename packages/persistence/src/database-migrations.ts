@@ -595,6 +595,34 @@ const migrations: readonly DatabaseMigration[] = [
       `)
     },
   },
+  {
+    version: 12,
+    migrate: (database) => {
+      if (!tableExists(database, "repos") || !tableExists(database, "local_viewed_files")) return
+      database.exec(`
+        DROP TABLE IF EXISTS local_viewed_files_v12;
+        CREATE TABLE local_viewed_files_v12 (
+          repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          source_identity TEXT NOT NULL,
+          comparison_kind TEXT NOT NULL CHECK (
+            comparison_kind IN ('workingTree', 'branch', 'repositoryComparison')
+          ),
+          comparison_target TEXT NOT NULL,
+          review_key TEXT NOT NULL,
+          patch_hash TEXT NOT NULL,
+          viewed_at TEXT NOT NULL,
+          PRIMARY KEY (
+            repo_id, source_identity, comparison_kind, comparison_target, review_key, patch_hash
+          )
+        );
+
+        INSERT INTO local_viewed_files_v12
+        SELECT * FROM local_viewed_files;
+        DROP TABLE local_viewed_files;
+        ALTER TABLE local_viewed_files_v12 RENAME TO local_viewed_files;
+      `)
+    },
+  },
 ]
 
 /** Highest core schema version written for rollback-compatible installations. */

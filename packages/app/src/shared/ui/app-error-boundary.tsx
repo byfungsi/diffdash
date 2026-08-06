@@ -1,3 +1,8 @@
+import {
+  decodeTransportError,
+  hasBridgeTransportErrorEncoding,
+  UNKNOWN_TRANSPORT_ERROR_MESSAGE,
+} from "@diffdash/protocol/transport-error"
 import { Component, type ErrorInfo, type ReactNode } from "react"
 
 interface AppErrorBoundaryProps {
@@ -95,6 +100,9 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 }
 
 const errorMessage = (error: unknown) => {
+  const transport = decodeTransportError(error)
+  if (transport !== null) return transport.message
+  if (hasBridgeTransportErrorEncoding(error)) return UNKNOWN_TRANSPORT_ERROR_MESSAGE
   if (error instanceof Error && error.message.length > 0) return error.message
   if (typeof error === "string" && error.length > 0) return error
   return "An unknown error prevented DiffDash from continuing."

@@ -24,7 +24,12 @@ import {
   type ReviewAgentProgressStage,
   type ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
-import { HostedReviewSnapshot, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshot,
+  LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
+  type ReviewSnapshot,
+} from "@diffdash/domain/review-context"
 import {
   MarkdownBody,
   type ReviewThreadDetails,
@@ -143,13 +148,18 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                 selection,
                 providerId,
               )
-              if (!(input.snapshot instanceof HostedReviewSnapshot) && input.cwd === null) {
+              if (input.snapshot instanceof LocalReviewSnapshot && input.cwd === null) {
                 return yield* serviceError(
                   "runThreadTurn.workingDirectory",
                   new Error("Local review execution requires a working directory"),
                 )
               }
               const hostedExecution = yield* prepareHostedExecution(input.snapshot, gitProviders)
+              const comparisonExecution = yield* prepareComparisonExecution(
+                input.snapshot,
+                gitProviders,
+                input.cwd,
+              )
               const publishingTools = (yield* gitProviders.list).flatMap(
                 (registration) => registration.publishingTools,
               )
@@ -237,6 +247,9 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                     }),
                   )
 
+                if (comparisonExecution !== null) {
+                  return yield* workspaces.useComparison(comparisonExecution, runProvider)
+                }
                 if (hostedExecution === null) return yield* runProvider(input.cwd)
                 return yield* workspaces.use(
                   {
@@ -341,6 +354,28 @@ const prepareHostedExecution = (snapshot: ReviewSnapshot, registry: GitProviderR
       checkout,
       bootstrapBareRepository: (destination: string) =>
         provider.bootstrapBareRepository(checkout.repository, destination),
+    }
+  })
+}
+
+const prepareComparisonExecution = (
+  snapshot: ReviewSnapshot,
+  registry: GitProviderRegistryService,
+  sourcePath: string | null,
+) => {
+  if (!(snapshot instanceof RepositoryComparisonSnapshot)) return Effect.succeed(null)
+  return Effect.gen(function* () {
+    const target = snapshot.detail.target
+    const provider = yield* registry.get(target.repository.providerId)
+    return {
+      repository: target.repository,
+      sourcePath,
+      remoteUrl: null,
+      baseSha: target.baseSha,
+      headSha: target.headSha,
+      mergeBaseSha: target.mergeBaseSha,
+      bootstrapBareRepository: (destination: string) =>
+        provider.bootstrapBareRepository(target.repository, destination),
     }
   })
 }

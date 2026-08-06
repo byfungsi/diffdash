@@ -1,5 +1,6 @@
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { ReviewFilePatchHash } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
@@ -42,6 +43,23 @@ export class SetLocalViewedFileRequest extends Schema.Class<SetLocalViewedFileRe
 )({
   target: LocalReviewTarget,
   sourceBranch: Schema.NullOr(Schema.NonEmptyString),
+  reviewKey: Schema.String,
+  patchHash: ReviewFilePatchHash,
+  viewed: Schema.Boolean,
+}) {}
+
+/** Content-scoped viewed-file lookup for one immutable repository comparison. */
+export class RepositoryComparisonViewedFilesRequest extends Schema.Class<RepositoryComparisonViewedFilesRequest>(
+  "RepositoryComparisonViewedFilesRequest",
+)({
+  target: RepositoryComparisonTarget,
+}) {}
+
+/** Content-scoped viewed-file mutation for one immutable repository comparison. */
+export class SetRepositoryComparisonViewedFileRequest extends Schema.Class<SetRepositoryComparisonViewedFileRequest>(
+  "SetRepositoryComparisonViewedFileRequest",
+)({
+  target: RepositoryComparisonTarget,
   reviewKey: Schema.String,
   patchHash: ReviewFilePatchHash,
   viewed: Schema.Boolean,

@@ -32,6 +32,14 @@ import {
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import {
+  GitCommitSha,
+  RepositoryComparisonDetail,
+  RepositoryComparisonDiff,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+  makeRepositoryComparisonReviewKey,
+} from "@diffdash/domain/repository-comparison"
+import {
   RendererLayoutSettings,
   ReviewPaneSettings,
 } from "@diffdash/domain/renderer-layout-settings"
@@ -49,6 +57,7 @@ import {
 import {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
+  RepositoryComparisonSnapshot,
   makeReviewSnapshotManifest,
   type ReviewSnapshot,
 } from "@diffdash/domain/review-context"
@@ -102,10 +111,12 @@ import {
   AppUpdateUnsupported,
 } from "@diffdash/protocol/app-update"
 import {
+  CliGitRevision,
   type CliNavigationCommand,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
   OpenPullRequestCommand,
+  OpenRepositoryComparisonCommand,
   OpenWorkingTreeCommand,
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
@@ -893,6 +904,7 @@ type AppBrowserScenarioId =
   | "cliPathSetup"
   | "cliPullRequestFailure"
   | "cliRecheckReadiness"
+  | "cliRepositoryComparison"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
   | "diffSearchSubstrings"
@@ -2373,6 +2385,30 @@ scenario("cliBranchNoAncestor", async () => {
       "Could not resolve comparison branch: Branch dev does not share a common ancestor with the current HEAD",
     )
     expect(document.body.textContent).not.toContain("branch.mergeBase")
+  })
+})
+
+scenario("cliRepositoryComparison", async () => {
+  const calls = installDiffDashApi()
+  renderApp()
+
+  await vi.waitFor(() => expect(document.body.textContent).toContain("Pinned projects"))
+  calls.openRepositoryComparison("v6.0", "v6.1")
+
+  await vi.waitFor(() => {
+    expect(calls.resolveRepositoryComparison).toHaveBeenCalledOnce()
+    expect(calls.acquireRepositoryComparisonSnapshot).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain("v6.0...v6.1")
+    expect(document.body.textContent).toContain("src/app.tsx")
+    expect(document.body.textContent).not.toContain("Approve pull request")
+    expect(calls.openProject).not.toHaveBeenCalled()
+    expect(calls.resolveBranch).not.toHaveBeenCalled()
+    expect(calls.saveProjectWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRibbon: "files",
+        selectedReviewTarget: expect.objectContaining({ kind: "repositoryComparison" }),
+      }),
+    )
   })
 })
 
@@ -6204,6 +6240,67 @@ const installDiffDashApi = (
       return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make("local-repo-1"))
     },
   )
+  const resolveRepositoryComparison = vi.fn<DiffDashApi["repositoryComparisons"]["resolve"]>(
+    async (command) => {
+      const repository = makeHostedRepositoryLocator("github", "torvalds", "linux")
+      return {
+        repo: Repo.make({
+          ...repo,
+          id: "github:github.com/torvalds/linux",
+          owner: "torvalds",
+          name: "linux",
+          remoteUrl: "https://github.com/torvalds/linux",
+        }),
+        target: RepositoryComparisonTarget.make({
+          kind: "repositoryComparison",
+          repository,
+          baseRef: RepositoryComparisonRef.make(command.baseRef),
+          headRef: RepositoryComparisonRef.make(command.headRef),
+          baseSha: GitCommitSha.make("b".repeat(40)),
+          headSha: GitCommitSha.make("a".repeat(40)),
+          mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+        }),
+      }
+    },
+  )
+  const acquireRepositoryComparisonSnapshot = vi.fn<
+    DiffDashApi["reviewSnapshots"]["acquireRepositoryComparison"]
+  >(async (target) => {
+    const rawDiff = (options.pullRequestDiff ?? diff).diff
+    const parsedDiff = parseUnifiedDiff(rawDiff)
+    const reviewKey = makeRepositoryComparisonReviewKey(target)
+    const baseRevision = ReviewRevision.make(target.mergeBaseSha)
+    const headRevision = ReviewRevision.make(target.headSha)
+    const fetchedAt = "2026-07-07T00:00:00Z"
+    const snapshot = RepositoryComparisonSnapshot.make({
+      snapshotId: makeReviewSnapshotId({
+        reviewKey,
+        baseRevision,
+        headRevision,
+        diffIdentity: makeReviewDiffIdentity(rawDiff),
+      }),
+      reviewKey,
+      baseRevision,
+      headRevision,
+      detail: RepositoryComparisonDetail.make({
+        target,
+        title: `${target.baseRef}...${target.headRef}`,
+        files: parsedDiff.files.map((file) =>
+          ChangedFile.make({
+            path: file.path,
+            additions: file.additions,
+            deletions: file.deletions,
+            changeType: file.status,
+          }),
+        ),
+        fetchedAt,
+      }),
+      diff: RepositoryComparisonDiff.make({ target, diff: rawDiff, fetchedAt }),
+      parsedDiff,
+    })
+    snapshots.set(snapshot.snapshotId, snapshot)
+    return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make("comparison-repo-1"))
+  })
   const calls = {
     captureAnalytics: vi.fn<DiffDashApi["analytics"]["capture"]>(async () => undefined),
     startAnalytics: vi.fn<DiffDashApi["analytics"]["start"]>(async () => undefined),
@@ -6302,6 +6399,8 @@ const installDiffDashApi = (
     downloadUpdate: vi.fn<() => Promise<void>>(async () => undefined),
     restartAndInstallUpdate: vi.fn<() => Promise<void>>(async () => undefined),
     getLocalReviewDetail,
+    resolveRepositoryComparison,
+    acquireRepositoryComparisonSnapshot,
     getLocalReviewDiff,
     acquireLocalReviewSnapshot,
     resolveBranch: vi.fn<DiffDashApi["localReviews"]["resolveBranch"]>(
@@ -6333,6 +6432,9 @@ const installDiffDashApi = (
       async () => undefined,
     ),
     openRepositoryFile: vi.fn<DiffDashApi["openRepositoryFile"]>(async () => undefined),
+    openRepositoryComparisonFile: vi.fn<DiffDashApi["repositoryComparisons"]["openFile"]>(
+      async () => undefined,
+    ),
     activateWindow: vi.fn<() => Promise<void>>(async () => undefined),
     approvePullRequest: vi.fn<DiffDashApi["hostedReviews"]["submitDecision"]>(async () => {
       approved = true
@@ -6583,9 +6685,14 @@ const installDiffDashApi = (
     localReviews: {
       resolveBranch: calls.resolveBranch,
     },
+    repositoryComparisons: {
+      resolve: calls.resolveRepositoryComparison,
+      openFile: calls.openRepositoryComparisonFile,
+    },
     reviewSnapshots: {
       acquireHosted: getHostedReviewSnapshot,
       acquireLocal: calls.acquireLocalReviewSnapshot,
+      acquireRepositoryComparison: calls.acquireRepositoryComparisonSnapshot,
       getPage: getReviewSnapshotPage,
       search: searchReviewSnapshot,
     },
@@ -6639,6 +6746,8 @@ const installDiffDashApi = (
         [...viewedFiles].map(([reviewKey, patchHash]) => ({ reviewKey, patchHash })),
       listLocal: async () =>
         [...localViewedFiles].map(([reviewKey, patchHash]) => ({ reviewKey, patchHash })),
+      listRepositoryComparison: async () =>
+        [...localViewedFiles].map(([reviewKey, patchHash]) => ({ reviewKey, patchHash })),
       set: async (request) => {
         await calls.setViewedFile(request)
         if (request.viewed) {
@@ -6655,6 +6764,10 @@ const installDiffDashApi = (
           localViewedFiles.delete(request.reviewKey)
         }
       },
+      setRepositoryComparison: async (request) => {
+        if (request.viewed) localViewedFiles.set(request.reviewKey, request.patchHash)
+        else localViewedFiles.delete(request.reviewKey)
+      },
     },
     walkthroughs: {
       generate: (request) =>
@@ -6667,6 +6780,15 @@ const installDiffDashApi = (
       generate: calls.generateLocalWalkthrough,
       get: calls.getLocalWalkthrough,
       regenerate: calls.regenerateLocalWalkthrough,
+    },
+    repositoryComparisonWalkthroughs: {
+      get: async () => null,
+      generate: async () => {
+        throw new Error("Repository comparison fixture is not configured")
+      },
+      regenerate: async () => {
+        throw new Error("Repository comparison fixture is not configured")
+      },
     },
   }
 
@@ -6695,6 +6817,17 @@ const installDiffDashApi = (
     },
     openBranchDiff: (branchName: string | null, localPath = localReview.rootPath) => {
       pendingCommands.push(OpenBranchDiffCommand.make({ localPath, branchName }))
+      commandsAvailableListener?.()
+    },
+    openRepositoryComparison: (baseRef: string, headRef: string) => {
+      pendingCommands.push(
+        OpenRepositoryComparisonCommand.make({
+          localPath: "/workspace/local-repo",
+          repository: null,
+          baseRef: CliGitRevision.make(baseRef),
+          headRef: CliGitRevision.make(headRef),
+        }),
+      )
       commandsAvailableListener?.()
     },
     repairRepositoriesFromCli: () => {
