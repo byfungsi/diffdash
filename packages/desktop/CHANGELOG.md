@@ -1,5 +1,15 @@
 # DiffDash Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- [#63](https://github.com/byfungsi/diffdash/pull/63) [`f937c31`](https://github.com/byfungsi/diffdash/commit/f937c31982d2656c6ea6aab1e93317f06eba7494) Thanks [@hanipcode](https://github.com/hanipcode)! - Open immutable repository revision comparisons from the CLI with `diffdash compare`.
+
+### Patch Changes
+
+- [#63](https://github.com/byfungsi/diffdash/pull/63) [`f937c31`](https://github.com/byfungsi/diffdash/commit/f937c31982d2656c6ea6aab1e93317f06eba7494) Thanks [@hanipcode](https://github.com/hanipcode)! - Show actionable walkthrough failure messages and let users copy privacy-safe error details for support.
+
 ## 0.6.0
 
 ### Minor Changes
