@@ -473,6 +473,78 @@ describe("IPC contract", () => {
     })
   })
 
+  it("preserves safe walkthrough diagnostics through the controller registry", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.generateLocalWalkthrough,
+    ])
+    registry.define(
+      InvokeChannel.generateLocalWalkthrough,
+      async () => {
+        throw AgentProviderOperationError.make({
+          providerId: AgentProviderId.make("codex"),
+          capability: "walkthrough",
+          reason: "Failure in /Users/example/secret-repository with private stderr",
+          cause: new Error("private provider cause"),
+        })
+      },
+      toPublicWalkthroughError,
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      target: {
+        kind: "local",
+        rootPath: "/workspace/repo",
+        comparison: { _tag: "workingTree" },
+      },
+      regenerate: false,
+    })
+    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
+
+    expect(envelope.error).toMatchObject({
+      code: "AgentProviderOperationError",
+      message: "Provider codex could not complete walkthrough generation.",
+      operation: InvokeChannel.generateLocalWalkthrough,
+    })
+    expect(JSON.stringify(envelope)).not.toContain("private provider cause")
+    expect(JSON.stringify(envelope)).not.toContain("secret-repository")
+  })
+
+  it("applies safe walkthrough diagnostics to hosted generation", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.generateWalkthrough,
+    ])
+    registry.define(
+      InvokeChannel.generateWalkthrough,
+      async () => {
+        throw AgentProviderOperationError.make({
+          providerId: AgentProviderId.make("codex"),
+          capability: "walkthrough",
+          reason: "private provider stderr",
+        })
+      },
+      toPublicWalkthroughError,
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      review: {
+        repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+        number: 1,
+      },
+      regenerate: false,
+    })
+    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
+
+    expect(envelope.error).toMatchObject({
+      code: "AgentProviderOperationError",
+      operation: InvokeChannel.generateWalkthrough,
+    })
+    expect(JSON.stringify(envelope)).not.toContain("private provider stderr")
+  })
+
   it("returns a structured failure when an encoded controller response exceeds its budget", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [

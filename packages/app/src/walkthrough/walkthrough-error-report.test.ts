@@ -86,6 +86,46 @@ describe("walkthroughErrorPresentation", () => {
     expect(malformed.report).not.toContain("Operation: unknown")
   })
 
+  it("builds actionable provider guidance", () => {
+    const result = walkthroughErrorPresentation(
+      transportError(
+        "AgentProviderOperationError",
+        "Provider codex could not complete walkthrough generation.",
+        InvokeChannel.generateLocalWalkthrough,
+      ),
+      { ...context, provider: "Codex", reviewSource: "local" },
+    )
+
+    expect(result.message).toBe(
+      "The configured AI provider could not generate this walkthrough. Check its setup, then retry.",
+    )
+    expect(result.report).toContain("Review type: Local changes")
+    expect(result.report).toContain("Error code: AgentProviderOperationError")
+  })
+
+  it("distinguishes invalid and empty provider output guidance", () => {
+    const invalid = walkthroughErrorPresentation(
+      transportError(
+        "WalkthroughValidationError",
+        "The AI agent returned a walkthrough that did not pass validation after retrying.",
+      ),
+      context,
+    )
+    const empty = walkthroughErrorPresentation(
+      transportError(
+        "InvalidAgentProviderResponseError",
+        "Provider codex completed without usable walkthrough text.",
+      ),
+      context,
+    )
+
+    expect(invalid.message).toContain("DiffDash retried once")
+    expect(empty.message).toBe(
+      "The AI provider returned no usable walkthrough. Retry or select another model.",
+    )
+    expect(empty.message).not.toContain("retried")
+  })
+
   it("normalizes copied context to bounded single lines", () => {
     const result = walkthroughErrorPresentation(
       bridgeTransportError(transportError("EXPECTED", "Safe reason")),

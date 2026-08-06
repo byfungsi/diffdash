@@ -115,6 +115,59 @@ Unhandled provider call: --print --model private-model`,
     })
   })
 
+  it("identifies a provider timeout without exposing process diagnostics", () => {
+    const result = toPublicWalkthroughError(
+      AgentProviderOperationError.make({
+        providerId: AgentProviderId.make("codex"),
+        capability: "walkthrough",
+        reason: "Command timed out in /Users/example/secret-repository",
+        cause: { _tag: "ProcessTimeoutError", stderr: "private stderr" },
+      }),
+      operation,
+    )
+
+    expect(result).toMatchObject({
+      code: "AgentProviderTimeoutError",
+      message: "Provider codex timed out during walkthrough generation.",
+    })
+    expect(JSON.stringify(result)).not.toContain("private")
+  })
+
+  it.each([
+    ["ProcessSpawnError", "AgentProviderSpawnError"],
+    ["ProcessExitError", "AgentProviderExitError"],
+    ["ProcessOutputError", "AgentProviderIoError"],
+    ["ProcessStdinError", "AgentProviderIoError"],
+    ["ProcessCleanupError", "AgentProviderCleanupError"],
+  ])("classifies %s without copying diagnostics", (causeTag, expectedCode) => {
+    const result = toPublicWalkthroughError(
+      AgentProviderOperationError.make({
+        providerId: AgentProviderId.make("codex"),
+        capability: "walkthrough",
+        reason: "private provider reason",
+        cause: { _tag: causeTag, stderr: "private stderr" },
+      }),
+      operation,
+    )
+
+    expect(result.code).toBe(expectedCode)
+    expect(JSON.stringify(result)).not.toContain("private")
+  })
+
+  it("replaces unsafe open provider identifiers in public diagnostics", () => {
+    const result = toPublicWalkthroughError(
+      AgentProviderOperationError.make({
+        providerId: AgentProviderId.make("/Users/example/secret-provider"),
+        capability: "walkthrough",
+        reason: "private provider reason",
+      }),
+      operation,
+    )
+
+    expect(result.message).toBe("Provider custom could not complete walkthrough generation.")
+    expect(JSON.stringify(result)).not.toContain("secret-provider")
+  })
+
   it("classifies review context, prompt preparation, and cache failures", () => {
     expect(
       toPublicWalkthroughError(

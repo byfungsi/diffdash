@@ -405,7 +405,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await reviewDisclosure.click()
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "false")
     await window.getByRole("button", { name: "Threads" }).click()
-    await window.getByRole("button", { name: /Go to src\/app\.tsx [LR]1 in diff/ }).click()
+    await window
+      .getByRole("button", { name: /Open thread details for src\/app\.tsx [LR]1/ })
+      .click()
+    await window.getByRole("button", { name: "Go to thread in diff" }).click()
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "true")
     await expect(followUpComposer).toBeFocused()
     await expect(addedLine).toBeVisible()

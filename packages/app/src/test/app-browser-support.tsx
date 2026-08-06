@@ -3457,7 +3457,8 @@ scenario("reviewThreadSidebar", async () => {
   railButton.click()
   const threadList = await vi.waitFor(() => {
     const element = document.querySelector<HTMLElement>("[data-review-thread-list]")
-    expect(element?.textContent).toContain("4 threads")
+    expect(element?.textContent).not.toContain("4 threads")
+    expect(element?.querySelector('button[aria-label="Agent settings"]')).not.toBeNull()
     expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
     const rootRect = element?.parentElement?.getBoundingClientRect()
     const listRect = element?.getBoundingClientRect()
@@ -3484,8 +3485,8 @@ scenario("reviewThreadSidebar", async () => {
   const previousRevisionPathText = previousRevisionRow?.querySelector<HTMLElement>(
     `[aria-label="${previousRevisionPath}"]`,
   )
-  const previousRevisionGoToDiff = previousRevisionRow?.querySelector<HTMLButtonElement>(
-    `button[aria-label="Go to ${previousRevisionPath} R1 in diff"]`,
+  const previousRevisionLineLabel = previousRevisionRow?.querySelector<HTMLElement>(
+    "[data-review-thread-line-label]",
   )
   const lockThreadButton = threadList.querySelector<HTMLButtonElement>(
     'button[aria-label="Open thread details for pnpm-lock.yaml R1"]',
@@ -3493,10 +3494,11 @@ scenario("reviewThreadSidebar", async () => {
   expect(previousRevisionButton).not.toBeNull()
   expect(lockThreadButton).not.toBeNull()
   expect(previousRevisionRow?.textContent).toContain("Previous revision")
+  expect(previousRevisionLineLabel?.textContent).toBe("R1")
   expect(previousRevisionPathText?.children).toHaveLength(2)
   expect(getComputedStyle(previousRevisionPathText!).overflowX).toBe("hidden")
   expect(getComputedStyle(previousRevisionRow!).borderBottomWidth).toBe("1px")
-  expect(previousRevisionGoToDiff?.querySelector(".lucide-move-right")).not.toBeNull()
+  expect(previousRevisionRow?.querySelector(".lucide-move-right")).toBeNull()
   previousRevisionButton?.click()
   const previousRevisionDetail = await vi.waitFor(() => {
     const selectedDetailElement = document.querySelector<HTMLElement>("[data-review-thread-detail]")
@@ -3504,6 +3506,11 @@ scenario("reviewThreadSidebar", async () => {
     expect(
       selectedDetailElement?.querySelector('button[aria-label="Go to thread in diff"]'),
     ).not.toBeNull()
+    expect(
+      selectedDetailElement?.querySelector('button[aria-label="Go to thread in diff"]')
+        ?.textContent,
+    ).toBe("go to diff")
+    expect(selectedDetailElement?.querySelector(".lucide-move-right")).toBeNull()
     return selectedDetailElement!
   })
   lockThreadButton?.click()
@@ -3704,9 +3711,17 @@ scenario("reviewThreadSidebar", async () => {
     restoredFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
   }
   document.querySelector<HTMLButtonElement>('button[aria-label="Threads"]')?.click()
+  const docsThreadButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open thread details for docs/readme.md R1"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  docsThreadButton.click()
   const docsGoToDiff = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Go to docs/readme.md R1 in diff"]',
+      '[data-review-thread-detail] button[aria-label="Go to thread in diff"]',
     )
     expect(button).not.toBeNull()
     return button!
@@ -3755,14 +3770,23 @@ scenario("reviewThreadSidebar", async () => {
     )
     ?.click()
 
-  const lockGoToDiff = await vi.waitFor(() => {
+  const currentLockThreadButton = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Go to pnpm-lock.yaml R1 in diff"]',
+      'button[aria-label="Open thread details for pnpm-lock.yaml R1"]',
     )
     expect(button).not.toBeNull()
     return button!
   })
-  expect(lockGoToDiff.querySelector(".lucide-move-right")).not.toBeNull()
+  currentLockThreadButton.click()
+  const lockGoToDiff = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-review-thread-detail] button[aria-label="Go to thread in diff"]',
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  expect(lockGoToDiff.textContent).toBe("go to diff")
+  expect(lockGoToDiff.querySelector(".lucide-move-right")).toBeNull()
   lockGoToDiff.click()
   const inlineOpenDetail = await vi.waitFor(
     () => {
@@ -5425,6 +5449,16 @@ scenario("homeToReview", async () => {
     ).not.toBeNull()
     expect(getDiffShadowRoot("src/app.tsx")?.textContent ?? "").toContain("new")
   })
+  const walkthroughStepTitle = document.querySelector<HTMLElement>("[data-walkthrough-step-title]")
+  const walkthroughStepFileCount = document.querySelector<HTMLElement>(
+    "[data-walkthrough-step-file-count]",
+  )
+  expect(walkthroughStepTitle).not.toBeNull()
+  expect(getComputedStyle(walkthroughStepTitle!).overflowX).toBe("hidden")
+  expect(getComputedStyle(walkthroughStepTitle!).textOverflow).toBe("ellipsis")
+  expect(getComputedStyle(walkthroughStepTitle!).whiteSpace).toBe("nowrap")
+  expect(walkthroughStepFileCount?.children).toHaveLength(2)
+  expect(getComputedStyle(walkthroughStepFileCount!).flexDirection).toBe("column")
   const criticalHeader = document.querySelector<HTMLElement>(
     '[data-walkthrough-main-risk="critical"]',
   )
@@ -5620,8 +5654,8 @@ scenario("homeToReview", async () => {
     expect(document.body.textContent).toContain("Complete")
   })
 
-  const regenerateButton = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Regenerate",
+  const regenerateButton = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Refresh walkthrough"]',
   )
   expect(regenerateButton).toBeDefined()
   regenerateButton?.click()
@@ -5911,9 +5945,17 @@ const openOnlyReviewThreadInDiff = async (path: string, lineLabel: string) => {
     return button!
   })
   threadsButton.click()
+  const threadButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      `button[aria-label="Open thread details for ${path} ${lineLabel}"]`,
+    )
+    expect(button).not.toBeNull()
+    return button!
+  })
+  threadButton.click()
   const goToDiff = await vi.waitFor(() => {
     const button = document.querySelector<HTMLButtonElement>(
-      `button[aria-label="Go to ${path} ${lineLabel} in diff"]`,
+      '[data-review-thread-detail] button[aria-label="Go to thread in diff"]',
     )
     expect(button).not.toBeNull()
     return button!
