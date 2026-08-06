@@ -891,19 +891,11 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
       }
       if (part.startsWith("`") && part.endsWith("`")) {
         const content = part.slice(1, -1)
-        const fileReference = reviewFileReference.test(content)
+        const referenceKind = technicalReferenceKind(content)
         return [
-          <code
-            key={key}
-            className={cn(
-              "bg-muted rounded px-1 py-0.5 font-mono font-medium",
-              fileReference ? "text-review-file-reference" : "text-review-symbol-reference",
-            )}
-            data-review-file-reference={fileReference || undefined}
-            data-review-symbol-reference={!fileReference || undefined}
-          >
+          <TechnicalReference key={key} kind={referenceKind} inlineCode>
             {content}
-          </code>,
+          </TechnicalReference>,
         ]
       }
       const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(part)
@@ -929,11 +921,47 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
     })
 }
 
-const fileReferenceSource = String.raw`(?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+(?::\d+(?:-\d+)?)?`
+const pathSegmentSource = String.raw`[A-Za-z0-9_@-](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_@-])?`
+const rootFileReferenceSource = String.raw`(?:[A-Za-z0-9_@-]+\.(?:c|cc|cpp|css|cts|go|h|hpp|html|java|js|json|jsx|kt|kts|md|mdx|mjs|mts|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|xml|yaml|yml|zsh)|Dockerfile|Makefile|Procfile)`
+const fileReferenceSource = String.raw`(?:(?:${pathSegmentSource}\/)+${pathSegmentSource}|${rootFileReferenceSource})(?::\d+(?:-\d+)?)?`
 const symbolReferenceSource = String.raw`(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Z]{2,}[A-Za-z0-9]*|[a-z_$][a-z0-9_$]*(?:[A-Z][A-Za-z0-9_$]*)+`
 const reviewFileReference = new RegExp(`^${fileReferenceSource}$`, "u")
 const reviewSymbolReference = new RegExp(`^(?:${symbolReferenceSource})$`, "u")
 const technicalReference = new RegExp(`(${fileReferenceSource}|${symbolReferenceSource})`, "gu")
+
+type TechnicalReferenceKind = "file" | "symbol" | null
+
+const technicalReferenceKind = (value: string): TechnicalReferenceKind => {
+  if (reviewFileReference.test(value)) return "file"
+  if (reviewSymbolReference.test(value)) return "symbol"
+  return null
+}
+
+const TechnicalReference = ({
+  kind,
+  inlineCode = false,
+  children,
+}: {
+  readonly kind: TechnicalReferenceKind
+  readonly inlineCode?: boolean
+  readonly children: ReactNode
+}) => {
+  const className = cn(
+    "font-mono font-medium",
+    inlineCode && "bg-muted rounded px-1 py-0.5",
+    kind === "file" ? "text-review-file-reference" : "text-review-symbol-reference",
+  )
+  const attributes = {
+    className,
+    "data-review-file-reference": kind === "file" || undefined,
+    "data-review-symbol-reference": kind === "symbol" || undefined,
+  }
+  return inlineCode ? (
+    <code {...attributes}>{children}</code>
+  ) : (
+    <span {...attributes}>{children}</span>
+  )
+}
 
 const renderTechnicalReferences = (value: string, initialOffset: number): readonly ReactNode[] => {
   let offset = initialOffset
@@ -943,28 +971,13 @@ const renderTechnicalReferences = (value: string, initialOffset: number): readon
     .map((part) => {
       const key = `${offset}:${part}`
       offset += part.length
-      if (reviewFileReference.test(part)) {
+      const kind = technicalReferenceKind(part)
+      if (kind !== null)
         return (
-          <span
-            key={key}
-            className="text-review-file-reference font-mono font-medium"
-            data-review-file-reference="true"
-          >
+          <TechnicalReference key={key} kind={kind}>
             {part}
-          </span>
+          </TechnicalReference>
         )
-      }
-      if (reviewSymbolReference.test(part)) {
-        return (
-          <span
-            key={key}
-            className="text-review-symbol-reference font-mono font-medium"
-            data-review-symbol-reference="true"
-          >
-            {part}
-          </span>
-        )
-      }
       return <Fragment key={key}>{part}</Fragment>
     })
 }

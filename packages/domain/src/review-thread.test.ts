@@ -61,5 +61,22 @@ Then verify settings.`)
     expect(normalizeMarkdownLineBreaks("Use `\\n` as the newline escape.")).toBe(
       "Use `\\n` as the newline escape.",
     )
+    expect(normalizeMarkdownLineBreaks("First sentence.\\nSecond sentence.")).toBe(
+      "First sentence.\nSecond sentence.",
+    )
+  })
+
+  it("preserves escaped newlines in inline and fenced code", () => {
+    expect(normalizeMarkdownLineBreaks("Use ``value\\nafter``.\\nContinue.")).toBe(
+      "Use ``value\\nafter``.\nContinue.",
+    )
+    expect(
+      normalizeMarkdownLineBreaks('Example.\\n```ts\\nconst value = "\\n"\\n```\\nContinue.'),
+    ).toBe(`Example.
+\`\`\`ts
+const value = "\\n"
+\`\`\`
+Continue.`)
+    expect(normalizeMarkdownLineBreaks("Before.\\r\\n- After.")).toBe("Before.\n- After.")
   })
 })

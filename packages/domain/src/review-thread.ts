@@ -40,23 +40,107 @@ export const MarkdownBody = Schema.String.pipe(Schema.brand("MarkdownBody"))
 /** Markdown content stored as a review thread message. */
 export type MarkdownBody = typeof MarkdownBody.Type
 
-const escapedMarkdownStructure =
-  /\\(?:r\\n|n)(?:\\(?:r\\n|n)|[\t ]*(?:#{1,3}[\t ]|[-*][\t ]|>[\t ]|```))/u
-const inlineCodeSpan = /((?<!`)`(?!`)[^`]*?(?<!`)`(?!`))/gu
-
 /** Repairs provider-escaped Markdown line breaks while preserving literal escapes in inline code. */
-export const normalizeMarkdownLineBreaks = (value: string): string => {
+export const normalizeMarkdownLineBreaks = (value: string): MarkdownBody => {
   const normalizedLineEndings = value.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
-  if (!escapedMarkdownStructure.test(normalizedLineEndings)) return normalizedLineEndings
+  let normalized = ""
+  let plainTextStart = 0
+  let index = 0
 
-  return normalizedLineEndings
-    .split(inlineCodeSpan)
-    .map((part) =>
-      part.startsWith("`") && part.endsWith("`")
-        ? part
-        : part.replaceAll("\\r\\n", "\n").replaceAll("\\n", "\n"),
+  while (index < normalizedLineEndings.length) {
+    if (normalizedLineEndings[index] !== "`") {
+      index += 1
+      continue
+    }
+    const delimiterLength = backtickRunLength(normalizedLineEndings, index)
+    const closingIndex = findClosingBackticks(
+      normalizedLineEndings,
+      index + delimiterLength,
+      delimiterLength,
     )
-    .join("")
+    if (closingIndex < 0) {
+      index += delimiterLength
+      continue
+    }
+
+    normalized += repairEscapedLineBreaks(normalizedLineEndings.slice(plainTextStart, index))
+    const codeEnd = closingIndex + delimiterLength
+    const code = normalizedLineEndings.slice(index, codeEnd)
+    normalized += delimiterLength >= 3 ? repairFencedCodeBoundaries(code, delimiterLength) : code
+    plainTextStart = codeEnd
+    index = codeEnd
+  }
+
+  normalized += repairEscapedLineBreaks(normalizedLineEndings.slice(plainTextStart))
+  return MarkdownBody.make(normalized)
+}
+
+const repairEscapedLineBreaks = (value: string) =>
+  value.replaceAll("\\r\\n", "\n").replaceAll("\\n", "\n")
+
+const backtickRunLength = (value: string, start: number) => {
+  let end = start
+  while (value[end] === "`") end += 1
+  return end - start
+}
+
+const findClosingBackticks = (value: string, start: number, delimiterLength: number) => {
+  let index = start
+  while (index < value.length) {
+    const candidate = value.indexOf("`", index)
+    if (candidate < 0) return -1
+    const candidateLength = backtickRunLength(value, candidate)
+    if (candidateLength === delimiterLength) return candidate
+    index = candidate + candidateLength
+  }
+  return -1
+}
+
+const repairFencedCodeBoundaries = (value: string, delimiterLength: number) => {
+  const closingIndex = value.length - delimiterLength
+  const openingBreak = escapedLineBreakAtOrAfter(value, delimiterLength)
+  const closingBreak = escapedLineBreakBefore(value, closingIndex)
+  const boundaries = [openingBreak, closingBreak]
+    .filter((boundary): boundary is EscapedLineBreak => boundary !== null)
+    .filter(
+      (boundary, index, all) => all.findIndex(({ start }) => start === boundary.start) === index,
+    )
+  const firstBoundary = boundaries[0]
+  const secondBoundary = boundaries[1]
+  const orderedBoundaries =
+    firstBoundary !== undefined &&
+    secondBoundary !== undefined &&
+    firstBoundary.start < secondBoundary.start
+      ? [secondBoundary, firstBoundary]
+      : boundaries
+
+  return orderedBoundaries.reduce(
+    (result, boundary) =>
+      `${result.slice(0, boundary.start)}\n${result.slice(boundary.start + boundary.length)}`,
+    value,
+  )
+}
+
+interface EscapedLineBreak {
+  readonly start: number
+  readonly length: number
+}
+
+const escapedLineBreakAtOrAfter = (value: string, start: number): EscapedLineBreak | null => {
+  const windows = value.indexOf("\\r\\n", start)
+  const unix = value.indexOf("\\n", start)
+  if (windows < 0 && unix < 0) return null
+  if (windows >= 0 && (unix < 0 || windows <= unix)) return { start: windows, length: 4 }
+  return { start: unix, length: 2 }
+}
+
+const escapedLineBreakBefore = (value: string, end: number): EscapedLineBreak | null => {
+  const windows = value.lastIndexOf("\\r\\n", end)
+  const unix = value.lastIndexOf("\\n", end)
+  if (windows < 0 && unix < 0) return null
+  if (windows >= 0 && (windows >= unix || unix === windows + 2))
+    return { start: windows, length: 4 }
+  return { start: unix, length: 2 }
 }
 
 /** Current relationship between an original anchor and the latest review revision. */

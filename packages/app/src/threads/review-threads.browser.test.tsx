@@ -364,7 +364,7 @@ const safe = true
       <div data-testid="markdown-under-test">
         <ReviewMarkdown>
           {
-            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4\\n- Trace createCoreLayer through paths.settings.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use `\\n` for a literal newline escape."
+            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4 and README.md\\n- Trace createCoreLayer through paths.settings in packages/app/src.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use `\\n` for a literal newline escape."
           }
         </ReviewMarkdown>
       </div>,
@@ -381,6 +381,8 @@ const safe = true
       expect.arrayContaining([
         "packages/core/src/core-configuration.ts:4",
         "packages/app/src/app.tsx:12",
+        "packages/app/src",
+        "README.md",
       ]),
     )
     expect(
