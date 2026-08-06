@@ -377,7 +377,7 @@ const nested = true
       <div data-testid="markdown-under-test">
         <ReviewMarkdown>
           {
-            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4, README.md, and LICENSE\\n- Trace createCoreLayer through paths.settings in packages/app/src.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use ``value\\nafter`` for a literal newline escape."
+            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4, README.md, and LICENSE\\n- Trace createCoreLayer through paths.settings in packages/app/src and .github/workflows/ci.yml.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use ``value\\nafter`` for a literal newline escape."
           }
         </ReviewMarkdown>
       </div>,
@@ -398,6 +398,7 @@ const nested = true
         "packages/app/src",
         "README.md",
         "LICENSE",
+        ".github/workflows/ci.yml",
       ]),
     )
     expect(

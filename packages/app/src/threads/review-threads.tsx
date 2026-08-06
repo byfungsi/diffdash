@@ -931,7 +931,7 @@ const backtickDelimiterLength = (value: string) => {
   return length
 }
 
-const pathSegmentSource = String.raw`[A-Za-z0-9_@-](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_@-])?`
+const pathSegmentSource = String.raw`(?:\.[A-Za-z0-9_.@-]+|[A-Za-z0-9_@-](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_@-])?)`
 const rootFileReferenceSource = String.raw`(?:[A-Za-z0-9_@-]+\.(?:c|cc|cpp|css|cts|go|h|hpp|html|java|js|json|jsx|kt|kts|md|mdx|mjs|mts|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|xml|yaml|yml|zsh)|\.[A-Za-z0-9_.-]+|CHANGELOG|CODEOWNERS|CONTRIBUTING|Dockerfile|LICENSE|Makefile|Procfile|README|assets|config|docs|packages|public|scripts|src|test|tests|tools)`
 const fileReferenceSource = String.raw`(?:(?:${pathSegmentSource}\/)+${pathSegmentSource}|${rootFileReferenceSource})(?::\d+(?:-\d+)?)?`
 const symbolReferenceSource = String.raw`(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+|[A-Z]{2,}[A-Za-z0-9]*|[a-z_$][a-z0-9_$]*(?:[A-Z][A-Za-z0-9_$]*)+`

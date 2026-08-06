@@ -85,5 +85,9 @@ const value = "\\n"
 Continue.`
     expect(normalizeMarkdownLineBreaks(validFence)).toBe(validFence)
     expect(normalizeMarkdownLineBreaks(normalizeMarkdownLineBreaks(validFence))).toBe(validFence)
+    const longerClosingFence = `\`\`\`ts
+const value = "\\n"
+\`\`\`\``
+    expect(normalizeMarkdownLineBreaks(longerClosingFence)).toBe(longerClosingFence)
   })
 })

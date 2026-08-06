@@ -53,10 +53,12 @@ export const normalizeMarkdownLineBreaks = (value: string): MarkdownBody => {
       continue
     }
     const delimiterLength = backtickRunLength(normalizedLineEndings, index)
+    const fencedCode = delimiterLength >= 3 && isMarkdownLineStart(normalizedLineEndings, index)
     const closingIndex = findClosingBackticks(
       normalizedLineEndings,
       index + delimiterLength,
       delimiterLength,
+      fencedCode,
     )
     if (closingIndex < 0) {
       index += delimiterLength
@@ -64,13 +66,12 @@ export const normalizeMarkdownLineBreaks = (value: string): MarkdownBody => {
     }
 
     normalized += repairEscapedLineBreaks(normalizedLineEndings.slice(plainTextStart, index))
-    const codeEnd = closingIndex + delimiterLength
+    const closingDelimiterLength = backtickRunLength(normalizedLineEndings, closingIndex)
+    const codeEnd = closingIndex + closingDelimiterLength
     const code = normalizedLineEndings.slice(index, codeEnd)
     normalized +=
-      delimiterLength >= 3 &&
-      isMarkdownLineStart(normalizedLineEndings, index) &&
-      isMarkdownLineStart(normalizedLineEndings, closingIndex)
-        ? repairFencedCodeBoundaries(code, delimiterLength)
+      fencedCode && isMarkdownLineStart(normalizedLineEndings, closingIndex)
+        ? repairFencedCodeBoundaries(code, delimiterLength, closingDelimiterLength)
         : code
     plainTextStart = codeEnd
     index = codeEnd
@@ -89,22 +90,36 @@ const backtickRunLength = (value: string, start: number) => {
   return end - start
 }
 
-const findClosingBackticks = (value: string, start: number, delimiterLength: number) => {
+const findClosingBackticks = (
+  value: string,
+  start: number,
+  delimiterLength: number,
+  fencedCode: boolean,
+) => {
   let index = start
   while (index < value.length) {
     const candidate = value.indexOf("`", index)
     if (candidate < 0) return -1
     const candidateLength = backtickRunLength(value, candidate)
-    if (candidateLength === delimiterLength) return candidate
+    if (
+      fencedCode
+        ? candidateLength >= delimiterLength && isMarkdownLineStart(value, candidate)
+        : candidateLength === delimiterLength
+    )
+      return candidate
     index = candidate + candidateLength
   }
   return -1
 }
 
-const repairFencedCodeBoundaries = (value: string, delimiterLength: number) => {
-  const closingIndex = value.length - delimiterLength
-  const openingBreak = escapedLineBreakAtOrAfter(value, delimiterLength)
-  const openingActualBreak = value.indexOf("\n", delimiterLength)
+const repairFencedCodeBoundaries = (
+  value: string,
+  openingDelimiterLength: number,
+  closingDelimiterLength: number,
+) => {
+  const closingIndex = value.length - closingDelimiterLength
+  const openingBreak = escapedLineBreakAtOrAfter(value, openingDelimiterLength)
+  const openingActualBreak = value.indexOf("\n", openingDelimiterLength)
   if (openingActualBreak >= 0 && (openingBreak === null || openingActualBreak < openingBreak.start))
     return value
   const closingBreak = escapedLineBreakBefore(value, closingIndex)
