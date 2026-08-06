@@ -1,9 +1,10 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
-import { AgentProviderId } from "./agent-provider"
+import { AgentProviderFailure, AgentProviderId } from "./agent-provider"
 import {
   boundedProviderReason,
+  classifyProviderFailureText,
   makeAgentProviderOperationErrorFactory,
   parseAgentRuntimeVersion,
   probeAgentRuntime,
@@ -59,6 +60,20 @@ describe("provider runtime helpers", () => {
     expect(reason).not.toContain("\n")
   })
 
+  it.each([
+    ["Authentication failed", "authentication"],
+    ["Authentication required", "authentication"],
+    ["Authorization denied for this model", "authorization"],
+    ["HTTP 429 too many requests", "rate-limited"],
+    ["Weekly usage limit reached and resets tomorrow", "usage-limited"],
+    ["Billing quota exhausted", "quota-exhausted"],
+    ["ECONNREFUSED while connecting", "network"],
+    ["Model is unavailable", "model-unavailable"],
+    ["Request timed out", "timeout"],
+  ] as const)("classifies %s without retaining provider text", (reason, category) => {
+    expect(classifyProviderFailureText(reason)).toBe(category)
+  })
+
   it.effect("probes a runtime once per execution and projects capability status", () =>
     Effect.gen(function* () {
       const ready = probeAgentRuntime({
@@ -104,8 +119,57 @@ describe("provider runtime helpers", () => {
     expect(errors.fromCause("walkthrough")({ stderr: "Bearer shared-secret" }).reason).toBe(
       "Bearer [redacted]",
     )
+    expect(
+      errors.fromCause("walkthrough")({
+        _tag: "ProcessExitError",
+        stdout: "Failed to authenticate. OAuth session expired and could not be refreshed.",
+        stderr: "",
+        exitCode: 1,
+        signal: null,
+      }).failure,
+    ).toMatchObject({
+      category: "authentication",
+      processKind: "exit",
+      exitCode: 1,
+    })
     expect(errors.fromReason("review-thread", "vendor-secret token=assigned-secret").reason).toBe(
       "[vendor-redacted] token=[redacted]",
     )
+    expect(
+      errors.fromReason("review-thread", "Session limit reached; resets at 3pm").failure.category,
+    ).toBe("usage-limited")
+    expect(errors.fromReason("review-thread", "Rate limit reached").failure.category).toBe(
+      "rate-limited",
+    )
+    expect(
+      errors.fromCause("review-thread")({ status: 429, message: "request failed" }).failure,
+    ).toMatchObject({ category: "rate-limited", httpStatus: 429 })
+    expect(
+      errors.fromCause("review-thread")({ statusCode: 402, message: "request failed" }).failure,
+    ).toMatchObject({ category: "quota-exhausted", httpStatus: 402 })
+    expect(
+      errors.fromCause("review-thread")({ statusCode: 408, message: "request failed" }).failure,
+    ).toMatchObject({ category: "timeout", httpStatus: 408 })
+    expect(
+      errors.fromCause("review-thread")({ status: 403, message: "authentication required" })
+        .failure,
+    ).toMatchObject({ category: "authorization", httpStatus: 403 })
+  })
+
+  it("rejects impossible provider reset timestamps", () => {
+    expect(() =>
+      AgentProviderFailure.make({
+        version: 1,
+        providerId: "fixture",
+        capability: "walkthrough",
+        category: "usage-limited",
+        processKind: null,
+        exitCode: null,
+        signal: null,
+        httpStatus: null,
+        retryAfterSeconds: null,
+        resetsAt: "2026-99-99T99:99:99Z",
+      }),
+    ).toThrow(/Invalid UTC provider reset timestamp/)
   })
 })

@@ -7,7 +7,7 @@ import {
   type OpencodeClient,
   type Part,
 } from "@opencode-ai/sdk/v2"
-import { Deferred, Effect, Exit, Option, Redacted, Schema, Stream } from "effect"
+import { Deferred, Effect, Option, Redacted, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
@@ -306,6 +306,7 @@ const executeReview = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
+        "policy-violation",
       )
     }
     const output = yield* runOpenCodeTurn(dependencies, request)
@@ -313,6 +314,7 @@ const executeReview = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "OpenCode emitted a patch despite non-mutating permissions",
+        "policy-violation",
       )
     }
     const response = yield* decodeReviewResponse(output)
@@ -369,6 +371,18 @@ const runOpenCodeTurn = (
       const client = yield* startOpenCode(dependencies, makeReviewServerConfig(request))
       return yield* callSession(client, request)
     }),
+  ).pipe(
+    Effect.raceFirst(
+      Effect.sleep(request.timeoutMs).pipe(
+        Effect.zipRight(
+          operationErrors.fromReason(
+            "review-thread",
+            "Timed out waiting for OpenCode review response",
+            "timeout",
+          ),
+        ),
+      ),
+    ),
   )
 
 const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Config) =>
@@ -395,12 +409,14 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
             : Deferred.succeed(ready, match[1]).pipe(Effect.asVoid)
         }),
         Effect.mapError(operationErrors.fromCause("review-thread")),
-        Effect.onExit((exit) =>
+        Effect.tapError((cause) => Deferred.fail(ready, cause).pipe(Effect.ignore)),
+        Effect.tap(() =>
           Deferred.fail(
             ready,
             operationErrors.fromReason(
               "review-thread",
-              `OpenCode server stopped before use: ${Exit.isFailure(exit) ? "failed" : "completed"}`,
+              "OpenCode server stopped before use",
+              "provider-unavailable",
             ),
           ).pipe(Effect.ignore),
         ),
@@ -408,7 +424,11 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
     yield* process.pipe(Effect.forkScoped)
     const timeout = Effect.sleep("5 seconds").pipe(
       Effect.zipRight(
-        operationErrors.fromReason("review-thread", "Timed out waiting for OpenCode server"),
+        operationErrors.fromReason(
+          "review-thread",
+          "Timed out waiting for OpenCode server",
+          "timeout",
+        ),
       ),
     )
     const url = yield* Deferred.await(ready).pipe(Effect.raceFirst(timeout))
@@ -693,7 +713,11 @@ const requirePolicy = (
   const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrors.fromReason(capability, "OpenCode requires the explicit non-mutating policy")
+    : operationErrors.fromReason(
+        capability,
+        "OpenCode requires the explicit non-mutating policy",
+        "policy-violation",
+      )
 }
 
 const resolveRuntimeExecutable = (
@@ -705,7 +729,11 @@ const resolveRuntimeExecutable = (
         Effect.flatMap((resolved) =>
           Option.match(resolved, {
             onNone: () =>
-              operationErrors.fromReason(capability, "OpenCode is not installed or available"),
+              operationErrors.fromReason(
+                capability,
+                "OpenCode is not installed or available",
+                "configuration",
+              ),
             onSome: (path) => Effect.succeed(path),
           }),
         ),

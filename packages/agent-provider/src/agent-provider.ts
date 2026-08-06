@@ -54,6 +54,79 @@ export const AgentCapability = Schema.Literal("walkthrough", "review-thread")
 /** Stable capabilities independently exposed by a provider. */
 export type AgentCapability = typeof AgentCapability.Type
 
+/** Provider-internal failure categories projected to public domain data at host boundaries. */
+export const AgentProviderFailureCategory = Schema.Literal(
+  "authentication",
+  "authorization",
+  "rate-limited",
+  "usage-limited",
+  "quota-exhausted",
+  "timeout",
+  "network",
+  "model-unavailable",
+  "provider-unavailable",
+  "configuration",
+  "invalid-response",
+  "policy-violation",
+  "process-failure",
+  "unknown",
+)
+
+/** Provider-internal failure categories projected to public domain data at host boundaries. */
+export type AgentProviderFailureCategory = typeof AgentProviderFailureCategory.Type
+
+/** Local process stage that failed before a provider operation completed. */
+export const AgentProviderProcessFailureKind = Schema.Literal(
+  "options",
+  "spawn",
+  "stdin",
+  "output",
+  "timeout",
+  "cleanup",
+  "exit",
+)
+
+/** Local process stage that failed before a provider operation completed. */
+export type AgentProviderProcessFailureKind = typeof AgentProviderProcessFailureKind.Type
+
+const isUtcTimestamp = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)) return false
+  const normalized = value.includes(".") ? value : value.replace("Z", ".000Z")
+  const parsed = new Date(value)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === normalized
+}
+
+const AgentProviderFailureResetAt = Schema.String.pipe(
+  Schema.maxLength(100),
+  Schema.filter(isUtcTimestamp, { message: () => "Invalid UTC provider reset timestamp" }),
+)
+
+/** Closed provider failure evidence retained without provider-owned text. */
+export class AgentProviderFailure extends Schema.Class<AgentProviderFailure>(
+  "AgentProviderFailure",
+)({
+  version: Schema.Literal(1),
+  providerId: Schema.String.pipe(
+    Schema.minLength(1),
+    Schema.maxLength(100),
+    Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  ),
+  capability: AgentCapability,
+  category: AgentProviderFailureCategory,
+  processKind: Schema.NullOr(AgentProviderProcessFailureKind),
+  exitCode: Schema.NullOr(Schema.Int),
+  signal: Schema.NullOr(
+    Schema.String.pipe(
+      Schema.minLength(1),
+      Schema.maxLength(100),
+      Schema.pattern(/^[A-Za-z0-9._:-]+$/u),
+    ),
+  ),
+  httpStatus: Schema.NullOr(Schema.Int),
+  retryAfterSeconds: Schema.NullOr(Schema.Int.pipe(Schema.greaterThanOrEqualTo(0))),
+  resetsAt: Schema.NullOr(AgentProviderFailureResetAt),
+}) {}
+
 /** User-facing provider metadata. */
 export class AgentProviderDescriptor extends Schema.Class<AgentProviderDescriptor>(
   "AgentProviderDescriptor",
@@ -363,6 +436,7 @@ export class AgentProviderOperationError extends Schema.TaggedError<AgentProvide
   {
     providerId: AgentProviderId,
     capability: AgentCapability,
+    failure: AgentProviderFailure,
     reason: Schema.String,
     cause: Schema.optional(Schema.Defect),
   },

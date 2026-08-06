@@ -11,6 +11,10 @@ import {
 } from "@diffdash/domain/agent-run"
 import { makeHostedRepositoryKey, makeHostedReviewKey } from "@diffdash/domain/git-provider"
 import {
+  AgentProviderFailure,
+  type AgentProviderFailure as AgentProviderFailureType,
+} from "@diffdash/domain/provider-failure"
+import {
   AgentRunId,
   type ReviewAgentArtifact,
   ReviewAgentArtifactId,
@@ -38,6 +42,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
 const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchor)
+const AgentProviderFailureJson = Schema.NullOr(Schema.parseJson(AgentProviderFailure))
 const ReviewAgentUsageJson = Schema.NullOr(Schema.parseJson(ReviewAgentUsageSchema))
 const ArtifactMetadataJson = Schema.parseJson(
   Schema.Record({ key: Schema.String, value: Schema.Unknown }),
@@ -70,6 +75,7 @@ const ReviewThreadMessageRow = Schema.Struct({
   body_markdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
   agent_run_id: Schema.NullOr(AgentRunId),
+  failure_json: AgentProviderFailureJson,
   created_at: Schema.String,
   updated_at: Schema.String,
 })
@@ -177,6 +183,7 @@ interface FailReviewTurnInput {
   readonly runId: AgentRunId
   readonly messageId: ReviewThreadMessageId
   readonly diagnostic: MarkdownBody
+  readonly failure: AgentProviderFailureType | null
   readonly providerRunId?: ReviewAgentProviderRunId
 }
 
@@ -390,7 +397,7 @@ export class ReviewTurnStore extends Context.Tag("@diffdash/ReviewTurnStore")<
                     transaction,
                     "complete.message",
                     `UPDATE review_thread_messages
-                     SET body_markdown = ?, status = 'complete', updated_at = ?
+                   SET body_markdown = ?, status = 'complete', updated_at = ?
                      WHERE id = ? AND thread_id = ? AND agent_run_id = ? AND status = 'pending'`,
                     [input.bodyMarkdown, now, message.id, input.threadId, input.runId],
                   )
@@ -452,6 +459,7 @@ export class ReviewTurnStore extends Context.Tag("@diffdash/ReviewTurnStore")<
             )
           }),
           failTurn: Effect.fn("ReviewTurnStore.failTurn")(function (input) {
+            const failureJson = Schema.encodeSync(AgentProviderFailureJson)(input.failure)
             return database
               .transaction("reviewTurns.failTurn", (transaction) => {
                 requireOwnedActiveTurn(transaction, input)
@@ -460,9 +468,16 @@ export class ReviewTurnStore extends Context.Tag("@diffdash/ReviewTurnStore")<
                   transaction,
                   "fail.message",
                   `UPDATE review_thread_messages
-                   SET body_markdown = ?, status = 'failed', updated_at = ?
-                   WHERE id = ? AND thread_id = ? AND agent_run_id = ? AND status = 'pending'`,
-                  [input.diagnostic, now, input.messageId, input.threadId, input.runId],
+                    SET body_markdown = ?, status = 'failed', failure_json = ?, updated_at = ?
+                    WHERE id = ? AND thread_id = ? AND agent_run_id = ? AND status = 'pending'`,
+                  [
+                    input.diagnostic,
+                    failureJson,
+                    now,
+                    input.messageId,
+                    input.threadId,
+                    input.runId,
+                  ],
                 )
                 write(
                   transaction,
@@ -823,6 +838,7 @@ const decodeMessageRow = (input: unknown) => {
     bodyMarkdown: row.body_markdown,
     status: row.status,
     agentRunId: row.agent_run_id,
+    failure: row.failure_json,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })

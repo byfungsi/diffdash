@@ -1,4 +1,5 @@
-import { AgentProviderId, AgentProviderOperationError } from "@diffdash/agent-provider"
+import { AgentProviderId } from "@diffdash/agent-provider"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { Repo } from "@diffdash/domain/repository"
 import { ProcessExitError } from "@diffdash/process"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
@@ -33,6 +34,15 @@ import { sendProtocolEvent } from "./main/ipc/transport"
 import { createShutdown } from "./main/shutdown"
 import type { RendererIpc } from "./preload/transport"
 import { createRendererTransport } from "./preload/transport"
+
+const claudeOperationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: AgentProviderId.make("claude"),
+  fallbackReason: "Claude execution failed",
+})
+const codexOperationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: AgentProviderId.make("codex"),
+  fallbackReason: "Codex execution failed",
+})
 
 const electronHostMocks = vi.hoisted(() => ({
   focusApplication: vi.fn<() => void>(),
@@ -241,11 +251,8 @@ describe("IPC contract", () => {
     registry.define(
       channel,
       async () => {
-        throw AgentProviderOperationError.make({
-          providerId: AgentProviderId.make("claude"),
-          capability: "walkthrough",
-          reason: "Authentication failed in /Users/example/secret-repository",
-          cause: ProcessExitError.make({
+        throw claudeOperationErrors.fromCause("walkthrough")(
+          ProcessExitError.make({
             command: "claude",
             args: ["--print", "private prompt"],
             cwd: "/Users/example/secret-repository",
@@ -258,7 +265,7 @@ describe("IPC contract", () => {
             outputTruncated: false,
             message: "Command exited with code 9",
           }),
-        })
+        )
       },
       toPublicWalkthroughError,
     )
@@ -268,7 +275,7 @@ describe("IPC contract", () => {
     const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
 
     expect(envelope.error).toMatchObject({
-      code: "AgentProviderExitError",
+      code: "AgentProviderAuthenticationError",
       operation: channel,
       diagnostic: {
         provider: "claude",
@@ -481,12 +488,9 @@ describe("IPC contract", () => {
     registry.define(
       InvokeChannel.generateLocalWalkthrough,
       async () => {
-        throw AgentProviderOperationError.make({
-          providerId: AgentProviderId.make("codex"),
-          capability: "walkthrough",
-          reason: "Failure in /Users/example/secret-repository with private stderr",
-          cause: new Error("private provider cause"),
-        })
+        throw codexOperationErrors.fromCause("walkthrough")(
+          new Error("private provider cause in /Users/example/secret-repository"),
+        )
       },
       toPublicWalkthroughError,
     )
@@ -519,11 +523,7 @@ describe("IPC contract", () => {
     registry.define(
       InvokeChannel.generateWalkthrough,
       async () => {
-        throw AgentProviderOperationError.make({
-          providerId: AgentProviderId.make("codex"),
-          capability: "walkthrough",
-          reason: "private provider stderr",
-        })
+        throw codexOperationErrors.fromReason("walkthrough", "private provider stderr")
       },
       toPublicWalkthroughError,
     )

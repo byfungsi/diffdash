@@ -300,6 +300,7 @@ const executeReview = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
+        "policy-violation",
       )
     }
 
@@ -338,6 +339,7 @@ const executeReview = (
             return yield* operationErrors.fromReason(
               "review-thread",
               `Codex stream ended without a complete turn lifecycle (stopped at ${state.lifecycle.stage})`,
+              "invalid-response",
             )
           }
           const response = yield* decodeReviewResponse(selectFinalAgentMessage(state.agentMessages))
@@ -387,6 +389,7 @@ const consumeCodexLine = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "Codex emitted an event without a type",
+        "invalid-response",
       )
     }
 
@@ -400,6 +403,7 @@ const consumeCodexLine = (
           return yield* operationErrors.fromReason(
             "review-thread",
             "Codex thread.started event omitted thread_id",
+            "invalid-response",
           )
         }
         state.lifecycle = { stage: "AwaitingTurnStart", threadId }
@@ -440,6 +444,7 @@ const consumeCodexLine = (
           return yield* operationErrors.fromReason(
             "review-thread",
             "Codex item.completed omitted item",
+            "invalid-response",
           )
         }
         return yield* consumeCompletedItem(state, item)
@@ -451,12 +456,17 @@ const consumeCodexLine = (
         }
         const item = recordAt(event, "item")
         if (item === null) {
-          return yield* operationErrors.fromReason("review-thread", `Codex ${type} omitted item`)
+          return yield* operationErrors.fromReason(
+            "review-thread",
+            `Codex ${type} omitted item`,
+            "invalid-response",
+          )
         }
         if (stringAt(item, "type") === "file_change") {
           return yield* operationErrors.fromReason(
             "review-thread",
             `Codex emitted a file change in ${type} despite the read-only sandbox`,
+            "policy-violation",
           )
         }
         return
@@ -604,7 +614,11 @@ const adaptAgentMessageItem = (
     ["output", "text"],
   ])
   if (text === null) {
-    return operationErrors.fromReason("review-thread", "Codex agent message omitted text")
+    return operationErrors.fromReason(
+      "review-thread",
+      "Codex agent message omitted text",
+      "invalid-response",
+    )
   }
   return Effect.succeed({
     text,
@@ -691,6 +705,7 @@ const adaptFileChangeItem = (): Effect.Effect<never, AgentProviderOperationError
   operationErrors.fromReason(
     "review-thread",
     "Codex emitted a file change in item.completed despite the read-only sandbox",
+    "policy-violation",
   )
 
 const adaptWebSearchItem = (completedItem: CodexWebSearchItem): PendingArtifact =>
@@ -927,12 +942,17 @@ const invalidLifecycleEvent = (state: CodexTurnState, eventType: string, expecte
   operationErrors.fromReason(
     "review-thread",
     `Codex emitted ${eventType} while lifecycle was ${state.lifecycle.stage}; expected ${expected}`,
+    "invalid-response",
   )
 
 const parseJsonLine = (line: string) =>
   parseProviderJsonlObject(line).pipe(
     Effect.mapError((cause) =>
-      operationErrors.fromReason("review-thread", `Codex emitted invalid JSONL: ${cause.reason}`),
+      operationErrors.fromReason(
+        "review-thread",
+        `Codex emitted invalid JSONL: ${cause.reason}`,
+        "invalid-response",
+      ),
     ),
   )
 
@@ -988,7 +1008,11 @@ const requirePolicy = (
   const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrors.fromReason(capability, "Codex requires the explicit non-mutating policy")
+    : operationErrors.fromReason(
+        capability,
+        "Codex requires the explicit non-mutating policy",
+        "policy-violation",
+      )
 }
 
 const errorMessage = (event: Readonly<Record<string, unknown>>) => {

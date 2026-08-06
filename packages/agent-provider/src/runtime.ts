@@ -6,10 +6,15 @@ import {
   AgentCapabilityUnavailable,
   type AgentCapability,
   type AgentCapabilityProbe,
+  AgentProviderFailure,
+  type AgentProviderFailureCategory,
   type AgentProviderId,
   AgentProviderOperationError,
+  type AgentProviderProcessFailureKind,
 } from "./agent-provider"
 import { type ProviderDiagnosticExtraRedaction, sanitizeProviderDiagnostic } from "./security"
+
+export type { AgentProviderFailureCategory } from "./agent-provider"
 
 /** Default maximum persisted or displayed length of a provider failure reason. */
 export const DEFAULT_PROVIDER_REASON_MAX_LENGTH = 600
@@ -41,14 +46,20 @@ export interface AgentProviderOperationErrorFactoryOptions {
   readonly providerId: AgentProviderId
   readonly fallbackReason: string
   readonly extraRedaction?: ProviderDiagnosticExtraRedaction
+  readonly classify?: (cause: unknown, reason: string) => AgentProviderFailureCategory | null
 }
 
 /** Cohesive constructors for cause-backed and reason-only provider operation errors. */
 export interface AgentProviderOperationErrorFactory {
   readonly fromCause: (
     capability: AgentCapability,
+    category?: AgentProviderFailureCategory,
   ) => (cause: unknown) => AgentProviderOperationError
-  readonly fromReason: (capability: AgentCapability, reason: string) => AgentProviderOperationError
+  readonly fromReason: (
+    capability: AgentCapability,
+    reason: string,
+    category?: AgentProviderFailureCategory,
+  ) => AgentProviderOperationError
 }
 
 /** Extracts a bounded runtime version from provider command output. */
@@ -110,6 +121,151 @@ export const boundedProviderDiagnostic = (
   return sanitizeProviderDiagnostic(value, extraRedaction).slice(-limit)
 }
 
+/** Classifies provider-owned text without retaining the source text in public data. */
+export const classifyProviderFailureText = (value: string): AgentProviderFailureCategory | null => {
+  if (/\b(?:429|rate[ -]?limit(?:ed)?|too many requests|throttl(?:e|ed|ing))\b/iu.test(value)) {
+    return "rate-limited"
+  }
+  if (
+    /\b(?:session|daily|weekly|monthly|usage)\s+(?:cap|limit)|(?:cap|limit)\s+(?:reached|resets?)\b/iu.test(
+      value,
+    )
+  ) {
+    return "usage-limited"
+  }
+  if (/\b(?:billing|credits?|payment required|spend(?:ing)?\s+limit|quota)\b/iu.test(value)) {
+    return "quota-exhausted"
+  }
+  if (
+    /\b(?:auth|authenticate(?:d)?|authentication|credentials?|login|sign[ -]?in|oauth|unauthorized|401)\b/iu.test(
+      value,
+    )
+  ) {
+    return "authentication"
+  }
+  if (
+    /\b(?:authorization|authorized|forbidden|permission denied|access denied|not authorized|403)\b/iu.test(
+      value,
+    )
+  ) {
+    return "authorization"
+  }
+  if (/\b(?:model).*(?:not found|unavailable|unsupported|access)\b/iu.test(value)) {
+    return "model-unavailable"
+  }
+  if (
+    /\b(?:connect(?:ion|ivity)?|dns|network|offline|socket|econn(?:refused|reset)|enotfound)\b/iu.test(
+      value,
+    )
+  ) {
+    return "network"
+  }
+  if (
+    /\b(?:service unavailable|temporarily unavailable|overloaded|bad gateway|502|503|504)\b/iu.test(
+      value,
+    )
+  ) {
+    return "provider-unavailable"
+  }
+  if (/\b(?:timed?[ -]?out|timeout)\b/iu.test(value)) {
+    return "timeout"
+  }
+  if (
+    /\b(?:configuration|config|invalid option|unknown (?:argument|flag|option))\b/iu.test(value)
+  ) {
+    return "configuration"
+  }
+  return null
+}
+
+const processKind = (cause: unknown): AgentProviderProcessFailureKind | null => {
+  const tag = taggedString(cause, "_tag")
+  switch (tag) {
+    case "InvalidProcessOptionsError":
+      return "options"
+    case "ProcessSpawnError":
+      return "spawn"
+    case "ProcessStdinError":
+      return "stdin"
+    case "ProcessOutputError":
+      return "output"
+    case "ProcessTimeoutError":
+      return "timeout"
+    case "ProcessCleanupError":
+      return "cleanup"
+    case "ProcessExitError":
+      return "exit"
+    default:
+      return null
+  }
+}
+
+const classificationText = (cause: unknown, reason: string) => {
+  if (!Predicate.isReadonlyRecord(cause)) return reason
+  return [cause.stdout, cause.stderr, cause.reason, cause.message, reason]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+}
+
+const taggedString = (value: unknown, key: string): string | null =>
+  Predicate.isReadonlyRecord(value) && typeof value[key] === "string" ? value[key] : null
+
+const taggedInteger = (value: unknown, key: string): number | null =>
+  Predicate.isReadonlyRecord(value) && Number.isSafeInteger(value[key])
+    ? (value[key] as number)
+    : null
+
+const safeProviderId = (providerId: AgentProviderId) =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(providerId) ? providerId : "custom"
+
+const makeFailure = (
+  options: AgentProviderOperationErrorFactoryOptions,
+  capability: AgentCapability,
+  cause: unknown,
+  reason: string,
+  category?: AgentProviderFailureCategory,
+) => {
+  const processFailure = processKind(cause)
+  const httpStatus = taggedInteger(cause, "status") ?? taggedInteger(cause, "statusCode")
+  const statusCategory =
+    httpStatus === 401
+      ? "authentication"
+      : httpStatus === 402
+        ? "quota-exhausted"
+        : httpStatus === 403
+          ? "authorization"
+          : httpStatus === 408
+            ? "timeout"
+            : httpStatus === 429
+              ? "rate-limited"
+              : httpStatus !== null && httpStatus >= 500
+                ? "provider-unavailable"
+                : null
+  const classified =
+    category ??
+    options.classify?.(cause, reason) ??
+    statusCategory ??
+    classifyProviderFailureText(classificationText(cause, reason))
+  return AgentProviderFailure.make({
+    version: 1,
+    providerId: safeProviderId(options.providerId),
+    capability,
+    category:
+      classified ??
+      (processFailure === "timeout"
+        ? "timeout"
+        : processFailure === null
+          ? "unknown"
+          : "process-failure"),
+    processKind: processFailure,
+    exitCode: taggedInteger(cause, "exitCode"),
+    signal: taggedString(cause, "signal"),
+    httpStatus,
+    retryAfterSeconds: null,
+    resetsAt: null,
+  })
+}
+
 /** Probes one provider version command and converts expected command failures to unavailable status. */
 export const probeAgentRuntime = <E, R>(
   options: ProbeAgentRuntimeOptions<E, R>,
@@ -151,17 +307,23 @@ export const projectAgentCapabilityProbe = <E, R>(
 export const makeAgentProviderOperationErrorFactory = (
   options: AgentProviderOperationErrorFactoryOptions,
 ): AgentProviderOperationErrorFactory => ({
-  fromCause: (capability) => (cause) =>
-    AgentProviderOperationError.make({
+  fromCause: (capability, category) => (cause) => {
+    const reason = boundedProviderReason(cause, options.fallbackReason, options.extraRedaction)
+    return AgentProviderOperationError.make({
       providerId: options.providerId,
       capability,
-      reason: boundedProviderReason(cause, options.fallbackReason, options.extraRedaction),
+      failure: makeFailure(options, capability, cause, reason, category),
+      reason,
       cause,
-    }),
-  fromReason: (capability, reason) =>
-    AgentProviderOperationError.make({
+    })
+  },
+  fromReason: (capability, reason, category) => {
+    const boundedReason = boundedProviderDiagnostic(reason, options.extraRedaction)
+    return AgentProviderOperationError.make({
       providerId: options.providerId,
       capability,
-      reason: boundedProviderDiagnostic(reason, options.extraRedaction),
-    }),
+      failure: makeFailure(options, capability, undefined, boundedReason, category),
+      reason: boundedReason,
+    })
+  },
 })

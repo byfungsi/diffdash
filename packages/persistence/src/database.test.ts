@@ -138,6 +138,15 @@ describe("DatabaseService", () => {
         expect(agentRunColumns.map(({ name }) => name)).toEqual(
           expect.arrayContaining(["usage_json", "review_key", "base_sha", "head_sha"]),
         )
+        const messageColumns = decodeColumnNameRows(
+          yield* database.all("PRAGMA table_info(review_thread_messages)"),
+        )
+        expect(messageColumns.map(({ name }) => name)).toContain("failure_json")
+        expect(
+          yield* database.get("SELECT name, version FROM diffdash_capabilities WHERE name = ?", [
+            "review-provider-failure",
+          ]),
+        ).toEqual({ name: "review-provider-failure", version: 1 })
         const turnIndexes = decodeColumnNameRows(
           yield* database.all(
             `SELECT name FROM sqlite_master
@@ -192,6 +201,103 @@ describe("DatabaseService", () => {
         expect(Either.isLeft(orphan)).toBe(true)
         if (Either.isLeft(orphan)) expect(orphan.left.operation).toBe("run")
       }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.scoped("upgrades legacy review failures to typed-safe generic records idempotently", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      const sqlite = new BetterSqlite3(databasePath)
+      sqlite.exec(`
+        INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES (
+          'repo-failure', 'local', 'local', 'failure', 'file:///failure', '/failure', 0,
+          NULL, NULL, '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z'
+        );
+        INSERT INTO review_threads (
+          id, repo_id, review_key, pr_number, base_sha, head_sha, current_base_sha,
+          current_head_sha, original_anchor_json, current_anchor_json, anchor_status,
+          status, closed_at, created_at, updated_at
+        ) VALUES (
+          'thread-failure', 'repo-failure', 'local:failure', NULL, 'base', 'head', 'base', 'head',
+          '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
+          '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
+          'active', 'open', NULL, '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z'
+        );
+        INSERT INTO agent_runs (
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          status, provider_run_id, error, started_at, completed_at, usage_json
+        ) VALUES (
+          'run-failure', 'thread-failure', 'local:failure', 'base', 'head', 'claude', 'model',
+          'review-thread-v3', 'failed', NULL, 'private legacy provider output',
+          '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:01.000Z', NULL
+        );
+        INSERT INTO review_thread_messages (
+          id, thread_id, sequence, author, body_markdown, status, agent_run_id,
+          created_at, updated_at, failure_json
+        ) VALUES
+          ('message-user', 'thread-failure', 1, 'user', 'keep this message', 'complete', NULL,
+           '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z', NULL),
+          ('message-failure', 'thread-failure', 2, 'agent', 'private legacy provider output',
+           'failed', 'run-failure', '2026-08-06T00:00:01.000Z',
+           '2026-08-06T00:00:01.000Z', NULL);
+        DELETE FROM diffdash_capabilities WHERE name = 'review-provider-failure';
+      `)
+      sqlite.close()
+
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      const downgraded = new BetterSqlite3(databasePath)
+      downgraded
+        .prepare(
+          "UPDATE review_thread_messages SET body_markdown = ?, failure_json = ? WHERE id = ?",
+        )
+        .run(
+          "private downgraded provider output",
+          '{"version":1,"providerId":"claude","capability":"review-thread","category":"authentication","processKind":null,"exitCode":null,"signal":null,"httpStatus":null,"retryAfterSeconds":null,"resetsAt":null}',
+          "message-failure",
+        )
+      downgraded
+        .prepare("UPDATE agent_runs SET error = ? WHERE id = ?")
+        .run("private downgraded provider output", "run-failure")
+      downgraded.close()
+
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      const reopened = new BetterSqlite3(databasePath)
+      const generic = "The local review agent could not complete this response. Retry to try again."
+      expect(
+        reopened
+          .prepare("SELECT body_markdown FROM review_thread_messages WHERE id = ?")
+          .pluck()
+          .get("message-failure"),
+      ).toBe(generic)
+      expect(
+        reopened
+          .prepare("SELECT failure_json FROM review_thread_messages WHERE id = ?")
+          .pluck()
+          .get("message-failure"),
+      ).toContain('"category":"authentication"')
+      expect(
+        reopened
+          .prepare("SELECT body_markdown FROM review_thread_messages WHERE id = ?")
+          .pluck()
+          .get("message-user"),
+      ).toBe("keep this message")
+      expect(
+        reopened.prepare("SELECT error FROM agent_runs WHERE id = ?").pluck().get("run-failure"),
+      ).toBe(generic)
+      expect(
+        reopened
+          .prepare("SELECT version FROM diffdash_capabilities WHERE name = ?")
+          .pluck()
+          .get("review-provider-failure"),
+      ).toBe(1)
+      reopened.close()
     }),
   )
 

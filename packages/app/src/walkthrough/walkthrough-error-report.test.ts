@@ -1,4 +1,5 @@
 import { AgentProviderId } from "@diffdash/protocol/agent-providers"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
   bridgeTransportError,
@@ -35,19 +36,32 @@ describe("walkthroughErrorPresentation", () => {
           stderr: "Provider diagnostics were redacted.",
           stackFrames: ["at runClaude", "at generateWalkthrough"],
         }),
+        AgentProviderFailure.make({
+          version: 1,
+          providerId: "claude",
+          capability: "walkthrough",
+          category: "authentication",
+          processKind: "exit",
+          exitCode: 9,
+          signal: null,
+          httpStatus: null,
+          retryAfterSeconds: null,
+          resetsAt: null,
+        }),
       ),
     )
 
     const result = walkthroughErrorPresentation({ message: error.message }, context)
 
     expect(result.message).toBe(
-      "The AI provider stopped before finishing the walkthrough. Check sign-in, connection, and quota, then retry.",
+      "AI provider authentication failed or expired. Sign in again, then retry.",
     )
     expect(result.report).toContain("Review type: Repository comparison")
     expect(result.report).toContain(
       `Operation: ${InvokeChannel.generateRepositoryComparisonWalkthrough}`,
     )
     expect(result.report).toContain("Error code: AgentProviderExitError")
+    expect(result.report).toContain("Failure category: authentication")
     expect(result.report).toContain("Cause tag: ProcessExitError")
     expect(result.report).toContain("Exit code: 9")
     expect(result.report).toContain("- at runClaude")
@@ -101,6 +115,34 @@ describe("walkthroughErrorPresentation", () => {
     )
     expect(result.report).toContain("Review type: Local changes")
     expect(result.report).toContain("Error code: AgentProviderOperationError")
+  })
+
+  it("uses typed timeout guidance for a capability preflight failure", () => {
+    const result = walkthroughErrorPresentation(
+      transportError(
+        "AgentCapabilityUnavailableError",
+        "Provider claude is currently unavailable.",
+        InvokeChannel.generateWalkthrough,
+        undefined,
+        AgentProviderFailure.make({
+          version: 1,
+          providerId: "claude",
+          capability: "walkthrough",
+          category: "timeout",
+          processKind: null,
+          exitCode: null,
+          signal: null,
+          httpStatus: null,
+          retryAfterSeconds: null,
+          resetsAt: null,
+        }),
+      ),
+      context,
+    )
+
+    expect(result.message).toBe(
+      "The AI provider timed out while generating this walkthrough. Retry or select a faster model.",
+    )
   })
 
   it("distinguishes invalid and empty provider output guidance", () => {

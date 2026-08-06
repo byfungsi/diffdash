@@ -1,24 +1,35 @@
 import { randomUUID } from "node:crypto"
 import {
+  AgentCapabilityUnavailableError,
   AgentModelId,
   type AgentModelQuality,
-  type AgentProviderId,
+  AgentPolicyEnforcementError,
+  AgentProviderId,
+  AgentProviderOperationError,
   type AgentProviderManifest,
+  AgentProviderProbeError,
   type AgentProviderRegistration,
   ReviewRevision as AgentReviewRevision,
   AgentSessionId,
   DIFFDASH_REVIEW_MCP_TOOLS,
+  InvalidAgentProviderResponseError,
+  MissingAgentProviderError,
   ReviewThreadResult,
   ScopedMcpAccessError,
+  UnsupportedAgentCapabilityError,
 } from "@diffdash/agent-provider"
 import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
 import { AgentProviderRegistry, type AgentProviderRoute } from "@diffdash/agent-provider/registry"
-import { boundedProviderDiagnostic } from "@diffdash/agent-provider/runtime"
+import {
+  boundedProviderDiagnostic,
+  classifyProviderFailureText,
+} from "@diffdash/agent-provider/runtime"
 import {
   AgentPromptVersion,
   ThreadMemorySummaryAlgorithm,
   UpsertThreadMemoryInput,
 } from "@diffdash/domain/agent-run"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import {
   ReviewAgentArtifactId,
   type ReviewAgentProgressStage,
@@ -39,10 +50,7 @@ import {
 } from "@diffdash/domain/review-thread"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { GitProviderRegistry } from "@diffdash/git-provider"
-import {
-  HostedReviewWorkspacePool,
-  HostedReviewWorkspacePoolError,
-} from "@diffdash/local-git/hosted-review-workspace-pool"
+import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import {
   type BegunReviewTurn,
@@ -107,6 +115,16 @@ export class ReviewAgentFinalizeError extends Schema.TaggedError<ReviewAgentFina
   },
 ) {}
 
+/** Provider failure already projected to data safe for persistence and renderer display. */
+export class ReviewAgentProviderFailureError extends Schema.TaggedError<ReviewAgentProviderFailureError>()(
+  "ReviewAgentProviderFailureError",
+  {
+    failure: AgentProviderFailure,
+    reason: Schema.String,
+    cause: Schema.Defect,
+  },
+) {}
+
 /** Coordinates provider selection, MCP capability lifetime, persistence, and thread memory. */
 export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentService")<
   ReviewAgentService,
@@ -117,6 +135,7 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
       ReviewThreadDetails,
       | ReviewAgentServiceError
       | ReviewAgentFinalizeError
+      | ReviewAgentProviderFailureError
       | ReviewTurnTargetError
       | ReviewTurnRejectedError
     >
@@ -241,8 +260,17 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                         },
                         policy,
                       })
-                      const providerResult =
-                        yield* Schema.decodeUnknown(ReviewThreadResult)(rawProviderResult)
+                      const providerResult = yield* Schema.decodeUnknown(ReviewThreadResult)(
+                        rawProviderResult,
+                      ).pipe(
+                        Effect.mapError(() =>
+                          InvalidAgentProviderResponseError.make({
+                            providerId,
+                            capability: "review-thread",
+                            reason: "Provider returned an invalid review-thread response.",
+                          }),
+                        ),
+                      )
                       return yield* adaptProviderResult(providerId, providerResult, normalizer)
                     }),
                   )
@@ -315,7 +343,8 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
               Effect.mapError((cause) =>
                 isReviewAgentTurnError(cause)
                   ? cause
-                  : serviceErrorValue("runThreadTurn.preflight", cause),
+                  : (publicPreflightFailure(cause) ??
+                    serviceErrorValue("runThreadTurn.preflight", cause)),
               ),
             ),
           ),
@@ -386,17 +415,28 @@ const failStartedTurn = (
   providerId: ReviewAgentProviderId,
   cause: unknown,
 ) => {
-  const failure = userSafeFailure(providerId, cause)
+  const failure = publicProviderFailure(providerId, cause)
+  const diagnostic = MarkdownBody.make(
+    "The local review agent could not complete this response. Retry to try again.",
+  )
   return turns
     .failTurn({
       threadId: begun.run.threadId,
       runId: begun.run.id,
       messageId: begun.pendingMessage.id,
-      diagnostic: MarkdownBody.make(failure),
+      diagnostic,
+      failure,
     })
     .pipe(
       Effect.mapError((finalizeCause) => finalizeErrorValue("failTurn", finalizeCause)),
-      Effect.flatMap(() => serviceError("runThreadTurn.provider", cause)),
+      Effect.flatMap(
+        (): Effect.Effect<never, ReviewAgentServiceError | ReviewAgentProviderFailureError> => {
+          if (failure === null) return serviceError("runThreadTurn.provider", cause)
+          return Effect.fail(
+            ReviewAgentProviderFailureError.make({ failure, reason: diagnostic, cause }),
+          )
+        },
+      ),
     )
 }
 
@@ -431,9 +471,12 @@ const resolveReviewProvider = (
   ): Effect.Effect<ResolvedReviewProvider, unknown> => {
     const [providerId, ...rest] = remaining
     if (providerId === undefined) {
-      return serviceError(
-        "runThreadTurn.resolveProvider",
-        new Error("No review agent provider is available"),
+      return Effect.fail(
+        providerFailureError(
+          AgentProviderId.make("unavailable"),
+          "configuration",
+          new Error("No review agent provider is available"),
+        ),
       )
     }
     return Effect.gen(function* () {
@@ -467,9 +510,12 @@ const modelForProvider = (
   return selected === null ||
     selected === undefined ||
     !reviewModels.some(({ id }) => id === selected)
-    ? serviceError(
-        "runThreadTurn.resolveModel",
-        new Error(`No review-thread model is configured for provider: ${providerId}`),
+    ? Effect.fail(
+        providerFailureError(
+          providerId,
+          "model-unavailable",
+          new Error(`No review-thread model is configured for provider: ${providerId}`),
+        ),
       )
     : Effect.succeed(selected)
 }
@@ -483,12 +529,72 @@ const reviewExecutionPolicy = (providerPublishingTools: readonly string[]) =>
     allowedMcpTools: DIFFDASH_REVIEW_MCP_TOOLS,
   })
 
-const userSafeFailure = (provider: ReviewAgentProviderId, cause: unknown) => {
-  const reason = executionFailureReason(cause)
-  return cause instanceof HostedReviewWorkspacePoolError
-    ? reason
-    : `The local ${provider} agent could not complete this response: ${reason}. Retry to try again.`
+const publicProviderFailure = (
+  provider: ReviewAgentProviderId,
+  cause: unknown,
+): AgentProviderFailure | null => {
+  if (cause instanceof AgentProviderOperationError) {
+    return AgentProviderFailure.make({ ...cause.failure })
+  }
+  if (!(cause instanceof InvalidAgentProviderResponseError)) return null
+  return AgentProviderFailure.make({
+    version: 1,
+    providerId: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(provider) ? provider : "custom",
+    capability: "review-thread",
+    category: "invalid-response",
+    processKind: null,
+    exitCode: null,
+    signal: null,
+    httpStatus: null,
+    retryAfterSeconds: null,
+    resetsAt: null,
+  })
 }
+
+const publicPreflightFailure = (cause: unknown): ReviewAgentProviderFailureError | null => {
+  if (cause instanceof AgentCapabilityUnavailableError) {
+    return providerFailureError(
+      cause.providerId,
+      classifyProviderFailureText(cause.reason) ?? "configuration",
+      cause,
+    )
+  }
+  if (cause instanceof AgentPolicyEnforcementError) {
+    return providerFailureError(cause.providerId, "policy-violation", cause)
+  }
+  if (cause instanceof AgentProviderProbeError) {
+    return providerFailureError(cause.providerId, "configuration", cause)
+  }
+  if (
+    cause instanceof MissingAgentProviderError ||
+    cause instanceof UnsupportedAgentCapabilityError
+  ) {
+    return providerFailureError(cause.providerId, "configuration", cause)
+  }
+  return null
+}
+
+const providerFailureError = (
+  providerId: AgentProviderId,
+  category: AgentProviderFailure["category"],
+  cause: unknown,
+) =>
+  ReviewAgentProviderFailureError.make({
+    failure: AgentProviderFailure.make({
+      version: 1,
+      providerId: /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(providerId) ? providerId : "custom",
+      capability: "review-thread",
+      category,
+      processKind: null,
+      exitCode: null,
+      signal: null,
+      httpStatus: null,
+      retryAfterSeconds: null,
+      resetsAt: null,
+    }),
+    reason: "The configured review agent is unavailable.",
+    cause,
+  })
 
 const executionFailureReason = (cause: unknown) => {
   const reason =
@@ -522,10 +628,12 @@ const isReviewAgentTurnError = (
 ): cause is
   | ReviewAgentServiceError
   | ReviewAgentFinalizeError
+  | ReviewAgentProviderFailureError
   | ReviewTurnTargetError
   | ReviewTurnRejectedError =>
   cause instanceof ReviewAgentServiceError ||
   cause instanceof ReviewAgentFinalizeError ||
+  cause instanceof ReviewAgentProviderFailureError ||
   cause instanceof ReviewTurnTargetError ||
   cause instanceof ReviewTurnRejectedError
 

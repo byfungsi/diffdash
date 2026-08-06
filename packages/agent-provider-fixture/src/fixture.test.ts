@@ -16,10 +16,15 @@ import {
   reviewConformance,
   walkthroughConformance,
 } from "@diffdash/agent-provider/testing"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { makeFixtureAgentProvider } from "./fixture"
 
 const model = AgentModelId.make("fixture-model")
 const allowedTool = McpToolName.make("getReviewContext")
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: makeFixtureAgentProvider().manifest.descriptor.id,
+  fallbackReason: "Fixture execution failed",
+})
 const policy = AgentExecutionPolicy.make({
   network: "deny",
   sensitiveFiles: "deny",
@@ -62,14 +67,7 @@ agentManifestConformance("Fixture Agent", { create: makeFixtureAgentProvider })
 walkthroughConformance("Fixture Agent", {
   create: makeFixtureAgentProvider,
   request: walkthroughRequest,
-  expectedFailure: () =>
-    Effect.fail(
-      AgentProviderOperationError.make({
-        providerId: makeFixtureAgentProvider().manifest.descriptor.id,
-        capability: "walkthrough",
-        reason: "fixture failure",
-      }),
-    ),
+  expectedFailure: () => Effect.fail(operationErrors.fromReason("walkthrough", "fixture failure")),
   temporaryFiles: () => Effect.succeed([]),
 })
 reviewConformance("Fixture Agent", { create: makeFixtureAgentProvider, request: reviewRequest })
@@ -78,24 +76,18 @@ agentSecurityConformance("Fixture Agent", {
     const capability = makeFixtureAgentProvider().reviewThread
     if (capability === undefined) {
       return Effect.fail(
-        AgentProviderOperationError.make({
-          providerId: makeFixtureAgentProvider().manifest.descriptor.id,
-          capability: "review-thread",
-          reason: "Fixture review capability is missing",
-        }),
+        operationErrors.fromReason("review-thread", "Fixture review capability is missing"),
       )
     }
-    return capability.execute(reviewRequest()).pipe(
-      Effect.mapError((cause) =>
-        cause instanceof AgentProviderOperationError
-          ? cause
-          : AgentProviderOperationError.make({
-              providerId: makeFixtureAgentProvider().manifest.descriptor.id,
-              capability: "review-thread",
-              reason: cause.reason,
-            }),
-      ),
-    )
+    return capability
+      .execute(reviewRequest())
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof AgentProviderOperationError
+            ? cause
+            : operationErrors.fromReason("review-thread", cause.reason),
+        ),
+      )
   },
   repositoryState: () => Effect.succeed("unchanged"),
   mcpToken: "fixture-secret-token",

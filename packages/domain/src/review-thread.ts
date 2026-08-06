@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { AgentProviderFailure } from "./provider-failure"
 
 import { LocalReviewTarget } from "./local-review"
 import { HostedReviewLocator } from "./git-provider"
@@ -144,6 +145,7 @@ export class ReviewThreadMessage extends Schema.Class<ReviewThreadMessage>("Revi
   bodyMarkdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
   agentRunId: Schema.NullOr(Schema.String),
+  failure: Schema.optionalWith(Schema.NullOr(AgentProviderFailure), { default: () => null }),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}

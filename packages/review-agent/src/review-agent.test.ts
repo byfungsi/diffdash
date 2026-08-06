@@ -23,6 +23,7 @@ import {
   ReviewThreadResult,
 } from "@diffdash/agent-provider"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import {
@@ -99,6 +100,7 @@ import { DiffDashMcpServer } from "./diffdash-mcp-server"
 import {
   type ReviewAgentRouteSelection,
   ReviewAgentFinalizeError,
+  ReviewAgentProviderFailureError,
   ReviewAgentRouting,
   ReviewAgentService,
 } from "./review-agent"
@@ -114,6 +116,11 @@ index 1111111..2222222 100644
 const reviewKey = ReviewKey.make(
   `local:${createHash("sha256").update("/workspace/diffdash").digest("hex")}`,
 )
+const opencodeProviderId = AgentProviderId.make("opencode")
+const operationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: opencodeProviderId,
+  fallbackReason: "OpenCode review test failed",
+})
 const baseRevision = ReviewRevision.make("base-sha")
 const headRevision = ReviewRevision.make("head-sha")
 const snapshot = LocalReviewSnapshot.make({
@@ -331,6 +338,7 @@ const makeLayer = (
     models: {},
     autoQuality: "balanced",
   },
+  includeProvider = true,
 ) => {
   const database = DatabaseService.layer(databasePath)
   const persistence = Layer.mergeAll(
@@ -380,9 +388,9 @@ const makeLayer = (
       execute: runTurn,
     },
   }
-  const registry = AgentProviderRegistry.layer([registration], {
+  const registry = AgentProviderRegistry.layer(includeProvider ? [registration] : [], {
     walkthrough: [],
-    reviewThread: [providerId],
+    reviewThread: includeProvider ? [providerId] : [],
   })
   const routing = Layer.succeed(
     ReviewAgentRouting,
@@ -846,12 +854,11 @@ describe("ReviewAgentService", () => {
           databasePath,
           () =>
             Effect.fail(
-              AgentProviderOperationError.make({
-                providerId: AgentProviderId.make("opencode"),
-                capability: "review-thread",
-                reason: "Provider failed before finalization",
-                cause: new Error("Provider failed"),
-              }),
+              operationErrors.fromCause("review-thread")(
+                Object.assign(new Error("Provider failed"), {
+                  reason: "Provider failed before finalization",
+                }),
+              ),
             ),
           released,
         )
@@ -903,13 +910,12 @@ describe("ReviewAgentService", () => {
           Effect.sync(() => released.events.push("provider.run")).pipe(
             Effect.flatMap(() =>
               Effect.fail(
-                AgentProviderOperationError.make({
-                  providerId: AgentProviderId.make("opencode"),
-                  capability: "review-thread",
-                  reason: `${"x".repeat(700)}
-Authorization: Bearer persisted-bearer-secret refresh_token=persisted-refresh-secret`,
-                  cause: new Error("Provider failed"),
-                }),
+                operationErrors.fromReason(
+                  "review-thread",
+                  `${"x".repeat(700)}
+Authorization: Bearer persisted-bearer-secret refresh_token=persisted-refresh-secret
+Failed to authenticate. OAuth session expired and could not be refreshed.`,
+                ),
               ),
             ),
             Effect.ensuring(Effect.sync(() => released.events.push("provider.finalized"))),
@@ -947,13 +953,17 @@ Authorization: Bearer persisted-bearer-secret refresh_token=persisted-refresh-se
         const runs = yield* (yield* AgentRunStore).listForThread(created.thread.id)
 
         expect(details.messages[1]).toMatchObject({ author: "agent", status: "failed" })
+        expect(details.messages[1]?.failure).toMatchObject({
+          providerId: "opencode",
+          category: "authentication",
+        })
         expect(runs[0]).toMatchObject({ status: "failed", usage: null })
         const persistedMessage = String(details.messages[1]?.bodyMarkdown)
-        expect(persistedMessage).toContain("Authorization: [redacted]")
-        expect(persistedMessage).toContain("refresh_token=[redacted]")
+        expect(persistedMessage).toBe(
+          "The local review agent could not complete this response. Retry to try again.",
+        )
         expect(persistedMessage).not.toContain("persisted-bearer-secret")
         expect(persistedMessage).not.toContain("persisted-refresh-secret")
-        expect(persistedMessage).not.toContain("\n")
         expect(runs[0]?.error).toBe(persistedMessage)
         expect(error.reason).not.toContain("persisted-bearer-secret")
         expect(error.reason).not.toContain("persisted-refresh-secret")
@@ -1018,14 +1028,15 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const runs = yield* (yield* AgentRunStore).listForThread(created.thread.id)
         const persistedMessage = String(details.messages[1]?.bodyMarkdown)
 
-        expect(persistedMessage).toHaveLength(600)
-        expect(persistedMessage).toContain("Authorization: [redacted]")
-        expect(persistedMessage).toContain("id_token=[redacted]")
+        expect(persistedMessage).toBe(
+          "The local review agent could not complete this response. Retry to try again.",
+        )
+        expect(details.messages[1]?.failure).toBeNull()
         expect(persistedMessage).not.toContain("workspace-basic-secret")
         expect(persistedMessage).not.toContain("workspace-id-secret")
-        expect(persistedMessage).not.toContain("\n")
         expect(runs[0]?.error).toBe(persistedMessage)
-        expect(error.reason).toBe(persistedMessage)
+        expect(error.reason).not.toContain("workspace-basic-secret")
+        expect(error.reason).not.toContain("workspace-id-secret")
       }).pipe(Effect.provide(layer))
 
       expect(released.count).toBe(0)
@@ -1077,9 +1088,65 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
 
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
         const runs = yield* (yield* AgentRunStore).listForThread(created.thread.id)
-        expect(error.reason).toContain("No review-thread model is configured")
+        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
+        if (error instanceof ReviewAgentProviderFailureError) {
+          expect(error.failure).toMatchObject({
+            providerId: "opencode",
+            category: "model-unavailable",
+          })
+        }
         expect(details.messages).toHaveLength(1)
         expect(runs).toEqual([])
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
+  it.scoped("reports an empty automatic provider route as typed configuration guidance", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const released = { count: 0 }
+      const layer = makeLayer(
+        databasePath,
+        () => Effect.succeed(makeProviderResult({ bodyMarkdown: "Unexpected response." })),
+        released,
+        { route: { mode: "auto" }, models: {}, autoQuality: "balanced" },
+        false,
+      )
+
+      yield* Effect.gen(function* () {
+        const repo = yield* (yield* RepositoryStore).upsertRepository({
+          provider: "local",
+          owner: "local",
+          name: "diffdash",
+          remoteUrl: "file:///workspace/diffdash",
+          localPath: "/workspace/diffdash",
+        })
+        const created = yield* (yield* ReviewThreadStore).create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: null,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Explain this line."),
+        })
+        const error = yield* (yield* ReviewAgentService)
+          .runThreadTurn({
+            threadId: created.thread.id,
+            ...turnIdentity(created, snapshot),
+            snapshot,
+            cwd: repo.localPath,
+            walkthrough: null,
+          })
+          .pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
+        if (error instanceof ReviewAgentProviderFailureError) {
+          expect(error.failure).toMatchObject({
+            providerId: "unavailable",
+            category: "configuration",
+          })
+        }
       }).pipe(Effect.provide(layer))
     }),
   )
@@ -1129,8 +1196,18 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
 
-        expect(error.reason).toContain("bodyMarkdown")
-        expect(details.messages[1]).toMatchObject({ author: "agent", status: "failed" })
+        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
+        if (error instanceof ReviewAgentProviderFailureError) {
+          expect(error.failure).toMatchObject({
+            providerId: "opencode",
+            category: "invalid-response",
+          })
+        }
+        expect(details.messages[1]).toMatchObject({
+          author: "agent",
+          status: "failed",
+          failure: { providerId: "opencode", category: "invalid-response" },
+        })
       }).pipe(Effect.provide(layer))
 
       expect(released.count).toBe(1)

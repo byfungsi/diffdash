@@ -12,7 +12,6 @@ import {
   AgentProviderDescriptor,
   AgentProviderId,
   AgentProviderManifest,
-  AgentProviderOperationError,
   AgentRuntimeRequirement,
   AgentSessionSupport,
   InvalidAgentProviderResponseError,
@@ -23,6 +22,7 @@ import {
   WalkthroughResult,
 } from "@diffdash/agent-provider"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
+import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 
 import { LocalReviewDetail } from "@diffdash/domain/local-review"
 import {
@@ -190,6 +190,10 @@ const invalidCoverageOutput = JSON.stringify({
 
 const primaryProviderId = AgentProviderId.make("primary")
 const fallbackProviderId = AgentProviderId.make("fallback")
+const primaryOperationErrors = makeAgentProviderOperationErrorFactory({
+  providerId: primaryProviderId,
+  fallbackReason: "Primary provider failed",
+})
 
 const providerManifest = (
   providerId: AgentProviderId,
@@ -389,11 +393,7 @@ describe("WalkthroughService", () => {
                 }),
               )
             : Effect.fail(
-                AgentProviderOperationError.make({
-                  providerId: primaryProviderId,
-                  capability: "walkthrough",
-                  reason: "primary process failed",
-                }),
+                primaryOperationErrors.fromReason("walkthrough", "primary process failed"),
               )
         },
       )
@@ -674,13 +674,7 @@ describe("WalkthroughService", () => {
           execute: () =>
             Effect.sync(() => calls.push(primaryProviderId)).pipe(
               Effect.flatMap(() =>
-                Effect.fail(
-                  AgentProviderOperationError.make({
-                    providerId: primaryProviderId,
-                    capability: "walkthrough",
-                    reason: "primary failed",
-                  }),
-                ),
+                Effect.fail(primaryOperationErrors.fromReason("walkthrough", "primary failed")),
               ),
             ),
         })

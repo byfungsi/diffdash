@@ -48,6 +48,8 @@ import {
 } from "@diffdash/agent-provider/review-output"
 import {
   boundedProviderDiagnostic,
+  type AgentProviderFailureCategory,
+  classifyProviderFailureText,
   makeAgentProviderOperationErrorFactory,
   probeAgentRuntime,
   projectAgentCapabilityProbe,
@@ -275,6 +277,7 @@ interface ClaudeTurnState {
   finalResponse: unknown
   sawResult: boolean
   usage: AgentUsage | null
+  failureHint: AgentProviderFailureCategory | null
   readonly toolUses: Map<string, ToolUse>
   readonly artifacts: PendingArtifact[]
 }
@@ -293,6 +296,7 @@ const executeReview = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "Scoped MCP access includes tools outside the execution policy",
+        "policy-violation",
       )
     }
     return yield* withMcpConfigPath(
@@ -306,6 +310,7 @@ const executeReview = (
             finalResponse: null,
             sawResult: false,
             usage: null,
+            failureHint: null,
             toolUses: new Map(),
             artifacts: [],
           }
@@ -331,6 +336,7 @@ const executeReview = (
             return yield* operationErrors.fromReason(
               "review-thread",
               "Claude stream ended without a result event",
+              state.failureHint ?? "invalid-response",
             )
           }
           const response = yield* decodeReviewResponse(state.finalResponse)
@@ -383,12 +389,19 @@ const consumeClaudeLine = (
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
     if (line.trim().length === 0) return
+    if (!line.trimStart().startsWith("{")) {
+      const category = classifyProviderFailureText(line)
+      if (category !== null) {
+        return yield* operationErrors.fromReason("review-thread", line, category)
+      }
+    }
     const event = yield* parseJsonLine(line)
     const type = stringAt(event, "type")
     if (type === null) {
       return yield* operationErrors.fromReason(
         "review-thread",
         "Claude emitted an event without a type",
+        "invalid-response",
       )
     }
     const sessionId = stringAt(event, "session_id")
@@ -425,6 +438,9 @@ const consumeClaudeLine = (
           )
         }
         return
+      case "rate_limit_event":
+        state.failureHint = claudeRateLimitCategory(event)
+        return
       default:
         return
     }
@@ -440,6 +456,7 @@ const consumeAssistant = (
       return yield* operationErrors.fromReason(
         "review-thread",
         "Claude assistant event omitted message",
+        "invalid-response",
       )
     }
     const usage = recordAt(message, "usage")
@@ -467,6 +484,7 @@ const consumeAssistant = (
           return yield* operationErrors.fromReason(
             "review-thread",
             "Claude tool_use block omitted id or name",
+            "invalid-response",
           )
         }
         state.toolUses.set(id, { name, input: recordAt(block, "input") ?? {} })
@@ -575,7 +593,11 @@ const requirePolicy = (
   const valid = isAgentExecutionPolicyEnforced(policy, expected)
   return valid
     ? Effect.void
-    : operationErrors.fromReason(capability, "Claude requires the explicit non-mutating policy")
+    : operationErrors.fromReason(
+        capability,
+        "Claude requires the explicit non-mutating policy",
+        "policy-violation",
+      )
 }
 
 const requireControls = (
@@ -583,7 +605,9 @@ const requireControls = (
   controls: ClaudePermissionControls | undefined,
 ) => {
   const reason = policyEnforcementFailure(controls ?? defaultPermissionControls)
-  return reason === null ? Effect.void : operationErrors.fromReason(capability, reason)
+  return reason === null
+    ? Effect.void
+    : operationErrors.fromReason(capability, reason, "policy-violation")
 }
 
 const reasoningEffortArgs = (effort: WalkthroughRequest["reasoningEffort"]) => [
@@ -597,9 +621,19 @@ const parseJsonLine = (line: string) =>
       operationErrors.fromReason(
         "review-thread",
         `Claude emitted invalid stream-json: ${cause.reason}`,
+        "invalid-response",
       ),
     ),
   )
+
+const claudeRateLimitCategory = (
+  event: Readonly<Record<string, unknown>>,
+): AgentProviderFailureCategory =>
+  /(?:five[_ -]?hour|seven[_ -]?day|session|daily|weekly|monthly|usage)/iu.test(
+    JSON.stringify(event),
+  )
+    ? "usage-limited"
+    : "rate-limited"
 
 const toolTitle = (name: string, input: Readonly<Record<string, unknown>> | undefined) => {
   if (input === undefined) return name

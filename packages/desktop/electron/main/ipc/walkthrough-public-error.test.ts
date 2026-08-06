@@ -1,15 +1,43 @@
-import { AgentProviderId, AgentProviderOperationError } from "@diffdash/agent-provider"
+import {
+  AgentCapabilityUnavailableError,
+  AgentPolicyEnforcementError,
+  AgentProviderId,
+  AgentProviderOperationError,
+} from "@diffdash/agent-provider"
+import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
+import {
+  AgentProviderFailure,
+  type AgentProviderFailureCategory,
+  type AgentProviderProcessFailureKind,
+} from "@diffdash/domain/provider-failure"
 import { WalkthroughPromptPreparationError } from "@diffdash/domain/walkthrough"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import { ProcessExitError } from "@diffdash/process"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { UNKNOWN_TRANSPORT_ERROR_MESSAGE } from "@diffdash/protocol/transport-error"
-import { WalkthroughGenerationError } from "@diffdash/walkthrough"
+import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { describe, expect, it } from "vitest"
 import { ReviewContextError } from "../../../src/main/services/review-context"
 import { toPublicWalkthroughError } from "./walkthrough-public-error"
 
 const operation = InvokeChannel.generateLocalWalkthrough
+const failure = (
+  providerId: string,
+  category: AgentProviderFailureCategory,
+  processKind: AgentProviderProcessFailureKind | null = null,
+) =>
+  AgentProviderFailure.make({
+    version: 1,
+    providerId,
+    capability: "walkthrough",
+    category,
+    processKind,
+    exitCode: null,
+    signal: null,
+    httpStatus: null,
+    retryAfterSeconds: null,
+    resetsAt: null,
+  })
 
 describe("toPublicWalkthroughError", () => {
   it("classifies a provider process exit with a bounded privacy-safe diagnostic trace", () => {
@@ -38,6 +66,7 @@ Unhandled provider call: --print --model private-model`,
     const error = AgentProviderOperationError.make({
       providerId: AgentProviderId.make("claude"),
       capability: "walkthrough",
+      failure: failure("claude", "authentication", "exit"),
       reason: "Authentication failed in /Users/example/secret-repository token=provider-secret",
       cause,
     })
@@ -45,8 +74,8 @@ Unhandled provider call: --print --model private-model`,
     const result = toPublicWalkthroughError(error, operation)
 
     expect(result).toMatchObject({
-      code: "AgentProviderExitError",
-      message: "Provider claude exited before completing the walkthrough.",
+      code: "AgentProviderAuthenticationError",
+      message: "Provider claude authentication failed or expired. Sign in again, then retry.",
       operation,
       diagnostic: {
         provider: "claude",
@@ -90,6 +119,7 @@ Unhandled provider call: --print --model private-model`,
         _tag: "AgentProviderOperationError",
         providerId: "codex",
         capability: "walkthrough",
+        failure: failure("codex", "process-failure", "exit"),
         reason: "Provider failed",
         cause: {
           _tag: "ProcessExitError",
@@ -120,6 +150,7 @@ Unhandled provider call: --print --model private-model`,
       AgentProviderOperationError.make({
         providerId: AgentProviderId.make("codex"),
         capability: "walkthrough",
+        failure: failure("codex", "timeout", "timeout"),
         reason: "Command timed out in /Users/example/secret-repository",
         cause: { _tag: "ProcessTimeoutError", stderr: "private stderr" },
       }),
@@ -128,9 +159,49 @@ Unhandled provider call: --print --model private-model`,
 
     expect(result).toMatchObject({
       code: "AgentProviderTimeoutError",
-      message: "Provider codex timed out during walkthrough generation.",
+      message: "Provider codex timed out while producing the walkthrough generation.",
     })
     expect(JSON.stringify(result)).not.toContain("private")
+  })
+
+  it.each([
+    [
+      AgentCapabilityUnavailableError.make({
+        providerId: AgentProviderId.make("claude"),
+        capability: "walkthrough",
+        reason: "OAuth session expired",
+      }),
+      "claude",
+      "authentication",
+    ],
+    [
+      AgentPolicyEnforcementError.make({
+        providerId: AgentProviderId.make("codex"),
+        capability: "walkthrough",
+        reason: "Read-only policy is unavailable",
+      }),
+      "codex",
+      "policy-violation",
+    ],
+    [
+      NoAgentProviderAvailableError.make({ capability: "walkthrough" }),
+      "unavailable",
+      "configuration",
+    ],
+    [
+      WalkthroughModelUnavailableError.make({
+        providerId: AgentProviderId.make("opencode"),
+        modelId: "missing-model",
+      }),
+      "opencode",
+      "model-unavailable",
+    ],
+  ])("attaches typed provider metadata to walkthrough preflight failures", (error, providerId, category) => {
+    expect(toPublicWalkthroughError(error, operation).providerFailure).toMatchObject({
+      providerId,
+      capability: "walkthrough",
+      category,
+    })
   })
 
   it.each([
@@ -144,6 +215,7 @@ Unhandled provider call: --print --model private-model`,
       AgentProviderOperationError.make({
         providerId: AgentProviderId.make("codex"),
         capability: "walkthrough",
+        failure: failure("codex", "process-failure"),
         reason: "private provider reason",
         cause: { _tag: causeTag, stderr: "private stderr" },
       }),
@@ -159,6 +231,7 @@ Unhandled provider call: --print --model private-model`,
       AgentProviderOperationError.make({
         providerId: AgentProviderId.make("/Users/example/secret-provider"),
         capability: "walkthrough",
+        failure: failure("custom", "unknown"),
         reason: "private provider reason",
       }),
       operation,

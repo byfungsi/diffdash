@@ -1,3 +1,4 @@
+import type { AgentProviderFailureCategory } from "@diffdash/domain/provider-failure"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
   decodeTransportError,
@@ -44,9 +45,10 @@ export const walkthroughErrorPresentation = (
   )
   const operation = transport?.operation ?? walkthroughGenerationOperation(context.reviewSource)
   const diagnostic = transport?.diagnostic
+  const providerFailure = transport?.providerFailure
 
   return {
-    message: walkthroughUserMessage(code, details),
+    message: walkthroughUserMessage(code, details, providerFailure?.category),
     report: [
       "DiffDash walkthrough error",
       "",
@@ -59,6 +61,12 @@ export const walkthroughErrorPresentation = (
       `Platform: ${safeReportLine(context.platform)}`,
       `Operation: ${safeReportLine(operation)}`,
       `Error code: ${safeReportLine(code)}`,
+      ...(providerFailure === undefined
+        ? []
+        : [
+            `Failure category: ${providerFailure.category}`,
+            `Failure capability: ${providerFailure.capability}`,
+          ]),
       `Details: ${details}`,
       ...(diagnostic === undefined
         ? []
@@ -93,7 +101,13 @@ const walkthroughReviewType = (source: WalkthroughErrorReviewSource): string => 
   return "Repository comparison"
 }
 
-const walkthroughUserMessage = (code: string, details: string): string => {
+const walkthroughUserMessage = (
+  code: string,
+  details: string,
+  category?: AgentProviderFailureCategory,
+): string => {
+  const categoryMessage = walkthroughProviderFailureMessage(category)
+  if (categoryMessage !== null) return categoryMessage
   if (code === "AgentProviderTimeoutError") {
     return "The AI provider timed out while generating this walkthrough. Retry or select a faster model."
   }
@@ -143,6 +157,39 @@ const walkthroughUserMessage = (code: string, details: string): string => {
     return "DiffDash hit an unexpected walkthrough error. Retry, then copy the error details if it continues."
   }
   return details
+}
+
+const walkthroughProviderFailureMessage = (
+  category: AgentProviderFailureCategory | undefined,
+): string | null => {
+  switch (category) {
+    case "authentication":
+      return "AI provider authentication failed or expired. Sign in again, then retry."
+    case "authorization":
+      return "The AI provider denied access to this operation or model. Check the provider account, then retry."
+    case "rate-limited":
+      return "The AI provider is temporarily rate limited. Wait briefly, then retry."
+    case "usage-limited":
+      return "The AI provider reached a session or usage limit. Retry after the limit resets."
+    case "quota-exhausted":
+      return "The AI provider reached an account quota or billing limit. Check the provider account before retrying."
+    case "network":
+      return "The AI provider could not connect to its service. Check the network, then retry."
+    case "model-unavailable":
+      return "The AI provider could not use the selected model. Choose another model in AI Settings, then retry."
+    case "provider-unavailable":
+      return "The AI provider is temporarily unavailable. Retry shortly."
+    case "policy-violation":
+      return "The AI provider could not satisfy DiffDash's read-only policy. Check its version and configuration, then retry."
+    case "timeout":
+      return "The AI provider timed out while generating this walkthrough. Retry or select a faster model."
+    case "configuration":
+    case "invalid-response":
+    case "process-failure":
+    case "unknown":
+    case undefined:
+      return null
+  }
 }
 
 const safeReportLine = (value: string): string =>

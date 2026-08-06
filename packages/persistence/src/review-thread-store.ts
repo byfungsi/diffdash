@@ -20,6 +20,7 @@ import {
   type ReviewThreadRevisionKey,
 } from "@diffdash/domain/review-thread"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
 /** One thread's complete current-revision mapping, persisted as a single logical update. */
@@ -32,6 +33,7 @@ export interface ReviewThreadCurrentMapping {
 }
 
 const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchorSchema)
+const AgentProviderFailureJson = Schema.NullOr(Schema.parseJson(AgentProviderFailure))
 
 const ReviewThreadRow = Schema.Struct({
   id: ReviewThreadId,
@@ -59,6 +61,7 @@ const ReviewThreadMessageRow = Schema.Struct({
   body_markdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
   agent_run_id: Schema.NullOr(Schema.String),
+  failure_json: AgentProviderFailureJson,
   created_at: Schema.String,
   updated_at: Schema.String,
 })
@@ -302,6 +305,7 @@ const decodeMessageRow = (input: unknown) => {
     bodyMarkdown: row.body_markdown,
     status: row.status,
     agentRunId: row.agent_run_id,
+    failure: row.failure_json,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   })
