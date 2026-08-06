@@ -5,7 +5,6 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { PostHog } from "posthog-node"
 
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
-import { AppConfig } from "./app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
 
 const AnalyticsState = Schema.Struct({
@@ -36,23 +35,28 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
     readonly start: Effect.Effect<void>
   }
 >() {
-  static readonly layer = Analytics.makeLayer()
-
-  static makeLayer(options?: {
+  /** Creates the analytics service from host-decoded runtime configuration. */
+  static makeLayer(options: {
+    readonly appVersion: string
+    readonly architecture: string
+    readonly packaged: boolean
+    readonly platform: string
+    readonly posthogHost: string | null
+    readonly posthogKey: string | null
+    readonly settingsPath: string
     readonly clientFactory?: (key: string, host: string) => AnalyticsClient
-  }) {
+  }): Layer.Layer<Analytics, never, AppSettings> {
     return Layer.scoped(
       Analytics,
       Effect.gen(function* () {
-        const config = yield* AppConfig
         const settings = yield* AppSettings
-        const statePath = join(dirname(config.settingsPath), "analytics.json")
+        const statePath = join(dirname(options.settingsPath), "analytics.json")
         let state = readAnalyticsState(statePath)
         let started = false
         const client =
-          !config.packaged || config.posthogKey.length === 0 || config.posthogHost.length === 0
+          !options.packaged || options.posthogKey === null || options.posthogHost === null
             ? null
-            : (options?.clientFactory ?? makePostHogClient)(config.posthogKey, config.posthogHost)
+            : (options.clientFactory ?? makePostHogClient)(options.posthogKey, options.posthogHost)
 
         if (client !== null) {
           yield* Effect.addFinalizer(() => ignorePromise(() => client.flush()))
@@ -78,10 +82,10 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
                   disableGeoip: true,
                   properties: {
                     ...eventProperties(event),
-                    app_version: config.appVersion,
-                    architecture: config.architecture,
-                    packaged: config.packaged,
-                    platform: config.platform,
+                    app_version: options.appVersion,
+                    architecture: options.architecture,
+                    packaged: options.packaged,
+                    platform: options.platform,
                     $process_person_profile: false,
                   },
                 }),

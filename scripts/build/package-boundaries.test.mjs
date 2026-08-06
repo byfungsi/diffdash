@@ -129,8 +129,8 @@ test("concrete Git providers remain isolated leaf integrations", () => {
   }
 })
 
-test("only desktop composition imports a concrete Git provider", () => {
-  const allowedComposition = resolve(root, "packages/desktop/electron/main/composition.ts")
+test("only Core composition imports a concrete Git provider", () => {
+  const allowedComposition = resolve(root, "packages/core/src/provider-composition.ts")
   for (const { directory, manifest } of manifests) {
     if (manifest.name.startsWith("@diffdash/git-provider-")) continue
     const source = join(directory, "src")
@@ -148,7 +148,7 @@ test("only desktop composition imports a concrete Git provider", () => {
       assert.doesNotMatch(
         readFileSync(file, "utf8"),
         /["']@diffdash\/git-provider-[^"']+(?:\/[^"']*)?["']/,
-        `${file} imports a concrete Git provider outside desktop composition`,
+        `${file} imports a concrete Git provider outside Core composition`,
       )
     }
   }
@@ -228,11 +228,8 @@ test("provider manifests remain platform-neutral leaves", () => {
   }
 })
 
-test("only the desktop agent composition imports concrete agent providers", () => {
-  const allowedComposition = resolve(
-    root,
-    "packages/desktop/electron/main/agent-provider-composition.ts",
-  )
+test("only Core composition imports concrete agent providers", () => {
+  const allowedComposition = resolve(root, "packages/core/src/provider-composition.ts")
   for (const { directory, manifest } of manifests) {
     if (manifest.name.startsWith("@diffdash/agent-provider-")) continue
     const source = join(directory, "src")
@@ -250,7 +247,7 @@ test("only the desktop agent composition imports concrete agent providers", () =
       assert.doesNotMatch(
         readFileSync(file, "utf8"),
         /["']@diffdash\/agent-provider-[^"']+(?:\/[^"']*)?["']/,
-        `${file} imports a concrete agent provider outside desktop composition`,
+        `${file} imports a concrete agent provider outside Core composition`,
       )
     }
   }
@@ -377,4 +374,64 @@ test("the workspace resolves one Effect runtime", () => {
   )
   assert.equal(effectVersions.size, 1)
   assert.doesNotMatch(lockfile, /^  ['"]?@effect\/schema@/m)
+})
+
+test("Core remains runtime-neutral and owns the only application ManagedRuntime", () => {
+  const coreDirectory = resolve(root, "packages/core")
+  const coreSourceFiles = sourceFiles(join(coreDirectory, "src"))
+  const coreSource = coreSourceFiles.map((file) => readFileSync(file, "utf8")).join("\n")
+  assert.doesNotMatch(
+    coreSource,
+    /(?:from\s*|import\s*\()(["'])(?:electron|electron-updater|react|@diffdash\/(?:app|desktop))(?:\/[^"']*)?\1/,
+    "@diffdash/core cannot import renderer or Electron host packages",
+  )
+
+  const managedRuntimeOwners = manifests.flatMap(({ directory, manifest }) => {
+    let files = []
+    try {
+      files = sourceFiles(join(directory, "src"))
+    } catch {
+      // Packages without source directories do not participate.
+    }
+    if (manifest.name === "@diffdash/desktop") {
+      files.push(...sourceFiles(join(directory, "electron")))
+    }
+    return files.filter(
+      (file) =>
+        !/\.test\.[cm]?[jt]sx?$/.test(file) &&
+        readFileSync(file, "utf8").includes("ManagedRuntime.make("),
+    )
+  })
+  assert.deepEqual(managedRuntimeOwners, [
+    resolve(root, "packages/core/src/legacy-embedded-core.ts"),
+  ])
+
+  const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
+  assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
+})
+
+test("the temporary Core legacy entrypoint has a closed desktop import allowlist", () => {
+  const desktopDirectory = resolve(root, "packages/desktop")
+  const importsLegacyCore = [
+    ...sourceFiles(join(desktopDirectory, "src")),
+    ...sourceFiles(join(desktopDirectory, "electron")),
+  ]
+    .filter((file) => readFileSync(file, "utf8").includes('"@diffdash/core/legacy"'))
+    .map((file) => relative(desktopDirectory, file))
+    .toSorted()
+
+  assert.deepEqual(importsLegacyCore, [
+    "electron/ipc-contract.test.ts",
+    "electron/main/application-runtime.ts",
+    "electron/main/desktop-application.ts",
+    "electron/main/ipc/controllers/analytics.ts",
+    "electron/main/ipc/controllers/navigation.ts",
+    "electron/main/ipc/controllers/repositories.ts",
+    "electron/main/ipc/controllers/reviews.ts",
+    "electron/main/ipc/controllers/settings.ts",
+    "electron/main/ipc/controllers/threads.ts",
+    "electron/main/ipc/controllers/walkthroughs.ts",
+    "electron/main/ipc/walkthrough-public-error.test.ts",
+    "electron/main/ipc/walkthrough-public-error.ts",
+  ])
 })

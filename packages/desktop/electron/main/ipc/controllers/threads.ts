@@ -14,9 +14,11 @@ import { transportError } from "@diffdash/protocol/transport-error"
 import { ReviewAgentService } from "@diffdash/review-agent"
 import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
 import { Effect } from "effect"
-import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
-import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
-import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
+import {
+  RepositoryComparisonSource,
+  RepositoryLinker,
+  ReviewSnapshotService,
+} from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicReviewThreadError } from "../review-thread-public-error"
 import { sendProtocolEvent } from "../transport"

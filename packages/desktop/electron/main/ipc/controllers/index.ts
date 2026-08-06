@@ -1,5 +1,7 @@
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { app } from "electron"
+import { Effect } from "effect"
+import type { DesktopUpdater } from "../../../../src/main/services/app-updater"
 import type { ApplicationRuntime } from "../../application-runtime"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { createShutdown } from "../../shutdown"
@@ -18,6 +20,7 @@ import { defineWalkthroughHandlers } from "./walkthroughs"
 /** Defines the complete protocol handler set before one atomic registry installation. */
 export const defineIpcHandlers = (
   runtime: ApplicationRuntime,
+  updater: DesktopUpdater,
   handlers: IpcControllerRegistry,
   navigationCommands: {
     readonly peek: () => readonly CliNavigationCommand[]
@@ -33,13 +36,14 @@ export const defineIpcHandlers = (
   defineWalkthroughHandlers(runtime, handlers)
   defineSettingsHandlers(runtime, handlers)
   defineAnalyticsHandlers(runtime, handlers)
-  defineUpdateHandlers(runtime, handlers, shutdown)
+  defineUpdateHandlers(updater, handlers, shutdown)
   defineNavigationHandlers(runtime, handlers, navigationCommands, rendererSecurityPolicy)
 }
 
 /** Defines and installs all domain IPC controllers at the application boundary. */
 export const installIpcControllers = (
   runtime: ApplicationRuntime,
+  updater: DesktopUpdater,
   navigationCommands: {
     readonly peek: () => readonly CliNavigationCommand[]
     readonly acknowledge: (count: number) => void
@@ -47,10 +51,23 @@ export const installIpcControllers = (
   rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
   const handlers = new IpcControllerRegistry(rendererSecurityPolicy)
-  const shutdown = createShutdown({ dispose: runtime.dispose, quit: () => app.quit() })
+  const shutdown = createShutdown({
+    dispose: async () => {
+      await Effect.runPromise(updater.dispose())
+      await runtime.dispose()
+    },
+    quit: () => app.quit(),
+  })
   app.on("before-quit", shutdown.beforeQuit)
 
-  defineIpcHandlers(runtime, handlers, navigationCommands, rendererSecurityPolicy, shutdown)
+  defineIpcHandlers(
+    runtime,
+    updater,
+    handlers,
+    navigationCommands,
+    rendererSecurityPolicy,
+    shutdown,
+  )
   handlers.install()
-  startUpdaterLifecycle(runtime)
+  startUpdaterLifecycle(updater)
 }

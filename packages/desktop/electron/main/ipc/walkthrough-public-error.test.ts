@@ -17,7 +17,7 @@ import { InvokeChannel } from "@diffdash/protocol/channels"
 import { UNKNOWN_TRANSPORT_ERROR_MESSAGE } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { describe, expect, it } from "vitest"
-import { ReviewContextError } from "../../../src/main/services/review-context"
+import { ReviewContextError } from "@diffdash/core/legacy"
 import { toPublicWalkthroughError } from "./walkthrough-public-error"
 
 const operation = InvokeChannel.generateLocalWalkthrough

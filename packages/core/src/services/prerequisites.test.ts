@@ -3,7 +3,6 @@ import { Effect, Layer, Option, Stream } from "effect"
 import { spawnSync } from "node:child_process"
 import {
   chmodSync,
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,9 +16,8 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { join } from "node:path"
 
-import { AppConfig } from "./app-config"
 import {
   ProcessExitError,
   type ProcessRequest,
@@ -50,6 +48,12 @@ import {
   GitProviderKind,
   GitProviderTerminology,
 } from "@diffdash/domain/git-provider"
+
+const DIFFDASH_CLI_FIXTURE = `#!/bin/sh
+set -eu
+app_binary="\${DIFFDASH_APPIMAGE_PATH:-}"
+"$app_binary" "--diffdash-cli-v1=$PWD" -- "$@" >/dev/null 2>&1 &
+`
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-prerequisites-test-"))),
@@ -110,21 +114,15 @@ const makeLayer = (
     readonly ghVersion?: string
   },
 ) =>
-  Prerequisites.layer.pipe(
+  Prerequisites.layer({
+    appImagePath: options.appImagePath ?? null,
+    diffDashCliPath: options.diffDashCliPath ?? "",
+    executableSearchPath: process.env.PATH ?? "",
+    homeDirectory: process.env.HOME ?? "",
+  }).pipe(
     Layer.provideMerge(fakeProcessLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
     Layer.provideMerge(fakeAgentProvidersLayer(options)),
-    Layer.provide(
-      AppConfig.layer({
-        ...(options.appImagePath === undefined ? {} : { appImagePath: options.appImagePath }),
-        databasePath: join(directory, "test.sqlite"),
-        ...(options.diffDashCliPath === undefined
-          ? {}
-          : { diffDashCliPath: options.diffDashCliPath }),
-        settingsPath: join(directory, "settings.json"),
-        tempDir: directory,
-      }),
-    ),
   )
 
 describe("Prerequisites", () => {
@@ -320,7 +318,7 @@ describe("Prerequisites", () => {
       yield* Effect.sync(() => {
         mkdirSync(mountPath, { recursive: true })
         mkdirSync(home, { recursive: true })
-        copyFileSync(resolve("resources/linux/bin/diffdash"), sourcePath)
+        writeFileSync(sourcePath, DIFFDASH_CLI_FIXTURE, "utf8")
         chmodSync(sourcePath, 0o444)
         writeFileSync(
           appImagePath,
@@ -382,7 +380,7 @@ describe("Prerequisites", () => {
       yield* Effect.sync(() => {
         mkdirSync(fakeBin, { recursive: true })
         mkdirSync(join(directory, "current-mount", "resources", "bin"), { recursive: true })
-        copyFileSync(resolve("resources/linux/bin/diffdash"), sourcePath)
+        writeFileSync(sourcePath, DIFFDASH_CLI_FIXTURE, "utf8")
         writeFileSync(appImagePath, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 })
         symlinkSync("/tmp/.mount_DiffDash/resources/bin/diffdash", linkPath)
       })
@@ -418,7 +416,7 @@ describe("Prerequisites", () => {
       yield* Effect.sync(() => {
         mkdirSync(fakeBin, { recursive: true })
         mkdirSync(join(directory, "resources", "bin"), { recursive: true })
-        copyFileSync(resolve("resources/linux/bin/diffdash"), sourcePath)
+        writeFileSync(sourcePath, DIFFDASH_CLI_FIXTURE, "utf8")
         writeFileSync(appImagePath, "#!/bin/sh\n", { encoding: "utf8", mode: 0o755 })
         writeFileSync(
           launcherPath,
@@ -428,7 +426,12 @@ describe("Prerequisites", () => {
       })
       yield* withPath(fakeBin)
 
-      yield* refreshAppImageCliLaunchers(sourcePath, appImagePath)
+      yield* refreshAppImageCliLaunchers({
+        sourcePath,
+        appImagePath,
+        executableSearchPath: fakeBin,
+        homeDirectory: directory,
+      })
 
       const launcher = readFileSync(launcherPath, "utf8")
       expect(launcher).toContain("--diffdash-cli-v1")

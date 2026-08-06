@@ -21,10 +21,11 @@ import {
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
-import { RepositoryLinkError } from "../src/main/services/repository-linker"
+import { RepositoryLinkError } from "@diffdash/core/legacy"
+import type { DesktopUpdater } from "../src/main/services/app-updater"
 import type { ApplicationRuntime } from "./main/application-runtime"
 import { createRendererSecurityPolicy } from "./main/electron-policy"
 import { defineIpcHandlers } from "./main/ipc/controllers"
@@ -65,6 +66,7 @@ describe("IPC contract", () => {
     const rendererSecurityPolicy = testRendererSecurityPolicy()
     const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
     const runtime: ApplicationRuntime = {
+      start: async () => undefined,
       dispose: async () => undefined,
       runPromise: async () => {
         throw new Error("Completeness test must not invoke handlers")
@@ -74,6 +76,7 @@ describe("IPC contract", () => {
 
     defineIpcHandlers(
       runtime,
+      testUpdater(),
       registry,
       { peek: () => [], acknowledge: () => undefined },
       rendererSecurityPolicy,
@@ -90,6 +93,7 @@ describe("IPC contract", () => {
     const rendererSecurityPolicy = testRendererSecurityPolicy()
     const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
     const runtime: ApplicationRuntime = {
+      start: async () => undefined,
       dispose: async () => undefined,
       runPromise: async () => {
         throw new Error("Window activation must not access application services")
@@ -106,6 +110,7 @@ describe("IPC contract", () => {
 
     defineIpcHandlers(
       runtime,
+      testUpdater(),
       registry,
       { peek: () => [], acknowledge: () => undefined },
       rendererSecurityPolicy,
@@ -780,3 +785,13 @@ const testRendererSecurityPolicy = () =>
     openExternal: async () => undefined,
     packagedRendererUrl: "file:///app/renderer/index.html",
   })
+
+const testUpdater = (): DesktopUpdater => ({
+  getState: () => Effect.succeed(AppUpdateIdle.make({ currentVersion: "0.0.0" })),
+  check: () => Effect.void,
+  download: () => Effect.void,
+  quitAndInstall: () => Effect.void,
+  startAutomaticChecks: () => Effect.void,
+  subscribe: () => Effect.succeed(() => undefined),
+  dispose: () => Effect.void,
+})

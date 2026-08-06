@@ -31,7 +31,7 @@ import {
 import { transportError, TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { Either, Schema } from "effect"
-import { ReviewContextError } from "../../../src/main/services/review-context"
+import { ReviewContextError } from "@diffdash/core/legacy"
 import { toPublicIpcError } from "./public-error"
 
 const KnownProviderProcessFailure = Schema.Union(

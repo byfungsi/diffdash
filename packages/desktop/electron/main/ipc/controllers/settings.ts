@@ -6,8 +6,7 @@ import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/proto
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { AppState } from "@diffdash/settings/app-state"
 import { app } from "electron"
-import { AgentProviders } from "../../../../src/main/services/agent-providers"
-import { Prerequisites } from "../../../../src/main/services/prerequisites"
+import { AgentProviders, Prerequisites } from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 

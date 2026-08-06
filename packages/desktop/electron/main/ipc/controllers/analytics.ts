@@ -1,5 +1,5 @@
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { Analytics } from "../../../../src/main/services/analytics"
+import { Analytics } from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 

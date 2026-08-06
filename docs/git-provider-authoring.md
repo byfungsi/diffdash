@@ -62,10 +62,10 @@ Expected authentication, parsing, API, CLI, and capability failures are
 `GitProviderOperationError` values. Remote parsing must reject other providers and preserve
 self-hosted domains and nested namespaces.
 
-## Desktop Registration
+## Core Registration
 
-Add the package as a `workspace:*` dependency of `@diffdash/desktop`, import its factory only in
-`packages/desktop/electron/main/composition.ts`, and append one registration before constructing
+Add the package as a `workspace:*` dependency of `@diffdash/core`, import its factory only in
+`packages/core/src/provider-composition.ts`, and append one registration before constructing
 `GitProviderRegistry.layer`:
 
 ```ts
@@ -76,7 +76,7 @@ const registrations: GitProviderRegistration[] = [
 ```
 
 Do not add provider branches to the registry, protocol, persistence, renderer, local Git, or host
-orchestration. `@diffdash/git-provider-fixture` plus its single conditional registration in desktop
+orchestration. `@diffdash/git-provider-fixture` plus its single conditional registration in Core
 composition proves the one-package plus one-registration path.
 
 ## Tests

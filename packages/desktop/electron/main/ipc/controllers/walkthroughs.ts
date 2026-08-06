@@ -9,9 +9,11 @@ import {
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { WalkthroughService } from "@diffdash/walkthrough"
-import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
-import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
-import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
+import {
+  RepositoryComparisonSource,
+  RepositoryLinker,
+  ReviewSnapshotService,
+} from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicWalkthroughError } from "../walkthrough-public-error"
 import { IpcControllerRegistry } from "./controller-registry"

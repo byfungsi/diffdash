@@ -23,17 +23,15 @@ import {
   ResolvedRepositoryComparison,
 } from "@diffdash/protocol/review-snapshot"
 import type { ViewedFileRecord } from "@diffdash/protocol/viewed-files"
-import { GitProvider } from "../../../../src/main/services/git-provider"
-import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
-import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
 import {
+  GitProvider,
+  paginateReviewSnapshot,
+  RepositoryComparisonSource,
+  RepositoryLinker,
   ReviewSnapshotService,
   ReviewSnapshotUnavailableError,
-} from "../../../../src/main/services/review-snapshot"
-import {
-  paginateReviewSnapshot,
   searchReviewSnapshot,
-} from "../../../../src/main/services/review-snapshot-pagination"
+} from "@diffdash/core/legacy"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 
