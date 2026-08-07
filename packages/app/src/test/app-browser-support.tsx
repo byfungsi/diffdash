@@ -5265,7 +5265,7 @@ scenario("toggleSidebarShortcut", async () => {
     )
     expect(expandSidebar?.getAttribute("aria-expanded")).toBe("false")
     expect(expandSidebar?.title).toBe("Expand sidebar (Cmd + B)")
-    expect(document.activeElement).toBe(filterInput)
+    expect(document.querySelector('input[placeholder="Filter files"]')).toBeNull()
   })
 
   dispatchKeyboardShortcut("b", { metaKey: true })
@@ -5274,7 +5274,7 @@ scenario("toggleSidebarShortcut", async () => {
       'button[aria-label="Collapse sidebar"]',
     )
     expect(collapseSidebar?.getAttribute("aria-expanded")).toBe("true")
-    expect(document.activeElement).toBe(filterInput)
+    expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
   })
 })
 

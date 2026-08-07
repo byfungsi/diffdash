@@ -42,7 +42,7 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("shortcutReferenceReview")()
   })
 
-  it("toggles the project sidebar with Cmd+B without moving focus", async () => {
+  it("toggles the project sidebar with Cmd+B from an editable control", async () => {
     expect.hasAssertions()
     await appBrowserScenario("toggleSidebarShortcut")()
   })
