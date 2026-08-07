@@ -358,6 +358,62 @@ const safe = true
     expect(document.querySelector('[data-testid="markdown-under-test"] script')).toBeNull()
     expect(document.body.textContent).toContain("<script>unsafe()</script>")
   })
+
+  it("keeps shorter backtick fences inside longer code fences", () => {
+    render(
+      <ReviewMarkdown>{`\`\`\`\`md
+\`\`\`ts
+const nested = true
+\`\`\`
+\`\`\`\``}</ReviewMarkdown>,
+    )
+
+    expect(document.querySelector("pre code")?.textContent).toContain("```ts")
+    expect(document.querySelector("pre code")?.textContent).toContain("const nested = true")
+  })
+
+  it("repairs escaped structure and distinguishes technical references", () => {
+    render(
+      <div data-testid="markdown-under-test">
+        <ReviewMarkdown>
+          {
+            "CoreConfiguration changed.\\n- Read packages/core/src/core-configuration.ts:4, README.md, and LICENSE\\n- Trace createCoreLayer through paths.settings in packages/app/src and .github/workflows/ci.yml.\\n\\nCompare `packages/app/src/app.tsx:12` with `AppSettings`. Use ``value\\nafter`` for a literal newline escape."
+          }
+        </ReviewMarkdown>
+      </div>,
+    )
+
+    expect(document.querySelectorAll("li")).toHaveLength(2)
+    expect(document.body.textContent).not.toContain("changed.\\n-")
+    expect(document.body.textContent).toContain("Use value\\nafter for a literal newline escape.")
+    expect(document.body.textContent).not.toContain("``value")
+    expect(
+      [...document.querySelectorAll('[data-review-file-reference="true"]')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "packages/core/src/core-configuration.ts:4",
+        "packages/app/src/app.tsx:12",
+        "packages/app/src",
+        "README.md",
+        "LICENSE",
+        ".github/workflows/ci.yml",
+      ]),
+    )
+    expect(
+      [...document.querySelectorAll('[data-review-symbol-reference="true"]')].map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "CoreConfiguration",
+        "createCoreLayer",
+        "paths.settings",
+        "AppSettings",
+      ]),
+    )
+  })
 })
 
 const threadDetails = ({ previousRevision = false, pending = true } = {}) => {

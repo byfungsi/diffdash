@@ -1182,7 +1182,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           mapping,
           provider: "opencode",
           model: "openai/gpt-5.3-codex-spark",
-          promptVersion: AgentPromptVersion.make("review-thread-v3"),
+          promptVersion: AgentPromptVersion.make("review-thread-v4"),
         })
         yield* turns.recoverInterruptedTurns
 

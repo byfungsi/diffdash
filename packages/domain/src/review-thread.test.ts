@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 
 import { parseUnifiedDiff } from "./diff-parser"
-import { LineReviewAnchor, isReviewAnchorInParsedDiff } from "./review-thread"
+import {
+  LineReviewAnchor,
+  isReviewAnchorInParsedDiff,
+  normalizeMarkdownLineBreaks,
+} from "./review-thread"
 
 const parsedDiff = parseUnifiedDiff(`diff --git a/src/app.ts b/src/app.ts
 index 1111111..2222222 100644
@@ -40,5 +44,50 @@ describe("review thread anchors", () => {
     expect(isReviewAnchorInParsedDiff(makeLine("new", 'const value = "old"'), parsedDiff)).toBe(
       false,
     )
+  })
+})
+
+describe("review thread Markdown", () => {
+  it("normalizes escaped Markdown structure without changing an isolated newline escape", () => {
+    expect(
+      normalizeMarkdownLineBreaks(
+        "Configuration changed.\\n- Read packages/core/src/configuration.ts:4\\n- Trace createCoreLayer.\\n\\nThen verify settings.",
+      ),
+    ).toBe(`Configuration changed.
+- Read packages/core/src/configuration.ts:4
+- Trace createCoreLayer.
+
+Then verify settings.`)
+    expect(normalizeMarkdownLineBreaks("Use `\\n` as the newline escape.")).toBe(
+      "Use `\\n` as the newline escape.",
+    )
+    expect(normalizeMarkdownLineBreaks("First sentence.\\nSecond sentence.")).toBe(
+      "First sentence.\nSecond sentence.",
+    )
+  })
+
+  it("preserves escaped newlines in inline and fenced code", () => {
+    expect(normalizeMarkdownLineBreaks("Use ``value\\nafter``.\\nContinue.")).toBe(
+      "Use ``value\\nafter``.\nContinue.",
+    )
+    expect(
+      normalizeMarkdownLineBreaks('Example.\\n```ts\\nconst value = "\\n"\\n```\\nContinue.'),
+    ).toBe(`Example.
+\`\`\`ts
+const value = "\\n"
+\`\`\`
+Continue.`)
+    expect(normalizeMarkdownLineBreaks("Before.\\r\\n- After.")).toBe("Before.\n- After.")
+    const validFence = `Example.
+\`\`\`ts
+const value = "\\n"
+\`\`\`
+Continue.`
+    expect(normalizeMarkdownLineBreaks(validFence)).toBe(validFence)
+    expect(normalizeMarkdownLineBreaks(normalizeMarkdownLineBreaks(validFence))).toBe(validFence)
+    const longerClosingFence = `\`\`\`ts
+const value = "\\n"
+\`\`\`\``
+    expect(normalizeMarkdownLineBreaks(longerClosingFence)).toBe(longerClosingFence)
   })
 })
