@@ -907,6 +907,7 @@ type AppBrowserScenarioId =
   | "cliRepositoryComparison"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
+  | "diffLineContextMenu"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
   | "diffSearchImmutableAnchor"
@@ -1322,6 +1323,77 @@ scenario("diffViewSettings", async () => {
     expect(
       getDiffShadowRoot("src/app.tsx")?.querySelector('[data-diff-type="split"]'),
     ).not.toBeNull()
+  })
+})
+
+scenario("diffLineContextMenu", async () => {
+  const path = "src/index.ts"
+  const lineDetail = HostedReviewDetail.make({
+    ...detail,
+    files: [
+      ChangedFile.make({
+        additions: 1,
+        changeType: "modified",
+        deletions: 1,
+        path,
+      }),
+    ],
+  })
+  const lineDiff = HostedReviewDiff.make({
+    ...diff,
+    diff: `diff --git a/${path} b/${path}
+index 1111111..2222222 100644
+--- a/${path}
++++ b/${path}
+@@ -12 +153 @@
+-old line
++new line`,
+  })
+  const writeText = vi.spyOn(window.navigator.clipboard, "writeText").mockResolvedValue()
+  installDiffDashApi({ pullRequestDetail: lineDetail, pullRequestDiff: lineDiff })
+  renderApp()
+
+  await openDefaultHostedReview()
+  const shadowRoot = await vi.waitFor(() => {
+    const root = getDiffShadowRoot(path)
+    expect(root?.querySelector("[data-line]")).not.toBeNull()
+    return root!
+  })
+  const addition = getDiffLine(shadowRoot, "new line")
+  expect(addition).not.toBeUndefined()
+  if (addition === undefined) throw new Error("Missing added diff line")
+
+  addition.dispatchEvent(
+    new PointerEvent("pointermove", {
+      bubbles: true,
+      composed: true,
+      pointerType: "mouse",
+    }),
+  )
+  addition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+
+  const menu = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(element).not.toBeNull()
+    return element!
+  })
+  const copyPath = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes("Copy path") ?? false,
+  )
+  expect(copyPath).not.toBeUndefined()
+  copyPath?.click()
+
+  await vi.waitFor(() => {
+    expect(writeText).toHaveBeenCalledWith("@src/index.ts:153")
   })
 })
 
