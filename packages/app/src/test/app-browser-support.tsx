@@ -4013,6 +4013,32 @@ scenario("reviewThreadSidebar", async () => {
     target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
   })
   await vi.waitFor(() => expect(document.querySelector("[data-review-thread-list]")).not.toBeNull())
+  const reopenedLockThread = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Open thread details for pnpm-lock.yaml R1"]',
+  )
+  if (reopenedLockThread === null) throw new Error("Reopened thread was not found")
+  reopenedLockThread.click()
+  const detailResizer = await vi.waitFor(() => {
+    const resizer = document.querySelector<HTMLElement>("[data-review-thread-detail-resizer]")
+    expect(document.querySelector("[data-review-thread-detail]")).not.toBeNull()
+    if (resizer === null) throw new Error("Thread detail resizer was not found")
+    return resizer
+  })
+  detailResizer.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: detailResizer }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+    )
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-list]")).not.toBeNull())
   document.body.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
   )
@@ -5314,6 +5340,26 @@ scenario("toggleSidebarShortcut", async () => {
       'button[aria-label="Collapse sidebar"]',
     )
     expect(collapseSidebar?.getAttribute("aria-expanded")).toBe("true")
+    expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
+  })
+
+  const contextResizer = document.querySelector<HTMLElement>("[data-review-sidebar-resizer]")
+  if (contextResizer === null) throw new Error("Review sidebar resizer was not found")
+  contextResizer.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: contextResizer }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector('input[placeholder="Filter files"]')).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+    )
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => {
     expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
   })
 

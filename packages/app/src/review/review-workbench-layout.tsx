@@ -264,7 +264,7 @@ export function ReviewWorkbenchLayout({
           >
             <div
               aria-hidden={!plan.contextVisible}
-              data-review-collapsible-sidebar-pane
+              data-review-sidebar-collapse-region
               inert={!plan.contextVisible}
               className="h-full min-h-0 min-w-0"
             >
@@ -275,6 +275,7 @@ export function ReviewWorkbenchLayout({
           <PaneResizeHandle
             id={contextResizeHandleId}
             aria-label="Resize review sidebar"
+            data-review-sidebar-collapse-region
             data-review-sidebar-resizer
             disableDoubleClick
             disabled={!outerHandleVisible}
@@ -311,7 +312,7 @@ export function ReviewWorkbenchLayout({
               >
                 <div
                   aria-hidden={!plan.detailVisible}
-                  data-review-collapsible-sidebar-pane
+                  data-review-sidebar-collapse-region
                   inert={!plan.detailVisible}
                   className="h-full min-h-0 min-w-0"
                 >
@@ -322,6 +323,7 @@ export function ReviewWorkbenchLayout({
               <PaneResizeHandle
                 id={detailResizeHandleId}
                 aria-label="Resize thread details"
+                data-review-sidebar-collapse-region
                 data-review-thread-detail-resizer
                 disableDoubleClick
                 disabled={!innerHandleVisible}
