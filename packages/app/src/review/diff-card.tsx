@@ -79,11 +79,10 @@ export const OpenDiffCard = ({
 }) => {
   const fileCardRef = useRef<HTMLElement>(null)
   const fileHeaderFocusRef = useRef<HTMLButtonElement>(null)
-  const hoveredDiffLineGetterRef = useRef<
-    (() => { readonly lineNumber: number } | undefined) | null
-  >(null)
   const threadHistorySyncFrameRef = useRef<number | null>(null)
+  const [contextMenuOpen, setContextMenuOpen] = useState(false)
   const [contextMenuLineNumber, setContextMenuLineNumber] = useState<number | null>(null)
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "failed">("idle")
   const [renderedPatch, setRenderedPatch] = useState<string | null>(null)
   const diffReady = renderedPatch === file.patch
   const renderAsPlainText = isVeryLargeDiffFile(file)
@@ -124,11 +123,9 @@ export const OpenDiffCard = ({
     NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
   >((node, instance, phase) => {
     if (phase === "unmount") {
-      hoveredDiffLineGetterRef.current = null
       onDiffRendered(node, instance, phase)
       return
     }
-    hoveredDiffLineGetterRef.current = instance.getHoveredLine
     setRenderedPatch(file.patch)
     onDiffRendered(node, instance, phase)
     if (annotations.length === 0 || threadHistorySyncFrameRef.current !== null) return
@@ -220,8 +217,12 @@ export const OpenDiffCard = ({
       />
       {isExpanded ? (
         <ContextMenu.Root
+          open={contextMenuOpen}
           onOpenChange={(open) => {
-            if (!open) setContextMenuLineNumber(null)
+            setContextMenuOpen(open)
+            if (open) return
+            setContextMenuLineNumber(null)
+            setCopyStatus("idle")
           }}
         >
           <ContextMenu.Trigger asChild>
@@ -230,13 +231,14 @@ export const OpenDiffCard = ({
               aria-busy={!diffReady}
               className="bg-diff-canvas relative overflow-hidden"
               onContextMenu={(event) => {
-                const hoveredLine = hoveredDiffLineGetterRef.current?.()
-                if (hoveredLine === undefined) {
+                const lineNumber = diffLineNumberFromEventPath(event.nativeEvent.composedPath())
+                if (lineNumber === null) {
                   event.preventDefault()
                   setContextMenuLineNumber(null)
                   return
                 }
-                setContextMenuLineNumber(hoveredLine.lineNumber)
+                setContextMenuLineNumber(lineNumber)
+                setCopyStatus("idle")
               }}
             >
               {diffReady ? null : <DiffLoadingSkeleton />}
@@ -351,15 +353,31 @@ export const OpenDiffCard = ({
             >
               <ContextMenu.Item
                 className="data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
-                onSelect={() => {
+                disabled={copyStatus === "copying"}
+                onSelect={(event) => {
                   if (contextMenuLineNumber === null) return
+                  event.preventDefault()
+                  setCopyStatus("copying")
                   void navigator.clipboard
                     .writeText(`@${file.path}:${contextMenuLineNumber}`)
-                    .catch(() => undefined)
+                    .then(
+                      () => {
+                        setContextMenuOpen(false)
+                        setContextMenuLineNumber(null)
+                        setCopyStatus("idle")
+                      },
+                      () => setCopyStatus("failed"),
+                    )
                 }}
               >
                 <Copy className="text-muted-foreground size-3.5 shrink-0" />
-                <span>Copy path</span>
+                <span>
+                  {copyStatus === "copying"
+                    ? "Copying path..."
+                    : copyStatus === "failed"
+                      ? "Copy failed, retry"
+                      : "Copy path"}
+                </span>
               </ContextMenu.Item>
             </ContextMenu.Content>
           </ContextMenu.Portal>
@@ -367,6 +385,17 @@ export const OpenDiffCard = ({
       ) : null}
     </section>
   )
+}
+
+const diffLineNumberFromEventPath = (path: readonly EventTarget[]) => {
+  for (const target of path) {
+    if (!(target instanceof HTMLElement)) continue
+    const value = target.getAttribute("data-line") ?? target.getAttribute("data-column-number")
+    if (value === null) continue
+    const lineNumber = Number(value)
+    if (Number.isSafeInteger(lineNumber) && lineNumber > 0) return lineNumber
+  }
+  return null
 }
 
 const DiffLoadingSkeleton = () => (

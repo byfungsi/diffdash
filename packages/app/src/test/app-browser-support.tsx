@@ -1333,7 +1333,7 @@ scenario("diffLineContextMenu", async () => {
     files: [
       ChangedFile.make({
         additions: 1,
-        changeType: "modified",
+        changeType: "renamed",
         deletions: 1,
         path,
       }),
@@ -1341,9 +1341,12 @@ scenario("diffLineContextMenu", async () => {
   })
   const lineDiff = HostedReviewDiff.make({
     ...diff,
-    diff: `diff --git a/${path} b/${path}
+    diff: `diff --git a/src/legacy.ts b/${path}
+similarity index 90%
+rename from src/legacy.ts
+rename to ${path}
 index 1111111..2222222 100644
---- a/${path}
+--- a/src/legacy.ts
 +++ b/${path}
 @@ -12 +153 @@
 -old line
@@ -1357,19 +1360,13 @@ index 1111111..2222222 100644
   const shadowRoot = await vi.waitFor(() => {
     const candidate = getDiffShadowRoot(path)
     expect(candidate?.querySelector("[data-line]")).not.toBeNull()
-    return candidate!
+    if (candidate === null) throw new Error("Missing diff shadow root")
+    return candidate
   })
   const addition = getDiffLine(shadowRoot, "new line")
   expect(addition).not.toBeUndefined()
   if (addition === undefined) throw new Error("Missing added diff line")
 
-  addition.dispatchEvent(
-    new PointerEvent("pointermove", {
-      bubbles: true,
-      composed: true,
-      pointerType: "mouse",
-    }),
-  )
   addition.dispatchEvent(
     new MouseEvent("contextmenu", {
       bubbles: true,
@@ -1394,6 +1391,58 @@ index 1111111..2222222 100644
 
   await vi.waitFor(() => {
     expect(writeText).toHaveBeenCalledWith("@src/index.ts:153")
+  })
+
+  const deletion = getDiffLine(shadowRoot, "old line")
+  expect(deletion).not.toBeUndefined()
+  if (deletion === undefined) throw new Error("Missing deleted diff line")
+  deletion.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const reopenedMenu = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(element).not.toBeNull()
+    if (element === null) throw new Error("Missing reopened diff line actions menu")
+    return element
+  })
+  const oldSideCopyPath = [...reopenedMenu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes("Copy path") ?? false,
+  )
+  expect(oldSideCopyPath).not.toBeUndefined()
+  oldSideCopyPath?.click()
+
+  await vi.waitFor(() => {
+    expect(writeText).toHaveBeenLastCalledWith("@src/index.ts:12")
+  })
+
+  writeText.mockRejectedValueOnce(new Error("Clipboard unavailable"))
+  addition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const failedCopyItem = await vi.waitFor(() => {
+    const item = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"] [role="menuitem"]',
+    )
+    expect(item).not.toBeNull()
+    if (item === null) throw new Error("Missing copy path menu item")
+    return item
+  })
+  failedCopyItem.click()
+
+  await vi.waitFor(() => {
+    expect(failedCopyItem.textContent).toContain("Copy failed, retry")
   })
 })
 
