@@ -1381,7 +1381,8 @@ index 1111111..2222222 100644
       '[role="menu"][aria-label="Diff line actions"]',
     )
     expect(element).not.toBeNull()
-    return element!
+    if (element === null) throw new Error("Missing diff line actions menu")
+    return element
   })
   const copyPath = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
     (item) => item.textContent?.includes("Copy path") ?? false,

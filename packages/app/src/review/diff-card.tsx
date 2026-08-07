@@ -41,6 +41,14 @@ const REVIEW_DIFF_METRICS = {
   spacing: 0,
 } satisfies VirtualFileMetrics
 
+type DiffLineContextMenuState =
+  | { readonly status: "closed" }
+  | {
+      readonly status: "open"
+      readonly lineNumber: number
+      readonly copyStatus: "idle" | "copying" | "failed"
+    }
+
 /** Virtualized diff card with viewed, expansion, file-open, and inline-thread interactions. */
 export const OpenDiffCard = ({
   diffOptions,
@@ -80,9 +88,9 @@ export const OpenDiffCard = ({
   const fileCardRef = useRef<HTMLElement>(null)
   const fileHeaderFocusRef = useRef<HTMLButtonElement>(null)
   const threadHistorySyncFrameRef = useRef<number | null>(null)
-  const [contextMenuOpen, setContextMenuOpen] = useState(false)
-  const [contextMenuLineNumber, setContextMenuLineNumber] = useState<number | null>(null)
-  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "failed">("idle")
+  const [contextMenuState, setContextMenuState] = useState<DiffLineContextMenuState>({
+    status: "closed",
+  })
   const [renderedPatch, setRenderedPatch] = useState<string | null>(null)
   const diffReady = renderedPatch === file.patch
   const renderAsPlainText = isVeryLargeDiffFile(file)
@@ -217,12 +225,9 @@ export const OpenDiffCard = ({
       />
       {isExpanded ? (
         <ContextMenu.Root
-          open={contextMenuOpen}
+          open={contextMenuState.status === "open"}
           onOpenChange={(open) => {
-            setContextMenuOpen(open)
-            if (open) return
-            setContextMenuLineNumber(null)
-            setCopyStatus("idle")
+            if (!open) setContextMenuState({ status: "closed" })
           }}
         >
           <ContextMenu.Trigger asChild>
@@ -234,11 +239,10 @@ export const OpenDiffCard = ({
                 const lineNumber = diffLineNumberFromEventPath(event.nativeEvent.composedPath())
                 if (lineNumber === null) {
                   event.preventDefault()
-                  setContextMenuLineNumber(null)
+                  setContextMenuState({ status: "closed" })
                   return
                 }
-                setContextMenuLineNumber(lineNumber)
-                setCopyStatus("idle")
+                setContextMenuState({ status: "open", lineNumber, copyStatus: "idle" })
               }}
             >
               {diffReady ? null : <DiffLoadingSkeleton />}
@@ -353,20 +357,25 @@ export const OpenDiffCard = ({
             >
               <ContextMenu.Item
                 className="data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
-                disabled={copyStatus === "copying"}
+                disabled={
+                  contextMenuState.status === "open" && contextMenuState.copyStatus === "copying"
+                }
                 onSelect={(event) => {
-                  if (contextMenuLineNumber === null) return
+                  if (contextMenuState.status !== "open") return
                   event.preventDefault()
-                  setCopyStatus("copying")
-                  void navigator.clipboard.writeText(`@${file.path}:${contextMenuLineNumber}`).then(
+                  const lineNumber = contextMenuState.lineNumber
+                  setContextMenuState({ ...contextMenuState, copyStatus: "copying" })
+                  void navigator.clipboard.writeText(`@${file.path}:${lineNumber}`).then(
                     () => {
-                      setContextMenuOpen(false)
-                      setContextMenuLineNumber(null)
-                      setCopyStatus("idle")
+                      setContextMenuState({ status: "closed" })
                       return undefined
                     },
                     () => {
-                      setCopyStatus("failed")
+                      setContextMenuState((current) =>
+                        current.status === "open" && current.lineNumber === lineNumber
+                          ? { ...current, copyStatus: "failed" }
+                          : current,
+                      )
                       return undefined
                     },
                   )
@@ -374,9 +383,9 @@ export const OpenDiffCard = ({
               >
                 <Copy className="text-muted-foreground size-3.5 shrink-0" />
                 <span>
-                  {copyStatus === "copying"
+                  {contextMenuState.status === "open" && contextMenuState.copyStatus === "copying"
                     ? "Copying path..."
-                    : copyStatus === "failed"
+                    : contextMenuState.status === "open" && contextMenuState.copyStatus === "failed"
                       ? "Copy failed, retry"
                       : "Copy path"}
                 </span>
