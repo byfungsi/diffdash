@@ -363,8 +363,12 @@ export const OpenDiffCard = ({
                       setContextMenuOpen(false)
                       setContextMenuLineNumber(null)
                       setCopyStatus("idle")
+                      return undefined
                     },
-                    () => setCopyStatus("failed"),
+                    () => {
+                      setCopyStatus("failed")
+                      return undefined
+                    },
                   )
                 }}
               >
