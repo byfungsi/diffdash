@@ -358,16 +358,14 @@ export const OpenDiffCard = ({
                   if (contextMenuLineNumber === null) return
                   event.preventDefault()
                   setCopyStatus("copying")
-                  void navigator.clipboard
-                    .writeText(`@${file.path}:${contextMenuLineNumber}`)
-                    .then(
-                      () => {
-                        setContextMenuOpen(false)
-                        setContextMenuLineNumber(null)
-                        setCopyStatus("idle")
-                      },
-                      () => setCopyStatus("failed"),
-                    )
+                  void navigator.clipboard.writeText(`@${file.path}:${contextMenuLineNumber}`).then(
+                    () => {
+                      setContextMenuOpen(false)
+                      setContextMenuLineNumber(null)
+                      setCopyStatus("idle")
+                    },
+                    () => setCopyStatus("failed"),
+                  )
                 }}
               >
                 <Copy className="text-muted-foreground size-3.5 shrink-0" />
