@@ -1391,9 +1391,7 @@ index 1111111..2222222 100644
 
   await vi.waitFor(() => {
     expect(writeText).toHaveBeenCalledWith("@src/index.ts:153")
-    expect(
-      document.querySelector('[role="menu"][aria-label="Diff line actions"]'),
-    ).toBeNull()
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
   })
 
   const deletion = getDiffLine(shadowRoot, "old line")
@@ -1423,9 +1421,7 @@ index 1111111..2222222 100644
 
   await vi.waitFor(() => {
     expect(writeText).toHaveBeenLastCalledWith("@src/index.ts:12")
-    expect(
-      document.querySelector('[role="menu"][aria-label="Diff line actions"]'),
-    ).toBeNull()
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
   })
 
   writeText.mockRejectedValueOnce(new Error("Clipboard unavailable"))
