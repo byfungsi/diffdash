@@ -1429,7 +1429,10 @@ index 1111111..2222222 100644
   })
 
   writeText.mockRejectedValueOnce(new Error("Clipboard unavailable"))
-  addition.dispatchEvent(
+  const retryAddition = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "new line")
+  expect(retryAddition).not.toBeUndefined()
+  if (retryAddition === undefined) throw new Error("Missing added diff line for retry")
+  retryAddition.dispatchEvent(
     new MouseEvent("contextmenu", {
       bubbles: true,
       button: 2,
