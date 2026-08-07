@@ -15,6 +15,7 @@ const generateWalkthrough = async (
   const result = await runtime.walkthroughs.getOperation(accepted.operationId)
   if ("walkthrough" in result) return result.walkthrough
   if ("error" in result) throw result.error
+  if ("defect" in result) throw result.defect
   throw new Error("Walkthrough generation was cancelled.")
 }
 

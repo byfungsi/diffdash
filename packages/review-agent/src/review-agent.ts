@@ -96,7 +96,7 @@ interface RunReviewAgentTurnInput {
 }
 
 /** A recoverable orchestration failure suitable for renderer error state. */
-class ReviewAgentServiceError extends Schema.TaggedError<ReviewAgentServiceError>()(
+export class ReviewAgentServiceError extends Schema.TaggedError<ReviewAgentServiceError>()(
   "ReviewAgentServiceError",
   {
     operation: Schema.String,

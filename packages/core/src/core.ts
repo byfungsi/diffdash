@@ -1,10 +1,49 @@
+import type {
+  AgentProviderOperationError,
+  AgentProviderResolutionError,
+  InvalidAgentProviderResponseError,
+} from "@diffdash/agent-provider"
+import type { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type {
+  StoredWalkthrough,
+  WalkthroughPromptPreparationError,
+  WalkthroughValidationError,
+} from "@diffdash/domain/walkthrough"
+import type { GitProviderOperationError, UnknownGitProviderError } from "@diffdash/git-provider"
+import type { LocalReviewTargetError } from "@diffdash/local-git/local-git"
+import type { ProjectWorkspaceStoreError } from "@diffdash/persistence/project-workspace-store"
+import type { ReviewThreadStoreError } from "@diffdash/persistence/review-thread-store"
+import type {
+  ReviewTurnRejectedError,
+  ReviewTurnStoreError,
+  ReviewTurnTargetError,
+} from "@diffdash/persistence/review-turn-store"
+import type { ViewedFileStoreError } from "@diffdash/persistence/viewed-file-store"
+import type { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
+import type { ProcessExecutionError } from "@diffdash/process"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
+import type { TransportError } from "@diffdash/protocol/transport-error"
+import type {
+  ReviewAgentFinalizeError,
+  ReviewAgentProviderFailureError,
+  ReviewAgentServiceError,
+} from "@diffdash/review-agent"
+import type { AppSettingsError } from "@diffdash/settings/app-settings"
+import type { AppStateError } from "@diffdash/settings/app-state"
+import type {
+  WalkthroughGenerationError,
+  WalkthroughModelUnavailableError,
+} from "@diffdash/walkthrough"
 import { Schema } from "effect"
 import type { CoreAbsolutePath, CoreWebUrl } from "./core-configuration"
+import type { CoreStartupFailure } from "./core-startup-error"
+import type { PrerequisiteInstallError } from "./services/prerequisites"
+import type { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
+import type { RepositoryLinkError } from "./services/repository-linker"
+import type { ReviewContextError } from "./services/review-context"
 
 export {
   CoreAbsolutePath,
@@ -17,6 +56,8 @@ export {
   type CoreStartupFailure,
 } from "./core-startup-error"
 export { createEmbeddedCore } from "./embedded-core"
+export { PrerequisiteInstallError } from "./services/prerequisites"
+export { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 export { RepositoryLinkError } from "./services/repository-linker"
 export { ReviewContextError } from "./services/review-context"
 
@@ -155,6 +196,118 @@ export type CoreOperationOutput<Method extends CoreMethod> = Method extends
   ? CoreFileOpenIntent
   : CoreMethodOutput<Method>
 
+/** Explicit success or expected failure returned across the embedded Core boundary. */
+export type CoreResult<Value, Failure> =
+  | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly error: Failure }
+
+/** Expected failures from selecting or invoking one hosted Git provider. */
+export type CoreGitProviderFailure = UnknownGitProviderError | GitProviderOperationError
+
+/** Expected failures while resolving one review target and its repository. */
+export type CoreThreadResolutionFailure =
+  | ReviewContextError
+  | RepositoryLinkError
+  | RepositoryComparisonSourceError
+
+/** Expected failures while executing one review-thread agent turn. */
+export type CoreReviewAgentFailure =
+  | ReviewAgentServiceError
+  | ReviewAgentFinalizeError
+  | ReviewAgentProviderFailureError
+  | ReviewTurnTargetError
+  | ReviewTurnRejectedError
+
+/** Expected provider, validation, persistence, and review failures from walkthrough generation. */
+export type CoreWalkthroughFailure =
+  | ReviewContextError
+  | RepositoryLinkError
+  | RepositoryComparisonSourceError
+  | WalkthroughStoreError
+  | WalkthroughPromptPreparationError
+  | WalkthroughGenerationError
+  | WalkthroughValidationError
+  | WalkthroughModelUnavailableError
+  | AgentProviderResolutionError
+  | NoAgentProviderAvailableError
+  | AgentProviderOperationError
+  | InvalidAgentProviderResponseError
+
+/** Exact expected failure channel for every closed Core business operation. */
+export interface CoreOperationFailureMap {
+  readonly [CoreMethod.analyticsCapture]: never
+  readonly [CoreMethod.analyticsStart]: never
+  readonly [CoreMethod.agentProvidersGetCatalog]: never
+  readonly [CoreMethod.appDiagnostics]: never
+  readonly [CoreMethod.appInstallDiffDashCli]: PrerequisiteInstallError
+  readonly [CoreMethod.appOpenLocalRepositoryFile]: ProcessExecutionError
+  readonly [CoreMethod.appOpenRepositoryComparisonFile]: CoreGitProviderFailure
+  readonly [CoreMethod.appOpenRepositoryFile]: RepositoryLinkError | CoreGitProviderFailure
+  readonly [CoreMethod.appStateGet]: AppStateError
+  readonly [CoreMethod.appStateUpdate]: AppStateError
+  readonly [CoreMethod.listProviders]: never
+  readonly [CoreMethod.submitHostedReviewDecision]: CoreGitProviderFailure
+  readonly [CoreMethod.getHostedReviewDecision]: CoreGitProviderFailure
+  readonly [CoreMethod.listHostedReviews]: CoreGitProviderFailure
+  readonly [CoreMethod.listAssignedHostedReviews]: CoreGitProviderFailure
+  readonly [CoreMethod.listHostedRepositorySearchScopes]: CoreGitProviderFailure
+  readonly [CoreMethod.searchHostedRepositories]: CoreGitProviderFailure
+  readonly [CoreMethod.resolveLocalBranch]: ProcessExecutionError | LocalReviewTargetError
+  readonly [CoreMethod.resolveRepositoryComparison]: RepositoryComparisonSourceError
+  readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
+  readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError
+  readonly [CoreMethod.acquireRepositoryComparisonSnapshot]: RepositoryComparisonSourceError
+  readonly [CoreMethod.getReviewSnapshotPage]: never
+  readonly [CoreMethod.searchReviewSnapshot]: never
+  readonly [CoreMethod.favoriteRemoteRepository]: RepositoryLinkError
+  readonly [CoreMethod.forgetRepository]: RepositoryLinkError
+  readonly [CoreMethod.installRepository]: RepositoryLinkError
+  readonly [CoreMethod.linkRepository]: RepositoryLinkError
+  readonly [CoreMethod.listRepositories]: RepositoryLinkError
+  readonly [CoreMethod.openProject]: RepositoryLinkError
+  readonly [CoreMethod.repairRepositoryIdentities]: RepositoryLinkError
+  readonly [CoreMethod.setRepositoryFavorite]: RepositoryLinkError
+  readonly [CoreMethod.projectWorkspaceGet]: ProjectWorkspaceStoreError
+  readonly [CoreMethod.projectWorkspaceSave]: ProjectWorkspaceStoreError
+  readonly [CoreMethod.addReviewThreadUserMessage]: ReviewThreadStoreError
+  readonly [CoreMethod.createReviewThread]:
+    | CoreThreadResolutionFailure
+    | TransportError
+    | ReviewThreadStoreError
+  readonly [CoreMethod.getReviewThread]: ReviewThreadStoreError
+  readonly [CoreMethod.listReviewThreads]: CoreThreadResolutionFailure | ReviewThreadStoreError
+  readonly [CoreMethod.runReviewThreadAgent]:
+    | ReviewTurnTargetError
+    | ReviewTurnStoreError
+    | CoreThreadResolutionFailure
+    | WalkthroughStoreError
+    | CoreReviewAgentFailure
+  readonly [CoreMethod.settingsGet]: AppSettingsError
+  readonly [CoreMethod.settingsUpdate]: AppSettingsError
+  readonly [CoreMethod.listViewedFiles]: RepositoryLinkError | ViewedFileStoreError
+  readonly [CoreMethod.setViewedFile]: RepositoryLinkError | ViewedFileStoreError
+  readonly [CoreMethod.listLocalViewedFiles]: RepositoryLinkError | ViewedFileStoreError
+  readonly [CoreMethod.setLocalViewedFile]: RepositoryLinkError | ViewedFileStoreError
+  readonly [CoreMethod.listRepositoryComparisonViewedFiles]:
+    | RepositoryComparisonSourceError
+    | ViewedFileStoreError
+  readonly [CoreMethod.setRepositoryComparisonViewedFile]:
+    | RepositoryComparisonSourceError
+    | ViewedFileStoreError
+}
+
+/** Expected failure returned by one named Core business operation. */
+export type CoreOperationFailure<Method extends CoreMethod> = CoreOperationFailureMap[Method]
+
+/** Startup acquisition can fail before any requested Core operation executes. */
+export type CoreBoundaryFailure<Failure> = CoreStartupFailure | Failure
+
+/** Expected failures while starting the Core application lifecycle. */
+export type CoreStartFailure = CoreBoundaryFailure<ReviewTurnStoreError>
+
+/** Expected failures while loading an already-persisted walkthrough. */
+export type CoreGetStoredWalkthroughFailure = CoreThreadResolutionFailure | WalkthroughStoreError
+
 /** Stable identity for one embedded walkthrough operation. */
 export const WalkthroughOperationId = Schema.String.pipe(
   Schema.minLength(1),
@@ -190,7 +343,8 @@ export interface WalkthroughOperationAccepted {
 /** Terminal state observed through the embedded operation boundary. */
 export type WalkthroughOperationResult =
   | { readonly _tag: "completed"; readonly walkthrough: StoredWalkthrough }
-  | { readonly _tag: "failed"; readonly error: unknown }
+  | { readonly _tag: "failed"; readonly error: CoreWalkthroughFailure }
+  | { readonly _tag: "defect"; readonly defect: unknown }
   | { readonly _tag: "cancelled" }
 
 /** Request for a stored artifact belonging to one exact review generation. */
@@ -202,25 +356,44 @@ export interface GetStoredWalkthrough {
 
 /** Durable walkthrough operation seam implemented in-process during the embedded migration. */
 export interface CoreWalkthroughs {
-  readonly start: (request: StartWalkthroughOperation) => Promise<WalkthroughOperationAccepted>
+  readonly start: (
+    request: StartWalkthroughOperation,
+  ) => Promise<
+    CoreResult<
+      WalkthroughOperationAccepted,
+      CoreBoundaryFailure<WalkthroughOperationCapacityExceeded>
+    >
+  >
   readonly getOperation: (
     operationId: WalkthroughOperationId,
-  ) => Promise<WalkthroughOperationResult>
-  readonly cancel: (operationId: WalkthroughOperationId) => Promise<WalkthroughOperationResult>
-  readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
+  ) => Promise<
+    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<WalkthroughOperationNotFound>>
+  >
+  readonly cancel: (
+    operationId: WalkthroughOperationId,
+  ) => Promise<
+    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<WalkthroughOperationNotFound>>
+  >
+  readonly getStored: (
+    request: GetStoredWalkthrough,
+  ) => Promise<
+    CoreResult<StoredWalkthrough | null, CoreBoundaryFailure<CoreGetStoredWalkthroughFailure>>
+  >
 }
 
 /** Lifecycle and closed operation surface exposed to a native DiffDash host. */
 export interface EmbeddedCore {
   /** Acquires Core resources and completes startup recovery. */
-  readonly start: () => Promise<void>
+  readonly start: () => Promise<CoreResult<void, CoreStartFailure>>
 
   /** Executes one named Core operation without exposing internal Effect services. */
   readonly execute: <Method extends CoreMethod>(
     method: Method,
     input: CoreMethodInput<Method>,
     options?: CoreOperationOptions,
-  ) => Promise<CoreOperationOutput<Method>>
+  ) => Promise<
+    CoreResult<CoreOperationOutput<Method>, CoreBoundaryFailure<CoreOperationFailure<Method>>>
+  >
 
   /** Provider-neutral walkthrough operation boundary owned by Core. */
   readonly walkthroughs: CoreWalkthroughs

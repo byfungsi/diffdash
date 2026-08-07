@@ -18,7 +18,7 @@ import {
 import { GitService } from "@diffdash/local-git/local-git"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
+import { ReviewTurnStore, type ReviewTurnStoreError } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import {
@@ -37,9 +37,12 @@ import { Cause, Context, Deferred, Effect, Exit, FiberMap, Layer, Option } from 
 import {
   CoreMethod,
   type CoreMethod as CoreMethodType,
+  type CoreGetStoredWalkthroughFailure,
   type CoreMethodInput,
+  type CoreOperationFailure,
   type CoreOperationOptions,
   type CoreOperationOutput,
+  type CoreWalkthroughFailure,
   type GetStoredWalkthrough,
   type StartWalkthroughOperation,
   type WalkthroughOperationAccepted,
@@ -60,16 +63,16 @@ import { ReviewSnapshotService } from "./services/review-snapshot"
 import { paginateReviewSnapshot, searchReviewSnapshot } from "./services/review-snapshot-pagination"
 
 interface CoreOperationServiceShape {
-  readonly start: Effect.Effect<void, unknown>
+  readonly start: Effect.Effect<void, ReviewTurnStoreError>
   readonly execute: <Method extends CoreMethodType>(
     method: Method,
     input: CoreMethodInput<Method>,
     options?: CoreOperationOptions,
-  ) => Effect.Effect<CoreOperationOutput<Method>, unknown>
+  ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
   readonly walkthroughs: {
     readonly start: (
       request: StartWalkthroughOperation,
-    ) => Effect.Effect<WalkthroughOperationAccepted, unknown>
+    ) => Effect.Effect<WalkthroughOperationAccepted, WalkthroughOperationCapacityExceeded>
     readonly getOperation: (
       operationId: WalkthroughOperationIdType,
     ) => Effect.Effect<WalkthroughOperationResult, WalkthroughOperationNotFound>
@@ -78,7 +81,7 @@ interface CoreOperationServiceShape {
     ) => Effect.Effect<WalkthroughOperationResult, WalkthroughOperationNotFound>
     readonly getStored: (
       request: GetStoredWalkthrough,
-    ) => Effect.Effect<StoredWalkthrough | null, unknown>
+    ) => Effect.Effect<StoredWalkthrough | null, CoreGetStoredWalkthroughFailure>
   }
 }
 
@@ -97,7 +100,7 @@ const MAX_RETAINED_WALKTHROUGH_OPERATIONS = 64
 type OperationHandler<Method extends CoreMethodType> = (
   input: CoreMethodInput<Method>,
   options: CoreOperationOptions,
-) => Effect.Effect<CoreOperationOutput<Method>, unknown>
+) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
 
 type OperationHandlers = {
   readonly [Method in CoreMethodType]: OperationHandler<Method>
@@ -148,9 +151,11 @@ export const coreOperationLayer = Layer.scoped(
       return { repo, snapshot, prNumber: null } as const
     })
 
-    const getStoredWalkthrough = Effect.fn("Core.Walkthroughs.getStored")(function* (
+    const getStoredWalkthrough: (
       request: GetStoredWalkthrough,
-    ) {
+    ) => Effect.Effect<StoredWalkthrough | null, CoreGetStoredWalkthroughFailure> = Effect.fn(
+      "Core.Walkthroughs.getStored",
+    )(function* (request) {
       const { repo, snapshot } = yield* resolveThreadReview(request.target)
       if (
         (request.expectedBaseRevision !== null &&
@@ -163,9 +168,11 @@ export const coreOperationLayer = Layer.scoped(
       return yield* walkthroughStore.get(walkthroughCacheKey(repo.id, snapshot))
     })
 
-    const generateWalkthrough = Effect.fn("Core.Walkthroughs.generate")(function* (
+    const generateWalkthrough: (
       request: StartWalkthroughOperation,
-    ) {
+    ) => Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure> = Effect.fn(
+      "Core.Walkthroughs.generate",
+    )(function* (request) {
       const target = request.target
       if (target.kind === "hosted") {
         const snapshot = yield* snapshots.acquireHosted(target.review)
@@ -271,12 +278,7 @@ export const coreOperationLayer = Layer.scoped(
               operationId,
               Effect.exit(generateWalkthrough(request)).pipe(
                 Effect.flatMap((exit) => {
-                  const terminal: WalkthroughOperationResult = Exit.isSuccess(exit)
-                    ? { _tag: "completed", walkthrough: exit.value }
-                    : Exit.isInterrupted(exit)
-                      ? { _tag: "cancelled" }
-                      : { _tag: "failed", error: failureFromCause(exit.cause) }
-                  return complete(terminal)
+                  return complete(walkthroughTerminalFromExit(exit))
                 }),
                 Effect.onInterrupt(() => complete({ _tag: "cancelled" })),
                 Effect.asVoid,
@@ -563,7 +565,7 @@ export const coreOperationLayer = Layer.scoped(
       // widens that relationship before TypeScript can invoke the selected generic member.
       return handler(input as never, options) as Effect.Effect<
         CoreOperationOutput<typeof method>,
-        unknown
+        CoreOperationFailure<typeof method>
       >
     }
 
@@ -580,9 +582,17 @@ export const coreOperationLayer = Layer.scoped(
   }),
 )
 
-const failureFromCause = (cause: Cause.Cause<unknown>): unknown => {
-  const failure = Cause.failureOption(cause)
-  return Option.isSome(failure) ? failure.value : Cause.squash(cause)
+/** Converts one walkthrough fiber exit without allowing defects to masquerade as expected failures. */
+export const walkthroughTerminalFromExit = (
+  exit: Exit.Exit<StoredWalkthrough, CoreWalkthroughFailure>,
+): WalkthroughOperationResult => {
+  if (Exit.isSuccess(exit)) return { _tag: "completed", walkthrough: exit.value }
+  const defect = Cause.dieOption(exit.cause)
+  if (Option.isSome(defect)) return { _tag: "defect", defect: defect.value }
+  const failure = Cause.failureOption(exit.cause)
+  if (Option.isSome(failure)) return { _tag: "failed", error: failure.value }
+  if (Exit.isInterrupted(exit)) return { _tag: "cancelled" }
+  return { _tag: "defect", defect: Cause.squash(exit.cause) }
 }
 
 const walkthroughCacheKey = (repoId: string, snapshot: ReviewSnapshot) => ({

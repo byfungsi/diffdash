@@ -1,19 +1,35 @@
-import { describe, expect, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { describe, expect, expectTypeOf, it } from "@effect/vitest"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import { CoreMethod, CoreStartupError, WalkthroughOperationId } from "./core"
+import {
+  CoreMethod,
+  type CoreOperationFailure,
+  type CoreResult,
+  type CoreWalkthroughFailure,
+  CoreStartupError,
+  RepositoryLinkError,
+  WalkthroughOperationId,
+  type WalkthroughOperationResult,
+} from "./core"
 import { CoreConfiguration } from "./core-configuration"
-import { createEmbeddedCore } from "./embedded-core"
+import { walkthroughTerminalFromExit } from "./core-operation-service"
+import { coreResultFromExit, createEmbeddedCore } from "./embedded-core"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-core-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
+
+const successValue = <Value, Failure>(result: CoreResult<Value, Failure>): Value => {
+  expect(result.ok).toBe(true)
+  if (!result.ok) throw new Error("Expected Core operation to succeed")
+  return result.value
+}
 
 const testConfiguration = (directory: string): CoreConfiguration =>
   Schema.decodeUnknownSync(CoreConfiguration)({
@@ -80,6 +96,46 @@ const fixtureConfiguration = (
 }
 
 describe("EmbeddedCore", () => {
+  it("correlates every public operation with its expected failure contract", () => {
+    expectTypeOf<
+      CoreOperationFailure<typeof CoreMethod.installRepository>
+    >().toEqualTypeOf<RepositoryLinkError>()
+    expectTypeOf<
+      CoreOperationFailure<typeof CoreMethod.listRepositories>
+    >().toEqualTypeOf<RepositoryLinkError>()
+    expectTypeOf<CoreOperationFailure<typeof CoreMethod.analyticsCapture>>().toEqualTypeOf<never>()
+    expectTypeOf<
+      Extract<WalkthroughOperationResult, { readonly _tag: "failed" }>["error"]
+    >().toEqualTypeOf<CoreWalkthroughFailure>()
+  })
+
+  it("never classifies a composite defect as an expected failure", () => {
+    const expected = RepositoryLinkError.make({
+      operation: "test",
+      reason: "Expected test failure.",
+      cause: new Error("expected"),
+    })
+    const defect = new Error("defect")
+    const composite = Exit.failCause(Cause.parallel(Cause.fail(expected), Cause.die(defect)))
+    let thrown: unknown = null
+
+    try {
+      coreResultFromExit(composite)
+    } catch (cause) {
+      thrown = cause
+    }
+
+    expect(thrown).toBe(defect)
+    expect(walkthroughTerminalFromExit(Exit.fail(expected))).toEqual({
+      _tag: "failed",
+      error: expected,
+    })
+    expect(walkthroughTerminalFromExit(composite)).toEqual({
+      _tag: "defect",
+      defect,
+    })
+  })
+
   it.scoped("starts one business runtime and releases it through the public lifecycle", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
@@ -88,9 +144,11 @@ describe("EmbeddedCore", () => {
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
 
       expect(existsSync(configuration.paths.temporaryDirectory)).toBe(false)
-      yield* Effect.promise(core.start)
+      successValue(yield* Effect.promise(core.start))
       expect(existsSync(configuration.paths.temporaryDirectory)).toBe(true)
-      const state = yield* Effect.promise(() => core.execute(CoreMethod.appStateGet, {}))
+      const state = successValue(
+        yield* Effect.promise(() => core.execute(CoreMethod.appStateGet, {})),
+      )
 
       expect(state).toMatchObject({ onboardingCompleted: false })
 
@@ -105,21 +163,20 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("preserves expected operation failures at the Promise boundary", () =>
+  it.scoped("returns typed expected operation failures without rejecting", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const core = createEmbeddedCore(testConfiguration(directory))
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
-      yield* Effect.promise(core.start)
+      successValue(yield* Effect.promise(core.start))
 
-      const failure = yield* Effect.promise(() =>
-        core.execute(CoreMethod.installRepository, { localPath: join(directory, "missing") }).then(
-          () => null,
-          (cause: unknown) => cause,
-        ),
+      const result = yield* Effect.promise(() =>
+        core.execute(CoreMethod.installRepository, { localPath: join(directory, "missing") }),
       )
 
-      expect(failure).toMatchObject({ _tag: "RepositoryLinkError" })
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error("Expected repository installation to fail")
+      expect(result.error).toMatchObject({ _tag: "RepositoryLinkError" })
     }),
   )
 
@@ -129,16 +186,18 @@ describe("EmbeddedCore", () => {
       const configuration = fixtureConfiguration(directory)
       const core = createEmbeddedCore(configuration)
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
-      yield* Effect.promise(core.start)
+      successValue(yield* Effect.promise(core.start))
       const operationIds = []
 
       for (let index = 0; index < 65; index += 1) {
-        const accepted = yield* Effect.promise(() =>
-          core.walkthroughs.start({ target: fixtureTarget, regenerate: index === 0 }),
+        const accepted = successValue(
+          yield* Effect.promise(() =>
+            core.walkthroughs.start({ target: fixtureTarget, regenerate: index === 0 }),
+          ),
         )
         operationIds.push(accepted.operationId)
-        const result = yield* Effect.promise(() =>
-          core.walkthroughs.getOperation(accepted.operationId),
+        const result = successValue(
+          yield* Effect.promise(() => core.walkthroughs.getOperation(accepted.operationId)),
         )
         if (result._tag === "failed") {
           const failure = result.error
@@ -154,15 +213,19 @@ describe("EmbeddedCore", () => {
       if (latestOperationId === undefined)
         throw new Error("Latest walkthrough operation is missing")
       expect(
-        yield* Effect.promise(() => core.walkthroughs.getOperation(latestOperationId)),
+        successValue(
+          yield* Effect.promise(() => core.walkthroughs.getOperation(latestOperationId)),
+        ),
       ).toMatchObject({ _tag: "completed" })
       expect(
-        yield* Effect.promise(() =>
-          core.walkthroughs.getStored({
-            target: fixtureTarget,
-            expectedBaseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            expectedHeadRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          }),
+        successValue(
+          yield* Effect.promise(() =>
+            core.walkthroughs.getStored({
+              target: fixtureTarget,
+              expectedBaseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              expectedHeadRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }),
+          ),
         ),
       ).toMatchObject({ walkthrough: { title: "Fixture review path" } })
 
@@ -171,19 +234,19 @@ describe("EmbeddedCore", () => {
       if (oldestOperationId === undefined)
         throw new Error("Oldest walkthrough operation is missing")
       const oldestFailure = yield* Effect.promise(() =>
-        core.walkthroughs.getOperation(oldestOperationId).then(
-          () => null,
-          (cause: unknown) => cause,
-        ),
+        core.walkthroughs.getOperation(oldestOperationId),
       )
-      expect(oldestFailure).toMatchObject({ _tag: "WalkthroughOperationNotFound" })
+      expect(oldestFailure).toMatchObject({
+        ok: false,
+        error: { _tag: "WalkthroughOperationNotFound" },
+      })
       const missingCancellation = yield* Effect.promise(() =>
-        core.walkthroughs.cancel(WalkthroughOperationId.make("missing-operation")).then(
-          () => null,
-          (cause: unknown) => cause,
-        ),
+        core.walkthroughs.cancel(WalkthroughOperationId.make("missing-operation")),
       )
-      expect(missingCancellation).toMatchObject({ _tag: "WalkthroughOperationNotFound" })
+      expect(missingCancellation).toMatchObject({
+        ok: false,
+        error: { _tag: "WalkthroughOperationNotFound" },
+      })
     }),
   )
 
@@ -192,21 +255,17 @@ describe("EmbeddedCore", () => {
       const directory = yield* makeTempDirectory
       const core = createEmbeddedCore(fixtureConfiguration(directory, true))
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
-      yield* Effect.promise(core.start)
+      successValue(yield* Effect.promise(core.start))
 
       const starts = yield* Effect.promise(() =>
-        Promise.allSettled(
+        Promise.all(
           Array.from({ length: 65 }, () =>
             core.walkthroughs.start({ target: fixtureTarget, regenerate: true }),
           ),
         ),
       )
-      const accepted = starts.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : [],
-      )
-      const rejected = starts.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      )
+      const accepted = starts.flatMap((result) => (result.ok ? [result.value] : []))
+      const rejected = starts.flatMap((result) => (result.ok ? [] : [result.error]))
 
       expect(accepted).toHaveLength(64)
       expect(rejected).toHaveLength(1)
@@ -214,7 +273,9 @@ describe("EmbeddedCore", () => {
       const cancellations = yield* Effect.promise(() =>
         Promise.all(accepted.map(({ operationId }) => core.walkthroughs.cancel(operationId))),
       )
-      expect(cancellations.every(({ _tag }) => _tag === "cancelled")).toBe(true)
+      expect(cancellations.every((result) => result.ok && result.value._tag === "cancelled")).toBe(
+        true,
+      )
     }),
   )
 
@@ -231,15 +292,12 @@ describe("EmbeddedCore", () => {
       const core = createEmbeddedCore(failedConfiguration)
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
 
-      const failure = yield* Effect.promise(() =>
-        core.start().then(
-          () => null,
-          (cause: unknown) => cause,
-        ),
-      )
+      const failure = yield* Effect.promise(core.start)
 
-      expect(failure).toBeInstanceOf(CoreStartupError)
-      expect(failure).toMatchObject({ operation: "createTemporaryDirectory" })
+      expect(failure.ok).toBe(false)
+      if (failure.ok) throw new Error("Expected Core startup to fail")
+      expect(failure.error).toBeInstanceOf(CoreStartupError)
+      expect(failure.error).toMatchObject({ operation: "createTemporaryDirectory" })
     }),
   )
 

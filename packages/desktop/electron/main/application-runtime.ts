@@ -1,8 +1,59 @@
-import { createEmbeddedCore, type CoreConfiguration, type EmbeddedCore } from "@diffdash/core"
+import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import {
+  createEmbeddedCore,
+  type CoreConfiguration,
+  type CoreMethod,
+  type CoreMethodInput,
+  type CoreOperationOptions,
+  type CoreOperationOutput,
+  type CoreResult,
+  type EmbeddedCore,
+  type GetStoredWalkthrough,
+  type StartWalkthroughOperation,
+  type WalkthroughOperationAccepted,
+  type WalkthroughOperationId,
+  type WalkthroughOperationResult,
+} from "@diffdash/core"
 
-/** Typed embedded Core boundary used by the Electron host. */
-export type ApplicationRuntime = EmbeddedCore
+/** Electron adapter that projects typed Core failures into the existing IPC error boundary. */
+export interface ApplicationRuntime {
+  readonly start: () => Promise<void>
+  readonly execute: <Method extends CoreMethod>(
+    method: Method,
+    input: CoreMethodInput<Method>,
+    options?: CoreOperationOptions,
+  ) => Promise<CoreOperationOutput<Method>>
+  readonly walkthroughs: {
+    readonly start: (request: StartWalkthroughOperation) => Promise<WalkthroughOperationAccepted>
+    readonly getOperation: (
+      operationId: WalkthroughOperationId,
+    ) => Promise<WalkthroughOperationResult>
+    readonly cancel: (operationId: WalkthroughOperationId) => Promise<WalkthroughOperationResult>
+    readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
+  }
+  readonly dispose: EmbeddedCore["dispose"]
+}
 
 /** Creates the one embedded Core runtime owned by the desktop application. */
-export const createApplicationRuntime = (configuration: CoreConfiguration): ApplicationRuntime =>
-  createEmbeddedCore(configuration)
+export const createApplicationRuntime = (configuration: CoreConfiguration): ApplicationRuntime => {
+  const core = createEmbeddedCore(configuration)
+  const execute: ApplicationRuntime["execute"] = async (method, input, options) =>
+    unwrapCoreResult(await core.execute(method, input, options))
+  return {
+    start: async () => unwrapCoreResult(await core.start()),
+    execute,
+    walkthroughs: {
+      start: async (request) => unwrapCoreResult(await core.walkthroughs.start(request)),
+      getOperation: async (operationId) =>
+        unwrapCoreResult(await core.walkthroughs.getOperation(operationId)),
+      cancel: async (operationId) => unwrapCoreResult(await core.walkthroughs.cancel(operationId)),
+      getStored: async (request) => unwrapCoreResult(await core.walkthroughs.getStored(request)),
+    },
+    dispose: core.dispose,
+  }
+}
+
+const unwrapCoreResult = <Value, Failure>(result: CoreResult<Value, Failure>): Value => {
+  if (result.ok) return result.value
+  throw result.error
+}

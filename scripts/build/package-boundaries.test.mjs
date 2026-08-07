@@ -406,6 +406,18 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
 
   const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
   assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
+  assert.match(stableCoreEntry, /interface CoreOperationFailureMap/)
+  assert.match(stableCoreEntry, /CoreResult<\s*CoreOperationOutput<Method>/)
+
+  const coreOperationService = readFileSync(
+    join(coreDirectory, "src/core-operation-service.ts"),
+    "utf8",
+  )
+  assert.doesNotMatch(
+    coreOperationService,
+    /, unknown>/,
+    "Core operation Effect channels must preserve expected failure types",
+  )
 })
 
 test("Electron controllers consume only the closed Core operation boundary", () => {

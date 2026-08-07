@@ -32,7 +32,7 @@ import { GitProvider } from "./git-provider"
 
 export { findExecutableInPath } from "@diffdash/process/executable"
 /** A typed failure from installing the DiffDash CLI into PATH. */
-class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
+export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
   "PrerequisiteInstallError",
   {
     operation: Schema.String,

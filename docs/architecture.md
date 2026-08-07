@@ -91,6 +91,9 @@ code.
 Electron controllers call the closed `CoreMethod` catalog and the Core-owned walkthrough operation
 facade. Internal Effect tags, Layers, and the managed runtime are not exposed to Electron. Boundary
 tests reject direct business-service imports and generic runtime execution from controllers.
+Each Core call returns `CoreResult<Value, Failure>` with an exact method-correlated expected failure
+union. The Electron application-runtime adapter deliberately unwraps that result into the existing
+IPC error adapters; only defects reject directly from `EmbeddedCore`.
 
 | Ownership | Current boundary |
 | --- | --- |
