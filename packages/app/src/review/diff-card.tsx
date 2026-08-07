@@ -312,7 +312,9 @@ export const OpenDiffCard = ({
                                     (progress) => progress.threadId === threadDetails.thread.id,
                                   )?.stage ?? null
                                 }
-                                agentError={reviewThreads.agentErrors[threadDetails.thread.id] ?? null}
+                                agentError={
+                                  reviewThreads.agentErrors[threadDetails.thread.id] ?? null
+                                }
                                 details={threadDetails}
                                 orchestration={{ retryAgentMessage: reviewThreads.runAgent }}
                                 {...(details.length > 1
