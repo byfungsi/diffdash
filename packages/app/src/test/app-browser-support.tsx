@@ -4019,10 +4019,12 @@ scenario("reviewThreadSidebar", async () => {
   if (reopenedLockThread === null) throw new Error("Reopened thread was not found")
   reopenedLockThread.click()
   const reopenedDetailResizer = await vi.waitFor(() => {
-    const resizer = document.querySelector<HTMLElement>("[data-review-thread-detail-resizer]")
+    const threadDetailResizer = document.querySelector<HTMLElement>(
+      "[data-review-thread-detail-resizer]",
+    )
     expect(document.querySelector("[data-review-thread-detail]")).not.toBeNull()
-    if (resizer === null) throw new Error("Thread detail resizer was not found")
-    return resizer
+    if (threadDetailResizer === null) throw new Error("Thread detail resizer was not found")
+    return threadDetailResizer
   })
   reopenedDetailResizer.focus()
   expect(
