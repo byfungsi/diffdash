@@ -5299,9 +5299,9 @@ scenario("toggleSidebarShortcut", async () => {
   dispatchKeyboardShortcut("b", { metaKey: true, target: windowsFilterInput })
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   expect(
-    document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.getAttribute(
-      "aria-expanded",
-    ),
+    document
+      .querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")
+      ?.getAttribute("aria-expanded"),
   ).toBe("true")
 
   dispatchKeyboardShortcut("b", { ctrlKey: true, target: windowsFilterInput })
