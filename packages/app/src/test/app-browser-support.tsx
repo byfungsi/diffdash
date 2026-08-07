@@ -4026,7 +4026,8 @@ scenario("reviewThreadSidebar", async () => {
   })
   reopenedDetailResizer.focus()
   expect(
-    dispatchKeyboardShortcut("b", { metaKey: true, target: reopenedDetailResizer }).defaultPrevented,
+    dispatchKeyboardShortcut("b", { metaKey: true, target: reopenedDetailResizer })
+      .defaultPrevented,
   ).toBe(true)
   await vi.waitFor(() => {
     expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
