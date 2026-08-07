@@ -4018,15 +4018,15 @@ scenario("reviewThreadSidebar", async () => {
   )
   if (reopenedLockThread === null) throw new Error("Reopened thread was not found")
   reopenedLockThread.click()
-  const detailResizer = await vi.waitFor(() => {
+  const reopenedDetailResizer = await vi.waitFor(() => {
     const resizer = document.querySelector<HTMLElement>("[data-review-thread-detail-resizer]")
     expect(document.querySelector("[data-review-thread-detail]")).not.toBeNull()
     if (resizer === null) throw new Error("Thread detail resizer was not found")
     return resizer
   })
-  detailResizer.focus()
+  reopenedDetailResizer.focus()
   expect(
-    dispatchKeyboardShortcut("b", { metaKey: true, target: detailResizer }).defaultPrevented,
+    dispatchKeyboardShortcut("b", { metaKey: true, target: reopenedDetailResizer }).defaultPrevented,
   ).toBe(true)
   await vi.waitFor(() => {
     expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
