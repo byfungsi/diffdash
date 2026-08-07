@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.7.1
+
+### Patch Changes
+
+- [#65](https://github.com/byfungsi/diffdash/pull/65) [`2e432fa`](https://github.com/byfungsi/diffdash/commit/2e432fa6e60e87a8fc2833a4c53a878943a86fe2) Thanks [@hanipcode](https://github.com/hanipcode)! - Show actionable, privacy-safe provider failure guidance in walkthroughs and AI review threads.
+
 ## 0.7.0
 
 ### Minor Changes
