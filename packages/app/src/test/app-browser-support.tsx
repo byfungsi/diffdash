@@ -1355,9 +1355,9 @@ index 1111111..2222222 100644
 
   await openDefaultHostedReview()
   const shadowRoot = await vi.waitFor(() => {
-    const root = getDiffShadowRoot(path)
-    expect(root?.querySelector("[data-line]")).not.toBeNull()
-    return root!
+    const candidate = getDiffShadowRoot(path)
+    expect(candidate?.querySelector("[data-line]")).not.toBeNull()
+    return candidate!
   })
   const addition = getDiffLine(shadowRoot, "new line")
   expect(addition).not.toBeUndefined()
