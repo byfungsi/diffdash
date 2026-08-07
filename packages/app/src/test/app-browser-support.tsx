@@ -1450,6 +1450,62 @@ index 1111111..2222222 100644
   await vi.waitFor(() => {
     expect(failedCopyItem.textContent).toContain("Copy failed, retry")
   })
+
+  document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  const delayedCopy = makeBrowserWait()
+  writeText.mockImplementationOnce(() => delayedCopy.promise)
+  const delayedAddition = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "new line")
+  expect(delayedAddition).not.toBeUndefined()
+  if (delayedAddition === undefined) throw new Error("Missing added diff line for delayed copy")
+  delayedAddition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const delayedCopyItem = await vi.waitFor(() => {
+    const item = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"] [role="menuitem"]',
+    )
+    expect(item).not.toBeNull()
+    if (item === null) throw new Error("Missing delayed copy path menu item")
+    return item
+  })
+  delayedCopyItem.click()
+  document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  const currentDeletion = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "old line")
+  expect(currentDeletion).not.toBeUndefined()
+  if (currentDeletion === undefined) throw new Error("Missing deleted diff line after delayed copy")
+  currentDeletion.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).not.toBeNull()
+  })
+  delayedCopy.release()
+
+  await vi.waitFor(() => {
+    const activeMenu = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(activeMenu).not.toBeNull()
+    expect(activeMenu?.textContent).toContain("Copy path")
+  })
 })
 
 scenario("firstRunOnboarding", async () => {

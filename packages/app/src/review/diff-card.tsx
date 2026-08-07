@@ -87,6 +87,7 @@ export const OpenDiffCard = ({
 }) => {
   const fileCardRef = useRef<HTMLElement>(null)
   const fileHeaderFocusRef = useRef<HTMLButtonElement>(null)
+  const copyOperationRef = useRef(0)
   const threadHistorySyncFrameRef = useRef<number | null>(null)
   const [contextMenuState, setContextMenuState] = useState<DiffLineContextMenuState>({
     status: "closed",
@@ -227,7 +228,9 @@ export const OpenDiffCard = ({
         <ContextMenu.Root
           open={contextMenuState.status === "open"}
           onOpenChange={(open) => {
-            if (!open) setContextMenuState({ status: "closed" })
+            if (open) return
+            copyOperationRef.current += 1
+            setContextMenuState({ status: "closed" })
           }}
         >
           <ContextMenu.Trigger asChild>
@@ -239,9 +242,11 @@ export const OpenDiffCard = ({
                 const lineNumber = diffLineNumberFromEventPath(event.nativeEvent.composedPath())
                 if (lineNumber === null) {
                   event.preventDefault()
+                  copyOperationRef.current += 1
                   setContextMenuState({ status: "closed" })
                   return
                 }
+                copyOperationRef.current += 1
                 setContextMenuState({ status: "open", lineNumber, copyStatus: "idle" })
               }}
             >
@@ -364,13 +369,17 @@ export const OpenDiffCard = ({
                   if (contextMenuState.status !== "open") return
                   event.preventDefault()
                   const lineNumber = contextMenuState.lineNumber
+                  const operation = copyOperationRef.current + 1
+                  copyOperationRef.current = operation
                   setContextMenuState({ ...contextMenuState, copyStatus: "copying" })
                   void navigator.clipboard.writeText(`@${file.path}:${lineNumber}`).then(
                     () => {
+                      if (copyOperationRef.current !== operation) return undefined
                       setContextMenuState({ status: "closed" })
                       return undefined
                     },
                     () => {
+                      if (copyOperationRef.current !== operation) return undefined
                       setContextMenuState((current) =>
                         current.status === "open" && current.lineNumber === lineNumber
                           ? { ...current, copyStatus: "failed" }
