@@ -30,6 +30,7 @@ export const WorkbenchTitlebar = ({
   const isMac = isMacPlatform()
   const shortcutModifier = keyboardShortcutModifierLabel()
   const shortcutTitle = `Keyboard shortcuts (${shortcutModifier} + /)`
+  const sidebarTitle = `${sidebarExpanded ? "Collapse" : "Expand"} sidebar (${shortcutModifier} + B)`
 
   return (
     <header
@@ -49,7 +50,7 @@ export const WorkbenchTitlebar = ({
             variant="ghost"
             aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
             aria-expanded={sidebarExpanded}
-            title={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
+            title={sidebarTitle}
             className={cn(
               "text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg",
               isMac && "relative top-px left-1",

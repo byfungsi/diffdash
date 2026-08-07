@@ -951,6 +951,7 @@ type AppBrowserScenarioId =
   | "stickyDiffCardHeaders"
   | "threadComposerShortcut"
   | "threadNavigationConvergence"
+  | "toggleSidebarShortcut"
   | "unavailableProviderRoute"
   | "unsupportedGitHubCli"
   | "updateDownloadRestart"
@@ -5226,6 +5227,7 @@ scenario("shortcutReferenceReview", async () => {
   })
   expect(dialog?.textContent).toContain("Ctrl")
   expect(dialog?.textContent).not.toContain("Cmd")
+  expect(dialog?.textContent).toContain("Toggle sidebar")
 
   document
     .querySelector<HTMLButtonElement>('button[aria-label="Close keyboard shortcuts"]')
@@ -5234,6 +5236,44 @@ scenario("shortcutReferenceReview", async () => {
     expect(
       document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
     ).toBeNull()
+    expect(document.activeElement).toBe(filterInput)
+  })
+})
+
+scenario("toggleSidebarShortcut", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  installDiffDashApi()
+  renderApp()
+
+  await openDefaultHostedReview()
+  await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+  await showWideReviewLayout()
+
+  const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  const sidebarToggle = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Collapse sidebar"]',
+  )
+  expect(filterInput).not.toBeNull()
+  expect(sidebarToggle).not.toBeNull()
+  expect(sidebarToggle?.title).toBe("Collapse sidebar (Cmd + B)")
+  filterInput?.focus()
+
+  dispatchKeyboardShortcut("b", { metaKey: true })
+  await vi.waitFor(() => {
+    const expandSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand sidebar"]',
+    )
+    expect(expandSidebar?.getAttribute("aria-expanded")).toBe("false")
+    expect(expandSidebar?.title).toBe("Expand sidebar (Cmd + B)")
+    expect(document.activeElement).toBe(filterInput)
+  })
+
+  dispatchKeyboardShortcut("b", { metaKey: true })
+  await vi.waitFor(() => {
+    const collapseSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse sidebar"]',
+    )
+    expect(collapseSidebar?.getAttribute("aria-expanded")).toBe("true")
     expect(document.activeElement).toBe(filterInput)
   })
 })

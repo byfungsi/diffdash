@@ -446,6 +446,29 @@ export function AppShell() {
   }, [])
 
   useEffect(() => {
+    const toggleProjectSidebar = (event: KeyboardEvent) => {
+      if (
+        appState?.onboardingCompleted !== true ||
+        screen !== "project" ||
+        !isModKey(event) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.repeat ||
+        event.key.toLowerCase() !== "b"
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      setReviewSidebarExpanded((expanded) => !expanded)
+    }
+
+    window.addEventListener("keydown", toggleProjectSidebar, true)
+    return () => window.removeEventListener("keydown", toggleProjectSidebar, true)
+  }, [appState?.onboardingCompleted, screen])
+
+  useEffect(() => {
     const openGoToPalette = (event: KeyboardEvent) => {
       if (!isModKey(event) || event.shiftKey || event.key.toLowerCase() !== "k") return
       if (screen === "project") return
