@@ -3395,6 +3395,7 @@ scenario("threadComposerShortcut", async () => {
 })
 
 scenario("reviewThreadSidebar", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
   const previousRevisionPath = "src/features/thread-sidebar/components/extra-review-thread.ts"
   const paths = ["src/app.tsx", "docs/readme.md", previousRevisionPath, "pnpm-lock.yaml"] as const
   const summaryDiffText = paths
@@ -3993,12 +3994,25 @@ scenario("reviewThreadSidebar", async () => {
       "pnpm-lock.yaml",
     )
   })
-  document
-    .querySelector<HTMLButtonElement>(
-      '[data-review-thread-detail] button[aria-label="Close thread details"]',
+  const closeThreadDetails = document.querySelector<HTMLButtonElement>(
+    '[data-review-thread-detail] button[aria-label="Close thread details"]',
+  )
+  if (closeThreadDetails === null) throw new Error("Thread detail close button was not found")
+  closeThreadDetails.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: closeThreadDetails }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
     )
-    ?.click()
-  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-detail]")).toBeNull())
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-list]")).not.toBeNull())
   document.body.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
   )
@@ -5245,7 +5259,7 @@ scenario("toggleSidebarShortcut", async () => {
   installDiffDashApi()
   renderApp()
 
-  dispatchKeyboardShortcut("b", { metaKey: true })
+  expect(dispatchKeyboardShortcut("b", { metaKey: true }).defaultPrevented).toBe(false)
   await openDefaultHostedReview()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
   await showWideReviewLayout()
@@ -5260,14 +5274,27 @@ scenario("toggleSidebarShortcut", async () => {
   expect(sidebarToggle.title).toBe("Collapse sidebar (Cmd + B)")
   filterInput.focus()
 
-  dispatchKeyboardShortcut("b", { ctrlKey: true, target: filterInput })
-  dispatchKeyboardShortcut("b", { altKey: true, metaKey: true, target: filterInput })
-  dispatchKeyboardShortcut("b", { metaKey: true, shiftKey: true, target: filterInput })
-  dispatchKeyboardShortcut("b", { metaKey: true, repeat: true, target: filterInput })
+  expect(
+    dispatchKeyboardShortcut("b", { ctrlKey: true, target: filterInput }).defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { altKey: true, metaKey: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, shiftKey: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, repeat: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   expect(sidebarToggle.getAttribute("aria-expanded")).toBe("true")
 
-  dispatchKeyboardShortcut("b", { metaKey: true, target: filterInput })
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: filterInput }).defaultPrevented,
+  ).toBe(true)
   await vi.waitFor(() => {
     const expandSidebar = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand sidebar"]',
@@ -5296,7 +5323,9 @@ scenario("toggleSidebarShortcut", async () => {
   )
   if (windowsFilterInput === null) throw new Error("Review file filter was not found")
   windowsFilterInput.focus()
-  dispatchKeyboardShortcut("b", { metaKey: true, target: windowsFilterInput })
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: windowsFilterInput }).defaultPrevented,
+  ).toBe(false)
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   expect(
     document
@@ -5304,7 +5333,9 @@ scenario("toggleSidebarShortcut", async () => {
       ?.getAttribute("aria-expanded"),
   ).toBe("true")
 
-  dispatchKeyboardShortcut("b", { ctrlKey: true, target: windowsFilterInput })
+  expect(
+    dispatchKeyboardShortcut("b", { ctrlKey: true, target: windowsFilterInput }).defaultPrevented,
+  ).toBe(true)
   await vi.waitFor(() => {
     const expandSidebar = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand sidebar"]',
@@ -6340,18 +6371,18 @@ const dispatchKeyboardShortcut = (
   } = {},
 ) => {
   const target = options.target ?? window
-  target.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      altKey: options.altKey ?? false,
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: options.ctrlKey ?? false,
-      key,
-      metaKey: options.metaKey ?? false,
-      repeat: options.repeat ?? false,
-      shiftKey: options.shiftKey ?? false,
-    }),
-  )
+  const event = new KeyboardEvent("keydown", {
+    altKey: options.altKey ?? false,
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: options.ctrlKey ?? false,
+    key,
+    metaKey: options.metaKey ?? false,
+    repeat: options.repeat ?? false,
+    shiftKey: options.shiftKey ?? false,
+  })
+  target.dispatchEvent(event)
+  return event
 }
 
 const reloadReviewDiff = async () => {

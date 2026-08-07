@@ -264,7 +264,7 @@ export function ReviewWorkbenchLayout({
           >
             <div
               aria-hidden={!plan.contextVisible}
-              data-review-context-pane
+              data-review-collapsible-sidebar-pane
               inert={!plan.contextVisible}
               className="h-full min-h-0 min-w-0"
             >
@@ -311,6 +311,7 @@ export function ReviewWorkbenchLayout({
               >
                 <div
                   aria-hidden={!plan.detailVisible}
+                  data-review-collapsible-sidebar-pane
                   inert={!plan.detailVisible}
                   className="h-full min-h-0 min-w-0"
                 >

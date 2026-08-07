@@ -469,7 +469,7 @@ export function AppShell() {
       if (
         reviewSidebarExpanded &&
         activeElement !== null &&
-        activeElement.closest("[data-review-context-pane]") !== null
+        activeElement.closest("[data-review-collapsible-sidebar-pane]") !== null
       ) {
         document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
       }
