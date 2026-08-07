@@ -50,6 +50,7 @@ export const WorkbenchTitlebar = ({
             variant="ghost"
             aria-label={sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"}
             aria-expanded={sidebarExpanded}
+            data-workbench-sidebar-toggle
             title={sidebarTitle}
             className={cn(
               "text-shell-titlebar-muted hover:bg-shell-titlebar-control-hover hover:text-shell-titlebar-fg",

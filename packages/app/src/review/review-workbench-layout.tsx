@@ -264,6 +264,7 @@ export function ReviewWorkbenchLayout({
           >
             <div
               aria-hidden={!plan.contextVisible}
+              data-review-context-pane
               inert={!plan.contextVisible}
               className="h-full min-h-0 min-w-0"
             >

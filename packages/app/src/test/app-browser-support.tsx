@@ -5241,10 +5241,11 @@ scenario("shortcutReferenceReview", async () => {
 })
 
 scenario("toggleSidebarShortcut", async () => {
-  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
   installDiffDashApi()
   renderApp()
 
+  dispatchKeyboardShortcut("b", { metaKey: true })
   await openDefaultHostedReview()
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
   await showWideReviewLayout()
@@ -5253,12 +5254,20 @@ scenario("toggleSidebarShortcut", async () => {
   const sidebarToggle = document.querySelector<HTMLButtonElement>(
     'button[aria-label="Collapse sidebar"]',
   )
-  expect(filterInput).not.toBeNull()
-  expect(sidebarToggle).not.toBeNull()
-  expect(sidebarToggle?.title).toBe("Collapse sidebar (Cmd + B)")
-  filterInput?.focus()
+  if (filterInput === null || sidebarToggle === null) {
+    throw new Error("Review sidebar controls were not found")
+  }
+  expect(sidebarToggle.title).toBe("Collapse sidebar (Cmd + B)")
+  filterInput.focus()
 
-  dispatchKeyboardShortcut("b", { metaKey: true })
+  dispatchKeyboardShortcut("b", { ctrlKey: true, target: filterInput })
+  dispatchKeyboardShortcut("b", { altKey: true, metaKey: true, target: filterInput })
+  dispatchKeyboardShortcut("b", { metaKey: true, shiftKey: true, target: filterInput })
+  dispatchKeyboardShortcut("b", { metaKey: true, repeat: true, target: filterInput })
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  expect(sidebarToggle.getAttribute("aria-expanded")).toBe("true")
+
+  dispatchKeyboardShortcut("b", { metaKey: true, target: filterInput })
   await vi.waitFor(() => {
     const expandSidebar = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Expand sidebar"]',
@@ -5266,15 +5275,42 @@ scenario("toggleSidebarShortcut", async () => {
     expect(expandSidebar?.getAttribute("aria-expanded")).toBe("false")
     expect(expandSidebar?.title).toBe("Expand sidebar (Cmd + B)")
     expect(document.querySelector('input[placeholder="Filter files"]')).toBeNull()
+    expect(document.activeElement).toBe(expandSidebar)
   })
 
-  dispatchKeyboardShortcut("b", { metaKey: true })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
   await vi.waitFor(() => {
     const collapseSidebar = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Collapse sidebar"]',
     )
     expect(collapseSidebar?.getAttribute("aria-expanded")).toBe("true")
     expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
+  })
+
+  platform.mockReturnValue("Win32")
+  const windowsFilterInput = document.querySelector<HTMLInputElement>(
+    'input[placeholder="Filter files"]',
+  )
+  if (windowsFilterInput === null) throw new Error("Review file filter was not found")
+  windowsFilterInput.focus()
+  dispatchKeyboardShortcut("b", { metaKey: true, target: windowsFilterInput })
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  expect(
+    document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.getAttribute(
+      "aria-expanded",
+    ),
+  ).toBe("true")
+
+  dispatchKeyboardShortcut("b", { ctrlKey: true, target: windowsFilterInput })
+  await vi.waitFor(() => {
+    const expandSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand sidebar"]',
+    )
+    expect(expandSidebar?.title).toBe("Expand sidebar (Ctrl + B)")
+    expect(document.activeElement).toBe(expandSidebar)
   })
 })
 
@@ -6295,18 +6331,24 @@ const clickGutterUtility = (button: HTMLButtonElement) => {
 const dispatchKeyboardShortcut = (
   key: string,
   options: {
+    readonly altKey?: boolean
     readonly ctrlKey?: boolean
     readonly metaKey?: boolean
+    readonly repeat?: boolean
     readonly shiftKey?: boolean
+    readonly target?: EventTarget | null
   } = {},
 ) => {
-  window.dispatchEvent(
+  const target = options.target ?? window
+  target.dispatchEvent(
     new KeyboardEvent("keydown", {
+      altKey: options.altKey ?? false,
       bubbles: true,
       cancelable: true,
       ctrlKey: options.ctrlKey ?? false,
       key,
       metaKey: options.metaKey ?? false,
+      repeat: options.repeat ?? false,
       shiftKey: options.shiftKey ?? false,
     }),
   )
