@@ -26,6 +26,7 @@ import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { repositoryLocalPath } from "@diffdash/domain/repository"
 import {
   LocalReviewDetail,
   LocalReviewDiff,
@@ -94,7 +95,7 @@ import {
   type ReviewTurnWriteStep,
 } from "@diffdash/persistence/review-turn-store"
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Redacted } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Redacted } from "effect"
 import { AgentArtifactNormalizer, normalizeAgentArtifactType } from "./agent-artifact-normalizer"
 import { DiffDashMcpServer } from "./diffdash-mcp-server"
 import {
@@ -547,7 +548,7 @@ describe("ReviewAgentService", () => {
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "git@github.com:fungsi/diffdash.git",
-          localPath: "/workspace/user-checkout",
+          localPath: repositoryLocalPath("/workspace/user-checkout"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -563,7 +564,7 @@ describe("ReviewAgentService", () => {
           ...turnIdentity(created, pullRequestSnapshot),
           snapshot: pullRequestSnapshot,
           cwd: repo.localPath,
-          walkthrough: null,
+          walkthrough: Option.none(),
           onProgress: (stage) => Effect.sync(() => released.events.push(`progress.${stage}`)),
         })
       }).pipe(Effect.provide(layer))
@@ -612,7 +613,7 @@ describe("ReviewAgentService", () => {
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "git@github.com:fungsi/diffdash.git",
-          localPath: "/workspace/user-checkout",
+          localPath: repositoryLocalPath("/workspace/user-checkout"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -628,7 +629,7 @@ describe("ReviewAgentService", () => {
           ...turnIdentity(created, comparisonSnapshot),
           snapshot: comparisonSnapshot,
           cwd: repo.localPath,
-          walkthrough: null,
+          walkthrough: Option.none(),
         })
       }).pipe(Effect.provide(layer))
 
@@ -674,7 +675,7 @@ describe("ReviewAgentService", () => {
             owner: "fungsi",
             name: "diffdash",
             remoteUrl: "git@github.com:fungsi/diffdash.git",
-            localPath: "/workspace/user-checkout",
+            localPath: repositoryLocalPath("/workspace/user-checkout"),
           })
           const created = yield* (yield* ReviewThreadStore).create({
             repoId: repo.id,
@@ -691,7 +692,7 @@ describe("ReviewAgentService", () => {
               ...turnIdentity(created, pullRequestSnapshot),
               snapshot: pullRequestSnapshot,
               cwd: repo.localPath,
-              walkthrough: null,
+              walkthrough: Option.none(),
             })
             .pipe(Effect.fork)
           yield* Deferred.await(providerStarted)
@@ -752,7 +753,7 @@ describe("ReviewAgentService", () => {
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -768,7 +769,7 @@ describe("ReviewAgentService", () => {
           ...turnIdentity(created, snapshot),
           snapshot,
           cwd: repo.localPath,
-          walkthrough: null,
+          walkthrough: Option.none(),
         })
         const runs = yield* (yield* AgentRunStore).listForThread(created.thread.id)
         const artifacts = yield* (yield* AgentRunArtifactStore).listForThread(created.thread.id)
@@ -812,7 +813,7 @@ describe("ReviewAgentService", () => {
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -829,7 +830,7 @@ describe("ReviewAgentService", () => {
             ...turnIdentity(created, snapshot),
             snapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
@@ -869,7 +870,7 @@ describe("ReviewAgentService", () => {
             owner: "local",
             name: "diffdash",
             remoteUrl: "file:///workspace/diffdash",
-            localPath: "/workspace/diffdash",
+            localPath: repositoryLocalPath("/workspace/diffdash"),
           })
           const created = yield* (yield* ReviewThreadStore).create({
             repoId: repo.id,
@@ -886,7 +887,7 @@ describe("ReviewAgentService", () => {
               ...turnIdentity(created, snapshot),
               snapshot,
               cwd: repo.localPath,
-              walkthrough: null,
+              walkthrough: Option.none(),
             })
             .pipe(Effect.flip)
           const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
@@ -929,7 +930,7 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "git@github.com:fungsi/diffdash.git",
-          localPath: "/workspace/user-checkout",
+          localPath: repositoryLocalPath("/workspace/user-checkout"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -946,7 +947,7 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
             ...turnIdentity(created, pullRequestSnapshot),
             snapshot: pullRequestSnapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
@@ -1004,7 +1005,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "git@github.com:fungsi/diffdash.git",
-          localPath: "/workspace/user-checkout",
+          localPath: repositoryLocalPath("/workspace/user-checkout"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1021,7 +1022,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
             ...turnIdentity(created, pullRequestSnapshot),
             snapshot: pullRequestSnapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
@@ -1064,7 +1065,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1082,7 +1083,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
             ...turnIdentity(created, snapshot),
             snapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
 
@@ -1119,7 +1120,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1136,7 +1137,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
             ...turnIdentity(created, snapshot),
             snapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
 
@@ -1174,7 +1175,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1191,7 +1192,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
             ...turnIdentity(created, snapshot),
             snapshot,
             cwd: repo.localPath,
-            walkthrough: null,
+            walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
@@ -1230,7 +1231,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const threads = yield* ReviewThreadStore
         const runs = yield* AgentRunStore
@@ -1268,7 +1269,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           ...turnIdentity(created, snapshot),
           snapshot,
           cwd: repo.localPath,
-          walkthrough: null,
+          walkthrough: Option.none(),
         })
         const persistedRuns = yield* runs.listForThread(created.thread.id)
 
@@ -1314,7 +1315,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "git@github.com:fungsi/diffdash.git",
-          localPath: "/workspace/user-checkout",
+          localPath: repositoryLocalPath("/workspace/user-checkout"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1347,7 +1348,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
               ...invalid,
               snapshot: pullRequestSnapshot,
               cwd: repo.localPath,
-              walkthrough: null,
+              walkthrough: Option.none(),
             })
             .pipe(Effect.flip)
           expect(error).toBeInstanceOf(ReviewTurnTargetError)
@@ -1381,7 +1382,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           owner: "local",
           name: "diffdash",
           remoteUrl: "file:///workspace/diffdash",
-          localPath: "/workspace/diffdash",
+          localPath: repositoryLocalPath("/workspace/diffdash"),
         })
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
@@ -1398,7 +1399,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           ...turnIdentity(created, snapshot),
           snapshot,
           cwd: repo.localPath,
-          walkthrough: null,
+          walkthrough: Option.none(),
         } as const
         const firstTurn = yield* service.runThreadTurn(input).pipe(Effect.fork)
         yield* Deferred.await(providerStarted)

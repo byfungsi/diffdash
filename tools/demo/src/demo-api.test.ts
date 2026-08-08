@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { repositoryLocalPath } from "@diffdash/domain/repository"
 import {
   AddReviewThreadUserMessageRequest,
   RunReviewThreadAgentRequest,
@@ -49,7 +50,7 @@ describe("scenario-backed DiffDash API", () => {
       )
       expect(opened["_tag"]).toBe("opened")
       if (opened["_tag"] !== "opened") return
-      expect(opened.repo.localPath).toBe("/Users/demo/emberline-dispatch")
+      expect(opened.repo.localPath).toEqual(repositoryLocalPath("/Users/demo/emberline-dispatch"))
 
       const saved = yield* Effect.promise(() =>
         api.projectWorkspace.save(

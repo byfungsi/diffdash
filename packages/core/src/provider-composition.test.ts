@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 
 import {
   createAgentProviderComposition,
@@ -21,8 +21,7 @@ describe("provider composition", () => {
         makeTempOutputPathScoped: () => Effect.dieMessage("temp resources are not evaluated"),
       },
       tempDirectory: "/tmp/diffdash-agent-composition",
-      includeFixture: true,
-      fixtureWalkthroughNeverCompletes: false,
+      fixture: Option.some({ walkthroughNeverCompletes: false }),
     })
 
     expect(composition.registrations.map(({ manifest }) => manifest.descriptor.id)).toEqual([
@@ -38,14 +37,36 @@ describe("provider composition", () => {
 
   it("adds the Git fixture only when the host enables it", () => {
     expect(
-      createGitProviderComposition(processes, null).map(({ descriptor }) => descriptor.id),
+      createGitProviderComposition(processes, Option.none()).map(({ descriptor }) => descriptor.id),
     ).toEqual(["github"])
     expect(
-      createGitProviderComposition(processes, {
-        remoteUrl: "/tmp/fixture.git",
-        baseRevision: "a".repeat(40),
-        headRevision: "b".repeat(40),
-      }).map(({ descriptor }) => descriptor.id),
+      createGitProviderComposition(
+        processes,
+        Option.some({
+          remoteUrl: "/tmp/fixture.git",
+          baseRevision: Option.some("a".repeat(40)),
+          headRevision: Option.some("b".repeat(40)),
+        }),
+      ).map(({ descriptor }) => descriptor.id),
     ).toEqual(["github", "fixture"])
+  })
+
+  it("omits the agent fixture with one explicit absence state", () => {
+    const composition = createAgentProviderComposition({
+      processes,
+      tempResources: {
+        makeTempDirectoryScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempFileScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempOutputPathScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+      },
+      tempDirectory: "/tmp/diffdash-agent-composition",
+      fixture: Option.none(),
+    })
+
+    expect(composition.registrations.map(({ manifest }) => manifest.descriptor.id)).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+    ])
   })
 })

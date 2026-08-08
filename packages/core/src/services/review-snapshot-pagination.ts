@@ -26,8 +26,13 @@ import {
   type ReviewSnapshotSearchResponse,
   ReviewSnapshotSearchResponse as ReviewSnapshotSearchResponseSchema,
 } from "@diffdash/protocol/review-snapshot"
-import { transportError } from "@diffdash/protocol/transport-error"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
+
+/** One complete snapshot search match cannot fit inside the response budget. */
+export class ReviewSnapshotSearchResultTooLargeError extends Schema.TaggedError<ReviewSnapshotSearchResultTooLargeError>()(
+  "ReviewSnapshotSearchResultTooLargeError",
+  { maxResponseBytes: Schema.Number },
+) {}
 
 /** Builds one stable, complete-file page under the supplied encoded response byte limit. */
 export const paginateReviewSnapshot = (
@@ -94,54 +99,51 @@ export const searchReviewSnapshot = (
   snapshot: ReviewSnapshot,
   request: ReviewSnapshotSearchRequest,
   maxResponseBytes: number,
-): ReviewSnapshotSearchResponse => {
-  if (request.snapshotId !== snapshot.snapshotId) {
-    return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
-  }
-  const queryHash = stableCursorHash([request.query, searchAnchorKey(request.anchor)])
-  const offset = decodeCursor(request.cursor, "search", queryHash)
-  const matches = anchoredSearchMatches(snapshot, request.query, request.anchor)
-  if (matches === null) {
-    return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
-  }
-  if (offset === null || offset > matches.length) {
-    return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
-  }
+): Effect.Effect<ReviewSnapshotSearchResponse, ReviewSnapshotSearchResultTooLargeError> =>
+  Effect.gen(function* () {
+    if (request.snapshotId !== snapshot.snapshotId) {
+      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+    }
+    const queryHash = stableCursorHash([request.query, searchAnchorKey(request.anchor)])
+    const offset = decodeCursor(request.cursor, "search", queryHash)
+    const matches = anchoredSearchMatches(snapshot, request.query, request.anchor)
+    if (matches === null) {
+      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+    }
+    if (offset === null || offset > matches.length) {
+      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+    }
 
-  const page: ReviewSnapshotSearchMatch[] = []
-  const end = Math.min(matches.length, offset + request.limit)
-  for (let index = offset; index < end; index += 1) {
-    const match = matches[index]
-    if (match === undefined) break
-    const nextOffset = index + 1
-    const candidateMatches = [...page, match]
-    const candidate = ReviewSnapshotSearchAvailable.make({
+    const page: ReviewSnapshotSearchMatch[] = []
+    const end = Math.min(matches.length, offset + request.limit)
+    for (let index = offset; index < end; index += 1) {
+      const match = matches[index]
+      if (match === undefined) break
+      const nextOffset = index + 1
+      const candidateMatches = [...page, match]
+      const candidate = ReviewSnapshotSearchAvailable.make({
+        snapshotId: snapshot.snapshotId,
+        matches: candidateMatches,
+        totalMatches: matches.length,
+        nextCursor: nextOffset < matches.length ? makeSearchCursor(nextOffset, queryHash) : null,
+      })
+      if (encodedByteLength(ReviewSnapshotSearchResponseSchema, candidate) > maxResponseBytes) break
+      page.push(match)
+    }
+
+    if (page.length === 0 && offset < matches.length) {
+      return yield* ReviewSnapshotSearchResultTooLargeError.make({ maxResponseBytes })
+    }
+    const nextOffset = offset + page.length
+    const response = ReviewSnapshotSearchAvailable.make({
       snapshotId: snapshot.snapshotId,
-      matches: candidateMatches,
+      matches: page,
       totalMatches: matches.length,
       nextCursor: nextOffset < matches.length ? makeSearchCursor(nextOffset, queryHash) : null,
     })
-    if (encodedByteLength(ReviewSnapshotSearchResponseSchema, candidate) > maxResponseBytes) break
-    page.push(match)
-  }
-
-  if (page.length === 0 && offset < matches.length) {
-    throw transportError(
-      "PAYLOAD_TOO_LARGE",
-      "One review search result exceeds the bounded response size.",
-      "reviewSnapshots:search",
-    )
-  }
-  const nextOffset = offset + page.length
-  const response = ReviewSnapshotSearchAvailable.make({
-    snapshotId: snapshot.snapshotId,
-    matches: page,
-    totalMatches: matches.length,
-    nextCursor: nextOffset < matches.length ? makeSearchCursor(nextOffset, queryHash) : null,
+    assertEncodedBudget(ReviewSnapshotSearchResponseSchema, response, maxResponseBytes)
+    return response
   })
-  assertEncodedBudget(ReviewSnapshotSearchResponseSchema, response, maxResponseBytes)
-  return response
-}
 
 const selectFiles = (snapshot: ReviewSnapshot, fileIds: readonly ReviewFileId[]) => {
   if (fileIds.length === 0) return snapshot.parsedDiff.files

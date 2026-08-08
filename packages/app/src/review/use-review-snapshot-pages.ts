@@ -3,6 +3,7 @@ import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import { RegistryContext, useAtomValue } from "@effect-atom/atom-react"
 import { useContext, useEffect, useRef, useState } from "react"
+import { runRendererPromise, useReviewContent } from "@/platform/renderer-runtime"
 
 import {
   type ReviewSnapshotLoadResult,
@@ -41,12 +42,13 @@ export const useReviewSnapshotPages = (
   onExpired: () => void | Promise<void>,
 ): ReviewSnapshotPages => {
   const registry = useContext(RegistryContext)
+  const reviewContent = useReviewContent()
   const manifestRef = useRef(manifest)
   manifestRef.current = manifest
   const [session] = useState(
     () =>
       new ReviewSnapshotPageSession(registry, manifest, {
-        getPage: (request) => window.diffDash.reviewSnapshots.getPage(request),
+        getPage: (request) => runRendererPromise(reviewContent.snapshots.getPage(request)),
         onExpired,
       }),
   )
@@ -68,7 +70,7 @@ export const useReviewSnapshotPages = (
   const disposeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   session.updateRuntime({
-    getPage: (request) => window.diffDash.reviewSnapshots.getPage(request),
+    getPage: (request) => runRendererPromise(reviewContent.snapshots.getPage(request)),
     onExpired,
   })
 

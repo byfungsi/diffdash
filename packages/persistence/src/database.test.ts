@@ -10,11 +10,12 @@ import {
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
+import { repositoryLocalPath } from "@diffdash/domain/repository"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
 import BetterSqlite3 from "better-sqlite3"
-import { Effect, Either, Layer, Schema } from "effect"
+import { Effect, Either, Layer, Option, Schema } from "effect"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
 import { DatabaseError, DatabaseService } from "./database"
@@ -1047,7 +1048,7 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
       owner: "byfungsi",
       name: "diffdash",
       remoteUrl: "https://github.com/byfungsi/diffdash",
-      localPath: "/fixtures/diffdash",
+      localPath: repositoryLocalPath("/fixtures/diffdash"),
       isFavorite: true,
     }),
   ])
@@ -1075,7 +1076,9 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     promptVersion: "walkthrough-v4",
   })
-  expect(walkthrough).toEqual(
+  expect(Option.isSome(walkthrough)).toBe(true)
+  if (Option.isNone(walkthrough)) throw new Error("Expected the version 8 walkthrough fixture")
+  expect(walkthrough.value).toEqual(
     expect.objectContaining({
       repoId: "github:byfungsi/diffdash",
       prNumber: 147,
@@ -1089,15 +1092,14 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
       }),
     }),
   )
-  expect(
-    yield* walkthroughs.get({
-      repoId: "github:byfungsi/diffdash",
-      reviewKey: "github:byfungsi/diffdash#147",
-      baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      headSha: "cccccccccccccccccccccccccccccccccccccccc",
-      promptVersion: "walkthrough-v4",
-    }),
-  ).toBeNull()
+  const missingWalkthrough = yield* walkthroughs.get({
+    repoId: "github:byfungsi/diffdash",
+    reviewKey: "github:byfungsi/diffdash#147",
+    baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    headSha: "cccccccccccccccccccccccccccccccccccccccc",
+    promptVersion: "walkthrough-v4",
+  })
+  expect(Option.isNone(missingWalkthrough)).toBe(true)
 
   const threadId = ReviewThreadId.make("thread-v8")
   const reviewKey = ReviewKey.make("github:byfungsi/diffdash#147")

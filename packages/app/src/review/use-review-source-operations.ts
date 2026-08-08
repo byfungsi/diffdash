@@ -1,5 +1,11 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { useAtomRefresh, useAtomSet } from "@effect-atom/atom-react"
+import { Effect, Option } from "effect"
+import {
+  runRendererPromise,
+  useReviewAutomation,
+  useReviewContent,
+} from "@/platform/renderer-runtime"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
@@ -33,13 +39,69 @@ export const useReviewSourceOperations = (
     repositoryComparisonManifestAtom(comparisonKey),
   )
   const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
+  const automation = useReviewAutomation()
+  const content = useReviewContent()
 
   if (selection._tag !== "ready") return { _tag: "unavailable" }
 
   return {
     _tag: "ready",
     operations: mapReviewSourceOperations(selection, {
-      api: window.diffDash,
+      api: {
+        hostedReviews: {
+          getDecision: (request) => runRendererPromise(content.hostedReviews.getDecision(request)),
+          submitDecision: (request) =>
+            runRendererPromise(content.hostedReviews.submitDecision(request)),
+        },
+        localWalkthroughs: {
+          get: (target, baseSha, headSha) =>
+            runRendererPromise(
+              automation.walkthroughs
+                .getLocal(target, baseSha, headSha)
+                .pipe(Effect.map(Option.getOrNull)),
+            ),
+          generate: (target) =>
+            runRendererPromise(automation.walkthroughs.generateLocal(target, false)),
+          regenerate: (target) =>
+            runRendererPromise(automation.walkthroughs.generateLocal(target, true)),
+        },
+        openLocalRepositoryFile: (rootPath, filePath) =>
+          runRendererPromise(content.openLocalFile(rootPath, filePath)),
+        openRepositoryFile: (request) => runRendererPromise(content.openHostedFile(request)),
+        repositoryComparisons: {
+          openFile: (request) => runRendererPromise(content.openRepositoryComparisonFile(request)),
+        },
+        repositoryComparisonWalkthroughs: {
+          get: (target) =>
+            runRendererPromise(
+              automation.walkthroughs
+                .getRepositoryComparison(target)
+                .pipe(Effect.map(Option.getOrNull)),
+            ),
+          generate: (target) =>
+            runRendererPromise(automation.walkthroughs.generateRepositoryComparison(target, false)),
+          regenerate: (target) =>
+            runRendererPromise(automation.walkthroughs.generateRepositoryComparison(target, true)),
+        },
+        viewedFiles: {
+          list: (request) => runRendererPromise(content.viewedFiles.listHosted(request)),
+          set: (request) => runRendererPromise(content.viewedFiles.setHosted(request)),
+          listLocal: (request) => runRendererPromise(content.viewedFiles.listLocal(request)),
+          setLocal: (request) => runRendererPromise(content.viewedFiles.setLocal(request)),
+          listRepositoryComparison: (request) =>
+            runRendererPromise(content.viewedFiles.listRepositoryComparison(request)),
+          setRepositoryComparison: (request) =>
+            runRendererPromise(content.viewedFiles.setRepositoryComparison(request)),
+        },
+        walkthroughs: {
+          get: (request) =>
+            runRendererPromise(
+              automation.walkthroughs.getHosted(request).pipe(Effect.map(Option.getOrNull)),
+            ),
+          generate: (request) =>
+            runRendererPromise(automation.walkthroughs.generateHosted(request)),
+        },
+      },
       refreshHosted: () => {
         refreshHostedManifest()
         if (selection.target.kind === "hosted") {

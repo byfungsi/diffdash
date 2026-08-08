@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Either, Layer, Option } from "effect"
 
 import type { HostedRepositoryLocator as HostedRepositoryLocatorType } from "@diffdash/domain/git-provider"
-import { Repo } from "@diffdash/domain/repository"
+import { Repo, repositoryLocalPath } from "@diffdash/domain/repository"
 import {
   GitProviderId,
   HostedRepositoryLocator,
@@ -23,20 +23,21 @@ const linkedRepo = Repo.make({
   owner: "fungsi",
   name: "diffdash",
   remoteUrl: "git@github.com:fungsi/diffdash.git",
-  localPath: "/workspace/diffdash",
+  localPath: repositoryLocalPath("/workspace/diffdash"),
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
   createdAt: "2026-07-14T00:00:00.000Z",
   updatedAt: "2026-07-14T00:00:00.000Z",
 })
+const linkedRepoLocalPath = "/workspace/diffdash"
 
 const unavailable = <A>() => Effect.die(new Error("Unused test method")) as Effect.Effect<A>
 
 const makeLayer = (
   remoteUrl = linkedRepo.remoteUrl,
   remoteUrls: readonly string[] = [remoteUrl],
-  existingByPath: Repo | null = null,
+  existingByPath: Option.Option<Repo> = Option.none(),
 ) => {
   const persisted: Array<{
     readonly favorite: boolean | undefined
@@ -52,9 +53,8 @@ const makeLayer = (
           GitService,
           GitService.of({
             listRemotes: () => Effect.succeed([{ name: "origin", fetchUrls: [...remoteUrls] }]),
-            detectRepository: () =>
-              Effect.succeed({ rootPath: linkedRepo.localPath ?? "", remoteUrl }),
-            detectRoot: () => Effect.succeed(linkedRepo.localPath ?? ""),
+            detectRepository: () => Effect.succeed({ rootPath: linkedRepoLocalPath, remoteUrl }),
+            detectRoot: () => Effect.succeed(linkedRepoLocalPath),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
             getLocalReviewDetail: () => unavailable(),
@@ -107,9 +107,10 @@ const makeLayer = (
           RepositoryStore.of({
             list: () => Effect.succeed([linkedRepo]),
             findByLocalPath: () => Effect.succeed(existingByPath),
-            findHosted: () => Effect.succeed(null),
-            findByProviderRepositoryId: () => Effect.succeed(null),
-            attachResolvedIdentity: () => Effect.succeed(existingByPath ?? linkedRepo),
+            findHosted: () => Effect.succeed(Option.none()),
+            findByProviderRepositoryId: () => Effect.succeed(Option.none()),
+            attachResolvedIdentity: () =>
+              Effect.succeed(Option.getOrElse(existingByPath, () => linkedRepo)),
             reconcileLocalAliases: () =>
               Effect.succeed({
                 matchedAliasCount: 0,
@@ -135,13 +136,13 @@ const makeLayer = (
                 return Repo.make({
                   ...linkedRepo,
                   ...input,
-                  localPath: input.localPath ?? linkedRepo.localPath,
+                  localPath: input.localPath !== null ? input.localPath : linkedRepo.localPath,
                   isFavorite: input.isFavorite === true || linkedRepo.isFavorite,
                 })
               }),
             setFavorite: (_id, isFavorite) =>
               Effect.succeed(Repo.make({ ...linkedRepo, isFavorite })),
-            touch: () => Effect.succeed(existingByPath ?? linkedRepo),
+            touch: () => Effect.succeed(Option.getOrElse(existingByPath, () => linkedRepo)),
             forget: () => unavailable(),
           }),
         ),
@@ -152,6 +153,15 @@ const makeLayer = (
 }
 
 describe("RepositoryLinker", () => {
+  it.effect("returns None when no hosted repository is linked", () => {
+    const { layer } = makeLayer()
+    return Effect.gen(function* () {
+      const result = yield* (yield* RepositoryLinker).findHosted(repository("fungsi", "missing"))
+
+      expect(Option.isNone(result)).toBe(true)
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect("links a matching checkout and canonical root", () => {
     const { layer, persisted } = makeLayer()
     return Effect.gen(function* () {
@@ -265,7 +275,11 @@ describe("RepositoryLinker", () => {
   })
 
   it.effect("reuses a hosted project identity for local review state", () => {
-    const { layer, persisted } = makeLayer(linkedRepo.remoteUrl, [linkedRepo.remoteUrl], linkedRepo)
+    const { layer, persisted } = makeLayer(
+      linkedRepo.remoteUrl,
+      [linkedRepo.remoteUrl],
+      Option.some(linkedRepo),
+    )
     return Effect.gen(function* () {
       const repo = yield* (yield* RepositoryLinker).ensureLocal("/workspace/diffdash/src")
 
@@ -469,7 +483,7 @@ describe("RepositoryLinker", () => {
 })
 
 interface OpenProjectLayerOptions {
-  readonly existing?: Repo | null
+  readonly existing?: Repo
   readonly forgetFails?: boolean
   readonly listed?: readonly Repo[]
   readonly remotes?: readonly {
@@ -558,9 +572,9 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
           RepositoryStore,
           RepositoryStore.of({
             list: () => Effect.succeed(options.listed ?? []),
-            findByLocalPath: () => Effect.succeed(options.existing ?? null),
-            findHosted: () => Effect.succeed(options.existing ?? null),
-            findByProviderRepositoryId: () => Effect.succeed(null),
+            findByLocalPath: () => Effect.succeed(Option.fromNullable(options.existing)),
+            findHosted: () => Effect.succeed(Option.fromNullable(options.existing)),
+            findByProviderRepositoryId: () => Effect.succeed(Option.none()),
             attachResolvedIdentity: (_repoId, resolved, localPath) =>
               Effect.succeed(
                 Repo.make({

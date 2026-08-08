@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import {
   StoredWalkthrough,
@@ -36,7 +36,7 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
   {
     readonly get: (
       key: WalkthroughCacheKey,
-    ) => Effect.Effect<StoredWalkthrough | null, WalkthroughStoreError>
+    ) => Effect.Effect<Option.Option<StoredWalkthrough>, WalkthroughStoreError>
     readonly save: (
       input: SaveWalkthroughInput,
     ) => Effect.Effect<StoredWalkthrough, WalkthroughStoreError>
@@ -66,9 +66,10 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
             ),
             Effect.flatMap((row) =>
               row === undefined
-                ? Effect.succeed(null)
+                ? Effect.succeed(Option.none<StoredWalkthrough>())
                 : decodeWalkthroughRow("get.decodeRow", row).pipe(
                     Effect.flatMap((decoded) => toStored("get.decodeContent", decoded)),
+                    Effect.map(Option.some),
                   ),
             ),
           )
@@ -110,13 +111,17 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
                 ),
             ),
             Effect.flatMap(() => get(input)),
-            Effect.flatMap((stored) =>
-              stored === null
-                ? WalkthroughStoreError.make({
-                    operation: "save.get",
-                    cause: new Error("Walkthrough cache row was not found after save."),
-                  })
-                : Effect.succeed(stored),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    WalkthroughStoreError.make({
+                      operation: "save.get",
+                      cause: new Error("Walkthrough cache row was not found after save."),
+                    }),
+                  ),
+                onSome: Effect.succeed,
+              }),
             ),
           )
         }),

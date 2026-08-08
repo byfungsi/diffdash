@@ -11,6 +11,7 @@ import {
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
 import type { DiffDashApi } from "@diffdash/protocol/api"
+import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
   ReviewSnapshotExpired,
   ReviewSnapshotFileTooLarge,
@@ -18,6 +19,7 @@ import {
   ReviewSnapshotPageCursor,
   type ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
+import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
 import { RegistryProvider } from "@effect-atom/atom-react"
 import { StrictMode } from "react"
 import { flushSync } from "react-dom"
@@ -334,7 +336,15 @@ describe("useReviewSnapshotPages", () => {
     if (file === undefined) throw new Error("Missing fixture file")
     const retryResponse = deferred<ReviewSnapshotPageResponse>()
     const getPage = vi.fn<DiffDashApi["reviewSnapshots"]["getPage"]>()
-    getPage.mockRejectedValueOnce(new Error("Snapshot transport unavailable"))
+    getPage.mockRejectedValueOnce(
+      bridgeTransportError(
+        transportError(
+          "SNAPSHOT_TRANSPORT_UNAVAILABLE",
+          `${InvokeChannel.getReviewSnapshotPage} failed: Snapshot transport unavailable`,
+          InvokeChannel.getReviewSnapshotPage,
+        ),
+      ),
+    )
     getPage.mockImplementationOnce(() => retryResponse.promise)
     installPageApi(getPage)
     renderHook(fixture.manifest)

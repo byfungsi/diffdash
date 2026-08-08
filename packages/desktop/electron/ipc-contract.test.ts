@@ -1,6 +1,6 @@
 import { AgentProviderId } from "@diffdash/agent-provider"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
-import { Repo } from "@diffdash/domain/repository"
+import { Repo, repositoryLocalPath } from "@diffdash/domain/repository"
 import { ProcessExitError } from "@diffdash/process"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
@@ -24,7 +24,7 @@ import {
 import { Effect, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
-import { RepositoryLinkError } from "@diffdash/core"
+import { CoreMethod, CoreMethodChannel, RepositoryLinkError } from "@diffdash/core"
 import type { DesktopUpdater } from "../src/main/services/app-updater"
 import type { ApplicationRuntime } from "./main/application-runtime"
 import { createRendererSecurityPolicy } from "./main/electron-policy"
@@ -59,6 +59,26 @@ vi.mock("electron", () => ({
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
     expect(Object.keys(InvokeContract)).toEqual(Object.values(InvokeChannel))
+  })
+
+  it("maps every Core method to one unique protocol invoke channel", () => {
+    expect(Object.keys(CoreMethodChannel)).toEqual(Object.values(CoreMethod))
+    expect(new Set(Object.values(CoreMethodChannel)).size).toBe(Object.values(CoreMethod).length)
+    expect(Object.values(CoreMethodChannel).every((channel) => channel in InvokeContract)).toBe(
+      true,
+    )
+  })
+
+  it("preserves nullable stored-walkthrough misses at the IPC boundary", () => {
+    const walkthroughChannels = [
+      InvokeChannel.getWalkthrough,
+      InvokeChannel.getLocalWalkthrough,
+      InvokeChannel.getRepositoryComparisonWalkthrough,
+    ] as const
+
+    for (const channel of walkthroughChannels) {
+      expect(Schema.decodeUnknownSync(invokeResponseSchema(channel))(null)).toBeNull()
+    }
   })
 
   it("defines and installs every application handler exactly once", () => {
@@ -550,7 +570,7 @@ describe("IPC contract", () => {
         owner: "local",
         name: `repo-${index}`,
         remoteUrl: `file:///${"x".repeat(150_000)}`,
-        localPath: `/repo-${index}`,
+        localPath: repositoryLocalPath(`/repo-${index}`),
         isFavorite: false,
         lastOpenedAt: null,
         lastSyncedAt: null,
@@ -572,7 +592,7 @@ describe("IPC contract", () => {
 
     expect(() =>
       sendProtocolEvent(
-        { send },
+        { isDestroyed: () => false, send },
         EventChannel.updateStateChanged,
         AppUpdateFailed.make({ currentVersion: "0.3.1", message: "x".repeat(300_000) }),
       ),

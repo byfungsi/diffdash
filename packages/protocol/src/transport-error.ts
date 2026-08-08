@@ -6,6 +6,13 @@ const MAX_PUBLIC_ERROR_MESSAGE_LENGTH = 500
 const MAX_PUBLIC_ERROR_OPERATION_LENGTH = 200
 const MAX_PUBLIC_ERROR_CODE_LENGTH = 100
 const BRIDGE_TRANSPORT_ERROR_PREFIX = "DIFFDASH_TRANSPORT_ERROR_V1:"
+const PUBLIC_REASON_ERROR_CODES = new Set([
+  "LocalReviewTargetError",
+  "RepositoryLinkError",
+  "RepositoryComparisonSourceError",
+  "ReviewTurnRejectedError",
+  "ReviewTurnTargetError",
+])
 const DiagnosticTag = Schema.String.pipe(
   Schema.minLength(1),
   Schema.maxLength(100),
@@ -132,6 +139,10 @@ export const isTransientTransportError = (error: unknown): boolean => {
   const decoded = decodeTransportError(error)
   return decoded?.code === "IPC_FAILURE"
 }
+
+/** Identifies transport failures whose message is a safe domain reason requiring caller context. */
+export const isPublicReasonTransportErrorCode = (code: string): boolean =>
+  PUBLIC_REASON_ERROR_CODES.has(code)
 
 /** Removes control characters and bounds an explicitly public transport message. */
 export const sanitizeTransportErrorMessage = (message: string) => {

@@ -11,6 +11,7 @@ import {
 } from "electron"
 import { resolveApplicationIdentity } from "./application-identity"
 import { createApplicationRuntime } from "./application-runtime"
+import { disposeApplicationResources } from "./application-resources"
 import { createApplicationUpdater } from "./application-updater"
 import { resolveCoreConfiguration } from "./core-configuration"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
@@ -19,6 +20,7 @@ import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
 import { createNavigation } from "./navigation"
 import { applicationPaths } from "./paths"
+import { createShutdown } from "./shutdown"
 import { installSingleInstanceHandling } from "./single-instance"
 import { logStartupStage } from "./startup-logging"
 import { createMainWindow } from "./window"
@@ -97,15 +99,20 @@ const start = async () => {
   const applicationRuntime = createApplicationRuntime(
     await Effect.runPromise(resolveCoreConfiguration()),
   )
-  let updater: ReturnType<typeof createApplicationUpdater>
-  try {
-    await applicationRuntime.start()
-    updater = createApplicationUpdater()
-  } catch (cause) {
-    await applicationRuntime.dispose()
-    throw cause
-  }
-  installIpcControllers(applicationRuntime, updater, navigation.commands, rendererSecurityPolicy)
+  const updater = createApplicationUpdater()
+  const shutdown = createShutdown({
+    dispose: () => disposeApplicationResources(updater, applicationRuntime),
+    quit: () => app.quit(),
+  })
+  app.on("before-quit", shutdown.beforeQuit)
+  await applicationRuntime.start()
+  installIpcControllers(
+    applicationRuntime,
+    updater,
+    navigation.commands,
+    rendererSecurityPolicy,
+    shutdown,
+  )
   activeRendererSecurityPolicy = rendererSecurityPolicy
   const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()

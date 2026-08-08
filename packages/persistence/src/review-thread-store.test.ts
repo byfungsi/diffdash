@@ -6,6 +6,7 @@ import { join } from "node:path"
 
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { noRepositoryLocalPath } from "@diffdash/domain/repository"
 import {
   makeReviewKey,
   ReviewFileId,
@@ -58,7 +59,7 @@ const createRepo = Effect.gen(function* () {
     owner: "fungsi",
     name: "diffdash",
     remoteUrl: "https://github.com/fungsi/diffdash",
-    localPath: null,
+    localPath: noRepositoryLocalPath,
   })
 })
 

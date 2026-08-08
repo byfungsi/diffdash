@@ -29,6 +29,7 @@ export interface ApplicationRuntime {
       operationId: WalkthroughOperationId,
     ) => Promise<WalkthroughOperationResult>
     readonly cancel: (operationId: WalkthroughOperationId) => Promise<WalkthroughOperationResult>
+    /** Nullable only at the existing Core-to-IPC transport boundary. */
     readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
   }
   readonly dispose: EmbeddedCore["dispose"]
@@ -53,7 +54,8 @@ export const createApplicationRuntime = (configuration: CoreConfiguration): Appl
   }
 }
 
-const unwrapCoreResult = <Value, Failure>(result: CoreResult<Value, Failure>): Value => {
+/** Projects an explicit Core result into Electron's exception-based IPC adapter boundary. */
+export const unwrapCoreResult = <Value, Failure>(result: CoreResult<Value, Failure>): Value => {
   if (result.ok) return result.value
   throw result.error
 }

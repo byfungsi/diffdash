@@ -1,5 +1,5 @@
 import { Atom } from "@effect-atom/atom-react"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 
 import {
   HostedRepositoryLocator,
@@ -10,13 +10,9 @@ import {
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import {
-  HostedReviewSnapshotManifest,
-  LocalReviewSnapshotManifest,
-  RepositoryComparisonSnapshotManifest,
-} from "@diffdash/domain/review-context"
 import { HostedRepositoryRequest, HostedReviewRequest } from "@diffdash/protocol/hosted-git"
-import { fetchSchemaEffect } from "@/shared/effect-api"
+import { rendererRuntime } from "@/platform/renderer-runtime"
+import { ReviewContent } from "@/platform/review-content"
 import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
 
 const localReviewAtomKeyCodec = makeSchemaAtomKeyCodec(LocalReviewTarget)
@@ -26,16 +22,15 @@ const repositoryComparisonAtomKeyCodec = makeSchemaAtomKeyCodec(RepositoryCompar
 
 /** Open hosted reviews for one repository. */
 export const pullRequestsAtom = Atom.family((key: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     Effect.gen(function* () {
       const parsedKey = parseRepoAtomKey(key)
       if (parsedKey === null) return [] as readonly HostedReviewSummary[]
-      return yield* fetchSchemaEffect(Schema.Array(HostedReviewSummary), () =>
-        window.diffDash.hostedReviews.list(
-          HostedRepositoryRequest.make({
-            repository: parsedKey,
-          }),
-        ),
+      const reviews = yield* ReviewContent
+      return yield* reviews.hostedReviews.list(
+        HostedRepositoryRequest.make({
+          repository: parsedKey,
+        }),
       )
     }),
     { initialValue: [] as readonly HostedReviewSummary[] },
@@ -44,15 +39,12 @@ export const pullRequestsAtom = Atom.family((key: string) =>
 
 /** Hosted review manifest backed by one coherent main-process snapshot. */
 export const hostedReviewManifestAtom = Atom.family((key: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     Effect.gen(function* () {
       const parsedKey = parseHostedReviewAtomKey(key)
       if (parsedKey === null) return null
-      return yield* fetchSchemaEffect(HostedReviewSnapshotManifest, () =>
-        window.diffDash.reviewSnapshots.acquireHosted(
-          HostedReviewRequest.make({ review: parsedKey }),
-        ),
-      )
+      const reviews = yield* ReviewContent
+      return yield* reviews.snapshots.acquireHosted(HostedReviewRequest.make({ review: parsedKey }))
     }),
     { initialValue: null },
   ),
@@ -60,13 +52,12 @@ export const hostedReviewManifestAtom = Atom.family((key: string) =>
 
 /** Local review manifest backed by one coherent main-process snapshot. */
 export const localReviewManifestAtom = Atom.family((key: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     Effect.gen(function* () {
       const target = parseLocalReviewAtomKey(key)
       if (target === null) return null
-      return yield* fetchSchemaEffect(LocalReviewSnapshotManifest, () =>
-        window.diffDash.reviewSnapshots.acquireLocal(target),
-      )
+      const reviews = yield* ReviewContent
+      return yield* reviews.snapshots.acquireLocal(target)
     }),
     { initialValue: null },
   ),
@@ -74,13 +65,12 @@ export const localReviewManifestAtom = Atom.family((key: string) =>
 
 /** Immutable repository comparison manifest backed by one coherent main-process snapshot. */
 export const repositoryComparisonManifestAtom = Atom.family((key: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     Effect.gen(function* () {
       const target = parseRepositoryComparisonAtomKey(key)
       if (target === null) return null
-      return yield* fetchSchemaEffect(RepositoryComparisonSnapshotManifest, () =>
-        window.diffDash.reviewSnapshots.acquireRepositoryComparison(target),
-      )
+      const reviews = yield* ReviewContent
+      return yield* reviews.snapshots.acquireRepositoryComparison(target)
     }),
     { initialValue: null },
   ),

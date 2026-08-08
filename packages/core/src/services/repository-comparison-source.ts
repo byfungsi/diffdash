@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { ChangedFile, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
@@ -124,7 +124,7 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
               ),
             ),
           )
-        if (saved !== null) return saved
+        if (Option.isSome(saved)) return saved.value
         return yield* sourceError(
           "repository-not-found",
           "acquire.repository",
@@ -260,14 +260,14 @@ const resolveSavedRepository = (
         ),
       ),
       Effect.flatMap((repository) =>
-        repository === null
+        Option.isNone(repository)
           ? sourceError(
               "repository-not-found",
               "resolve.repository",
               "The requested repository is not saved or linked in DiffDash.",
               new Error(`Saved repository not found: ${selector.providerId}`),
             )
-          : Effect.succeed(repository),
+          : Effect.succeed(repository.value),
       ),
     )
   }

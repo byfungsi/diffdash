@@ -10,17 +10,21 @@ import { makeOpenCodeProvider } from "@diffdash/agent-provider-opencode"
 import type { GitProviderRegistration } from "@diffdash/git-provider"
 import { createFixtureGitProvider } from "@diffdash/git-provider-fixture"
 import { createGitHubProvider } from "@diffdash/git-provider-github"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { type ProcessRunner, processRequest } from "@diffdash/process"
 import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 /** Dependencies supplied once by the Core composition boundary. */
-interface AgentProviderCompositionDependencies {
+interface AgentProviderCompositionBaseDependencies {
   readonly processes: ProcessRunner
   readonly tempResources: TempResourceOperations
   readonly tempDirectory: string
-  readonly includeFixture: boolean
-  readonly fixtureWalkthroughNeverCompletes: boolean
+}
+
+type AgentProviderCompositionDependencies = AgentProviderCompositionBaseDependencies & {
+  readonly fixture: Option.Option<{
+    readonly walkthroughNeverCompletes: boolean
+  }>
 }
 
 /** Complete agent provider composition consumed by registry and catalog services. */
@@ -33,6 +37,7 @@ interface AgentProviderComposition {
 export const createAgentProviderComposition = (
   dependencies: AgentProviderCompositionDependencies,
 ): AgentProviderComposition => {
+  const fixture = dependencies.fixture
   const shared = {
     processes: dependencies.processes,
     tempResources: dependencies.tempResources,
@@ -42,10 +47,10 @@ export const createAgentProviderComposition = (
     makeClaudeProvider(shared),
     makeCodexProvider(shared),
     makeOpenCodeProvider(shared),
-    ...(dependencies.includeFixture
+    ...(Option.isSome(fixture)
       ? [
           makeFixtureAgentProvider({
-            walkthroughNeverCompletes: dependencies.fixtureWalkthroughNeverCompletes,
+            walkthroughNeverCompletes: fixture.value.walkthroughNeverCompletes,
           }),
         ]
       : []),
@@ -56,28 +61,38 @@ export const createAgentProviderComposition = (
 /** Creates built-in Git providers from host-decoded fixture configuration. */
 export const createGitProviderComposition = (
   processes: ProcessRunner,
-  fixture: {
+  configuredFixture: Option.Option<{
     readonly remoteUrl: string
-    readonly baseRevision: string | null
-    readonly headRevision: string | null
-  } | null,
-): readonly GitProviderRegistration[] => [
-  createGitHubProvider({}, processes),
-  ...(fixture === null
-    ? []
-    : [
-        createFixtureGitProvider({
-          remoteUrl: fixture.remoteUrl,
-          ...(fixture.baseRevision === null ? {} : { baseRevision: fixture.baseRevision }),
-          ...(fixture.headRevision === null ? {} : { headRevision: fixture.headRevision }),
-          bootstrapBareRepository: (destination) =>
-            processes
-              .run(
-                processRequest("git", ["clone", "--bare", "--", fixture.remoteUrl, destination], {
-                  timeoutMs: 120_000,
-                }),
-              )
-              .pipe(Effect.asVoid),
-        }),
-      ]),
-]
+    readonly baseRevision: Option.Option<string>
+    readonly headRevision: Option.Option<string>
+  }>,
+): readonly GitProviderRegistration[] => {
+  return [
+    createGitHubProvider({}, processes),
+    ...(Option.isNone(configuredFixture)
+      ? []
+      : [
+          createFixtureGitProvider({
+            remoteUrl: configuredFixture.value.remoteUrl,
+            ...(Option.isNone(configuredFixture.value.baseRevision)
+              ? {}
+              : { baseRevision: configuredFixture.value.baseRevision.value }),
+            ...(Option.isNone(configuredFixture.value.headRevision)
+              ? {}
+              : { headRevision: configuredFixture.value.headRevision.value }),
+            bootstrapBareRepository: (destination) =>
+              processes
+                .run(
+                  processRequest(
+                    "git",
+                    ["clone", "--bare", "--", configuredFixture.value.remoteUrl, destination],
+                    {
+                      timeoutMs: 120_000,
+                    },
+                  ),
+                )
+                .pipe(Effect.asVoid),
+          }),
+        ]),
+  ]
+}

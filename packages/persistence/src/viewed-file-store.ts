@@ -40,13 +40,16 @@ interface HostedViewedFileScope {
   readonly repoId: string
 }
 
-/** Local review scope shared by viewed-file reads and writes. */
-export interface LocalViewedFileScope {
-  readonly comparisonKind: "workingTree" | "branch" | "repositoryComparison"
-  readonly comparisonTarget: string
-  readonly repoId: string
-  readonly sourceIdentity: string
-}
+/** Local and repository-comparison scope shared by viewed-file reads and writes. */
+export const LocalViewedFileScope = Schema.Struct({
+  comparisonKind: Schema.Literal("workingTree", "branch", "repositoryComparison"),
+  comparisonTarget: Schema.String,
+  repoId: Schema.String,
+  sourceIdentity: Schema.String,
+})
+
+/** Local and repository-comparison scope shared by viewed-file reads and writes. */
+export type LocalViewedFileScope = typeof LocalViewedFileScope.Type
 
 /** Viewed-file mutation for one exact hosted patch identity. */
 interface SetHostedViewedFileInput extends HostedViewedFileScope, ViewedFileRecord {
@@ -54,7 +57,7 @@ interface SetHostedViewedFileInput extends HostedViewedFileScope, ViewedFileReco
 }
 
 /** Viewed-file mutation for one exact local patch identity. */
-interface SetLocalViewedFileInput extends LocalViewedFileScope, ViewedFileRecord {
+interface SetLocalViewedFileInput extends ViewedFileRecord {
   readonly viewed: boolean
 }
 
@@ -71,7 +74,10 @@ export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
     readonly setHosted: (
       input: SetHostedViewedFileInput,
     ) => Effect.Effect<void, ViewedFileStoreError>
-    readonly setLocal: (input: SetLocalViewedFileInput) => Effect.Effect<void, ViewedFileStoreError>
+    readonly setLocal: (
+      scope: LocalViewedFileScope,
+      input: SetLocalViewedFileInput,
+    ) => Effect.Effect<void, ViewedFileStoreError>
   }
 >() {
   static readonly layer = Layer.effect(
@@ -137,7 +143,7 @@ export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
               ),
             )
         }),
-        setLocal: Effect.fn("ViewedFileStore.setLocal")(function (input) {
+        setLocal: Effect.fn("ViewedFileStore.setLocal")(function (scope, input) {
           const statement = input.viewed
             ? `INSERT OR REPLACE INTO local_viewed_files (
                  repo_id, source_identity, comparison_kind, comparison_target,
@@ -148,10 +154,10 @@ export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
                  AND comparison_kind = ? AND comparison_target = ?
                  AND review_key = ? AND patch_hash = ?`
           const identity: readonly unknown[] = [
-            input.repoId,
-            input.sourceIdentity,
-            input.comparisonKind,
-            input.comparisonTarget,
+            scope.repoId,
+            scope.sourceIdentity,
+            scope.comparisonKind,
+            scope.comparisonTarget,
             input.reviewKey,
             input.patchHash,
           ]

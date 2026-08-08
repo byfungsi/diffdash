@@ -12,6 +12,7 @@ import {
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
+import { noRepositoryLocalPath, repositoryLocalPath } from "@diffdash/domain/repository"
 import { AgentRunId } from "@diffdash/domain/review-agent"
 import {
   GitCommitSha,
@@ -317,8 +318,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot,
-        localPath: null,
-        walkthrough: null,
+        localPath: noRepositoryLocalPath,
+        walkthrough: Option.none(),
       })
       const unauthorized = yield* Effect.promise(() =>
         fetch(access.url, {
@@ -344,8 +345,8 @@ describe("DiffDashMcpServer", () => {
             threadId,
             repoId: "github:fungsi/diffdash",
             snapshot,
-            localPath: null,
-            walkthrough: null,
+            localPath: noRepositoryLocalPath,
+            walkthrough: Option.none(),
           })
           .pipe(
             Effect.map((temporary) => ({
@@ -380,8 +381,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot,
-        localPath: null,
-        walkthrough: null,
+        localPath: noRepositoryLocalPath,
+        walkthrough: Option.none(),
         maxToolOutputBytes: 400,
       })
       const client = new Client({ name: "diffdash-test", version: "1" })
@@ -506,8 +507,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot,
-        localPath: null,
-        walkthrough: null,
+        localPath: noRepositoryLocalPath,
+        walkthrough: Option.none(),
         maxToolOutputBytes: 16,
       })
       const client = new Client({ name: "diffdash-tiny-output-test", version: "1" })
@@ -540,8 +541,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot,
-        localPath: null,
-        walkthrough: null,
+        localPath: noRepositoryLocalPath,
+        walkthrough: Option.none(),
       })
       const client = new Client({ name: "diffdash-search-test", version: "1" })
       const transport = new StreamableHTTPClientTransport(new URL(access.url), {
@@ -616,8 +617,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot,
-        localPath: "/workspace/diffdash",
-        walkthrough: null,
+        localPath: repositoryLocalPath("/workspace/diffdash"),
+        walkthrough: Option.none(),
       })
       const client = new Client({ name: "diffdash-linked-search-test", version: "1" })
       const transport = new StreamableHTTPClientTransport(new URL(access.url), {
@@ -659,8 +660,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "github:fungsi/diffdash",
         snapshot: comparisonSnapshot,
-        localPath: "/workspace/comparison",
-        walkthrough: null,
+        localPath: repositoryLocalPath("/workspace/comparison"),
+        walkthrough: Option.none(),
       })
       const client = new Client({ name: "diffdash-comparison-search-test", version: "1" })
       const transport = new StreamableHTTPClientTransport(new URL(access.url), {
@@ -702,8 +703,8 @@ describe("DiffDashMcpServer", () => {
         threadId,
         repoId: "local:/workspace/diffdash",
         snapshot: localSnapshot,
-        localPath: null,
-        walkthrough: null,
+        localPath: noRepositoryLocalPath,
+        walkthrough: Option.none(),
       })
       const client = new Client({ name: "diffdash-local-test", version: "1" })
       const transport = new StreamableHTTPClientTransport(new URL(access.url), {
@@ -797,8 +798,8 @@ describe("DiffDashMcpServer", () => {
           threadId,
           repoId: "github:fungsi/diffdash",
           snapshot,
-          localPath: "/workspace/diffdash",
-          walkthrough: null,
+          localPath: repositoryLocalPath("/workspace/diffdash"),
+          walkthrough: Option.none(),
         })
         const connected = yield* connectClient(access)
         const search = yield* Effect.promise(() =>
@@ -889,7 +890,7 @@ describe("DiffDashMcpServer", () => {
           Effect.gen(function* () {
             const access = yield* server.acquireRun({
               ...runContext("run-cli-interruption"),
-              localPath: "/workspace/diffdash",
+              localPath: repositoryLocalPath("/workspace/diffdash"),
             })
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
@@ -1170,8 +1171,8 @@ const runContext = (runId: string) => ({
   threadId,
   repoId: "github:fungsi/diffdash",
   snapshot,
-  localPath: null,
-  walkthrough: null,
+  localPath: noRepositoryLocalPath,
+  walkthrough: Option.none(),
 })
 
 const authorizedHeaders = (access: DiffDashMcpRunAccess) => ({

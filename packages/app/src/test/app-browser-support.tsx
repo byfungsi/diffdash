@@ -50,7 +50,9 @@ import {
   ProjectWorkspaceState,
 } from "@diffdash/domain/project-workspace"
 import {
+  noRepositoryLocalPath,
   Repo,
+  repositoryLocalPath,
   RepositoryIdentityRepairSummary,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
@@ -120,6 +122,7 @@ import {
   OpenWorkingTreeCommand,
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
+import { InvokeChannel } from "@diffdash/protocol/channels"
 import { AppPrerequisites, SetupRequirement } from "@diffdash/protocol/prerequisites"
 import {
   ReviewSnapshotExpired,
@@ -129,6 +132,7 @@ import {
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
 } from "@diffdash/protocol/review-snapshot"
+import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
 import { StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, expect, vi } from "vitest"
@@ -147,7 +151,7 @@ const repo = Repo.make({
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
-  localPath: null,
+  localPath: noRepositoryLocalPath,
   name: "diffdash",
   owner: "fungsi",
   provider: "github",
@@ -182,7 +186,7 @@ const staleLocalFavoriteRepo = Repo.make({
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
-  localPath: "/workspace/diffdash",
+  localPath: repositoryLocalPath("/workspace/diffdash"),
   name: "diffdash-fe11f30a1061",
   owner: "local",
   provider: "local",
@@ -1459,7 +1463,15 @@ scenario("appStateRecovery", async () => {
   const calls = installDiffDashApi({
     getAppState: async () => {
       attempt += 1
-      if (attempt === 1) throw new Error("Application runtime unavailable")
+      if (attempt === 1) {
+        throw bridgeTransportError(
+          transportError(
+            "APP_STATE_UNAVAILABLE",
+            `${InvokeChannel.appStateGet} failed: Application runtime unavailable`,
+            InvokeChannel.appStateGet,
+          ),
+        )
+      }
       return { onboardingCompleted: true }
     },
   })
@@ -1500,7 +1512,9 @@ scenario("projectOpenChooser", async () => {
     openProject: async (localPath, selectedRepository) =>
       selectedRepository === undefined
         ? ProjectRemoteSelectionRequired.make({ rootPath: localPath, candidates })
-        : ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) }),
+        : ProjectOpened.make({
+            repo: Repo.make({ ...repo, localPath: repositoryLocalPath(localPath) }),
+          }),
   })
   renderApp()
 
@@ -1576,7 +1590,7 @@ scenario("projectStateRestoration", async () => {
 })
 
 scenario("cleanProjectReviews", async () => {
-  const localRepo = Repo.make({ ...repo, localPath: localReview.rootPath })
+  const localRepo = Repo.make({ ...repo, localPath: repositoryLocalPath(localReview.rootPath) })
   installDiffDashApi({
     repositories: [localRepo],
     pullRequests: [],
@@ -1605,7 +1619,15 @@ scenario("cleanProjectReviews", async () => {
 
 scenario("failedProjectReviews", async () => {
   const calls = installDiffDashApi()
-  calls.listPullRequests.mockRejectedValue(new Error("Hosted provider unavailable"))
+  calls.listPullRequests.mockRejectedValue(
+    bridgeTransportError(
+      transportError(
+        "HOSTED_PROVIDER_UNAVAILABLE",
+        `${InvokeChannel.listHostedReviews} failed: Hosted provider unavailable`,
+        InvokeChannel.listHostedReviews,
+      ),
+    ),
+  )
   renderApp()
 
   await openDefaultProject()
@@ -1849,7 +1871,15 @@ scenario("remoteRepositorySearch", async () => {
 
 scenario("repositorySearchFailure", async () => {
   const calls = installDiffDashApi()
-  calls.searchRepositories.mockRejectedValue(new Error("GitHub search is unavailable"))
+  calls.searchRepositories.mockRejectedValue(
+    bridgeTransportError(
+      transportError(
+        "HOSTED_SEARCH_UNAVAILABLE",
+        `${InvokeChannel.searchHostedRepositories} failed: GitHub search is unavailable`,
+        InvokeChannel.searchHostedRepositories,
+      ),
+    ),
+  )
   renderApp()
 
   await vi.waitFor(() => {
@@ -2332,8 +2362,12 @@ scenario("cliNumberedPullRequest", async () => {
 scenario("cliPullRequestFailure", async () => {
   const calls = installDiffDashApi()
   calls.openProject.mockRejectedValueOnce(
-    new Error(
-      `repositories:install failed: (FiberFailure) RepositoryLinkError: { "operation": "detectRepository", "reason": "Select a Git repository with a GitHub origin.", "cause": {} } at internal stack`,
+    bridgeTransportError(
+      transportError(
+        "RepositoryLinkError",
+        `${InvokeChannel.openProject} failed: Select a Git repository with a GitHub origin.`,
+        InvokeChannel.openProject,
+      ),
     ),
   )
   renderApp()
@@ -2371,8 +2405,12 @@ scenario("cliBranchComparison", async () => {
 scenario("cliBranchNoAncestor", async () => {
   const calls = installDiffDashApi()
   calls.resolveBranch.mockRejectedValueOnce(
-    new Error(
-      `localReviews:resolveBranch failed: LocalReviewTargetError: { "operation": "branch.mergeBase", "reason": "Branch dev does not share a common ancestor with the current HEAD", "cause": {} }`,
+    bridgeTransportError(
+      transportError(
+        "LocalReviewTargetError",
+        `${InvokeChannel.resolveLocalBranch} failed: Branch dev does not share a common ancestor with the current HEAD`,
+        InvokeChannel.resolveLocalBranch,
+      ),
     ),
   )
   renderApp()
@@ -6363,17 +6401,20 @@ const installDiffDashApi = (
       pathSetupCommand: options.cliInstallResult?.pathSetupCommand ?? null,
     })),
     installRepository: vi.fn<(localPath: string) => Promise<Repo>>(async (localPath) =>
-      Repo.make({ ...repo, localPath }),
+      Repo.make({ ...repo, localPath: repositoryLocalPath(localPath) }),
     ),
     linkRepository: vi.fn<DiffDashApi["repositories"]["link"]>(async (input) =>
-      Repo.make({ ...repo, localPath: input.localPath }),
+      Repo.make({ ...repo, localPath: repositoryLocalPath(input.localPath) }),
     ),
     selectLocalFolder: vi.fn<() => Promise<string | null>>(
       async () => options.selectLocalFolder ?? null,
     ),
     openProject: vi.fn<DiffDashApi["repositories"]["openProject"]>(
       options.openProject ??
-        (async (localPath) => ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) })),
+        (async (localPath) =>
+          ProjectOpened.make({
+            repo: Repo.make({ ...repo, localPath: repositoryLocalPath(localPath) }),
+          })),
     ),
     repairRepositoryIdentities: vi.fn<DiffDashApi["repositories"]["repairIdentities"]>(async () =>
       RepositoryIdentityRepairSummary.make({

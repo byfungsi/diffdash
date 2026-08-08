@@ -1,13 +1,14 @@
-import { CoreMethod, type CoreFileOpenIntent } from "@diffdash/core"
+import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { transportError } from "@diffdash/protocol/transport-error"
 import { app, BrowserWindow, shell } from "electron"
 import { isAbsolute } from "node:path"
 import type { ApplicationRuntime } from "../../application-runtime"
-import { normalizeReviewFilePath, resolveContainedRepositoryPath } from "../../electron-policy"
+import { normalizeReviewFilePath } from "../../electron-policy"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { openLocalPath } from "../../file-opening"
+import { openCoreFileIntent } from "../core-file-open-intent"
 import { isHiddenE2EWindow, revealAppWindow } from "../../window-activation"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -21,14 +22,11 @@ export const defineNavigationHandlers = (
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
-  const openIntent = async (intent: CoreFileOpenIntent): Promise<void> => {
-    if ("url" in intent) {
-      await rendererSecurityPolicy.openExternalUrl(intent.url)
-      return
-    }
-    const targetPath = resolveContainedRepositoryPath(intent.rootPath, intent.filePath)
-    await openLocalPath((path) => shell.openPath(path), targetPath)
-  }
+  const openIntent = (intent: Parameters<typeof openCoreFileIntent>[0]): Promise<void> =>
+    openCoreFileIntent(intent, {
+      openExternal: (url) => rendererSecurityPolicy.openExternalUrl(url),
+      openLocal: (targetPath) => openLocalPath((path) => shell.openPath(path), targetPath),
+    })
 
   handlers.define(InvokeChannel.appActivateWindow, async (event): Promise<void> => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender)

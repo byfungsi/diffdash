@@ -11,9 +11,7 @@ export const startUpdaterLifecycle = (updater: DesktopUpdater): void => {
     Effect.gen(function* () {
       yield* updater.subscribe((state) => {
         for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            sendProtocolEvent(window.webContents, EventChannel.updateStateChanged, state)
-          }
+          sendProtocolEvent(window.webContents, EventChannel.updateStateChanged, state)
         }
       })
       yield* updater.startAutomaticChecks()

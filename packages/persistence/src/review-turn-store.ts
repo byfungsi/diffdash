@@ -24,6 +24,7 @@ import {
   ReviewAgentUsage as ReviewAgentUsageSchema,
 } from "@diffdash/domain/review-agent"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { RepositoryLocalPath } from "@diffdash/domain/repository"
 import {
   MarkdownBody,
   ReviewAnchorStatus,
@@ -112,7 +113,7 @@ const RepositoryTargetRow = Schema.Struct({
   provider: Schema.NonEmptyString,
   owner: Schema.String,
   name: Schema.String,
-  local_path: Schema.NullOr(Schema.String),
+  local_path: RepositoryLocalPath,
 })
 
 const NextSequenceRow = Schema.Struct({
@@ -613,8 +614,9 @@ const canonicalTarget = (
     }
   }
   if (repository.local_path === null) throw targetError("A local review requires a local checkout.")
+  const localPath = repository.local_path
   const targetRoot = resolve(target.rootPath)
-  if (resolve(repository.local_path) !== targetRoot) {
+  if (resolve(localPath) !== targetRoot) {
     throw targetError("The local review thread belongs to a different repository path.")
   }
   return {

@@ -2,6 +2,7 @@ import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { InvokeChannel } from "@diffdash/protocol/channels"
+import { Match } from "effect"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicWalkthroughError } from "../walkthrough-public-error"
 import { IpcControllerRegistry } from "./controller-registry"
@@ -13,10 +14,18 @@ const generateWalkthrough = async (
 ): Promise<StoredWalkthrough> => {
   const accepted = await runtime.walkthroughs.start({ target, regenerate })
   const result = await runtime.walkthroughs.getOperation(accepted.operationId)
-  if ("walkthrough" in result) return result.walkthrough
-  if ("error" in result) throw result.error
-  if ("defect" in result) throw result.defect
-  throw new Error("Walkthrough generation was cancelled.")
+  return Match.valueTags(result, {
+    completed: ({ walkthrough }) => walkthrough,
+    failed: ({ error }) => {
+      throw error
+    },
+    defect: ({ defect }) => {
+      throw defect
+    },
+    cancelled: () => {
+      throw new Error("Walkthrough generation was cancelled.")
+    },
+  })
 }
 
 /** Defines walkthrough IPC handlers over the Core-owned operation boundary. */

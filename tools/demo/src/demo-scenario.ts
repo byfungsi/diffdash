@@ -10,7 +10,7 @@ import {
   ReviewCommit,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
-import { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import { noRepositoryLocalPath, Repo, RepositorySearchScope } from "@diffdash/domain/repository"
 import type { ParsedDiff } from "@diffdash/domain/diff"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -309,7 +309,7 @@ export const materializeDemoScenario = (
       owner: manifest.repository.owner,
       name: manifest.repository.name,
       remoteUrl: manifest.repository.remoteUrl,
-      localPath: null,
+      localPath: noRepositoryLocalPath,
       isFavorite: true,
       lastOpenedAt: manifest.pullRequest.createdAt,
       lastSyncedAt: manifest.pullRequest.createdAt,

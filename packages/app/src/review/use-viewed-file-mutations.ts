@@ -1,6 +1,6 @@
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
 import type { ReviewSelectionProjection } from "./review-selection"
 import type { ReviewSourceOperations } from "./review-source-operations"
@@ -33,6 +33,7 @@ export const useViewedFileMutations = (
   selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>,
   operations: ReviewSourceOperations,
 ): ViewedFileMutationController => {
+  const captureAnalytics = useCaptureAnalytics()
   const initialExpanded = new Set(selection.inventory.map((file) => file.reviewKey))
   const viewedRef = useRef<ReadonlySet<string>>(new Set())
   const expandedRef = useRef<ReadonlySet<string>>(initialExpanded)

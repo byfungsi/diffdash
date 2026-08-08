@@ -14,6 +14,32 @@ export const RepoProvider = Schema.String.pipe(Schema.minLength(1))
 /** Persisted provider instance ID, or the reserved legacy local-source marker. */
 export type RepoProvider = typeof RepoProvider.Type
 
+/** Absolute checkout path stored for a repository linked on this machine. */
+export const RepositoryCheckoutPath = Schema.String.pipe(
+  Schema.minLength(1),
+  Schema.filter(
+    (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\"),
+    { message: () => "Expected an absolute repository checkout path" },
+  ),
+  Schema.brand("RepositoryCheckoutPath"),
+)
+
+/** Absolute checkout path stored for a repository linked on this machine. */
+export type RepositoryCheckoutPath = typeof RepositoryCheckoutPath.Type
+
+/** Optional checkout path preserved as nullable data across persistence and renderer transports. */
+export const RepositoryLocalPath = Schema.NullOr(RepositoryCheckoutPath)
+
+/** Optional local checkout decoded from and encoded to the nullable persisted representation. */
+export type RepositoryLocalPath = typeof RepositoryLocalPath.Type
+
+/** Constructs a present repository checkout path for the transport-safe domain model. */
+export const repositoryLocalPath = (path: string): RepositoryLocalPath =>
+  RepositoryCheckoutPath.make(path)
+
+/** Represents a repository without a checkout on this machine. */
+export const noRepositoryLocalPath: RepositoryLocalPath = null
+
 /** A local or remote-only repository saved in the DiffDash workspace. */
 export class Repo extends Schema.Class<Repo>("Repo")({
   id: Schema.String,
@@ -21,7 +47,7 @@ export class Repo extends Schema.Class<Repo>("Repo")({
   owner: Schema.String,
   name: Schema.String,
   remoteUrl: Schema.String,
-  localPath: Schema.NullOr(Schema.String),
+  localPath: RepositoryLocalPath,
   isFavorite: Schema.Boolean,
   lastOpenedAt: Schema.NullOr(Schema.String),
   lastSyncedAt: Schema.NullOr(Schema.String),
@@ -52,7 +78,7 @@ export interface UpsertRepositoryInput {
   readonly owner: string
   readonly name: string
   readonly remoteUrl: string
-  readonly localPath: string | null
+  readonly localPath: RepositoryLocalPath
   readonly isFavorite?: boolean
 }
 

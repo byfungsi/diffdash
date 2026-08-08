@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 import electronUpdater, {
   type AppUpdater as ElectronNativeUpdater,
   type ProgressInfo,
@@ -77,6 +77,19 @@ export interface DesktopUpdater {
   readonly dispose: () => Effect.Effect<void>
 }
 
+type AppUpdaterEvent =
+  | { readonly _tag: "checking" }
+  | { readonly _tag: "available"; readonly version: string }
+  | { readonly _tag: "notAvailable" }
+  | { readonly _tag: "progress"; readonly percent: number }
+  | { readonly _tag: "downloaded"; readonly version: string }
+  | { readonly _tag: "error"; readonly message: string }
+
+type AppUpdaterCommand = { readonly _tag: "download" } | { readonly _tag: "quitAndInstall" }
+
+const rejectDownload = () => Promise.reject(new Error("No update is available to download."))
+const rejectInstall = () => Promise.reject(new Error("No downloaded update is ready."))
+
 /** Creates the production adapter around electron-updater. */
 export const nativeUpdaterAdapter = (): NativeUpdaterAdapter => {
   let updater: ElectronNativeUpdater | null = null
@@ -133,7 +146,6 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
           reason: eligibility.reason,
         })
       : AppUpdateIdle.make({ currentVersion: options.currentVersion })
-  let availableVersion: string | null = null
   let initialTimer: NodeJS.Timeout | null = null
   let intervalTimer: NodeJS.Timeout | null = null
   const listeners = new Set<(state: AppUpdateState) => void>()
@@ -149,52 +161,68 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
     publish(AppUpdateFailed.make({ currentVersion: options.currentVersion, message }))
     return AppUpdaterError.make({ operation, message, cause })
   }
+  const publishProgress = (version: string, percent: number) => {
+    publish(
+      AppUpdateDownloading.make({
+        currentVersion: options.currentVersion,
+        percent: Math.min(100, Math.max(0, percent)),
+        version,
+      }),
+    )
+  }
+  const transition = (event: AppUpdaterEvent): void =>
+    Match.valueTags(event, {
+      checking: () => {
+        publish(AppUpdateChecking.make({ currentVersion: options.currentVersion }))
+      },
+      available: ({ version }) => {
+        publish(AppUpdateAvailable.make({ currentVersion: options.currentVersion, version }))
+      },
+      notAvailable: () => {
+        publish(AppUpdateIdle.make({ currentVersion: options.currentVersion }))
+      },
+      progress: ({ percent }) =>
+        Match.valueTags(state, {
+          unsupported: () => undefined,
+          idle: () => undefined,
+          checking: () => undefined,
+          available: ({ version }) => {
+            publishProgress(version, percent)
+          },
+          downloading: ({ version }) => {
+            publishProgress(version, percent)
+          },
+          downloaded: () => undefined,
+          error: () => undefined,
+        }),
+      downloaded: ({ version }) => {
+        publish(AppUpdateDownloaded.make({ currentVersion: options.currentVersion, version }))
+      },
+      error: ({ message }) => {
+        publish(AppUpdateFailed.make({ currentVersion: options.currentVersion, message }))
+      },
+    })
 
   if ("feedUrl" in eligibility) {
     options.adapter.configure(eligibility.feedUrl)
     subscriptions.push(
       options.adapter.onChecking(() => {
-        publish(AppUpdateChecking.make({ currentVersion: options.currentVersion }))
+        transition({ _tag: "checking" })
       }),
       options.adapter.onAvailable((info) => {
-        availableVersion = info.version
-        publish(
-          AppUpdateAvailable.make({
-            currentVersion: options.currentVersion,
-            version: info.version,
-          }),
-        )
+        transition({ _tag: "available", version: info.version })
       }),
       options.adapter.onNotAvailable(() => {
-        availableVersion = null
-        publish(AppUpdateIdle.make({ currentVersion: options.currentVersion }))
+        transition({ _tag: "notAvailable" })
       }),
       options.adapter.onProgress((info) => {
-        if (availableVersion === null) return
-        publish(
-          AppUpdateDownloading.make({
-            currentVersion: options.currentVersion,
-            percent: Math.min(100, Math.max(0, info.percent)),
-            version: availableVersion,
-          }),
-        )
+        transition({ _tag: "progress", percent: info.percent })
       }),
       options.adapter.onDownloaded((info) => {
-        availableVersion = info.version
-        publish(
-          AppUpdateDownloaded.make({
-            currentVersion: options.currentVersion,
-            version: info.version,
-          }),
-        )
+        transition({ _tag: "downloaded", version: info.version })
       }),
       options.adapter.onError((error) => {
-        publish(
-          AppUpdateFailed.make({
-            currentVersion: options.currentVersion,
-            message: error.message,
-          }),
-        )
+        transition({ _tag: "error", message: error.message })
       }),
     )
   }
@@ -206,29 +234,48 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
     },
     catch: (cause) => fail("check", cause),
   })
-  const download = Effect.tryPromise({
-    try: async () => {
-      if ("reason" in eligibility || availableVersion === null) {
-        throw new Error("No update is available to download.")
-      }
-      publish(
-        AppUpdateDownloading.make({
-          currentVersion: options.currentVersion,
-          percent: 0,
-          version: availableVersion,
+  const executeCommand = (command: AppUpdaterCommand): Promise<void> =>
+    Match.valueTags(command, {
+      download: () =>
+        Match.valueTags(state, {
+          unsupported: rejectDownload,
+          idle: rejectDownload,
+          checking: rejectDownload,
+          available: async ({ version }) => {
+            publishProgress(version, 0)
+            await options.adapter.download()
+          },
+          downloading: rejectDownload,
+          downloaded: rejectDownload,
+          error: rejectDownload,
         }),
-      )
-      await options.adapter.download()
-    },
-    catch: (cause) => fail("download", cause),
-  })
-  const quitAndInstall = Effect.try({
-    try: () => {
-      if (state["_tag"] !== "downloaded") throw new Error("No downloaded update is ready.")
-      options.adapter.quitAndInstall()
-    },
-    catch: (cause) => fail("quitAndInstall", cause),
-  })
+      quitAndInstall: () =>
+        Match.valueTags(state, {
+          unsupported: rejectInstall,
+          idle: rejectInstall,
+          checking: rejectInstall,
+          available: rejectInstall,
+          downloading: rejectInstall,
+          downloaded: async () => {
+            options.adapter.quitAndInstall()
+          },
+          error: rejectInstall,
+        }),
+    })
+  const runCommand = (command: AppUpdaterCommand) =>
+    Effect.tryPromise({
+      try: () => executeCommand(command),
+      catch: (cause) =>
+        fail(
+          Match.valueTags(command, {
+            download: () => "download",
+            quitAndInstall: () => "quitAndInstall",
+          }),
+          cause,
+        ),
+    })
+  const download = runCommand({ _tag: "download" })
+  const quitAndInstall = runCommand({ _tag: "quitAndInstall" })
   const startAutomaticChecks = Effect.sync(() => {
     if ("reason" in eligibility || initialTimer !== null || intervalTimer !== null) return
     const runCheck = () => void Effect.runPromise(check).catch(() => undefined)

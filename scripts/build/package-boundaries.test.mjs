@@ -165,6 +165,31 @@ test("Electron IPC controllers do not access repository persistence directly", (
   }
 })
 
+test("renderer features access the preload bridge only through PreloadClient", () => {
+  const appSourceDirectory = resolve(root, "packages/app/src")
+  const allowedBridgeOwner = resolve(appSourceDirectory, "platform/preload-client.ts")
+  const directBridgePattern = /\bwindow(?:\.diffDash|\[["']diffDash["']\])/u
+
+  for (const file of sourceFiles(appSourceDirectory)) {
+    if (resolve(file) === allowedBridgeOwner) continue
+    if (/\.test\.[cm]?[jt]sx?$/.test(file)) continue
+    if (
+      relative(appSourceDirectory, file).startsWith(
+        `test${process.platform === "win32" ? "\\" : "/"}`,
+      )
+    ) {
+      continue
+    }
+    assert.doesNotMatch(
+      readFileSync(file, "utf8"),
+      directBridgePattern,
+      `${relative(appSourceDirectory, file)} bypasses renderer capability services`,
+    )
+  }
+
+  assert.match(readFileSync(allowedBridgeOwner, "utf8"), directBridgePattern)
+})
+
 test("agent providers remain isolated leaf integrations", () => {
   const sdk = manifests.find(({ manifest }) => manifest.name === "@diffdash/agent-provider")
   assert.ok(sdk, "@diffdash/agent-provider must exist")
@@ -406,8 +431,29 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
 
   const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
   assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
-  assert.match(stableCoreEntry, /interface CoreOperationFailureMap/)
-  assert.match(stableCoreEntry, /CoreResult<\s*CoreOperationOutput<Method>/)
+  assert.match(stableCoreEntry, /export \* from ["']\.\/core-contract["']/)
+
+  const coreContract = readFileSync(join(coreDirectory, "src/core-contract.ts"), "utf8")
+  assert.match(coreContract, /interface CoreOperationFailureMap/)
+  assert.match(coreContract, /CoreResult<\s*CoreOperationOutput<Method>/)
+
+  for (const sourceFile of coreSourceFiles.filter(
+    (candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate),
+  )) {
+    const source = readFileSync(sourceFile, "utf8")
+    if (sourceFile !== resolve(coreDirectory, "src/core.ts")) {
+      assert.doesNotMatch(
+        source,
+        /from ["']\.\.?\/core["']/,
+        `${relative(coreDirectory, sourceFile)} imports the public Core entrypoint internally`,
+      )
+    }
+    assert.doesNotMatch(
+      source,
+      /["']@diffdash\/protocol\/transport-error["']/,
+      `${relative(coreDirectory, sourceFile)} creates transport-owned failures inside Core`,
+    )
+  }
 
   const coreOperationService = readFileSync(
     join(coreDirectory, "src/core-operation-service.ts"),

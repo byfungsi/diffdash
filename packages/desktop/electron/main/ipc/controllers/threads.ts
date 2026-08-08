@@ -28,7 +28,6 @@ export const defineThreadHandlers = (
     async (event, request) =>
       runtime.execute(CoreMethod.runReviewThreadAgent, request, {
         onReviewThreadAgentProgress: (stage) => {
-          if (event.sender.isDestroyed()) return
           sendProtocolEvent(
             event.sender,
             EventChannel.reviewThreadAgentProgress,

@@ -29,7 +29,7 @@ import * as NodePath from "@effect/platform-node/NodePath"
 import { Effect, Layer } from "effect"
 import type { CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
-import { CoreStartupError, type CoreStartupFailure } from "./core-startup-error"
+import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
 import {
   createAgentProviderComposition,
   createGitProviderComposition,
@@ -37,7 +37,7 @@ import {
 import { AgentProviders } from "./services/agent-providers"
 import { Analytics } from "./services/analytics"
 import { GitProvider } from "./services/git-provider"
-import { Prerequisites } from "./services/prerequisites"
+import { createCorePrerequisitesLayer } from "./services/core-prerequisites"
 import { RepositoryComparisonSource } from "./services/repository-comparison-source"
 import { RepositoryLinker } from "./services/repository-linker"
 import { ReviewContextService } from "./services/review-context"
@@ -75,7 +75,7 @@ export const createCoreLayer = (
       const processes = yield* ProcessService
       const registrations = createGitProviderComposition(
         processes,
-        configuration.fixtures.gitProvider,
+        configuration.fixtures.gitProviderOption,
       )
       const registry = yield* Effect.provide(
         GitProviderRegistry,
@@ -91,8 +91,7 @@ export const createCoreLayer = (
     architecture: configuration.application.architecture,
     packaged: configuration.application.packaged,
     platform: configuration.application.platform,
-    posthogHost: configuration.analytics.host,
-    posthogKey: configuration.analytics.projectKey,
+    analytics: configuration.analytics,
     settingsPath,
   }).pipe(Layer.provideMerge(settingsLayer))
   const agentProviderRegistryLayer = Layer.effect(
@@ -104,8 +103,7 @@ export const createCoreLayer = (
         processes,
         tempResources,
         tempDirectory: agentWorkingDirectory,
-        includeFixture: configuration.fixtures.agentProviderEnabled,
-        fixtureWalkthroughNeverCompletes: configuration.fixtures.agentProviderNeverCompletes,
+        fixture: configuration.fixtures.agentProvider,
       })
       return yield* AgentProviderRegistry.pipe(
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
@@ -202,14 +200,10 @@ export const createCoreLayer = (
     Layer.provideMerge(reviewContextLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
-  const prerequisitesLayer = Prerequisites.layer({
-    appImagePath: configuration.paths.appImage,
-    diffDashCliPath: configuration.paths.diffDashCli,
-    executableSearchPath: configuration.environment.executableSearchPath,
-    executablePathExtensions: configuration.environment.executablePathExtensions,
-    homeDirectory: configuration.environment.homeDirectory,
-    platform: configuration.application.platform,
-  }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
+  const prerequisitesLayer = createCorePrerequisitesLayer(configuration).pipe(
+    Layer.provideMerge(gitProviderLayer),
+    Layer.provideMerge(agentProvidersLayer),
+  )
 
   const businessServicesLayer = Layer.mergeAll(
     temporaryDirectoryLayer,
@@ -230,5 +224,8 @@ export const createCoreLayer = (
     threadAnchorMapperLayer,
   ).pipe(Layer.provide(DatabaseService.layer(databasePath)), Layer.provide(processLayer))
 
-  return coreOperationLayer.pipe(Layer.provide(businessServicesLayer))
+  return coreOperationLayer.pipe(
+    Layer.provide(businessServicesLayer),
+    Layer.mapError(toCoreStartupError),
+  )
 }

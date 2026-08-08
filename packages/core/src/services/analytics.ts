@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Match, Schema } from "effect"
 import { PostHog } from "posthog-node"
 
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { AppSettings } from "@diffdash/settings/app-settings"
+import type { CoreAnalyticsState } from "../analytics-state"
 
 const AnalyticsState = Schema.Struct({
   distinctId: Schema.String,
@@ -41,8 +42,7 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
     readonly architecture: string
     readonly packaged: boolean
     readonly platform: string
-    readonly posthogHost: string | null
-    readonly posthogKey: string | null
+    readonly analytics: CoreAnalyticsState
     readonly settingsPath: string
     readonly clientFactory?: (key: string, host: string) => AnalyticsClient
   }): Layer.Layer<Analytics, never, AppSettings> {
@@ -53,10 +53,13 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
         const statePath = join(dirname(options.settingsPath), "analytics.json")
         let state = readAnalyticsState(statePath)
         let started = false
-        const client =
-          !options.packaged || options.posthogKey === null || options.posthogHost === null
-            ? null
-            : (options.clientFactory ?? makePostHogClient)(options.posthogKey, options.posthogHost)
+        const client = !options.packaged
+          ? null
+          : Match.valueTags(options.analytics, {
+              disabled: () => null,
+              enabled: ({ projectKey, host }) =>
+                (options.clientFactory ?? makePostHogClient)(projectKey, host),
+            })
 
         if (client !== null) {
           yield* Effect.addFinalizer(() => ignorePromise(() => client.flush()))

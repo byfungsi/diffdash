@@ -2,7 +2,7 @@ import { makeHostedRepositoryLocator, makeHostedReviewLocator } from "@diffdash/
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import { Repo } from "@diffdash/domain/repository"
+import { Repo, repositoryLocalPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
   RepositoryComparisonRef,
@@ -25,7 +25,7 @@ const repo = Repo.make({
   owner: "fungsi",
   name: "diffdash",
   remoteUrl: "https://github.com/fungsi/diffdash",
-  localPath: "/workspace/diffdash",
+  localPath: repositoryLocalPath("/workspace/diffdash"),
   isFavorite: true,
   lastOpenedAt: "2026-08-02T00:00:00.000Z",
   lastSyncedAt: null,

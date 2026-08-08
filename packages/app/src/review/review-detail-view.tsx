@@ -51,6 +51,11 @@ import { DropdownMenu } from "radix-ui"
 import type { ReactNode } from "react"
 import { useContext, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react"
 import {
+  runRendererPromise,
+  useDesktopRuntime,
+  useReviewContent,
+} from "@/platform/renderer-runtime"
+import {
   agentProviderOptions,
   agentUnavailableReason,
   aiProviderLabel,
@@ -61,7 +66,7 @@ import {
   selectedModelForProvider,
 } from "@/settings/agent-selection"
 import type { ColorScheme } from "@/settings/theme"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -321,6 +326,9 @@ export const ReviewDetailView = ({
   readonly reviewsContext: ReactNode
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
 }) => {
+  const captureAnalytics = useCaptureAnalytics()
+  const desktop = useDesktopRuntime()
+  const reviewContentService = useReviewContent()
   const {
     aiAgentAvailable,
     aiSettings,
@@ -434,7 +442,7 @@ export const ReviewDetailView = ({
   reviewSearchController.updateRuntime({
     navigator: reviewNavigator,
     onSnapshotExpired: onReload,
-    search: (request) => window.diffDash.reviewSnapshots.search(request),
+    search: (request) => runRendererPromise(reviewContentService.snapshots.search(request)),
   })
 
   useEffect(() => {
@@ -920,7 +928,7 @@ export const ReviewDetailView = ({
     threads: reviewThreads.details,
     requestReconciliation: requestReviewDiffReconciliation,
     prepareFile: prepareNavigationFile,
-    activateWindow: () => window.diffDash.navigation.activateWindow(),
+    activateWindow: () => runRendererPromise(desktop.navigation.activateWindow()),
   })
   const navigationDisposeTimerRef = useRef<number | null>(null)
   useEffect(() => {

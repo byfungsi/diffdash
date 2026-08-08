@@ -8,6 +8,7 @@ import { join } from "node:path"
 
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
+import { CoreAnalyticsEnabled, CoreWebUrl } from "../analytics-state"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { FileStorage } from "@diffdash/settings/file-storage"
 
@@ -34,8 +35,10 @@ const makeLayer = (directory: string, events: CapturedEvent[]) => {
     architecture: "arm64",
     packaged: true,
     platform: "darwin",
-    posthogHost: "https://us.i.posthog.com",
-    posthogKey: "phc_test",
+    analytics: CoreAnalyticsEnabled.make({
+      host: CoreWebUrl.make("https://us.i.posthog.com"),
+      projectKey: "phc_test",
+    }),
     settingsPath,
     clientFactory: () => ({
       capture: (event) => events.push(event),

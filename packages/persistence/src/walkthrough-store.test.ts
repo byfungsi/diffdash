@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Either, Layer, Option } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,6 +11,7 @@ import {
   WalkthroughSupportItem,
   WALKTHROUGH_PROMPT_VERSION,
 } from "@diffdash/domain/walkthrough"
+import { noRepositoryLocalPath } from "@diffdash/domain/repository"
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
 import { WalkthroughStore, WalkthroughStoreError } from "./walkthrough-store"
@@ -63,6 +64,28 @@ const cacheKey = {
 }
 
 describe("WalkthroughStore", () => {
+  it.scoped("returns a cache miss for an empty database", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const repositoryStore = yield* RepositoryStore
+        const walkthroughStore = yield* WalkthroughStore
+        const repo = yield* repositoryStore.upsertRepository({
+          localPath: noRepositoryLocalPath,
+          name: "diffdash",
+          owner: "fungsi",
+          provider: "github",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+        })
+
+        const cached = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
+
+        expect(cached).toEqual(Option.none())
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.scoped("FUN-47 AC: saves and reads a walkthrough for the same cache key", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
@@ -71,7 +94,7 @@ describe("WalkthroughStore", () => {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -91,7 +114,9 @@ describe("WalkthroughStore", () => {
         expect(saved.prNumber).toBe(51)
         expect(saved.baseSha).toBe(cacheKey.baseSha)
         expect(saved.reviewKey).toBe(cacheKey.reviewKey)
-        expect(cached?.walkthrough.summary).toBe("Review the entry point first.")
+        expect(Option.map(cached, (stored) => stored.walkthrough.summary)).toEqual(
+          Option.some("Review the entry point first."),
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -104,7 +129,7 @@ describe("WalkthroughStore", () => {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -126,7 +151,9 @@ describe("WalkthroughStore", () => {
 
         const cached = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
 
-        expect(cached?.walkthrough.summary).toBe("Regenerated order.")
+        expect(Option.map(cached, (stored) => stored.walkthrough.summary)).toEqual(
+          Option.some("Regenerated order."),
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -139,7 +166,7 @@ describe("WalkthroughStore", () => {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -155,7 +182,9 @@ describe("WalkthroughStore", () => {
         })
         const cached = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
 
-        expect(cached?.walkthrough.summary).toBe("Legacy head-only order.")
+        expect(Option.map(cached, (stored) => stored.walkthrough.summary)).toEqual(
+          Option.some("Legacy head-only order."),
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -170,14 +199,14 @@ describe("WalkthroughStore", () => {
           const repositoryStore = yield* RepositoryStore
           const walkthroughStore = yield* WalkthroughStore
           const repo = yield* repositoryStore.upsertRepository({
-            localPath: null,
+            localPath: noRepositoryLocalPath,
             name: "diffdash",
             owner: "fungsi",
             provider: "github",
             remoteUrl: "https://github.com/fungsi/diffdash",
           })
           const otherRepo = yield* repositoryStore.upsertRepository({
-            localPath: null,
+            localPath: noRepositoryLocalPath,
             name: "other",
             owner: "fungsi",
             provider: "github",
@@ -217,12 +246,14 @@ describe("WalkthroughStore", () => {
             repoId: otherRepo.id,
           })
 
-          expect(matching?.walkthrough.summary).toBe("Head A order.")
-          expect(differentHead).toBeNull()
-          expect(differentBase).toBeNull()
-          expect(differentPrompt).toBeNull()
-          expect(differentReview).toBeNull()
-          expect(differentRepository).toBeNull()
+          expect(Option.map(matching, (stored) => stored.walkthrough.summary)).toEqual(
+            Option.some("Head A order."),
+          )
+          expect(differentHead).toEqual(Option.none())
+          expect(differentBase).toEqual(Option.none())
+          expect(differentPrompt).toEqual(Option.none())
+          expect(differentReview).toEqual(Option.none())
+          expect(differentRepository).toEqual(Option.none())
         }).pipe(Effect.provide(makeLayer(databasePath)))
       }),
   )
@@ -236,7 +267,7 @@ describe("WalkthroughStore", () => {
         const walkthroughStore = yield* WalkthroughStore
         const database = yield* DatabaseService
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "corrupt-walkthrough",
           owner: "fungsi",
           provider: "github",

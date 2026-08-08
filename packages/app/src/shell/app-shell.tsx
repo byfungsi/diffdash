@@ -9,7 +9,7 @@ import {
   type HostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
-import { LocalReviewTarget, workingTreeReviewTarget } from "@diffdash/domain/local-review"
+import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import {
   type ProjectRemoteSelectionRequired,
   type ProjectWorkspaceRibbon,
@@ -27,11 +27,19 @@ import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import { Result, useAtomRefresh, useAtomSet, useAtomValue } from "@effect-atom/atom-react"
-import { Schema } from "effect"
-import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
+import { Option } from "effect"
+import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { HomeScreen } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
+import {
+  useDesktopRuntime,
+  useProjectWorkspace,
+  useRendererPreferences,
+  useRendererStream,
+  useRepositories,
+  runRendererPromise,
+} from "@/platform/renderer-runtime"
 import {
   providersAtom,
   remoteRepositorySearchAtom,
@@ -78,7 +86,7 @@ import {
   THEME_DEFINITIONS,
 } from "@/settings/theme"
 import { useSettingsMutation } from "@/settings/use-settings-mutation"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -108,6 +116,11 @@ const MOUSE_BUTTON_BACK = 3
 
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
+  const captureAnalytics = useCaptureAnalytics()
+  const desktop = useDesktopRuntime()
+  const preferences = useRendererPreferences()
+  const projectWorkspace = useProjectWorkspace()
+  const repositories = useRepositories()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
@@ -118,7 +131,6 @@ export function AppShell() {
   const [reviewSidebarExpanded, setReviewSidebarExpanded] = useState(true)
   const [reviewQuickNavigationRequest, setReviewQuickNavigationRequest] = useState(0)
   const [contextActionsHost, setContextActionsHost] = useState<HTMLDivElement | null>(null)
-  const commandDrainRef = useRef<Promise<void>>(Promise.resolve())
   const workspaceSaveRef = useRef<Promise<void>>(Promise.resolve())
   const projectRestoreRequestRef = useRef(0)
   const handledMouseNavigationButtonRef = useRef<number | null>(null)
@@ -144,24 +156,7 @@ export function AppShell() {
   const deferredSearchQuery = useDeferredValue(query.trim())
   const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
 
-  useEffect(() => {
-    let cancelled = false
-    const unsubscribe = window.diffDash.updates.onStateChanged((state) => {
-      if (!cancelled) setUpdateState(state)
-    })
-    void window.diffDash.updates
-      .getState()
-      .then((state) => {
-        if (!cancelled) setUpdateState(state)
-        return undefined
-      })
-      .catch(() => undefined)
-
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [])
+  useRendererStream(desktop.updates.states, setUpdateState)
 
   useEffect(() => {
     const trimmedQuery = query.trim()
@@ -347,8 +342,7 @@ export function AppShell() {
 
   useEffect(() => {
     let cancelled = false
-    window.diffDash.appState
-      .get()
+    runRendererPromise(preferences.loadAppState())
       .then((state) => {
         if (!cancelled) setAppState(state)
         return undefined
@@ -362,12 +356,12 @@ export function AppShell() {
     return () => {
       cancelled = true
     }
-  }, [appStateLoadAttempt])
+  }, [appStateLoadAttempt, preferences])
 
   useEffect(() => {
     if (appState?.onboardingCompleted !== true) return
-    void window.diffDash.analytics.start().catch(() => undefined)
-  }, [appState?.onboardingCompleted])
+    void runRendererPromise(desktop.analytics.start()).catch(() => undefined)
+  }, [appState?.onboardingCompleted, desktop])
 
   useEffect(() => {
     const applyTheme = () => {
@@ -471,7 +465,7 @@ export function AppShell() {
     workspaceSaveRef.current = enqueueProjectWorkspaceSave(
       workspaceSaveRef.current,
       input,
-      window.diffDash.projectWorkspace.save,
+      (nextInput) => runRendererPromise(preferences.saveWorkspace(nextInput)),
       (error) => {
         setWorkspaceNotice(formatError(error, "Could not save project workspace"))
       },
@@ -504,7 +498,9 @@ export function AppShell() {
     showProject(repo, "reviews", null, null, false)
     setActionStatus(`Restoring ${repo.owner}/${repo.name}...`)
     try {
-      const persisted = await window.diffDash.projectWorkspace.get(projectIdForRepo(repo))
+      const persisted = Option.getOrNull(
+        await runRendererPromise(preferences.loadWorkspace(projectIdForRepo(repo))),
+      )
       if (projectRestoreRequestRef.current !== request) return
       const restored = resolveProjectWorkspaceState(repo, persisted)
       showProject(
@@ -558,8 +554,9 @@ export function AppShell() {
     }
     if (intent.kind === "branchDiff") {
       if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
-      const target = Schema.decodeUnknownSync(LocalReviewTarget)(
-        await window.diffDash.localReviews.resolveBranch(repo.localPath, intent.branchName),
+      const localPath = repo.localPath
+      const target = await runRendererPromise(
+        projectWorkspace.resolveLocalReview(localPath, Option.fromNullable(intent.branchName)),
       )
       showProject(repo, "files", { kind: "localDiff", target }, null, true)
       captureAnalytics({ event: "review_opened", reviewType: "local_diff" })
@@ -587,7 +584,9 @@ export function AppShell() {
   ) => {
     setActionStatus("Opening project...")
     try {
-      const result = await window.diffDash.repositories.openProject(localPath, selectedRepository)
+      const result = await runRendererPromise(
+        repositories.openProject(localPath, Option.fromNullable(selectedRepository)),
+      )
       if (result._tag === "remoteSelectionRequired") {
         setPendingRemoteSelection({ intent, selection: result })
         return
@@ -610,8 +609,8 @@ export function AppShell() {
 
   const chooseProjectFolder = async () => {
     setCliNavigationError(null)
-    const localPath = await window.diffDash.repositories.selectLocalFolder()
-    if (localPath !== null) await openProjectPath(localPath, { kind: "reviews" })
+    const localPath = await runRendererPromise(repositories.selectLocalFolder())
+    if (Option.isSome(localPath)) await openProjectPath(localPath.value, { kind: "reviews" })
   }
 
   const pinRemote = async (repo: HostedRepository) => {
@@ -657,7 +656,7 @@ export function AppShell() {
     setIsRepairingIdentities(true)
     setActionStatus("Repairing project identities...")
     try {
-      const result = await window.diffDash.repositories.repairIdentities()
+      const result = await runRendererPromise(repositories.repairIdentities())
       refreshRepositories()
       setActionStatus(
         `Repaired ${result.resolvedCount + result.localAliasCount} project identities; ${result.unresolvedCount} will retry when providers are available.`,
@@ -718,15 +717,19 @@ export function AppShell() {
     if (command["_tag"] === "openRepositoryComparison") {
       setActionStatus("Resolving repository comparison...")
       try {
-        const comparison = await window.diffDash.repositoryComparisons.resolve(command)
+        const comparison = await runRendererPromise(
+          projectWorkspace.resolveRepositoryComparison(command),
+        )
         const selection = { kind: "repositoryComparison", target: comparison.target } as const
         showProject(comparison.repo, "files", selection, null, false)
-        await window.diffDash.projectWorkspace.save(
-          ProjectWorkspaceStateInput.make({
-            projectId: projectIdForRepo(comparison.repo),
-            activeRibbon: "files",
-            selectedReviewTarget: selectedReviewTargetForPersistence(selection),
-          }),
+        await runRendererPromise(
+          preferences.saveWorkspace(
+            ProjectWorkspaceStateInput.make({
+              projectId: projectIdForRepo(comparison.repo),
+              activeRibbon: "files",
+              selectedReviewTarget: selectedReviewTargetForPersistence(selection),
+            }),
+          ),
         )
         captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
       } catch (error) {
@@ -743,12 +746,11 @@ export function AppShell() {
         : { kind: "pullRequest", number: command.number },
     )
   }
-  const handleCliNavigationCommandEvent = useEffectEvent(handleCliNavigationCommand)
-
   const linkSelectedReviewRepository = async () => {
     if (selectedReview?.kind !== "hosted") return false
-    const localPath = await window.diffDash.repositories.selectLocalFolder()
-    if (localPath === null) return false
+    const localPathOption = await runRendererPromise(repositories.selectLocalFolder())
+    if (Option.isNone(localPathOption)) return false
+    const localPath = localPathOption.value
 
     const linked = await repositoryMutations.link({
       repository: selectedReview.review.repository,
@@ -766,29 +768,7 @@ export function AppShell() {
     return true
   }
 
-  useEffect(() => {
-    const drainCommands = () => {
-      commandDrainRef.current = commandDrainRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          const commands = await window.diffDash.navigation.drainCommands()
-          await commands.reduce<Promise<void>>(
-            (previous, command) => previous.then(() => handleCliNavigationCommandEvent(command)),
-            Promise.resolve(),
-          )
-          return undefined
-        })
-      return commandDrainRef.current
-    }
-    const unsubscribe = window.diffDash.navigation.onCommandsAvailable(() => {
-      void drainCommands().catch(() => undefined)
-    })
-    void drainCommands().catch(() => undefined)
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
+  useRendererStream(desktop.navigation.commands, handleCliNavigationCommand)
 
   const updateAISettings = (settings: AISettings) => {
     void settingsMutation.update(settings).catch(() => undefined)
@@ -830,7 +810,7 @@ export function AppShell() {
   }
 
   const openSetupDocs = (url: string) => {
-    void window.diffDash.openExternalUrl(url).catch((error) => {
+    void runRendererPromise(desktop.openExternalUrl(url)).catch((error) => {
       setSetupActionStatus(formatError(error, "Could not open setup documentation"))
     })
   }
@@ -838,7 +818,7 @@ export function AppShell() {
   const installDiffDashCli = async () => {
     setSetupActionStatus("Installing the DiffDash CLI...")
     try {
-      const result = await window.diffDash.installDiffDashCli()
+      const result = await runRendererPromise(desktop.installCli())
       setSetupActionStatus(
         result.pathSetupCommand === null
           ? `Installed the DiffDash CLI at ${result.path}`
@@ -859,11 +839,11 @@ export function AppShell() {
           telemetryEnabled,
         }),
       )
-      const savedState = await window.diffDash.appState.update(nextState)
+      const savedState = await runRendererPromise(preferences.saveAppState(nextState))
       setAppState(savedState)
       if (telemetryEnabled) {
-        await window.diffDash.analytics.start()
-        await window.diffDash.analytics.capture({ event: "onboarding_completed" })
+        await runRendererPromise(desktop.analytics.start())
+        await runRendererPromise(desktop.analytics.capture({ event: "onboarding_completed" }))
       }
     } catch (error) {
       setSetupActionStatus(formatError(error, "Could not save onboarding state"))
@@ -907,14 +887,14 @@ export function AppShell() {
         {updateState === null ? null : (
           <UpdateBanner
             state={updateState}
-            onCheck={() => void window.diffDash.updates.check().catch(() => undefined)}
+            onCheck={() => void runRendererPromise(desktop.updates.check()).catch(() => undefined)}
             onDownload={() => {
               captureAnalytics({ event: "update_download_started" })
-              void window.diffDash.updates.download().catch(() => undefined)
+              void runRendererPromise(desktop.updates.download()).catch(() => undefined)
             }}
             onRestart={() => {
               captureAnalytics({ event: "update_install_started" })
-              void window.diffDash.updates.restartAndInstall().catch(() => undefined)
+              void runRendererPromise(desktop.updates.restartAndInstall()).catch(() => undefined)
             }}
           />
         )}

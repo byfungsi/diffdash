@@ -1,7 +1,5 @@
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
-import { app } from "electron"
 import type { DesktopUpdater } from "../../../../src/main/services/app-updater"
-import { disposeApplicationResources } from "../../application-resources"
 import type { ApplicationRuntime } from "../../application-runtime"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { createShutdown } from "../../shutdown"
@@ -49,14 +47,9 @@ export const installIpcControllers = (
     readonly acknowledge: (count: number) => void
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
+  shutdown: ReturnType<typeof createShutdown>,
 ) => {
   const handlers = new IpcControllerRegistry(rendererSecurityPolicy)
-  const shutdown = createShutdown({
-    dispose: () => disposeApplicationResources(updater, runtime),
-    quit: () => app.quit(),
-  })
-  app.on("before-quit", shutdown.beforeQuit)
-
   defineIpcHandlers(
     runtime,
     updater,

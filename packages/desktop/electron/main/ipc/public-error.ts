@@ -1,20 +1,39 @@
 import {
+  isPublicReasonTransportErrorCode,
   toTransportError,
   transportError,
   TransportError,
 } from "@diffdash/protocol/transport-error"
-
-const SAFE_REASON_TAGS = new Set([
-  "LocalReviewTargetError",
-  "RepositoryLinkError",
-  "RepositoryComparisonSourceError",
-  "ReviewTurnRejectedError",
-  "ReviewTurnTargetError",
-])
+import {
+  ReviewThreadAnchorInvalidError,
+  ReviewThreadRevisionChangedError,
+} from "@diffdash/domain/review-thread"
+import { ReviewSnapshotSearchResultTooLargeError } from "@diffdash/core"
 
 /** Adapts one main-process failure to bounded renderer-safe protocol data. */
 export const toPublicIpcError = (error: unknown, operation: string) => {
   if (error instanceof TransportError) return toTransportError(error, operation)
+  if (error instanceof ReviewThreadRevisionChangedError) {
+    return transportError(
+      "REVIEW_CHANGED",
+      "Review changed before the local thread was created.",
+      operation,
+    )
+  }
+  if (error instanceof ReviewThreadAnchorInvalidError) {
+    return transportError(
+      "INVALID_REVIEW_ANCHOR",
+      "Review thread anchor does not exist in the expected review revision.",
+      operation,
+    )
+  }
+  if (error instanceof ReviewSnapshotSearchResultTooLargeError) {
+    return transportError(
+      "PAYLOAD_TOO_LARGE",
+      "One review search result exceeds the bounded response size.",
+      operation,
+    )
+  }
 
   const domainFailure = safeDomainFailure(error)
   return domainFailure === null
@@ -28,7 +47,7 @@ const safeDomainFailure = (error: unknown) => {
     error === null ||
     !("_tag" in error) ||
     typeof error["_tag"] !== "string" ||
-    !SAFE_REASON_TAGS.has(error["_tag"]) ||
+    !isPublicReasonTransportErrorCode(error["_tag"]) ||
     !("reason" in error) ||
     typeof error.reason !== "string"
   ) {

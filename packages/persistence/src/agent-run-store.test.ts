@@ -12,6 +12,7 @@ import {
   ReviewAgentUsage,
 } from "@diffdash/domain/review-agent"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { noRepositoryLocalPath } from "@diffdash/domain/repository"
 import {
   makeReviewKey,
   ReviewFileId,
@@ -67,7 +68,7 @@ const beginTurn = (provider: ReviewAgentProviderId, model: string) =>
       owner: "fungsi",
       name: "diffdash",
       remoteUrl: "https://github.com/fungsi/diffdash",
-      localPath: null,
+      localPath: noRepositoryLocalPath,
     })
     const thread = yield* threads.create({
       repoId: repo.id,

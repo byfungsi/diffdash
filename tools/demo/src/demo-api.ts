@@ -26,7 +26,12 @@ import {
   ProjectWorkspaceState,
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
-import { Repo, RepositoryIdentityRepairSummary } from "@diffdash/domain/repository"
+import {
+  noRepositoryLocalPath,
+  Repo,
+  repositoryLocalPath,
+  RepositoryIdentityRepairSummary,
+} from "@diffdash/domain/repository"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
 import { ReviewProjectId, type ReviewFilePatchHash } from "@diffdash/domain/review-identity"
@@ -518,7 +523,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           owner: remote.locator.namespace,
           name: remote.locator.name,
           remoteUrl: remote.url,
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           isFavorite: true,
           lastOpenedAt: null,
           lastSyncedAt: remote.updatedAt,
@@ -983,7 +988,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   }
 
   function linkLocalPath(localPath: string) {
-    const linked = Repo.make({ ...scenario.repository, localPath })
+    const linked = Repo.make({ ...scenario.repository, localPath: repositoryLocalPath(localPath) })
     repositories = repositories.map((repo) => (repo.id === linked.id ? linked : repo))
     record("repositories.link", { localPath })
     return linked

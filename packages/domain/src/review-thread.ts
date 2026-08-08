@@ -208,6 +208,23 @@ export const ReviewThreadTarget = Schema.Union(
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
 export type ReviewThreadTarget = typeof ReviewThreadTarget.Type
 
+/** Thread creation was scoped to a review revision that is no longer current. */
+export class ReviewThreadRevisionChangedError extends Schema.TaggedError<ReviewThreadRevisionChangedError>()(
+  "ReviewThreadRevisionChangedError",
+  {
+    expectedBaseRevision: ReviewRevision,
+    expectedHeadRevision: ReviewRevision,
+    currentBaseRevision: ReviewRevision,
+    currentHeadRevision: ReviewRevision,
+  },
+) {}
+
+/** Thread creation referenced an anchor absent from the requested immutable revision. */
+export class ReviewThreadAnchorInvalidError extends Schema.TaggedError<ReviewThreadAnchorInvalidError>()(
+  "ReviewThreadAnchorInvalidError",
+  { reviewKey: ReviewKey },
+) {}
+
 /** Checks that an anchor still identifies exact content in a coherent parsed review snapshot. */
 export const isReviewAnchorInParsedDiff = (anchor: ReviewThreadAnchor, diff: ParsedDiff) => {
   const file = diff.files.find(

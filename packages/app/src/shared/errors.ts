@@ -1,9 +1,17 @@
-import { decodeTransportError } from "@diffdash/protocol/transport-error"
+import {
+  decodeTransportError,
+  isPublicReasonTransportErrorCode,
+} from "@diffdash/protocol/transport-error"
+
+const PRELOAD_OPERATION_PREFIX = /^[A-Za-z][A-Za-z0-9._:-]* failed:\s*/u
 
 /** Formats an unknown renderer failure for user-facing status text. */
 export const formatError = (error: unknown, fallback: string) => {
   const transport = decodeTransportError(error)
-  if (transport !== null) return transport.message
+  if (transport !== null) {
+    const message = transport.message.replace(PRELOAD_OPERATION_PREFIX, "")
+    return isPublicReasonTransportErrorCode(transport.code) ? `${fallback}: ${message}` : message
+  }
   if (error instanceof Error && error.message.length > 0) {
     return cleanErrorMessage(error.message, fallback)
   }

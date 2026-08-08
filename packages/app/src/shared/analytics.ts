@@ -1,6 +1,12 @@
-/** Captures a renderer analytics event without allowing telemetry failures to affect the UI. */
-export const captureAnalytics = (
-  event: Parameters<typeof window.diffDash.analytics.capture>[0],
-) => {
-  void window.diffDash.analytics.capture(event).catch(() => undefined)
+import { Effect } from "effect"
+
+import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
+import { useDesktopRuntime } from "@/platform/renderer-runtime"
+
+/** Returns best-effort renderer analytics backed by the shared desktop capability. */
+export const useCaptureAnalytics = () => {
+  const desktop = useDesktopRuntime()
+  return (event: AnalyticsEvent): void => {
+    Effect.runFork(desktop.analytics.capture(event).pipe(Effect.catchAll(() => Effect.void)))
+  }
 }

@@ -1,27 +1,16 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { isAbsolute } from "node:path"
+
+import { CoreAnalyticsState, CoreWebUrl as CoreWebUrlSchema } from "./analytics-state"
+
+/** HTTP or HTTPS URL decoded at the native host boundary. */
+export const CoreWebUrl = CoreWebUrlSchema
 
 /** Absolute filesystem path decoded at the native host boundary. */
 export const CoreAbsolutePath = Schema.String.pipe(
   Schema.minLength(1),
   Schema.filter(isAbsolute, { message: () => "Expected an absolute filesystem path" }),
   Schema.brand("CoreAbsolutePath"),
-)
-
-/** HTTP or HTTPS URL decoded at the native host boundary. */
-export const CoreWebUrl = Schema.String.pipe(
-  Schema.filter(
-    (value) => {
-      try {
-        const url = new URL(value)
-        return url.protocol === "http:" || url.protocol === "https:"
-      } catch {
-        return false
-      }
-    },
-    { message: () => "Expected an HTTP or HTTPS URL" },
-  ),
-  Schema.brand("CoreWebUrl"),
 )
 
 /** Absolute filesystem path decoded at the native host boundary. */
@@ -52,15 +41,19 @@ const OperatingSystemPlatform = Schema.Literal(
   "netbsd",
 )
 
-/** Plain runtime configuration supplied by the native host to DiffDash Core. */
-export class CoreConfiguration extends Schema.Class<CoreConfiguration>("CoreConfiguration")({
-  application: Schema.Struct({
-    version: Schema.String.pipe(Schema.minLength(1)),
-    architecture: Schema.String.pipe(Schema.minLength(1)),
-    platform: OperatingSystemPlatform,
-    packaged: Schema.Boolean,
-  }),
-  paths: Schema.Struct({
+const EncodedCorePaths = Schema.Struct({
+  database: CoreAbsolutePath,
+  settings: CoreAbsolutePath,
+  state: CoreAbsolutePath,
+  temporaryDirectory: CoreAbsolutePath,
+  worktreePool: CoreAbsolutePath,
+  remoteWorktreePool: CoreAbsolutePath,
+  diffDashCli: CoreAbsolutePath,
+  appImage: Schema.NullOr(CoreAbsolutePath),
+})
+
+class CorePathsConfiguration extends Schema.Class<CorePathsConfiguration>("CorePathsConfiguration")(
+  {
     database: CoreAbsolutePath,
     settings: CoreAbsolutePath,
     state: CoreAbsolutePath,
@@ -68,18 +61,74 @@ export class CoreConfiguration extends Schema.Class<CoreConfiguration>("CoreConf
     worktreePool: CoreAbsolutePath,
     remoteWorktreePool: CoreAbsolutePath,
     diffDashCli: CoreAbsolutePath,
-    appImage: Schema.NullOr(CoreAbsolutePath),
+    appImageOption: Schema.OptionFromSelf(CoreAbsolutePath),
+  },
+) {}
+
+const CorePaths = Schema.transform(EncodedCorePaths, CorePathsConfiguration, {
+  strict: true,
+  decode: ({ appImage, ...paths }) =>
+    CorePathsConfiguration.make({
+      ...paths,
+      appImageOption: Option.fromNullable(appImage),
+    }),
+  encode: (_encodedPaths, { appImageOption, ...paths }) => ({
+    ...paths,
+    appImage: Option.getOrNull(appImageOption),
   }),
-  analytics: Schema.Struct({
-    host: Schema.NullOr(CoreWebUrl),
-    projectKey: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
+})
+
+const EncodedCoreEnvironment = Schema.Struct({
+  executableSearchPath: Schema.String,
+  executablePathExtensions: Schema.NullOr(Schema.String),
+  homeDirectory: Schema.NullOr(CoreAbsolutePath),
+})
+
+class CoreEnvironmentConfiguration extends Schema.Class<CoreEnvironmentConfiguration>(
+  "CoreEnvironmentConfiguration",
+)({
+  executableSearchPath: Schema.String,
+  executablePathExtensionsOption: Schema.OptionFromSelf(Schema.String),
+  homeDirectoryOption: Schema.OptionFromSelf(CoreAbsolutePath),
+}) {}
+
+const CoreEnvironment = Schema.transform(EncodedCoreEnvironment, CoreEnvironmentConfiguration, {
+  strict: true,
+  decode: ({ executableSearchPath, executablePathExtensions, homeDirectory }) =>
+    CoreEnvironmentConfiguration.make({
+      executableSearchPath,
+      executablePathExtensionsOption: Option.fromNullable(executablePathExtensions),
+      homeDirectoryOption: Option.fromNullable(homeDirectory),
+    }),
+  encode: (
+    _encodedEnvironment,
+    { executableSearchPath, executablePathExtensionsOption, homeDirectoryOption },
+  ) => ({
+    executableSearchPath,
+    executablePathExtensions: Option.getOrNull(executablePathExtensionsOption),
+    homeDirectory: Option.getOrNull(homeDirectoryOption),
   }),
-  environment: Schema.Struct({
-    executableSearchPath: Schema.String,
-    executablePathExtensions: Schema.NullOr(Schema.String),
-    homeDirectory: Schema.NullOr(CoreAbsolutePath),
-  }),
-  fixtures: Schema.Struct({
+})
+
+const AgentProviderFixture = Schema.Struct({
+  walkthroughNeverCompletes: Schema.Boolean,
+})
+
+const GitProviderFixture = Schema.Struct({
+  remoteUrl: GitFixtureRemote,
+  baseRevision: Schema.OptionFromNullOr(Schema.String),
+  headRevision: Schema.OptionFromNullOr(Schema.String),
+})
+
+class CoreFixturesConfiguration extends Schema.Class<CoreFixturesConfiguration>(
+  "CoreFixturesConfiguration",
+)({
+  agentProvider: Schema.OptionFromSelf(AgentProviderFixture),
+  gitProviderOption: Schema.OptionFromSelf(Schema.typeSchema(GitProviderFixture)),
+}) {}
+
+const CoreFixtures = Schema.transform(
+  Schema.Struct({
     agentProviderEnabled: Schema.Boolean,
     agentProviderNeverCompletes: Schema.Boolean,
     gitProvider: Schema.NullOr(
@@ -90,4 +139,51 @@ export class CoreConfiguration extends Schema.Class<CoreConfiguration>("CoreConf
       }),
     ),
   }),
+  CoreFixturesConfiguration,
+  {
+    strict: true,
+    decode: ({ agentProviderEnabled, agentProviderNeverCompletes, gitProvider }) =>
+      CoreFixturesConfiguration.make({
+        agentProvider: agentProviderEnabled
+          ? Option.some({ walkthroughNeverCompletes: agentProviderNeverCompletes })
+          : Option.none(),
+        gitProviderOption:
+          gitProvider === null
+            ? Option.none()
+            : Option.some({
+                remoteUrl: gitProvider.remoteUrl,
+                baseRevision: Option.fromNullable(gitProvider.baseRevision),
+                headRevision: Option.fromNullable(gitProvider.headRevision),
+              }),
+      }),
+    encode: (_encodedFixtures, { agentProvider, gitProviderOption }) => ({
+      agentProviderEnabled: Option.isSome(agentProvider),
+      agentProviderNeverCompletes: Option.match(agentProvider, {
+        onNone: () => false,
+        onSome: ({ walkthroughNeverCompletes }) => walkthroughNeverCompletes,
+      }),
+      gitProvider: Option.match(gitProviderOption, {
+        onNone: () => null,
+        onSome: ({ remoteUrl, baseRevision, headRevision }) => ({
+          remoteUrl,
+          baseRevision: Option.getOrNull(baseRevision),
+          headRevision: Option.getOrNull(headRevision),
+        }),
+      }),
+    }),
+  },
+)
+
+/** Plain runtime configuration supplied by the native host to DiffDash Core. */
+export class CoreConfiguration extends Schema.Class<CoreConfiguration>("CoreConfiguration")({
+  application: Schema.Struct({
+    version: Schema.String.pipe(Schema.minLength(1)),
+    architecture: Schema.String.pipe(Schema.minLength(1)),
+    platform: OperatingSystemPlatform,
+    packaged: Schema.Boolean,
+  }),
+  paths: CorePaths,
+  analytics: CoreAnalyticsState,
+  environment: CoreEnvironment,
+  fixtures: CoreFixtures,
 }) {}

@@ -17,8 +17,15 @@ import {
   ReviewSnapshotSearchRequest,
 } from "@diffdash/protocol/review-snapshot"
 import { describe, expect, it } from "@effect/vitest"
-import { Schema } from "effect"
-import { paginateReviewSnapshot, searchReviewSnapshot } from "./review-snapshot-pagination"
+import { Effect, Schema } from "effect"
+import {
+  paginateReviewSnapshot,
+  ReviewSnapshotSearchResultTooLargeError,
+  searchReviewSnapshot,
+} from "./review-snapshot-pagination"
+
+const runSearchReviewSnapshot = (...args: Parameters<typeof searchReviewSnapshot>) =>
+  Effect.runSync(searchReviewSnapshot(...args))
 
 const makeSnapshot = (rawDiff: string) => {
   const parsedDiff = parseUnifiedDiff(rawDiff)
@@ -205,7 +212,7 @@ describe("review snapshot pagination", () => {
     )
     expect(loadedPage["_tag"]).toBe("available")
 
-    const firstSearch = searchReviewSnapshot(
+    const firstSearch = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -222,7 +229,7 @@ describe("review snapshot pagination", () => {
     expect(firstSearch.nextCursor).not.toBeNull()
     if (firstSearch.nextCursor === null) return
 
-    const secondSearch = searchReviewSnapshot(
+    const secondSearch = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -238,13 +245,32 @@ describe("review snapshot pagination", () => {
     expect(secondSearch.nextCursor).toBeNull()
   })
 
+  it.effect("returns a typed domain failure when one search result exceeds the budget", () =>
+    Effect.gen(function* () {
+      const snapshot = makeSnapshot(threeFileDiff)
+      const failure = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "needle",
+          cursor: null,
+          limit: 1,
+        }),
+        1,
+      ).pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(ReviewSnapshotSearchResultTooLargeError)
+      expect(failure.maxResponseBytes).toBe(1)
+    }),
+  )
+
   it("rotates search results forward from a file viewport anchor", () => {
     const snapshot = makeSnapshot(threeFileDiff)
     const secondFile = snapshot.parsedDiff.files[1]
     expect(secondFile).toBeDefined()
     if (secondFile === undefined) return
 
-    const fromSecondFile = searchReviewSnapshot(
+    const fromSecondFile = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -265,7 +291,7 @@ describe("review snapshot pagination", () => {
 
   it("rejects an invalid file anchor even when the query has no matches", () => {
     const snapshot = makeSnapshot(threeFileDiff)
-    const response = searchReviewSnapshot(
+    const response = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -290,7 +316,7 @@ describe("review snapshot pagination", () => {
     expect(secondFile).toBeDefined()
     if (firstFile === undefined || secondFile === undefined) return
     const anchor = ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId })
-    const firstPage = searchReviewSnapshot(
+    const firstPage = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -306,7 +332,7 @@ describe("review snapshot pagination", () => {
       throw new Error("Expected an anchored continuation cursor")
     }
 
-    const continuation = searchReviewSnapshot(
+    const continuation = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,
@@ -321,7 +347,7 @@ describe("review snapshot pagination", () => {
     if (continuation["_tag"] !== "available") return
     expect(continuation.matches[0]?.filePath).toBe("src/first.ts")
 
-    const changedAnchor = searchReviewSnapshot(
+    const changedAnchor = runSearchReviewSnapshot(
       snapshot,
       ReviewSnapshotSearchRequest.make({
         snapshotId: snapshot.snapshotId,

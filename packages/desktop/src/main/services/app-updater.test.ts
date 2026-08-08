@@ -130,6 +130,30 @@ describe("AppUpdater", () => {
     })
   })
 
+  it.scoped("ignores stale progress after the lifecycle no longer carries a version", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      fake.emitError(new Error("download failed"))
+      fake.emitProgress(75)
+      expect(yield* updater.getState()).toMatchObject({
+        _tag: "error",
+        message: "download failed",
+      })
+
+      fake.emitDownloaded("0.1.5")
+      fake.emitProgress(90)
+      expect(yield* updater.getState()).toMatchObject({
+        _tag: "downloaded",
+        version: "0.1.5",
+      })
+    })
+  })
+
   it.scoped("rejects download and install requests before their required states", () => {
     const fake = makeFakeUpdater()
 
@@ -143,6 +167,43 @@ describe("AppUpdater", () => {
       const installError = yield* updater.quitAndInstall().pipe(Effect.flip)
       expect(installError).toMatchObject({ operation: "quitAndInstall" })
       expect(fake.installCount).toBe(0)
+    })
+  })
+
+  it.scoped("rejects download after availability is superseded", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      fake.emitError(new Error("native updater failed"))
+
+      const error = yield* updater.download().pipe(Effect.flip)
+      expect(error).toMatchObject({
+        operation: "download",
+        message: "No update is available to download.",
+      })
+      expect(fake.downloadCount).toBe(0)
+    })
+  })
+
+  it.scoped("allows install only after the downloaded transition", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      const error = yield* updater.quitAndInstall().pipe(Effect.flip)
+      expect(error).toMatchObject({ operation: "quitAndInstall" })
+      expect(fake.installCount).toBe(0)
+
+      fake.emitDownloaded("0.1.5")
+      yield* updater.quitAndInstall()
+      expect(fake.installCount).toBe(1)
     })
   })
 

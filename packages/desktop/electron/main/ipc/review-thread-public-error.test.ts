@@ -1,10 +1,44 @@
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import {
+  ReviewThreadAnchorInvalidError,
+  ReviewThreadRevisionChangedError,
+} from "@diffdash/domain/review-thread"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { ReviewAgentProviderFailureError } from "@diffdash/review-agent"
 import { describe, expect, it } from "vitest"
 import { toPublicReviewThreadError } from "./review-thread-public-error"
 
 describe("toPublicReviewThreadError", () => {
+  it("preserves the existing public code for a changed review revision", () => {
+    const result = toPublicReviewThreadError(
+      ReviewThreadRevisionChangedError.make({
+        expectedBaseRevision: ReviewRevision.make("expected-base"),
+        expectedHeadRevision: ReviewRevision.make("expected-head"),
+        currentBaseRevision: ReviewRevision.make("current-base"),
+        currentHeadRevision: ReviewRevision.make("current-head"),
+      }),
+      InvokeChannel.createReviewThread,
+    )
+
+    expect(result).toMatchObject({
+      code: "REVIEW_CHANGED",
+      message: "Review changed before the local thread was created.",
+    })
+  })
+
+  it("preserves the existing public code for an invalid review anchor", () => {
+    const result = toPublicReviewThreadError(
+      ReviewThreadAnchorInvalidError.make({ reviewKey: ReviewKey.make("fixture#1") }),
+      InvokeChannel.createReviewThread,
+    )
+
+    expect(result).toMatchObject({
+      code: "INVALID_REVIEW_ANCHOR",
+      message: "Review thread anchor does not exist in the expected review revision.",
+    })
+  })
+
   it("exposes typed authentication guidance without provider output", () => {
     const failure = AgentProviderFailure.make({
       version: 1,

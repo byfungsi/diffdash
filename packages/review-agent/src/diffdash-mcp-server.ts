@@ -65,7 +65,7 @@ interface DiffDashMcpRunContext {
   readonly repoId: string
   readonly snapshot: ReviewSnapshot
   readonly localPath: string | null
-  readonly walkthrough: StoredWalkthrough | null
+  readonly walkthrough: Option.Option<StoredWalkthrough>
   readonly maxToolOutputBytes?: number
 }
 
@@ -661,9 +661,10 @@ const createRunServer = (
     z.object({}),
     () =>
       Effect.sync(() =>
-        context.walkthrough === null
-          ? unavailable("No walkthrough is available for this review revision")
-          : available(context.walkthrough),
+        Option.match(context.walkthrough, {
+          onNone: () => unavailable("No walkthrough is available for this review revision"),
+          onSome: available,
+        }),
       ),
   )
 
@@ -811,6 +812,7 @@ const readLinkedRepositoryFile = (
       unavailable("An isolated repository workspace is unavailable for this review run"),
     )
   }
+  const localPath = context.localPath
   const safePath = normalizeRepositoryPath(path)
   if (safePath === null) {
     return Effect.succeed(unavailable("Repository file path must stay inside the checkout"))
@@ -819,7 +821,7 @@ const readLinkedRepositoryFile = (
 
   return processes
     .run(
-      processRequest("git", ["-C", context.localPath, "show", `${revision}:${safePath}`], {
+      processRequest("git", ["-C", localPath, "show", `${revision}:${safePath}`], {
         timeoutMs: 20_000,
       }),
     )

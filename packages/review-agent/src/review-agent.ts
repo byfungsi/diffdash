@@ -91,7 +91,7 @@ interface RunReviewAgentTurnInput {
   readonly mapping: ReviewTurnMappingToken
   readonly snapshot: ReviewSnapshot
   readonly cwd: string | null
-  readonly walkthrough: StoredWalkthrough | null
+  readonly walkthrough: Option.Option<StoredWalkthrough>
   readonly onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>
 }
 

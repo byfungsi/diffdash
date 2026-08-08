@@ -5,13 +5,18 @@ import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget
 import { Schema } from "effect"
 import type { WebContents } from "electron"
 
-/** Encodes one protocol event before publishing it to a renderer. */
+/** Encodes and best-effort delivers one unsolicited protocol event to a live renderer. */
 export const sendProtocolEvent = <Channel extends EventChannel>(
-  target: Pick<WebContents, "send">,
+  target: Pick<WebContents, "isDestroyed" | "send">,
   channel: Channel,
   payload: EventPayload<Channel>,
-) => {
+): void => {
+  if (target.isDestroyed()) return
   const encoded = Schema.encodeUnknownSync(eventPayloadSchema(channel))(payload)
   assertJsonPayloadWithinBudget(encoded, EventContract[channel].maxPayloadBytes, channel)
-  target.send(channel, encoded)
+  try {
+    target.send(channel, encoded)
+  } catch {
+    // The renderer can disappear after the lifetime check; event delivery is best-effort.
+  }
 }

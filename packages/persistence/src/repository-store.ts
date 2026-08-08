@@ -1,10 +1,15 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import type {
   HostedRepositoryLocator,
   ResolvedHostedRepository,
 } from "@diffdash/domain/git-provider"
-import { Repo, RepoProvider, type UpsertRepositoryInput } from "@diffdash/domain/repository"
+import {
+  Repo,
+  RepositoryLocalPath,
+  RepoProvider,
+  type UpsertRepositoryInput,
+} from "@diffdash/domain/repository"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
@@ -16,7 +21,7 @@ const RepoRow = Schema.Struct({
   owner: Schema.String,
   name: Schema.String,
   remote_url: Schema.String,
-  local_path: Schema.NullOr(Schema.String),
+  local_path: RepositoryLocalPath,
   is_favorite: Schema.Literal(0, 1),
   last_opened_at: Schema.NullOr(Schema.String),
   last_synced_at: Schema.NullOr(Schema.String),
@@ -59,21 +64,21 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
     /** Finds the preferred persisted repository for a local checkout path. */
     readonly findByLocalPath: (
       localPath: string,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Finds a canonical repository by its current case-insensitive hosted locator. */
     readonly findHosted: (
       repository: HostedRepositoryLocator,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Finds a canonical repository by a provider-owned stable identifier. */
     readonly findByProviderRepositoryId: (
       providerId: string,
       providerRepositoryId: string,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Records authoritative provider identity and binds an optional checkout. */
     readonly attachResolvedIdentity: (
       repoId: ReviewProjectId,
       resolved: ResolvedHostedRepository,
-      localPath: string | null,
+      localPath: RepositoryLocalPath,
       remoteUrl: string,
     ) => Effect.Effect<Repo, RepositoryStoreError>
     /** Moves legacy local-project data to a canonical hosted project when collisions permit. */
@@ -143,7 +148,12 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
             Effect.flatMap((row) =>
               decodeOptionalRepositoryId("findByLocalPath.legacyDecode", row),
             ),
-            Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed(Option.none<Repo>()),
+                onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+              }),
+            ),
           )
 
       const recordCompatibilityIdentity = (id: string, input: UpsertRepositoryInput, now: string) =>
@@ -230,8 +240,11 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 RepositoryStoreError.make({ operation: "findByLocalPath.query", cause }),
               ),
               Effect.flatMap((row) => decodeOptionalRepositoryId("findByLocalPath.decode", row)),
-              Effect.flatMap((id) =>
-                id === null ? findLegacyByLocalPath(localPath) : getById(id),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => findLegacyByLocalPath(localPath),
+                  onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                }),
               ),
             )
         }),
@@ -254,7 +267,12 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 RepositoryStoreError.make({ operation: "findHosted.query", cause }),
               ),
               Effect.flatMap((row) => decodeOptionalRepositoryId("findHosted.decode", row)),
-              Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.succeed(Option.none<Repo>()),
+                  onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                }),
+              ),
             )
         }),
         findByProviderRepositoryId: Effect.fn("RepositoryStore.findByProviderRepositoryId")(
@@ -280,7 +298,12 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 Effect.flatMap((row) =>
                   decodeOptionalRepositoryId("findByProviderRepositoryId.decode", row),
                 ),
-                Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.succeed(Option.none<Repo>()),
+                    onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                  }),
+                ),
               )
           },
         ),
@@ -297,7 +320,7 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                         [resolved.locator.providerId, resolved.providerRepositoryId],
                       )
                 const stableId = decodeOptionalRepositoryIdSync(stable)
-                let canonicalId = stableId ?? repoId
+                let canonicalId = Option.getOrElse(stableId, () => repoId)
 
                 const locatorRows = Schema.decodeUnknownSync(RepositoryIdRows)(
                   transaction.all(
@@ -365,8 +388,8 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                     [localPath],
                   )
                   const previousId = decodeOptionalRepositoryIdSync(previous)
-                  if (previousId !== null && previousId !== canonicalId) {
-                    mergeRepositoryAlias(transaction, canonicalId, previousId, "checkout")
+                  if (Option.isSome(previousId) && previousId.value !== canonicalId) {
+                    mergeRepositoryAlias(transaction, canonicalId, previousId.value, "checkout")
                   }
                   transaction.run(
                     `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
@@ -851,11 +874,13 @@ const decodeRepos = (operation: string, input: readonly unknown[]) =>
 
 const decodeOptionalRepositoryId = (operation: string, input: unknown) =>
   input === undefined
-    ? Effect.succeed(null)
+    ? Effect.succeed(Option.none<string>())
     : Schema.decodeUnknown(RepositoryIdRow)(input).pipe(
-        Effect.map(({ id }) => id),
+        Effect.map(({ id }) => Option.some(id)),
         Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
       )
 
 const decodeOptionalRepositoryIdSync = (input: unknown) =>
-  input === undefined ? null : Schema.decodeUnknownSync(RepositoryIdRow)(input).id
+  input === undefined
+    ? Option.none<string>()
+    : Option.some(Schema.decodeUnknownSync(RepositoryIdRow)(input).id)

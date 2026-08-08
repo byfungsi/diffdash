@@ -1,24 +1,43 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Schema } from "effect"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { Cause, Effect, Exit, FiberId, Schema } from "effect"
+import { execFileSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
-import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import {
+  BranchComparison,
+  LocalReviewTarget,
+  workingTreeReviewTarget,
+} from "@diffdash/domain/local-review"
+import {
+  GitCommitSha,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
+import { HostedReviewTarget } from "@diffdash/domain/review-thread"
+import { StoredWalkthrough, Walkthrough } from "@diffdash/domain/walkthrough"
+import {
+  CoreFileOpenIntent,
+  CoreLifecycleError,
   CoreMethod,
   type CoreOperationFailure,
   type CoreResult,
   type CoreWalkthroughFailure,
   CoreStartupError,
   RepositoryLinkError,
+  WalkthroughOperationCancelled,
+  WalkthroughOperationCompleted,
+  WalkthroughOperationDefect,
+  WalkthroughOperationFailed,
   WalkthroughOperationId,
-  type WalkthroughOperationResult,
+  WalkthroughOperationResult,
 } from "./core"
 import { CoreConfiguration } from "./core-configuration"
-import { walkthroughTerminalFromExit } from "./core-operation-service"
 import { coreResultFromExit, createEmbeddedCore } from "./embedded-core"
+import { comparisonViewedFileScope, localViewedFileScope } from "./operations/viewed-file-scope"
+import { walkthroughTerminalFromExit } from "./operations/walkthrough-operations"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-core-test-"))),
@@ -67,12 +86,29 @@ const fixtureTarget = HostedReviewTarget.make({
   review: makeHostedReviewLocator("fixture", "platform/backend", "service", 73),
 })
 
+const storedWalkthrough = StoredWalkthrough.make({
+  repoId: "fixture:platform/backend/service",
+  prNumber: 73,
+  reviewKey: "fixture:platform/backend/service#73",
+  baseSha: "b".repeat(40),
+  headSha: "a".repeat(40),
+  promptVersion: "walkthrough-v1",
+  walkthrough: Walkthrough.make({
+    title: "Fixture review path",
+    summary: "Review the fixture path.",
+    chapters: [],
+    support: [],
+  }),
+  createdAt: "2026-08-07T00:00:00.000Z",
+})
+
 const fixtureConfiguration = (
   directory: string,
   agentProviderNeverCompletes = false,
 ): CoreConfiguration => {
+  const encoded = Schema.encodeSync(CoreConfiguration)(testConfiguration(directory))
   const configuration = Schema.decodeUnknownSync(CoreConfiguration)({
-    ...testConfiguration(directory),
+    ...encoded,
     fixtures: {
       agentProviderEnabled: true,
       agentProviderNeverCompletes,
@@ -109,7 +145,7 @@ describe("EmbeddedCore", () => {
     >().toEqualTypeOf<CoreWalkthroughFailure>()
   })
 
-  it("never classifies a composite defect as an expected failure", () => {
+  it("constructs every walkthrough terminal variant and keeps defects dominant", () => {
     const expected = RepositoryLinkError.make({
       operation: "test",
       reason: "Expected test failure.",
@@ -117,6 +153,11 @@ describe("EmbeddedCore", () => {
     })
     const defect = new Error("defect")
     const composite = Exit.failCause(Cause.parallel(Cause.fail(expected), Cause.die(defect)))
+    const completedTerminal = WalkthroughOperationCompleted.make({ walkthrough: storedWalkthrough })
+    const failedTerminal = WalkthroughOperationFailed.make({ error: expected })
+    const cancelledTerminal = WalkthroughOperationCancelled.make({})
+    const defectTerminal = WalkthroughOperationDefect.make({ defect })
+    const terminals = [completedTerminal, failedTerminal, cancelledTerminal, defectTerminal]
     let thrown: unknown = null
 
     try {
@@ -126,15 +167,170 @@ describe("EmbeddedCore", () => {
     }
 
     expect(thrown).toBe(defect)
-    expect(walkthroughTerminalFromExit(Exit.fail(expected))).toEqual({
-      _tag: "failed",
-      error: expected,
-    })
-    expect(walkthroughTerminalFromExit(composite)).toEqual({
-      _tag: "defect",
-      defect,
+    expect(walkthroughTerminalFromExit(Exit.succeed(storedWalkthrough))).toEqual(completedTerminal)
+    expect(walkthroughTerminalFromExit(Exit.fail(expected))).toEqual(failedTerminal)
+    expect(walkthroughTerminalFromExit(Exit.interrupt(FiberId.none))).toEqual(cancelledTerminal)
+    expect(walkthroughTerminalFromExit(composite)).toEqual(defectTerminal)
+    for (const terminal of terminals) {
+      expect(
+        Schema.decodeUnknownSync(WalkthroughOperationResult)(
+          Schema.encodeSync(WalkthroughOperationResult)(terminal),
+        ),
+      ).toEqual(terminal)
+    }
+    expect(Schema.encodeSync(WalkthroughOperationResult)(completedTerminal)).toMatchObject({
+      _tag: "completed",
+      walkthrough: { repoId: storedWalkthrough.repoId },
     })
   })
+
+  it("preserves local, detached, branch, and repository-comparison viewed-file identities", () => {
+    const workingTree = workingTreeReviewTarget("/workspace/diffdash")
+    const branch = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: "/workspace/diffdash",
+      comparison: BranchComparison.make({
+        branchName: "main",
+        baseRef: "refs/heads/main",
+        baseSha: "a".repeat(40),
+      }),
+    })
+    const repositoryComparison = RepositoryComparisonTarget.make({
+      kind: "repositoryComparison",
+      repository: fixtureTarget.review.repository,
+      baseRef: RepositoryComparisonRef.make("main"),
+      headRef: RepositoryComparisonRef.make("feature/core"),
+      baseSha: GitCommitSha.make("a".repeat(40)),
+      headSha: GitCommitSha.make("b".repeat(40)),
+      mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+    })
+
+    expect(localViewedFileScope("repo-1", workingTree, null)).toEqual({
+      repoId: "repo-1",
+      sourceIdentity: "detached",
+      comparisonKind: "workingTree",
+      comparisonTarget: "",
+    })
+    expect(localViewedFileScope("repo-1", workingTree, "feature/source")).toEqual({
+      repoId: "repo-1",
+      sourceIdentity: "branch:feature/source",
+      comparisonKind: "workingTree",
+      comparisonTarget: "",
+    })
+    expect(localViewedFileScope("repo-1", branch, null)).toEqual({
+      repoId: "repo-1",
+      sourceIdentity: "detached",
+      comparisonKind: "branch",
+      comparisonTarget: "main",
+    })
+    expect(comparisonViewedFileScope("repo-1", repositoryComparison)).toEqual({
+      repoId: "repo-1",
+      sourceIdentity: `comparison:repository-comparison:v1:fixture:platform/backend/service:${"a".repeat(40)}:${"b".repeat(40)}:${"c".repeat(40)}`,
+      comparisonKind: "repositoryComparison",
+      comparisonTarget: "b".repeat(40),
+    })
+  })
+
+  it.scoped("constructs every local and external file-open intent path", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const repositoryPath = join(directory, "repository")
+      mkdirSync(repositoryPath)
+      const canonicalRepositoryPath = realpathSync(repositoryPath)
+      execFileSync("git", ["init", "-b", "feature/core", repositoryPath])
+      execFileSync("git", [
+        "-C",
+        repositoryPath,
+        "remote",
+        "add",
+        "origin",
+        "https://git.fixture.test/platform/backend/service.git",
+      ])
+      const core = createEmbeddedCore(fixtureConfiguration(directory))
+      yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
+      successValue(yield* Effect.promise(core.start))
+
+      const externalHosted = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.appOpenRepositoryFile, {
+            review: fixtureTarget.review,
+            filePath: "src/external.ts",
+            headRefName: "feature/core",
+            headRevision: "a".repeat(40),
+          }),
+        ),
+      )
+      const localDirect = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.appOpenLocalRepositoryFile, {
+            rootPath: repositoryPath,
+            filePath: "src/local.ts",
+          }),
+        ),
+      )
+      const comparisonTarget = RepositoryComparisonTarget.make({
+        kind: "repositoryComparison",
+        repository: fixtureTarget.review.repository,
+        baseRef: RepositoryComparisonRef.make("main"),
+        headRef: RepositoryComparisonRef.make("feature/core"),
+        baseSha: GitCommitSha.make("a".repeat(40)),
+        headSha: GitCommitSha.make("b".repeat(40)),
+        mergeBaseSha: GitCommitSha.make("c".repeat(40)),
+      })
+      const externalComparison = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.appOpenRepositoryComparisonFile, {
+            target: comparisonTarget,
+            filePath: "src/comparison.ts",
+          }),
+        ),
+      )
+      successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.installRepository, { localPath: repositoryPath }),
+        ),
+      )
+      const localHosted = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.appOpenRepositoryFile, {
+            review: fixtureTarget.review,
+            filePath: "src/linked.ts",
+            headRefName: "feature/core",
+            headRevision: "a".repeat(40),
+          }),
+        ),
+      )
+      const mismatchedBranch = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.appOpenRepositoryFile, {
+            review: fixtureTarget.review,
+            filePath: "src/mismatch.ts",
+            headRefName: "feature/other",
+            headRevision: "a".repeat(40),
+          }),
+        ),
+      )
+
+      expect(externalHosted._tag).toBe("external")
+      expect(localDirect).toMatchObject({
+        _tag: "local",
+        rootPath: canonicalRepositoryPath,
+        filePath: "src/local.ts",
+      })
+      expect(externalComparison._tag).toBe("external")
+      expect(localHosted).toMatchObject({
+        _tag: "local",
+        rootPath: canonicalRepositoryPath,
+        filePath: "src/linked.ts",
+      })
+      expect(mismatchedBranch._tag).toBe("external")
+      expect(yield* Schema.encode(CoreFileOpenIntent)(localHosted)).toEqual({
+        _tag: "local",
+        rootPath: canonicalRepositoryPath,
+        filePath: "src/linked.ts",
+      })
+    }),
+  )
 
   it.scoped("starts one business runtime and releases it through the public lifecycle", () =>
     Effect.gen(function* () {
@@ -153,13 +349,50 @@ describe("EmbeddedCore", () => {
       expect(state).toMatchObject({ onboardingCompleted: false })
 
       yield* Effect.promise(core.dispose)
-      const afterDispose = yield* Effect.promise(() =>
-        core.execute(CoreMethod.appStateGet, {}).then(
-          () => null,
-          (cause: unknown) => cause,
-        ),
-      )
-      expect(afterDispose).not.toBeNull()
+      const afterDispose = yield* Effect.promise(() => core.execute(CoreMethod.appStateGet, {}))
+      expect(afterDispose).toMatchObject({
+        ok: false,
+        error: { _tag: "CoreLifecycleError", state: "disposed" },
+      })
+    }),
+  )
+
+  it.scoped("gates operations until startup and makes startup idempotent", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const configuration = testConfiguration(directory)
+      const core = createEmbeddedCore(configuration)
+      yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
+
+      const beforeStart = yield* Effect.promise(() => core.execute(CoreMethod.appStateGet, {}))
+      expect(beforeStart).toMatchObject({
+        ok: false,
+        error: { _tag: "CoreLifecycleError", state: "notStarted" },
+      })
+      if (beforeStart.ok) throw new Error("Expected an operation before startup to fail")
+      expect(beforeStart.error).toBeInstanceOf(CoreLifecycleError)
+      expect(existsSync(configuration.paths.temporaryDirectory)).toBe(false)
+
+      const [first, second] = yield* Effect.promise(() => Promise.all([core.start(), core.start()]))
+      expect(first).toEqual({ ok: true, value: undefined })
+      expect(second).toEqual(first)
+      expect(yield* Effect.promise(core.start)).toEqual(first)
+    }),
+  )
+
+  it.scoped("disposes without acquiring an unstarted runtime", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const configuration = testConfiguration(directory)
+      const core = createEmbeddedCore(configuration)
+
+      yield* Effect.promise(() => Promise.all([core.dispose(), core.dispose()]))
+
+      expect(existsSync(configuration.paths.temporaryDirectory)).toBe(false)
+      expect(yield* Effect.promise(core.start)).toMatchObject({
+        ok: false,
+        error: { _tag: "CoreLifecycleError", state: "disposed" },
+      })
     }),
   )
 
@@ -187,12 +420,23 @@ describe("EmbeddedCore", () => {
       const core = createEmbeddedCore(configuration)
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
       successValue(yield* Effect.promise(core.start))
+      expect(
+        successValue(
+          yield* Effect.promise(() =>
+            core.walkthroughs.getStored({
+              target: fixtureTarget,
+              expectedBaseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              expectedHeadRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }),
+          ),
+        ),
+      ).toBeNull()
       const operationIds = []
 
-      for (let index = 0; index < 65; index += 1) {
+      for (let remaining = 65; remaining > 0; remaining -= 1) {
         const accepted = successValue(
           yield* Effect.promise(() =>
-            core.walkthroughs.start({ target: fixtureTarget, regenerate: index === 0 }),
+            core.walkthroughs.start({ target: fixtureTarget, regenerate: false }),
           ),
         )
         operationIds.push(accepted.operationId)
@@ -228,6 +472,28 @@ describe("EmbeddedCore", () => {
           ),
         ),
       ).toMatchObject({ walkthrough: { title: "Fixture review path" } })
+      expect(
+        successValue(
+          yield* Effect.promise(() =>
+            core.walkthroughs.getStored({
+              target: fixtureTarget,
+              expectedBaseRevision: "c".repeat(40),
+              expectedHeadRevision: "a".repeat(40),
+            }),
+          ),
+        ),
+      ).toBeNull()
+      expect(
+        successValue(
+          yield* Effect.promise(() =>
+            core.walkthroughs.getStored({
+              target: fixtureTarget,
+              expectedBaseRevision: "b".repeat(40),
+              expectedHeadRevision: "d".repeat(40),
+            }),
+          ),
+        ),
+      ).toBeNull()
 
       const oldestOperationId = operationIds[0]
       expect(oldestOperationId).toBeDefined()
@@ -285,9 +551,10 @@ describe("EmbeddedCore", () => {
       const blockedParent = join(directory, "blocked")
       writeFileSync(blockedParent, "not a directory")
       const configuration = testConfiguration(directory)
+      const encoded = yield* Schema.encode(CoreConfiguration)(configuration)
       const failedConfiguration = yield* Schema.decodeUnknown(CoreConfiguration)({
-        ...configuration,
-        paths: { ...configuration.paths, temporaryDirectory: join(blockedParent, "temporary") },
+        ...encoded,
+        paths: { ...encoded.paths, temporaryDirectory: join(blockedParent, "temporary") },
       })
       const core = createEmbeddedCore(failedConfiguration)
       yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
@@ -309,11 +576,12 @@ describe("EmbeddedCore", () => {
 
   it("rejects an enabled Git fixture without a remote locator", () => {
     const configuration = testConfiguration("/tmp/diffdash-core-configuration-test")
+    const encoded = Schema.encodeSync(CoreConfiguration)(configuration)
     expect(() =>
       Schema.decodeUnknownSync(CoreConfiguration)({
-        ...configuration,
+        ...encoded,
         fixtures: {
-          ...configuration.fixtures,
+          ...encoded.fixtures,
           gitProvider: { remoteUrl: null, baseRevision: null, headRevision: null },
         },
       }),

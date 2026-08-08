@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { repositoryLocalPath } from "@diffdash/domain/repository"
 import {
   ReviewAgentArtifact,
   ReviewAgentArtifactId,
@@ -88,7 +89,7 @@ const createHostedThread = Effect.gen(function* () {
     owner: "fungsi",
     name: "diffdash",
     remoteUrl: "https://github.com/fungsi/diffdash",
-    localPath: "/workspace/diffdash",
+    localPath: repositoryLocalPath("/workspace/diffdash"),
   })
   const details = yield* (yield* ReviewThreadStore).create({
     repoId: repository.id,
@@ -145,7 +146,7 @@ describe("ReviewTurnStore", () => {
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "https://github.com/fungsi/diffdash",
-          localPath: rootPath,
+          localPath: repositoryLocalPath(rootPath),
         })
         const details = yield* (yield* ReviewThreadStore).create({
           repoId: repository.id,

@@ -6,6 +6,7 @@ import { join } from "node:path"
 
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { noRepositoryLocalPath } from "@diffdash/domain/repository"
 import { makeReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import { DatabaseService } from "@diffdash/persistence/database"
@@ -168,7 +169,7 @@ describe("ReviewThreadAnchorMapper", () => {
           owner: "fungsi",
           name: "diffdash",
           remoteUrl: "https://github.com/fungsi/diffdash",
-          localPath: null,
+          localPath: noRepositoryLocalPath,
         })
         const anchors = [
           ["retained", makeLineAnchor("src/retained.ts", 1, "export const retained = true")],

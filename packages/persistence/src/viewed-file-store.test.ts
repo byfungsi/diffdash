@@ -2,16 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { noRepositoryLocalPath, repositoryLocalPath } from "@diffdash/domain/repository"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Either, Layer } from "effect"
 
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
-import {
-  type LocalViewedFileScope,
-  ViewedFileStore,
-  ViewedFileStoreError,
-} from "./viewed-file-store"
+import { LocalViewedFileScope, ViewedFileStore, ViewedFileStoreError } from "./viewed-file-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-test-"))),
@@ -35,7 +32,7 @@ describe("ViewedFileStore", () => {
         const repositoryStore = yield* RepositoryStore
         const viewedFiles = yield* ViewedFileStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -87,21 +84,20 @@ describe("ViewedFileStore", () => {
         const repositoryStore = yield* RepositoryStore
         const viewedFiles = yield* ViewedFileStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: "/repo",
+          localPath: repositoryLocalPath("/repo"),
           name: "local-repo",
           owner: "local",
           provider: "local",
           remoteUrl: "file:///repo",
         })
-        const scope: LocalViewedFileScope = {
+        const scope = LocalViewedFileScope.make({
           comparisonKind: "branch",
           comparisonTarget: "main",
           repoId: repo.id,
           sourceIdentity: "branch:feature/auth",
-        }
+        })
 
-        yield* viewedFiles.setLocal({
-          ...scope,
+        yield* viewedFiles.setLocal(scope, {
           patchHash: patchA,
           reviewKey: "src/auth.ts",
           viewed: true,
@@ -111,17 +107,26 @@ describe("ViewedFileStore", () => {
           { patchHash: patchA, reviewKey: "src/auth.ts" },
         ])
         expect(
-          yield* viewedFiles.listLocal({ ...scope, sourceIdentity: "branch:feature/payments" }),
+          yield* viewedFiles.listLocal(
+            LocalViewedFileScope.make({
+              ...scope,
+              sourceIdentity: "branch:feature/payments",
+            }),
+          ),
         ).toEqual([])
         expect(
-          yield* viewedFiles.listLocal({ ...scope, comparisonTarget: "release/next" }),
+          yield* viewedFiles.listLocal(
+            LocalViewedFileScope.make({ ...scope, comparisonTarget: "release/next" }),
+          ),
         ).toEqual([])
         expect(
-          yield* viewedFiles.listLocal({
-            ...scope,
-            comparisonKind: "workingTree",
-            comparisonTarget: "",
-          }),
+          yield* viewedFiles.listLocal(
+            LocalViewedFileScope.make({
+              ...scope,
+              comparisonKind: "workingTree",
+              comparisonTarget: "",
+            }),
+          ),
         ).toEqual([])
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -135,21 +140,20 @@ describe("ViewedFileStore", () => {
         const repositoryStore = yield* RepositoryStore
         const viewedFiles = yield* ViewedFileStore
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: "/repo",
+          localPath: repositoryLocalPath("/repo"),
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
           remoteUrl: "https://github.com/fungsi/diffdash",
         })
-        const scope: LocalViewedFileScope = {
+        const scope = LocalViewedFileScope.make({
           comparisonKind: "repositoryComparison",
           comparisonTarget: "b".repeat(40),
           repoId: repo.id,
           sourceIdentity: `comparison:repository-comparison:v1:${repo.id}:${"a".repeat(40)}:${"b".repeat(40)}:${"c".repeat(40)}`,
-        }
+        })
 
-        yield* viewedFiles.setLocal({
-          ...scope,
+        yield* viewedFiles.setLocal(scope, {
           patchHash: patchA,
           reviewKey: "src/app.tsx",
           viewed: true,
@@ -159,16 +163,20 @@ describe("ViewedFileStore", () => {
           { patchHash: patchA, reviewKey: "src/app.tsx" },
         ])
         expect(
-          yield* viewedFiles.listLocal({ ...scope, comparisonTarget: "d".repeat(40) }),
+          yield* viewedFiles.listLocal(
+            LocalViewedFileScope.make({ ...scope, comparisonTarget: "d".repeat(40) }),
+          ),
         ).toEqual([])
         expect(
-          yield* viewedFiles.listLocal({
-            ...scope,
-            sourceIdentity: scope.sourceIdentity.replace(
-              `:${"c".repeat(40)}`,
-              `:${"d".repeat(40)}`,
-            ),
-          }),
+          yield* viewedFiles.listLocal(
+            LocalViewedFileScope.make({
+              ...scope,
+              sourceIdentity: scope.sourceIdentity.replace(
+                `:${"c".repeat(40)}`,
+                `:${"d".repeat(40)}`,
+              ),
+            }),
+          ),
         ).toEqual([])
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -183,27 +191,26 @@ describe("ViewedFileStore", () => {
         const viewedFiles = yield* ViewedFileStore
         const database = yield* DatabaseService
         const repo = yield* repositoryStore.upsertRepository({
-          localPath: "/repo",
+          localPath: repositoryLocalPath("/repo"),
           name: "decoded-repo",
           owner: "local",
           provider: "local",
           remoteUrl: "file:///repo",
         })
         const hostedScope = { baseRefName: "main", prNumber: 51, repoId: repo.id }
-        const localScope: LocalViewedFileScope = {
+        const localScope = LocalViewedFileScope.make({
           comparisonKind: "branch",
           comparisonTarget: "main",
           repoId: repo.id,
           sourceIdentity: "branch:feature/schema",
-        }
+        })
         yield* viewedFiles.setHosted({
           ...hostedScope,
           patchHash: patchA,
           reviewKey: "src/hosted.ts",
           viewed: true,
         })
-        yield* viewedFiles.setLocal({
-          ...localScope,
+        yield* viewedFiles.setLocal(localScope, {
           patchHash: patchB,
           reviewKey: "src/local.ts",
           viewed: true,

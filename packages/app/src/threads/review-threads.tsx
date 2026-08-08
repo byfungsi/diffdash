@@ -39,7 +39,13 @@ import {
   useRef,
   useState,
 } from "react"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
+import {
+  runRendererPromise,
+  useDesktopRuntime,
+  useRendererStream,
+  useReviewAutomation,
+} from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
 import { formatTimestamp } from "@/shared/timestamp"
 import { Badge } from "@/shared/ui/badge"
@@ -104,6 +110,8 @@ export type ReviewThreadsController = {
 
 /** Loads and mutates persisted review threads exclusively through the typed preload API. */
 export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsController {
+  const captureAnalytics = useCaptureAnalytics()
+  const automation = useReviewAutomation()
   const [details, setDetails] = useState<readonly ReviewThreadDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -162,11 +170,10 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     try {
-      const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-      )
-      const loaded = await Promise.all(
-        threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
+      const loaded = await runRendererPromise(
+        automation.threads.listDetails(
+          reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+        ),
       )
       setDetails(sortThreadDetails(loaded))
     } catch (cause) {
@@ -176,14 +183,12 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     }
   }
 
-  useEffect(() => {
-    return window.diffDash.reviewThreads.onAgentProgress((progress) => {
-      setAgentProgress((current) => [
-        ...current.filter((item) => item.threadId !== progress.threadId),
-        progress,
-      ])
-    })
-  }, [])
+  useRendererStream(automation.threads.progress, (progress) => {
+    setAgentProgress((current) => [
+      ...current.filter((item) => item.threadId !== progress.threadId),
+      progress,
+    ])
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -200,11 +205,11 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setAgentErrors({})
     setLoading(true)
     setError(null)
-    window.diffDash.reviewThreads
-      .list(reviewThreadTarget(hostedReview, localTarget, comparisonTarget))
-      .then((threads) =>
-        Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
-      )
+    runRendererPromise(
+      automation.threads.listDetails(
+        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+      ),
+    )
       .then((loaded) => {
         if (!cancelled) setDetails(sortThreadDetails(loaded))
         return undefined
@@ -227,11 +232,12 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     hostedReview,
     localTarget,
     localTargetKey,
+    automation,
   ])
 
   const refreshThreadDetails = async (threadId: ReviewThreadId) => {
     try {
-      const refreshed = await window.diffDash.reviewThreads.get(threadId)
+      const refreshed = await runRendererPromise(automation.threads.get(threadId))
       setDetails((current) =>
         sortThreadDetails([...current.filter((item) => item.thread.id !== threadId), refreshed]),
       )
@@ -263,15 +269,17 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       ReviewAgentProgress.make({ threadId, stage: "preparing-context" }),
     ])
     try {
-      const pending = window.diffDash.reviewThreads.runAgent(
-        RunReviewThreadAgentRequest.make({
-          threadId,
-          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-          repoId: currentDetails.thread.repoId,
-          reviewKey: currentDetails.thread.reviewKey,
-          expectedBaseRevision: ReviewRevision.make(baseRevision),
-          expectedHeadRevision: ReviewRevision.make(headRevision),
-        }),
+      const pending = runRendererPromise(
+        automation.threads.runAgent(
+          RunReviewThreadAgentRequest.make({
+            threadId,
+            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+            repoId: currentDetails.thread.repoId,
+            reviewKey: currentDetails.thread.reviewKey,
+            expectedBaseRevision: ReviewRevision.make(baseRevision),
+            expectedHeadRevision: ReviewRevision.make(headRevision),
+          }),
+        ),
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
       const result = await pending
@@ -313,14 +321,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       throw new Error("Review revisions are unavailable")
     }
     try {
-      const created = await window.diffDash.reviewThreads.create(
-        CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-          expectedBaseRevision: ReviewRevision.make(baseRevision),
-          expectedHeadRevision: ReviewRevision.make(headRevision),
-          anchor,
-          bodyMarkdown: MarkdownBody.make(bodyMarkdown),
-        }),
+      const created = await runRendererPromise(
+        automation.threads.create(
+          CreateReviewThreadRequest.make({
+            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+            expectedBaseRevision: ReviewRevision.make(baseRevision),
+            expectedHeadRevision: ReviewRevision.make(headRevision),
+            anchor,
+            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
+          }),
+        ),
       )
       setDetails((current) => sortThreadDetails([...current, created]))
       captureAnalytics({
@@ -342,11 +352,13 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
 
   const addUserMessage = async (threadId: ReviewThreadId, bodyMarkdown: string) => {
     try {
-      const updatedDetails = await window.diffDash.reviewThreads.addUserMessage(
-        AddReviewThreadUserMessageRequest.make({
-          threadId,
-          bodyMarkdown: MarkdownBody.make(bodyMarkdown),
-        }),
+      const updatedDetails = await runRendererPromise(
+        automation.threads.addUserMessage(
+          AddReviewThreadUserMessageRequest.make({
+            threadId,
+            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
+          }),
+        ),
       )
       setDetails((current) => replaceThreadDetails(current, updatedDetails))
       setError(null)
@@ -717,6 +729,10 @@ export function ReviewThreadPanel({
 
 /** Safe, dependency-free Markdown subset for persisted review messages. */
 export function ReviewMarkdown({ children }: { readonly children: string }) {
+  const desktop = useDesktopRuntime()
+  const openExternalUrl = (url: string) => {
+    void runRendererPromise(desktop.openExternalUrl(url)).catch(() => undefined)
+  }
   const lines = children.replaceAll("\r\n", "\n").split("\n")
   const blocks: ReactNode[] = []
   let index = 0
@@ -748,7 +764,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
     }
     const heading = /^(#{1,3})\s+(.+)$/.exec(line)
     if (heading !== null) {
-      const content = inlineMarkdown(heading[2] ?? "")
+      const content = inlineMarkdown(heading[2] ?? "", openExternalUrl)
       const className = "font-semibold tracking-tight"
       blocks.push(
         heading[1]?.length === 1 ? (
@@ -777,7 +793,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       blocks.push(
         <ul key={`list-${index}`} className="list-disc space-y-0.5 pl-4">
           {items.map((item) => (
-            <li key={item.key}>{inlineMarkdown(item.value)}</li>
+            <li key={item.key}>{inlineMarkdown(item.value, openExternalUrl)}</li>
           ))}
         </ul>,
       )
@@ -789,7 +805,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
           key={`quote-${index}`}
           className="border-primary/50 text-muted-foreground border-l-2 pl-2"
         >
-          {inlineMarkdown(line.slice(2))}
+          {inlineMarkdown(line.slice(2), openExternalUrl)}
         </blockquote>,
       )
       index += 1
@@ -808,7 +824,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
     }
     blocks.push(
       <p key={`paragraph-${index}`} className="leading-5">
-        {inlineMarkdown(paragraph.join("\n"))}
+        {inlineMarkdown(paragraph.join("\n"), openExternalUrl)}
       </p>,
     )
   }
@@ -969,7 +985,10 @@ const providerDisplayName = (providerId: string): string => {
   return providerId
 }
 
-const inlineMarkdown = (value: string): readonly ReactNode[] => {
+const inlineMarkdown = (
+  value: string,
+  openExternalUrl: (url: string) => void,
+): readonly ReactNode[] => {
   const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*[^*]+\*|\n)/g
   let offset = 0
   return value
@@ -998,7 +1017,7 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
             className="text-link underline underline-offset-2"
             onClick={(event) => {
               event.preventDefault()
-              if (link[2] !== undefined) void window.diffDash.openExternalUrl(link[2])
+              if (link[2] !== undefined) openExternalUrl(link[2])
             }}
           >
             {link[1]}

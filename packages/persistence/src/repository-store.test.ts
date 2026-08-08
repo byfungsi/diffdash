@@ -1,10 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Either, Layer, Option } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { repositorySource } from "@diffdash/domain/repository"
+import {
+  noRepositoryLocalPath,
+  repositoryLocalPath,
+  repositorySource,
+} from "@diffdash/domain/repository"
 import {
   HostedRepositorySource,
   LocalRepositorySource,
@@ -39,7 +43,7 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const remote = yield* store.upsertRepository({
           isFavorite: true,
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "remote-repo",
           owner: "fungsi",
           provider: "github",
@@ -47,7 +51,7 @@ describe("RepositoryStore", () => {
         })
         const local = yield* store.upsertRepository({
           isFavorite: false,
-          localPath: "/tmp/local-repo",
+          localPath: repositoryLocalPath("/tmp/local-repo"),
           name: "local-repo",
           owner: "fungsi",
           provider: "github",
@@ -71,7 +75,7 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const database = yield* DatabaseService
         const repo = yield* store.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "searchable",
           owner: "fungsi",
           provider: "github",
@@ -102,14 +106,14 @@ describe("RepositoryStore", () => {
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
         const hosted = yield* store.upsertRepository({
-          localPath: "/tmp/shared-repo",
+          localPath: repositoryLocalPath("/tmp/shared-repo"),
           name: "shared-repo",
           owner: "fungsi",
           provider: "github",
           remoteUrl: "https://github.com/fungsi/shared-repo",
         })
         yield* store.upsertRepository({
-          localPath: "/tmp/shared-repo",
+          localPath: repositoryLocalPath("/tmp/shared-repo"),
           name: "shared-repo-local",
           owner: "local",
           provider: "local",
@@ -118,20 +122,32 @@ describe("RepositoryStore", () => {
 
         const found = yield* store.findByLocalPath("/tmp/shared-repo")
 
-        expect(found?.id).toBe(hosted.id)
-        expect(found?.provider).toBe("github")
+        expect(Option.getOrUndefined(found)).toMatchObject({
+          id: hosted.id,
+          provider: "github",
+        })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("returns null when no repository matches a local path", () =>
+  it.scoped("returns None when no repository matches a lookup", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
 
-        expect(yield* store.findByLocalPath("/tmp/missing-repo")).toBeNull()
+        expect(Option.isNone(yield* store.findByLocalPath("/tmp/missing-repo"))).toBe(true)
+        expect(
+          Option.isNone(
+            yield* store.findHosted(
+              makeHostedRepositoryLocator("github", "fungsi", "missing-repo"),
+            ),
+          ),
+        ).toBe(true)
+        expect(Option.isNone(yield* store.findByProviderRepositoryId("github", "R_missing"))).toBe(
+          true,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -145,14 +161,14 @@ describe("RepositoryStore", () => {
         const database = yield* DatabaseService
         const localPath = "/tmp/reconciled-repo"
         const hosted = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "reconciled-repo",
           owner: "fungsi",
           provider: "github",
           remoteUrl: "https://github.com/fungsi/reconciled-repo",
         })
         const alias = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "reconciled-repo-local",
           owner: "local",
           provider: "local",
@@ -357,14 +373,14 @@ describe("RepositoryStore", () => {
         const database = yield* DatabaseService
         const localPath = "/tmp/conflicting-repo"
         const hosted = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "conflicting-repo",
           owner: "fungsi",
           provider: "github",
           remoteUrl: "https://github.com/fungsi/conflicting-repo",
         })
         const alias = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "conflicting-repo-local",
           owner: "local",
           provider: "local",
@@ -523,7 +539,7 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const repo = yield* store.upsertRepository({
           isFavorite: true,
-          localPath: "/tmp/forgettable-repo",
+          localPath: repositoryLocalPath("/tmp/forgettable-repo"),
           name: "forgettable-repo",
           owner: "fungsi",
           provider: "github",
@@ -553,7 +569,7 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const hosted = yield* store.upsertRepository({
           isFavorite: true,
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -561,7 +577,7 @@ describe("RepositoryStore", () => {
         })
         const linked = yield* store.upsertRepository({
           isFavorite: false,
-          localPath: "/tmp/diffdash",
+          localPath: repositoryLocalPath("/tmp/diffdash"),
           name: "diffdash",
           owner: "fungsi",
           provider: "github",
@@ -586,14 +602,14 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const old = yield* store.upsertRepository({
           isFavorite: true,
-          localPath: "/tmp/xenith-operator-dashboard-fe",
+          localPath: repositoryLocalPath("/tmp/xenith-operator-dashboard-fe"),
           name: "xenith-operator-dashboard-fe",
           owner: "xenithlabs",
           provider: "github",
           remoteUrl: "git@github.com:xenithlabs/xenith-operator-dashboard-fe.git",
         })
         const current = yield* store.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "xenith-dashboard",
           owner: "xenithlabs",
           provider: "github",
@@ -620,7 +636,9 @@ describe("RepositoryStore", () => {
         expect(repositories.filter((repo) => repo.name === "xenith-dashboard")).toHaveLength(1)
         expect(repositories.some((repo) => repo.id === current.id)).toBe(false)
         expect(
-          yield* store.findByProviderRepositoryId("github", "R_xenith_dashboard"),
+          Option.getOrUndefined(
+            yield* store.findByProviderRepositoryId("github", "R_xenith_dashboard"),
+          ),
         ).toMatchObject({ id: old.id, name: "xenith-dashboard" })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -635,14 +653,14 @@ describe("RepositoryStore", () => {
         const database = yield* DatabaseService
         const localPath = "/tmp/diffdash"
         const hosted = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "diffdash",
           owner: "byfungsi",
           provider: "github",
           remoteUrl: "git@github.com:byfungsi/diffdash.git",
         })
         const local = yield* store.upsertRepository({
-          localPath,
+          localPath: repositoryLocalPath(localPath),
           name: "diffdash-local",
           owner: "local",
           provider: "local",
@@ -681,21 +699,21 @@ describe("RepositoryStore", () => {
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
         const github = yield* store.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "service",
           owner: "platform/backend",
           provider: "github",
           remoteUrl: "https://github.com/platform/backend/service",
         })
         const enterprise = yield* store.upsertRepository({
-          localPath: null,
+          localPath: noRepositoryLocalPath,
           name: "service",
           owner: "platform/backend",
           provider: "github-enterprise",
           remoteUrl: "https://git.example.com/platform/backend/service",
         })
         const legacyLocal = yield* store.upsertRepository({
-          localPath: "/tmp/service",
+          localPath: repositoryLocalPath("/tmp/service"),
           name: "service-local-id",
           owner: "local",
           provider: "local",
@@ -719,7 +737,7 @@ describe("RepositoryStore", () => {
         const store = yield* RepositoryStore
         const database = yield* DatabaseService
         const repo = yield* store.upsertRepository({
-          localPath: "/tmp/corrupt-repo",
+          localPath: repositoryLocalPath("/tmp/corrupt-repo"),
           name: "corrupt-repo",
           owner: "fungsi",
           provider: "github",

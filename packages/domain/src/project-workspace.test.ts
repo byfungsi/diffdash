@@ -12,7 +12,7 @@ import {
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
 } from "./project-workspace"
-import { Repo } from "./repository"
+import { Repo, RepositoryCheckoutPath } from "./repository"
 import { ReviewProjectId } from "./review-identity"
 import { HostedReviewTarget } from "./review-thread"
 
@@ -48,7 +48,7 @@ describe("project workspace", () => {
       owner: "fungsi",
       name: "diffdash",
       remoteUrl: "git@github.com:fungsi/diffdash.git",
-      localPath: "/workspace/diffdash",
+      localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
       isFavorite: false,
       lastOpenedAt: "2026-08-02T00:00:00.000Z",
       lastSyncedAt: "2026-08-02T00:00:00.000Z",
@@ -56,9 +56,10 @@ describe("project workspace", () => {
       updatedAt: "2026-08-02T00:00:00.000Z",
     })
 
-    expect(Schema.decodeUnknownSync(ProjectOpenResult)(ProjectOpened.make({ repo }))).toEqual(
-      ProjectOpened.make({ repo }),
-    )
+    const opened = ProjectOpened.make({ repo })
+    expect(
+      Schema.decodeUnknownSync(ProjectOpenResult)(Schema.encodeSync(ProjectOpenResult)(opened)),
+    ).toEqual(opened)
     expect(
       Schema.encodeSync(ProjectOpenResult)(
         ProjectRemoteSelectionRequired.make({
