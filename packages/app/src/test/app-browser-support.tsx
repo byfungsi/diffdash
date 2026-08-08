@@ -2674,7 +2674,30 @@ scenario("fileTreeSelection", async () => {
   expect(stickyChrome).not.toBeNull()
   if (stickyChrome !== null) {
     const expectedTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
-    expect(Math.abs(docsCard.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(1)
+    await vi.waitFor(() => {
+      diffPane.scrollTop = Math.max(0, diffPane.scrollHeight - diffPane.clientHeight)
+      expect(Math.abs(docsCard.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(1)
+    })
+
+    diffPane.scrollTop = 0
+    diffPane.dispatchEvent(new Event("scroll", { bubbles: true }))
+    await waitForAnimationFrames(2)
+    const scrolledAwayTop = docsCard.getBoundingClientRect().top
+    expect(Math.abs(scrolledAwayTop - expectedTop)).toBeGreaterThan(1)
+
+    getChangedFilesTreeItem("docs/readme.md")?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true }),
+    )
+
+    await vi.waitFor(() => {
+      expect(diffPane.dataset.reviewNavigationPhase).toBe("idle")
+      const cardRect = docsCard.getBoundingClientRect()
+      expect(cardRect.top).toBeLessThan(scrolledAwayTop)
+      expect(cardRect.top).toBeGreaterThanOrEqual(expectedTop - 1)
+      expect(cardRect.bottom).toBeLessThanOrEqual(diffPane.getBoundingClientRect().bottom + 1)
+    })
+    expect(getSelectedChangedFileTreeItems()).toHaveLength(1)
+    expect(getSelectedChangedFileTreeItems()[0]?.dataset.itemPath).toBe("docs/readme.md")
   }
 })
 
