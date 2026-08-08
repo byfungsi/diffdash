@@ -22,6 +22,7 @@ const internalPackages = [
   "@diffdash/agent-provider-fixture",
   "@diffdash/agent-provider-opencode",
   "@diffdash/app",
+  "@diffdash/core",
   "@diffdash/domain",
   "@diffdash/git-provider",
   "@diffdash/git-provider-fixture",

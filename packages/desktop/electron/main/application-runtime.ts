@@ -1,70 +1,59 @@
-import type { GitService } from "@diffdash/local-git/local-git"
-import type { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
-import type { RepositoryStore } from "@diffdash/persistence/repository-store"
-import type { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
-import type { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
-import type { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
-import type { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
-import type { ProcessService } from "@diffdash/process"
-import type { ReviewAgentService } from "@diffdash/review-agent"
-import type { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
-import type { AppSettings } from "@diffdash/settings/app-settings"
-import type { AppState } from "@diffdash/settings/app-state"
-import type { WalkthroughService } from "@diffdash/walkthrough"
-import { Cause, type Effect, Exit, ManagedRuntime, Option } from "effect"
-import type { AgentProviders } from "../../src/main/services/agent-providers"
-import type { Analytics } from "../../src/main/services/analytics"
-import type { AppUpdater } from "../../src/main/services/app-updater"
-import type { GitProvider } from "../../src/main/services/git-provider"
-import type { Prerequisites } from "../../src/main/services/prerequisites"
-import type { RepositoryLinker } from "../../src/main/services/repository-linker"
-import type { RepositoryComparisonSource } from "../../src/main/services/repository-comparison-source"
-import type { ReviewContextService } from "../../src/main/services/review-context"
-import type { ReviewSnapshotService } from "../../src/main/services/review-snapshot"
-import { createAppLayer } from "./composition"
+import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import {
+  createEmbeddedCore,
+  type CoreConfiguration,
+  type CoreMethod,
+  type CoreMethodInput,
+  type CoreOperationOptions,
+  type CoreOperationOutput,
+  type CoreResult,
+  type EmbeddedCore,
+  type GetStoredWalkthrough,
+  type StartWalkthroughOperation,
+  type WalkthroughOperationAccepted,
+  type WalkthroughOperationId,
+  type WalkthroughOperationResult,
+} from "@diffdash/core"
 
-/** Services provided once to all desktop application programs. */
-type ApplicationServices =
-  | RepositoryStore
-  | ProjectWorkspaceStore
-  | Analytics
-  | RepositoryLinker
-  | RepositoryComparisonSource
-  | GitService
-  | ProcessService
-  | GitProvider
-  | AppState
-  | AppUpdater
-  | AppSettings
-  | Prerequisites
-  | AgentProviders
-  | ReviewContextService
-  | ReviewSnapshotService
-  | ReviewAgentService
-  | ReviewThreadAnchorMapper
-  | ReviewThreadStore
-  | ReviewTurnStore
-  | ViewedFileStore
-  | WalkthroughStore
-  | WalkthroughService
-
-/** Typed boundary around the desktop application's managed Effect runtime. */
+/** Electron adapter that projects typed Core failures into the existing IPC error boundary. */
 export interface ApplicationRuntime {
-  readonly dispose: () => Promise<void>
-  readonly runPromise: <A, E>(program: Effect.Effect<A, E, ApplicationServices>) => Promise<A>
+  readonly start: () => Promise<void>
+  readonly execute: <Method extends CoreMethod>(
+    method: Method,
+    input: CoreMethodInput<Method>,
+    options?: CoreOperationOptions,
+  ) => Promise<CoreOperationOutput<Method>>
+  readonly walkthroughs: {
+    readonly start: (request: StartWalkthroughOperation) => Promise<WalkthroughOperationAccepted>
+    readonly getOperation: (
+      operationId: WalkthroughOperationId,
+    ) => Promise<WalkthroughOperationResult>
+    readonly cancel: (operationId: WalkthroughOperationId) => Promise<WalkthroughOperationResult>
+    readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
+  }
+  readonly dispose: EmbeddedCore["dispose"]
 }
 
-/** Creates the single managed runtime owned by the Electron application lifecycle. */
-export const createApplicationRuntime = (): ApplicationRuntime => {
-  const runtime = ManagedRuntime.make(createAppLayer())
+/** Creates the one embedded Core runtime owned by the desktop application. */
+export const createApplicationRuntime = (configuration: CoreConfiguration): ApplicationRuntime => {
+  const core = createEmbeddedCore(configuration)
+  const execute: ApplicationRuntime["execute"] = async (method, input, options) =>
+    unwrapCoreResult(await core.execute(method, input, options))
   return {
-    dispose: () => runtime.dispose(),
-    runPromise: async (program) => {
-      const exit = await runtime.runPromiseExit(program)
-      if (Exit.isSuccess(exit)) return exit.value
-      const failure = Cause.failureOption(exit.cause)
-      if (Option.isSome(failure)) throw failure.value
-      throw Cause.squash(exit.cause)
+    start: async () => unwrapCoreResult(await core.start()),
+    execute,
+    walkthroughs: {
+      start: async (request) => unwrapCoreResult(await core.walkthroughs.start(request)),
+      getOperation: async (operationId) =>
+        unwrapCoreResult(await core.walkthroughs.getOperation(operationId)),
+      cancel: async (operationId) => unwrapCoreResult(await core.walkthroughs.cancel(operationId)),
+      getStored: async (request) => unwrapCoreResult(await core.walkthroughs.getStored(request)),
     },
+    dispose: core.dispose,
   }
+}
+
+const unwrapCoreResult = <Value, Failure>(result: CoreResult<Value, Failure>): Value => {
+  if (result.ok) return result.value
+  throw result.error
 }

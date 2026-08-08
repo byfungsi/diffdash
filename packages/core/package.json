@@ -1,0 +1,43 @@
+{
+  "name": "@diffdash/core",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/core.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/agent-provider": "workspace:*",
+    "@diffdash/agent-provider-claude": "workspace:*",
+    "@diffdash/agent-provider-codex": "workspace:*",
+    "@diffdash/agent-provider-fixture": "workspace:*",
+    "@diffdash/agent-provider-opencode": "workspace:*",
+    "@diffdash/domain": "workspace:*",
+    "@diffdash/git-provider": "workspace:*",
+    "@diffdash/git-provider-fixture": "workspace:*",
+    "@diffdash/git-provider-github": "workspace:*",
+    "@diffdash/local-git": "workspace:*",
+    "@diffdash/persistence": "workspace:*",
+    "@diffdash/process": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
+    "@diffdash/review-agent": "workspace:*",
+    "@diffdash/settings": "workspace:*",
+    "@diffdash/walkthrough": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "posthog-node": "5.41.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

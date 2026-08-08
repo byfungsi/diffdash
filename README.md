@@ -22,13 +22,13 @@ providers behind provider-neutral Git and agent contracts.
 
 ## Architecture
 
-The workspace separates browser-safe domain/protocol/application packages, main-process
-infrastructure, provider-neutral orchestration, concrete provider leaves, and one Electron
-composition root. Renderer code reaches Node, SQLite, Git, CLIs, and updater capabilities only
-through the typed preload protocol.
+The workspace separates browser-safe domain/protocol/application packages, an embedded Effect Core,
+main-process infrastructure, provider-neutral orchestration, and concrete provider leaves. Electron
+is the native host and renderer trust boundary; Core owns the business runtime. Renderer code reaches
+Node, SQLite, Git, CLIs, and updater capabilities only through the typed preload protocol.
 
-Concrete Git and agent integrations are built-in leaf packages registered only by desktop
-composition. These package boundaries are dependency and ownership boundaries, not runtime
+Concrete Git and agent integrations are built-in leaf packages registered only by Core composition.
+These package boundaries are dependency and ownership boundaries, not runtime
 sandboxing. See `docs/architecture.md`, `docs/git-provider-authoring.md`, and
 `docs/agent-provider-authoring.md` for the package graph, allowed directions, extension templates,
 security requirements, tests, and release policy.

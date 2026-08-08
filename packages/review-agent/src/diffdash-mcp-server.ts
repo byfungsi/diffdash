@@ -237,7 +237,7 @@ class RunCapability {
 }
 
 /** A typed failure from the local DiffDash review context server. */
-class DiffDashMcpServerError extends Schema.TaggedError<DiffDashMcpServerError>()(
+export class DiffDashMcpServerError extends Schema.TaggedError<DiffDashMcpServerError>()(
   "DiffDashMcpServerError",
   {
     operation: Schema.String,

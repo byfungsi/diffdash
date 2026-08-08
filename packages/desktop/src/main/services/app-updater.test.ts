@@ -2,8 +2,8 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
 import {
-  AppUpdater,
   type AppUpdaterOptions,
+  createDesktopUpdater,
   nativeUpdaterAdapter,
   type NativeUpdaterAdapter,
 } from "./app-updater"
@@ -26,68 +26,66 @@ describe("AppUpdater", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
-      const updater = yield* AppUpdater
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
       expect(fake.feedUrls).toEqual(["https://updates.example.test/stable/macos/arm64"])
 
-      yield* updater.check
+      yield* updater.check()
       expect(fake.checkCount).toBe(1)
       expect(fake.downloadCount).toBe(0)
 
       fake.emitAvailable("0.1.5")
-      expect(yield* updater.state).toMatchObject({ _tag: "available", version: "0.1.5" })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "available", version: "0.1.5" })
 
-      yield* updater.download
+      yield* updater.download()
       expect(fake.downloadCount).toBe(1)
-      expect(yield* updater.state).toMatchObject({
+      expect(yield* updater.getState()).toMatchObject({
         _tag: "downloading",
         percent: 0,
         version: "0.1.5",
       })
 
       fake.emitProgress(62.5)
-      expect(yield* updater.state).toMatchObject({ _tag: "downloading", percent: 62.5 })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "downloading", percent: 62.5 })
       fake.emitDownloaded("0.1.5")
-      expect(yield* updater.state).toMatchObject({ _tag: "downloaded", version: "0.1.5" })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "downloaded", version: "0.1.5" })
 
-      yield* updater.quitAndInstall
+      yield* updater.quitAndInstall()
       expect(fake.installCount).toBe(1)
-    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+    })
   })
 
   it.scoped("selects the Linux x64 feed only for a real AppImage", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
-      yield* AppUpdater
+      const updater = createDesktopUpdater({
+        ...baseOptions(fake.adapter),
+        appImagePath: "/home/user/DiffDash.AppImage",
+        arch: "x64",
+        platform: "linux",
+      })
+      yield* Effect.addFinalizer(updater.dispose)
       expect(fake.feedUrls).toEqual(["https://updates.example.test/stable/linux/x64"])
-    }).pipe(
-      Effect.provide(
-        AppUpdater.layer({
-          ...baseOptions(fake.adapter),
-          appImagePath: "/home/user/DiffDash.AppImage",
-          arch: "x64",
-          platform: "linux",
-        }),
-      ),
-    )
+    })
   })
 
   it.scoped("marks deb and development installations as unsupported", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
-      const updater = yield* AppUpdater
-      expect(yield* updater.state).toMatchObject({ _tag: "unsupported", reason: "installation" })
+      const updater = createDesktopUpdater({
+        ...baseOptions(fake.adapter),
+        arch: "x64",
+        platform: "linux",
+      })
+      yield* Effect.addFinalizer(updater.dispose)
+      expect(yield* updater.getState()).toMatchObject({
+        _tag: "unsupported",
+        reason: "installation",
+      })
       expect(fake.feedUrls).toEqual([])
-    }).pipe(
-      Effect.provide(
-        AppUpdater.layer({
-          ...baseOptions(fake.adapter),
-          arch: "x64",
-          platform: "linux",
-        }),
-      ),
-    )
+    })
   })
 
   it.scoped("retains failures and notifies subscribers", () => {
@@ -95,54 +93,75 @@ describe("AppUpdater", () => {
     const states: string[] = []
 
     return Effect.gen(function* () {
-      const updater = yield* AppUpdater
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
       yield* updater.subscribe((state) => states.push(state["_tag"]))
-      yield* Effect.either(updater.check)
+      yield* Effect.either(updater.check())
 
-      expect(yield* updater.state).toMatchObject({
+      expect(yield* updater.getState()).toMatchObject({
         _tag: "error",
         message: "feed unavailable",
       })
       expect(states).toContain("error")
-    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+    })
   })
 
   it.scoped("returns to idle when no update exists and clamps native progress", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
-      const updater = yield* AppUpdater
-      yield* updater.check
-      expect(yield* updater.state).toMatchObject({ _tag: "checking" })
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+      yield* updater.check()
+      expect(yield* updater.getState()).toMatchObject({ _tag: "checking" })
       fake.emitNotAvailable()
-      expect(yield* updater.state).toMatchObject({ _tag: "idle" })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "idle" })
 
       fake.emitAvailable("0.1.5")
       fake.emitProgress(150)
-      expect(yield* updater.state).toMatchObject({ _tag: "downloading", percent: 100 })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "downloading", percent: 100 })
       fake.emitProgress(-10)
-      expect(yield* updater.state).toMatchObject({ _tag: "downloading", percent: 0 })
+      expect(yield* updater.getState()).toMatchObject({ _tag: "downloading", percent: 0 })
       fake.emitError(new Error("native updater failed"))
-      expect(yield* updater.state).toMatchObject({
+      expect(yield* updater.getState()).toMatchObject({
         _tag: "error",
         message: "native updater failed",
       })
-    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+    })
   })
 
   it.scoped("rejects download and install requests before their required states", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
-      const updater = yield* AppUpdater
-      const downloadError = yield* updater.download.pipe(Effect.flip)
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+      const downloadError = yield* updater.download().pipe(Effect.flip)
       expect(downloadError).toMatchObject({ operation: "download" })
       expect(fake.downloadCount).toBe(0)
 
-      const installError = yield* updater.quitAndInstall.pipe(Effect.flip)
+      const installError = yield* updater.quitAndInstall().pipe(Effect.flip)
       expect(installError).toMatchObject({ operation: "quitAndInstall" })
       expect(fake.installCount).toBe(0)
-    }).pipe(Effect.provide(AppUpdater.layer(baseOptions(fake.adapter))))
+    })
+  })
+
+  it.scoped("releases native and renderer subscriptions on disposal", () => {
+    const fake = makeFakeUpdater()
+    const states: string[] = []
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* updater.subscribe((state) => states.push(state["_tag"]))
+      expect(fake.nativeListenerCount).toBe(6)
+
+      yield* updater.dispose()
+      fake.emitAvailable("0.1.5")
+
+      expect(fake.nativeListenerCount).toBe(0)
+      expect(states).toEqual([])
+      expect(yield* updater.getState()).toMatchObject({ _tag: "idle" })
+    })
   })
 })
 
@@ -191,6 +210,16 @@ const makeFakeUpdater = (options: { readonly checkError?: Error } = {}) => {
     },
     get installCount() {
       return installCount
+    },
+    get nativeListenerCount() {
+      return (
+        checking.size +
+        available.size +
+        notAvailable.size +
+        progress.size +
+        downloaded.size +
+        errors.size
+      )
     },
     emitAvailable: (version: string) => {
       for (const listener of available) listener({ version })

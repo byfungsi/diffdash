@@ -2,7 +2,8 @@ import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { isVeryLargeDiffFile } from "@diffdash/domain/large-diff-policy"
 import { makeReviewDiffIdentity } from "@diffdash/domain/review-identity"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
-import { Check, ChevronDown, ChevronRight, MessageSquare } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, Copy, MessageSquare } from "lucide-react"
+import { ContextMenu } from "radix-ui"
 import { type RefObject, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   FileDiff,
@@ -39,6 +40,14 @@ const REVIEW_DIFF_METRICS = {
   paddingTop: 0,
   spacing: 0,
 } satisfies VirtualFileMetrics
+
+type DiffLineContextMenuState =
+  | { readonly status: "closed" }
+  | {
+      readonly status: "open"
+      readonly lineNumber: number
+      readonly copyStatus: "idle" | "copying" | "failed"
+    }
 
 /** Virtualized diff card with viewed, expansion, file-open, and inline-thread interactions. */
 export const OpenDiffCard = ({
@@ -78,7 +87,11 @@ export const OpenDiffCard = ({
 }) => {
   const fileCardRef = useRef<HTMLElement>(null)
   const fileHeaderFocusRef = useRef<HTMLButtonElement>(null)
+  const copyOperationRef = useRef(0)
   const threadHistorySyncFrameRef = useRef<number | null>(null)
+  const [contextMenuState, setContextMenuState] = useState<DiffLineContextMenuState>({
+    status: "closed",
+  })
   const [renderedPatch, setRenderedPatch] = useState<string | null>(null)
   const diffReady = renderedPatch === file.patch
   const renderAsPlainText = isVeryLargeDiffFile(file)
@@ -212,111 +225,197 @@ export const OpenDiffCard = ({
         onToggleExpanded={onToggleExpanded}
       />
       {isExpanded ? (
-        <div
-          data-diff-card-body
-          aria-busy={!diffReady}
-          className="bg-diff-canvas relative overflow-hidden"
+        <ContextMenu.Root
+          open={contextMenuState.status === "open"}
+          onOpenChange={(open) => {
+            if (open) return
+            copyOperationRef.current += 1
+            setContextMenuState({ status: "closed" })
+          }}
         >
-          {diffReady ? null : <DiffLoadingSkeleton />}
-          <FileDiff<ReviewThreadAnnotation>
-            className="block text-xs"
-            fileDiff={pierreFileDiff}
-            lineAnnotations={annotations}
-            metrics={REVIEW_DIFF_METRICS}
-            options={interactiveDiffOptions}
-            renderAnnotation={(annotation) => {
-              const { anchor, details, draftAnchor, expanded: reviewExpanded } = annotation.metadata
-              const contentId = reviewThreadAnnotationContentId(anchor)
-              const singleThreadDetails = details.length === 1 ? (details.at(0) ?? null) : null
-              return (
-                <div
-                  data-review-thread-annotation
-                  className="bg-diff-canvas box-border w-full min-w-0 max-w-full overflow-x-clip px-3 py-1.5 [overflow-wrap:anywhere]"
-                >
-                  <section className="bg-card overflow-hidden rounded-lg border shadow-xs">
-                    <div className="flex min-w-0 items-center">
-                      <button
-                        type="button"
-                        className="text-muted-foreground hover:bg-muted/45 hover:text-foreground focus-visible:ring-ring flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
-                        aria-controls={contentId}
-                        aria-expanded={reviewExpanded}
-                        onClick={() => onToggleLine(anchor)}
-                      >
-                        {reviewExpanded ? (
-                          <ChevronDown className="size-3.5 shrink-0" />
-                        ) : (
-                          <ChevronRight className="size-3.5 shrink-0" />
-                        )}
-                        <span>
-                          Review on{" "}
-                          <strong className="text-foreground">{reviewLineLabel(anchor)}</strong>
-                        </span>
-                      </button>
-                      {singleThreadDetails === null ? null : (
-                        <div className="shrink-0 border-l px-1">
-                          <Button
+          <ContextMenu.Trigger asChild>
+            <div
+              data-diff-card-body
+              aria-busy={!diffReady}
+              className="bg-diff-canvas relative overflow-hidden"
+              onContextMenu={(event) => {
+                const lineNumber = diffLineNumberFromEventPath(event.nativeEvent.composedPath())
+                if (lineNumber === null) {
+                  event.preventDefault()
+                  copyOperationRef.current += 1
+                  setContextMenuState({ status: "closed" })
+                  return
+                }
+                copyOperationRef.current += 1
+                setContextMenuState({ status: "open", lineNumber, copyStatus: "idle" })
+              }}
+            >
+              {diffReady ? null : <DiffLoadingSkeleton />}
+              <FileDiff<ReviewThreadAnnotation>
+                className="block text-xs"
+                fileDiff={pierreFileDiff}
+                lineAnnotations={annotations}
+                metrics={REVIEW_DIFF_METRICS}
+                options={interactiveDiffOptions}
+                renderAnnotation={(annotation) => {
+                  const {
+                    anchor,
+                    details,
+                    draftAnchor,
+                    expanded: reviewExpanded,
+                  } = annotation.metadata
+                  const contentId = reviewThreadAnnotationContentId(anchor)
+                  const singleThreadDetails = details.length === 1 ? (details.at(0) ?? null) : null
+                  return (
+                    <div
+                      data-review-thread-annotation
+                      className="bg-diff-canvas box-border w-full min-w-0 max-w-full overflow-x-clip px-3 py-1.5 [overflow-wrap:anywhere]"
+                    >
+                      <section className="bg-card overflow-hidden rounded-lg border shadow-xs">
+                        <div className="flex min-w-0 items-center">
+                          <button
                             type="button"
-                            size="icon-xs"
-                            variant="ghost"
-                            aria-label={`Open ${reviewLineLabel(anchor)} thread details`}
-                            title="Open thread details"
-                            onClick={() => onOpenThread(singleThreadDetails)}
+                            className="text-muted-foreground hover:bg-muted/45 hover:text-foreground focus-visible:ring-ring flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-xs transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
+                            aria-controls={contentId}
+                            aria-expanded={reviewExpanded}
+                            onClick={() => onToggleLine(anchor)}
                           >
-                            <MessageSquare />
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                    {reviewExpanded ? (
-                      <div
-                        id={contentId}
-                        data-review-thread-conversation
-                        className="flex min-h-0 flex-1 flex-col divide-y overflow-hidden border-t"
-                      >
-                        {details.map((threadDetails) => (
-                          <ReviewThreadPanel
-                            key={threadDetails.thread.id}
-                            embedded
-                            agentRunning={reviewThreads.runningThreadIds.includes(
-                              threadDetails.thread.id,
+                            {reviewExpanded ? (
+                              <ChevronDown className="size-3.5 shrink-0" />
+                            ) : (
+                              <ChevronRight className="size-3.5 shrink-0" />
                             )}
-                            agentProgress={
-                              reviewThreads.agentProgress.find(
-                                (progress) => progress.threadId === threadDetails.thread.id,
-                              )?.stage ?? null
-                            }
-                            agentError={reviewThreads.agentErrors[threadDetails.thread.id] ?? null}
-                            details={threadDetails}
-                            orchestration={{ retryAgentMessage: reviewThreads.runAgent }}
-                            {...(details.length > 1
-                              ? { onOpenDetail: () => onOpenThread(threadDetails) }
-                              : {})}
-                            onAddUserMessage={reviewThreads.addUserMessage}
-                            onRefresh={reviewThreads.refreshThread}
-                          />
-                        ))}
-                        {draftAnchor === null ? null : (
-                          <div className="p-3">
-                            <ReviewThreadComposer
-                              label="Line comment"
-                              onCancel={() => onToggleLine(draftAnchor)}
-                              onSubmit={async (bodyMarkdown) => {
-                                await reviewThreads.createThread(draftAnchor, bodyMarkdown)
-                              }}
-                            />
+                            <span>
+                              Review on{" "}
+                              <strong className="text-foreground">{reviewLineLabel(anchor)}</strong>
+                            </span>
+                          </button>
+                          {singleThreadDetails === null ? null : (
+                            <div className="shrink-0 border-l px-1">
+                              <Button
+                                type="button"
+                                size="icon-xs"
+                                variant="ghost"
+                                aria-label={`Open ${reviewLineLabel(anchor)} thread details`}
+                                title="Open thread details"
+                                onClick={() => onOpenThread(singleThreadDetails)}
+                              >
+                                <MessageSquare />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        {reviewExpanded ? (
+                          <div
+                            id={contentId}
+                            data-review-thread-conversation
+                            className="flex min-h-0 flex-1 flex-col divide-y overflow-hidden border-t"
+                          >
+                            {details.map((threadDetails) => (
+                              <ReviewThreadPanel
+                                key={threadDetails.thread.id}
+                                embedded
+                                agentRunning={reviewThreads.runningThreadIds.includes(
+                                  threadDetails.thread.id,
+                                )}
+                                agentProgress={
+                                  reviewThreads.agentProgress.find(
+                                    (progress) => progress.threadId === threadDetails.thread.id,
+                                  )?.stage ?? null
+                                }
+                                agentError={
+                                  reviewThreads.agentErrors[threadDetails.thread.id] ?? null
+                                }
+                                details={threadDetails}
+                                orchestration={{ retryAgentMessage: reviewThreads.runAgent }}
+                                {...(details.length > 1
+                                  ? { onOpenDetail: () => onOpenThread(threadDetails) }
+                                  : {})}
+                                onAddUserMessage={reviewThreads.addUserMessage}
+                                onRefresh={reviewThreads.refreshThread}
+                              />
+                            ))}
+                            {draftAnchor === null ? null : (
+                              <div className="p-3">
+                                <ReviewThreadComposer
+                                  label="Line comment"
+                                  onCancel={() => onToggleLine(draftAnchor)}
+                                  onSubmit={async (bodyMarkdown) => {
+                                    await reviewThreads.createThread(draftAnchor, bodyMarkdown)
+                                  }}
+                                />
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ) : null}
-                  </section>
-                </div>
-              )
-            }}
-          />
-        </div>
+                        ) : null}
+                      </section>
+                    </div>
+                  )
+                }}
+              />
+            </div>
+          </ContextMenu.Trigger>
+          <ContextMenu.Portal>
+            <ContextMenu.Content
+              aria-label="Diff line actions"
+              className="bg-popover text-popover-foreground z-50 min-w-44 overflow-hidden rounded-xl border p-1 shadow-lg"
+            >
+              <ContextMenu.Item
+                className="data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2 text-xs outline-none"
+                disabled={
+                  contextMenuState.status === "open" && contextMenuState.copyStatus === "copying"
+                }
+                onSelect={(event) => {
+                  if (contextMenuState.status !== "open") return
+                  event.preventDefault()
+                  const lineNumber = contextMenuState.lineNumber
+                  const operation = copyOperationRef.current + 1
+                  copyOperationRef.current = operation
+                  setContextMenuState({ ...contextMenuState, copyStatus: "copying" })
+                  void navigator.clipboard.writeText(`@${file.path}:${lineNumber}`).then(
+                    () => {
+                      if (copyOperationRef.current !== operation) return undefined
+                      setContextMenuState({ status: "closed" })
+                      return undefined
+                    },
+                    () => {
+                      if (copyOperationRef.current !== operation) return undefined
+                      setContextMenuState((current) =>
+                        current.status === "open" && current.lineNumber === lineNumber
+                          ? { ...current, copyStatus: "failed" }
+                          : current,
+                      )
+                      return undefined
+                    },
+                  )
+                }}
+              >
+                <Copy className="text-muted-foreground size-3.5 shrink-0" />
+                <span>
+                  {contextMenuState.status === "open" && contextMenuState.copyStatus === "copying"
+                    ? "Copying path..."
+                    : contextMenuState.status === "open" && contextMenuState.copyStatus === "failed"
+                      ? "Copy failed, retry"
+                      : "Copy path"}
+                </span>
+              </ContextMenu.Item>
+            </ContextMenu.Content>
+          </ContextMenu.Portal>
+        </ContextMenu.Root>
       ) : null}
     </section>
   )
+}
+
+const diffLineNumberFromEventPath = (path: readonly EventTarget[]) => {
+  for (const target of path) {
+    if (!(target instanceof HTMLElement)) continue
+    const value = target.getAttribute("data-line") ?? target.getAttribute("data-column-number")
+    if (value === null) continue
+    const lineNumber = Number(value)
+    if (Number.isSafeInteger(lineNumber) && lineNumber > 0) return lineNumber
+  }
+  return null
 }
 
 const DiffLoadingSkeleton = () => (

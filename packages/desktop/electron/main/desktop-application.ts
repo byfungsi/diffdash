@@ -1,5 +1,7 @@
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { CoreMethod } from "@diffdash/core"
+import { Effect } from "effect"
 import {
   app,
   BrowserWindow,
@@ -7,11 +9,10 @@ import {
   dialog,
   shell,
 } from "electron"
-import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
-import { Effect } from "effect"
-import { RepositoryLinker } from "../../src/main/services/repository-linker"
 import { resolveApplicationIdentity } from "./application-identity"
 import { createApplicationRuntime } from "./application-runtime"
+import { createApplicationUpdater } from "./application-updater"
+import { resolveCoreConfiguration } from "./core-configuration"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
 import { createRendererSecurityPolicy } from "./electron-policy"
 import type { RendererSecurityPolicy } from "./electron-policy"
@@ -93,19 +94,24 @@ const start = async () => {
     openExternal: (url) => shell.openExternal(url),
     packagedRendererUrl: pathToFileURL(join(__dirname, "../renderer/index.html")).href,
   })
-  const applicationRuntime = createApplicationRuntime()
-  await applicationRuntime.runPromise(
-    Effect.flatMap(ReviewTurnStore, (turns) => turns.recoverInterruptedTurns),
+  const applicationRuntime = createApplicationRuntime(
+    await Effect.runPromise(resolveCoreConfiguration()),
   )
-  installIpcControllers(applicationRuntime, navigation.commands, rendererSecurityPolicy)
+  let updater: ReturnType<typeof createApplicationUpdater>
+  try {
+    await applicationRuntime.start()
+    updater = createApplicationUpdater()
+  } catch (cause) {
+    await applicationRuntime.dispose()
+    throw cause
+  }
+  installIpcControllers(applicationRuntime, updater, navigation.commands, rendererSecurityPolicy)
   activeRendererSecurityPolicy = rendererSecurityPolicy
   const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()
   if (shouldRepairOnStartup) {
     void applicationRuntime
-      .runPromise(
-        Effect.flatMap(RepositoryLinker, (repositories) => repositories.repairIdentities()),
-      )
+      .execute(CoreMethod.repairRepositoryIdentities, {})
       .then((result) => {
         console.info(
           `[repositories:repair] resolved=${result.resolvedCount} unresolved=${result.unresolvedCount} localAliases=${result.localAliasCount}`,

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import electronUpdater, {
   type AppUpdater as ElectronNativeUpdater,
   type ProgressInfo,
@@ -22,7 +22,7 @@ const INITIAL_CHECK_DELAY_MS = 10_000
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000
 
 /** A recoverable automatic-update operation failure. */
-class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
+export class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
   operation: Schema.String,
   message: Schema.String,
   cause: Schema.NullOr(Schema.Defect),
@@ -53,28 +53,28 @@ export interface AppUpdaterOptions {
   readonly platform: NodeJS.Platform
 }
 
-/** Main-process service for checking, downloading, and installing DiffDash updates. */
-export class AppUpdater extends Context.Tag("@diffdash/AppUpdater")<
-  AppUpdater,
-  {
-    readonly state: Effect.Effect<AppUpdateState>
-    readonly check: Effect.Effect<void, AppUpdaterError>
-    readonly download: Effect.Effect<void, AppUpdaterError>
-    readonly quitAndInstall: Effect.Effect<void, AppUpdaterError>
-    readonly startAutomaticChecks: Effect.Effect<void>
-    readonly subscribe: (listener: (state: AppUpdateState) => void) => Effect.Effect<() => void>
-  }
->() {
-  /** Creates an updater layer for production or a supplied test adapter. */
-  static layer(options: AppUpdaterOptions) {
-    return Layer.scoped(
-      AppUpdater,
-      Effect.acquireRelease(
-        Effect.sync(() => makeAppUpdater(options)),
-        ({ cleanup }) => Effect.sync(cleanup),
-      ).pipe(Effect.map(({ service }) => service)),
-    )
-  }
+/** Electron-owned updater operations and lifecycle. */
+export interface DesktopUpdater {
+  /** Returns the latest updater state. */
+  readonly getState: () => Effect.Effect<AppUpdateState>
+
+  /** Checks the configured feed for an update. */
+  readonly check: () => Effect.Effect<void, AppUpdaterError>
+
+  /** Downloads the currently available update. */
+  readonly download: () => Effect.Effect<void, AppUpdaterError>
+
+  /** Installs a downloaded update and exits the application. */
+  readonly quitAndInstall: () => Effect.Effect<void, AppUpdaterError>
+
+  /** Starts the bounded automatic update-check timers once. */
+  readonly startAutomaticChecks: () => Effect.Effect<void>
+
+  /** Subscribes to updater state changes until the returned cleanup runs. */
+  readonly subscribe: (listener: (state: AppUpdateState) => void) => Effect.Effect<() => void>
+
+  /** Releases timers, native subscriptions, and listeners. */
+  readonly dispose: () => Effect.Effect<void>
 }
 
 /** Creates the production adapter around electron-updater. */
@@ -123,7 +123,8 @@ const subscribeNative = <Event extends Parameters<ElectronNativeUpdater["on"]>[0
   return () => updater.removeListener(event, listener)
 }
 
-const makeAppUpdater = (options: AppUpdaterOptions) => {
+/** Creates the Electron-owned updater without introducing another managed runtime. */
+export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater => {
   const eligibility = updateEligibility(options)
   let state: AppUpdateState =
     "reason" in eligibility
@@ -244,19 +245,17 @@ const makeAppUpdater = (options: AppUpdaterOptions) => {
   }
 
   return {
-    cleanup,
-    service: AppUpdater.of({
-      state: Effect.sync(() => state),
-      check,
-      download,
-      quitAndInstall,
-      startAutomaticChecks,
-      subscribe: (listener) =>
-        Effect.sync(() => {
-          listeners.add(listener)
-          return () => listeners.delete(listener)
-        }),
-    }),
+    getState: () => Effect.sync(() => state),
+    check: () => check,
+    download: () => download,
+    quitAndInstall: () => quitAndInstall,
+    startAutomaticChecks: () => startAutomaticChecks,
+    subscribe: (listener) =>
+      Effect.sync(() => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+    dispose: () => Effect.sync(cleanup),
   }
 }
 

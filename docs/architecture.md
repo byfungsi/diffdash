@@ -1,7 +1,8 @@
 # Architecture
 
-DiffDash is a pnpm workspace with one Electron composition root. Package boundaries separate domain,
-platform, host orchestration, and concrete integrations; they are enforced by
+DiffDash is a pnpm workspace with an Electron native-host composition root and one embedded Core
+business runtime. Package boundaries separate domain, platform, host orchestration, and concrete
+integrations; they are enforced by
 `scripts/build/package-boundaries.test.mjs`.
 
 ## Package Graph
@@ -10,17 +11,18 @@ Arrows point from a consumer to an allowed dependency. External libraries are om
 
 ```mermaid
 graph TD
+  desktop["@diffdash/desktop"] --> core["@diffdash/core"]
   desktop["@diffdash/desktop"] --> app["@diffdash/app"]
   desktop --> protocol["@diffdash/protocol"]
-  desktop --> settings["@diffdash/settings"]
-  desktop --> persistence["@diffdash/persistence"]
-  desktop --> localGit["@diffdash/local-git"]
-  desktop --> walkthrough["@diffdash/walkthrough"]
-  desktop --> reviewAgent["@diffdash/review-agent"]
-  desktop --> gitSdk["@diffdash/git-provider"]
-  desktop --> agentSdk["@diffdash/agent-provider"]
-  desktop --> gitProviders["Git provider leaves"]
-  desktop --> agentProviders["Agent provider leaves"]
+  core --> settings["@diffdash/settings"]
+  core --> persistence["@diffdash/persistence"]
+  core --> localGit["@diffdash/local-git"]
+  core --> walkthrough["@diffdash/walkthrough"]
+  core --> reviewAgent["@diffdash/review-agent"]
+  core --> gitSdk["@diffdash/git-provider"]
+  core --> agentSdk["@diffdash/agent-provider"]
+  core --> gitProviders["Git provider leaves"]
+  core --> agentProviders["Agent provider leaves"]
 
   app --> protocol
   app --> domain["@diffdash/domain"]
@@ -59,17 +61,18 @@ demo and promotional output but is never shipped in the desktop application.
   typed protocol implemented by preload.
 - `@diffdash/process`, `@diffdash/settings`, and `@diffdash/persistence` own subprocess, JSON, and
   SQLite infrastructure respectively. Process execution is exposed as one scoped Effect service;
-  concrete command protocols remain outside the package. Electron supplies paths and layers at the
-  application edge.
+  concrete command protocols remain outside the package. Electron supplies schema-validated plain
+  runtime configuration at the Core boundary.
 - `@diffdash/git-provider` and `@diffdash/agent-provider` own provider-neutral contracts,
   registries, errors, and conformance suites. They never import concrete providers.
 - Concrete provider packages are inward-facing leaves. They may depend on their SDK, Effect,
   `@diffdash/process` when needed, and provider-owned libraries. They never depend on desktop,
   renderer, protocol, settings, persistence, orchestration, or another concrete provider.
 - Provider-neutral orchestration may depend on SDKs and infrastructure, but not concrete providers.
-- `@diffdash/desktop` is the only composition root. Concrete Git providers are registered in
-  `packages/desktop/electron/main/composition.ts`; concrete agent providers are registered in
-  `packages/desktop/electron/main/agent-provider-composition.ts`.
+- `@diffdash/core` owns the single business `ManagedRuntime`, service Layer graph, and concrete
+  provider registration. It imports no Electron, updater, renderer, or desktop modules.
+- `@diffdash/desktop` owns windows, preload security, dialogs, shell integration, the updater,
+  single-instance behavior, and embedded Core lifecycle.
 
 Dependencies must remain acyclic and use `workspace:*`. Relative imports cannot cross package
 roots. Browser-safe exports are bundled in a browser target during the boundary test to reject Node,
@@ -79,9 +82,37 @@ Electron, SQLite, and concrete-provider leakage.
 
 Providers are built into DiffDash and reviewed and released with the desktop application. A package
 boundary is an ownership, test, and dependency boundary, not runtime sandboxing. Concrete provider
-code executes as trusted code in the Electron main process and can use capabilities explicitly
-passed by desktop composition. Do not treat the package model as safe plugin loading for untrusted
-third-party code.
+code executes as trusted code in the embedded Core and can use capabilities explicitly passed by
+Core composition. Do not treat the package model as safe plugin loading for untrusted third-party
+code.
+
+## Embedded Core Migration
+
+Electron controllers call the closed `CoreMethod` catalog and the Core-owned walkthrough operation
+facade. Internal Effect tags, Layers, and the managed runtime are not exposed to Electron. Boundary
+tests reject direct business-service imports and generic runtime execution from controllers.
+Each Core call returns `CoreResult<Value, Failure>` with an exact method-correlated expected failure
+union. The Electron application-runtime adapter deliberately unwraps that result into the existing
+IPC error adapters; only defects reject directly from `EmbeddedCore`.
+
+| Ownership | Current boundary |
+| --- | --- |
+| Repositories, project workspace, settings, prerequisites, analytics | Named Core operations |
+| Review acquisition, paging, search, viewed state, navigation resolution | Named Core operations |
+| Review agents and threads | Named Core operations with host progress callbacks |
+| Walkthrough execution and persistence | `start`, `getOperation`, `cancel`, and `getStored` |
+
+Updater, window, dialog, shell, IPC sender validation, and renderer transport remain Electron-owned.
+FUN-254 will replace the embedded walkthrough operation implementation with persisted idempotency,
+replay, and cross-process diagnostics without moving orchestration back into Electron.
+
+The remaining Electron imports of Core-owned error types are temporary transport adapters with
+explicit migration owners:
+
+| Electron adapter | Migration owner |
+| --- | --- |
+| `ipc/walkthrough-public-error.ts` | FUN-254 moves walkthrough failure classification and diagnostics behind the durable Core operation boundary |
+| `ipc/review-thread-public-error.ts` | FUN-215 moves review-thread failure envelopes behind external Core RPC during atomic cutover |
 
 See [Git provider authoring](git-provider-authoring.md) and
 [agent provider authoring](agent-provider-authoring.md) for extension contracts.

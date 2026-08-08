@@ -907,6 +907,7 @@ type AppBrowserScenarioId =
   | "cliRepositoryComparison"
   | "cliRepairRepositories"
   | "cliRepositoryPullRequests"
+  | "diffLineContextMenu"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
   | "diffSearchImmutableAnchor"
@@ -950,6 +951,7 @@ type AppBrowserScenarioId =
   | "stickyDiffCardHeaders"
   | "threadComposerShortcut"
   | "threadNavigationConvergence"
+  | "toggleSidebarShortcut"
   | "unavailableProviderRoute"
   | "unsupportedGitHubCli"
   | "updateDownloadRestart"
@@ -1322,6 +1324,188 @@ scenario("diffViewSettings", async () => {
     expect(
       getDiffShadowRoot("src/app.tsx")?.querySelector('[data-diff-type="split"]'),
     ).not.toBeNull()
+  })
+})
+
+scenario("diffLineContextMenu", async () => {
+  const path = "src/index.ts"
+  const lineDetail = HostedReviewDetail.make({
+    ...detail,
+    files: [
+      ChangedFile.make({
+        additions: 1,
+        changeType: "renamed",
+        deletions: 1,
+        path,
+      }),
+    ],
+  })
+  const lineDiff = HostedReviewDiff.make({
+    ...diff,
+    diff: `diff --git a/src/legacy.ts b/${path}
+similarity index 90%
+rename from src/legacy.ts
+rename to ${path}
+index 1111111..2222222 100644
+--- a/src/legacy.ts
++++ b/${path}
+@@ -12 +153 @@
+-old line
++new line`,
+  })
+  const writeText = vi.spyOn(window.navigator.clipboard, "writeText").mockResolvedValue()
+  installDiffDashApi({ pullRequestDetail: lineDetail, pullRequestDiff: lineDiff })
+  renderApp()
+
+  await openDefaultHostedReview()
+  const shadowRoot = await vi.waitFor(() => {
+    const candidate = getDiffShadowRoot(path)
+    expect(candidate?.querySelector("[data-line]")).not.toBeNull()
+    if (candidate === null) throw new Error("Missing diff shadow root")
+    return candidate
+  })
+  const addition = getDiffLine(shadowRoot, "new line")
+  expect(addition).not.toBeUndefined()
+  if (addition === undefined) throw new Error("Missing added diff line")
+
+  addition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+
+  const menu = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(element).not.toBeNull()
+    if (element === null) throw new Error("Missing diff line actions menu")
+    return element
+  })
+  const copyPath = [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes("Copy path") ?? false,
+  )
+  expect(copyPath).not.toBeUndefined()
+  copyPath?.click()
+
+  await vi.waitFor(() => {
+    expect(writeText).toHaveBeenCalledWith("@src/index.ts:153")
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  const deletion = getDiffLine(shadowRoot, "old line")
+  expect(deletion).not.toBeUndefined()
+  if (deletion === undefined) throw new Error("Missing deleted diff line")
+  deletion.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const reopenedMenu = await vi.waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(element).not.toBeNull()
+    if (element === null) throw new Error("Missing reopened diff line actions menu")
+    return element
+  })
+  const oldSideCopyPath = [...reopenedMenu.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+    (item) => item.textContent?.includes("Copy path") ?? false,
+  )
+  expect(oldSideCopyPath).not.toBeUndefined()
+  oldSideCopyPath?.click()
+
+  await vi.waitFor(() => {
+    expect(writeText).toHaveBeenLastCalledWith("@src/index.ts:12")
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  writeText.mockRejectedValueOnce(new Error("Clipboard unavailable"))
+  const retryAddition = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "new line")
+  expect(retryAddition).not.toBeUndefined()
+  if (retryAddition === undefined) throw new Error("Missing added diff line for retry")
+  retryAddition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const failedCopyItem = await vi.waitFor(() => {
+    const item = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"] [role="menuitem"]',
+    )
+    expect(item).not.toBeNull()
+    if (item === null) throw new Error("Missing copy path menu item")
+    return item
+  })
+  failedCopyItem.click()
+
+  await vi.waitFor(() => {
+    expect(failedCopyItem.textContent).toContain("Copy failed, retry")
+  })
+
+  document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  const delayedCopy = makeBrowserWait()
+  writeText.mockImplementationOnce(() => delayedCopy.promise)
+  const delayedAddition = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "new line")
+  expect(delayedAddition).not.toBeUndefined()
+  if (delayedAddition === undefined) throw new Error("Missing added diff line for delayed copy")
+  delayedAddition.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  const delayedCopyItem = await vi.waitFor(() => {
+    const item = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"] [role="menuitem"]',
+    )
+    expect(item).not.toBeNull()
+    if (item === null) throw new Error("Missing delayed copy path menu item")
+    return item
+  })
+  delayedCopyItem.click()
+  document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).toBeNull()
+  })
+
+  const currentDeletion = getDiffLine(getDiffShadowRoot(path) ?? shadowRoot, "old line")
+  expect(currentDeletion).not.toBeUndefined()
+  if (currentDeletion === undefined) throw new Error("Missing deleted diff line after delayed copy")
+  currentDeletion.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      button: 2,
+      cancelable: true,
+      composed: true,
+    }),
+  )
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="menu"][aria-label="Diff line actions"]')).not.toBeNull()
+  })
+  delayedCopy.release()
+
+  await vi.waitFor(() => {
+    const activeMenu = document.querySelector<HTMLElement>(
+      '[role="menu"][aria-label="Diff line actions"]',
+    )
+    expect(activeMenu).not.toBeNull()
+    expect(activeMenu?.textContent).toContain("Copy path")
   })
 })
 
@@ -3211,6 +3395,7 @@ scenario("threadComposerShortcut", async () => {
 })
 
 scenario("reviewThreadSidebar", async () => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
   const previousRevisionPath = "src/features/thread-sidebar/components/extra-review-thread.ts"
   const paths = ["src/app.tsx", "docs/readme.md", previousRevisionPath, "pnpm-lock.yaml"] as const
   const summaryDiffText = paths
@@ -3809,12 +3994,54 @@ scenario("reviewThreadSidebar", async () => {
       "pnpm-lock.yaml",
     )
   })
-  document
-    .querySelector<HTMLButtonElement>(
-      '[data-review-thread-detail] button[aria-label="Close thread details"]',
+  const closeThreadDetails = document.querySelector<HTMLButtonElement>(
+    '[data-review-thread-detail] button[aria-label="Close thread details"]',
+  )
+  if (closeThreadDetails === null) throw new Error("Thread detail close button was not found")
+  closeThreadDetails.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: closeThreadDetails }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
     )
-    ?.click()
-  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-detail]")).toBeNull())
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-list]")).not.toBeNull())
+  const reopenedLockThread = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Open thread details for pnpm-lock.yaml R1"]',
+  )
+  if (reopenedLockThread === null) throw new Error("Reopened thread was not found")
+  reopenedLockThread.click()
+  const reopenedDetailResizer = await vi.waitFor(() => {
+    const threadDetailResizer = document.querySelector<HTMLElement>(
+      "[data-review-thread-detail-resizer]",
+    )
+    expect(document.querySelector("[data-review-thread-detail]")).not.toBeNull()
+    if (threadDetailResizer === null) throw new Error("Thread detail resizer was not found")
+    return threadDetailResizer
+  })
+  reopenedDetailResizer.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: reopenedDetailResizer })
+      .defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector("[data-review-thread-detail]")).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+    )
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => expect(document.querySelector("[data-review-thread-list]")).not.toBeNull())
   document.body.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }),
   )
@@ -5043,6 +5270,7 @@ scenario("shortcutReferenceReview", async () => {
   })
   expect(dialog?.textContent).toContain("Ctrl")
   expect(dialog?.textContent).not.toContain("Cmd")
+  expect(dialog?.textContent).toContain("Toggle sidebar")
 
   document
     .querySelector<HTMLButtonElement>('button[aria-label="Close keyboard shortcuts"]')
@@ -5052,6 +5280,117 @@ scenario("shortcutReferenceReview", async () => {
       document.querySelector('dialog[aria-labelledby="keyboard-shortcut-reference-title"]'),
     ).toBeNull()
     expect(document.activeElement).toBe(filterInput)
+  })
+})
+
+scenario("toggleSidebarShortcut", async () => {
+  const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  installDiffDashApi()
+  renderApp()
+
+  expect(dispatchKeyboardShortcut("b", { metaKey: true }).defaultPrevented).toBe(false)
+  await openDefaultHostedReview()
+  await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")).not.toBeNull())
+  await showWideReviewLayout()
+
+  const filterInput = document.querySelector<HTMLInputElement>('input[placeholder="Filter files"]')
+  const sidebarToggle = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="Collapse sidebar"]',
+  )
+  if (filterInput === null || sidebarToggle === null) {
+    throw new Error("Review sidebar controls were not found")
+  }
+  expect(sidebarToggle.title).toBe("Collapse sidebar (Cmd + B)")
+  filterInput.focus()
+
+  expect(
+    dispatchKeyboardShortcut("b", { ctrlKey: true, target: filterInput }).defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { altKey: true, metaKey: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, shiftKey: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, repeat: true, target: filterInput })
+      .defaultPrevented,
+  ).toBe(false)
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  expect(sidebarToggle.getAttribute("aria-expanded")).toBe("true")
+
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: filterInput }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    const expandSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand sidebar"]',
+    )
+    expect(expandSidebar?.getAttribute("aria-expanded")).toBe("false")
+    expect(expandSidebar?.title).toBe("Expand sidebar (Cmd + B)")
+    expect(document.querySelector('input[placeholder="Filter files"]')).toBeNull()
+    expect(document.activeElement).toBe(expandSidebar)
+  })
+
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => {
+    const collapseSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Collapse sidebar"]',
+    )
+    expect(collapseSidebar?.getAttribute("aria-expanded")).toBe("true")
+    expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
+  })
+
+  const contextResizer = document.querySelector<HTMLElement>("[data-review-sidebar-resizer]")
+  if (contextResizer === null) throw new Error("Review sidebar resizer was not found")
+  contextResizer.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: contextResizer }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    expect(document.querySelector('input[placeholder="Filter files"]')).toBeNull()
+    expect(document.activeElement).toBe(
+      document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+    )
+  })
+  dispatchKeyboardShortcut("b", {
+    metaKey: true,
+    target: document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]"),
+  })
+  await vi.waitFor(() => {
+    expect(document.querySelector('input[placeholder="Filter files"]')).not.toBeNull()
+  })
+
+  platform.mockReturnValue("Win32")
+  const windowsFilterInput = document.querySelector<HTMLInputElement>(
+    'input[placeholder="Filter files"]',
+  )
+  if (windowsFilterInput === null) throw new Error("Review file filter was not found")
+  windowsFilterInput.focus()
+  expect(
+    dispatchKeyboardShortcut("b", { metaKey: true, target: windowsFilterInput }).defaultPrevented,
+  ).toBe(false)
+  await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  expect(
+    document
+      .querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")
+      ?.getAttribute("aria-expanded"),
+  ).toBe("true")
+
+  expect(
+    dispatchKeyboardShortcut("b", { ctrlKey: true, target: windowsFilterInput }).defaultPrevented,
+  ).toBe(true)
+  await vi.waitFor(() => {
+    const expandSidebar = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Expand sidebar"]',
+    )
+    expect(expandSidebar?.title).toBe("Expand sidebar (Ctrl + B)")
+    expect(document.activeElement).toBe(expandSidebar)
   })
 })
 
@@ -6072,21 +6411,27 @@ const clickGutterUtility = (button: HTMLButtonElement) => {
 const dispatchKeyboardShortcut = (
   key: string,
   options: {
+    readonly altKey?: boolean
     readonly ctrlKey?: boolean
     readonly metaKey?: boolean
+    readonly repeat?: boolean
     readonly shiftKey?: boolean
+    readonly target?: EventTarget | null
   } = {},
 ) => {
-  window.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      ctrlKey: options.ctrlKey ?? false,
-      key,
-      metaKey: options.metaKey ?? false,
-      shiftKey: options.shiftKey ?? false,
-    }),
-  )
+  const target = options.target ?? window
+  const event = new KeyboardEvent("keydown", {
+    altKey: options.altKey ?? false,
+    bubbles: true,
+    cancelable: true,
+    ctrlKey: options.ctrlKey ?? false,
+    key,
+    metaKey: options.metaKey ?? false,
+    repeat: options.repeat ?? false,
+    shiftKey: options.shiftKey ?? false,
+  })
+  target.dispatchEvent(event)
+  return event
 }
 
 const reloadReviewDiff = async () => {

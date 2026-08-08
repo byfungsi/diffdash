@@ -17,7 +17,7 @@ import { InvokeChannel } from "@diffdash/protocol/channels"
 import { UNKNOWN_TRANSPORT_ERROR_MESSAGE } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { describe, expect, it } from "vitest"
-import { ReviewContextError } from "../../../src/main/services/review-context"
+import { ReviewContextError, WalkthroughOperationCapacityExceeded } from "@diffdash/core"
 import { toPublicWalkthroughError } from "./walkthrough-public-error"
 
 const operation = InvokeChannel.generateLocalWalkthrough
@@ -295,6 +295,23 @@ Unhandled provider call: --print --model private-model`,
       message: "The AI agent returned invalid walkthrough data after retrying.",
     })
     expect(JSON.stringify(result)).not.toContain("private")
+  })
+
+  it("classifies walkthrough capacity as retryable load pressure", () => {
+    expect(
+      toPublicWalkthroughError(
+        WalkthroughOperationCapacityExceeded.make({
+          capacity: 64,
+          message: "DiffDash already retains 64 active walkthrough operations.",
+        }),
+        operation,
+      ),
+    ).toMatchObject({
+      code: "WalkthroughOperationCapacityExceeded",
+      message:
+        "DiffDash is already processing 64 walkthrough operations. Try again after one finishes.",
+      operation,
+    })
   })
 
   it("classifies unexpected failures with only sanitized internal frames", () => {

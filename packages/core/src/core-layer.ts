@@ -2,9 +2,7 @@ import { mkdirSync } from "node:fs"
 import { AgentProviderId } from "@diffdash/agent-provider"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { type GitProviderRegistration, GitProviderRegistry } from "@diffdash/git-provider"
-import { createFixtureGitProvider } from "@diffdash/git-provider-fixture"
-import { createGitHubProvider } from "@diffdash/git-provider-github"
+import { GitProviderRegistry } from "@diffdash/git-provider"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
@@ -15,7 +13,7 @@ import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
-import { ProcessService, processRequest } from "@diffdash/process"
+import { ProcessService } from "@diffdash/process"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { ReviewAgentRouting, ReviewAgentService } from "@diffdash/review-agent"
 import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
@@ -29,50 +27,43 @@ import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
 import { Effect, Layer } from "effect"
-import { app } from "electron"
-import { AgentProviders } from "../../src/main/services/agent-providers"
-import { Analytics } from "../../src/main/services/analytics"
-import { AppConfig } from "../../src/main/services/app-config"
-import { AppUpdater, nativeUpdaterAdapter } from "../../src/main/services/app-updater"
-import { GitProvider } from "../../src/main/services/git-provider"
-import { Prerequisites } from "../../src/main/services/prerequisites"
-import { RepositoryComparisonSource } from "../../src/main/services/repository-comparison-source"
-import { RepositoryLinker } from "../../src/main/services/repository-linker"
-import { ReviewContextService } from "../../src/main/services/review-context"
-import { ReviewSnapshotService } from "../../src/main/services/review-snapshot"
-import { createAgentProviderComposition } from "./agent-provider-composition"
-import { applicationPaths } from "./paths"
+import type { CoreConfiguration } from "./core-configuration"
+import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
+import { CoreStartupError, type CoreStartupFailure } from "./core-startup-error"
+import {
+  createAgentProviderComposition,
+  createGitProviderComposition,
+} from "./provider-composition"
+import { AgentProviders } from "./services/agent-providers"
+import { Analytics } from "./services/analytics"
+import { GitProvider } from "./services/git-provider"
+import { Prerequisites } from "./services/prerequisites"
+import { RepositoryComparisonSource } from "./services/repository-comparison-source"
+import { RepositoryLinker } from "./services/repository-linker"
+import { ReviewContextService } from "./services/review-context"
+import { ReviewSnapshotService } from "./services/review-snapshot"
 
-export const createAppLayer = () => {
-  const {
-    agentWorkingDirectory,
-    databasePath,
-    diffDashCliPath,
-    remoteWorktreePoolPath,
-    settingsPath,
-    statePath,
-    worktreePoolPath,
-  } = applicationPaths()
-  mkdirSync(agentWorkingDirectory, { recursive: true, mode: 0o700 })
-  const configLayer = AppConfig.layer({
-    appVersion: app.getVersion(),
-    ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
-    architecture: process.arch,
-    databasePath,
-    diffDashCliPath,
-    packaged: app.isPackaged,
-    platform: process.platform,
-    ...(process.env.VITE_POSTHOG_HOST === undefined
-      ? {}
-      : { posthogHost: process.env.VITE_POSTHOG_HOST }),
-    ...(process.env.VITE_POSTHOG_KEY === undefined
-      ? {}
-      : { posthogKey: process.env.VITE_POSTHOG_KEY }),
-    settingsPath,
-    tempDir: agentWorkingDirectory,
-    remoteWorktreePoolPath,
-    worktreePoolPath,
-  })
+/** Builds the runtime-neutral business service graph owned by DiffDash Core. */
+export const createCoreLayer = (
+  configuration: CoreConfiguration,
+): Layer.Layer<CoreOperationService, CoreStartupFailure> => {
+  const agentWorkingDirectory = configuration.paths.temporaryDirectory
+  const databasePath = configuration.paths.database
+  const remoteWorktreePoolPath = configuration.paths.remoteWorktreePool
+  const settingsPath = configuration.paths.settings
+  const statePath = configuration.paths.state
+  const worktreePoolPath = configuration.paths.worktreePool
+  const temporaryDirectoryLayer = Layer.effectDiscard(
+    Effect.try({
+      try: () => mkdirSync(agentWorkingDirectory, { recursive: true, mode: 0o700 }),
+      catch: (cause) =>
+        CoreStartupError.make({
+          operation: "createTemporaryDirectory",
+          message: "DiffDash Core could not create its temporary directory.",
+          cause,
+        }),
+    }),
+  )
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
   const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
   const tempResourcesLayer = TempResources.layer.pipe(Layer.provide(platformLayer))
@@ -82,31 +73,10 @@ export const createAppLayer = () => {
     GitProviderRegistry,
     Effect.gen(function* () {
       const processes = yield* ProcessService
-      const registrations: GitProviderRegistration[] = [createGitHubProvider({}, processes)]
-      if (process.env.DIFFDASH_E2E_FAKE_GIT_PROVIDER === "1") {
-        const remoteUrl = process.env.DIFFDASH_E2E_FAKE_GIT_REMOTE
-        registrations.push(
-          createFixtureGitProvider({
-            ...(remoteUrl === undefined ? {} : { remoteUrl }),
-            ...(process.env.DIFFDASH_E2E_FAKE_GIT_BASE_SHA === undefined
-              ? {}
-              : { baseRevision: process.env.DIFFDASH_E2E_FAKE_GIT_BASE_SHA }),
-            ...(process.env.DIFFDASH_E2E_FAKE_GIT_HEAD_SHA === undefined
-              ? {}
-              : { headRevision: process.env.DIFFDASH_E2E_FAKE_GIT_HEAD_SHA }),
-            bootstrapBareRepository: (destination) =>
-              remoteUrl === undefined
-                ? Effect.dieMessage("DIFFDASH_E2E_FAKE_GIT_REMOTE is required")
-                : processes
-                    .run(
-                      processRequest("git", ["clone", "--bare", "--", remoteUrl, destination], {
-                        timeoutMs: 120_000,
-                      }),
-                    )
-                    .pipe(Effect.asVoid),
-          }),
-        )
-      }
+      const registrations = createGitProviderComposition(
+        processes,
+        configuration.fixtures.gitProvider,
+      )
       const registry = yield* Effect.provide(
         GitProviderRegistry,
         GitProviderRegistry.layer(registrations),
@@ -116,7 +86,15 @@ export const createAppLayer = () => {
   )
   const gitProviderLayer = GitProvider.layer.pipe(Layer.provide(gitProviderRegistryLayer))
   const appStateLayer = AppState.layer(statePath).pipe(Layer.provide(fileStorageLayer))
-  const analyticsLayer = Analytics.layer.pipe(Layer.provideMerge(settingsLayer))
+  const analyticsLayer = Analytics.makeLayer({
+    appVersion: configuration.application.version,
+    architecture: configuration.application.architecture,
+    packaged: configuration.application.packaged,
+    platform: configuration.application.platform,
+    posthogHost: configuration.analytics.host,
+    posthogKey: configuration.analytics.projectKey,
+    settingsPath,
+  }).pipe(Layer.provideMerge(settingsLayer))
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
@@ -126,7 +104,8 @@ export const createAppLayer = () => {
         processes,
         tempResources,
         tempDirectory: agentWorkingDirectory,
-        includeFixture: process.env.DIFFDASH_E2E_FAKE_AGENT_PROVIDER === "1",
+        includeFixture: configuration.fixtures.agentProviderEnabled,
+        fixtureWalkthroughNeverCompletes: configuration.fixtures.agentProviderNeverCompletes,
       })
       return yield* AgentProviderRegistry.pipe(
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
@@ -223,16 +202,17 @@ export const createAppLayer = () => {
     Layer.provideMerge(reviewContextLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
-  const updaterLayer = AppUpdater.layer({
-    adapter: nativeUpdaterAdapter(),
-    ...(process.env.APPIMAGE === undefined ? {} : { appImagePath: process.env.APPIMAGE }),
-    arch: process.arch,
-    currentVersion: app.getVersion(),
-    packaged: app.isPackaged,
-    platform: process.platform,
-  })
+  const prerequisitesLayer = Prerequisites.layer({
+    appImagePath: configuration.paths.appImage,
+    diffDashCliPath: configuration.paths.diffDashCli,
+    executableSearchPath: configuration.environment.executableSearchPath,
+    executablePathExtensions: configuration.environment.executablePathExtensions,
+    homeDirectory: configuration.environment.homeDirectory,
+    platform: configuration.application.platform,
+  }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
 
-  return Layer.mergeAll(
+  const businessServicesLayer = Layer.mergeAll(
+    temporaryDirectoryLayer,
     repositoryLinkerLayer,
     repositoryComparisonSourceLayer,
     ProjectWorkspaceStore.layer,
@@ -240,10 +220,7 @@ export const createAppLayer = () => {
     reviewSnapshotLayer,
     reviewTurnStoreLayer,
     appStateLayer,
-    Prerequisites.layer.pipe(
-      Layer.provideMerge(gitProviderLayer),
-      Layer.provideMerge(agentProvidersLayer),
-    ),
+    prerequisitesLayer,
     agentProvidersLayer,
     gitProviderLayer,
     walkthroughLayer,
@@ -251,10 +228,7 @@ export const createAppLayer = () => {
     WalkthroughStore.layer,
     reviewAgentLayer,
     threadAnchorMapperLayer,
-    updaterLayer,
-  ).pipe(
-    Layer.provideMerge(DatabaseService.layer(databasePath)),
-    Layer.provideMerge(processLayer),
-    Layer.provide(configLayer),
-  )
+  ).pipe(Layer.provide(DatabaseService.layer(databasePath)), Layer.provide(processLayer))
+
+  return coreOperationLayer.pipe(Layer.provide(businessServicesLayer))
 }

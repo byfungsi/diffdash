@@ -8,7 +8,6 @@ import { join } from "node:path"
 
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
-import { AppConfig } from "./app-config"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { FileStorage } from "@diffdash/settings/file-storage"
 
@@ -25,31 +24,26 @@ type CapturedEvent = {
 }
 
 const makeLayer = (directory: string, events: CapturedEvent[]) => {
-  const configLayer = AppConfig.layer({
+  const settingsPath = join(directory, "diffdash", "settings.json")
+  const fileStorageLayer = FileStorage.layer.pipe(
+    Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
+  )
+  const settingsLayer = AppSettings.layer(settingsPath).pipe(Layer.provide(fileStorageLayer))
+  return Analytics.makeLayer({
     appVersion: "1.2.3",
     architecture: "arm64",
-    databasePath: join(directory, "test.sqlite"),
     packaged: true,
     platform: "darwin",
     posthogHost: "https://us.i.posthog.com",
     posthogKey: "phc_test",
-    settingsPath: join(directory, "diffdash", "settings.json"),
-    tempDir: directory,
-  })
-  const fileStorageLayer = FileStorage.layer.pipe(
-    Layer.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)),
-  )
-  const settingsLayer = AppSettings.layer(join(directory, "diffdash", "settings.json")).pipe(
-    Layer.provide(fileStorageLayer),
-  )
-  return Analytics.makeLayer({
+    settingsPath,
     clientFactory: () => ({
       capture: (event) => events.push(event),
       disable: async () => undefined,
       enable: async () => undefined,
       flush: async () => undefined,
     }),
-  }).pipe(Layer.provideMerge(settingsLayer), Layer.provide(configLayer))
+  }).pipe(Layer.provideMerge(settingsLayer))
 }
 
 describe("Analytics", () => {

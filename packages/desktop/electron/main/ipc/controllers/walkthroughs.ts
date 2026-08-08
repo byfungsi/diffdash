@@ -1,247 +1,68 @@
-import {
-  prepareWalkthroughPromptInput,
-  type StoredWalkthrough,
-  WALKTHROUGH_PROMPT_VERSION,
-  walkthroughLocalDiffScope,
-  walkthroughHostedReviewScope,
-  walkthroughRepositoryComparisonScope,
-} from "@diffdash/domain/walkthrough"
-import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
+import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import { HostedReviewTarget } from "@diffdash/domain/review-thread"
+import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { WalkthroughService } from "@diffdash/walkthrough"
-import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
-import { RepositoryComparisonSource } from "../../../../src/main/services/repository-comparison-source"
-import { ReviewSnapshotService } from "../../../../src/main/services/review-snapshot"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicWalkthroughError } from "../walkthrough-public-error"
 import { IpcControllerRegistry } from "./controller-registry"
 
-/** Defines walkthroughs IPC handler implementations. */
+const generateWalkthrough = async (
+  runtime: ApplicationRuntime,
+  target: ReviewThreadTarget,
+  regenerate: boolean,
+): Promise<StoredWalkthrough> => {
+  const accepted = await runtime.walkthroughs.start({ target, regenerate })
+  const result = await runtime.walkthroughs.getOperation(accepted.operationId)
+  if ("walkthrough" in result) return result.walkthrough
+  if ("error" in result) throw result.error
+  if ("defect" in result) throw result.defect
+  throw new Error("Walkthrough generation was cancelled.")
+}
+
+/** Defines walkthrough IPC handlers over the Core-owned operation boundary. */
 export const defineWalkthroughHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  const run = runtime.runPromise
-
-  handlers.define(
-    InvokeChannel.getWalkthrough,
-    async (_event, request): Promise<StoredWalkthrough | null> => {
-      const snapshots = await run(ReviewSnapshotService)
-      const repositories = await run(RepositoryLinker)
-      const walkthroughStore = await run(WalkthroughStore)
-      const snapshot = await run(snapshots.acquireHosted(request.review))
-      if (
-        snapshot.baseRevision !== request.baseRevision ||
-        snapshot.headRevision !== request.headRevision
-      ) {
-        return null
-      }
-      const repo = await run(repositories.ensureHosted(request.review.repository))
-      return run(
-        walkthroughStore.get({
-          repoId: repo.id,
-          reviewKey: snapshot.reviewKey,
-          baseSha: snapshot.baseRevision,
-          headSha: snapshot.headRevision,
-          promptVersion: WALKTHROUGH_PROMPT_VERSION,
-        }),
-      )
-    },
+  handlers.define(InvokeChannel.getWalkthrough, async (_event, request) =>
+    runtime.walkthroughs.getStored({
+      target: HostedReviewTarget.make({ kind: "hosted", review: request.review }),
+      expectedBaseRevision: request.baseRevision,
+      expectedHeadRevision: request.headRevision,
+    }),
   )
-
-  handlers.define(
-    InvokeChannel.getLocalWalkthrough,
-    async (_event, { target, baseSha, headSha }): Promise<StoredWalkthrough | null> => {
-      const snapshots = await run(ReviewSnapshotService)
-      const repositories = await run(RepositoryLinker)
-      const walkthroughStore = await run(WalkthroughStore)
-      const snapshot = await run(snapshots.acquireLocal(target))
-      if (snapshot.baseRevision !== baseSha || snapshot.headRevision !== headSha) return null
-      const repo = await run(repositories.ensureLocal(snapshot.detail.rootPath))
-      return run(
-        walkthroughStore.get({
-          repoId: repo.id,
-          reviewKey: snapshot.reviewKey,
-          baseSha: snapshot.baseRevision,
-          headSha: snapshot.headRevision,
-          promptVersion: WALKTHROUGH_PROMPT_VERSION,
-        }),
-      )
-    },
+  handlers.define(InvokeChannel.getLocalWalkthrough, async (_event, request) =>
+    runtime.walkthroughs.getStored({
+      target: request.target,
+      expectedBaseRevision: request.baseSha,
+      expectedHeadRevision: request.headSha,
+    }),
   )
-
   handlers.define(
     InvokeChannel.generateWalkthrough,
-    async (_event, request): Promise<StoredWalkthrough> => {
-      const { repository } = request.review
-      const snapshots = await run(ReviewSnapshotService)
-      const repositories = await run(RepositoryLinker)
-      const walkthroughStore = await run(WalkthroughStore)
-      const walkthroughService = await run(WalkthroughService)
-
-      const repo = await run(repositories.ensureHosted(repository))
-      const snapshot = await run(snapshots.acquireHosted(request.review))
-      const cacheKey = {
-        repoId: repo.id,
-        reviewKey: snapshot.reviewKey,
-        baseSha: snapshot.baseRevision,
-        headSha: snapshot.headRevision,
-        promptVersion: WALKTHROUGH_PROMPT_VERSION,
-      }
-
-      if (!request.regenerate) {
-        const cached = await run(walkthroughStore.get(cacheKey))
-        if (cached !== null) return cached
-      }
-
-      const promptInput = await run(
-        prepareWalkthroughPromptInput(
-          snapshot.parsedDiff.files,
-          walkthroughHostedReviewScope(request.review),
-        ),
-      )
-      const walkthrough = await run(
-        walkthroughService.generate({
-          review: { kind: "hosted", hostedReview: snapshot.detail },
-          diff: promptInput.diff,
-          hunkDigest: promptInput.hunkDigest,
-          changedFileTree: promptInput.changedFileTree,
-          generation: promptInput.generation,
-          promptStats: promptInput.stats,
-        }),
-      )
-
-      return run(
-        walkthroughStore.save({
-          ...cacheKey,
-          prNumber: request.review.number,
-          walkthrough,
-        }),
-      )
-    },
+    async (_event, request) =>
+      generateWalkthrough(
+        runtime,
+        HostedReviewTarget.make({ kind: "hosted", review: request.review }),
+        request.regenerate,
+      ),
     toPublicWalkthroughError,
   )
-
   handlers.define(
     InvokeChannel.generateLocalWalkthrough,
-    async (_event, { target, regenerate }): Promise<StoredWalkthrough> => {
-      const snapshots = await run(ReviewSnapshotService)
-      const repositories = await run(RepositoryLinker)
-      const walkthroughStore = await run(WalkthroughStore)
-      const walkthroughService = await run(WalkthroughService)
-
-      const snapshot = await run(snapshots.acquireLocal(target))
-      const localReview = snapshot.detail
-      const diff = snapshot.diff
-      const repo = await run(repositories.ensureLocal(diff.rootPath))
-      const cacheKey = {
-        repoId: repo.id,
-        reviewKey: snapshot.reviewKey,
-        baseSha: snapshot.baseRevision,
-        headSha: snapshot.headRevision,
-        promptVersion: WALKTHROUGH_PROMPT_VERSION,
-      }
-
-      if (!regenerate) {
-        const cached = await run(walkthroughStore.get(cacheKey))
-        if (cached !== null) return cached
-      }
-
-      const promptInput = await run(
-        prepareWalkthroughPromptInput(
-          snapshot.parsedDiff.files,
-          walkthroughLocalDiffScope(snapshot.headRevision),
-        ),
-      )
-      const walkthrough = await run(
-        walkthroughService.generate({
-          review: { kind: "localDiff", localReview },
-          diff: promptInput.diff,
-          hunkDigest: promptInput.hunkDigest,
-          changedFileTree: promptInput.changedFileTree,
-          generation: promptInput.generation,
-          promptStats: promptInput.stats,
-        }),
-      )
-
-      return run(
-        walkthroughStore.save({
-          ...cacheKey,
-          prNumber: null,
-          walkthrough,
-        }),
-      )
-    },
+    async (_event, request) => generateWalkthrough(runtime, request.target, request.regenerate),
     toPublicWalkthroughError,
   )
-
-  handlers.define(
-    InvokeChannel.getRepositoryComparisonWalkthrough,
-    async (_event, { target }): Promise<StoredWalkthrough | null> => {
-      const snapshots = await run(ReviewSnapshotService)
-      const comparisons = await run(RepositoryComparisonSource)
-      const walkthroughStore = await run(WalkthroughStore)
-      const snapshot = await run(snapshots.acquireComparison(target))
-      const repo = await run(comparisons.repository(target))
-      return run(
-        walkthroughStore.get({
-          repoId: repo.id,
-          reviewKey: snapshot.reviewKey,
-          baseSha: snapshot.baseRevision,
-          headSha: snapshot.headRevision,
-          promptVersion: WALKTHROUGH_PROMPT_VERSION,
-        }),
-      )
-    },
+  handlers.define(InvokeChannel.getRepositoryComparisonWalkthrough, async (_event, request) =>
+    runtime.walkthroughs.getStored({
+      target: request.target,
+      expectedBaseRevision: null,
+      expectedHeadRevision: null,
+    }),
   )
-
   handlers.define(
     InvokeChannel.generateRepositoryComparisonWalkthrough,
-    async (_event, { target, regenerate }): Promise<StoredWalkthrough> => {
-      const snapshots = await run(ReviewSnapshotService)
-      const comparisons = await run(RepositoryComparisonSource)
-      const walkthroughStore = await run(WalkthroughStore)
-      const walkthroughService = await run(WalkthroughService)
-      const snapshot = await run(snapshots.acquireComparison(target))
-      const repo = await run(comparisons.repository(target))
-      const cacheKey = {
-        repoId: repo.id,
-        reviewKey: snapshot.reviewKey,
-        baseSha: snapshot.baseRevision,
-        headSha: snapshot.headRevision,
-        promptVersion: WALKTHROUGH_PROMPT_VERSION,
-      }
-      if (!regenerate) {
-        const cached = await run(walkthroughStore.get(cacheKey))
-        if (cached !== null) return cached
-      }
-      const promptInput = await run(
-        prepareWalkthroughPromptInput(
-          snapshot.parsedDiff.files,
-          walkthroughRepositoryComparisonScope(snapshot.reviewKey),
-        ),
-      )
-      const walkthrough = await run(
-        comparisons.useWorkspace(target, (workingDirectory) =>
-          walkthroughService.generate({
-            review: { kind: "repositoryComparison", comparison: snapshot.detail },
-            diff: promptInput.diff,
-            hunkDigest: promptInput.hunkDigest,
-            changedFileTree: promptInput.changedFileTree,
-            generation: promptInput.generation,
-            promptStats: promptInput.stats,
-            workingDirectory,
-          }),
-        ),
-      )
-      return run(
-        walkthroughStore.save({
-          ...cacheKey,
-          prNumber: null,
-          walkthrough,
-        }),
-      )
-    },
+    async (_event, request) => generateWalkthrough(runtime, request.target, request.regenerate),
     toPublicWalkthroughError,
   )
 }

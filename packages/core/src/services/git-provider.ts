@@ -16,6 +16,7 @@ import {
   GitProviderOperationError,
   GitProviderRegistry,
   type HostedReviewCheckoutSpec,
+  type UnknownGitProviderError,
 } from "@diffdash/git-provider"
 import { RepositorySearchScope, type RepositorySearchRequest } from "@diffdash/domain/repository"
 
@@ -24,6 +25,9 @@ export class GitProviderRemoteParseError extends Schema.TaggedError<GitProviderR
   "GitProviderRemoteParseError",
   { remoteUrl: Schema.String },
 ) {}
+
+/** Expected failures from selecting or invoking one hosted Git provider. */
+export type GitProviderCallError = UnknownGitProviderError | GitProviderOperationError
 
 /** Provider-neutral hosted Git orchestration backed only by the provider registry. */
 export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
@@ -36,49 +40,51 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
     ) => Effect.Effect<HostedRepositoryLocator, GitProviderRemoteParseError>
     readonly resolveRepository: (
       repository: HostedRepositoryLocator,
-    ) => Effect.Effect<ResolvedHostedRepository, unknown>
-    readonly repositoryUrl: (repository: HostedRepositoryLocator) => Effect.Effect<string, unknown>
+    ) => Effect.Effect<ResolvedHostedRepository, GitProviderCallError>
+    readonly repositoryUrl: (
+      repository: HostedRepositoryLocator,
+    ) => Effect.Effect<string, GitProviderCallError>
     readonly fileUrl: (
       repository: HostedRepositoryLocator,
       filePath: string,
       revision: string,
-    ) => Effect.Effect<string, unknown>
+    ) => Effect.Effect<string, GitProviderCallError>
     readonly searchRepositories: (
       request: RepositorySearchRequest,
-    ) => Effect.Effect<readonly HostedRepository[], unknown>
+    ) => Effect.Effect<readonly HostedRepository[], GitProviderCallError>
     readonly listSearchScopes: (
       providerId: GitProviderId,
-    ) => Effect.Effect<readonly RepositorySearchScope[], unknown>
+    ) => Effect.Effect<readonly RepositorySearchScope[], GitProviderCallError>
     readonly listHostedReviews: (
       repository: HostedRepositoryLocator,
-    ) => Effect.Effect<readonly HostedReviewSummary[], unknown>
+    ) => Effect.Effect<readonly HostedReviewSummary[], GitProviderCallError>
     readonly listAssignedReviews: (
       providerId: GitProviderId,
-    ) => Effect.Effect<readonly HostedReviewSummary[], unknown>
+    ) => Effect.Effect<readonly HostedReviewSummary[], GitProviderCallError>
     readonly getHostedReview: (
       review: HostedReviewLocator,
-    ) => Effect.Effect<HostedReviewDetail, unknown>
+    ) => Effect.Effect<HostedReviewDetail, GitProviderCallError>
     readonly refreshHostedReview: (
       review: HostedReviewLocator,
-    ) => Effect.Effect<HostedReviewDetail, unknown>
+    ) => Effect.Effect<HostedReviewDetail, GitProviderCallError>
     readonly getHostedReviewDiff: (
       review: HostedReviewLocator,
-    ) => Effect.Effect<HostedReviewDiff, unknown>
+    ) => Effect.Effect<HostedReviewDiff, GitProviderCallError>
     readonly getReviewDecision: (
       review: HostedReviewLocator,
-    ) => Effect.Effect<import("@diffdash/domain/git-provider").ReviewDecision, unknown>
+    ) => Effect.Effect<import("@diffdash/domain/git-provider").ReviewDecision, GitProviderCallError>
     readonly submitReviewDecision: (
       review: HostedReviewLocator,
       decision: import("@diffdash/domain/git-provider").ReviewDecision,
-    ) => Effect.Effect<void, unknown>
+    ) => Effect.Effect<void, GitProviderCallError>
     readonly hostedReviewCheckoutSpec: (
       review: HostedReviewLocator,
       revision: string,
-    ) => Effect.Effect<HostedReviewCheckoutSpec, unknown>
+    ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderCallError>
     readonly bootstrapBareRepository: (
       repository: HostedRepositoryLocator,
       destination: string,
-    ) => Effect.Effect<void, unknown>
+    ) => Effect.Effect<void, GitProviderCallError>
     readonly isAvailable: (providerId: GitProviderId) => Effect.Effect<boolean>
   }
 >() {

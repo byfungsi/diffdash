@@ -1,11 +1,6 @@
-import type { HostedRepository } from "@diffdash/domain/git-provider"
-import type { ProjectOpenResult } from "@diffdash/domain/project-workspace"
-import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
-import { RepositorySearchRequest } from "@diffdash/domain/repository"
+import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { dialog } from "electron"
-import { GitProvider } from "../../../../src/main/services/git-provider"
-import { RepositoryLinker } from "../../../../src/main/services/repository-linker"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -14,59 +9,30 @@ export const defineRepositoryHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  const run = runtime.runPromise
-
-  handlers.define(
-    InvokeChannel.listRepositories,
-    async (_event, { query }): Promise<readonly Repo[]> => {
-      const repositories = await run(RepositoryLinker)
-      return run(repositories.list(query ?? undefined))
-    },
+  handlers.define(InvokeChannel.listRepositories, async (_event, request) =>
+    runtime.execute(CoreMethod.listRepositories, request),
   )
-
-  handlers.define(
-    InvokeChannel.setRepositoryFavorite,
-    async (_event, { id, isFavorite }): Promise<Repo> => {
-      const repositories = await run(RepositoryLinker)
-      return run(repositories.setFavorite(id, isFavorite))
-    },
+  handlers.define(InvokeChannel.setRepositoryFavorite, async (_event, request) =>
+    runtime.execute(CoreMethod.setRepositoryFavorite, request),
   )
-
-  handlers.define(
-    InvokeChannel.favoriteRemoteRepository,
-    async (_event, { repository: repo }): Promise<Repo> => {
-      const repositories = await run(RepositoryLinker)
-      return run(repositories.ensureHosted(repo.locator, true))
-    },
+  handlers.define(InvokeChannel.favoriteRemoteRepository, async (_event, request) =>
+    runtime.execute(CoreMethod.favoriteRemoteRepository, request),
   )
-
-  handlers.define(InvokeChannel.installRepository, async (_event, { localPath }): Promise<Repo> => {
-    const linker = await run(RepositoryLinker)
-    return run(linker.install(localPath))
-  })
-
-  handlers.define(InvokeChannel.linkRepository, async (_event, request): Promise<Repo> => {
-    const linker = await run(RepositoryLinker)
-    return run(linker.link(request))
-  })
-
-  handlers.define(
-    InvokeChannel.openProject,
-    async (_event, { localPath, selectedRepository }): Promise<ProjectOpenResult> => {
-      const linker = await run(RepositoryLinker)
-      return run(linker.openProject(localPath, selectedRepository ?? undefined))
-    },
+  handlers.define(InvokeChannel.installRepository, async (_event, request) =>
+    runtime.execute(CoreMethod.installRepository, request),
   )
-
-  handlers.define(InvokeChannel.repairRepositoryIdentities, async () => {
-    const linker = await run(RepositoryLinker)
-    return run(linker.repairIdentities())
-  })
-
-  handlers.define(InvokeChannel.forgetRepository, async (_event, { projectId }): Promise<Repo> => {
-    const linker = await run(RepositoryLinker)
-    return run(linker.forget(projectId))
-  })
+  handlers.define(InvokeChannel.linkRepository, async (_event, request) =>
+    runtime.execute(CoreMethod.linkRepository, request),
+  )
+  handlers.define(InvokeChannel.openProject, async (_event, request) =>
+    runtime.execute(CoreMethod.openProject, request),
+  )
+  handlers.define(InvokeChannel.repairRepositoryIdentities, async () =>
+    runtime.execute(CoreMethod.repairRepositoryIdentities, {}),
+  )
+  handlers.define(InvokeChannel.forgetRepository, async (_event, request) =>
+    runtime.execute(CoreMethod.forgetRepository, request),
+  )
 
   handlers.define(InvokeChannel.selectLocalFolder, async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
@@ -76,35 +42,13 @@ export const defineRepositoryHandlers = (
     return result.canceled ? null : (result.filePaths[0] ?? null)
   })
 
-  handlers.define(
-    InvokeChannel.listProviders,
-    async (): Promise<readonly import("@diffdash/domain/git-provider").GitProviderDescriptor[]> => {
-      const gitProvider = await run(GitProvider)
-      return run(gitProvider.listProviders)
-    },
+  handlers.define(InvokeChannel.listProviders, async () =>
+    runtime.execute(CoreMethod.listProviders, {}),
   )
-
-  handlers.define(
-    InvokeChannel.searchHostedRepositories,
-    async (_event, request): Promise<readonly HostedRepository[]> => {
-      const gitProvider = await run(GitProvider)
-      return run(
-        gitProvider.searchRepositories(
-          RepositorySearchRequest.make({
-            providerId: request.providerId,
-            query: request.query,
-            owners: request.namespaces,
-          }),
-        ),
-      )
-    },
+  handlers.define(InvokeChannel.searchHostedRepositories, async (_event, request) =>
+    runtime.execute(CoreMethod.searchHostedRepositories, request),
   )
-
-  handlers.define(
-    InvokeChannel.listHostedRepositorySearchScopes,
-    async (_event, request): Promise<readonly RepositorySearchScope[]> => {
-      const gitProvider = await run(GitProvider)
-      return run(gitProvider.listSearchScopes(request.providerId))
-    },
+  handlers.define(InvokeChannel.listHostedRepositorySearchScopes, async (_event, request) =>
+    runtime.execute(CoreMethod.listHostedRepositorySearchScopes, request),
   )
 }

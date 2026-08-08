@@ -1,13 +1,10 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
 import { DEFAULT_APP_STATE, AppState as SharedAppState } from "@diffdash/domain/app-state"
+import { CoreMethod } from "@diffdash/core"
 import type { AgentProviderCatalog } from "@diffdash/protocol/agent-providers"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
-import { AppSettings } from "@diffdash/settings/app-settings"
-import { AppState } from "@diffdash/settings/app-state"
 import { app } from "electron"
-import { AgentProviders } from "../../../../src/main/services/agent-providers"
-import { Prerequisites } from "../../../../src/main/services/prerequisites"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -36,34 +33,28 @@ export const defineSettingsHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  const run = runtime.runPromise
-
   handlers.define(
     InvokeChannel.agentProvidersGetCatalog,
     async (): Promise<AgentProviderCatalog> => {
-      const providers = await run(AgentProviders)
-      return run(providers.catalog)
+      return runtime.execute(CoreMethod.agentProvidersGetCatalog, {})
     },
   )
 
   handlers.define(InvokeChannel.settingsGet, async (): Promise<AISettings> => {
-    const settings = await run(AppSettings)
-    return run(settings.get)
+    return runtime.execute(CoreMethod.settingsGet, {})
   })
 
   handlers.define(
     InvokeChannel.settingsUpdate,
     async (_event, { settings: parsed }): Promise<AISettings> => {
-      const settings = await run(AppSettings)
-      return run(settings.save(parsed))
+      return runtime.execute(CoreMethod.settingsUpdate, { settings: parsed })
     },
   )
 
   handlers.define(InvokeChannel.appStateGet, async (): Promise<SharedAppState> => {
     if (isDebugOnboardingEnabled()) return DEFAULT_APP_STATE
 
-    const appState = await run(AppState)
-    return run(appState.get)
+    return runtime.execute(CoreMethod.appStateGet, {})
   })
 
   handlers.define(
@@ -71,23 +62,20 @@ export const defineSettingsHandlers = (
     async (_event, { state: parsed }): Promise<SharedAppState> => {
       if (isDebugOnboardingEnabled()) return parsed
 
-      const appState = await run(AppState)
-      return run(appState.save(parsed))
+      return runtime.execute(CoreMethod.appStateUpdate, { state: parsed })
     },
   )
 
   handlers.define(InvokeChannel.appDiagnostics, async (): Promise<AppPrerequisites> => {
     if (isDebugOnboardingEnabled()) return debugMissingPrerequisites()
 
-    const prerequisites = await run(Prerequisites)
-    return run(prerequisites.get)
+    return runtime.execute(CoreMethod.appDiagnostics, {})
   })
 
   handlers.define(
     InvokeChannel.appInstallDiffDashCli,
     async (): Promise<DiffDashCliInstallResult> => {
-      const prerequisites = await run(Prerequisites)
-      return run(prerequisites.installDiffDashCli)
+      return runtime.execute(CoreMethod.appInstallDiffDashCli, {})
     },
   )
 }

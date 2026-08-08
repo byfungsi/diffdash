@@ -60,13 +60,13 @@ results.
 
 Execution must honor `AgentExecutionPolicy`, scoped MCP endpoint/token/tool access, selected model,
 working directory, timeout, and interruption. Return SDK `WalkthroughResult` or
-`ReviewThreadResult` values. Provider artifacts remain candidates; desktop host normalization owns
+`ReviewThreadResult` values. Provider artifacts remain candidates; Core review-agent normalization owns
 allowlisting, redaction, bounding, and persistence. Expected failures use bounded SDK errors.
 
-## Desktop Registration
+## Core Registration
 
-Add a `workspace:*` desktop dependency and import the provider only in
-`packages/desktop/electron/main/agent-provider-composition.ts`:
+Add a `workspace:*` Core dependency and import the provider only in
+`packages/core/src/provider-composition.ts`:
 
 ```ts
 const registrations: readonly AgentProviderRegistration[] = [
@@ -80,7 +80,7 @@ return { registrations, policies: agentAutoRoutingPolicies(registrations) }
 
 Do not edit registry logic, settings shape, persistence, walkthrough/review orchestration, protocol,
 or renderer business logic. `@diffdash/agent-provider-fixture` and its one conditional entry in this
-composition array prove that one package plus one explicit desktop registration is sufficient.
+composition array prove that one package plus one explicit Core registration is sufficient.
 
 ## Tests
 
