@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "@effect/vitest"
-import { Cause, Effect, Exit, FiberId, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -32,12 +32,19 @@ import {
   WalkthroughOperationDefect,
   WalkthroughOperationFailed,
   WalkthroughOperationId,
+  WalkthroughOperationInterrupted,
   WalkthroughOperationResult,
+  WalkthroughOperationSuperseded,
+  type WalkthroughOperationTerminalFailure,
 } from "./core"
 import { CoreConfiguration } from "./core-configuration"
-import { coreResultFromExit, createEmbeddedCore } from "./embedded-core"
+import {
+  coreResultFromExit,
+  createEmbeddedCore,
+  type EmbeddedCoreRuntime,
+  makeEmbeddedCore,
+} from "./embedded-core"
 import { comparisonViewedFileScope, localViewedFileScope } from "./operations/viewed-file-scope"
-import { walkthroughTerminalFromExit } from "./operations/walkthrough-operations"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-core-test-"))),
@@ -142,22 +149,33 @@ describe("EmbeddedCore", () => {
     expectTypeOf<CoreOperationFailure<typeof CoreMethod.analyticsCapture>>().toEqualTypeOf<never>()
     expectTypeOf<
       Extract<WalkthroughOperationResult, { readonly _tag: "failed" }>["error"]
-    >().toEqualTypeOf<CoreWalkthroughFailure>()
+    >().toEqualTypeOf<CoreWalkthroughFailure | WalkthroughOperationTerminalFailure>()
   })
 
-  it("constructs every walkthrough terminal variant and keeps defects dominant", () => {
+  it("constructs every walkthrough terminal variant and keeps Core defects dominant", () => {
     const expected = RepositoryLinkError.make({
       operation: "test",
       reason: "Expected test failure.",
       cause: new Error("expected"),
     })
     const defect = new Error("defect")
-    const composite = Exit.failCause(Cause.parallel(Cause.fail(expected), Cause.die(defect)))
+    const composite = Exit.failCause(Cause.combine(Cause.fail(expected), Cause.die(defect)))
     const completedTerminal = WalkthroughOperationCompleted.make({ walkthrough: storedWalkthrough })
     const failedTerminal = WalkthroughOperationFailed.make({ error: expected })
     const cancelledTerminal = WalkthroughOperationCancelled.make({})
+    const supersededTerminal = WalkthroughOperationSuperseded.make({
+      supersededByOperationId: WalkthroughOperationId.make("replacement-operation"),
+    })
+    const interruptedTerminal = WalkthroughOperationInterrupted.make({})
     const defectTerminal = WalkthroughOperationDefect.make({ defect })
-    const terminals = [completedTerminal, failedTerminal, cancelledTerminal, defectTerminal]
+    const terminals = [
+      completedTerminal,
+      failedTerminal,
+      cancelledTerminal,
+      supersededTerminal,
+      interruptedTerminal,
+      defectTerminal,
+    ]
     let thrown: unknown = null
 
     try {
@@ -167,10 +185,6 @@ describe("EmbeddedCore", () => {
     }
 
     expect(thrown).toBe(defect)
-    expect(walkthroughTerminalFromExit(Exit.succeed(storedWalkthrough))).toEqual(completedTerminal)
-    expect(walkthroughTerminalFromExit(Exit.fail(expected))).toEqual(failedTerminal)
-    expect(walkthroughTerminalFromExit(Exit.interrupt(FiberId.none))).toEqual(cancelledTerminal)
-    expect(walkthroughTerminalFromExit(composite)).toEqual(defectTerminal)
     for (const terminal of terminals) {
       expect(
         Schema.decodeUnknownSync(WalkthroughOperationResult)(
@@ -231,7 +245,7 @@ describe("EmbeddedCore", () => {
     })
   })
 
-  it.scoped("constructs every local and external file-open intent path", () =>
+  it.effect("constructs every local and external file-open intent path", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const repositoryPath = join(directory, "repository")
@@ -324,7 +338,7 @@ describe("EmbeddedCore", () => {
         filePath: "src/linked.ts",
       })
       expect(mismatchedBranch._tag).toBe("external")
-      expect(yield* Schema.encode(CoreFileOpenIntent)(localHosted)).toEqual({
+      expect(yield* Schema.encodeEffect(CoreFileOpenIntent)(localHosted)).toEqual({
         _tag: "local",
         rootPath: canonicalRepositoryPath,
         filePath: "src/linked.ts",
@@ -332,7 +346,7 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("starts one business runtime and releases it through the public lifecycle", () =>
+  it.effect("starts one business runtime and releases it through the public lifecycle", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const configuration = testConfiguration(directory)
@@ -357,7 +371,7 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("gates operations until startup and makes startup idempotent", () =>
+  it.effect("gates operations until startup and makes startup idempotent", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const configuration = testConfiguration(directory)
@@ -380,7 +394,29 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("disposes without acquiring an unstarted runtime", () =>
+  it("transitions startup defects and still disposes acquired runtime resources", async () => {
+    const defect = new Error("simulated startup defect")
+    let disposals = 0
+    const runtime: EmbeddedCoreRuntime = {
+      runPromiseExit: () => Promise.resolve(Exit.die(defect)),
+      dispose: async () => {
+        disposals += 1
+      },
+    }
+    const core = makeEmbeddedCore(runtime)
+
+    await expect(core.start()).rejects.toBe(defect)
+    await expect(core.execute(CoreMethod.appStateGet, {})).rejects.toBe(defect)
+    await expect(core.start()).rejects.toBe(defect)
+    await expect(core.dispose()).resolves.toBeUndefined()
+    expect(disposals).toBe(1)
+    expect(await core.start()).toMatchObject({
+      ok: false,
+      error: { _tag: "CoreLifecycleError", state: "disposed" },
+    })
+  })
+
+  it.effect("disposes without acquiring an unstarted runtime", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const configuration = testConfiguration(directory)
@@ -396,7 +432,7 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("returns typed expected operation failures without rejecting", () =>
+  it.effect("returns typed expected operation failures without rejecting", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const core = createEmbeddedCore(testConfiguration(directory))
@@ -413,7 +449,7 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("runs and retains bounded walkthrough operations through the public facade", () =>
+  it.effect("keeps durable walkthrough history beyond the former in-memory limit", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const configuration = fixtureConfiguration(directory)
@@ -433,10 +469,10 @@ describe("EmbeddedCore", () => {
       ).toBeNull()
       const operationIds = []
 
-      for (let remaining = 65; remaining > 0; remaining -= 1) {
+      for (let index = 0; index < 65; index += 1) {
         const accepted = successValue(
           yield* Effect.promise(() =>
-            core.walkthroughs.start({ target: fixtureTarget, regenerate: false }),
+            core.walkthroughs.start({ target: fixtureTarget, regenerate: index > 0 }),
           ),
         )
         operationIds.push(accepted.operationId)
@@ -499,13 +535,11 @@ describe("EmbeddedCore", () => {
       expect(oldestOperationId).toBeDefined()
       if (oldestOperationId === undefined)
         throw new Error("Oldest walkthrough operation is missing")
-      const oldestFailure = yield* Effect.promise(() =>
-        core.walkthroughs.getOperation(oldestOperationId),
-      )
-      expect(oldestFailure).toMatchObject({
-        ok: false,
-        error: { _tag: "WalkthroughOperationNotFound" },
-      })
+      expect(
+        successValue(
+          yield* Effect.promise(() => core.walkthroughs.getOperation(oldestOperationId)),
+        ),
+      ).toMatchObject({ _tag: "superseded" })
       const missingCancellation = yield* Effect.promise(() =>
         core.walkthroughs.cancel(WalkthroughOperationId.make("missing-operation")),
       )
@@ -516,7 +550,7 @@ describe("EmbeddedCore", () => {
     }),
   )
 
-  it.scoped("bounds concurrent walkthrough starts and completes in-flight cancellation", () =>
+  it.effect("accepts concurrent regenerations without a terminal-history capacity limit", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const core = createEmbeddedCore(fixtureConfiguration(directory, true))
@@ -530,29 +564,79 @@ describe("EmbeddedCore", () => {
           ),
         ),
       )
-      const accepted = starts.flatMap((result) => (result.ok ? [result.value] : []))
-      const rejected = starts.flatMap((result) => (result.ok ? [] : [result.error]))
-
-      expect(accepted).toHaveLength(64)
-      expect(rejected).toHaveLength(1)
-      expect(rejected[0]).toMatchObject({ _tag: "WalkthroughOperationCapacityExceeded" })
+      expect(starts.filter((result) => !result.ok)).toEqual([])
+      const accepted = starts.map(successValue)
+      expect(accepted).toHaveLength(65)
       const cancellations = yield* Effect.promise(() =>
         Promise.all(accepted.map(({ operationId }) => core.walkthroughs.cancel(operationId))),
       )
-      expect(cancellations.every((result) => result.ok && result.value._tag === "cancelled")).toBe(
-        true,
-      )
+      const terminals = cancellations.map(successValue)
+      expect(terminals.filter(({ _tag }) => _tag === "superseded")).toHaveLength(64)
+      expect(terminals.filter(({ _tag }) => _tag === "cancelled")).toHaveLength(1)
     }),
   )
 
-  it.scoped("reports startup acquisition failures with their concrete type", () =>
+  it.effect("attaches repeated starts to one active exact operation", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const core = createEmbeddedCore(fixtureConfiguration(directory, true))
+      yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
+      successValue(yield* Effect.promise(core.start))
+
+      const [first, repeated] = yield* Effect.promise(() =>
+        Promise.all([
+          core.walkthroughs.start({ target: fixtureTarget, regenerate: false }),
+          core.walkthroughs.start({ target: fixtureTarget, regenerate: false }),
+        ]),
+      )
+      const firstAccepted = successValue(first)
+      const repeatedAccepted = successValue(repeated)
+
+      expect(repeatedAccepted.operationId).toBe(firstAccepted.operationId)
+      expect(
+        successValue(
+          yield* Effect.promise(() => core.walkthroughs.cancel(firstAccepted.operationId)),
+        ),
+      ).toEqual(WalkthroughOperationCancelled.make({}))
+    }),
+  )
+
+  it.effect("recovers active walkthrough work as interrupted without restarting it", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const configuration = fixtureConfiguration(directory, true)
+      const firstCore = createEmbeddedCore(configuration)
+      successValue(yield* Effect.promise(firstCore.start))
+      const accepted = successValue(
+        yield* Effect.promise(() =>
+          firstCore.walkthroughs.start({ target: fixtureTarget, regenerate: false }),
+        ),
+      )
+
+      yield* Effect.promise(firstCore.dispose)
+
+      const recoveredCore = createEmbeddedCore(configuration)
+      yield* Effect.addFinalizer(() => Effect.promise(recoveredCore.dispose))
+      successValue(yield* Effect.promise(recoveredCore.start))
+
+      expect(
+        successValue(
+          yield* Effect.promise(() =>
+            recoveredCore.walkthroughs.getOperation(accepted.operationId),
+          ),
+        ),
+      ).toEqual(WalkthroughOperationInterrupted.make({}))
+    }),
+  )
+
+  it.effect("reports startup acquisition failures with their concrete type", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const blockedParent = join(directory, "blocked")
       writeFileSync(blockedParent, "not a directory")
       const configuration = testConfiguration(directory)
-      const encoded = yield* Schema.encode(CoreConfiguration)(configuration)
-      const failedConfiguration = yield* Schema.decodeUnknown(CoreConfiguration)({
+      const encoded = yield* Schema.encodeEffect(CoreConfiguration)(configuration)
+      const failedConfiguration = yield* Schema.decodeUnknownEffect(CoreConfiguration)({
         ...encoded,
         paths: { ...encoded.paths, temporaryDirectory: join(blockedParent, "temporary") },
       })
@@ -571,7 +655,7 @@ describe("EmbeddedCore", () => {
   it("rejects malformed host configuration before Core starts", () => {
     expect(() =>
       Schema.decodeUnknownSync(CoreConfiguration)({ application: { packaged: "yes" } }),
-    ).toThrow(/is missing/)
+    ).toThrow(/Missing key/)
   })
 
   it("rejects an enabled Git fixture without a remote locator", () => {

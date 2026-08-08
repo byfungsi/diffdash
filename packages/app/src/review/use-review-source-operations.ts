@@ -1,5 +1,5 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import { useAtomRefresh, useAtomSet } from "@effect-atom/atom-react"
+import { useAtomRefresh, useAtomSet } from "@effect/atom-react"
 import { Effect, Option } from "effect"
 import {
   runRendererPromise,

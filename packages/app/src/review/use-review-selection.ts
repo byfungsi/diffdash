@@ -1,6 +1,7 @@
 import type { GitProviderDescriptor } from "@diffdash/domain/git-provider"
 import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
-import { Result, useAtomValue } from "@effect-atom/atom-react"
+import { useAtomValue } from "@effect/atom-react"
+import { AsyncResult } from "effect/unstable/reactivity"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
@@ -15,14 +16,14 @@ import {
 import type { SelectedReviewTarget } from "./review-subject"
 
 const manifestLoadState = <Manifest extends ReviewSnapshotManifest>(
-  result: Result.Result<Manifest | null, unknown>,
+  result: AsyncResult.AsyncResult<Manifest | null, unknown>,
 ): ReviewManifestLoadState<Manifest> => {
-  if (Result.isSuccess(result)) {
+  if (AsyncResult.isSuccess(result)) {
     return result.value === null
       ? { _tag: "loading" }
-      : { _tag: "ready", manifest: result.value, refreshing: Result.isWaiting(result) }
+      : { _tag: "ready", manifest: result.value, refreshing: AsyncResult.isWaiting(result) }
   }
-  if (Result.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) return { _tag: "failure", error: result.cause }
   return { _tag: "loading" }
 }
 

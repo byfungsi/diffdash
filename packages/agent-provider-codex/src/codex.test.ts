@@ -266,9 +266,13 @@ agentCancellationConformance("Codex", {
             ? () => Effect.die(new Error("unreachable"))
             : (request) => Effect.succeed(result(request, "codex-cli 1.2.3")),
         streamLines: () =>
-          Stream.acquireRelease(
-            Effect.sync(() => void (acquired = true)),
-            () => Effect.sync(() => void (released = true)),
+          Stream.scoped(
+            Stream.fromEffect(
+              Effect.acquireRelease(
+                Effect.sync(() => void (acquired = true)),
+                () => Effect.sync(() => void (released = true)),
+              ),
+            ),
           ).pipe(Stream.flatMap(() => Stream.never)),
       },
       tempDirectory: cancellationTempDirectory,

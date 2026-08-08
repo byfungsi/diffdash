@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Queue, Schema, Stream } from "effect"
 
 import {
   BoundedOutput,
@@ -40,7 +40,7 @@ export const defaultMaxStreamEvents = 20_000
 export const defaultMaxBufferedEvents = 16
 
 /** Identifies the subprocess output channel that produced bytes or a complete line. */
-export const ProcessOutputSource = Schema.Literal("stdout", "stderr")
+export const ProcessOutputSource = Schema.Literals(["stdout", "stderr"])
 
 /** Identifies the subprocess output channel that produced bytes or a complete line. */
 export type ProcessOutputSource = typeof ProcessOutputSource.Type
@@ -48,7 +48,7 @@ export type ProcessOutputSource = typeof ProcessOutputSource.Type
 /** Controls retained bytes and behavior when one output channel exceeds its budget. */
 export class ProcessOutputPolicy extends Schema.Class<ProcessOutputPolicy>("ProcessOutputPolicy")({
   maxBytes: Schema.Number,
-  overflow: Schema.Literal("error", "truncate"),
+  overflow: Schema.Literals(["error", "truncate"]),
 }) {}
 
 /** Structural input accepted when configuring one output channel. */
@@ -82,7 +82,7 @@ export class ProcessRequest extends Schema.Class<ProcessRequest>("ProcessRequest
   cwd: Schema.NullOr(Schema.String),
   stdin: Schema.NullOr(Schema.String),
   timeoutMs: Schema.NullOr(Schema.Number),
-  env: Schema.Record({ key: Schema.String, value: Schema.String }),
+  env: Schema.Record(Schema.String, Schema.String),
   unsetEnv: Schema.Array(Schema.String),
   stdout: Schema.NullOr(ProcessOutputPolicy),
   stderr: Schema.NullOr(ProcessOutputPolicy),
@@ -146,7 +146,7 @@ export class ProcessExit extends Schema.TaggedClass<ProcessExit>()("ProcessExit"
 }) {}
 
 /** Ordered line or successful terminal event from a streamed process. */
-export const ProcessEvent = Schema.Union(ProcessLine, ProcessExit)
+export const ProcessEvent = Schema.Union([ProcessLine, ProcessExit])
 
 /** Ordered line or successful terminal event from a streamed process. */
 export type ProcessEvent = typeof ProcessEvent.Type
@@ -168,19 +168,19 @@ const diagnosticFields = {
 /** Process request options failed validation before spawning. */
 export class InvalidProcessOptionsError extends Schema.TaggedError<InvalidProcessOptionsError>()(
   "InvalidProcessOptionsError",
-  { ...diagnosticFields, option: Schema.String, cause: Schema.Defect },
+  { ...diagnosticFields, option: Schema.String, cause: Schema.Defect() },
 ) {}
 
 /** The operating system could not spawn the requested process. */
 export class ProcessSpawnError extends Schema.TaggedError<ProcessSpawnError>()(
   "ProcessSpawnError",
-  { ...diagnosticFields, cause: Schema.Defect },
+  { ...diagnosticFields, cause: Schema.Defect() },
 ) {}
 
 /** The process rejected or failed while receiving stdin. */
 export class ProcessStdinError extends Schema.TaggedError<ProcessStdinError>()(
   "ProcessStdinError",
-  { ...diagnosticFields, cause: Schema.Defect },
+  { ...diagnosticFields, cause: Schema.Defect() },
 ) {}
 
 /** Process output failed or exceeded a configured byte/event limit. */
@@ -189,8 +189,8 @@ export class ProcessOutputError extends Schema.TaggedError<ProcessOutputError>()
   {
     ...diagnosticFields,
     source: Schema.NullOr(ProcessOutputSource),
-    limit: Schema.Literal("capture-bytes", "events", "line-bytes", "stream-bytes", "io"),
-    cause: Schema.NullOr(Schema.Defect),
+    limit: Schema.Literals(["capture-bytes", "events", "line-bytes", "stream-bytes", "io"]),
+    cause: Schema.NullOr(Schema.Defect()),
   },
 ) {}
 
@@ -231,10 +231,9 @@ export interface ProcessRunner {
 }
 
 /** Main-process service for scoped, bounded local process execution. */
-export class ProcessService extends Context.Tag("@diffdash/process/ProcessService")<
-  ProcessService,
-  ProcessRunner
->() {
+export class ProcessService extends Context.Service<ProcessService, ProcessRunner>()(
+  "@diffdash/process/ProcessService",
+) {
   static readonly layer = Layer.suspend(makeProcessServiceLayer).pipe(
     Layer.provide(NodeProcessSpawner.layer),
   )
@@ -270,16 +269,12 @@ function makeProcessServiceLayer() {
         Stream.unwrap(
           resolveRequest(request, "streaming").pipe(
             Effect.map((resolved) =>
-              Stream.asyncScoped<ProcessEvent, ProcessExecutionError>(
-                (emit) =>
-                  execute(spawner, request, resolved, (event) =>
-                    Effect.promise(() => emit.single(event)),
-                  ).pipe(
-                    Effect.flatMap((result) =>
-                      Effect.promise(() => emit.single(ProcessExit.make({ result }))),
-                    ),
-                    Effect.flatMap(() => Effect.promise(() => emit.end())),
-                    Effect.catchAll((error) => Effect.promise(() => emit.fail(error))),
+              Stream.callback<ProcessEvent, ProcessExecutionError>(
+                (queue) =>
+                  execute(spawner, request, resolved, (event) => Queue.offer(queue, event)).pipe(
+                    Effect.flatMap((result) => Queue.offer(queue, ProcessExit.make({ result }))),
+                    Effect.andThen(Queue.end(queue)),
+                    Effect.catch((error) => Queue.fail(queue, error)),
                     Effect.forkScoped,
                   ),
                 { bufferSize: resolved.options.maxBufferedEvents, strategy: "suspend" },
@@ -350,7 +345,7 @@ const resolveRequest = (
   })
 
 const execute = (
-  spawner: Context.Tag.Service<NodeProcessSpawner>,
+  spawner: Context.Service.Shape<typeof NodeProcessSpawner>,
   request: ProcessRequest,
   resolved: ResolvedExecution,
   emitLine?: (event: ProcessLine) => Effect.Effect<void>,
@@ -419,8 +414,8 @@ const execute = (
         : Effect.raceFirst(
             execution,
             Effect.sleep(timeoutMs).pipe(
-              Effect.zipRight(handle.terminate),
-              Effect.zipRight(handle.awaitTerminal),
+              Effect.andThen(handle.terminate),
+              Effect.andThen(handle.awaitTerminal),
               Effect.flatMap((timedOutTerminal) =>
                 ProcessTimeoutError.make({
                   ...terminalDiagnostics(request, capture, timedOutTerminal),
@@ -506,7 +501,7 @@ const awaitProcessTerminal = (
           const { _tag: afterExitTag } = afterExit
           if (afterExitTag === "Terminal") return Effect.succeed(afterExit.terminal)
           return handle.terminate.pipe(
-            Effect.zipRight(handle.awaitTerminal),
+            Effect.andThen(handle.awaitTerminal),
             Effect.flatMap((terminal) =>
               ProcessCleanupError.make({
                 ...terminalDiagnostics(request, capture, terminal),

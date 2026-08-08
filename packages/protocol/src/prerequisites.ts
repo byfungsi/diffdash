@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import {
   GitProviderDescriptor,
   GitProviderDiagnostic,
@@ -6,7 +6,7 @@ import {
 } from "@diffdash/domain/git-provider"
 
 /** Open registered agent-provider identity retained for legacy diagnostic consumers. */
-export const CodingAgentName = Schema.String.pipe(Schema.minLength(1))
+export const CodingAgentName = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 
 /** CLI coding agent name. */
 export type CodingAgentName = typeof CodingAgentName.Type
@@ -20,7 +20,9 @@ export class ProviderDiagnostic extends Schema.Class<ProviderDiagnostic>("Provid
 /** One advisory setup item; hosted-provider items never block local-only use. */
 export class SetupRequirement extends Schema.Class<SetupRequirement>("SetupRequirement")({
   key: Schema.String,
-  providerId: Schema.NullOr(Schema.Union(GitProviderId, Schema.String.pipe(Schema.minLength(1)))),
+  providerId: Schema.NullOr(
+    Schema.Union([GitProviderId, Schema.String.pipe(Schema.check(Schema.isMinLength(1)))]),
+  ),
   title: Schema.String,
   description: Schema.String,
   detail: Schema.String,
@@ -39,8 +41,14 @@ export class AppPrerequisites extends Schema.Class<AppPrerequisites>("AppPrerequ
   ghAuthenticated: Schema.Boolean,
   codingAgentInstalled: Schema.Boolean,
   installedCodingAgents: Schema.Array(CodingAgentName),
-  providerDiagnostics: Schema.optionalWith(Schema.Array(ProviderDiagnostic), { default: () => [] }),
-  setupRequirements: Schema.optionalWith(Schema.Array(SetupRequirement), { default: () => [] }),
+  providerDiagnostics: Schema.Array(ProviderDiagnostic).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  setupRequirements: Schema.Array(SetupRequirement).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   diffDashCliInstalled: Schema.Boolean,
   diffDashCliInPath: Schema.Boolean,
   diffDashCliPath: Schema.NullOr(Schema.String),

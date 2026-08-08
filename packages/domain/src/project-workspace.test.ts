@@ -84,7 +84,7 @@ describe("project workspace", () => {
         rootPath: "/workspace/diffdash",
         candidates: [{ remoteName: "origin", repository, remoteUrl: "private" }],
       }),
-    ).toThrow(/at least 2 item/)
+    ).toThrow(/at least 2/)
   })
 
   it("accepts exactly the supported ribbon values", () => {

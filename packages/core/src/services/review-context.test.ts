@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 
 import { GitService } from "@diffdash/local-git/local-git"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -165,10 +165,10 @@ describe("ReviewContextService", () => {
   it.effect("FUN-80 AC: rejects a snapshot that remains inconsistent", () =>
     Effect.gen(function* () {
       const service = yield* ReviewContextService
-      const result = yield* Effect.either(service.getHostedReviewSnapshot(review))
+      const result = yield* Effect.result(service.getHostedReviewSnapshot(review))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewContextError)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewContextError)
     }).pipe(
       Effect.provide(
         makeLayer({

@@ -26,8 +26,9 @@ import { EMPTY_AGENT_PROVIDER_CATALOG } from "@diffdash/protocol/agent-providers
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
-import { Result, useAtomRefresh, useAtomSet, useAtomValue } from "@effect-atom/atom-react"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
+import { AsyncResult } from "effect/unstable/reactivity"
 import { useDeferredValue, useEffect, useRef, useState } from "react"
 import { HomeScreen } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
@@ -156,7 +157,9 @@ export function AppShell() {
   const deferredSearchQuery = useDeferredValue(query.trim())
   const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
 
-  useRendererStream(desktop.updates.states, setUpdateState)
+  useRendererStream(desktop.updates.states, setUpdateState, (error) =>
+    setActionStatus(formatError(error, "Could not monitor application updates")),
+  )
 
   useEffect(() => {
     const trimmedQuery = query.trim()
@@ -232,7 +235,7 @@ export function AppShell() {
   })
 
   const repos = resultValue(repositoriesResult, [] as readonly Repo[])
-  const projectsStatus = Result.isFailure(repositoriesResult)
+  const projectsStatus = AsyncResult.isFailure(repositoriesResult)
     ? resultErrorMessage(repositoriesResult, "Could not load projects")
     : null
   const providers = availableProviders
@@ -256,12 +259,12 @@ export function AppShell() {
   const refreshSelectedRepositoryComparison = useAtomRefresh(
     repositoryComparisonManifestAtom(selectedReviewSourceKeys.comparison),
   )
-  const isLoadingDiagnostics = Result.isWaiting(diagnosticsResult)
+  const isLoadingDiagnostics = AsyncResult.isWaiting(diagnosticsResult)
   const pullRequests = resultValue(pullRequestsResult, [] as readonly HostedReviewSummary[])
   const reviewRepositoryLinkState: RepositoryLinkState =
     selectedReview?.kind !== "hosted"
       ? "not-applicable"
-      : Result.isWaiting(repositoriesResult) || Result.isFailure(repositoriesResult)
+      : AsyncResult.isWaiting(repositoriesResult) || AsyncResult.isFailure(repositoriesResult)
         ? "checking"
         : repos.some(
               (candidate) =>
@@ -291,12 +294,12 @@ export function AppShell() {
     hasQuery &&
     (query.trim() !== debouncedRemoteSearchQuery ||
       query.trim() !== deferredSearchQuery ||
-      Result.isWaiting(searchScopesResult) ||
-      Result.isWaiting(localResultsResult) ||
-      Result.isWaiting(remoteResultsResult))
-  const searchError = Result.isFailure(searchScopesResult)
+      AsyncResult.isWaiting(searchScopesResult) ||
+      AsyncResult.isWaiting(localResultsResult) ||
+      AsyncResult.isWaiting(remoteResultsResult))
+  const searchError = AsyncResult.isFailure(searchScopesResult)
     ? resultErrorMessage(searchScopesResult, "Could not load repository owners")
-    : Result.isFailure(remoteResultsResult)
+    : AsyncResult.isFailure(remoteResultsResult)
       ? resultErrorMessage(
           remoteResultsResult,
           `Could not search ${selectedProvider?.displayName ?? "hosted"} repositories`,
@@ -556,7 +559,7 @@ export function AppShell() {
       if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
       const localPath = repo.localPath
       const target = await runRendererPromise(
-        projectWorkspace.resolveLocalReview(localPath, Option.fromNullable(intent.branchName)),
+        projectWorkspace.resolveLocalReview(localPath, Option.fromNullishOr(intent.branchName)),
       )
       showProject(repo, "files", { kind: "localDiff", target }, null, true)
       captureAnalytics({ event: "review_opened", reviewType: "local_diff" })
@@ -585,7 +588,7 @@ export function AppShell() {
     setActionStatus("Opening project...")
     try {
       const result = await runRendererPromise(
-        repositories.openProject(localPath, Option.fromNullable(selectedRepository)),
+        repositories.openProject(localPath, Option.fromNullishOr(selectedRepository)),
       )
       if (result._tag === "remoteSelectionRequired") {
         setPendingRemoteSelection({ intent, selection: result })
@@ -768,7 +771,9 @@ export function AppShell() {
     return true
   }
 
-  useRendererStream(desktop.navigation.commands, handleCliNavigationCommand)
+  useRendererStream(desktop.navigation.commands, handleCliNavigationCommand, (error) =>
+    setCliNavigationError(formatError(error, "Could not receive CLI navigation commands")),
+  )
 
   const updateAISettings = (settings: AISettings) => {
     void settingsMutation.update(settings).catch(() => undefined)
@@ -975,7 +980,7 @@ export function AppShell() {
                         agentProviderCatalog,
                         aiSettings.routes.walkthrough,
                         "walkthrough",
-                      ) || Result.isWaiting(agentProviderCatalogResult),
+                      ) || AsyncResult.isWaiting(agentProviderCatalogResult),
                     aiSettings,
                     quickNavigationRequest: reviewQuickNavigationRequest,
                     repositoryLinkState: reviewRepositoryLinkState,
@@ -1150,11 +1155,11 @@ const goToPaletteItems = ({
 const hostedRepositoryLabel = (repository: HostedRepository) =>
   `${repository.locator.namespace}/${repository.locator.name}`
 
-const resultValue = <A,>(result: Result.Result<A, unknown>, fallback: A) =>
-  Result.getOrElse(result, () => fallback)
+const resultValue = <A,>(result: AsyncResult.AsyncResult<A, unknown>, fallback: A) =>
+  AsyncResult.getOrElse(result, () => fallback)
 
-const resultErrorMessage = (result: Result.Result<unknown, unknown>, fallback: string) =>
-  Result.matchWithError(result, {
+const resultErrorMessage = (result: AsyncResult.AsyncResult<unknown, unknown>, fallback: string) =>
+  AsyncResult.matchWithError(result, {
     onInitial: () => fallback,
     onError: (error) => formatError(error, fallback),
     onDefect: (defect) => formatError(defect, fallback),

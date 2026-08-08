@@ -51,19 +51,19 @@ class AgentArtifactNormalizationError extends Schema.TaggedError<AgentArtifactNo
   "AgentArtifactNormalizationError",
   {
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Creates stable digests and bounded normalized artifacts from provider-boundary values. */
-export class AgentArtifactNormalizer extends Context.Tag("@diffdash/AgentArtifactNormalizer")<
+export class AgentArtifactNormalizer extends Context.Service<
   AgentArtifactNormalizer,
   {
     readonly normalize: (
       input: NormalizeAgentArtifactInput,
     ) => Effect.Effect<ReviewAgentArtifact, AgentArtifactNormalizationError>
   }
->() {
+>()("@diffdash/AgentArtifactNormalizer") {
   static readonly layer = Layer.succeed(
     AgentArtifactNormalizer,
     AgentArtifactNormalizer.of({

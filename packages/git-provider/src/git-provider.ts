@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import {
   GitProviderDescriptor,
@@ -71,7 +71,7 @@ export class GitRepositorySearchScope extends Schema.Class<GitRepositorySearchSc
   "GitRepositorySearchScope",
 )({
   login: Schema.String,
-  kind: Schema.Literal("user", "organization"),
+  kind: Schema.Literals(["user", "organization"]),
 }) {}
 
 /** Unknown configured provider ID. */
@@ -99,7 +99,7 @@ export class GitProviderOperationError extends Schema.TaggedError<GitProviderOpe
     providerId: GitProviderId,
     operation: Schema.String,
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
@@ -171,7 +171,7 @@ export interface GitProviderRegistration {
 }
 
 /** Registry of configured hosted Git provider instances. */
-export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegistry")<
+export class GitProviderRegistry extends Context.Service<
   GitProviderRegistry,
   {
     readonly list: Effect.Effect<readonly GitProviderRegistration[]>
@@ -185,7 +185,7 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
       AmbiguousGitRemoteError | GitProviderOperationError
     >
   }
->() {
+>()("@diffdash/GitProviderRegistry") {
   /** Builds a registry and fails immediately when instance IDs collide. */
   static readonly layer = (registrations: readonly GitProviderRegistration[]) =>
     Layer.effect(
@@ -205,8 +205,8 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
         return GitProviderRegistry.of({
           list: Effect.succeed([...providers.values()]),
           get: (providerId) =>
-            Effect.fromNullable(providers.get(providerId)).pipe(
-              Effect.orElseFail(() => UnknownGitProviderError.make({ providerId })),
+            Effect.fromOption(Option.fromNullishOr(providers.get(providerId)), () =>
+              UnknownGitProviderError.make({ providerId }),
             ),
           resolveRemote: Effect.fn("GitProviderRegistry.resolveRemote")(function* (remoteUrl) {
             const matches = (yield* Effect.all(
@@ -227,7 +227,7 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
 }
 
 const InvalidRegistrationProviderId = GitProviderId.make("invalid-provider")
-const PublishingTools = Schema.Array(Schema.String.pipe(Schema.minLength(1)))
+const PublishingTools = Schema.Array(Schema.String.pipe(Schema.check(Schema.isMinLength(1))))
 const RepositoryResults = Schema.Array(HostedRepository)
 const ReviewSummaryResults = Schema.Array(HostedReviewSummary)
 const SearchScopeResults = Schema.Array(GitRepositorySearchScope)
@@ -247,10 +247,10 @@ const wrongTargetResult = (providerId: GitProviderId, operation: string) =>
 const decodeResult = <A, I>(
   providerId: GitProviderId,
   operation: string,
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I, never, never>,
   value: unknown,
 ) =>
-  Schema.decodeUnknown(schema)(value).pipe(
+  Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError(() => malformedResult(providerId, operation)),
   )
 
@@ -279,7 +279,7 @@ const requireReviewProvider = (
 
 const validateRegistration = (registration: GitProviderRegistration) =>
   Effect.gen(function* () {
-    const descriptor = yield* Schema.decodeUnknown(GitProviderDescriptor)(
+    const descriptor = yield* Schema.decodeUnknownEffect(GitProviderDescriptor)(
       registration.descriptor,
     ).pipe(
       Effect.mapError(() => malformedResult(InvalidRegistrationProviderId, "register.descriptor")),

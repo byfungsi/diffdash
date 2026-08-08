@@ -43,7 +43,7 @@ export class ReviewSnapshotUnavailableError extends Schema.TaggedError<ReviewSna
   "ReviewSnapshotUnavailableError",
   {
     snapshotId: ReviewSnapshotId,
-    reason: Schema.Literal("expired", "evicted", "mismatched"),
+    reason: Schema.Literals(["expired", "evicted", "mismatched"]),
   },
 ) {}
 
@@ -59,7 +59,7 @@ interface SnapshotTombstone {
 }
 
 /** Owns coherent snapshot acquisition and a bounded immutable revision-keyed LRU/TTL cache. */
-export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshotService")<
+export class ReviewSnapshotService extends Context.Service<
   ReviewSnapshotService,
   {
     readonly acquireHosted: (
@@ -76,7 +76,7 @@ export class ReviewSnapshotService extends Context.Tag("@diffdash/ReviewSnapshot
     ) => Effect.Effect<ReviewSnapshot, ReviewSnapshotUnavailableError>
     readonly stats: Effect.Effect<ReviewSnapshotCacheStats>
   }
->() {
+>()("@diffdash/ReviewSnapshotService") {
   /** Builds the cache layer with explicit, validated capacity and TTL bounds. */
   static readonly layer = (
     config: ReviewSnapshotCacheConfig = DEFAULT_REVIEW_SNAPSHOT_CACHE_CONFIG,

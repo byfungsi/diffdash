@@ -8,24 +8,24 @@ import {
 export const AI_SETTINGS_VERSION = 7 as const
 
 /** Application appearance preference. */
-export const Appearance = Schema.Literal("light", "dark", "system")
+export const Appearance = Schema.Literals(["light", "dark", "system"])
 
 /** Application appearance selected in user settings. */
 export type Appearance = typeof Appearance.Type
 
 /** Palette available when the application uses a light color scheme. */
-export const LightTheme = Schema.Literal("diffdash", "catppuccin-latte")
+export const LightTheme = Schema.Literals(["diffdash", "catppuccin-latte"])
 
 /** Palette available when the application uses a light color scheme. */
 export type LightTheme = typeof LightTheme.Type
 
 /** Palette available when the application uses a dark color scheme. */
-export const DarkTheme = Schema.Literal(
+export const DarkTheme = Schema.Literals([
   "diffdash",
   "catppuccin-frappe",
   "catppuccin-macchiato",
   "catppuccin-mocha",
-)
+])
 
 /** Palette available when the application uses a dark color scheme. */
 export type DarkTheme = typeof DarkTheme.Type
@@ -43,12 +43,12 @@ export const DEFAULT_THEME_PREFERENCES = ThemePreferences.make({
 })
 
 /** Syntax-highlighting theme available when the application uses a light color scheme. */
-export const LightCodeTheme = Schema.Literal(
+export const LightCodeTheme = Schema.Literals([
   "rose-pine-dawn",
   "catppuccin-latte",
   "github-light-default",
   "pierre-light-soft",
-)
+])
 
 /** Syntax-highlighting theme available when the application uses a light color scheme. */
 export type LightCodeTheme = typeof LightCodeTheme.Type
@@ -57,7 +57,7 @@ export type LightCodeTheme = typeof LightCodeTheme.Type
 export const DIFFDASH_DARK_CODE_THEME = "diffdash-dark" as const
 
 /** Syntax-highlighting theme available when the application uses a dark color scheme. */
-export const DarkCodeTheme = Schema.Literal(
+export const DarkCodeTheme = Schema.Literals([
   DIFFDASH_DARK_CODE_THEME,
   "rose-pine-moon",
   "catppuccin-frappe",
@@ -65,7 +65,7 @@ export const DarkCodeTheme = Schema.Literal(
   "catppuccin-mocha",
   "github-dark-default",
   "pierre-dark-soft",
-)
+])
 
 /** Syntax-highlighting theme available when the application uses a dark color scheme. */
 export type DarkCodeTheme = typeof DarkCodeTheme.Type
@@ -85,19 +85,19 @@ export const DEFAULT_CODE_THEME_PREFERENCES = CodeThemePreferences.make({
 })
 
 /** Preferred layout for rendered source diffs. */
-export const DiffViewMode = Schema.Literal("auto", "unified", "split")
+export const DiffViewMode = Schema.Literals(["auto", "unified", "split"])
 
 /** Preferred layout for rendered source diffs. */
 export type DiffViewMode = typeof DiffViewMode.Type
 
 /** Automatic model quality used by capability routing. */
-export const AutoQuality = Schema.Literal("fast", "balanced", "best")
+export const AutoQuality = Schema.Literals(["fast", "balanced", "best"])
 
 /** Automatic model quality used by capability routing. */
 export type AutoQuality = typeof AutoQuality.Type
 
 /** A capability route selected automatically or pinned to an open provider ID. */
-export const AICapabilityRoute = Schema.String.pipe(Schema.minLength(1))
+export const AICapabilityRoute = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 
 /** A capability route selected automatically or pinned to an open provider ID. */
 export type AICapabilityRoute = typeof AICapabilityRoute.Type
@@ -112,10 +112,10 @@ export const AICapabilityRoutes = Schema.Struct({
 export type AICapabilityRoutes = typeof AICapabilityRoutes.Type
 
 /** Open provider-to-model selections retained even when a provider package is absent. */
-export const AIProviderModels = Schema.Record({
-  key: Schema.String.pipe(Schema.minLength(1)),
-  value: Schema.String.pipe(Schema.minLength(1)),
-})
+export const AIProviderModels = Schema.Record(
+  Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+)
 
 /** Open provider-to-model selections retained even when a provider package is absent. */
 export type AIProviderModels = typeof AIProviderModels.Type

@@ -7,5 +7,6 @@ export default defineConfig({
     exclude: ["src/**/*.browser.test.tsx"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     pool: "forks",
+    setupFiles: ["./vitest.setup.ts"],
   },
 })

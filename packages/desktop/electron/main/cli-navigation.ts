@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from "node:path"
-import { Args, Command, HelpDoc, Options } from "@effect/cli"
-import * as NodeContext from "@effect/platform-node/NodeContext"
+import { NodeServices } from "@effect/platform-node"
 import { Console, Effect, Option } from "effect"
+import { Argument, CliError, CliOutput, Command, Flag } from "effect/unstable/cli"
 
 import {
   GitProviderId,
@@ -98,7 +98,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
       result = command
     })
 
-  const optionalPath = Args.text({ name: "path" }).pipe(Args.optional)
+  const optionalPath = Argument.string("path").pipe(Argument.optional)
   const install = Command.make("install", { path: optionalPath }, ({ path }) =>
     select(
       LinkRepositoryCommand.make({
@@ -109,16 +109,16 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
       }),
     ),
   ).pipe(Command.withDescription("Save a local Git repository in DiffDash"))
-  const pullRequestNumber = Args.text({ name: "pr-number" }).pipe(
-    Args.mapTryCatch(
+  const pullRequestNumber = Argument.string("pr-number").pipe(
+    Argument.mapTryCatch(
       (input) => {
         const number = Number(input)
         if (!Number.isSafeInteger(number) || number <= 0) throw new Error("invalid PR number")
         return number
       },
-      () => HelpDoc.p("Pull request number must be a positive integer."),
+      () => "Pull request number must be a positive integer.",
     ),
-    Args.optional,
+    Argument.optional,
   )
   const pullRequest = Command.make("pr", { number: pullRequestNumber }, ({ number }) =>
     select(
@@ -128,7 +128,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
       }),
     ),
   ).pipe(Command.withDescription("Open a repository's pull requests"))
-  const branch = Args.text({ name: "branch-name" }).pipe(Args.optional)
+  const branch = Argument.string("branch-name").pipe(Argument.optional)
   const diff = Command.make("diff", { branch }, ({ branch: branchName }) =>
     select(
       OpenBranchDiffCommand.make({
@@ -139,17 +139,17 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   ).pipe(Command.withDescription("Open local changes against a branch"))
   const baseRef = gitRevisionArgument("base")
   const headRef = gitRevisionArgument("head")
-  const repository = Options.text("repository").pipe(
-    Options.mapTryCatch(
+  const repository = Flag.string("repository").pipe(
+    Flag.mapTryCatch(
       (input) => {
         const selector = parseRepositorySelector(input)
         if (selector === null) throw new Error("invalid repository selector")
         return selector
       },
-      () => HelpDoc.p("Repository must be provider:namespace/name or namespace/name."),
+      () => "Repository must be provider:namespace/name or namespace/name.",
     ),
-    Options.withDescription("Saved repository to compare"),
-    Options.optional,
+    Flag.withDescription("Saved repository to compare"),
+    Flag.optional,
   )
   const compare = Command.make(
     "compare",
@@ -182,26 +182,37 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   )
 
   const normalizedArgs = normalizePublicArguments(args)
-  const program = Command.run(root, { name: "diffdash", version: "0.0.0" })([
-    "node",
-    "diffdash",
-    ...normalizedArgs,
-  ]).pipe(
-    Effect.catchAll((error) =>
-      select(cliError(stripAnsi(HelpDoc.toAnsiText(error.error)).trim() || "Invalid command.")),
-    ),
+  const formatter = CliOutput.defaultFormatter({ colors: false })
+  const program = Command.runWith(root, { version: "0.0.0" })(normalizedArgs).pipe(
+    Effect.catch((error) => {
+      if (error instanceof CliError.ShowHelp) {
+        if (error.errors.length === 0) return Effect.void
+        return select(
+          cliError(
+            error.errors
+              .map((reportedError) =>
+                reportedError instanceof CliError.MissingArgument
+                  ? `Missing argument <${reportedError.argument}>`
+                  : formatter.formatCliError(reportedError),
+              )
+              .join("\n") || "Invalid command.",
+          ),
+        )
+      }
+      return select(cliError(formatter.formatCliError(error) || "Invalid command."))
+    }),
     silenceConsole,
-    Effect.provide(NodeContext.layer),
+    Effect.provide(NodeServices.layer),
   )
   Effect.runSync(program)
   return result
 }
 
 const gitRevisionArgument = (name: "base" | "head") =>
-  Args.text({ name }).pipe(
-    Args.mapTryCatch(
+  Argument.string(name).pipe(
+    Argument.mapTryCatch(
       (input) => CliGitRevision.make(input),
-      () => HelpDoc.p(`Invalid ${name} revision.`),
+      () => `Invalid ${name} revision.`,
     ),
   )
 
@@ -279,24 +290,11 @@ const validatePublicArgumentCompatibility = (
 }
 
 const silenceConsole = <A, E, R>(program: Effect.Effect<A, E, R>) =>
-  Console.consoleWith((current) =>
-    program.pipe(
-      Console.withConsole({
-        ...current,
-        error: () => Effect.void,
-        log: () => Effect.void,
-        unsafe: {
-          ...current.unsafe,
-          error: () => undefined,
-          log: () => undefined,
-        },
-      }),
-    ),
-  )
-
-const ansiEscapePattern = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g")
-
-const stripAnsi = (input: string) => input.replace(ansiEscapePattern, "")
+  Effect.provideService(program, Console.Console, {
+    ...console,
+    error: () => undefined,
+    log: () => undefined,
+  })
 
 const parseRepositorySelector = (input: string): CliRepositorySelector | null => {
   const separator = input.indexOf(":")

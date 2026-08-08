@@ -7,8 +7,8 @@ import {
 } from "./provider-composition"
 
 const processes = {
-  run: () => Effect.dieMessage("probe is not evaluated during composition"),
-  streamLines: () => Stream.dieMessage("execution is not evaluated during composition"),
+  run: () => Effect.die(new Error("probe is not evaluated during composition")),
+  streamLines: () => Stream.die(new Error("execution is not evaluated during composition")),
 }
 
 describe("provider composition", () => {
@@ -16,9 +16,9 @@ describe("provider composition", () => {
     const composition = createAgentProviderComposition({
       processes,
       tempResources: {
-        makeTempDirectoryScoped: () => Effect.dieMessage("temp resources are not evaluated"),
-        makeTempFileScoped: () => Effect.dieMessage("temp resources are not evaluated"),
-        makeTempOutputPathScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempDirectoryScoped: () => Effect.die(new Error("temp resources are not evaluated")),
+        makeTempFileScoped: () => Effect.die(new Error("temp resources are not evaluated")),
+        makeTempOutputPathScoped: () => Effect.die(new Error("temp resources are not evaluated")),
       },
       tempDirectory: "/tmp/diffdash-agent-composition",
       fixture: Option.some({ walkthroughNeverCompletes: false }),
@@ -55,9 +55,9 @@ describe("provider composition", () => {
     const composition = createAgentProviderComposition({
       processes,
       tempResources: {
-        makeTempDirectoryScoped: () => Effect.dieMessage("temp resources are not evaluated"),
-        makeTempFileScoped: () => Effect.dieMessage("temp resources are not evaluated"),
-        makeTempOutputPathScoped: () => Effect.dieMessage("temp resources are not evaluated"),
+        makeTempDirectoryScoped: () => Effect.die(new Error("temp resources are not evaluated")),
+        makeTempFileScoped: () => Effect.die(new Error("temp resources are not evaluated")),
+        makeTempOutputPathScoped: () => Effect.die(new Error("temp resources are not evaluated")),
       },
       tempDirectory: "/tmp/diffdash-agent-composition",
       fixture: Option.none(),

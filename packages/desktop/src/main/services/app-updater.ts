@@ -25,7 +25,7 @@ const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000
 export class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
   operation: Schema.String,
   message: Schema.String,
-  cause: Schema.NullOr(Schema.Defect),
+  cause: Schema.NullOr(Schema.Defect()),
 }) {}
 
 /** Native updater seam used by the production service and deterministic tests. */

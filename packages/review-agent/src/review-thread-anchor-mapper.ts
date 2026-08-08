@@ -35,14 +35,14 @@ type UniqueMatch<A> =
   | { readonly kind: "ambiguous" }
 
 /** Maps persisted review-thread anchors into the latest parsed review revision. */
-export class ReviewThreadAnchorMapper extends Context.Tag("@diffdash/ReviewThreadAnchorMapper")<
+export class ReviewThreadAnchorMapper extends Context.Service<
   ReviewThreadAnchorMapper,
   {
     readonly mapReview: (
       input: MapReviewThreadAnchorsInput,
     ) => Effect.Effect<readonly ReviewThread[], ReviewThreadStoreError>
   }
->() {
+>()("@diffdash/ReviewThreadAnchorMapper") {
   static readonly layer = Layer.effect(
     ReviewThreadAnchorMapper,
     Effect.gen(function* () {

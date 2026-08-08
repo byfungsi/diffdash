@@ -78,7 +78,7 @@ export interface PinnedRepositoryComparisonInput {
 export { HostedReviewWorkspacePoolError } from "./hosted-review-workspace-pool-error"
 
 /** Executes hosted-review agent work inside an exclusively leased managed worktree. */
-export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedReviewWorkspacePool")<
+export class HostedReviewWorkspacePool extends Context.Service<
   HostedReviewWorkspacePool,
   {
     readonly use: <A, E, R>(
@@ -97,7 +97,7 @@ export class HostedReviewWorkspacePool extends Context.Tag("@diffdash/HostedRevi
       run: (localPath: string) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError>
   }
->() {
+>()("@diffdash/HostedReviewWorkspacePool") {
   static readonly layer = (config: {
     readonly worktreePoolPath: string
     readonly remoteWorktreePoolPath: string
@@ -364,9 +364,7 @@ const reserveAndPrepare = (
       Effect.onInterrupt(() =>
         quarantine("Review workspace preparation was interrupted.").pipe(Effect.ignore),
       ),
-      Effect.catchAll((cause) =>
-        quarantine(cause.reason).pipe(Effect.zipRight(Effect.fail(cause))),
-      ),
+      Effect.catch((cause) => quarantine(cause.reason).pipe(Effect.andThen(Effect.fail(cause)))),
     )
   })
 
@@ -392,7 +390,7 @@ const prepareSlot = (
         )
 
   return evict.pipe(
-    Effect.zipRight(
+    Effect.andThen(
       withFileLock(
         filesystem,
         filesystem.child(repositoryRoot, "repository.lock"),
@@ -808,7 +806,7 @@ const restoreAndRelease = (
               lastError: cause.reason,
             })),
             value: undefined,
-          })).pipe(Effect.zipRight(Effect.fail(cause))),
+          })).pipe(Effect.andThen(Effect.fail(cause))),
         onSuccess: () =>
           mutateManifest(filesystem, (manifest) => ({
             manifest: updateSlot(manifest, lease.slotId, (slot) => ({
@@ -841,7 +839,7 @@ const recreateWorktree = (
         "remove",
         "--force",
         worktreePath,
-      ]).pipe(Effect.catchAll(() => Effect.void))
+      ]).pipe(Effect.catch(() => Effect.void))
       yield* filesystem.remove(worktreePath, "worktree.removeDirectory")
     }
     yield* runManagedGit(filesystem, [barePath], processes, [
@@ -881,7 +879,7 @@ const removeWorktree = (
         "remove",
         "--force",
         worktreePath,
-      ]).pipe(Effect.catchAll(() => Effect.void))
+      ]).pipe(Effect.catch(() => Effect.void))
       yield* filesystem.remove(worktreePath, "comparison.workspace.remove")
     }
     yield* runManagedGit(filesystem, [barePath], processes, [
@@ -891,7 +889,7 @@ const removeWorktree = (
       "prune",
       "--expire",
       "now",
-    ]).pipe(Effect.catchAll(() => Effect.void))
+    ]).pipe(Effect.catch(() => Effect.void))
   })
 
 const verifyWorktree = (
@@ -940,7 +938,7 @@ const evictSlot = (
         "remove",
         "--force",
         slotPath,
-      ]).pipe(Effect.catchAll(() => Effect.void))
+      ]).pipe(Effect.catch(() => Effect.void))
       yield* runManagedGit(filesystem, [barePath], processes, [
         "--git-dir",
         barePath,
@@ -948,7 +946,7 @@ const evictSlot = (
         "prune",
         "--expire",
         "now",
-      ]).pipe(Effect.catchAll(() => Effect.void))
+      ]).pipe(Effect.catch(() => Effect.void))
     }
     yield* filesystem.remove(slotPath, "evict.remove")
   })
@@ -1052,7 +1050,7 @@ const runGit = (
             env: { GIT_TERMINAL_PROMPT: "0" },
           }),
         )
-        .pipe(Stream.runLast, Effect.fork)
+        .pipe(Stream.runLast, Effect.forkChild)
       const lastEvent = yield* restore(Fiber.join(fiber))
       return yield* Option.match(lastEvent, {
         onNone: () =>
@@ -1100,7 +1098,7 @@ const runManagedGit = (
 ) =>
   Effect.forEach(paths, (path) => filesystem.validate(path, "git.managedPath"), {
     discard: true,
-  }).pipe(Effect.zipRight(runGit(processes, args)))
+  }).pipe(Effect.andThen(runGit(processes, args)))
 
 const isBareRepository = (
   filesystem: ManagedWorkspaceFilesystem,
@@ -1114,7 +1112,7 @@ const isBareRepository = (
     "--is-bare-repository",
   ]).pipe(
     Effect.map((result) => result.stdout.trim() === "true"),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   )
 
 const recordRemoteRepositoryUse = (

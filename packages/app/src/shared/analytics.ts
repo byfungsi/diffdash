@@ -7,6 +7,6 @@ import { useDesktopRuntime } from "@/platform/renderer-runtime"
 export const useCaptureAnalytics = () => {
   const desktop = useDesktopRuntime()
   return (event: AnalyticsEvent): void => {
-    Effect.runFork(desktop.analytics.capture(event).pipe(Effect.catchAll(() => Effect.void)))
+    Effect.runFork(desktop.analytics.capture(event).pipe(Effect.catch(() => Effect.void)))
   }
 }

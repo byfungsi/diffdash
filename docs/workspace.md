@@ -42,18 +42,18 @@ providers. `@diffdash/settings` owns path-parameterized JSON settings and app-st
 preserving unknown provider fields. Neither package depends on Electron or concrete providers.
 
 `@diffdash/persistence` is the sole owner of SQLite lifecycle, migrations, durable stores, and
-versioned database fixtures. Its layer receives the database path from desktop composition;
+versioned database fixtures. Its layer receives the database path from Core composition;
 workspace source is bundled while the native `better-sqlite3` dependency remains external and
 unpacked for Electron.
 
 `@diffdash/git-provider` defines the hosted Git extension contract, multi-instance registry, typed
 errors, and reusable provider conformance suite. Concrete providers are leaf packages imported only
-by desktop composition; contributor dependency rules are documented in `docs/providers.md`.
+by Core composition; contributor dependency rules are documented in `docs/providers.md`.
 
 `@diffdash/agent-provider` defines open agent identities, manifests, capability-specific probes and
 policies, walkthrough and review-thread contracts, scoped MCP access, a provider-neutral registry,
 and reusable conformance suites. It is browser-safe and imports no concrete provider. Concrete agent
-providers are leaf packages composed once by desktop; contribution rules are in `docs/providers.md`.
+providers are leaf packages composed once by Core; contribution rules are in `docs/providers.md`.
 
 ## Task Policy
 

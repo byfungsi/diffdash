@@ -9,13 +9,13 @@ import { ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { DatabaseService } from "./database"
 
-const ImportantArtifactIdsJson = Schema.parseJson(Schema.Array(ReviewAgentArtifactId))
+const ImportantArtifactIdsJson = Schema.fromJsonString(Schema.Array(ReviewAgentArtifactId))
 const ThreadMemoryRow = Schema.Struct({
   thread_id: ReviewThreadId,
   summary: Schema.String,
-  summarized_through_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+  summarized_through_sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   summary_algorithm: ThreadMemorySummaryAlgorithm,
-  summary_version: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  summary_version: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
   important_artifact_ids_json: ImportantArtifactIdsJson,
   updated_at: Schema.String,
 })
@@ -25,12 +25,12 @@ export class ThreadMemoryStoreError extends Schema.TaggedError<ThreadMemoryStore
   "ThreadMemoryStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Persistence for compact thread summaries and selected normalized artifacts. */
-export class ThreadMemoryStore extends Context.Tag("@diffdash/ThreadMemoryStore")<
+export class ThreadMemoryStore extends Context.Service<
   ThreadMemoryStore,
   {
     readonly get: (
@@ -40,7 +40,7 @@ export class ThreadMemoryStore extends Context.Tag("@diffdash/ThreadMemoryStore"
       input: UpsertThreadMemoryInput,
     ) => Effect.Effect<ThreadMemory, ThreadMemoryStoreError>
   }
->() {
+>()("@diffdash/ThreadMemoryStore") {
   static readonly layer = Layer.effect(
     ThreadMemoryStore,
     Effect.gen(function* () {
@@ -65,7 +65,7 @@ export class ThreadMemoryStore extends Context.Tag("@diffdash/ThreadMemoryStore"
       return ThreadMemoryStore.of({
         get,
         upsert: Effect.fn("ThreadMemoryStore.upsert")(function (input) {
-          return Schema.encode(ImportantArtifactIdsJson)(input.importantArtifactIds).pipe(
+          return Schema.encodeEffect(ImportantArtifactIdsJson)(input.importantArtifactIds).pipe(
             Effect.mapError((cause) =>
               ThreadMemoryStoreError.make({ operation: "upsert.encodeArtifactIds", cause }),
             ),

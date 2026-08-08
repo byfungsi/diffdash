@@ -46,11 +46,11 @@ const makeLayer = (directory: string, events: CapturedEvent[]) => {
       enable: async () => undefined,
       flush: async () => undefined,
     }),
-  }).pipe(Layer.provideMerge(settingsLayer))
+  }).pipe(Layer.provide(fileStorageLayer), Layer.provideMerge(settingsLayer))
 }
 
 describe("Analytics", () => {
-  it.scoped("reports install once and uses a stable anonymous ID", () =>
+  it.effect("reports install once and uses a stable anonymous ID", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []
@@ -85,7 +85,7 @@ describe("Analytics", () => {
     }),
   )
 
-  it.scoped("sends nothing after a persisted opt-out", () =>
+  it.effect("sends nothing after a persisted opt-out", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []
@@ -102,7 +102,7 @@ describe("Analytics", () => {
     }),
   )
 
-  it.scoped("stops immediately after opt-out without changing unrelated settings", () =>
+  it.effect("stops immediately after opt-out without changing unrelated settings", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []

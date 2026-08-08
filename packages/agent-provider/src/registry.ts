@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Schema } from "effect"
+import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 
 import {
   AgentCapabilityUnavailableError,
@@ -14,10 +14,10 @@ import {
 } from "./agent-provider"
 
 /** Explicit route for one capability. Auto is never treated as a provider ID. */
-export const AgentProviderRoute = Schema.Union(
+export const AgentProviderRoute = Schema.Union([
   Schema.Struct({ mode: Schema.Literal("auto") }),
   Schema.Struct({ mode: Schema.Literal("provider"), providerId: AgentProviderId }),
-)
+])
 
 /** Explicit route for one capability. Auto is never treated as a provider ID. */
 export type AgentProviderRoute = typeof AgentProviderRoute.Type
@@ -39,11 +39,11 @@ export const agentAutoRoutingPolicies = (
 /** No automatic candidate can safely serve a capability. */
 export class NoAgentProviderAvailableError extends Schema.TaggedError<NoAgentProviderAvailableError>()(
   "NoAgentProviderAvailableError",
-  { capability: Schema.Literal("walkthrough", "review-thread") },
+  { capability: Schema.Literals(["walkthrough", "review-thread"]) },
 ) {}
 
 /** Provider registration registry with fail-closed capability resolution. */
-export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderRegistry")<
+export class AgentProviderRegistry extends Context.Service<
   AgentProviderRegistry,
   {
     readonly list: Effect.Effect<readonly AgentProviderRegistration[]>
@@ -65,7 +65,7 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
     >
     readonly reviewThreadRoute: (route: AgentProviderRoute) => readonly AgentProviderId[]
   }
->() {
+>()("@diffdash/AgentProviderRegistry") {
   /** Builds a registry and rejects duplicate IDs before exposing any provider. */
   static readonly layer = (
     registrations: readonly AgentProviderRegistration[],
@@ -84,8 +84,8 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
         }
 
         const get = (providerId: AgentProviderId) =>
-          Effect.fromNullable(providers.get(providerId)).pipe(
-            Effect.orElseFail(() => MissingAgentProviderError.make({ providerId })),
+          Effect.fromOption(Option.fromNullishOr(providers.get(providerId)), () =>
+            MissingAgentProviderError.make({ providerId }),
           )
 
         const walkthrough = capabilityResolver(
@@ -175,7 +175,7 @@ const capabilityResolver = <Capability extends WalkthroughCapability | ReviewThr
     if (providerId === undefined) {
       return Effect.fail(NoAgentProviderAvailableError.make({ capability: capabilityName }))
     }
-    return resolveExplicit(providerId).pipe(Effect.catchAll(() => resolveAuto(rest)))
+    return resolveExplicit(providerId).pipe(Effect.catch(() => resolveAuto(rest)))
   }
 
   return (

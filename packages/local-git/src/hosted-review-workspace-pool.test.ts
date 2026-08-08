@@ -15,7 +15,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer, Stream, TestLive } from "effect"
+import { Cause, Effect, Fiber, Layer, Stream } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   GitProviderId,
@@ -55,7 +56,7 @@ const fixture = Effect.acquireRelease(Effect.sync(makeGitFixture), (value) =>
 )
 
 describe("HostedReviewWorkspacePool", () => {
-  it.scoped(
+  it.effect(
     "leases the exact PR head without changing the user's checkout and rebuilds it clean",
     () =>
       Effect.gen(function* () {
@@ -145,7 +146,7 @@ describe("HostedReviewWorkspacePool", () => {
       }),
   )
 
-  it.scoped("allows a configured pool root symlink and returns canonical lease paths", () =>
+  it.effect("allows a configured pool root symlink and returns canonical lease paths", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const canonicalPool = join(value.root, "canonical-pool")
@@ -167,7 +168,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects symlinked manifest and lock files without touching their targets", () =>
+  it.effect("rejects symlinked manifest and lock files without touching their targets", () =>
     Effect.gen(function* () {
       for (const name of ["manifest.json", "manifest.lock"] as const) {
         const value = yield* fixture
@@ -195,7 +196,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects symlinked repository ancestors before locking or Git mutation", () =>
+  it.effect("rejects symlinked repository ancestors before locking or Git mutation", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const outside = join(value.root, "outside-repositories")
@@ -223,7 +224,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects symlinked repository.git and repository lock paths", () =>
+  it.effect("rejects symlinked repository.git and repository lock paths", () =>
     Effect.gen(function* () {
       for (const name of ["repository.git", "repository.lock"] as const) {
         const value = yield* fixture
@@ -254,7 +255,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects a symlinked manifest slot before reserving it", () =>
+  it.effect("rejects a symlinked manifest slot before reserving it", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const repositoryRoot = repositoryPoolPath(value.pool, "github:Acme/Widget")
@@ -308,7 +309,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("invalidates disposable version-1 cache state before preparing version 2", () =>
+  it.effect("invalidates disposable version-1 cache state before preparing version 2", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const staleRepositoryPath = join(value.pool, "repositories", "stale")
@@ -344,7 +345,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("separates nested repository keys across provider instances", () =>
+  it.effect("separates nested repository keys across provider instances", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const nestedCheckout = makeCheckout({
@@ -390,7 +391,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects an eleventh lease while all ten global slots are active", () =>
+  it.effect("rejects an eleventh lease while all ten global slots are active", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       yield* Effect.promise(async () => {
@@ -446,7 +447,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("recovers a dead lease and stale manifest lock before reusing the slot", () =>
+  it.effect("recovers a dead lease and stale manifest lock before reusing the slot", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const deadPid = 2_147_483_647
@@ -522,7 +523,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("quarantines a slot when post-provider workspace restoration fails", () =>
+  it.effect("quarantines a slot when post-provider workspace restoration fails", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       let providerStarted = false
@@ -571,7 +572,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("evicts and reuses the globally oldest idle slot at capacity", () =>
+  it.effect("evicts and reuses the globally oldest idle slot at capacity", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       mkdirSync(value.pool, { recursive: true })
@@ -637,7 +638,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects malicious manifest slot paths without touching files outside the pool", () =>
+  it.effect("rejects malicious manifest slot paths without touching files outside the pool", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       mkdirSync(value.pool, { recursive: true })
@@ -692,7 +693,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("fails before provider use when the fetched PR head moved", () =>
+  it.effect("fails before provider use when the fetched PR head moved", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const movedSnapshot = HostedReviewCheckoutSpec.make({
@@ -753,7 +754,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("pins branch, tag, SHA, and merge-base identities without a worktree", () =>
+  it.effect("pins branch, tag, SHA, and merge-base identities without a worktree", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const wrongRemote = join(value.root, "wrong-origin.git")
@@ -782,7 +783,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("reads and materializes the pinned comparison after its head ref moves", () =>
+  it.effect("reads and materializes the pinned comparison after its head ref moves", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const result = yield* Effect.gen(function* () {
@@ -821,7 +822,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("deepens a shallow linked checkout before resolving merge-base", () =>
+  it.effect("deepens a shallow linked checkout before resolving merge-base", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const shallow = join(value.root, "shallow")
@@ -852,7 +853,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("requires explicit ref namespaces when a branch and tag share a name", () =>
+  it.effect("requires explicit ref namespaces when a branch and tag share a name", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const error = yield* Effect.gen(function* () {
@@ -869,7 +870,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("reports missing revisions and unrelated histories distinctly", () =>
+  it.effect("reports missing revisions and unrelated histories distinctly", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const errors = yield* Effect.gen(function* () {
@@ -901,22 +902,22 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("rejects a comparison when a ref moves between acquisition passes", () =>
+  it.effect("rejects a comparison when a ref moves between acquisition passes", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const processes = yield* ProcessService.pipe(Effect.provide(ProcessService.layer))
       const observedRequests: string[][] = []
       const result = yield* Effect.gen(function* () {
         const pool = yield* ReviewWorktreePool
-        return yield* Effect.either(pool.pinComparison(comparisonInput(value, "base", "feature")))
+        return yield* Effect.result(pool.pinComparison(comparisonInput(value, "base", "feature")))
       }).pipe(
         Effect.provide(poolLayer(value, movingProcessLayer(value, processes, observedRequests))),
       )
 
       expect(observedRequests.filter((args) => args.includes("fetch"))).toHaveLength(2)
       expect(result).toMatchObject({
-        _tag: "Left",
-        left: {
+        _tag: "Failure",
+        failure: {
           code: "revision-changed",
           operation: "comparison.verify",
         },
@@ -924,7 +925,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("classifies a ref deleted between acquisition passes as changed", () =>
+  it.effect("classifies a ref deleted between acquisition passes as changed", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const processes = yield* ProcessService.pipe(Effect.provide(ProcessService.layer))
@@ -947,7 +948,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("uses authenticated remote bootstrap and reuses it across hosted reviews", () =>
+  it.effect("uses authenticated remote bootstrap and reuses it across hosted reviews", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const binPath = join(value.root, "bin")
@@ -969,7 +970,6 @@ describe("HostedReviewWorkspacePool", () => {
 
       yield* Effect.gen(function* () {
         const pool = yield* ReviewWorktreePool
-        const live = yield* TestLive.TestLive
         yield* pool.use(
           {
             runId: AgentRunId.make("run-unlinked"),
@@ -1027,7 +1027,7 @@ describe("HostedReviewWorkspacePool", () => {
                 await concurrentGate
               }),
           )
-        yield* live.provide(
+        yield* TestClock.withLive(
           Effect.all(
             [
               concurrentRun(value.snapshot, "run-concurrent-one", "thread-concurrent-one"),
@@ -1086,7 +1086,7 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
-  it.scoped("interrupts remote bootstrap and quarantines the reserved slot", () =>
+  it.effect("interrupts remote bootstrap and quarantines the reserved slot", () =>
     Effect.gen(function* () {
       const value = yield* fixture
       const binPath = join(value.root, "interrupt-bin")
@@ -1113,13 +1113,13 @@ describe("HostedReviewWorkspacePool", () => {
               checkout: value.snapshot,
               bootstrapBareRepository: () =>
                 Effect.sync(() => writeFileSync(startedPath, "started\n")).pipe(
-                  Effect.zipRight(Effect.never),
+                  Effect.andThen(Effect.never),
                 ),
               sourcePath: null,
             },
             () => Effect.void,
           )
-          .pipe(Effect.fork)
+          .pipe(Effect.forkChild)
         yield* Effect.promise(() => waitForFile(startedPath))
         expect(readFileSync(startedPath, "utf8")).toBe("started\n")
         yield* Fiber.interrupt(fiber)

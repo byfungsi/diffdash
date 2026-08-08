@@ -8,7 +8,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer operations that resolve local and repository-comparison workspace targets. */
-export class ProjectWorkspace extends Context.Tag("@diffdash/app/ProjectWorkspace")<
+export class ProjectWorkspace extends Context.Service<
   ProjectWorkspace,
   {
     readonly resolveLocalReview: (
@@ -19,7 +19,7 @@ export class ProjectWorkspace extends Context.Tag("@diffdash/app/ProjectWorkspac
       command: OpenRepositoryComparisonCommand,
     ) => Effect.Effect<ResolvedRepositoryComparison, RendererApiError>
   }
->() {}
+>()("@diffdash/app/ProjectWorkspace") {}
 
 /** Desktop implementation of project target resolution. */
 export const projectWorkspaceLayer = Layer.effect(

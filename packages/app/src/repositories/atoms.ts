@@ -1,5 +1,5 @@
-import { Atom } from "@effect-atom/atom-react"
 import { Effect, Option } from "effect"
+import { Atom } from "effect/unstable/reactivity"
 
 import {
   type GitProviderDescriptor,

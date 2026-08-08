@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -22,7 +22,7 @@ const makeLayer = (directory: string) =>
     ),
   )
 
-it.scoped("FUN-148 AC: loads committed incomplete and completed onboarding fixtures", () =>
+it.effect("FUN-148 AC: loads committed incomplete and completed onboarding fixtures", () =>
   Effect.gen(function* () {
     const directory = yield* makeTempDirectory
     const statePath = installStateFixture(directory, "onboarding-incomplete.json")
@@ -43,7 +43,7 @@ it.scoped("FUN-148 AC: loads committed incomplete and completed onboarding fixtu
 )
 
 describe("AppState", () => {
-  it.scoped("returns default app state when the file is missing", () =>
+  it.effect("returns default app state when the file is missing", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
 
@@ -56,25 +56,25 @@ describe("AppState", () => {
     }),
   )
 
-  it.scoped("maps non-ENOENT filesystem failures to read errors", () =>
+  it.effect("maps non-ENOENT filesystem failures to read errors", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       mkdirSync(join(directory, "diffdash", "state.json"), { recursive: true })
 
       const result = yield* Effect.gen(function* () {
         const appState = yield* AppState
-        return yield* Effect.either(appState.get)
+        return yield* Effect.result(appState.get)
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(AppStateError)
-        expect(result.left.operation).toBe("read")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppStateError)
+        expect(result.failure.operation).toBe("read")
       }
     }),
   )
 
-  it.scoped("maps atomic replacement failures to write errors and removes temporary files", () =>
+  it.effect("maps atomic replacement failures to write errors and removes temporary files", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const stateDirectory = join(directory, "diffdash")
@@ -82,19 +82,19 @@ describe("AppState", () => {
 
       const result = yield* Effect.gen(function* () {
         const appState = yield* AppState
-        return yield* Effect.either(appState.save({ onboardingCompleted: true }))
+        return yield* Effect.result(appState.save({ onboardingCompleted: true }))
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(AppStateError)
-        expect(result.left.operation).toBe("write")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppStateError)
+        expect(result.failure.operation).toBe("write")
       }
       expect(readdirSync(stateDirectory)).toEqual(["state.json"])
     }),
   )
 
-  it.scoped("persists app state as JSON", () =>
+  it.effect("persists app state as JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const statePath = join(directory, "diffdash", "state.json")
@@ -110,20 +110,20 @@ describe("AppState", () => {
     }),
   )
 
-  it.scoped("fails instead of treating invalid JSON as first-run state", () =>
+  it.effect("fails instead of treating invalid JSON as first-run state", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installStateFixture(directory, "settings-malformed.txt")
 
       const result = yield* Effect.gen(function* () {
         const appState = yield* AppState
-        return yield* Effect.either(appState.get)
+        return yield* Effect.result(appState.get)
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(AppStateError)
-        expect(result.left.operation).toBe("read")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppStateError)
+        expect(result.failure.operation).toBe("read")
       }
     }),
   )

@@ -32,7 +32,7 @@ export class OpenPullRequestCommand extends Schema.TaggedClass<OpenPullRequestCo
   "openPullRequest",
   {
     localPath: Schema.NonEmptyString,
-    number: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+    number: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
   },
 ) {}
 
@@ -84,7 +84,7 @@ export class CliNavigationErrorCommand extends Schema.TaggedClass<CliNavigationE
 ) {}
 
 /** One command forwarded by a DiffDash launcher to the running desktop app. */
-export const CliNavigationCommand = Schema.Union(
+export const CliNavigationCommand = Schema.Union([
   OpenProjectCommand,
   OpenWorkingTreeCommand,
   LinkRepositoryCommand,
@@ -93,7 +93,7 @@ export const CliNavigationCommand = Schema.Union(
   OpenRepositoryComparisonCommand,
   RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,
-)
+])
 
 /** One command forwarded by a DiffDash launcher to the running desktop app. */
 export type CliNavigationCommand = typeof CliNavigationCommand.Type

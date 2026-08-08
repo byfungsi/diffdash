@@ -33,7 +33,8 @@ import {
   EMPTY_AGENT_PROVIDER_CATALOG,
 } from "@diffdash/protocol/agent-providers"
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
-import { RegistryContext, Result, useAtomValue } from "@effect-atom/atom-react"
+import { RegistryContext, useAtomValue } from "@effect/atom-react"
+import { AsyncResult } from "effect/unstable/reactivity"
 import {
   Check,
   Ellipsis,
@@ -2539,8 +2540,8 @@ const captureReviewSearchAnchor = (
   return ReviewSnapshotSearchFileAnchor.make({ fileId: inventoryFile.fileId })
 }
 
-const resultValue = <A,>(result: Result.Result<A, unknown>, fallback: A) =>
-  Result.getOrElse(result, () => fallback)
+const resultValue = <A,>(result: AsyncResult.AsyncResult<A, unknown>, fallback: A) =>
+  AsyncResult.getOrElse(result, () => fallback)
 
 const projectRibbonToSidebarTab = (ribbon: ProjectWorkspaceRibbon): ReviewSidebarTab =>
   ribbon === "files" ? "tree" : ribbon

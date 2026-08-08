@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Fiber } from "effect"
+import { Effect, Result, Fiber } from "effect"
 import {
   chmodSync,
   existsSync,
@@ -73,13 +73,13 @@ describe("ProcessService captured execution", () => {
       const processes = yield* ProcessService
       const result = yield* processes
         .run(processRequest("", [], { timeoutMs: -1 }))
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(InvalidProcessOptionsError)
-        const { _tag: tag } = result.left
-        if (tag === "InvalidProcessOptionsError") expect(result.left.option).toBe("command")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(InvalidProcessOptionsError)
+        const { _tag: tag } = result.failure
+        if (tag === "InvalidProcessOptionsError") expect(result.failure.option).toBe("command")
       }
     }).pipe(Effect.provide(ProcessService.layer)),
   )
@@ -102,14 +102,14 @@ describe("ProcessService captured execution", () => {
   it.live("returns a typed exit error without replacing captured stderr", () =>
     Effect.gen(function* () {
       const cli = testRunner(yield* ProcessService)
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run(process.execPath, ["-e", "process.stderr.write('bad'); process.exit(7)"]),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(ProcessExitError)
-        expect(result.left).toMatchObject({
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(ProcessExitError)
+        expect(result.failure).toMatchObject({
           exitCode: 7,
           message: "Command exited with code 7",
           stderr: "bad",
@@ -127,7 +127,7 @@ describe("ProcessService captured execution", () => {
       expect(exact.stdout).toBe("abcde")
       expect(exact.stdoutTruncated).toBe(false)
 
-      const over = yield* Effect.either(
+      const over = yield* Effect.result(
         cli.run(
           process.execPath,
           [
@@ -140,14 +140,14 @@ describe("ProcessService captured execution", () => {
           },
         ),
       )
-      expect(Either.isLeft(over)).toBe(true)
-      if (Either.isLeft(over)) {
-        const { _tag: tag } = over.left
+      expect(Result.isFailure(over)).toBe(true)
+      if (Result.isFailure(over)) {
+        const { _tag: tag } = over.failure
         expect(tag).toBe("ProcessOutputError")
-        expect(over.left.stdout).toBe("abcde")
-        expect(over.left.stdoutTruncated).toBe(true)
-        expect(over.left.stderr).toBe("diagnostic")
-        expect(over.left.stderrTruncated).toBe(false)
+        expect(over.failure.stdout).toBe("abcde")
+        expect(over.failure.stdoutTruncated).toBe(true)
+        expect(over.failure.stderr).toBe("diagnostic")
+        expect(over.failure.stderrTruncated).toBe(false)
       }
     }).pipe(Effect.provide(ProcessService.layer)),
   )
@@ -176,21 +176,21 @@ describe("ProcessService captured execution", () => {
   it.live("drops a partial trailing UTF-8 code point at a capture boundary", () =>
     Effect.gen(function* () {
       const cli = testRunner(yield* ProcessService)
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run(process.execPath, ["-e", "process.stdout.write('a😀b')"], {
           stdout: { maxBytes: 3, overflow: "error" },
         }),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left.stdout).toBe("a")
-        expect(result.left.stdout).not.toContain("�")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure.stdout).toBe("a")
+        expect(result.failure.stdout).not.toContain("�")
       }
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("keeps captured output separate from timeout diagnostics", () =>
+  it.live("keeps captured output separate from timeout diagnostics", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const signalPath = join(directory, "signal")
@@ -202,7 +202,7 @@ describe("ProcessService captured execution", () => {
         setInterval(() => {}, 1_000)
       `
       const cli = testRunner(yield* ProcessService)
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run(process.execPath, ["-e", script], {
           env: { SIGNAL_PATH: signalPath },
           timeoutMs: 1_000,
@@ -211,15 +211,15 @@ describe("ProcessService captured execution", () => {
         }),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toMatchObject({
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
           _tag: "ProcessTimeoutError",
           message: "Command timed out after 1000ms",
           stdout: "partial",
           stderr: "warning",
         })
-        expect(result.left).toBeInstanceOf(ProcessTimeoutError)
+        expect(result.failure).toBeInstanceOf(ProcessTimeoutError)
       }
       expect(readFileSync(signalPath, "utf8")).toBe("SIGTERM")
     }).pipe(Effect.provide(ProcessService.layer)),
@@ -228,21 +228,21 @@ describe("ProcessService captured execution", () => {
   it.live("reports signal termination and stdin failures with typed reasons", () =>
     Effect.gen(function* () {
       const cli = testRunner(yield* ProcessService)
-      const signalResult = yield* Effect.either(
+      const signalResult = yield* Effect.result(
         cli.run(process.execPath, ["-e", "process.kill(process.pid, 'SIGTERM')"]),
       )
-      expect(Either.isLeft(signalResult)).toBe(true)
-      if (Either.isLeft(signalResult)) {
-        expect(signalResult.left).toBeInstanceOf(ProcessExitError)
-        expect(signalResult.left.message).toContain("SIGTERM")
-        expect(signalResult.left.stderr).toBe("")
+      expect(Result.isFailure(signalResult)).toBe(true)
+      if (Result.isFailure(signalResult)) {
+        expect(signalResult.failure).toBeInstanceOf(ProcessExitError)
+        expect(signalResult.failure.message).toContain("SIGTERM")
+        expect(signalResult.failure.stderr).toBe("")
       }
 
       const closeStdinScript = `
         require('node:fs').closeSync(0)
         setInterval(() => {}, 1_000)
       `
-      const stdinResult = yield* Effect.either(
+      const stdinResult = yield* Effect.result(
         cli.run(process.execPath, ["-e", closeStdinScript], {
           stdin: "x".repeat(2 * 1024 * 1024),
           timeoutMs: 5_000,
@@ -250,17 +250,17 @@ describe("ProcessService captured execution", () => {
           forceKillAfterMs: 25,
         }),
       )
-      expect(Either.isLeft(stdinResult)).toBe(true)
-      if (Either.isLeft(stdinResult)) {
-        expect(stdinResult.left).toBeInstanceOf(ProcessStdinError)
-        expect(stdinResult.left.message).toBe("Failed to write command stdin")
-        expect(stdinResult.left.stderr).toBe("")
-        expect(stdinResult.left.cause).not.toBeNull()
+      expect(Result.isFailure(stdinResult)).toBe(true)
+      if (Result.isFailure(stdinResult)) {
+        expect(stdinResult.failure).toBeInstanceOf(ProcessStdinError)
+        expect(stdinResult.failure.message).toBe("Failed to write command stdin")
+        expect(stdinResult.failure.stderr).toBe("")
+        expect(stdinResult.failure.cause).not.toBeNull()
       }
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("terminates the process group when the Effect fiber is interrupted", () =>
+  it.live("terminates the process group when the Effect fiber is interrupted", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const pidPath = join(directory, "pid")
@@ -278,7 +278,7 @@ describe("ProcessService captured execution", () => {
           killAfterMs: 25,
           forceKillAfterMs: 25,
         })
-        .pipe(Effect.fork)
+        .pipe(Effect.forkChild)
       yield* Effect.promise(() => waitForFile(pidPath))
 
       yield* Fiber.interrupt(fiber)
@@ -290,7 +290,7 @@ describe("ProcessService captured execution", () => {
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("kills a same-group descendant that retains stdio after the child exits", () =>
+  it.live("kills a same-group descendant that retains stdio after the child exits", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const descendantPath = join(directory, "descendant")
@@ -305,7 +305,7 @@ describe("ProcessService captured execution", () => {
         process.stdout.write('parent-output')
       `
       const cli = testRunner(yield* ProcessService)
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run(process.execPath, ["-e", script], {
           env: { DESCENDANT_PATH: descendantPath },
           exitCloseAfterMs: 10,
@@ -315,17 +315,17 @@ describe("ProcessService captured execution", () => {
       )
 
       const descendantPid = Number.parseInt(readFileSync(descendantPath, "utf8"), 10)
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(ProcessCleanupError)
-        expect(result.left.stdout).toBe("parent-output")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(ProcessCleanupError)
+        expect(result.failure.stdout).toBe("parent-output")
       }
       yield* Effect.promise(() => waitForProcessExit(descendantPid))
       expect(processIsRunning(descendantPid)).toBe(false)
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("allows inherited stdio to close shortly after the direct child exits", () =>
+  it.live("allows inherited stdio to close shortly after the direct child exits", () =>
     Effect.gen(function* () {
       const script = `
         const { spawn } = require('node:child_process')
@@ -342,7 +342,7 @@ describe("ProcessService captured execution", () => {
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("finishes at the cleanup deadline when detached inherited stdio never closes", () =>
+  it.live("finishes at the cleanup deadline when detached inherited stdio never closes", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const descendantPath = join(directory, "detached-descendant")
@@ -358,7 +358,7 @@ describe("ProcessService captured execution", () => {
       `
       const cli = testRunner(yield* ProcessService)
       const startedAt = Date.now()
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run(process.execPath, ["-e", script], {
           env: { DESCENDANT_PATH: descendantPath },
           exitCloseAfterMs: 10,
@@ -370,14 +370,14 @@ describe("ProcessService captured execution", () => {
       const descendantPid = Number.parseInt(readFileSync(descendantPath, "utf8"), 10)
       yield* Effect.addFinalizer(() => Effect.sync(() => killIfRunning(descendantPid)))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ProcessCleanupError)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ProcessCleanupError)
       expect(elapsedMs).toBeLessThan(5_000)
       expect(processIsRunning(descendantPid)).toBe(true)
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("finds commands from user-local bin when PATH is sparse", () =>
+  it.live("finds commands from user-local bin when PATH is sparse", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectory
       const localBin = join(home, ".local", "bin")
@@ -397,7 +397,7 @@ describe("ProcessService captured execution", () => {
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 
-  it.scopedLive("does not resolve unrelated commands from ~/.opencode/bin", () =>
+  it.live("does not resolve unrelated commands from ~/.opencode/bin", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectory
       const openCodeBin = join(home, ".opencode", "bin")
@@ -409,7 +409,7 @@ describe("ProcessService captured execution", () => {
       })
 
       const cli = testRunner(yield* ProcessService)
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         cli.run("diffdash-shadow-command", [], {
           env: {
             HOME: home,
@@ -418,7 +418,7 @@ describe("ProcessService captured execution", () => {
         }),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
+      expect(Result.isFailure(result)).toBe(true)
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 })

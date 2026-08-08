@@ -22,11 +22,11 @@ export interface DatabaseTransaction {
 /** A typed SQLite persistence failure. */
 export class DatabaseError extends Schema.TaggedError<DatabaseError>()("DatabaseError", {
   operation: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
 /** Main-process SQLite service with typed Effect errors. */
-export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
+export class DatabaseService extends Context.Service<
   DatabaseService,
   {
     readonly get: (sql: string, params?: SqlParams) => Effect.Effect<unknown, DatabaseError>
@@ -40,9 +40,9 @@ export class DatabaseService extends Context.Tag("@diffdash/DatabaseService")<
       execute: (transaction: DatabaseTransaction) => A,
     ) => Effect.Effect<A, DatabaseError>
   }
->() {
+>()("@diffdash/DatabaseService") {
   static readonly layer = (databasePath: string) =>
-    Layer.scoped(
+    Layer.effect(
       DatabaseService,
       Effect.gen(function* () {
         const db = yield* Effect.acquireRelease(

@@ -129,9 +129,18 @@ owning workflow.
 | Review agents and threads | Named Core operations with host progress callbacks |
 | Walkthrough execution and persistence | `start`, `getOperation`, `cancel`, and `getStored` |
 
+SQLite is authoritative for accepted, active, and terminal walkthrough operations. Core persists
+acceptance before provider execution, uses guarded state versions to choose one terminal winner, and
+loads successful content from `WalkthroughStore` through the persisted artifact reference. The
+scoped `FiberMap<WalkthroughOperationId>` contains active workers only; completed fibers leave it
+automatically, and no terminal `Deferred` registry or fixed in-memory history limit exists. Repeated
+non-regenerate starts attach to the persisted exact review generation and prompt version, while
+regeneration durably supersedes matching prior work. Startup marks active rows from a dead Core epoch
+as interrupted and never restarts provider work automatically.
+
 Updater, window, dialog, shell, IPC sender validation, and renderer transport remain Electron-owned.
-FUN-254 will replace the embedded walkthrough operation implementation with persisted idempotency,
-replay, and cross-process diagnostics without moving orchestration back into Electron.
+FUN-254 continues with renderer-visible replay and cross-process diagnostics without moving
+orchestration back into Electron.
 
 The remaining Electron imports of Core-owned error types are temporary transport adapters with
 explicit migration owners:

@@ -47,7 +47,7 @@ export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTarget
   {
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.NullOr(Schema.Defect),
+    cause: Schema.NullOr(Schema.Defect()),
   },
 ) {}
 
@@ -65,7 +65,7 @@ export class LocalGitRemote extends Schema.Class<LocalGitRemote>("LocalGitRemote
 }) {}
 
 /** Main-process service for local Git repository inspection. */
-export class GitService extends Context.Tag("@diffdash/GitService")<
+export class GitService extends Context.Service<
   GitService,
   {
     readonly detectRepository: (
@@ -90,7 +90,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
       target: LocalReviewInput,
     ) => Effect.Effect<LocalReviewSnapshot, ProcessExecutionError | LocalReviewChangedError>
   }
->() {
+>()("@diffdash/GitService") {
   /** Builds the local Git layer with an optional parser test seam. */
   static readonly layerWith = (options: GitServiceLayerOptions = {}) =>
     Layer.effect(
@@ -241,7 +241,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
           }
           const branchName = yield* currentBranch(diff.rootPath).pipe(
             Effect.map((branch) => (branch.length === 0 ? null : branch)),
-            Effect.catchAll(() => Effect.succeed(null)),
+            Effect.catch(() => Effect.succeed(null)),
           )
           const parsedDiff = parseDiff(diff.diff)
           const detail = localReviewDetail(diff, branchName, parsedDiff)
@@ -285,7 +285,7 @@ export class GitService extends Context.Tag("@diffdash/GitService")<
               const diff = yield* getLocalReviewDiff(input)
               const branchName = yield* currentBranch(diff.rootPath).pipe(
                 Effect.map((branch) => (branch.length === 0 ? null : branch)),
-                Effect.catchAll(() => Effect.succeed(null)),
+                Effect.catch(() => Effect.succeed(null)),
               )
               return localReviewDetail(diff, branchName, parseDiff(diff.diff))
             }),
@@ -305,7 +305,7 @@ const currentHeadSha = (rootPath: string) =>
       .run(gitProcessRequest(["-C", rootPath, "rev-parse", "--verify", "HEAD"]))
       .pipe(
         Effect.map((result) => result.stdout.trim()),
-        Effect.catchAll(() => Effect.succeed(null)),
+        Effect.catch(() => Effect.succeed(null)),
       )
   })
 

@@ -742,9 +742,9 @@ describe("WalkthroughService", () => {
       const fiber = yield* Effect.gen(function* () {
         const service = yield* WalkthroughService
         return yield* service.generate(generationInput)
-      }).pipe(Effect.provide(layer), Effect.fork)
+      }).pipe(Effect.provide(layer), Effect.forkChild)
 
-      yield* Effect.yieldNow()
+      yield* Effect.yieldNow
       yield* Fiber.interrupt(fiber)
       expect(interrupted).toBe(true)
       expect(calls).toEqual([primaryProviderId])

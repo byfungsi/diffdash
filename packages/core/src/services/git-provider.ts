@@ -30,7 +30,7 @@ export class GitProviderRemoteParseError extends Schema.TaggedError<GitProviderR
 export type GitProviderCallError = UnknownGitProviderError | GitProviderOperationError
 
 /** Provider-neutral hosted Git orchestration backed only by the provider registry. */
-export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
+export class GitProvider extends Context.Service<
   GitProvider,
   {
     readonly listProviders: Effect.Effect<readonly GitProviderDescriptor[]>
@@ -87,7 +87,7 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
     ) => Effect.Effect<void, GitProviderCallError>
     readonly isAvailable: (providerId: GitProviderId) => Effect.Effect<boolean>
   }
->() {
+>()("@diffdash/GitProvider") {
   static readonly layer = Layer.effect(
     GitProvider,
     Effect.gen(function* () {
@@ -102,7 +102,7 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
             Effect.all(
               providers.map((registration) =>
                 registration.diagnose.pipe(
-                  Effect.catchAll((error) =>
+                  Effect.catch((error) =>
                     Effect.succeed({
                       providerId: registration.descriptor.id,
                       available: false,
@@ -214,7 +214,7 @@ export class GitProvider extends Context.Tag("@diffdash/GitProvider")<
           provider(providerId).pipe(
             Effect.flatMap((registration) => registration.diagnose),
             Effect.map((diagnostic) => diagnostic.available && diagnostic.authenticated),
-            Effect.catchAll(() => Effect.succeed(false)),
+            Effect.catch(() => Effect.succeed(false)),
           ),
       })
     }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Stream } from "effect"
+import { Effect, Result, Stream } from "effect"
 
 import {
   GitProviderId,
@@ -277,13 +277,13 @@ describe("GitHub provider", () => {
       processRunner((request) => Effect.succeed(result("not json", request))),
     )
     return Effect.gen(function* () {
-      const parsed = yield* Effect.either(
+      const parsed = yield* Effect.result(
         provider.searchRepositories({ query: "diffdash", namespaces: ["fungsi"] }),
       )
-      expect(Either.isLeft(parsed)).toBe(true)
-      if (Either.isLeft(parsed)) {
-        expect(parsed.left).toBeInstanceOf(GitProviderOperationError)
-        expect(parsed.left.operation).toBe("searchRepositories")
+      expect(Result.isFailure(parsed)).toBe(true)
+      if (Result.isFailure(parsed)) {
+        expect(parsed.failure).toBeInstanceOf(GitProviderOperationError)
+        expect(parsed.failure.operation).toBe("searchRepositories")
       }
     })
   })

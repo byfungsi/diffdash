@@ -13,7 +13,8 @@ import {
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, TestClock } from "effect"
+import { Effect, Layer, Result } from "effect"
+import { TestClock } from "effect/testing"
 import { ReviewContextError, ReviewContextService } from "./review-context"
 import { RepositoryComparisonSource } from "./repository-comparison-source"
 import { ReviewSnapshotService } from "./review-snapshot"
@@ -73,7 +74,7 @@ const snapshot = (name: string) => {
 }
 
 const layerFor = (
-  acquireLocal: ReviewContextService["Type"]["getLocalReviewSnapshot"],
+  acquireLocal: ReviewContextService["Service"]["getLocalReviewSnapshot"],
   config = { capacity: 2, ttlMs: 1_000, tombstoneCapacity: 4 },
 ) =>
   ReviewSnapshotService.layer(config).pipe(
@@ -115,9 +116,9 @@ describe("ReviewSnapshotService", () => {
 
       expect((yield* service.stats).snapshotIds).toEqual([first.snapshotId, third.snapshotId])
       expect(Object.isFrozen(first)).toBe(true)
-      const stale = yield* Effect.either(service.get(second.snapshotId))
-      expect(Either.isLeft(stale)).toBe(true)
-      if (Either.isLeft(stale)) expect(stale.left.reason).toBe("evicted")
+      const stale = yield* Effect.result(service.get(second.snapshotId))
+      expect(Result.isFailure(stale)).toBe(true)
+      if (Result.isFailure(stale)) expect(stale.failure.reason).toBe("evicted")
     }).pipe(Effect.provide(layerFor(() => Effect.succeed(snapshots[index++] ?? thirdValue))))
   })
 
@@ -128,9 +129,9 @@ describe("ReviewSnapshotService", () => {
       yield* service.acquireLocal(target)
       yield* TestClock.adjust(1_001)
 
-      const stale = yield* Effect.either(service.get(value.snapshotId))
-      expect(Either.isLeft(stale)).toBe(true)
-      if (Either.isLeft(stale)) expect(stale.left.reason).toBe("expired")
+      const stale = yield* Effect.result(service.get(value.snapshotId))
+      expect(Result.isFailure(stale)).toBe(true)
+      if (Result.isFailure(stale)) expect(stale.failure.reason).toBe("expired")
       expect((yield* service.stats).size).toBe(0)
     }).pipe(Effect.provide(layerFor(() => Effect.succeed(value))))
   })
@@ -138,9 +139,9 @@ describe("ReviewSnapshotService", () => {
   it.effect("does not save a snapshot when coherent acquisition fails", () =>
     Effect.gen(function* () {
       const service = yield* ReviewSnapshotService
-      const result = yield* Effect.either(service.acquireLocal(target))
+      const result = yield* Effect.result(service.acquireLocal(target))
 
-      expect(Either.isLeft(result)).toBe(true)
+      expect(Result.isFailure(result)).toBe(true)
       expect((yield* service.stats).size).toBe(0)
     }).pipe(
       Effect.provide(

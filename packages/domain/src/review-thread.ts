@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { AgentProviderFailure } from "./provider-failure"
 
 import { LocalReviewTarget } from "./local-review"
@@ -19,7 +19,7 @@ import type { ParsedDiff } from "./diff"
 
 /** Persistent identity for one local DiffDash review thread. */
 export const ReviewThreadId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewThreadId"),
 )
 
@@ -28,7 +28,7 @@ export type ReviewThreadId = typeof ReviewThreadId.Type
 
 /** Persistent identity for one message in a local review thread. */
 export const ReviewThreadMessageId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewThreadMessageId"),
 )
 
@@ -42,19 +42,19 @@ export const MarkdownBody = Schema.String.pipe(Schema.brand("MarkdownBody"))
 export type MarkdownBody = typeof MarkdownBody.Type
 
 /** Current relationship between an original anchor and the latest review revision. */
-export const ReviewAnchorStatus = Schema.Literal("active", "outdated", "unresolved_anchor")
+export const ReviewAnchorStatus = Schema.Literals(["active", "outdated", "unresolved_anchor"])
 
 /** Current relationship between an original anchor and the latest review revision. */
 export type ReviewAnchorStatus = typeof ReviewAnchorStatus.Type
 
 /** Author type for a persisted local thread message. */
-export const ReviewThreadMessageAuthor = Schema.Literal("user", "agent")
+export const ReviewThreadMessageAuthor = Schema.Literals(["user", "agent"])
 
 /** Author type for a persisted local thread message. */
 export type ReviewThreadMessageAuthor = typeof ReviewThreadMessageAuthor.Type
 
 /** Lifecycle status for a persisted local thread message. */
-export const ReviewThreadMessageStatus = Schema.Literal("pending", "complete", "failed")
+export const ReviewThreadMessageStatus = Schema.Literals(["pending", "complete", "failed"])
 
 /** Lifecycle status for a persisted local thread message. */
 export type ReviewThreadMessageStatus = typeof ReviewThreadMessageStatus.Type
@@ -84,7 +84,7 @@ export class HunkReviewAnchor extends Schema.TaggedClass<HunkReviewAnchor>()("hu
 }) {}
 
 /** Side of a split diff containing an anchored line. */
-export const ReviewLineSide = Schema.Literal("old", "new")
+export const ReviewLineSide = Schema.Literals(["old", "new"])
 
 /** Side of a split diff containing an anchored line. */
 export type ReviewLineSide = typeof ReviewLineSide.Type
@@ -103,12 +103,12 @@ export class LineReviewAnchor extends Schema.TaggedClass<LineReviewAnchor>()("li
 }) {}
 
 /** Any diff location that an agent may reference in a response. */
-export const ReviewAnchor = Schema.Union(
+export const ReviewAnchor = Schema.Union([
   ReviewLevelAnchor,
   FileReviewAnchor,
   HunkReviewAnchor,
   LineReviewAnchor,
-)
+])
 
 /** Any diff location that an agent may reference in a response. */
 export type ReviewAnchor = typeof ReviewAnchor.Type
@@ -145,7 +145,10 @@ export class ReviewThreadMessage extends Schema.Class<ReviewThreadMessage>("Revi
   bodyMarkdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
   agentRunId: Schema.NullOr(Schema.String),
-  failure: Schema.optionalWith(Schema.NullOr(AgentProviderFailure), { default: () => null }),
+  failure: Schema.NullOr(AgentProviderFailure).pipe(
+    Schema.withConstructorDefault(Effect.succeed(null)),
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 }) {}
@@ -199,11 +202,11 @@ export class HostedReviewTarget extends Schema.Class<HostedReviewTarget>("Hosted
 }) {}
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
-export const ReviewThreadTarget = Schema.Union(
+export const ReviewThreadTarget = Schema.Union([
   HostedReviewTarget,
   LocalReviewTarget,
   RepositoryComparisonTarget,
-)
+])
 
 /** Renderer-safe locator resolved into a canonical review snapshot by the main process. */
 export type ReviewThreadTarget = typeof ReviewThreadTarget.Type

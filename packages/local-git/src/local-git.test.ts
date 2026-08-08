@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect, Either, Layer, Stream } from "effect"
+import { Effect, Result, Layer, Stream } from "effect"
 
 import {
   ProcessExitError,
@@ -407,12 +407,12 @@ index 0000000..3333333
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
-      const result = yield* Effect.either(service.resolveBranchComparison("/workspace/repo", "dev"))
+      const result = yield* Effect.result(service.resolveBranchComparison("/workspace/repo", "dev"))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(LocalReviewTargetError)
-        expect(result.left).toMatchObject({
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(LocalReviewTargetError)
+        expect(result.failure).toMatchObject({
           operation: "branch.mergeBase",
           reason: "Branch dev does not share a common ancestor with the current HEAD",
         })
@@ -420,7 +420,7 @@ index 0000000..3333333
     }),
   )
 
-  it.scoped(
+  it.effect(
     "excludes target-only changes while retaining the current branch and local changes",
     () =>
       Effect.gen(function* () {
@@ -533,10 +533,10 @@ index 0000000..3333333
       })
       const layer = GitService.layer.pipe(Layer.provide(processesLayer))
       const service = yield* GitService.pipe(Effect.provide(layer))
-      const result = yield* Effect.either(service.getLocalReviewSnapshot("/workspace/repo"))
+      const result = yield* Effect.result(service.getLocalReviewSnapshot("/workspace/repo"))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(LocalReviewChangedError)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(LocalReviewChangedError)
     }),
   )
 })

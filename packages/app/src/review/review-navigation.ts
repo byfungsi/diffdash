@@ -24,8 +24,8 @@ import {
   UnavailableReviewNavigationOutcome,
 } from "@diffdash/domain/review-navigation"
 import { isTransientTransportError } from "@diffdash/protocol/transport-error"
-import { Atom, type Registry } from "@effect-atom/atom-react"
-import { Either, Schema } from "effect"
+import { Equal, Result, Schema } from "effect"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 /** Exact active review attached to the renderer-local navigator. */
 export interface ReviewNavigationSession {
@@ -332,7 +332,7 @@ const reviewNavigationCommandAtom = Atom.fnSync(
 /** Read-only current navigation status for status UI and external observers. */
 export const reviewNavigationStatusAtom: Atom.Atom<ReviewNavigationStatus> = Atom.readable((get) =>
   projectReviewNavigationStatus(get(privateReviewNavigationModelAtom).machine),
-)
+).pipe(Atom.withEquality(Equal.equals))
 
 /** Read-only most recent terminal navigation result. */
 export const reviewNavigationLastOutcomeAtom: Atom.Atom<ReviewNavigationOutcome | null> =
@@ -478,7 +478,7 @@ class ReviewNavigationOperationalError extends Error {
 
 /** Coordinates atom transitions, promise settlement, aborts, and the imperative bridge. */
 export class ReviewNavigatorController implements ReviewNavigator {
-  readonly #registry: Registry.Registry
+  readonly #registry: AtomRegistry.AtomRegistry
   readonly #budgets: ReviewNavigationBudgets
   readonly #scheduler: ReviewNavigationScheduler
   readonly #releaseCommand: () => void
@@ -494,7 +494,7 @@ export class ReviewNavigatorController implements ReviewNavigator {
   #disposed = false
 
   constructor(
-    registry: Registry.Registry,
+    registry: AtomRegistry.AtomRegistry,
     options: {
       readonly budgets?: Partial<ReviewNavigationBudgets>
       readonly scheduler?: ReviewNavigationScheduler
@@ -529,8 +529,8 @@ export class ReviewNavigatorController implements ReviewNavigator {
     this.#assertUsable()
     const requestId = ReviewNavigationRequestId.make(this.#nextRequestId)
     this.#nextRequestId += 1
-    const decoded = Schema.decodeUnknownEither(ReviewNavigationInput)(input)
-    if (Either.isLeft(decoded)) {
+    const decoded = Schema.decodeUnknownResult(ReviewNavigationInput)(input)
+    if (Result.isFailure(decoded)) {
       const outcome = UnavailableReviewNavigationOutcome.make({
         requestId,
         reason: "invalidLocation",
@@ -544,7 +544,7 @@ export class ReviewNavigatorController implements ReviewNavigator {
     })
     const result = this.#dispatch({
       _tag: "submit",
-      input: decoded.right,
+      input: decoded.success,
       requestId,
       now: this.#scheduler.now(),
       deadlineMs: Math.min(this.#budgets.requestMs, this.#budgets.hardCapMs),

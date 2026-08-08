@@ -52,26 +52,26 @@ import {
 
 /** Stable locator for an authored walkthrough hunk before parser IDs are derived. */
 export class DemoHunkLocator extends Schema.Class<DemoHunkLocator>("DemoHunkLocator")({
-  path: Schema.String.pipe(Schema.minLength(1)),
-  ordinal: Schema.Int.pipe(Schema.greaterThan(0)),
+  path: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  ordinal: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
 }) {}
 
 /** Stable locator for an authored line thread before its exact anchor is derived. */
 export class DemoLineLocator extends Schema.Class<DemoLineLocator>("DemoLineLocator")({
-  path: Schema.String.pipe(Schema.minLength(1)),
-  side: Schema.Literal("old", "new"),
-  lineNumber: Schema.Int.pipe(Schema.greaterThan(0)),
-  lineContent: Schema.String.pipe(Schema.minLength(1)),
+  path: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  side: Schema.Literals(["old", "new"]),
+  lineNumber: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  lineContent: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
 /** One authored walkthrough stop using semantic hunk locators. */
 export class DemoWalkthroughStopSource extends Schema.Class<DemoWalkthroughStopSource>(
   "DemoWalkthroughStopSource",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  title: Schema.String.pipe(Schema.minLength(1)),
-  summary: Schema.String.pipe(Schema.minLength(1)),
-  risk: Schema.Literal("critical", "review", "support"),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  summary: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  risk: Schema.Literals(["critical", "review", "support"]),
   hunks: Schema.Array(DemoHunkLocator),
 }) {}
 
@@ -79,9 +79,9 @@ export class DemoWalkthroughStopSource extends Schema.Class<DemoWalkthroughStopS
 export class DemoWalkthroughChapterSource extends Schema.Class<DemoWalkthroughChapterSource>(
   "DemoWalkthroughChapterSource",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  title: Schema.String.pipe(Schema.minLength(1)),
-  summary: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  summary: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   stops: Schema.Array(DemoWalkthroughStopSource),
 }) {}
 
@@ -89,9 +89,9 @@ export class DemoWalkthroughChapterSource extends Schema.Class<DemoWalkthroughCh
 export class DemoWalkthroughSupportSource extends Schema.Class<DemoWalkthroughSupportSource>(
   "DemoWalkthroughSupportSource",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  title: Schema.String.pipe(Schema.minLength(1)),
-  reason: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  reason: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   hunks: Schema.Array(DemoHunkLocator),
 }) {}
 
@@ -99,30 +99,30 @@ export class DemoWalkthroughSupportSource extends Schema.Class<DemoWalkthroughSu
 export class DemoWalkthroughSource extends Schema.Class<DemoWalkthroughSource>(
   "DemoWalkthroughSource",
 )({
-  title: Schema.String.pipe(Schema.minLength(1)),
-  summary: Schema.String.pipe(Schema.minLength(1)),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  summary: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   chapters: Schema.Array(DemoWalkthroughChapterSource),
   support: Schema.Array(DemoWalkthroughSupportSource),
 }) {}
 
 /** Authored commit metadata for a demo revision. */
 export class DemoCommitSource extends Schema.Class<DemoCommitSource>("DemoCommitSource")({
-  oid: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
-  messageHeadline: Schema.String.pipe(Schema.minLength(1)),
-  authoredDate: Schema.String.pipe(Schema.minLength(1)),
+  oid: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  messageHeadline: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  authoredDate: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
 /** Manifest entry for one coherent demo pull-request revision. */
 export class DemoRevisionManifest extends Schema.Class<DemoRevisionManifest>(
   "DemoRevisionManifest",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  baseSha: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
-  headSha: Schema.String.pipe(Schema.pattern(/^[0-9a-f]{40}$/)),
-  fetchedAt: Schema.String.pipe(Schema.minLength(1)),
-  updatedAt: Schema.String.pipe(Schema.minLength(1)),
-  diffAsset: Schema.String.pipe(Schema.minLength(1)),
-  walkthroughAsset: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  baseSha: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  headSha: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  fetchedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  updatedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  diffAsset: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  walkthroughAsset: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   commits: Schema.Array(DemoCommitSource),
 }) {}
 
@@ -130,52 +130,52 @@ export class DemoRevisionManifest extends Schema.Class<DemoRevisionManifest>(
 export class DemoRepositorySource extends Schema.Class<DemoRepositorySource>(
   "DemoRepositorySource",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  owner: Schema.String.pipe(Schema.minLength(1)),
-  name: Schema.String.pipe(Schema.minLength(1)),
-  description: Schema.String.pipe(Schema.minLength(1)),
-  remoteUrl: Schema.String.pipe(Schema.minLength(1)),
-  createdAt: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  owner: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  name: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  description: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  remoteUrl: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
 /** Authored pull-request metadata shared by every revision. */
 export class DemoPullRequestSource extends Schema.Class<DemoPullRequestSource>(
   "DemoPullRequestSource",
 )({
-  number: Schema.Int.pipe(Schema.greaterThan(0)),
-  title: Schema.String.pipe(Schema.minLength(1)),
-  body: Schema.String.pipe(Schema.minLength(1)),
-  author: Schema.String.pipe(Schema.minLength(1)),
-  state: Schema.String.pipe(Schema.minLength(1)),
+  number: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  body: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  author: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  state: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   isDraft: Schema.Boolean,
-  baseRefName: Schema.String.pipe(Schema.minLength(1)),
-  headRefName: Schema.String.pipe(Schema.minLength(1)),
-  createdAt: Schema.String.pipe(Schema.minLength(1)),
+  baseRefName: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  headRefName: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
 /** One authored message in a reusable local review thread. */
 export class DemoThreadMessageSource extends Schema.Class<DemoThreadMessageSource>(
   "DemoThreadMessageSource",
 )({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
-  author: Schema.Literal("user", "agent"),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  author: Schema.Literals(["user", "agent"]),
   bodyMarkdown: Schema.String,
-  status: Schema.Literal("pending", "complete", "failed"),
+  status: Schema.Literals(["pending", "complete", "failed"]),
   agentRunId: Schema.NullOr(Schema.String),
-  createdAt: Schema.String.pipe(Schema.minLength(1)),
-  updatedAt: Schema.String.pipe(Schema.minLength(1)),
+  createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  updatedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
 /** Authored thread carried from one demo revision to another. */
 export class DemoThreadSource extends Schema.Class<DemoThreadSource>("DemoThreadSource")({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  originalRevisionId: Schema.String.pipe(Schema.minLength(1)),
-  currentRevisionId: Schema.String.pipe(Schema.minLength(1)),
-  anchorStatus: Schema.Literal("active", "outdated", "unresolved_anchor"),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  originalRevisionId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  currentRevisionId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  anchorStatus: Schema.Literals(["active", "outdated", "unresolved_anchor"]),
   locator: DemoLineLocator,
-  createdAt: Schema.String.pipe(Schema.minLength(1)),
-  updatedAt: Schema.String.pipe(Schema.minLength(1)),
+  createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  updatedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   messages: Schema.Array(DemoThreadMessageSource),
 }) {}
 
@@ -183,17 +183,17 @@ export class DemoThreadSource extends Schema.Class<DemoThreadSource>("DemoThread
 export class DemoAgentProgressSource extends Schema.Class<DemoAgentProgressSource>(
   "DemoAgentProgressSource",
 )({
-  afterMs: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+  afterMs: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   stage: ReviewAgentProgressStage,
 }) {}
 
 /** Authored provider-neutral response and progress for a demo thread turn. */
 export class DemoAgentTurnSource extends Schema.Class<DemoAgentTurnSource>("DemoAgentTurnSource")({
-  id: Schema.String.pipe(Schema.minLength(1)),
-  threadId: Schema.String.pipe(Schema.minLength(1)),
-  agentRunId: Schema.String.pipe(Schema.minLength(1)),
-  responseBodyMarkdown: Schema.String.pipe(Schema.minLength(1)),
-  threadSummaryUpdate: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  threadId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  agentRunId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  responseBodyMarkdown: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  threadSummaryUpdate: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   progress: Schema.Array(DemoAgentProgressSource),
 }) {}
 
@@ -202,19 +202,19 @@ export class DemoScenarioManifest extends Schema.Class<DemoScenarioManifest>(
   "DemoScenarioManifest",
 )({
   schemaVersion: Schema.Literal(1),
-  id: Schema.String.pipe(Schema.minLength(1)),
-  title: Schema.String.pipe(Schema.minLength(1)),
-  appVersion: Schema.String.pipe(Schema.minLength(1)),
-  locale: Schema.String.pipe(Schema.minLength(1)),
-  timezone: Schema.String.pipe(Schema.minLength(1)),
-  theme: Schema.Literal("light", "dark"),
-  currentRevisionId: Schema.String.pipe(Schema.minLength(1)),
+  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  appVersion: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  locale: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  timezone: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  theme: Schema.Literals(["light", "dark"]),
+  currentRevisionId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   repository: DemoRepositorySource,
   pullRequest: DemoPullRequestSource,
   searchScopes: Schema.Array(
     Schema.Struct({
-      login: Schema.String.pipe(Schema.minLength(1)),
-      kind: Schema.Literal("user", "organization"),
+      login: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+      kind: Schema.Literals(["user", "organization"]),
     }),
   ),
   revisions: Schema.Array(DemoRevisionManifest),
@@ -275,10 +275,10 @@ export class DemoScenarioValidationError extends Schema.TaggedError<DemoScenario
 export const decodeDemoJson = <A, I>(
   scenarioId: string,
   assetName: string,
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I>,
   source: string,
 ): Effect.Effect<A, DemoScenarioValidationError> =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(source).pipe(
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(source).pipe(
     Effect.mapError(() =>
       DemoScenarioValidationError.make({
         scenarioId,
@@ -466,7 +466,7 @@ const materializeRevision = (
     })
     const scope = walkthroughHostedReviewScope(locator)
     const hunkDigest = buildWalkthroughHunkDigest(parsedDiff.files, scope)
-    const source = yield* Schema.decodeUnknown(DemoWalkthroughSource)(walkthroughSource).pipe(
+    const source = yield* Schema.decodeUnknownEffect(DemoWalkthroughSource)(walkthroughSource).pipe(
       Effect.mapError(() =>
         DemoScenarioValidationError.make({
           scenarioId: manifest.id,

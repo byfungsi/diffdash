@@ -54,7 +54,7 @@ export const resolveCoreConfiguration = (): Effect.Effect<
       },
     }
   }).pipe(
-    Effect.flatMap(Schema.decodeUnknown(CoreConfiguration)),
+    Effect.flatMap(Schema.decodeUnknownEffect(CoreConfiguration)),
     Effect.mapError((cause) =>
       CoreConfigurationError.make({
         message: "DiffDash Core configuration is invalid.",

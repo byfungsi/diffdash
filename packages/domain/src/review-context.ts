@@ -51,11 +51,11 @@ export class RepositoryComparisonSnapshot extends Schema.TaggedClass<RepositoryC
 ) {}
 
 /** A coherent local or provider-backed review revision. */
-export const ReviewSnapshot = Schema.Union(
+export const ReviewSnapshot = Schema.Union([
   HostedReviewSnapshot,
   LocalReviewSnapshot,
   RepositoryComparisonSnapshot,
-)
+])
 
 /** A coherent local or provider-backed review revision. */
 export type ReviewSnapshot = typeof ReviewSnapshot.Type
@@ -72,7 +72,7 @@ export class ReviewSnapshotFileInventory extends Schema.Class<ReviewSnapshotFile
   status: ParsedDiffFile.fields.status,
   additions: Schema.Number,
   deletions: Schema.Number,
-  hunkCount: Schema.Int.pipe(Schema.nonNegative()),
+  hunkCount: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
 /** Renderer-safe hosted snapshot metadata and complete file inventory. */
@@ -118,11 +118,11 @@ export class RepositoryComparisonSnapshotManifest extends Schema.TaggedClass<Rep
 ) {}
 
 /** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
-export const ReviewSnapshotManifest = Schema.Union(
+export const ReviewSnapshotManifest = Schema.Union([
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
   RepositoryComparisonSnapshotManifest,
-)
+])
 
 /** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
 export type ReviewSnapshotManifest = typeof ReviewSnapshotManifest.Type

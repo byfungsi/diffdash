@@ -35,7 +35,7 @@ const isSafeGitRevisionInput = (input: string): boolean => {
 
 /** Safe branch, tag, or full commit input for one repository comparison. */
 export const RepositoryComparisonRef = Schema.String.pipe(
-  Schema.filter(isSafeGitRevisionInput, { message: () => "Invalid Git revision" }),
+  Schema.check(Schema.makeFilter(isSafeGitRevisionInput, { message: "Invalid Git revision" })),
   Schema.brand("RepositoryComparisonRef"),
 )
 
@@ -44,7 +44,7 @@ export type RepositoryComparisonRef = typeof RepositoryComparisonRef.Type
 
 /** Full normalized SHA-1 or SHA-256 Git commit object identity. */
 export const GitCommitSha = Schema.String.pipe(
-  Schema.pattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  Schema.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)),
   Schema.brand("GitCommitSha"),
 )
 

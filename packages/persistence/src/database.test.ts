@@ -15,7 +15,7 @@ import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
 import BetterSqlite3 from "better-sqlite3"
-import { Effect, Either, Layer, Option, Schema } from "effect"
+import { Effect, Result, Layer, Option, Schema } from "effect"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
 import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
 import { DatabaseError, DatabaseService } from "./database"
@@ -79,6 +79,7 @@ const CompatibilityCountsRow = Schema.Struct({
   thread_memory: Schema.Number,
   hosted_viewed_files: Schema.Number,
   local_viewed_files: Schema.Number,
+  walkthrough_operations: Schema.Number,
   walkthroughs: Schema.Number,
 })
 const TableSqlRow = Schema.Struct({ sql: Schema.String })
@@ -95,7 +96,7 @@ const decodeCompatibilityCountsRow = Schema.decodeUnknownSync(CompatibilityCount
 const decodeTableSqlRow = Schema.decodeUnknownSync(TableSqlRow)
 
 describe("DatabaseService", () => {
-  it.scoped("FUN-82 AC: creates and versions a fresh database", () =>
+  it.effect("FUN-82 AC: creates and versions a fresh database", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -121,6 +122,7 @@ describe("DatabaseService", () => {
           "review_thread_messages",
           "review_threads",
           "thread_memory",
+          "walkthrough_operations",
           "walkthroughs",
         ])
         const memoryColumns = decodeColumnNameRows(
@@ -176,12 +178,55 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
       sqlite.close()
     }),
   )
 
-  it.scoped("FUN-148 AC: enables WAL mode and enforces foreign keys", () =>
+  it.effect("upgrades version 12 with durable walkthrough operation constraints", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      const downgraded = new BetterSqlite3(databasePath)
+      downgraded.exec("DROP TABLE walkthrough_operations")
+      downgraded.pragma("user_version = 12")
+      downgraded.close()
+
+      yield* Effect.gen(function* () {
+        const database = yield* DatabaseService
+        const operationTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'walkthrough_operations'",
+          ),
+        )
+        const operationIndexes = decodeColumnNameRows(
+          yield* database.all(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'index' AND tbl_name = 'walkthrough_operations' ORDER BY name`,
+          ),
+        )
+
+        expect(operationTable.sql).toContain("state_version INTEGER NOT NULL CHECK")
+        expect(operationTable.sql).toContain("REFERENCES repos(id) ON DELETE CASCADE")
+        expect(operationTable.sql).toContain("REFERENCES walkthroughs")
+        expect(operationIndexes.map(({ name }) => name)).toEqual(
+          expect.arrayContaining([
+            "walkthrough_operations_active_idx",
+            "walkthrough_operations_identity_idx",
+            "walkthrough_operations_one_active_generation_idx",
+            "walkthrough_operations_regeneration_idx",
+          ]),
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+
+      const reopened = new BetterSqlite3(databasePath)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
+      reopened.close()
+    }),
+  )
+
+  it.effect("FUN-148 AC: enables WAL mode and enforces foreign keys", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -189,7 +234,7 @@ describe("DatabaseService", () => {
         const database = yield* DatabaseService
         const journalMode = decodeJournalModeRow(yield* database.get("PRAGMA journal_mode"))
         const foreignKeys = decodeForeignKeysRow(yield* database.get("PRAGMA foreign_keys"))
-        const orphan = yield* Effect.either(
+        const orphan = yield* Effect.result(
           database.run(
             `INSERT INTO hosted_viewed_files (
               repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
@@ -199,13 +244,13 @@ describe("DatabaseService", () => {
 
         expect(journalMode.journal_mode).toBe("wal")
         expect(foreignKeys.foreign_keys).toBe(1)
-        expect(Either.isLeft(orphan)).toBe(true)
-        if (Either.isLeft(orphan)) expect(orphan.left.operation).toBe("run")
+        expect(Result.isFailure(orphan)).toBe(true)
+        if (Result.isFailure(orphan)) expect(orphan.failure.operation).toBe("run")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("upgrades legacy review failures to typed-safe generic records idempotently", () =>
+  it.effect("upgrades legacy review failures to typed-safe generic records idempotently", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
@@ -302,7 +347,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-148 AC: enforces every version-8 durable uniqueness boundary", () =>
+  it.effect("FUN-148 AC: enforces every version-8 durable uniqueness boundary", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
@@ -341,15 +386,15 @@ describe("DatabaseService", () => {
         ]
 
         for (const statement of duplicateStatements) {
-          const result = yield* Effect.either(database.run(statement))
-          expect(Either.isLeft(result)).toBe(true)
-          if (Either.isLeft(result)) expect(result.left.operation).toBe("run")
+          const result = yield* Effect.result(database.run(statement))
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) expect(result.failure.operation).toBe("run")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-148 AC: cascades repository deletion through the complete durable graph", () =>
+  it.effect("FUN-148 AC: cascades repository deletion through the complete durable graph", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
@@ -372,6 +417,7 @@ describe("DatabaseService", () => {
           "pull_requests",
           "hosted_viewed_files",
           "local_viewed_files",
+          "walkthrough_operations",
           "walkthroughs",
           "review_threads",
           "review_thread_messages",
@@ -386,33 +432,33 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-148 AC: rejects newer database versions without mutating them", () =>
+  it.effect("FUN-148 AC: rejects newer database versions without mutating them", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const sqlite = new BetterSqlite3(databasePath)
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.pragma("user_version = 13")
+      sqlite.pragma("user_version = 14")
       sqlite.close()
 
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath)))),
       )
-      expect(Either.isLeft(result) && result.left).toEqual(
+      expect(Result.isFailure(result) && result.failure).toEqual(
         expect.objectContaining<Partial<DatabaseError>>({
           _tag: "DatabaseError",
           operation: "open",
         }),
       )
-      if (Either.isLeft(result)) {
-        expect(String(result.left.cause)).toContain(
-          "Database schema version 13 is newer than supported version 12",
+      if (Result.isFailure(result)) {
+        expect(String(result.failure.cause)).toContain(
+          "Database schema version 14 is newer than supported version 13",
         )
       }
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(14)
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -420,7 +466,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-131 AC: migrates and preserves the populated version-8 agent graph", () =>
+  it.effect("FUN-131 AC: migrates and preserves the populated version-8 agent graph", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
@@ -450,7 +496,7 @@ describe("DatabaseService", () => {
       backupSqlite.close()
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
       const agentRunsSql = sqlite
         .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'")
         .pluck()
@@ -489,16 +535,16 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-148 AC: reports a corrupt database as a typed open failure", () =>
+  it.effect("FUN-148 AC: reports a corrupt database as a typed open failure", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       writeFileSync(databasePath, "not a sqlite database")
 
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath)))),
       )
 
-      expect(Either.isLeft(result) && result.left).toEqual(
+      expect(Result.isFailure(result) && result.failure).toEqual(
         expect.objectContaining<Partial<DatabaseError>>({
           _tag: "DatabaseError",
           operation: "open",
@@ -507,7 +553,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-148 AC: reports malformed durable JSON at typed store boundaries", () =>
+  it.effect("FUN-148 AC: reports malformed durable JSON at typed store boundaries", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
@@ -523,7 +569,7 @@ describe("DatabaseService", () => {
         const memory = yield* ThreadMemoryStore
 
         return {
-          walkthrough: yield* Effect.either(
+          walkthrough: yield* Effect.result(
             walkthroughs.get({
               repoId: "github:byfungsi/diffdash",
               reviewKey: "github:byfungsi/diffdash#147",
@@ -532,38 +578,38 @@ describe("DatabaseService", () => {
               promptVersion: "walkthrough-v4",
             }),
           ),
-          thread: yield* Effect.either(threads.get(ReviewThreadId.make("thread-v8"))),
-          run: yield* Effect.either(runs.get(AgentRunId.make("run-v8"))),
-          artifact: yield* Effect.either(artifacts.get(ReviewAgentArtifactId.make("artifact-v8"))),
-          memory: yield* Effect.either(memory.get(ReviewThreadId.make("thread-v8"))),
+          thread: yield* Effect.result(threads.get(ReviewThreadId.make("thread-v8"))),
+          run: yield* Effect.result(runs.get(AgentRunId.make("run-v8"))),
+          artifact: yield* Effect.result(artifacts.get(ReviewAgentArtifactId.make("artifact-v8"))),
+          memory: yield* Effect.result(memory.get(ReviewThreadId.make("thread-v8"))),
         }
       }).pipe(Effect.provide(makeCompatibilityLayer(databasePath)))
 
-      expect(Either.isLeft(results.walkthrough) && results.walkthrough.left).toEqual(
+      expect(Result.isFailure(results.walkthrough) && results.walkthrough.failure).toEqual(
         expect.objectContaining<Partial<WalkthroughStoreError>>({
           _tag: "WalkthroughStoreError",
           operation: "get.decodeContent",
         }),
       )
-      expect(Either.isLeft(results.thread) && results.thread.left).toEqual(
+      expect(Result.isFailure(results.thread) && results.thread.failure).toEqual(
         expect.objectContaining<Partial<ReviewThreadStoreError>>({
           _tag: "ReviewThreadStoreError",
           operation: "get",
         }),
       )
-      expect(Either.isLeft(results.run) && results.run.left).toEqual(
+      expect(Result.isFailure(results.run) && results.run.failure).toEqual(
         expect.objectContaining<Partial<AgentRunStoreError>>({
           _tag: "AgentRunStoreError",
           operation: "get.decode",
         }),
       )
-      expect(Either.isLeft(results.artifact) && results.artifact.left).toEqual(
+      expect(Result.isFailure(results.artifact) && results.artifact.failure).toEqual(
         expect.objectContaining<Partial<AgentRunArtifactStoreError>>({
           _tag: "AgentRunArtifactStoreError",
           operation: "get.decode",
         }),
       )
-      expect(Either.isLeft(results.memory) && results.memory.left).toEqual(
+      expect(Result.isFailure(results.memory) && results.memory.failure).toEqual(
         expect.objectContaining<Partial<ThreadMemoryStoreError>>({
           _tag: "ThreadMemoryStoreError",
           operation: "get.decode",
@@ -572,7 +618,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: migrates a legacy walkthrough schema without losing data", () =>
+  it.effect("FUN-82 AC: migrates a legacy walkthrough schema without losing data", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       createLegacyDatabase(databasePath)
@@ -592,7 +638,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: safely retries an already applied migration", () =>
+  it.effect("FUN-82 AC: safely retries an already applied migration", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -639,7 +685,7 @@ describe("DatabaseService", () => {
       backupSqlite.close()
 
       const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(12)
+      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
       expect(
         reopened
           .prepare("SELECT is_favorite FROM repos WHERE id = ?")
@@ -650,7 +696,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-67 AC: clears v3 thread memory during the single-thread reset", () =>
+  it.effect("FUN-67 AC: clears v3 thread memory during the single-thread reset", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       createVersion3ThreadMemoryDatabase(databasePath)
@@ -667,12 +713,12 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
       sqlite.close()
     }),
   )
 
-  it.scoped("FUN-67 AC: clears v4 agent runs during the single-thread reset", () =>
+  it.effect("FUN-67 AC: clears v4 agent runs during the single-thread reset", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       createVersion4AgentRunsDatabase(databasePath)
@@ -687,12 +733,12 @@ describe("DatabaseService", () => {
       }).pipe(Effect.provide(makeLayer(databasePath)))
 
       const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(12)
+      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
       sqlite.close()
     }),
   )
 
-  it.scoped("FUN-67 AC: clears all legacy thread data for the single-thread model", () =>
+  it.effect("FUN-67 AC: clears all legacy thread data for the single-thread model", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
@@ -828,7 +874,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-67 AC: reopens threads closed by the removed lifecycle control", () =>
+  it.effect("FUN-67 AC: reopens threads closed by the removed lifecycle control", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
@@ -893,7 +939,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: recovers rows left by the previous interrupted migration", () =>
+  it.effect("FUN-82 AC: recovers rows left by the previous interrupted migration", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       createInterruptedLegacyDatabase(databasePath)
@@ -913,7 +959,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: commits successful transaction callbacks", () =>
+  it.effect("FUN-82 AC: commits successful transaction callbacks", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -941,7 +987,7 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: rolls back failed transaction callbacks", () =>
+  it.effect("FUN-82 AC: rolls back failed transaction callbacks", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -964,7 +1010,7 @@ describe("DatabaseService", () => {
             ])
             throw new Error("rollback")
           })
-          .pipe(Effect.catchAll(() => Effect.void))
+          .pipe(Effect.catch(() => Effect.void))
 
         const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
         expect(row.count).toBe(0)
@@ -972,13 +1018,13 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.scoped("FUN-82 AC: rejects suspended transaction callbacks and rolls them back", () =>
+  it.effect("FUN-82 AC: rejects suspended transaction callbacks and rolls them back", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         const database = yield* DatabaseService
-        const result = yield* Effect.either(
+        const result = yield* Effect.result(
           database.transaction("test.async", (transaction) => {
             transaction.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
               "github:fungsi/diffdash",
@@ -998,7 +1044,7 @@ describe("DatabaseService", () => {
         )
         const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
 
-        expect(Either.isLeft(result)).toBe(true)
+        expect(Result.isFailure(result)).toBe(true)
         expect(row.count).toBe(0)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -1020,6 +1066,7 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     (SELECT COUNT(*) FROM pull_requests) AS pull_requests,
     (SELECT COUNT(*) FROM hosted_viewed_files) AS hosted_viewed_files,
     (SELECT COUNT(*) FROM local_viewed_files) AS local_viewed_files,
+    (SELECT COUNT(*) FROM walkthrough_operations) AS walkthrough_operations,
     (SELECT COUNT(*) FROM walkthroughs) AS walkthroughs,
     (SELECT COUNT(*) FROM review_threads) AS review_threads,
     (SELECT COUNT(*) FROM review_thread_messages) AS review_thread_messages,
@@ -1032,6 +1079,7 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     pull_requests: 1,
     hosted_viewed_files: 0,
     local_viewed_files: 0,
+    walkthrough_operations: 0,
     walkthroughs: 1,
     review_threads: 1,
     review_thread_messages: 3,

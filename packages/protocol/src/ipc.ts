@@ -31,7 +31,7 @@ import {
 } from "@diffdash/domain/review-thread"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
-import { Schema } from "effect"
+import { Schema, SchemaTransformation } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
@@ -83,10 +83,15 @@ import {
 } from "./viewed-files"
 
 const EmptyRequest = Schema.Struct({})
-const EmptyResponse = Schema.transform(Schema.Null, Schema.Void, {
-  decode: () => undefined,
-  encode: () => null,
-})
+const EmptyResponse = Schema.Null.pipe(
+  Schema.decodeTo(
+    Schema.Void,
+    SchemaTransformation.transform({
+      decode: (): void => undefined,
+      encode: (_value: void) => null,
+    }),
+  ),
+)
 /** Serializable failure envelope returned for every invoke operation. */
 export const FailureEnvelope = Schema.TaggedStruct("Failure", {
   error: TransportError,
@@ -102,11 +107,12 @@ const KIB = 1_024
 const DEFAULT_MAX_REQUEST_BYTES = 256 * KIB
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1_024 * KIB
 const DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * KIB
+type BoundarySchema = Schema.ConstraintCodec<unknown, unknown, never, never>
 
 const defineInvoke = <
   Channel extends InvokeChannel,
-  Request extends Schema.Schema.AnyNoContext,
-  Response extends Schema.Schema.AnyNoContext,
+  Request extends BoundarySchema,
+  Response extends BoundarySchema,
 >(
   channel: Channel,
   request: Request,
@@ -295,7 +301,9 @@ export const InvokeContract = {
   [InvokeChannel.drainNavigationCommands]: defineInvoke(
     InvokeChannel.drainNavigationCommands,
     EmptyRequest,
-    Schema.Array(CliNavigationCommand).pipe(Schema.maxItems(NAVIGATION_COMMAND_DRAIN_LIMIT)),
+    Schema.Array(CliNavigationCommand).pipe(
+      Schema.check(Schema.isMaxLength(NAVIGATION_COMMAND_DRAIN_LIMIT)),
+    ),
   ),
   [InvokeChannel.favoriteRemoteRepository]: defineInvoke(
     InvokeChannel.favoriteRemoteRepository,
@@ -448,7 +456,7 @@ export const InvokeContract = {
   ),
 } as const
 
-const defineEvent = <Channel extends EventChannel, Payload extends Schema.Schema.AnyNoContext>(
+const defineEvent = <Channel extends EventChannel, Payload extends BoundarySchema>(
   channel: Channel,
   payload: Payload,
   maxPayloadBytes = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
@@ -521,7 +529,7 @@ export const eventPayloadSchema = <Channel extends EventChannel>(channel: Channe
 }
 
 /** Serializable success envelope returned for every invoke operation. */
-export const successEnvelope = <Value extends Schema.Schema.AnyNoContext>(value: Value) =>
+export const successEnvelope = <Value extends BoundarySchema>(value: Value) =>
   Schema.TaggedStruct("Success", { value })
 
 /** Encodes one failure under a contract response budget, falling back to a fixed bounded error. */

@@ -35,7 +35,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer review discovery, immutable snapshot, viewed-state, decision, and file capabilities. */
-export class ReviewContent extends Context.Tag("@diffdash/app/ReviewContent")<
+export class ReviewContent extends Context.Service<
   ReviewContent,
   {
     readonly hostedReviews: {
@@ -97,7 +97,7 @@ export class ReviewContent extends Context.Tag("@diffdash/app/ReviewContent")<
       request: OpenRepositoryComparisonFileRequest,
     ) => Effect.Effect<void, RendererApiError>
   }
->() {}
+>()("@diffdash/app/ReviewContent") {}
 
 /** Desktop implementation of renderer review content capabilities. */
 export const reviewContentLayer = Layer.effect(

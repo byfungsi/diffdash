@@ -25,7 +25,8 @@
     "./review-navigation": "./src/review-navigation.ts",
     "./review-path": "./src/review-path.ts",
     "./review-thread": "./src/review-thread.ts",
-    "./walkthrough": "./src/walkthrough.ts"
+    "./walkthrough": "./src/walkthrough.ts",
+    "./walkthrough-operation": "./src/walkthrough-operation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

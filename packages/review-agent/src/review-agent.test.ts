@@ -424,9 +424,10 @@ const makeLayer = (
   const worktrees = Layer.succeed(
     HostedReviewWorkspacePool,
     HostedReviewWorkspacePool.of({
-      pinComparison: () => Effect.dieMessage("Unexpected comparison pinning in review-agent test"),
+      pinComparison: () =>
+        Effect.die(new Error("Unexpected comparison pinning in review-agent test")),
       readComparisonDiff: () =>
-        Effect.dieMessage("Unexpected comparison diff read in review-agent test"),
+        Effect.die(new Error("Unexpected comparison diff read in review-agent test")),
       useComparison: (input, run) =>
         Effect.acquireUseRelease(
           Effect.sync(() => {
@@ -471,7 +472,7 @@ const makeLayer = (
 }
 
 const unavailableGitOperation = <A>() =>
-  Effect.dieMessage("Unused test Git provider operation") as Effect.Effect<A>
+  Effect.die(new Error("Unused test Git provider operation")) as Effect.Effect<A>
 
 const testGitProvider = (): GitProviderRegistration => {
   const id = GitProviderId.make("github")
@@ -523,7 +524,7 @@ const testGitProvider = (): GitProviderRegistration => {
 }
 
 describe("ReviewAgentService", () => {
-  it.scoped("leases an isolated PR worktree around MCP and provider execution", () =>
+  it.effect("leases an isolated PR worktree around MCP and provider execution", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0, events: [] as string[], mcpPaths: [] as Array<string | null> }
@@ -589,7 +590,7 @@ describe("ReviewAgentService", () => {
     }),
   )
 
-  it.scoped("runs repository-comparison agents in the pinned head workspace", () =>
+  it.effect("runs repository-comparison agents in the pinned head workspace", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = {
@@ -651,7 +652,7 @@ describe("ReviewAgentService", () => {
     }),
   )
 
-  it.scoped(
+  it.effect(
     "finalizes an interrupted provider before revoking MCP and releasing its workspace",
     () =>
       Effect.gen(function* () {
@@ -662,8 +663,8 @@ describe("ReviewAgentService", () => {
           databasePath,
           () =>
             Effect.sync(() => released.events.push("provider.run")).pipe(
-              Effect.zipRight(Deferred.succeed(providerStarted, undefined)),
-              Effect.zipRight(Effect.never),
+              Effect.andThen(Deferred.succeed(providerStarted, undefined)),
+              Effect.andThen(Effect.never),
               Effect.ensuring(Effect.sync(() => released.events.push("provider.finalized"))),
             ),
           released,
@@ -694,7 +695,7 @@ describe("ReviewAgentService", () => {
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
-            .pipe(Effect.fork)
+            .pipe(Effect.forkChild)
           yield* Deferred.await(providerStarted)
           yield* Fiber.interrupt(turn)
         }).pipe(Effect.provide(layer))
@@ -711,7 +712,7 @@ describe("ReviewAgentService", () => {
       }),
   )
 
-  it.scoped("FUN-72 AC: persists a complete run, reply, memory, and scoped MCP lifetime", () =>
+  it.effect("FUN-72 AC: persists a complete run, reply, memory, and scoped MCP lifetime", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0 }
@@ -797,7 +798,7 @@ describe("ReviewAgentService", () => {
     }),
   )
 
-  it.scoped("returns a distinct finalize error without compensating a rolled-back completion", () =>
+  it.effect("returns a distinct finalize error without compensating a rolled-back completion", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0, turnFailure: "complete.run" as ReviewTurnWriteStep }
@@ -845,7 +846,7 @@ describe("ReviewAgentService", () => {
     }),
   )
 
-  it.scoped(
+  it.effect(
     "returns a distinct finalize error when transactional failure persistence rolls back",
     () =>
       Effect.gen(function* () {
@@ -901,7 +902,7 @@ describe("ReviewAgentService", () => {
       }),
   )
 
-  it.scoped("FUN-72 AC: records a retryable failed message and failed run", () =>
+  it.effect("FUN-72 AC: records a retryable failed message and failed run", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0, events: [] as string[] }
@@ -982,7 +983,7 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
     }),
   )
 
-  it.scoped("bounds and redacts hosted workspace failures before persistence or display", () =>
+  it.effect("bounds and redacts hosted workspace failures before persistence or display", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const workspaceFailure = HostedReviewWorkspacePoolError.make({
@@ -1044,7 +1045,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("rejects provider preflight without creating a detached failed message or run", () =>
+  it.effect("rejects provider preflight without creating a detached failed message or run", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0 }
@@ -1102,7 +1103,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("reports an empty automatic provider route as typed configuration guidance", () =>
+  it.effect("reports an empty automatic provider route as typed configuration guidance", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0 }
@@ -1152,7 +1153,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("FUN-72 AC: validates the provider result before persisting completion", () =>
+  it.effect("FUN-72 AC: validates the provider result before persisting completion", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0 }
@@ -1215,7 +1216,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("recovers an interrupted pending run before starting its replacement", () =>
+  it.effect("recovers an interrupted pending run before starting its replacement", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const released = { count: 0 }
@@ -1294,7 +1295,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("rejects wrong hosted, local, and repository targets before provider execution", () =>
+  it.effect("rejects wrong hosted, local, and repository targets before provider execution", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let providerCalls = 0
@@ -1360,7 +1361,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
     }),
   )
 
-  it.scoped("rejects a concurrent turn before creating a second run or message", () =>
+  it.effect("rejects a concurrent turn before creating a second run or message", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       const providerStarted = yield* Deferred.make<void>()
@@ -1370,7 +1371,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         databasePath,
         () =>
           Deferred.succeed(providerStarted, undefined).pipe(
-            Effect.zipRight(Deferred.await(releaseProvider)),
+            Effect.andThen(Deferred.await(releaseProvider)),
             Effect.as(makeProviderResult({ bodyMarkdown: "Only response." })),
           ),
         released,
@@ -1401,7 +1402,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         } as const
-        const firstTurn = yield* service.runThreadTurn(input).pipe(Effect.fork)
+        const firstTurn = yield* service.runThreadTurn(input).pipe(Effect.forkChild)
         yield* Deferred.await(providerStarted)
 
         const concurrentError = yield* service.runThreadTurn(input).pipe(Effect.flip)

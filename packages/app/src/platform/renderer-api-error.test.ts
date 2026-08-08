@@ -1,15 +1,17 @@
 import { Repo } from "@diffdash/domain/repository"
-import { InvokeChannel } from "@diffdash/protocol/channels"
+import { AppUpdateChecking, AppUpdateIdle } from "@diffdash/protocol/app-update"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import {
   bridgeTransportError,
   TransportError,
   transportError,
 } from "@diffdash/protocol/transport-error"
-import { Effect } from "effect"
+import { Effect, Fiber, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { describe, expect, it } from "@effect/vitest"
 
-import { invokePreload } from "./renderer-api-error"
-import { runRendererPromise } from "./renderer-runtime"
+import { invokePreload, preloadEventStream } from "./renderer-api-error"
+import { consumeRendererStream, runRendererPromise } from "./renderer-runtime"
 
 describe("invokePreload", () => {
   it.effect("rehydrates schema classes after the context bridge", () =>
@@ -85,4 +87,63 @@ describe("invokePreload", () => {
 
     await expect(runRendererPromise(Effect.fail(failure))).rejects.toBe(failure)
   })
+})
+
+describe("renderer streams", () => {
+  it.effect("subscribes before loading initial state and replays buffered events afterward", () =>
+    Effect.gen(function* () {
+      let listener: ((payload: unknown) => void) | undefined
+      let subscribed = false
+      const initial = AppUpdateIdle.make({ currentVersion: "1.0.0" })
+      const checking = AppUpdateChecking.make({ currentVersion: "1.0.0" })
+      const stream = preloadEventStream(
+        EventChannel.updateStateChanged,
+        (next) => {
+          listener = next
+          subscribed = true
+          return () => {
+            subscribed = false
+          }
+        },
+        Effect.sync(() => {
+          if (listener === undefined) throw new Error("Subscription was not installed")
+          listener(checking)
+          return initial
+        }),
+      )
+
+      const values = yield* stream.pipe(Stream.take(2), Stream.runCollect)
+
+      expect(Array.from(values)).toEqual([initial, checking])
+      expect(subscribed).toBe(false)
+    }),
+  )
+
+  it.effect("reports typed failures and reconnects the stream", () =>
+    Effect.gen(function* () {
+      const failure = transportError("INVALID_EVENT", "Invalid updater event", "updates")
+      const errors: TransportError[] = []
+      const values: string[] = []
+      let attempts = 0
+      const stream = Stream.unwrap(
+        Effect.sync(() => {
+          attempts += 1
+          return attempts === 1 ? Stream.fail(failure) : Stream.make("reconnected")
+        }),
+      )
+      const fiber = yield* consumeRendererStream(
+        stream,
+        (value) => Effect.sync(() => void values.push(value)),
+        (error) => Effect.sync(() => void errors.push(error)),
+      ).pipe(Effect.forkChild)
+
+      yield* Effect.yieldNow
+      expect(errors).toEqual([failure])
+      yield* TestClock.adjust("1 second")
+      yield* Fiber.join(fiber)
+
+      expect(attempts).toBe(2)
+      expect(values).toEqual(["reconnected"])
+    }),
+  )
 })

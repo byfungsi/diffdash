@@ -26,7 +26,7 @@ import {
   type ReviewThreadId,
 } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, ManagedRuntime, Schema } from "effect"
+import { Effect, Result, Layer, ManagedRuntime, Schema } from "effect"
 import { AgentRunArtifactStore } from "./agent-run-artifact-store"
 import { AgentRunStore } from "./agent-run-store"
 import { DatabaseService } from "./database"
@@ -128,11 +128,11 @@ const readCounts = Effect.gen(function* () {
         WHERE author = 'agent' AND status = 'pending') AS pending_messages,
       (SELECT COUNT(*) FROM agent_run_artifacts) AS artifacts,
       (SELECT COUNT(*) FROM thread_memory) AS memory`)
-  return yield* Schema.decodeUnknown(CountsRow)(row)
+  return yield* Schema.decodeUnknownEffect(CountsRow)(row)
 })
 
 describe("ReviewTurnStore", () => {
-  it.scoped("accepts a local review under a linked hosted project identity", () =>
+  it.effect("accepts a local review under a linked hosted project identity", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -173,7 +173,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rolls back beginTurn after every aggregate write", () =>
+  it.effect("rolls back beginTurn after every aggregate write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -187,11 +187,11 @@ describe("ReviewTurnStore", () => {
         const mapping = yield* turns.validateTarget(validateInput(details.thread.id, repository.id))
         for (const step of ["begin.run", "begin.message", "begin.thread"] as const) {
           failAt = step
-          const result = yield* Effect.either(
+          const result = yield* Effect.result(
             turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
           )
-          expect(Either.isLeft(result)).toBe(true)
-          if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewTurnStoreError)
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewTurnStoreError)
           expect(yield* readCounts).toEqual({
             runs: 0,
             pending_messages: 0,
@@ -206,7 +206,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rolls back all artifacts, message, run, and memory after every completion write", () =>
+  it.effect("rolls back all artifacts, message, run, and memory after every completion write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -267,8 +267,8 @@ describe("ReviewTurnStore", () => {
           "complete.thread",
         ] as const) {
           failAt = step
-          const result = yield* Effect.either(complete())
-          expect(Either.isLeft(result)).toBe(true)
+          const result = yield* Effect.result(complete())
+          expect(Result.isFailure(result)).toBe(true)
           const run = yield* (yield* AgentRunStore).get(begun.run.id)
           const persisted = yield* (yield* ReviewThreadStore).get(details.thread.id)
           expect(run.status).toBe("running")
@@ -295,7 +295,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("keeps failed run and message status in agreement after every failure write", () =>
+  it.effect("keeps failed run and message status in agreement after every failure write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -319,7 +319,7 @@ describe("ReviewTurnStore", () => {
 
         for (const step of ["fail.message", "fail.run", "fail.thread"] as const) {
           failAt = step
-          expect(Either.isLeft(yield* Effect.either(fail()))).toBe(true)
+          expect(Result.isFailure(yield* Effect.result(fail()))).toBe(true)
           expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
           expect(
             (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?.status,
@@ -334,7 +334,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rejects wrong targets, stale revisions, and mapping races without mutation", () =>
+  it.effect("rejects wrong targets, stale revisions, and mapping races without mutation", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -354,9 +354,9 @@ describe("ReviewTurnStore", () => {
           { ...valid, repoId: "github:fungsi/other" },
           { ...valid, headRevision: ReviewRevision.make("stale-head") },
         ]) {
-          const result = yield* Effect.either(turns.validateTarget(input))
-          expect(Either.isLeft(result)).toBe(true)
-          if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewTurnTargetError)
+          const result = yield* Effect.result(turns.validateTarget(input))
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewTurnTargetError)
           expect(yield* readCounts).toEqual({
             runs: 0,
             pending_messages: 0,
@@ -375,11 +375,11 @@ describe("ReviewTurnStore", () => {
             anchorStatus: "active",
           },
         ])
-        const raced = yield* Effect.either(
+        const raced = yield* Effect.result(
           turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
         )
-        expect(Either.isLeft(raced)).toBe(true)
-        if (Either.isLeft(raced)) expect(raced.left).toBeInstanceOf(ReviewTurnTargetError)
+        expect(Result.isFailure(raced)).toBe(true)
+        if (Result.isFailure(raced)) expect(raced.failure).toBeInstanceOf(ReviewTurnTargetError)
         expect(yield* readCounts).toEqual({
           runs: 0,
           pending_messages: 0,
@@ -390,7 +390,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rejects completion and failure that do not own the active run/message pair", () =>
+  it.effect("rejects completion and failure that do not own the active run/message pair", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -400,7 +400,7 @@ describe("ReviewTurnStore", () => {
         const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
         const wrongMessageId = begun.details.messages[0]?.id
         if (wrongMessageId === undefined) throw new Error("Expected initial user message")
-        const completion = yield* Effect.either(
+        const completion = yield* Effect.result(
           turns.completeTurn({
             threadId: details.thread.id,
             runId: begun.run.id,
@@ -412,7 +412,7 @@ describe("ReviewTurnStore", () => {
             memoryUpdate: null,
           }),
         )
-        const failure = yield* Effect.either(
+        const failure = yield* Effect.result(
           turns.failTurn({
             threadId: details.thread.id,
             runId: begun.run.id,
@@ -421,12 +421,13 @@ describe("ReviewTurnStore", () => {
             failure: null,
           }),
         )
-        expect(Either.isLeft(completion)).toBe(true)
-        expect(Either.isLeft(failure)).toBe(true)
-        if (Either.isLeft(completion)) {
-          expect(completion.left).toBeInstanceOf(ReviewTurnOwnershipError)
+        expect(Result.isFailure(completion)).toBe(true)
+        expect(Result.isFailure(failure)).toBe(true)
+        if (Result.isFailure(completion)) {
+          expect(completion.failure).toBeInstanceOf(ReviewTurnOwnershipError)
         }
-        if (Either.isLeft(failure)) expect(failure.left).toBeInstanceOf(ReviewTurnOwnershipError)
+        if (Result.isFailure(failure))
+          expect(failure.failure).toBeInstanceOf(ReviewTurnOwnershipError)
         expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
         expect(
           (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?.status,
@@ -435,7 +436,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("leaves committed interrupted state untouched when a target check fails", () =>
+  it.effect("leaves committed interrupted state untouched when a target check fails", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -444,11 +445,12 @@ describe("ReviewTurnStore", () => {
         const valid = validateInput(details.thread.id, repository.id)
         const mapping = yield* turns.validateTarget(valid)
         const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
-        const rejected = yield* Effect.either(
+        const rejected = yield* Effect.result(
           turns.validateTarget({ ...valid, repoId: "github:fungsi/wrong" }),
         )
-        expect(Either.isLeft(rejected)).toBe(true)
-        if (Either.isLeft(rejected)) expect(rejected.left).toBeInstanceOf(ReviewTurnTargetError)
+        expect(Result.isFailure(rejected)).toBe(true)
+        if (Result.isFailure(rejected))
+          expect(rejected.failure).toBeInstanceOf(ReviewTurnTargetError)
         expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
         const persisted = yield* (yield* ReviewThreadStore).get(details.thread.id)
         expect(persisted.messages.at(-1)?.status).toBe("pending")

@@ -9,17 +9,20 @@ import {
 } from "./git-provider"
 
 /** Persisted provider instance ID, or the reserved legacy local-source marker. */
-export const RepoProvider = Schema.String.pipe(Schema.minLength(1))
+export const RepoProvider = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 
 /** Persisted provider instance ID, or the reserved legacy local-source marker. */
 export type RepoProvider = typeof RepoProvider.Type
 
 /** Absolute checkout path stored for a repository linked on this machine. */
 export const RepositoryCheckoutPath = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.filter(
-    (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\"),
-    { message: () => "Expected an absolute repository checkout path" },
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(
+    Schema.makeFilter(
+      (value) =>
+        value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\"),
+      { message: "Expected an absolute repository checkout path" },
+    ),
   ),
   Schema.brand("RepositoryCheckoutPath"),
 )
@@ -60,7 +63,7 @@ export class RepositorySearchScope extends Schema.Class<RepositorySearchScope>(
   "RepositorySearchScope",
 )({
   login: Schema.String,
-  kind: Schema.Literal("user", "organization"),
+  kind: Schema.Literals(["user", "organization"]),
 }) {}
 
 /** Owner-scoped input for searching repositories through a Git provider. */
@@ -99,9 +102,9 @@ export interface ProviderRepositoryReference {
 export class RepositoryIdentityRepairSummary extends Schema.Class<RepositoryIdentityRepairSummary>(
   "RepositoryIdentityRepairSummary",
 )({
-  resolvedCount: Schema.NonNegativeInt,
-  unresolvedCount: Schema.NonNegativeInt,
-  localAliasCount: Schema.NonNegativeInt,
+  resolvedCount: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  unresolvedCount: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  localAliasCount: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
 /** Interprets the compatibility persistence shape as a local or hosted source. */

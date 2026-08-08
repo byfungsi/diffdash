@@ -3,14 +3,17 @@ import { Schema } from "effect"
 import { ReviewAnchor, ReviewThreadId } from "./review-thread"
 
 /** Persistent identity for one review agent execution. */
-export const AgentRunId = Schema.String.pipe(Schema.minLength(1), Schema.brand("AgentRunId"))
+export const AgentRunId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("AgentRunId"),
+)
 
 /** Persistent identity for one review agent execution. */
 export type AgentRunId = typeof AgentRunId.Type
 
 /** Persistent identity for one normalized agent artifact. */
 export const ReviewAgentArtifactId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewAgentArtifactId"),
 )
 
@@ -19,7 +22,7 @@ export type ReviewAgentArtifactId = typeof ReviewAgentArtifactId.Type
 
 /** Provider-owned identity for an agent run or session. */
 export const ReviewAgentProviderRunId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewAgentProviderRunId"),
 )
 
@@ -27,13 +30,13 @@ export const ReviewAgentProviderRunId = Schema.String.pipe(
 export type ReviewAgentProviderRunId = typeof ReviewAgentProviderRunId.Type
 
 /** Open identity of the provider that produced a review run or artifact. */
-export const ReviewAgentProviderId = Schema.String.pipe(Schema.minLength(1))
+export const ReviewAgentProviderId = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 
 /** Open identity of the provider that produced a review run or artifact. */
 export type ReviewAgentProviderId = typeof ReviewAgentProviderId.Type
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */
-export const ReviewAgentProgressStage = Schema.Literal(
+export const ReviewAgentProgressStage = Schema.Literals([
   "preparing-context",
   "reserving-workspace",
   "creating-repository",
@@ -42,7 +45,7 @@ export const ReviewAgentProgressStage = Schema.Literal(
   "starting-agent",
   "reviewing",
   "restoring-workspace",
-)
+])
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */
 export type ReviewAgentProgressStage = typeof ReviewAgentProgressStage.Type
@@ -69,13 +72,13 @@ export const REVIEW_AGENT_PROGRESS_LABELS: Readonly<Record<ReviewAgentProgressSt
 export class ReviewThreadAgentResponse extends Schema.Class<ReviewThreadAgentResponse>(
   "ReviewThreadAgentResponse",
 )({
-  bodyMarkdown: Schema.String.pipe(Schema.minLength(1)),
-  threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.minLength(1))),
+  bodyMarkdown: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
   referencedAnchors: Schema.optional(Schema.Array(ReviewAnchor)),
 }) {}
 
 /** Normalized artifact categories independent of provider event protocols. */
-export const ReviewAgentArtifactType = Schema.Literal(
+export const ReviewAgentArtifactType = Schema.Literals([
   "file_read",
   "search_result",
   "shell_output",
@@ -84,7 +87,7 @@ export const ReviewAgentArtifactType = Schema.Literal(
   "mcp_tool_result",
   "provider_message",
   "unknown",
-)
+])
 
 /** Normalized artifact categories independent of provider event protocols. */
 export type ReviewAgentArtifactType = typeof ReviewAgentArtifactType.Type
@@ -96,7 +99,7 @@ export class ReviewAgentArtifact extends Schema.Class<ReviewAgentArtifact>("Revi
   title: Schema.String,
   content: Schema.String,
   contentDigest: Schema.String,
-  metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  metadata: Schema.Record(Schema.String, Schema.Unknown),
   truncated: Schema.Boolean,
   originalSize: Schema.Number,
 }) {}

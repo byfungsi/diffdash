@@ -13,7 +13,7 @@ import { ReviewThreadId } from "./review-thread"
 
 /** Version identifier for the stable prompt contract used by an agent run. */
 export const AgentPromptVersion = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("AgentPromptVersion"),
 )
 
@@ -21,7 +21,7 @@ export const AgentPromptVersion = Schema.String.pipe(
 export type AgentPromptVersion = typeof AgentPromptVersion.Type
 
 /** Lifecycle state for one persisted review-agent run. */
-export const AgentRunStatus = Schema.Literal("running", "completed", "failed")
+export const AgentRunStatus = Schema.Literals(["running", "completed", "failed"])
 
 /** Lifecycle state for one persisted review-agent run. */
 export type AgentRunStatus = typeof AgentRunStatus.Type
@@ -34,12 +34,12 @@ export class AgentRun extends Schema.Class<AgentRun>("AgentRun")({
   baseRevision: ReviewRevision,
   headRevision: ReviewRevision,
   provider: ReviewAgentProviderId,
-  model: Schema.String.pipe(Schema.minLength(1)),
+  model: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   promptVersion: AgentPromptVersion,
   status: AgentRunStatus,
   providerRunId: Schema.NullOr(ReviewAgentProviderRunId),
   usage: Schema.NullOr(ReviewAgentUsage),
-  error: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
+  error: Schema.NullOr(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
   startedAt: Schema.String,
   completedAt: Schema.NullOr(Schema.String),
 }) {}
@@ -66,15 +66,15 @@ export class SaveAgentRunArtifactInput extends Schema.Class<SaveAgentRunArtifact
 
 /** Stable identifier for the algorithm that produced a compact thread summary. */
 export const ThreadMemorySummaryAlgorithm = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ThreadMemorySummaryAlgorithm"),
 )
 
 /** Stable identifier for the algorithm that produced a compact thread summary. */
 export type ThreadMemorySummaryAlgorithm = typeof ThreadMemorySummaryAlgorithm.Type
 
-const ThreadMemoryWatermark = Schema.Int.pipe(Schema.greaterThanOrEqualTo(0))
-const ThreadMemorySummaryVersion = Schema.Int.pipe(Schema.greaterThanOrEqualTo(1))
+const ThreadMemoryWatermark = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))
+const ThreadMemorySummaryVersion = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1)))
 
 /** Compact context retained independently from provider session memory. */
 export class ThreadMemory extends Schema.Class<ThreadMemory>("ThreadMemory")({

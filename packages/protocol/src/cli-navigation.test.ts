@@ -64,6 +64,6 @@ describe("CliNavigationCommand", () => {
     "refs/.hidden/head",
     "refs/heads/topic.lock",
   ])("rejects unsafe revision input %s", (revision) => {
-    expect(() => CliGitRevision.make(revision)).toThrow("Invalid Git revision")
+    expect(() => CliGitRevision.make(revision)).toThrow("Schema validation failed")
   })
 })

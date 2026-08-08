@@ -34,13 +34,13 @@ export class RepositoryLinkError extends Schema.TaggedError<RepositoryLinkError>
   {
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Main-process service for resolving and persisting local and hosted repositories. */
 /** Main-process service for resolving and persisting local and hosted repositories. */
-export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
+export class RepositoryLinker extends Context.Service<
   RepositoryLinker,
   {
     readonly list: (query?: string) => Effect.Effect<readonly Repo[], RepositoryLinkError>
@@ -70,7 +70,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       RepositoryLinkError
     >
   }
->() {
+>()("@diffdash/RepositoryLinker") {
   static readonly layer = Layer.effect(
     RepositoryLinker,
     Effect.gen(function* () {
@@ -177,7 +177,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       })
 
       const persistDetected = Effect.fn("RepositoryLinker.persistDetected")(function* (
-        detected: Effect.Effect.Success<ReturnType<typeof detectHosted>>,
+        detected: Effect.Success<ReturnType<typeof detectHosted>>,
         isFavorite: boolean,
       ) {
         return yield* persist(
@@ -215,7 +215,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
         isFavorite = false,
       ) {
         const resolved = yield* gitProvider.resolveRepository(candidate.repository).pipe(
-          Effect.catchAll(() =>
+          Effect.catch(() =>
             Effect.succeed(
               ResolvedHostedRepository.make({
                 locator: candidate.repository,
@@ -350,7 +350,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
           isFavorite = false,
         ) {
           const resolved = yield* gitProvider.resolveRepository(repository).pipe(
-            Effect.catchAll(() =>
+            Effect.catch(() =>
               gitProvider.repositoryUrl(repository).pipe(
                 Effect.map((url) =>
                   ResolvedHostedRepository.make({
@@ -637,7 +637,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
                   })
                 }
                 return yield* persistRecognized(candidate, localPath, repo.isFavorite)
-              }).pipe(Effect.either),
+              }).pipe(Effect.result),
             { concurrency: 2 },
           )
           const hostedResults = yield* Effect.forEach(
@@ -656,7 +656,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
                       repo.remoteUrl,
                     ),
                   ),
-                  Effect.either,
+                  Effect.result,
                 ),
             { concurrency: 2 },
           )
@@ -671,10 +671,10 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
           )
           return RepositoryIdentityRepairSummary.make({
             resolvedCount: [...localResults, ...hostedResults].filter(
-              (result) => result._tag === "Right",
+              (result) => result._tag === "Success",
             ).length,
             unresolvedCount: [...localResults, ...hostedResults].filter(
-              (result) => result._tag === "Left",
+              (result) => result._tag === "Failure",
             ).length,
             localAliasCount: local.matchedAliasCount,
           })

@@ -17,7 +17,7 @@ import {
   ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchMatch,
 } from "@diffdash/protocol/review-snapshot"
-import { Registry } from "@effect-atom/atom-react"
+import { AtomRegistry } from "effect/unstable/reactivity"
 import { afterEach, describe, expect, it, vi } from "@effect/vitest"
 
 import {
@@ -83,7 +83,7 @@ const deferred = <Value>() => {
   return { promise, resolve }
 }
 
-const registries: Registry.Registry[] = []
+const registries: AtomRegistry.AtomRegistry[] = []
 const controllers: ReviewSearchController[] = []
 
 const makeRuntime = (search: ReviewSearchRuntime["search"]) => {
@@ -113,7 +113,7 @@ const requireOperation = (
 }
 
 const makeController = (runtime: ReviewSearchRuntime, session = address) => {
-  const registry = Registry.make()
+  const registry = AtomRegistry.make()
   const controller = new ReviewSearchController(registry)
   registries.push(registry)
   controllers.push(controller)
@@ -329,7 +329,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("FUN-213 AC: isolates fixed atom bundles inside one registry", async () => {
-    const registry = Registry.make()
+    const registry = AtomRegistry.make()
     registries.push(registry)
     const firstRuntime = makeRuntime((request) =>
       Promise.resolve(makeAvailable({ query: request.query })),

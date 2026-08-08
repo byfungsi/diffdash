@@ -1,24 +1,10 @@
 # DiffDash Agent Guide
 
-<!-- effect-solutions:start -->
-
 ## Effect Best Practices
 
-**IMPORTANT:** Always consult effect-solutions before writing Effect code.
-
-1. Run `effect-solutions list` to see available guides
-2. Run `effect-solutions show <topic>...` for relevant patterns (supports multiple topics)
-3. Search `~/.local/share/effect-solutions/effect` for real implementations
-
-Topics: quick-start, project-setup, tsconfig, basics, services-and-layers, data-modeling, error-handling, config, testing, cli.
-
-Never guess at Effect patterns - check the guide first.
-<!-- effect-solutions:end -->
-
-## Local Effect Source
-
-The Effect source repository is cloned to `~/.local/share/effect-solutions/effect` for reference.
-Use this to explore APIs, find usage examples, and understand implementation details when documentation is not enough.
+**IMPORTANT:** Always load the repository's `effect` skill before writing Effect code.
+Inspect the pinned package types and configured `@effect` source reference instead of relying on memory or Effect v2/v3 examples.
+The pinned package is the compatibility authority because the reference follows upstream `main`.
 
 ## Project Stack
 
@@ -28,7 +14,7 @@ Use this to explore APIs, find usage examples, and understand implementation det
 - Formatting: Biome.
 - Git hooks: Husky + lint-staged for pre-commit formatting/checks when `.git` is present.
 - Testing: Vitest with `@effect/vitest` for Effect-aware tests and scoped resources.
-- Main process services: Effect `Context.Tag` services and `Layer` composition.
+- Main process services: Effect `Context.Service` services and `Layer` composition.
 - Persistence: SQLite through `better-sqlite3`, accessed from main-process Effect services only.
 - CLI integration: `git`, `gh`, and `codex` are executed from main-process Effect services only.
 

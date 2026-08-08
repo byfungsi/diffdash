@@ -374,7 +374,7 @@ const runOpenCodeTurn = (
   ).pipe(
     Effect.raceFirst(
       Effect.sleep(request.timeoutMs).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           operationErrors.fromReason(
             "review-thread",
             "Timed out waiting for OpenCode review response",
@@ -423,7 +423,7 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
       )
     yield* process.pipe(Effect.forkScoped)
     const timeout = Effect.sleep("5 seconds").pipe(
-      Effect.zipRight(
+      Effect.andThen(
         operationErrors.fromReason(
           "review-thread",
           "Timed out waiting for OpenCode server",
@@ -683,7 +683,7 @@ const decodeReviewResponse = (
 ): Effect.Effect<ReviewThreadResponse, InvalidAgentProviderResponseError> => {
   const candidate =
     output.structured === undefined ? parseTextResponse(output.parts) : output.structured
-  return Schema.decodeUnknown(ReviewThreadResponse)(normalizeResponse(candidate)).pipe(
+  return Schema.decodeUnknownEffect(ReviewThreadResponse)(normalizeResponse(candidate)).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,

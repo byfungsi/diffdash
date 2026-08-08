@@ -25,7 +25,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, preloadEventStream, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer walkthrough and review-agent capabilities. */
-export class ReviewAutomation extends Context.Tag("@diffdash/app/ReviewAutomation")<
+export class ReviewAutomation extends Context.Service<
   ReviewAutomation,
   {
     readonly getAgentCatalog: () => Effect.Effect<AgentProviderCatalog, RendererApiError>
@@ -75,7 +75,7 @@ export class ReviewAutomation extends Context.Tag("@diffdash/app/ReviewAutomatio
       readonly progress: Stream.Stream<ReviewAgentProgress, RendererApiError>
     }
   }
->() {}
+>()("@diffdash/app/ReviewAutomation") {}
 
 /** Desktop implementation of renderer walkthrough and review-agent capabilities. */
 export const reviewAutomationLayer = Layer.effect(
@@ -95,7 +95,7 @@ export const reviewAutomationLayer = Layer.effect(
       walkthroughs: {
         getHosted: (request) =>
           invokePreload(InvokeChannel.getWalkthrough, () => api.walkthroughs.get(request)).pipe(
-            Effect.map(Option.fromNullable),
+            Effect.map(Option.fromNullishOr),
           ),
         generateHosted: (request) =>
           invokePreload(InvokeChannel.generateWalkthrough, () =>
@@ -104,7 +104,7 @@ export const reviewAutomationLayer = Layer.effect(
         getLocal: (target, baseSha, headSha) =>
           invokePreload(InvokeChannel.getLocalWalkthrough, () =>
             api.localWalkthroughs.get(target, baseSha, headSha),
-          ).pipe(Effect.map(Option.fromNullable)),
+          ).pipe(Effect.map(Option.fromNullishOr)),
         generateLocal: (target, regenerate) =>
           invokePreload(InvokeChannel.generateLocalWalkthrough, () =>
             regenerate
@@ -114,7 +114,7 @@ export const reviewAutomationLayer = Layer.effect(
         getRepositoryComparison: (target) =>
           invokePreload(InvokeChannel.getRepositoryComparisonWalkthrough, () =>
             api.repositoryComparisonWalkthroughs.get(target),
-          ).pipe(Effect.map(Option.fromNullable)),
+          ).pipe(Effect.map(Option.fromNullishOr)),
         generateRepositoryComparison: (target, regenerate) =>
           invokePreload(InvokeChannel.generateRepositoryComparisonWalkthrough, () =>
             regenerate

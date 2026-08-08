@@ -17,7 +17,7 @@ import {
   type ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
 import { transportError } from "@diffdash/protocol/transport-error"
-import { Atom, Registry } from "@effect-atom/atom-react"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -26,7 +26,7 @@ import {
 } from "./review-snapshot-page-session"
 
 const target = workingTreeReviewTarget("/workspace/diffdash")
-const registries: Registry.Registry[] = []
+const registries: AtomRegistry.AtomRegistry[] = []
 const sessions: ReviewSnapshotPageSession[] = []
 const ignoreDeferredValue = <Value>(_value: Value): void => undefined
 const ignoreDeferredCause = (_cause: unknown): void => undefined
@@ -363,7 +363,7 @@ describe("ReviewSnapshotPageSession", () => {
 })
 
 const makeRegistry = () => {
-  const registry = Registry.make()
+  const registry = AtomRegistry.make()
   registries.push(registry)
   return registry
 }
@@ -381,7 +381,7 @@ const makeSession = (
 }
 
 const makeSessionInRegistry = (
-  registry: Registry.Registry,
+  registry: AtomRegistry.AtomRegistry,
   fixture: ReturnType<typeof snapshotFixture>,
 ) => {
   const getPage = vi.fn<ReviewSnapshotPageRuntime["getPage"]>(async (request) =>

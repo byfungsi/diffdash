@@ -4,7 +4,7 @@ import {
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
-import { Effect, Either, Schema, Stream } from "effect"
+import { Cause, Effect, Queue, Result, Schema, Stream } from "effect"
 
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import {
@@ -27,7 +27,7 @@ export const invokePreload = <Channel extends InvokeChannel>(
     catch: (error) => rendererApiError(channel, error),
   }).pipe(
     Effect.flatMap((response) =>
-      Schema.decodeUnknown(invokeResponseSchema(channel))(
+      Schema.decodeUnknownEffect(typedInvokeResponseSchema(channel))(
         response === undefined ? null : response,
       ).pipe(
         Effect.mapError(() =>
@@ -41,22 +41,45 @@ export const invokePreload = <Channel extends InvokeChannel>(
 export const preloadEventStream = <Channel extends EventChannel>(
   channel: Channel,
   subscribe: (listener: (payload: unknown) => void) => () => void,
+  initial?: Effect.Effect<EventPayload<Channel>, RendererApiError>,
 ): Stream.Stream<EventPayload<Channel>, RendererApiError> =>
-  Stream.asyncScoped((emit) =>
-    Effect.acquireRelease(
-      Effect.sync(() =>
-        subscribe((payload) => {
-          const decoded = Schema.decodeUnknownEither(eventPayloadSchema(channel))(payload)
-          if (Either.isLeft(decoded)) {
-            void emit.fail(transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel))
+  Stream.callback((queue) => {
+    let initialized = initial === undefined
+    const pending: EventPayload<Channel>[] = []
+    const subscription = Effect.acquireRelease(
+      Effect.sync(() => {
+        const unsubscribe = subscribe((payload) => {
+          const decoded = Schema.decodeUnknownResult(typedEventPayloadSchema(channel))(payload)
+          if (Result.isFailure(decoded)) {
+            Queue.failCauseUnsafe(
+              queue,
+              Cause.fail(transportError("INVALID_EVENT", `Invalid event for ${channel}`, channel)),
+            )
             return
           }
-          void emit.single(decoded.right)
-        }),
-      ),
+          if (initialized) Queue.offerUnsafe(queue, decoded.success)
+          else pending.push(decoded.success)
+        })
+        return unsubscribe
+      }),
       (unsubscribe) => Effect.sync(unsubscribe),
-    ),
-  )
+    )
+    if (initial === undefined) return subscription
+    return subscription.pipe(
+      Effect.tap(() =>
+        initial.pipe(
+          Effect.tap((value) =>
+            Effect.sync(() => {
+              Queue.offerUnsafe(queue, value)
+              initialized = true
+              for (const pendingValue of pending) Queue.offerUnsafe(queue, pendingValue)
+              pending.length = 0
+            }),
+          ),
+        ),
+      ),
+    )
+  })
 
 /** Converts an unknown rejected preload Promise into a stable renderer failure. */
 export const rendererApiError = (operation: string, error: unknown): RendererApiError => {
@@ -64,3 +87,11 @@ export const rendererApiError = (operation: string, error: unknown): RendererApi
   if (transport !== null) return transport
   return transportError("RENDERER_API_FAILURE", UNKNOWN_TRANSPORT_ERROR_MESSAGE, operation)
 }
+
+const typedInvokeResponseSchema = <Channel extends InvokeChannel>(channel: Channel) =>
+  // SAFETY: The protocol registry indexes each channel to the schema defining InvokeResponse<Channel>.
+  invokeResponseSchema(channel) as Schema.Codec<InvokeResponse<Channel>, unknown>
+
+const typedEventPayloadSchema = <Channel extends EventChannel>(channel: Channel) =>
+  // SAFETY: The protocol registry indexes each channel to the schema defining EventPayload<Channel>.
+  eventPayloadSchema(channel) as Schema.Codec<EventPayload<Channel>, unknown>

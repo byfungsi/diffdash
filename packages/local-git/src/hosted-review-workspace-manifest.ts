@@ -32,7 +32,7 @@ const WorktreeSlot = Schema.Struct({
   id: Schema.String,
   providerId: Schema.String,
   repositoryKey: Schema.String,
-  state: Schema.Literal("preparing", "leased", "cleaning", "available", "quarantined"),
+  state: Schema.Literals(["preparing", "leased", "cleaning", "available", "quarantined"]),
   headSha: Schema.NullOr(Schema.String),
   reviewNumber: Schema.NullOr(Schema.Number),
   lastThreadId: Schema.NullOr(Schema.String),
@@ -120,7 +120,7 @@ const readManifest = (
           cause,
         ),
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         isNodeError(cause.cause, "ENOENT") ? Effect.succeed(null) : Effect.fail(cause),
       ),
     )
@@ -138,12 +138,12 @@ const readManifest = (
           cause,
         ),
     })
-    if (Predicate.isReadonlyRecord(parsed) && parsed.version === 1) {
+    if (Predicate.isReadonlyObject(parsed) && parsed.version === 1) {
       yield* filesystem.remove(filesystem.path("repositories"), "manifest.invalidateV1")
       return { version: MANIFEST_VERSION, repositories: [], slots: [] }
     }
 
-    const manifest = yield* Schema.decodeUnknown(WorktreeManifest)(parsed).pipe(
+    const manifest = yield* Schema.decodeUnknownEffect(WorktreeManifest)(parsed).pipe(
       Effect.mapError((cause) =>
         poolError(
           "manifest",

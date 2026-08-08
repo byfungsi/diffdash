@@ -3,8 +3,6 @@ import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import {
   encodeFailureEnvelopeWithinBudget,
   InvokeContract,
-  invokeRequestSchema,
-  invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
 import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
@@ -110,7 +108,7 @@ export class IpcControllerRegistry {
 
       let request: InvokeRequest<Channel>
       try {
-        request = Schema.decodeUnknownSync(invokeRequestSchema(channel))(rawRequest)
+        request = Schema.decodeUnknownSync(InvokeContract[channel].request)(rawRequest)
       } catch {
         return encodeFailure(
           transportError("INVALID_REQUEST", `Invalid request for ${channel}`, channel),
@@ -128,10 +126,12 @@ export class IpcControllerRegistry {
       }
 
       try {
-        const encoded = Schema.encodeUnknownSync(successEnvelope(invokeResponseSchema(channel)))({
-          _tag: "Success",
-          value: prepared.response,
-        })
+        const encoded = Schema.encodeUnknownSync(successEnvelope(InvokeContract[channel].response))(
+          {
+            _tag: "Success",
+            value: prepared.response,
+          },
+        )
         assertJsonPayloadWithinBudget(encoded, InvokeContract[channel].maxResponseBytes, channel)
         prepared.commit?.()
         return encoded

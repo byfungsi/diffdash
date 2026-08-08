@@ -13,6 +13,7 @@
     "./review-turn-store": "./src/review-turn-store.ts",
     "./thread-memory-store": "./src/thread-memory-store.ts",
     "./viewed-file-store": "./src/viewed-file-store.ts",
+    "./walkthrough-operation-store": "./src/walkthrough-operation-store.ts",
     "./walkthrough-store": "./src/walkthrough-store.ts"
   },
   "scripts": {

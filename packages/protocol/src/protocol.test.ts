@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { AgentProviderId } from "@diffdash/agent-provider"
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 
 import { EventChannel, InvokeChannel } from "./channels"
 import { HostedRepositorySearchRequest, HostedReviewRequest } from "./hosted-git"
@@ -62,7 +62,7 @@ describe("protocol boundaries", () => {
   })
 
   it("validates project opening and workspace identities at the IPC boundary", () => {
-    const opening = Schema.decodeUnknownEither(InvokeContract[InvokeChannel.openProject].request)({
+    const opening = Schema.decodeUnknownResult(InvokeContract[InvokeChannel.openProject].request)({
       localPath: "/workspace/diffdash",
       selectedRepository: {
         providerId: "github",
@@ -70,7 +70,7 @@ describe("protocol boundaries", () => {
         name: "diffdash",
       },
     })
-    const ambiguous = Schema.decodeUnknownEither(
+    const ambiguous = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.openProject].response,
     )({
       _tag: "remoteSelectionRequired",
@@ -82,32 +82,32 @@ describe("protocol boundaries", () => {
         },
       ],
     })
-    const forgotten = Schema.decodeUnknownEither(
+    const forgotten = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.forgetRepository].request,
     )({ projectId: "" })
-    const workspace = Schema.decodeUnknownEither(
+    const workspace = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.projectWorkspaceSave].request,
     )({
       input: { projectId: "", activeRibbon: "files", selectedReviewTarget: null },
     })
 
-    expect(Either.isRight(opening)).toBe(true)
-    expect(Either.isLeft(ambiguous)).toBe(true)
-    expect(Either.isLeft(forgotten)).toBe(true)
-    expect(Either.isLeft(workspace)).toBe(true)
+    expect(Result.isSuccess(opening)).toBe(true)
+    expect(Result.isFailure(ambiguous)).toBe(true)
+    expect(Result.isFailure(forgotten)).toBe(true)
+    expect(Result.isFailure(workspace)).toBe(true)
   })
 
   it("rejects malformed review-thread requests", () => {
-    const result = Schema.decodeUnknownEither(AddReviewThreadUserMessageRequest)({
+    const result = Schema.decodeUnknownResult(AddReviewThreadUserMessageRequest)({
       bodyMarkdown: "Follow up",
       threadId: "",
     })
 
-    expect(Either.isLeft(result)).toBe(true)
+    expect(Result.isFailure(result)).toBe(true)
   })
 
   it("requires canonical repository and revision identity on review-turn requests", () => {
-    const result = Schema.decodeUnknownEither(RunReviewThreadAgentRequest)({
+    const result = Schema.decodeUnknownResult(RunReviewThreadAgentRequest)({
       threadId: "thread-10",
       target: {
         kind: "hosted",
@@ -118,27 +118,27 @@ describe("protocol boundaries", () => {
       },
     })
 
-    expect(Either.isLeft(result)).toBe(true)
+    expect(Result.isFailure(result)).toBe(true)
   })
 
   it("FUN-126 AC: rejects hosted requests without complete provider identity", () => {
-    const search = Schema.decodeUnknownEither(HostedRepositorySearchRequest)({
+    const search = Schema.decodeUnknownResult(HostedRepositorySearchRequest)({
       query: "diffdash",
       namespaces: ["fungsi"],
     })
-    const review = Schema.decodeUnknownEither(HostedReviewRequest)({
+    const review = Schema.decodeUnknownResult(HostedReviewRequest)({
       review: {
         repository: { namespace: "fungsi", name: "diffdash" },
         number: 126,
       },
     })
 
-    expect(Either.isLeft(search)).toBe(true)
-    expect(Either.isLeft(review)).toBe(true)
+    expect(Result.isFailure(search)).toBe(true)
+    expect(Result.isFailure(review)).toBe(true)
   })
 
   it("rejects incomplete viewed-file content identities", () => {
-    const hosted = Schema.decodeUnknownEither(SetHostedViewedFileRequest)({
+    const hosted = Schema.decodeUnknownResult(SetHostedViewedFileRequest)({
       review: {
         repository: {
           providerId: "github",
@@ -152,7 +152,7 @@ describe("protocol boundaries", () => {
       patchHash: "",
       viewed: true,
     })
-    const local = Schema.decodeUnknownEither(SetLocalViewedFileRequest)({
+    const local = Schema.decodeUnknownResult(SetLocalViewedFileRequest)({
       target: { kind: "local", rootPath: "/repo", comparison: { _tag: "workingTree" } },
       sourceBranch: "feature/auth",
       reviewKey: "src/app.ts",
@@ -160,8 +160,8 @@ describe("protocol boundaries", () => {
       viewed: true,
     })
 
-    expect(Either.isLeft(hosted)).toBe(true)
-    expect(Either.isLeft(local)).toBe(true)
+    expect(Result.isFailure(hosted)).toBe(true)
+    expect(Result.isFailure(local)).toBe(true)
   })
 
   it("serializes unknown failures without messages, stacks, or cause data", () => {
@@ -230,7 +230,7 @@ describe("protocol boundaries", () => {
   })
 
   it("rejects free-form diagnostic text and stack locations", () => {
-    const unsafe = Schema.decodeUnknownEither(TransportErrorDiagnosticTrace)({
+    const unsafe = Schema.decodeUnknownResult(TransportErrorDiagnosticTrace)({
       provider: "claude",
       errorTag: "AgentProviderOperationError",
       causeTag: "ProcessExitError",
@@ -241,7 +241,7 @@ describe("protocol boundaries", () => {
       stackFrames: ["at runProvider (/Users/example/private.ts:10:2)"],
     })
 
-    expect(Either.isLeft(unsafe)).toBe(true)
+    expect(Result.isFailure(unsafe)).toBe(true)
   })
 
   it("rejects malformed bridge payloads instead of trusting error text", () => {

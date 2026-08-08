@@ -914,7 +914,7 @@ const stringAtPath = (item: Readonly<Record<string, unknown>>, path: readonly st
 const valueAtPath = (item: Readonly<Record<string, unknown>>, path: readonly string[]): unknown => {
   let value: unknown = item
   for (const key of path) {
-    if (!Predicate.isReadonlyRecord(value)) return undefined
+    if (!Predicate.isReadonlyObject(value)) return undefined
     value = value[key]
   }
   return value
@@ -961,7 +961,7 @@ const decodeReviewResponse = (
 ): Effect.Effect<ReviewThreadResponse, InvalidAgentProviderResponseError> => {
   const parsed = finalMessage === null ? null : parseJsonText(finalMessage)
   const candidate = normalizeResponse(parsed)
-  return Schema.decodeUnknown(ReviewThreadResponse)(candidate).pipe(
+  return Schema.decodeUnknownEffect(ReviewThreadResponse)(candidate).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,

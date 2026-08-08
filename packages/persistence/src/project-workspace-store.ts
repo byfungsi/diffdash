@@ -9,7 +9,7 @@ import {
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { DatabaseService } from "./database"
 
-const ReviewTargetJson = Schema.parseJson(ProjectWorkspaceReviewTarget)
+const ReviewTargetJson = Schema.fromJsonString(ProjectWorkspaceReviewTarget)
 
 const ProjectWorkspaceStateRow = Schema.Struct({
   repo_id: ReviewProjectId,
@@ -23,12 +23,12 @@ export class ProjectWorkspaceStoreError extends Schema.TaggedError<ProjectWorksp
   "ProjectWorkspaceStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Domain-oriented persistence for the last workspace state of each review project. */
-export class ProjectWorkspaceStore extends Context.Tag("@diffdash/ProjectWorkspaceStore")<
+export class ProjectWorkspaceStore extends Context.Service<
   ProjectWorkspaceStore,
   {
     readonly get: (
@@ -38,7 +38,7 @@ export class ProjectWorkspaceStore extends Context.Tag("@diffdash/ProjectWorkspa
       input: ProjectWorkspaceStateInput,
     ) => Effect.Effect<ProjectWorkspaceState, ProjectWorkspaceStoreError>
   }
->() {
+>()("@diffdash/ProjectWorkspaceStore") {
   static readonly layer = Layer.effect(
     ProjectWorkspaceStore,
     Effect.gen(function* () {
@@ -63,7 +63,7 @@ export class ProjectWorkspaceStore extends Context.Tag("@diffdash/ProjectWorkspa
         const selectedReviewTargetJson =
           input.selectedReviewTarget === null
             ? null
-            : yield* Schema.encode(ReviewTargetJson)(input.selectedReviewTarget).pipe(
+            : yield* Schema.encodeEffect(ReviewTargetJson)(input.selectedReviewTarget).pipe(
                 Effect.mapError((cause) =>
                   ProjectWorkspaceStoreError.make({ operation: "save.encodeTarget", cause }),
                 ),
@@ -103,7 +103,7 @@ export class ProjectWorkspaceStore extends Context.Tag("@diffdash/ProjectWorkspa
 }
 
 const decodeStateRow = (operation: string, input: unknown) =>
-  Schema.decodeUnknown(ProjectWorkspaceStateRow)(input).pipe(
+  Schema.decodeUnknownEffect(ProjectWorkspaceStateRow)(input).pipe(
     Effect.mapError((cause) => ProjectWorkspaceStoreError.make({ operation, cause })),
     Effect.map((row) =>
       ProjectWorkspaceState.make({

@@ -21,7 +21,7 @@ export class AgentProviderCapabilityStatus extends Schema.Class<AgentProviderCap
   "AgentProviderCapabilityStatus",
 )({
   capability: AgentCapability,
-  status: Schema.Literal("ready", "unavailable", "policy-unsupported", "unsupported"),
+  status: Schema.Literals(["ready", "unavailable", "policy-unsupported", "unsupported"]),
   runtimeVersion: Schema.NullOr(Schema.String),
   reason: Schema.NullOr(Schema.String),
 }) {}

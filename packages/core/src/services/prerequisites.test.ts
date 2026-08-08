@@ -128,7 +128,7 @@ const makeLayer = (
   )
 
 describe("Prerequisites", () => {
-  it.scoped("detects Git, GitHub auth, coding agents, and diffdash in PATH", () =>
+  it.effect("detects Git, GitHub auth, coding agents, and diffdash in PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -167,7 +167,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("detects a user-local diffdash CLI outside inherited PATH", () =>
+  it.effect("detects a user-local diffdash CLI outside inherited PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -199,7 +199,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
+  it.effect("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const status = yield* Effect.gen(function* () {
@@ -221,7 +221,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("requires the gh search repos capability even when auth succeeds", () =>
+  it.effect("requires the gh search repos capability even when auth succeeds", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const status = yield* Effect.gen(function* () {
@@ -243,7 +243,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("installs the bundled diffdash CLI into the first writable PATH directory", () =>
+  it.effect("installs the bundled diffdash CLI into the first writable PATH directory", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -272,7 +272,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("falls back to a user-local bin directory when PATH has no writable directory", () =>
+  it.effect("falls back to a user-local bin directory when PATH has no writable directory", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -309,7 +309,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("installs a durable AppImage launcher outside the temporary mount", () =>
+  it.effect("installs a durable AppImage launcher outside the temporary mount", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -372,7 +372,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("replaces a stale CLI symlink into an old AppImage mount", () =>
+  it.effect("replaces a stale CLI symlink into an old AppImage mount", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -408,7 +408,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("refreshes a marker-owned AppImage launcher after an app update", () =>
+  it.effect("refreshes a marker-owned AppImage launcher after an app update", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -443,7 +443,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("atomically replaces executables with mode 0755 and cleans failed temporaries", () =>
+  it.effect("atomically replaces executables with mode 0755 and cleans failed temporaries", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const executablePath = join(directory, "diffdash")
@@ -463,7 +463,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("resolves an executable in a supplied PATH", () =>
+  it.effect("resolves an executable in a supplied PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const executablePath = join(directory, "diffdash")

@@ -1,5 +1,5 @@
-import { Atom } from "@effect-atom/atom-react"
 import { Effect } from "effect"
+import { Atom } from "effect/unstable/reactivity"
 
 import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
 import { DesktopRuntime } from "@/platform/desktop-runtime"

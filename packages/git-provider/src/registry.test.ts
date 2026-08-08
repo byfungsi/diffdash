@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 
 import {
   BranchRevision,
@@ -193,13 +193,13 @@ describe("GitProviderRegistry", () => {
   it.effect("fails closed for unknown IDs and ambiguous remotes", () =>
     Effect.gen(function* () {
       const registry = yield* GitProviderRegistry
-      const unknown = yield* Effect.either(registry.get(GitProviderId.make("missing")))
-      const ambiguous = yield* Effect.either(registry.resolveRemote("https://shared.example/repo"))
-      expect(Either.isLeft(unknown)).toBe(true)
-      expect(Either.isLeft(ambiguous)).toBe(true)
-      if (Either.isLeft(unknown)) expect(unknown.left).toBeInstanceOf(UnknownGitProviderError)
-      if (Either.isLeft(ambiguous)) {
-        expect(ambiguous.left).toBeInstanceOf(AmbiguousGitRemoteError)
+      const unknown = yield* Effect.result(registry.get(GitProviderId.make("missing")))
+      const ambiguous = yield* Effect.result(registry.resolveRemote("https://shared.example/repo"))
+      expect(Result.isFailure(unknown)).toBe(true)
+      expect(Result.isFailure(ambiguous)).toBe(true)
+      if (Result.isFailure(unknown)) expect(unknown.failure).toBeInstanceOf(UnknownGitProviderError)
+      if (Result.isFailure(ambiguous)) {
+        expect(ambiguous.failure).toBeInstanceOf(AmbiguousGitRemoteError)
       }
     }).pipe(
       Effect.provide(
@@ -215,10 +215,10 @@ describe("GitProviderRegistry", () => {
     Effect.gen(function* () {
       const exit = yield* GitProviderRegistry.pipe(
         Effect.provide(GitProviderRegistry.layer([makeProvider("same"), makeProvider("same")])),
-        Effect.either,
+        Effect.result,
       )
-      expect(Either.isLeft(exit)).toBe(true)
-      if (Either.isLeft(exit)) expect(exit.left).toBeInstanceOf(DuplicateGitProviderError)
+      expect(Result.isFailure(exit)).toBe(true)
+      if (Result.isFailure(exit)) expect(exit.failure).toBeInstanceOf(DuplicateGitProviderError)
     }),
   )
 
@@ -231,16 +231,16 @@ describe("GitProviderRegistry", () => {
     return Effect.gen(function* () {
       const registry = yield* GitProviderRegistry
       const provider = yield* registry.get(GitProviderId.make("fake"))
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         provider.searchRepositories({ query: "", namespaces: [] }),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(GitProviderOperationError)
-        expect(result.left.operation).toBe("searchRepositories")
-        expect(result.left.message).toBe("Provider returned malformed data")
-        expect(result.left.message.length).toBeLessThanOrEqual(500)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(GitProviderOperationError)
+        expect(result.failure.operation).toBe("searchRepositories")
+        expect(result.failure.message).toBe("Provider returned malformed data")
+        expect(result.failure.message.length).toBeLessThanOrEqual(500)
       }
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
@@ -254,15 +254,15 @@ describe("GitProviderRegistry", () => {
     return Effect.gen(function* () {
       const result = yield* GitProviderRegistry.pipe(
         Effect.provide(GitProviderRegistry.layer([registration])),
-        Effect.either,
+        Effect.result,
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(GitProviderOperationError)
-        if (result.left instanceof GitProviderOperationError) {
-          expect(result.left.providerId).toBe("invalid-provider")
-          expect(result.left.operation).toBe("register.descriptor")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(GitProviderOperationError)
+        if (result.failure instanceof GitProviderOperationError) {
+          expect(result.failure.providerId).toBe("invalid-provider")
+          expect(result.failure.operation).toBe("register.descriptor")
         }
       }
     })
@@ -309,15 +309,15 @@ describe("GitProviderRegistry", () => {
     return Effect.gen(function* () {
       const registry = yield* GitProviderRegistry
       const provider = yield* registry.get(GitProviderId.make("fake"))
-      const diff = yield* Effect.either(provider.getReviewDiff(requested))
-      const checkout = yield* Effect.either(provider.checkoutSpec(requested))
+      const diff = yield* Effect.result(provider.getReviewDiff(requested))
+      const checkout = yield* Effect.result(provider.checkoutSpec(requested))
 
-      expect(Either.isLeft(diff)).toBe(true)
-      expect(Either.isLeft(checkout)).toBe(true)
-      if (Either.isLeft(diff))
-        expect(diff.left.message).toBe("Provider returned data for another target")
-      if (Either.isLeft(checkout)) {
-        expect(checkout.left.message).toBe("Provider returned data for another target")
+      expect(Result.isFailure(diff)).toBe(true)
+      expect(Result.isFailure(checkout)).toBe(true)
+      if (Result.isFailure(diff))
+        expect(diff.failure.message).toBe("Provider returned data for another target")
+      if (Result.isFailure(checkout)) {
+        expect(checkout.failure.message).toBe("Provider returned data for another target")
       }
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
@@ -390,16 +390,16 @@ describe("GitProviderRegistry", () => {
     return Effect.gen(function* () {
       const registry = yield* GitProviderRegistry
       const provider = yield* registry.get(GitProviderId.make("fake"))
-      const listed = yield* Effect.either(provider.listReviews(requestedRepository))
-      const detail = yield* Effect.either(provider.getReview(requestedReview))
+      const listed = yield* Effect.result(provider.listReviews(requestedRepository))
+      const detail = yield* Effect.result(provider.getReview(requestedReview))
       const checkoutSpecAtRevision = provider.checkoutSpecAtRevision
       expect(checkoutSpecAtRevision).toBeDefined()
       if (checkoutSpecAtRevision === undefined) return
-      const checkout = yield* Effect.either(checkoutSpecAtRevision(requestedReview, "head"))
+      const checkout = yield* Effect.result(checkoutSpecAtRevision(requestedReview, "head"))
 
-      expect(Either.isLeft(listed)).toBe(true)
-      expect(Either.isLeft(detail)).toBe(true)
-      expect(Either.isLeft(checkout)).toBe(true)
+      expect(Result.isFailure(listed)).toBe(true)
+      expect(Result.isFailure(detail)).toBe(true)
+      expect(Result.isFailure(checkout)).toBe(true)
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
 
@@ -422,10 +422,10 @@ describe("GitProviderRegistry", () => {
         namespace: RepositoryNamespace.make("platform/backend"),
         name: HostedRepositoryName.make("service"),
       })
-      const result = yield* Effect.either(provider.listReviews(repository))
+      const result = yield* Effect.result(provider.listReviews(repository))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBe(expected)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBe(expected)
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
 })

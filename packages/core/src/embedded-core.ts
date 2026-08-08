@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, ManagedRuntime, Match, Option } from "effect"
+import { Cause, Effect, Exit, ManagedRuntime, Match, Option, Result } from "effect"
 import type {
   CoreBoundaryFailure,
   CoreMethod,
@@ -12,6 +12,7 @@ import { CoreLifecycleError } from "./core-contract"
 import type { CoreConfiguration } from "./core-configuration"
 import { createCoreLayer } from "./core-layer"
 import { CoreOperationService } from "./core-operation-service"
+import type { CoreStartupFailure } from "./core-startup-error"
 
 type CoreLifecycle =
   | { readonly _tag: "created" }
@@ -21,6 +22,7 @@ type CoreLifecycle =
     }
   | { readonly _tag: "started" }
   | { readonly _tag: "failed"; readonly failure: CoreStartFailure }
+  | { readonly _tag: "defective"; readonly defect: unknown }
   | { readonly _tag: "disposing"; readonly promise: Promise<void> }
   | { readonly _tag: "disposed" }
 
@@ -34,9 +36,16 @@ const unavailable = (
   }),
 })
 
-/** Creates the single managed embedded DiffDash Core runtime. */
-export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCore => {
-  const runtime = ManagedRuntime.make(createCoreLayer(configuration))
+/** Minimal managed-runtime boundary owned by the embedded Core lifecycle. */
+export interface EmbeddedCoreRuntime {
+  readonly runPromiseExit: <A, E>(
+    program: Effect.Effect<A, E, CoreOperationService>,
+  ) => Promise<Exit.Exit<A, E | CoreStartupFailure>>
+  readonly dispose: () => Promise<void>
+}
+
+/** Builds the embedded Core facade around one managed runtime. */
+export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => {
   let lifecycle: CoreLifecycle = { _tag: "created" }
 
   const runRuntime = async <A, E>(
@@ -52,6 +61,7 @@ export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCo
     Match.value(lifecycle).pipe(
       Match.tag("started", () => runRuntime(program)),
       Match.tag("failed", ({ failure }) => Promise.resolve({ ok: false as const, error: failure })),
+      Match.tag("defective", ({ defect }) => Promise.reject(defect)),
       Match.tag("created", () => Promise.resolve(unavailable("notStarted"))),
       Match.tag("starting", () => Promise.resolve(unavailable("starting"))),
       Match.tag("disposing", () => Promise.resolve(unavailable("disposing"))),
@@ -66,16 +76,24 @@ export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCo
           Effect.flatMap(CoreOperationService, (operations) => operations.start),
         )
         lifecycle = { _tag: "starting", promise }
-        void promise.then((result) => {
-          if (lifecycle._tag !== "starting" || lifecycle.promise !== promise) return undefined
-          lifecycle = result.ok ? { _tag: "started" } : { _tag: "failed", failure: result.error }
-          return undefined
-        })
+        void promise.then(
+          (result) => {
+            if (lifecycle._tag !== "starting" || lifecycle.promise !== promise) return undefined
+            lifecycle = result.ok ? { _tag: "started" } : { _tag: "failed", failure: result.error }
+            return undefined
+          },
+          (defect: unknown) => {
+            if (lifecycle._tag !== "starting" || lifecycle.promise !== promise) return undefined
+            lifecycle = { _tag: "defective", defect }
+            return undefined
+          },
+        )
         return promise
       }),
       Match.tag("starting", ({ promise }) => promise),
       Match.tag("started", () => Promise.resolve({ ok: true as const, value: undefined })),
       Match.tag("failed", ({ failure }) => Promise.resolve({ ok: false as const, error: failure })),
+      Match.tag("defective", ({ defect }) => Promise.reject(defect)),
       Match.tag("disposing", () => Promise.resolve(unavailable("disposing"))),
       Match.tag("disposed", () => Promise.resolve(unavailable("disposed"))),
       Match.exhaustive,
@@ -86,14 +104,21 @@ export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCo
       Match.tag("disposing", ({ promise }) => promise),
       Match.tag("disposed", () => Promise.resolve()),
       Match.orElse((current) => {
-        const started = current._tag === "starting" ? current.promise : Promise.resolve()
+        const started =
+          current._tag === "starting"
+            ? current.promise.then(
+                () => undefined,
+                () => undefined,
+              )
+            : Promise.resolve()
         const promise = started.then(() => runtime.dispose())
         lifecycle = { _tag: "disposing", promise }
-        void promise.finally(() => {
+        const finishDisposal = () => {
           if (lifecycle._tag === "disposing" && lifecycle.promise === promise) {
             lifecycle = { _tag: "disposed" }
           }
-        })
+        }
+        void promise.then(finishDisposal, finishDisposal)
         return promise
       }),
     )
@@ -142,14 +167,18 @@ export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCo
   }
 }
 
+/** Creates the single managed embedded DiffDash Core runtime. */
+export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCore =>
+  makeEmbeddedCore(ManagedRuntime.make(createCoreLayer(configuration)))
+
 /** Converts expected Effect failures to CoreResult while preserving defects as rejected promises. */
 export const coreResultFromExit = <Value, Failure>(
   exit: Exit.Exit<Value, Failure>,
 ): CoreResult<Value, Failure> => {
   if (Exit.isSuccess(exit)) return { ok: true, value: exit.value }
-  const defect = Cause.dieOption(exit.cause)
-  if (Option.isSome(defect)) throw defect.value
-  const failure = Cause.failureOption(exit.cause)
+  const defect = Cause.findDefect(exit.cause)
+  if (Result.isSuccess(defect)) throw defect.success
+  const failure = Cause.findErrorOption(exit.cause)
   if (Option.isSome(failure)) return { ok: false, error: failure.value }
   throw Cause.squash(exit.cause)
 }

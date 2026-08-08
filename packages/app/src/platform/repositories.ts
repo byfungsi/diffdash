@@ -22,7 +22,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer repository catalog, discovery, and local-checkout capabilities. */
-export class Repositories extends Context.Tag("@diffdash/app/Repositories")<
+export class Repositories extends Context.Service<
   Repositories,
   {
     readonly list: (
@@ -51,7 +51,7 @@ export class Repositories extends Context.Tag("@diffdash/app/Repositories")<
       RendererApiError
     >
   }
->() {}
+>()("@diffdash/app/Repositories") {}
 
 /** Desktop implementation of renderer repository capabilities. */
 export const repositoriesLayer = Layer.effect(
@@ -103,7 +103,7 @@ export const repositoriesLayer = Layer.effect(
       selectLocalFolder: () =>
         invokePreload(InvokeChannel.selectLocalFolder, () =>
           api.repositories.selectLocalFolder(),
-        ).pipe(Effect.map(Option.fromNullable)),
+        ).pipe(Effect.map(Option.fromNullishOr)),
       repairIdentities: () =>
         invokePreload(InvokeChannel.repairRepositoryIdentities, () =>
           api.repositories.repairIdentities(),

@@ -20,7 +20,7 @@ import {
   type ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
 import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
-import { RegistryProvider } from "@effect-atom/atom-react"
+import { RegistryProvider } from "@effect/atom-react"
 import { StrictMode } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"

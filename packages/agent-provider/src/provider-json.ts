@@ -21,7 +21,7 @@ export const parseProviderJsonlObject = (
       }),
   }).pipe(
     Effect.flatMap((value) =>
-      Predicate.isReadonlyRecord(value)
+      Predicate.isReadonlyObject(value)
         ? Effect.succeed(value)
         : ProviderJsonlObjectParseError.make({ reason: "event is not a JSON object" }),
     ),
@@ -58,7 +58,7 @@ export const nonNegativeNumberAt = (record: Readonly<Record<string, unknown>>, k
 /** Reads a non-array object property from an unknown-value record. */
 export const recordAt = (record: Readonly<Record<string, unknown>>, key: string) => {
   const value = record[key]
-  return Predicate.isReadonlyRecord(value) ? value : null
+  return Predicate.isReadonlyObject(value) ? value : null
 }
 
 /** Reads an array property from an unknown-value record. */

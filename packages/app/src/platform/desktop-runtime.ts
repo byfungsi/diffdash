@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Layer, Queue, Stream } from "effect"
 
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
@@ -9,7 +9,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, preloadEventStream, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer capabilities owned by the Electron shell rather than a product feature. */
-export class DesktopRuntime extends Context.Tag("@diffdash/app/DesktopRuntime")<
+export class DesktopRuntime extends Context.Service<
   DesktopRuntime,
   {
     readonly getDiagnostics: () => Effect.Effect<AppPrerequisites, RendererApiError>
@@ -30,21 +30,25 @@ export class DesktopRuntime extends Context.Tag("@diffdash/app/DesktopRuntime")<
       readonly commands: Stream.Stream<CliNavigationCommand, RendererApiError>
     }
   }
->() {}
+>()("@diffdash/app/DesktopRuntime") {}
 
 /** Desktop implementation of Electron-shell renderer capabilities. */
 export const desktopRuntimeLayer = Layer.effect(
   DesktopRuntime,
   Effect.gen(function* () {
     const api = yield* PreloadClient
-    const updateEvents = preloadEventStream(EventChannel.updateStateChanged, (listener) =>
-      api.updates.onStateChanged(listener),
+    const updateStates = preloadEventStream(
+      EventChannel.updateStateChanged,
+      (listener) => api.updates.onStateChanged(listener),
+      invokePreload(InvokeChannel.updatesGetState, () => api.updates.getState()),
     )
-    const navigationNotifications = Stream.asyncScoped<void>((emit) =>
+    const navigationNotifications = Stream.callback<void>((queue) =>
       Effect.acquireRelease(
-        Effect.sync(() => api.navigation.onCommandsAvailable(() => void emit.single(undefined))),
+        Effect.sync(() =>
+          api.navigation.onCommandsAvailable(() => void Queue.offerUnsafe(queue, undefined)),
+        ),
         (unsubscribe) => Effect.sync(unsubscribe),
-      ),
+      ).pipe(Effect.tap(() => Effect.sync(() => void Queue.offerUnsafe(queue, undefined)))),
     )
     const drainNavigationCommands = invokePreload(InvokeChannel.drainNavigationCommands, () =>
       api.navigation.drainCommands(),
@@ -62,12 +66,7 @@ export const desktopRuntimeLayer = Layer.effect(
           invokePreload(InvokeChannel.analyticsCapture, () => api.analytics.capture(event)),
       },
       updates: {
-        states: Stream.concat(
-          Stream.fromEffect(
-            invokePreload(InvokeChannel.updatesGetState, () => api.updates.getState()),
-          ),
-          updateEvents,
-        ),
+        states: updateStates,
         check: () => invokePreload(InvokeChannel.updatesCheck, () => api.updates.check()),
         download: () => invokePreload(InvokeChannel.updatesDownload, () => api.updates.download()),
         restartAndInstall: () =>
@@ -78,7 +77,7 @@ export const desktopRuntimeLayer = Layer.effect(
       navigation: {
         activateWindow: () =>
           invokePreload(InvokeChannel.appActivateWindow, () => api.navigation.activateWindow()),
-        commands: Stream.concat(Stream.succeed(undefined), navigationNotifications).pipe(
+        commands: navigationNotifications.pipe(
           Stream.mapEffect(() => drainNavigationCommands),
           Stream.flatMap(Stream.fromIterable),
         ),

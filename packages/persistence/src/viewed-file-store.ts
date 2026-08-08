@@ -5,7 +5,7 @@ import { DatabaseService } from "./database"
 
 const ViewedFileRow = Schema.Struct({
   patch_hash: ReviewFilePatchHash,
-  review_key: Schema.String.pipe(Schema.minLength(1)),
+  review_key: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 })
 
 const ViewedFileRows = Schema.Array(ViewedFileRow)
@@ -23,7 +23,7 @@ export class ViewedFileStoreError extends Schema.TaggedError<ViewedFileStoreErro
   "ViewedFileStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
@@ -42,7 +42,7 @@ interface HostedViewedFileScope {
 
 /** Local and repository-comparison scope shared by viewed-file reads and writes. */
 export const LocalViewedFileScope = Schema.Struct({
-  comparisonKind: Schema.Literal("workingTree", "branch", "repositoryComparison"),
+  comparisonKind: Schema.Literals(["workingTree", "branch", "repositoryComparison"]),
   comparisonTarget: Schema.String,
   repoId: Schema.String,
   sourceIdentity: Schema.String,
@@ -62,7 +62,7 @@ interface SetLocalViewedFileInput extends ViewedFileRecord {
 }
 
 /** Domain-oriented persistence service for viewed file state. */
-export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
+export class ViewedFileStore extends Context.Service<
   ViewedFileStore,
   {
     readonly listHosted: (
@@ -79,7 +79,7 @@ export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
       input: SetLocalViewedFileInput,
     ) => Effect.Effect<void, ViewedFileStoreError>
   }
->() {
+>()("@diffdash/ViewedFileStore") {
   static readonly layer = Layer.effect(
     ViewedFileStore,
     Effect.gen(function* () {
@@ -175,7 +175,7 @@ export class ViewedFileStore extends Context.Tag("@diffdash/ViewedFileStore")<
 }
 
 const decodeViewedFileRows = (operation: string, input: readonly unknown[]) =>
-  Schema.decodeUnknown(ViewedFileRows)(input).pipe(
+  Schema.decodeUnknownEffect(ViewedFileRows)(input).pipe(
     Effect.map(viewedFileRecords),
     Effect.mapError((cause) => ViewedFileStoreError.make({ operation, cause })),
   )

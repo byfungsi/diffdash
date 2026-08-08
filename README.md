@@ -180,14 +180,9 @@ Browser-backed tests run headless by default. Use non-headless mode only when de
 
 ## Effect Guidance
 
-Before writing Effect code, consult Effect Solutions:
-
-```bash
-effect-solutions list
-effect-solutions show <topic>
-```
-
-Use the local Effect source reference at `~/.local/share/effect-solutions/effect` when API details are unclear.
+OpenCode reads the repository's `effect` skill before writing Effect code and exposes the upstream
+`Effect-TS/effect` `main` branch as the `@effect` reference. The exact versions in the workspace
+catalog and installed package types remain the compatibility authority while Effect v4 is in beta.
 
 ## UI Guidance
 

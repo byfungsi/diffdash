@@ -88,14 +88,14 @@ export class GitHubCliParseError extends Schema.TaggedError<GitHubCliParseError>
   {
     operation: Schema.String,
     output: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
-const GhRepoOwnerJson = Schema.Union(
+const GhRepoOwnerJson = Schema.Union([
   Schema.String,
   Schema.Struct({ login: Schema.optional(Schema.String) }),
-)
+])
 const GhRepoJson = Schema.Struct({
   id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
@@ -132,9 +132,8 @@ const GhPullRequestJson = Schema.Struct({
 })
 type GhPullRequestJson = typeof GhPullRequestJson.Type
 
-const GhPullRequestDetailJson = Schema.extend(
-  GhPullRequestJson,
-  Schema.Struct({
+const GhPullRequestDetailJson = GhPullRequestJson.pipe(
+  Schema.fieldsAssign({
     files: Schema.Array(
       Schema.Struct({
         path: Schema.String,
@@ -185,9 +184,8 @@ const GhViewerApprovalJson = Schema.Struct({
     ),
   }),
 })
-const GhReviewRequestJson = Schema.extend(
-  GhPullRequestJson,
-  Schema.Struct({
+const GhReviewRequestJson = GhPullRequestJson.pipe(
+  Schema.fieldsAssign({
     repository: Schema.Struct({ name: Schema.String, owner: GhActorJson }),
   }),
 )
@@ -197,8 +195,8 @@ const GhReviewRequestSearchJson = Schema.Struct({
   }),
 })
 
-const decodeJson = <A, I>(operation: string, output: string, schema: Schema.Schema<A, I>) =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(output).pipe(
+const decodeJson = <A, I>(operation: string, output: string, schema: Schema.Codec<A, I>) =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(output).pipe(
     Effect.mapError((cause) => GitHubCliParseError.make({ operation, output, cause })),
   )
 
@@ -442,7 +440,7 @@ export const inspectGitHubCli = (
             )
             .pipe(
               Effect.as(true),
-              Effect.catchAll(() => Effect.succeed(false)),
+              Effect.catch(() => Effect.succeed(false)),
             ),
           processes
             .run(
@@ -452,7 +450,7 @@ export const inspectGitHubCli = (
             )
             .pipe(
               Effect.as(true),
-              Effect.catchAll(() => Effect.succeed(false)),
+              Effect.catch(() => Effect.succeed(false)),
             ),
         ],
         { concurrency: "unbounded" },
@@ -467,7 +465,7 @@ export const inspectGitHubCli = (
         })),
       )
     }),
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.succeed({
         installed: false,
         authenticated: false,
@@ -515,7 +513,7 @@ export const createGitHubProvider = (
     processes
       .run(processRequest("gh", args, stdout === undefined ? { timeoutMs } : { timeoutMs, stdout }))
       .pipe(Effect.mapError(operationError(providerId, operation)))
-  const decode = <A, I>(operation: string, output: string, schema: Schema.Schema<A, I>) =>
+  const decode = <A, I>(operation: string, output: string, schema: Schema.Codec<A, I>) =>
     decodeJson(operation, output, schema).pipe(
       Effect.mapError(operationError(providerId, operation)),
     )

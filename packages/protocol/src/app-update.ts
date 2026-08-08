@@ -1,12 +1,12 @@
 import { Schema } from "effect"
 
 /** Why automatic updates are unavailable for the current installation. */
-export const AppUpdateUnsupportedReason = Schema.Literal(
+export const AppUpdateUnsupportedReason = Schema.Literals([
   "development",
   "platform",
   "architecture",
   "installation",
-)
+])
 
 /** Why automatic updates are unavailable for the current installation. */
 export type AppUpdateUnsupportedReason = typeof AppUpdateUnsupportedReason.Type
@@ -59,7 +59,7 @@ export class AppUpdateFailed extends Schema.TaggedClass<AppUpdateFailed>()("erro
 }) {}
 
 /** Renderer-safe automatic update lifecycle state. */
-export const AppUpdateState = Schema.Union(
+export const AppUpdateState = Schema.Union([
   AppUpdateUnsupported,
   AppUpdateIdle,
   AppUpdateChecking,
@@ -67,7 +67,7 @@ export const AppUpdateState = Schema.Union(
   AppUpdateDownloading,
   AppUpdateDownloaded,
   AppUpdateFailed,
-)
+])
 
 /** Renderer-safe automatic update lifecycle state. */
 export type AppUpdateState = typeof AppUpdateState.Type

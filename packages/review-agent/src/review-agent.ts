@@ -78,10 +78,10 @@ export interface ReviewAgentRouteSelection {
 }
 
 /** Supplies host-owned review routing and model preferences. */
-export class ReviewAgentRouting extends Context.Tag("@diffdash/ReviewAgentRouting")<
+export class ReviewAgentRouting extends Context.Service<
   ReviewAgentRouting,
   { readonly get: Effect.Effect<ReviewAgentRouteSelection> }
->() {}
+>()("@diffdash/ReviewAgentRouting") {}
 
 /** Immutable resources resolved by main before one local review-agent turn. */
 interface RunReviewAgentTurnInput {
@@ -101,7 +101,7 @@ export class ReviewAgentServiceError extends Schema.TaggedError<ReviewAgentServi
   {
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
@@ -109,9 +109,9 @@ export class ReviewAgentServiceError extends Schema.TaggedError<ReviewAgentServi
 export class ReviewAgentFinalizeError extends Schema.TaggedError<ReviewAgentFinalizeError>()(
   "ReviewAgentFinalizeError",
   {
-    operation: Schema.Literal("completeTurn", "failTurn"),
+    operation: Schema.Literals(["completeTurn", "failTurn"]),
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
@@ -121,12 +121,12 @@ export class ReviewAgentProviderFailureError extends Schema.TaggedError<ReviewAg
   {
     failure: AgentProviderFailure,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Coordinates provider selection, MCP capability lifetime, persistence, and thread memory. */
-export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentService")<
+export class ReviewAgentService extends Context.Service<
   ReviewAgentService,
   {
     readonly runThreadTurn: (
@@ -140,7 +140,7 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
       | ReviewTurnRejectedError
     >
   }
->() {
+>()("@diffdash/ReviewAgentService") {
   static readonly layer = Layer.effect(
     ReviewAgentService,
     Effect.gen(function* () {
@@ -260,7 +260,7 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
                         },
                         policy,
                       })
-                      const providerResult = yield* Schema.decodeUnknown(ReviewThreadResult)(
+                      const providerResult = yield* Schema.decodeUnknownEffect(ReviewThreadResult)(
                         rawProviderResult,
                       ).pipe(
                         Effect.mapError(() =>
@@ -293,7 +293,7 @@ export class ReviewAgentService extends Context.Tag("@diffdash/ReviewAgentServic
               })
 
               const result = yield* execute.pipe(
-                Effect.catchAll((cause) => failStartedTurn(turns, begun, providerId, cause)),
+                Effect.catch((cause) => failStartedTurn(turns, begun, providerId, cause)),
               )
               const preparedArtifacts = result.artifacts.map((artifact) => ({
                 id: ReviewAgentArtifactId.make(randomUUID()),
@@ -364,7 +364,7 @@ const validateReviewSnapshot = (input: RunReviewAgentTurnInput) =>
         reason: "The review snapshot changed after the review-turn target was checked.",
       })
 
-type GitProviderRegistryService = Context.Tag.Service<GitProviderRegistry>
+type GitProviderRegistryService = Context.Service.Shape<typeof GitProviderRegistry>
 
 const prepareHostedExecution = (snapshot: ReviewSnapshot, registry: GitProviderRegistryService) => {
   if (!(snapshot instanceof HostedReviewSnapshot)) return Effect.succeed(null)
@@ -410,7 +410,7 @@ const prepareComparisonExecution = (
 }
 
 const failStartedTurn = (
-  turns: Context.Tag.Service<ReviewTurnStore>,
+  turns: Context.Service.Shape<typeof ReviewTurnStore>,
   begun: BegunReviewTurn,
   providerId: ReviewAgentProviderId,
   cause: unknown,
@@ -441,9 +441,9 @@ const failStartedTurn = (
 }
 
 const loadSelectedArtifacts = (
-  artifactIds: readonly Parameters<Context.Tag.Service<AgentRunArtifactStore>["get"]>[0][],
+  artifactIds: readonly Parameters<Context.Service.Shape<typeof AgentRunArtifactStore>["get"]>[0][],
   threadId: ReviewThreadId,
-  store: Context.Tag.Service<AgentRunArtifactStore>,
+  store: Context.Service.Shape<typeof AgentRunArtifactStore>,
 ): Effect.Effect<readonly SelectedReviewAgentArtifact[]> =>
   Effect.forEach(artifactIds, (id) => store.get(id).pipe(Effect.option), { concurrency: 1 }).pipe(
     Effect.map((items) =>
@@ -455,7 +455,7 @@ const loadSelectedArtifacts = (
     ),
   )
 
-type ProviderRegistry = Context.Tag.Service<AgentProviderRegistry>
+type ProviderRegistry = Context.Service.Shape<typeof AgentProviderRegistry>
 
 interface ResolvedReviewProvider {
   readonly registration: AgentProviderRegistration
@@ -484,7 +484,7 @@ const resolveReviewProvider = (
       const capability = yield* registry.resolveReviewThread({ mode: "provider", providerId })
       return { registration, capability }
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         route.mode === "auto" && rest.length > 0 ? resolveProvider(rest) : Effect.fail(cause),
       ),
     )

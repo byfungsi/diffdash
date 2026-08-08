@@ -12,7 +12,7 @@ import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
 
 /** Renderer persistence capabilities for preferences, onboarding, and project workspace state. */
-export class RendererPreferences extends Context.Tag("@diffdash/app/RendererPreferences")<
+export class RendererPreferences extends Context.Service<
   RendererPreferences,
   {
     readonly loadSettings: () => Effect.Effect<AISettings, RendererApiError>
@@ -26,7 +26,7 @@ export class RendererPreferences extends Context.Tag("@diffdash/app/RendererPref
       input: ProjectWorkspaceStateInput,
     ) => Effect.Effect<ProjectWorkspaceState, RendererApiError>
   }
->() {}
+>()("@diffdash/app/RendererPreferences") {}
 
 /** Desktop implementation of renderer persistence capabilities. */
 export const rendererPreferencesLayer = Layer.effect(
@@ -43,7 +43,7 @@ export const rendererPreferencesLayer = Layer.effect(
       loadWorkspace: (projectId) =>
         invokePreload(InvokeChannel.projectWorkspaceGet, () =>
           api.projectWorkspace.get(projectId),
-        ).pipe(Effect.map(Option.fromNullable)),
+        ).pipe(Effect.map(Option.fromNullishOr)),
       saveWorkspace: (input) =>
         invokePreload(InvokeChannel.projectWorkspaceSave, () => api.projectWorkspace.save(input)),
     })

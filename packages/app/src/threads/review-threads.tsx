@@ -183,12 +183,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     }
   }
 
-  useRendererStream(automation.threads.progress, (progress) => {
-    setAgentProgress((current) => [
-      ...current.filter((item) => item.threadId !== progress.threadId),
-      progress,
-    ])
-  })
+  useRendererStream(
+    automation.threads.progress,
+    (progress) => {
+      setAgentProgress((current) => [
+        ...current.filter((item) => item.threadId !== progress.threadId),
+        progress,
+      ])
+    },
+    (cause) => setError(formatError(cause, "Could not receive review progress")),
+  )
 
   useEffect(() => {
     let cancelled = false

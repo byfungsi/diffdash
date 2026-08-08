@@ -156,7 +156,7 @@ const makeLineAnchor = (path: string, lineNumber: number, lineContent: string) =
 }
 
 describe("ReviewThreadAnchorMapper", () => {
-  it.scoped("FUN-66 AC: maps all anchor outcomes deterministically and idempotently", () =>
+  it.effect("FUN-66 AC: maps all anchor outcomes deterministically and idempotently", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 

@@ -6,5 +6,5 @@ export class LinkRepositoryCheckoutRequest extends Schema.Class<LinkRepositoryCh
   "LinkRepositoryCheckoutRequest",
 )({
   repository: HostedRepositoryLocator,
-  localPath: Schema.String.pipe(Schema.minLength(1)),
+  localPath: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}

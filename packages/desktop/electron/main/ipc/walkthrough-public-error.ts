@@ -20,6 +20,7 @@ import {
   WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
+import { WalkthroughOperationStoreError } from "@diffdash/persistence/walkthrough-operation-store"
 import {
   ProcessCleanupError,
   ProcessExitError,
@@ -30,101 +31,93 @@ import {
 } from "@diffdash/process"
 import { transportError, TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
-import { Either, Schema } from "effect"
-import { ReviewContextError, WalkthroughOperationCapacityExceeded } from "@diffdash/core"
+import { Result, Schema } from "effect"
+import {
+  ReviewContextError,
+  WalkthroughOperationArtifactUnavailable,
+  WalkthroughOperationCancelled,
+  WalkthroughOperationInterrupted,
+  WalkthroughOperationNotFound,
+  WalkthroughOperationStateUnavailable,
+  WalkthroughOperationSuperseded,
+  WalkthroughOperationTerminalFailure,
+} from "@diffdash/core"
 import { toPublicIpcError } from "./public-error"
 
-const KnownProviderProcessFailure = Schema.Union(
+const KnownProviderProcessFailure = Schema.Union([
   ProcessTimeoutError,
   ProcessSpawnError,
   ProcessExitError,
   ProcessOutputError,
   ProcessStdinError,
   ProcessCleanupError,
-)
+])
 
 /** Adapts walkthrough failures to user-reportable diagnostics without exposing private causes. */
 export const toPublicWalkthroughError = (error: unknown, operation: string) => {
-  const capabilityUnavailable = Schema.decodeUnknownEither(AgentCapabilityUnavailableError)(error)
-  if (Either.isRight(capabilityUnavailable)) {
+  if (Schema.is(AgentCapabilityUnavailableError)(error)) {
     return transportError(
       "AgentCapabilityUnavailableError",
-      `Provider ${publicProviderId(capabilityUnavailable.right.providerId)} is currently unavailable.`,
+      `Provider ${publicProviderId(error.providerId)} is currently unavailable.`,
       operation,
       undefined,
       walkthroughProviderFailure(
-        capabilityUnavailable.right.providerId,
-        classifyProviderFailureText(capabilityUnavailable.right.reason) ?? "configuration",
+        error.providerId,
+        classifyProviderFailureText(error.reason) ?? "configuration",
       ),
     )
   }
-  const policyFailure = Schema.decodeUnknownEither(AgentPolicyEnforcementError)(error)
-  if (Either.isRight(policyFailure)) {
+  if (Schema.is(AgentPolicyEnforcementError)(error)) {
     return transportError(
       "AgentPolicyEnforcementError",
-      `Provider ${publicProviderId(policyFailure.right.providerId)} cannot enforce DiffDash's required read-only policy.`,
+      `Provider ${publicProviderId(error.providerId)} cannot enforce DiffDash's required read-only policy.`,
       operation,
       undefined,
-      walkthroughProviderFailure(policyFailure.right.providerId, "policy-violation"),
+      walkthroughProviderFailure(error.providerId, "policy-violation"),
     )
   }
-  const providerOperation = Schema.decodeUnknownEither(AgentProviderOperationError)(error)
-  if (Either.isRight(providerOperation)) {
-    return publicProviderOperationError(
-      providerOperation.right,
-      structuralCause(error),
-      error,
-      operation,
-    )
+  const providerOperation = parseProviderOperationError(error)
+  if (providerOperation !== null) {
+    return publicProviderOperationError(providerOperation, structuralCause(error), error, operation)
   }
-  const providerProbe = Schema.decodeUnknownEither(AgentProviderProbeError)(error)
-  if (Either.isRight(providerProbe)) {
+  if (Schema.is(AgentProviderProbeError)(error)) {
     return transportError(
       "AgentProviderProbeError",
-      `DiffDash could not verify that provider ${publicProviderId(providerProbe.right.providerId)} is available.`,
+      `DiffDash could not verify that provider ${publicProviderId(error.providerId)} is available.`,
       operation,
       undefined,
-      walkthroughProviderFailure(providerProbe.right.providerId, "configuration"),
+      walkthroughProviderFailure(error.providerId, "configuration"),
     )
   }
-  const invalidProviderResponse = Schema.decodeUnknownEither(InvalidAgentProviderResponseError)(
-    error,
-  )
-  if (Either.isRight(invalidProviderResponse)) {
-    const failure = invalidResponseFailure(
-      invalidProviderResponse.right.providerId,
-      invalidProviderResponse.right.capability,
-    )
+  if (Schema.is(InvalidAgentProviderResponseError)(error)) {
+    const failure = invalidResponseFailure(error.providerId, error.capability)
     return transportError(
       "InvalidAgentProviderResponseError",
-      `Provider ${publicProviderId(invalidProviderResponse.right.providerId)} completed without usable walkthrough text.`,
+      `Provider ${publicProviderId(error.providerId)} completed without usable walkthrough text.`,
       operation,
       undefined,
       failure,
     )
   }
-  const missingProvider = Schema.decodeUnknownEither(MissingAgentProviderError)(error)
-  if (Either.isRight(missingProvider)) {
+  if (Schema.is(MissingAgentProviderError)(error)) {
     return transportError(
       "MissingAgentProviderError",
-      `Provider ${publicProviderId(missingProvider.right.providerId)} is not registered in this version of DiffDash.`,
+      `Provider ${publicProviderId(error.providerId)} is not registered in this version of DiffDash.`,
       operation,
       undefined,
-      walkthroughProviderFailure(missingProvider.right.providerId, "configuration"),
+      walkthroughProviderFailure(error.providerId, "configuration"),
     )
   }
-  const unsupportedCapability = Schema.decodeUnknownEither(UnsupportedAgentCapabilityError)(error)
-  if (Either.isRight(unsupportedCapability)) {
+  if (Schema.is(UnsupportedAgentCapabilityError)(error)) {
     return transportError(
       "UnsupportedAgentCapabilityError",
-      `Provider ${publicProviderId(unsupportedCapability.right.providerId)} does not support walkthrough generation.`,
+      `Provider ${publicProviderId(error.providerId)} does not support walkthrough generation.`,
       operation,
       undefined,
-      walkthroughProviderFailure(unsupportedCapability.right.providerId, "configuration"),
+      walkthroughProviderFailure(error.providerId, "configuration"),
     )
   }
-  const noProvider = Schema.decodeUnknownEither(NoAgentProviderAvailableError)(error)
-  if (Either.isRight(noProvider)) {
+  if (Schema.is(NoAgentProviderAvailableError)(error)) {
     return transportError(
       "NoAgentProviderAvailableError",
       "No configured AI provider is currently available for walkthrough generation.",
@@ -133,54 +126,90 @@ export const toPublicWalkthroughError = (error: unknown, operation: string) => {
       walkthroughProviderFailure("unavailable", "configuration"),
     )
   }
-  const unavailableModel = Schema.decodeUnknownEither(WalkthroughModelUnavailableError)(error)
-  if (Either.isRight(unavailableModel)) {
+  if (Schema.is(WalkthroughModelUnavailableError)(error)) {
     return transportError(
       "WalkthroughModelUnavailableError",
-      `Provider ${publicProviderId(unavailableModel.right.providerId)} has no compatible selected model for walkthrough generation.`,
+      `Provider ${publicProviderId(error.providerId)} has no compatible selected model for walkthrough generation.`,
       operation,
       undefined,
-      walkthroughProviderFailure(unavailableModel.right.providerId, "model-unavailable"),
+      walkthroughProviderFailure(error.providerId, "model-unavailable"),
     )
   }
-  if (Either.isRight(Schema.decodeUnknownEither(WalkthroughGenerationError)(error))) {
+  if (Schema.is(WalkthroughGenerationError)(error)) {
     return transportError(
       "WalkthroughGenerationError",
       "The AI agent returned invalid walkthrough data after retrying.",
       operation,
     )
   }
-  if (Either.isRight(Schema.decodeUnknownEither(WalkthroughValidationError)(error))) {
+  if (Schema.is(WalkthroughValidationError)(error)) {
     return transportError(
       "WalkthroughValidationError",
       "The AI agent returned a walkthrough that did not pass validation after retrying.",
       operation,
     )
   }
-  const promptPreparation = Schema.decodeUnknownEither(WalkthroughPromptPreparationError)(error)
-  if (Either.isRight(promptPreparation)) {
-    return transportError(
-      "WalkthroughPromptPreparationError",
-      promptPreparation.right.message,
-      operation,
-    )
+  if (Schema.is(WalkthroughPromptPreparationError)(error)) {
+    return transportError("WalkthroughPromptPreparationError", error.message, operation)
   }
-  const reviewContext = Schema.decodeUnknownEither(ReviewContextError)(error)
-  if (Either.isRight(reviewContext)) {
-    return transportError("ReviewContextError", reviewContext.right.reason, operation)
+  if (Schema.is(ReviewContextError)(error)) {
+    return transportError("ReviewContextError", error.reason, operation)
   }
-  const walkthroughStore = Schema.decodeUnknownEither(WalkthroughStoreError)(error)
-  if (Either.isRight(walkthroughStore)) {
-    const message = walkthroughStore.right.operation.startsWith("get")
+  if (Schema.is(WalkthroughStoreError)(error)) {
+    const message = error.operation.startsWith("get")
       ? "DiffDash could not read the walkthrough cache."
       : "DiffDash could not save the generated walkthrough."
     return transportError("WalkthroughStoreError", message, operation)
   }
-  const capacity = Schema.decodeUnknownEither(WalkthroughOperationCapacityExceeded)(error)
-  if (Either.isRight(capacity)) {
+  if (Schema.is(WalkthroughOperationStoreError)(error)) {
     return transportError(
-      "WalkthroughOperationCapacityExceeded",
-      `DiffDash is already processing ${capacity.right.capacity} walkthrough operations. Try again after one finishes.`,
+      "WALKTHROUGH_OPERATION_STORE",
+      "DiffDash could not persist walkthrough operation state.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationTerminalFailure)(error)) {
+    return persistedWalkthroughFailure(error, operation)
+  }
+  if (Schema.is(WalkthroughOperationNotFound)(error)) {
+    return transportError(
+      "WALKTHROUGH_OPERATION_NOT_FOUND",
+      "DiffDash could not find the requested walkthrough operation.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationArtifactUnavailable)(error)) {
+    return transportError(
+      "WALKTHROUGH_STORE",
+      "DiffDash could not load the completed walkthrough.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationStateUnavailable)(error)) {
+    return transportError(
+      "WALKTHROUGH_OPERATION_STATE_UNAVAILABLE",
+      "DiffDash could not reconcile the walkthrough operation with the current Core process.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationCancelled)(error)) {
+    return transportError(
+      "WALKTHROUGH_CANCELLED",
+      "Walkthrough generation was cancelled.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationSuperseded)(error)) {
+    return transportError(
+      "WALKTHROUGH_SUPERSEDED",
+      "A newer walkthrough generation replaced this operation.",
+      operation,
+    )
+  }
+  if (Schema.is(WalkthroughOperationInterrupted)(error)) {
+    return transportError(
+      "WALKTHROUGH_INTERRUPTED",
+      "Walkthrough generation was interrupted when DiffDash restarted. Retry to generate it again.",
       operation,
     )
   }
@@ -204,6 +233,56 @@ export const toPublicWalkthroughError = (error: unknown, operation: string) => {
   )
 }
 
+const persistedWalkthroughFailure = (
+  error: WalkthroughOperationTerminalFailure,
+  operation: string,
+) => {
+  switch (error.failure.category) {
+    case "review-resolution":
+      return transportError(
+        "WALKTHROUGH_REVIEW_RESOLUTION",
+        "DiffDash could not resolve the review generation for this walkthrough.",
+        operation,
+      )
+    case "prompt-preparation":
+      return transportError(
+        "WALKTHROUGH_PROMPT_PREPARATION",
+        "DiffDash could not prepare this review for walkthrough generation.",
+        operation,
+      )
+    case "provider":
+      return transportError(
+        "WALKTHROUGH_PROVIDER_ERROR",
+        "The configured AI provider could not complete walkthrough generation.",
+        operation,
+      )
+    case "validation":
+      return transportError(
+        "WALKTHROUGH_VALIDATION",
+        "The AI provider returned walkthrough data that did not pass validation.",
+        operation,
+      )
+    case "artifact-persistence":
+      return transportError(
+        "WALKTHROUGH_STORE",
+        "DiffDash could not save the generated walkthrough.",
+        operation,
+      )
+    case "operation-persistence":
+      return transportError(
+        "WALKTHROUGH_OPERATION_STORE",
+        "DiffDash could not persist walkthrough operation state.",
+        operation,
+      )
+    case "internal":
+      return transportError(
+        "WALKTHROUGH_INTERNAL_ERROR",
+        "DiffDash could not complete the walkthrough because of an internal error.",
+        operation,
+      )
+  }
+}
+
 const publicProviderOperationError = (
   error: AgentProviderOperationError,
   cause: unknown,
@@ -211,11 +290,12 @@ const publicProviderOperationError = (
   operation: string,
 ) => {
   const provider = publicProviderId(error.providerId)
-  const processFailure = Schema.decodeUnknownEither(KnownProviderProcessFailure)(cause)
-  const causeTag = Either.isRight(processFailure) ? processFailure.right._tag : taggedCause(cause)
-  const diagnostic = Either.isRight(processFailure)
-    ? publicProcessDiagnostic(error, processFailure.right, stackSource, cause)
-    : undefined
+  const processFailure = parseKnownProviderProcessFailure(cause)
+  const causeTag = processFailure === null ? taggedCause(cause) : processFailure._tag
+  const diagnostic =
+    processFailure === null
+      ? undefined
+      : publicProcessDiagnostic(error, processFailure, stackSource, cause)
   const publicFailure = AgentProviderFailure.make({ ...error.failure })
   const typed = providerFailurePresentation(
     error.failure.category,
@@ -277,6 +357,18 @@ const publicProviderOperationError = (
     diagnostic,
     publicFailure,
   )
+}
+
+const parseProviderOperationError = (input: unknown): AgentProviderOperationError | null => {
+  if (Schema.is(AgentProviderOperationError)(input)) return input
+  return Result.getOrNull(Schema.decodeUnknownResult(AgentProviderOperationError)(input))
+}
+
+const parseKnownProviderProcessFailure = (
+  input: unknown,
+): typeof KnownProviderProcessFailure.Type | null => {
+  if (Schema.is(KnownProviderProcessFailure)(input)) return input
+  return Result.getOrNull(Schema.decodeUnknownResult(KnownProviderProcessFailure)(input))
 }
 
 /** Maps a safe provider failure category to bounded user-facing transport copy. */

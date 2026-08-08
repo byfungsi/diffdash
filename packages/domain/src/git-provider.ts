@@ -1,8 +1,8 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 /** Stable identifier for one configured hosted Git provider instance. */
 export const GitProviderId = Schema.String.pipe(
-  Schema.pattern(/^(?!local$)[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  Schema.check(Schema.isPattern(/^(?!local$)[A-Za-z0-9][A-Za-z0-9._-]*$/)),
   Schema.brand("GitProviderId"),
 )
 
@@ -11,7 +11,7 @@ export type GitProviderId = typeof GitProviderId.Type
 
 /** Implementation family shared by compatible provider instances. */
 export const GitProviderKind = Schema.String.pipe(
-  Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)),
   Schema.brand("GitProviderKind"),
 )
 
@@ -20,7 +20,7 @@ export type GitProviderKind = typeof GitProviderKind.Type
 
 /** A provider-owned namespace, including nested namespace segments. */
 export const RepositoryNamespace = Schema.String.pipe(
-  Schema.pattern(/^[^/:#%]+(?:\/[^/:#%]+)*$/),
+  Schema.check(Schema.isPattern(/^[^/:#%]+(?:\/[^/:#%]+)*$/)),
   Schema.brand("RepositoryNamespace"),
 )
 
@@ -29,7 +29,7 @@ export type RepositoryNamespace = typeof RepositoryNamespace.Type
 
 /** Repository name within a hosted namespace. */
 export const HostedRepositoryName = Schema.String.pipe(
-  Schema.pattern(/^[^/:#%]+$/),
+  Schema.check(Schema.isPattern(/^[^/:#%]+$/)),
   Schema.brand("HostedRepositoryName"),
 )
 
@@ -38,7 +38,7 @@ export type HostedRepositoryName = typeof HostedRepositoryName.Type
 
 /** Stable provider-owned repository identifier that survives owner and repository renames. */
 export const ProviderRepositoryId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ProviderRepositoryId"),
 )
 
@@ -47,7 +47,7 @@ export type ProviderRepositoryId = typeof ProviderRepositoryId.Type
 
 /** Positive provider-owned review number. */
 export const HostedReviewNumber = Schema.Int.pipe(
-  Schema.positive(),
+  Schema.check(Schema.isGreaterThan(0)),
   Schema.brand("HostedReviewNumber"),
 )
 
@@ -114,7 +114,7 @@ export class HostedRepositorySource extends Schema.TaggedClass<HostedRepositoryS
 }) {}
 
 /** Repository source mode independent from checkout availability. */
-export const RepositorySource = Schema.Union(LocalRepositorySource, HostedRepositorySource)
+export const RepositorySource = Schema.Union([LocalRepositorySource, HostedRepositorySource])
 
 /** Repository source mode independent from checkout availability. */
 export type RepositorySource = typeof RepositorySource.Type
@@ -139,7 +139,10 @@ export class GitProviderTerminology extends Schema.Class<GitProviderTerminology>
   repositoryPlural: Schema.String,
   reviewSingular: Schema.String,
   reviewPlural: Schema.String,
-  reviewAbbreviation: Schema.optionalWith(Schema.String, { default: () => "PR" }),
+  reviewAbbreviation: Schema.String.pipe(
+    Schema.withConstructorDefault(Effect.succeed("PR")),
+    Schema.withDecodingDefault(Effect.succeed("PR")),
+  ),
 }) {}
 
 /** Serializable description of one configured provider instance. */
@@ -165,7 +168,7 @@ export class GitProviderDiagnostic extends Schema.Class<GitProviderDiagnostic>(
 }) {}
 
 /** Provider-neutral review decision. */
-export const ReviewDecision = Schema.Literal("none", "approved", "changesRequested", "commented")
+export const ReviewDecision = Schema.Literals(["none", "approved", "changesRequested", "commented"])
 
 /** Provider-neutral review decision. */
 export type ReviewDecision = typeof ReviewDecision.Type

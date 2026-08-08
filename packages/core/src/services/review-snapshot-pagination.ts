@@ -249,11 +249,11 @@ const stableCursorHash = (parts: readonly string[]) => {
   return (hash >>> 0).toString(16).padStart(8, "0")
 }
 
-const encodedByteLength = (schema: Schema.Schema.AnyNoContext, value: unknown) =>
+const encodedByteLength = (schema: Schema.ConstraintEncoder<unknown>, value: unknown) =>
   jsonSafeUtf8ByteLength(Schema.encodeUnknownSync(schema)(value))
 
 const assertEncodedBudget = (
-  schema: Schema.Schema.AnyNoContext,
+  schema: Schema.ConstraintEncoder<unknown>,
   value: unknown,
   maxBytes: number,
 ) => assertJsonPayloadWithinBudget(Schema.encodeUnknownSync(schema)(value), maxBytes)

@@ -462,7 +462,7 @@ const consumeAssistant = (
     const usage = recordAt(message, "usage")
     if (usage !== null) state.usage = parseClaudeUsage(usage, state.usage?.costUsd ?? null)
     for (const block of arrayAt(message, "content")) {
-      if (!Predicate.isReadonlyRecord(block)) continue
+      if (!Predicate.isReadonlyObject(block)) continue
       const blockType = stringAt(block, "type")
       if (blockType === "text") {
         const text = stringAt(block, "text")
@@ -496,7 +496,7 @@ const consumeToolResults = (state: ClaudeTurnState, event: Readonly<Record<strin
   const message = recordAt(event, "message")
   const blocks = message === null ? [event] : arrayAt(message, "content")
   for (const block of blocks) {
-    if (!Predicate.isReadonlyRecord(block) || stringAt(block, "type") !== "tool_result") continue
+    if (!Predicate.isReadonlyObject(block) || stringAt(block, "type") !== "tool_result") continue
     const toolUseId = stringAt(block, "tool_use_id")
     const toolUse = toolUseId === null ? undefined : state.toolUses.get(toolUseId)
     const name = toolUse?.name ?? stringAt(block, "name") ?? "unknown"
@@ -573,7 +573,7 @@ const makeMcpConfig = (request: ReviewThreadRequest) => ({
 const decodeReviewResponse = (
   value: unknown,
 ): Effect.Effect<ReviewThreadResponse, InvalidAgentProviderResponseError> =>
-  Schema.decodeUnknown(ReviewThreadResponse)(normalizeResponse(value)).pipe(
+  Schema.decodeUnknownEffect(ReviewThreadResponse)(normalizeResponse(value)).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,
@@ -646,7 +646,7 @@ const claudeToolContent = (content: unknown): string => {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return jsonContent(content)
   const text = content.flatMap((part) => {
-    if (!Predicate.isReadonlyRecord(part)) return []
+    if (!Predicate.isReadonlyObject(part)) return []
     const value = stringAt(part, "text")
     return value === null ? [] : [value]
   })

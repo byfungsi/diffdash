@@ -79,13 +79,13 @@ export const boundedProviderReason = (
 ) => {
   let reason = fallback
   if (
-    Predicate.isReadonlyRecord(cause) &&
+    Predicate.isReadonlyObject(cause) &&
     typeof cause.stderr === "string" &&
     cause.stderr.trim().length > 0
   ) {
     reason = cause.stderr
   } else if (
-    Predicate.isReadonlyRecord(cause) &&
+    Predicate.isReadonlyObject(cause) &&
     typeof cause.reason === "string" &&
     cause.reason.trim().length > 0
   ) {
@@ -100,7 +100,7 @@ export const boundedProviderReason = (
 
 const isGenericProcessSpawnFailure = (cause: unknown) => {
   const message =
-    Predicate.isReadonlyRecord(cause) && typeof cause.message === "string"
+    Predicate.isReadonlyObject(cause) && typeof cause.message === "string"
       ? cause.message
       : cause instanceof Error
         ? cause.message
@@ -201,17 +201,17 @@ const processKind = (cause: unknown): AgentProviderProcessFailureKind | null => 
 }
 
 const classificationText = (cause: unknown, reason: string) => {
-  if (!Predicate.isReadonlyRecord(cause)) return reason
+  if (!Predicate.isReadonlyObject(cause)) return reason
   return [cause.stdout, cause.stderr, cause.reason, cause.message, reason]
     .filter((value): value is string => typeof value === "string")
     .join("\n")
 }
 
 const taggedString = (value: unknown, key: string): string | null =>
-  Predicate.isReadonlyRecord(value) && typeof value[key] === "string" ? value[key] : null
+  Predicate.isReadonlyObject(value) && typeof value[key] === "string" ? value[key] : null
 
 const taggedInteger = (value: unknown, key: string): number | null =>
-  Predicate.isReadonlyRecord(value) && Number.isSafeInteger(value[key])
+  Predicate.isReadonlyObject(value) && Number.isSafeInteger(value[key])
     ? (value[key] as number)
     : null
 
@@ -277,7 +277,7 @@ export const probeAgentRuntime = <E, R>(
         version: parseAgentRuntimeVersion(output),
       }),
     ),
-    Effect.catchAll((cause) =>
+    Effect.catch((cause) =>
       Effect.succeed<AgentRuntimeProbeResult>({
         status: "unavailable",
         reason: boundedProviderReason(cause, options.unavailableReason, options.extraRedaction),

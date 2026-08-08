@@ -12,7 +12,7 @@ export const localViewedFileScope = (
   target: Extract<ReviewThreadTarget, { readonly kind: "local" }>,
   sourceBranch: string | null,
 ): LocalViewedFileScope => {
-  const sourceIdentity = Option.match(Option.fromNullable(sourceBranch), {
+  const sourceIdentity = Option.match(Option.fromNullishOr(sourceBranch), {
     onNone: () => "detached",
     onSome: (branch) => `branch:${branch}`,
   })

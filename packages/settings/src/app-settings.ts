@@ -1,4 +1,4 @@
-import { Context, Effect, Either, Layer, Predicate, Schema } from "effect"
+import { Context, Effect, Result, Layer, Predicate, Schema } from "effect"
 
 import {
   AICapabilityRoutes,
@@ -25,31 +25,31 @@ import {
 } from "@diffdash/domain/renderer-layout-settings"
 import { FileStorage, type FileStorageOperations } from "./file-storage"
 
-const decodeAppearance = Schema.decodeUnknownEither(Appearance)
-const decodeAutoQuality = Schema.decodeUnknownEither(AutoQuality)
-const decodeDiffViewMode = Schema.decodeUnknownEither(DiffViewMode)
-const decodeLightCodeTheme = Schema.decodeUnknownEither(LightCodeTheme)
-const decodeDarkCodeTheme = Schema.decodeUnknownEither(DarkCodeTheme)
-const decodeLightTheme = Schema.decodeUnknownEither(LightTheme)
-const decodeDarkTheme = Schema.decodeUnknownEither(DarkTheme)
-const decodeTelemetry = Schema.decodeUnknownEither(Schema.Boolean)
-const decodeReviewContextPaneWidth = Schema.decodeUnknownEither(ReviewContextPaneWidth)
-const decodeReviewThreadDetailPaneWidth = Schema.decodeUnknownEither(ReviewThreadDetailPaneWidth)
+const decodeAppearance = Schema.decodeUnknownResult(Appearance)
+const decodeAutoQuality = Schema.decodeUnknownResult(AutoQuality)
+const decodeDiffViewMode = Schema.decodeUnknownResult(DiffViewMode)
+const decodeLightCodeTheme = Schema.decodeUnknownResult(LightCodeTheme)
+const decodeDarkCodeTheme = Schema.decodeUnknownResult(DarkCodeTheme)
+const decodeLightTheme = Schema.decodeUnknownResult(LightTheme)
+const decodeDarkTheme = Schema.decodeUnknownResult(DarkTheme)
+const decodeTelemetry = Schema.decodeUnknownResult(Schema.Boolean)
+const decodeReviewContextPaneWidth = Schema.decodeUnknownResult(ReviewContextPaneWidth)
+const decodeReviewThreadDetailPaneWidth = Schema.decodeUnknownResult(ReviewThreadDetailPaneWidth)
 
 /** A typed failure from reading or writing user settings. */
 export class AppSettingsError extends Schema.TaggedError<AppSettingsError>()("AppSettingsError", {
   operation: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
 /** Main-process service for JSON-backed user settings. */
-export class AppSettings extends Context.Tag("@diffdash/AppSettings")<
+export class AppSettings extends Context.Service<
   AppSettings,
   {
     readonly get: Effect.Effect<AISettings, AppSettingsError>
     readonly save: (settings: AISettings) => Effect.Effect<AISettings, AppSettingsError>
   }
->() {
+>()("@diffdash/AppSettings") {
   static readonly layer = (path: string) =>
     Layer.effect(
       AppSettings,
@@ -102,14 +102,14 @@ const mergeSettings = (content: string | null, settings: AISettings): unknown =>
   if (content === null) return settings
   try {
     const existing: unknown = JSON.parse(content)
-    if (!Predicate.isReadonlyRecord(existing)) return settings
-    const existingModels = Predicate.isReadonlyRecord(existing.models) ? existing.models : {}
-    const existingLayout = Predicate.isReadonlyRecord(existing.layout) ? existing.layout : {}
-    const existingThemes = Predicate.isReadonlyRecord(existing.themes) ? existing.themes : {}
-    const existingCodeThemes = Predicate.isReadonlyRecord(existing.codeThemes)
+    if (!Predicate.isReadonlyObject(existing)) return settings
+    const existingModels = Predicate.isReadonlyObject(existing.models) ? existing.models : {}
+    const existingLayout = Predicate.isReadonlyObject(existing.layout) ? existing.layout : {}
+    const existingThemes = Predicate.isReadonlyObject(existing.themes) ? existing.themes : {}
+    const existingCodeThemes = Predicate.isReadonlyObject(existing.codeThemes)
       ? existing.codeThemes
       : {}
-    const existingReviewLayout = Predicate.isReadonlyRecord(existingLayout.review)
+    const existingReviewLayout = Predicate.isReadonlyObject(existingLayout.review)
       ? existingLayout.review
       : {}
     const { provider: _legacyProvider, ...current } = existing
@@ -140,7 +140,7 @@ const decodeSettings = (
   } catch {
     return { settings: DEFAULT_AI_SETTINGS, migrated: false }
   }
-  if (!Predicate.isReadonlyRecord(parsed)) return { settings: DEFAULT_AI_SETTINGS, migrated: false }
+  if (!Predicate.isReadonlyObject(parsed)) return { settings: DEFAULT_AI_SETTINGS, migrated: false }
 
   const appearance = decodeOrDefault(
     decodeAppearance,
@@ -193,7 +193,7 @@ const decodeSettings = (
 }
 
 const decodeThemePreferences = (value: unknown): ThemePreferences => {
-  const themes = Predicate.isReadonlyRecord(value) ? value : {}
+  const themes = Predicate.isReadonlyObject(value) ? value : {}
   return ThemePreferences.make({
     light: decodeOrDefault(decodeLightTheme, themes.light, DEFAULT_AI_SETTINGS.themes.light),
     dark: decodeOrDefault(decodeDarkTheme, themes.dark, DEFAULT_AI_SETTINGS.themes.dark),
@@ -204,7 +204,7 @@ const decodeCodeThemePreferences = (
   value: unknown,
   fallback: CodeThemePreferences,
 ): CodeThemePreferences => {
-  const codeThemes = Predicate.isReadonlyRecord(value) ? value : {}
+  const codeThemes = Predicate.isReadonlyObject(value) ? value : {}
   return CodeThemePreferences.make({
     light: decodeOrDefault(decodeLightCodeTheme, codeThemes.light, fallback.light),
     dark: decodeOrDefault(decodeDarkCodeTheme, codeThemes.dark, fallback.dark),
@@ -223,8 +223,8 @@ const migrateVersion7CodeThemes = (codeThemes: CodeThemePreferences): CodeThemeP
     : codeThemes
 
 const decodeRendererLayoutSettings = (value: unknown): RendererLayoutSettings => {
-  const layout = Predicate.isReadonlyRecord(value) ? value : {}
-  const review = Predicate.isReadonlyRecord(layout.review) ? layout.review : {}
+  const layout = Predicate.isReadonlyObject(value) ? value : {}
+  const review = Predicate.isReadonlyObject(layout.review) ? layout.review : {}
   return RendererLayoutSettings.make({
     review: ReviewPaneSettings.make({
       contextWidth: decodeOrDefault(
@@ -242,7 +242,7 @@ const decodeRendererLayoutSettings = (value: unknown): RendererLayoutSettings =>
 }
 
 const decodeCurrentAgentSettings = (settings: Readonly<Record<string, unknown>>) => {
-  const result = Schema.decodeUnknownEither(
+  const result = Schema.decodeUnknownResult(
     Schema.Struct({
       routes: AICapabilityRoutes,
       models: AISettings.fields.models,
@@ -253,8 +253,8 @@ const decodeCurrentAgentSettings = (settings: Readonly<Record<string, unknown>>)
     models: settings.models,
     autoQuality: settings.autoQuality,
   })
-  return Either.isRight(result)
-    ? result.right
+  return Result.isSuccess(result)
+    ? result.success
     : {
         routes: DEFAULT_AI_SETTINGS.routes,
         models: DEFAULT_AI_SETTINGS.models,
@@ -264,7 +264,7 @@ const decodeCurrentAgentSettings = (settings: Readonly<Record<string, unknown>>)
 
 const migrateLegacyAgentSettings = (settings: Readonly<Record<string, unknown>>) => {
   const provider = nonEmptyString(settings.provider) ?? "auto"
-  const legacyModels = Predicate.isReadonlyRecord(settings.models) ? settings.models : {}
+  const legacyModels = Predicate.isReadonlyObject(settings.models) ? settings.models : {}
   const models = { ...DEFAULT_AI_SETTINGS.models }
   for (const [providerId, modelId] of Object.entries(legacyModels)) {
     if (providerId === "auto") continue
@@ -286,12 +286,12 @@ const migrateLegacyAgentSettings = (settings: Readonly<Record<string, unknown>>)
 }
 
 const decodeOrDefault = <A>(
-  decode: (value: unknown) => Either.Either<A, unknown>,
+  decode: (value: unknown) => Result.Result<A, unknown>,
   value: unknown,
   fallback: A,
 ): A => {
   const result = decode(value)
-  return Either.isRight(result) ? result.right : fallback
+  return Result.isSuccess(result) ? result.success : fallback
 }
 
 const nonEmptyString = (value: unknown) =>

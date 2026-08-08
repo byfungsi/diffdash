@@ -11,8 +11,8 @@ import {
   ReviewSnapshotPageRequest,
   ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { Atom, type Registry } from "@effect-atom/atom-react"
 import { Schema } from "effect"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 import { formatError } from "@/shared/errors"
 import { ReviewPageCache } from "./review-page-cache"
@@ -129,7 +129,7 @@ const makePendingFileLoad = (
  * fixed pair of immutable Effect Atom values.
  */
 export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
-  readonly #registry: Registry.Registry
+  readonly #registry: AtomRegistry.AtomRegistry
   readonly #cache = new ReviewPageCache()
   readonly #modelAtom: Atom.Writable<ReviewSnapshotPageModel>
   readonly #releases: Array<() => void> = []
@@ -153,7 +153,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
   readonly reader: ReviewSnapshotPageReader
 
   constructor(
-    registry: Registry.Registry,
+    registry: AtomRegistry.AtomRegistry,
     manifest: ReviewSnapshotManifest,
     runtime: ReviewSnapshotPageRuntime,
   ) {

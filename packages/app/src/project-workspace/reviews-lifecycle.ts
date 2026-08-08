@@ -1,7 +1,7 @@
 import type { HostedReviewSummary } from "@diffdash/domain/git-provider"
 import type { LocalReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import type { Repo } from "@diffdash/domain/repository"
-import { Result } from "@effect-atom/atom-react"
+import { AsyncResult } from "effect/unstable/reactivity"
 
 import type { RibbonLifecycle } from "./ribbon-lifecycle"
 
@@ -27,16 +27,16 @@ export type ReviewsLifecycle = RibbonLifecycle<ReviewsLifecycleData, unknown, st
 /** Projects the local working-tree atom without depending on hosted review availability. */
 export const projectLocalReviewsLifecycle = (
   repo: Repo,
-  result: Result.Result<LocalReviewSnapshotManifest | null, unknown>,
+  result: AsyncResult.AsyncResult<LocalReviewSnapshotManifest | null, unknown>,
 ): LocalReviewsLifecycle => {
   if (repo.localPath === null) return { _tag: "unavailable", reason: "No local checkout linked." }
-  if (Result.isSuccess(result)) {
+  if (AsyncResult.isSuccess(result)) {
     if (result.value === null) return { _tag: "loading" }
     return result.value.files.length === 0
-      ? { _tag: "empty", refreshing: Result.isWaiting(result) }
-      : { _tag: "ready", data: result.value, refreshing: Result.isWaiting(result) }
+      ? { _tag: "empty", refreshing: AsyncResult.isWaiting(result) }
+      : { _tag: "ready", data: result.value, refreshing: AsyncResult.isWaiting(result) }
   }
-  if (Result.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) return { _tag: "failure", error: result.cause }
   return { _tag: "loading" }
 }
 
@@ -107,16 +107,16 @@ const sourceIssue = (source: LocalReviewsLifecycle | HostedReviewsLifecycle): re
 /** Projects hosted pull requests without depending on working-tree availability. */
 export const projectHostedReviewsLifecycle = (
   repo: Repo,
-  result: Result.Result<readonly HostedReviewSummary[], unknown>,
+  result: AsyncResult.AsyncResult<readonly HostedReviewSummary[], unknown>,
 ): HostedReviewsLifecycle => {
   if (repo.provider === "local") {
     return { _tag: "unavailable", reason: "This is a local-only project." }
   }
-  if (Result.isSuccess(result)) {
+  if (AsyncResult.isSuccess(result)) {
     return result.value.length === 0
-      ? { _tag: "empty", refreshing: Result.isWaiting(result) }
-      : { _tag: "ready", data: result.value, refreshing: Result.isWaiting(result) }
+      ? { _tag: "empty", refreshing: AsyncResult.isWaiting(result) }
+      : { _tag: "ready", data: result.value, refreshing: AsyncResult.isWaiting(result) }
   }
-  if (Result.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) return { _tag: "failure", error: result.cause }
   return { _tag: "loading" }
 }

@@ -1,10 +1,7 @@
 import {
-  eventPayloadSchema,
   EventContract,
   FailureEnvelope,
   InvokeContract,
-  invokeRequestSchema,
-  invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
 import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
@@ -37,7 +34,7 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
   ): Promise<InvokeResponse<Channel>> => {
     let encodedRequest: unknown
     try {
-      encodedRequest = Schema.encodeUnknownSync(invokeRequestSchema(channel))(request)
+      encodedRequest = Schema.encodeUnknownSync(InvokeContract[channel].request)(request)
       assertJsonPayloadWithinBudget(
         encodedRequest,
         InvokeContract[channel].maxRequestBytes,
@@ -60,7 +57,7 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
     try {
       assertJsonPayloadWithinBudget(rawResponse, InvokeContract[channel].maxResponseBytes, channel)
       envelope = Schema.decodeUnknownSync(
-        Schema.Union(successEnvelope(invokeResponseSchema(channel)), FailureEnvelope),
+        Schema.Union([successEnvelope(InvokeContract[channel].response), FailureEnvelope]),
       )(rawResponse)
     } catch (error) {
       const transport = decodeTransportError(error)
@@ -86,7 +83,7 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
     const wrapped = (_event: unknown, rawPayload: unknown) => {
       try {
         assertJsonPayloadWithinBudget(rawPayload, EventContract[channel].maxPayloadBytes, channel)
-        listener(Schema.decodeUnknownSync(eventPayloadSchema(channel))(rawPayload))
+        listener(Schema.decodeUnknownSync(EventContract[channel].payload)(rawPayload))
       } catch {
         // Invalid host events are isolated from renderer state and future subscriptions.
       }

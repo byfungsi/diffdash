@@ -42,11 +42,11 @@ const registration = (
     }),
     walkthrough: {
       probe: walkthroughProbe,
-      execute: () => Effect.dieMessage("Unused walkthrough capability"),
+      execute: () => Effect.die(new Error("Unused walkthrough capability")),
     },
     reviewThread: {
       probe: reviewProbe,
-      execute: () => Effect.dieMessage("Unused review capability"),
+      execute: () => Effect.die(new Error("Unused review capability")),
     },
   }
 }

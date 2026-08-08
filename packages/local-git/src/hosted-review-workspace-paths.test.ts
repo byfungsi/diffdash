@@ -22,7 +22,7 @@ const temporaryDirectory = Effect.acquireRelease(
 )
 
 describe("ManagedWorkspaceFilesystem", () => {
-  it.scoped("allows and canonicalizes a configured root symlink", () =>
+  it.effect("allows and canonicalizes a configured root symlink", () =>
     Effect.gen(function* () {
       const temporary = yield* temporaryDirectory
       const target = join(temporary, "target")
@@ -37,7 +37,7 @@ describe("ManagedWorkspaceFilesystem", () => {
     }),
   )
 
-  it.scoped("rejects a symlink in each existing managed descendant component", () =>
+  it.effect("rejects a symlink in each existing managed descendant component", () =>
     Effect.gen(function* () {
       const temporary = yield* temporaryDirectory
 
@@ -68,7 +68,7 @@ describe("ManagedWorkspaceFilesystem", () => {
     }),
   )
 
-  it.scoped("does not treat non-ENOENT traversal errors as an absent path", () =>
+  it.effect("does not treat non-ENOENT traversal errors as an absent path", () =>
     Effect.gen(function* () {
       const temporary = yield* temporaryDirectory
       const filesystem = yield* makeManagedWorkspaceFilesystem(join(temporary, "pool"))
@@ -85,7 +85,7 @@ describe("ManagedWorkspaceFilesystem", () => {
     }),
   )
 
-  it.scoped("preserves permission failures instead of reporting an absent descendant", () =>
+  it.effect("preserves permission failures instead of reporting an absent descendant", () =>
     Effect.gen(function* () {
       const temporary = yield* temporaryDirectory
       const filesystem = yield* makeManagedWorkspaceFilesystem(join(temporary, "pool"))

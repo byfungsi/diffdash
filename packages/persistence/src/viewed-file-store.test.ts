@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { ReviewFilePatchHash } from "@diffdash/domain/review-identity"
 import { noRepositoryLocalPath, repositoryLocalPath } from "@diffdash/domain/repository"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 
 import { DatabaseService } from "./database"
 import { RepositoryStore } from "./repository-store"
@@ -24,7 +24,7 @@ const patchA = ReviewFilePatchHash.make("file-patch:v1:aaaaaaaaaaaaaaaa")
 const patchB = ReviewFilePatchHash.make("file-patch:v1:bbbbbbbbbbbbbbbb")
 
 describe("ViewedFileStore", () => {
-  it.scoped("retains hosted viewed state only for the same base target and file patch", () =>
+  it.effect("retains hosted viewed state only for the same base target and file patch", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -76,7 +76,7 @@ describe("ViewedFileStore", () => {
     }),
   )
 
-  it.scoped("isolates local viewed state by source branch and comparison target", () =>
+  it.effect("isolates local viewed state by source branch and comparison target", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -132,7 +132,7 @@ describe("ViewedFileStore", () => {
     }),
   )
 
-  it.scoped("isolates repository-comparison viewed state by immutable head identity", () =>
+  it.effect("isolates repository-comparison viewed state by immutable head identity", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -182,7 +182,7 @@ describe("ViewedFileStore", () => {
     }),
   )
 
-  it.scoped("fully decodes hosted and local viewed-file rows", () =>
+  it.effect("fully decodes hosted and local viewed-file rows", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -223,17 +223,17 @@ describe("ViewedFileStore", () => {
           repo.id,
         ])
 
-        const hosted = yield* Effect.either(viewedFiles.listHosted(hostedScope))
-        const local = yield* Effect.either(viewedFiles.listLocal(localScope))
-        expect(Either.isLeft(hosted)).toBe(true)
-        if (Either.isLeft(hosted)) {
-          expect(hosted.left).toBeInstanceOf(ViewedFileStoreError)
-          expect(hosted.left.operation).toBe("listHosted.decode")
+        const hosted = yield* Effect.result(viewedFiles.listHosted(hostedScope))
+        const local = yield* Effect.result(viewedFiles.listLocal(localScope))
+        expect(Result.isFailure(hosted)).toBe(true)
+        if (Result.isFailure(hosted)) {
+          expect(hosted.failure).toBeInstanceOf(ViewedFileStoreError)
+          expect(hosted.failure.operation).toBe("listHosted.decode")
         }
-        expect(Either.isLeft(local)).toBe(true)
-        if (Either.isLeft(local)) {
-          expect(local.left).toBeInstanceOf(ViewedFileStoreError)
-          expect(local.left.operation).toBe("listLocal.decode")
+        expect(Result.isFailure(local)).toBe(true)
+        if (Result.isFailure(local)) {
+          expect(local.failure).toBeInstanceOf(ViewedFileStoreError)
+          expect(local.failure.operation).toBe("listLocal.decode")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

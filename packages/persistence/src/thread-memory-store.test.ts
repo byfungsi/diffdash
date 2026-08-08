@@ -64,7 +64,7 @@ const createThread = Effect.gen(function* () {
 })
 
 describe("ThreadMemoryStore", () => {
-  it.scoped("FUN-76 AC: persists metadata and refuses stale watermark replacement", () =>
+  it.effect("FUN-76 AC: persists metadata and refuses stale watermark replacement", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 

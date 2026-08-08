@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@diffdash/domain": "workspace:*",
-    "@effect/platform": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
+import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
 import { Context, Effect, Layer, type Option } from "effect"
 
 import {
@@ -9,12 +10,12 @@ import {
   type CoreOperationFailure,
   type CoreOperationOptions,
   type CoreOperationOutput,
+  type CoreWalkthroughOperationFailure,
+  type CoreWalkthroughStartFailure,
   type GetStoredWalkthrough,
   type StartWalkthroughOperation,
   type WalkthroughOperationAccepted,
   type WalkthroughOperationId as WalkthroughOperationIdType,
-  type WalkthroughOperationCapacityExceeded,
-  type WalkthroughOperationNotFound,
   type WalkthroughOperationResult,
 } from "./core-contract"
 import { CoreStartupError } from "./core-startup-error"
@@ -42,13 +43,13 @@ interface CoreOperationServiceShape {
   readonly walkthroughs: {
     readonly start: (
       request: StartWalkthroughOperation,
-    ) => Effect.Effect<WalkthroughOperationAccepted, WalkthroughOperationCapacityExceeded>
+    ) => Effect.Effect<WalkthroughOperationAccepted, CoreWalkthroughStartFailure>
     readonly getOperation: (
       operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, WalkthroughOperationNotFound>
+    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
     readonly cancel: (
       operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, WalkthroughOperationNotFound>
+    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
     readonly getStored: (
       request: GetStoredWalkthrough,
     ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
@@ -56,16 +57,17 @@ interface CoreOperationServiceShape {
 }
 
 /** Internal authority that exposes only cohesive Core operations to the embedded runtime. */
-export class CoreOperationService extends Context.Tag("@diffdash/CoreOperationService")<
+export class CoreOperationService extends Context.Service<
   CoreOperationService,
   CoreOperationServiceShape
->() {}
+>()("@diffdash/CoreOperationService") {}
 
 /** Builds the stable Core facade from cohesive internal operation capabilities. */
-export const coreOperationLayer = Layer.scoped(
+export const coreOperationLayer = Layer.effect(
   CoreOperationService,
   Effect.gen(function* () {
     const turns = yield* ReviewTurnStore
+    const walkthroughOperationStore = yield* WalkthroughOperationStore
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
@@ -108,16 +110,26 @@ export const coreOperationLayer = Layer.scoped(
     }
 
     return CoreOperationService.of({
-      start: turns.recoverInterruptedTurns.pipe(
-        Effect.asVoid,
-        Effect.mapError((cause) =>
-          CoreStartupError.make({
-            operation: "recoverInterruptedReviewTurns",
-            message: "DiffDash Core could not recover interrupted review turns.",
-            cause,
-          }),
-        ),
-      ),
+      start: Effect.gen(function* () {
+        yield* turns.recoverInterruptedTurns.pipe(
+          Effect.mapError((cause) =>
+            CoreStartupError.make({
+              operation: "recoverInterruptedReviewTurns",
+              message: "DiffDash Core could not recover interrupted review turns.",
+              cause,
+            }),
+          ),
+        )
+        yield* walkthroughOperationStore.recoverActiveAsInterrupted.pipe(
+          Effect.mapError((cause) =>
+            CoreStartupError.make({
+              operation: "recoverInterruptedWalkthroughOperations",
+              message: "DiffDash Core could not recover interrupted walkthrough operations.",
+              cause,
+            }),
+          ),
+        )
+      }),
       execute,
       walkthroughs: {
         start: walkthroughs.start,

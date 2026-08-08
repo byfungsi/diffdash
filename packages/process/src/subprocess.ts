@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { delimiter, join, resolve } from "node:path"
 import { StringDecoder } from "node:string_decoder"
-import { Context, Data, Deferred, Effect, Layer, Runtime, Stream, type Scope } from "effect"
+import { Context, Data, Deferred, Effect, Layer, Queue, Stream, type Scope } from "effect"
 
 import type { ProcessOutputPolicy, ProcessOutputSource } from "./process"
 
@@ -73,14 +73,14 @@ export interface NodeProcessHandle {
 }
 
 /** Private leaf service containing the unavoidable Node callback and process-signal boundary. */
-export class NodeProcessSpawner extends Context.Tag("@diffdash/process/NodeProcessSpawner")<
+export class NodeProcessSpawner extends Context.Service<
   NodeProcessSpawner,
   {
     readonly spawn: (
       input: SpawnProcessInput,
     ) => Effect.Effect<NodeProcessHandle, NodeProcessSpawnFailed, Scope.Scope>
   }
->() {
+>()("@diffdash/process/NodeProcessSpawner") {
   static readonly layer = Layer.succeed(
     NodeProcessSpawner,
     NodeProcessSpawner.of({ spawn: spawnNode }),
@@ -280,8 +280,8 @@ function spawnNode(
       const exited = yield* Deferred.make<void>()
       const stdinFailed = yield* Deferred.make<never, NodeProcessStdinFailure>()
       const outputFailed = yield* Deferred.make<ProcessLimitFailure>()
-      const runtime = yield* Effect.runtime<never>()
-      const runFork = Runtime.runFork(runtime)
+      const context = yield* Effect.context<never>()
+      const runFork = Effect.runForkWith(context)
       const child = yield* Effect.try({
         try: () => spawnChild(input),
         catch: (cause) => new NodeProcessSpawnFailed({ cause }),
@@ -328,7 +328,7 @@ function spawnNode(
           const { _tag: stateTag } = state
           return stateTag === "Terminal"
             ? Effect.succeed(null)
-            : terminate.pipe(Effect.zipRight(Deferred.await(terminal)), Effect.as(state.failure))
+            : terminate.pipe(Effect.andThen(Deferred.await(terminal)), Effect.as(state.failure))
         }),
       )
 
@@ -366,8 +366,8 @@ const outputChunks = (
   capture: BoundedOutput,
   onLimit: (failure: ProcessLimitFailure) => void,
 ): Stream.Stream<NodeProcessChunk, NodeProcessIoFailure> =>
-  Stream.asyncScoped<NodeProcessChunk, NodeProcessIoFailure>(
-    (emit) =>
+  Stream.callback<NodeProcessChunk, NodeProcessIoFailure>(
+    (queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
           let active = true
@@ -396,13 +396,21 @@ const outputChunks = (
             } catch (cause) {
               if (cause instanceof ProcessLimitFailure) onLimit(cause)
             }
-            enqueue(() => emit.single({ source, bytes: copied }))
+            enqueue(() =>
+              Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
+            )
           }
           const onError = (source: ProcessOutputSource) => (cause: Error) =>
-            enqueue(() => emit.fail(new NodeProcessIoFailure({ source, cause })))
+            enqueue(() =>
+              Effect.runPromise(
+                Queue.fail(queue, new NodeProcessIoFailure({ source, cause })).pipe(Effect.asVoid),
+              ),
+            )
           const onEnd = (source: ProcessOutputSource) => () => {
             ended.add(source)
-            if (ended.size === 2) enqueue(() => emit.end())
+            if (ended.size === 2) {
+              enqueue(() => Effect.runPromise(Queue.end(queue).pipe(Effect.asVoid)))
+            }
           }
           const onStdoutData = onData("stdout")
           const onStderrData = onData("stderr")
@@ -438,7 +446,7 @@ const writeChildStdin = (
   child: ChildProcessWithoutNullStreams,
   stdin: string | null,
 ): Effect.Effect<void, NodeProcessStdinFailure> =>
-  Effect.async<void, NodeProcessStdinFailure>((resume) => {
+  Effect.callback<void, NodeProcessStdinFailure>((resume) => {
     let settled = false
     const finish = (effect: Effect.Effect<void, NodeProcessStdinFailure>) => {
       if (settled) return

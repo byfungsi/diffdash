@@ -20,7 +20,7 @@ export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
 const MAX_SAMPLED_FILE_TREE_CHARS = 60_000
 
 /** Risk level assigned to a walkthrough stop. */
-export const WalkthroughRisk = Schema.Literal("critical", "review", "support")
+export const WalkthroughRisk = Schema.Literals(["critical", "review", "support"])
 
 /** Risk level assigned to a walkthrough stop. */
 export type WalkthroughRisk = typeof WalkthroughRisk.Type
@@ -53,7 +53,7 @@ export class WalkthroughSupportItem extends Schema.Class<WalkthroughSupportItem>
 }) {}
 
 /** Strategy used to prepare source material for walkthrough generation. */
-export const WalkthroughGenerationMode = Schema.Literal("standard", "sampled-tree")
+export const WalkthroughGenerationMode = Schema.Literals(["standard", "sampled-tree"])
 
 /** Strategy used to prepare source material for walkthrough generation. */
 export type WalkthroughGenerationMode = typeof WalkthroughGenerationMode.Type
@@ -283,7 +283,7 @@ export const validateWalkthrough = (
   input: unknown,
   hunkDigest: readonly WalkthroughHunkDigest[],
 ): Effect.Effect<Walkthrough, WalkthroughValidationError> =>
-  Schema.decodeUnknown(Walkthrough)(normalizeWalkthroughInput(input)).pipe(
+  Schema.decodeUnknownEffect(Walkthrough)(normalizeWalkthroughInput(input)).pipe(
     Effect.mapError(() =>
       WalkthroughValidationError.make({
         reason: "invalid_shape",
@@ -687,7 +687,7 @@ const validateWalkthroughHunkCoverage = (
 }
 
 const normalizeWalkthroughInput = (input: unknown): unknown => {
-  if (!Predicate.isReadonlyRecord(input)) return input
+  if (!Predicate.isReadonlyObject(input)) return input
   if ("support" in input && input.support !== undefined) return input
   return { ...input, support: [] }
 }

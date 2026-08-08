@@ -51,7 +51,7 @@ export const REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA = {
 
 /** Normalizes current and legacy provider fields to the provider-neutral review response shape. */
 export const normalizeProviderReviewThreadResponse = (value: unknown): unknown => {
-  if (!Predicate.isReadonlyRecord(value)) return value
+  if (!Predicate.isReadonlyObject(value)) return value
   const locations = value.referencedLocations ?? value.referencedAnchors ?? []
   return {
     bodyMarkdown: value.bodyMarkdown,

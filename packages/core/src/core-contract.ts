@@ -15,6 +15,11 @@ import type {
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
 import {
+  WalkthroughOperationFailure,
+  WalkthroughOperationId as DomainWalkthroughOperationId,
+  type WalkthroughOperationId as WalkthroughOperationIdType,
+} from "@diffdash/domain/walkthrough-operation"
+import {
   StoredWalkthrough,
   WalkthroughPromptPreparationError,
   WalkthroughValidationError,
@@ -29,6 +34,7 @@ import type {
   ReviewTurnTargetError,
 } from "@diffdash/persistence/review-turn-store"
 import type { ViewedFileStoreError } from "@diffdash/persistence/viewed-file-store"
+import type { WalkthroughOperationStoreError } from "@diffdash/persistence/walkthrough-operation-store"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import type { ProcessExecutionError } from "@diffdash/process"
 import { InvokeChannel } from "@diffdash/protocol/channels"
@@ -188,7 +194,10 @@ export class CoreExternalFileOpenIntent extends Schema.TaggedClass<CoreExternalF
 ) {}
 
 /** Intent returned when Electron must perform a native file-open action. */
-export const CoreFileOpenIntent = Schema.Union(CoreLocalFileOpenIntent, CoreExternalFileOpenIntent)
+export const CoreFileOpenIntent = Schema.Union([
+  CoreLocalFileOpenIntent,
+  CoreExternalFileOpenIntent,
+])
 
 /** Intent returned when Electron must perform a native file-open action. */
 export type CoreFileOpenIntent = typeof CoreFileOpenIntent.Type
@@ -207,12 +216,12 @@ export type CoreResult<Value, Failure> =
   | { readonly ok: false; readonly error: Failure }
 
 /** Lifecycle states in which the embedded Core cannot accept requested work. */
-export const CoreUnavailableState = Schema.Literal(
+export const CoreUnavailableState = Schema.Literals([
   "notStarted",
   "starting",
   "disposing",
   "disposed",
-)
+])
 
 /** Lifecycle states in which the embedded Core cannot accept requested work. */
 export type CoreUnavailableState = typeof CoreUnavailableState.Type
@@ -244,7 +253,7 @@ export type CoreReviewAgentFailure =
   | ReviewTurnRejectedError
 
 /** Expected provider, validation, persistence, and review failures from walkthrough generation. */
-export const CoreWalkthroughFailure = Schema.Union(
+export const CoreWalkthroughFailure = Schema.Union([
   ReviewContextError,
   RepositoryLinkError,
   RepositoryComparisonSourceError,
@@ -261,7 +270,7 @@ export const CoreWalkthroughFailure = Schema.Union(
   NoAgentProviderAvailableError,
   AgentProviderOperationError,
   InvalidAgentProviderResponseError,
-)
+])
 
 /** Expected provider, validation, persistence, and review failures from walkthrough generation. */
 export type CoreWalkthroughFailure = typeof CoreWalkthroughFailure.Type
@@ -342,14 +351,11 @@ export type CoreStartFailure = CoreBoundaryFailure<never>
 /** Expected failures while loading an already-persisted walkthrough. */
 export type CoreGetStoredWalkthroughFailure = CoreThreadResolutionFailure | WalkthroughStoreError
 
-/** Stable identity for one embedded walkthrough operation. */
-export const WalkthroughOperationId = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.brand("WalkthroughOperationId"),
-)
+/** Stable identity shared by durable storage and the embedded Core boundary. */
+export const WalkthroughOperationId = DomainWalkthroughOperationId
 
-/** Stable identity for one embedded walkthrough operation. */
-export type WalkthroughOperationId = typeof WalkthroughOperationId.Type
+/** Stable identity shared by durable storage and the embedded Core boundary. */
+export type WalkthroughOperationId = WalkthroughOperationIdType
 
 /** A requested embedded walkthrough operation is no longer known to this Core epoch. */
 export class WalkthroughOperationNotFound extends Schema.TaggedError<WalkthroughOperationNotFound>()(
@@ -357,10 +363,25 @@ export class WalkthroughOperationNotFound extends Schema.TaggedError<Walkthrough
   { operationId: WalkthroughOperationId },
 ) {}
 
-/** The embedded Core already retains the maximum number of walkthrough operation records. */
-export class WalkthroughOperationCapacityExceeded extends Schema.TaggedError<WalkthroughOperationCapacityExceeded>()(
-  "WalkthroughOperationCapacityExceeded",
-  { capacity: Schema.Number, message: Schema.String },
+/** Active durable state could not be reconciled with a worker in this Core epoch. */
+export class WalkthroughOperationStateUnavailable extends Schema.TaggedError<WalkthroughOperationStateUnavailable>()(
+  "WalkthroughOperationStateUnavailable",
+  { operationId: WalkthroughOperationId },
+) {}
+
+/** A completed operation references a walkthrough artifact that cannot be loaded. */
+export class WalkthroughOperationArtifactUnavailable extends Schema.TaggedError<WalkthroughOperationArtifactUnavailable>()(
+  "WalkthroughOperationArtifactUnavailable",
+  { operationId: WalkthroughOperationId },
+) {}
+
+/** Privacy-safe terminal failure reconstructed from authoritative durable state. */
+export class WalkthroughOperationTerminalFailure extends Schema.TaggedError<WalkthroughOperationTerminalFailure>()(
+  "WalkthroughOperationTerminalFailure",
+  {
+    operationId: WalkthroughOperationId,
+    failure: WalkthroughOperationFailure,
+  },
 ) {}
 
 /** Request to start provider-neutral walkthrough generation inside Core. */
@@ -383,12 +404,24 @@ export class WalkthroughOperationCompleted extends Schema.TaggedClass<Walkthroug
 /** Walkthrough operation that ended with one expected typed failure. */
 export class WalkthroughOperationFailed extends Schema.TaggedClass<WalkthroughOperationFailed>()(
   "failed",
-  { error: CoreWalkthroughFailure },
+  { error: Schema.Union([CoreWalkthroughFailure, WalkthroughOperationTerminalFailure]) },
 ) {}
 
 /** Walkthrough operation cancelled before producing a stored artifact. */
 export class WalkthroughOperationCancelled extends Schema.TaggedClass<WalkthroughOperationCancelled>()(
   "cancelled",
+  {},
+) {}
+
+/** Walkthrough operation replaced by explicit regeneration of the same exact generation. */
+export class WalkthroughOperationSuperseded extends Schema.TaggedClass<WalkthroughOperationSuperseded>()(
+  "superseded",
+  { supersededByOperationId: WalkthroughOperationId },
+) {}
+
+/** Walkthrough operation left active by a previous Core epoch and recovered without restart. */
+export class WalkthroughOperationInterrupted extends Schema.TaggedClass<WalkthroughOperationInterrupted>()(
+  "interrupted",
   {},
 ) {}
 
@@ -399,12 +432,14 @@ export class WalkthroughOperationDefect extends Schema.TaggedClass<WalkthroughOp
 ) {}
 
 /** Terminal state observed through the embedded operation boundary. */
-export const WalkthroughOperationResult = Schema.Union(
+export const WalkthroughOperationResult = Schema.Union([
   WalkthroughOperationCompleted,
   WalkthroughOperationFailed,
   WalkthroughOperationCancelled,
+  WalkthroughOperationSuperseded,
+  WalkthroughOperationInterrupted,
   WalkthroughOperationDefect,
-)
+])
 
 /** Terminal state observed through the embedded operation boundary. */
 export type WalkthroughOperationResult = typeof WalkthroughOperationResult.Type
@@ -421,20 +456,17 @@ export interface CoreWalkthroughs {
   readonly start: (
     request: StartWalkthroughOperation,
   ) => Promise<
-    CoreResult<
-      WalkthroughOperationAccepted,
-      CoreBoundaryFailure<WalkthroughOperationCapacityExceeded>
-    >
+    CoreResult<WalkthroughOperationAccepted, CoreBoundaryFailure<CoreWalkthroughStartFailure>>
   >
   readonly getOperation: (
     operationId: WalkthroughOperationId,
   ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<WalkthroughOperationNotFound>>
+    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
   >
   readonly cancel: (
     operationId: WalkthroughOperationId,
   ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<WalkthroughOperationNotFound>>
+    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
   >
   /** Preserves nullable absence for the existing host and IPC transport contract. */
   readonly getStored: (
@@ -443,6 +475,19 @@ export interface CoreWalkthroughs {
     CoreResult<StoredWalkthrough | null, CoreBoundaryFailure<CoreGetStoredWalkthroughFailure>>
   >
 }
+
+/** Expected failures while resolving and durably accepting walkthrough work. */
+export type CoreWalkthroughStartFailure =
+  | CoreThreadResolutionFailure
+  | WalkthroughOperationStoreError
+
+/** Expected failures while reading, cancelling, or materializing durable walkthrough work. */
+export type CoreWalkthroughOperationFailure =
+  | WalkthroughOperationNotFound
+  | WalkthroughOperationStoreError
+  | WalkthroughStoreError
+  | WalkthroughOperationStateUnavailable
+  | WalkthroughOperationArtifactUnavailable
 
 /** Lifecycle and closed operation surface exposed to a native DiffDash host. */
 export interface EmbeddedCore {

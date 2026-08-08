@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, Option } from "effect"
+import { Effect, Result, Layer, Option } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -64,7 +64,7 @@ const cacheKey = {
 }
 
 describe("WalkthroughStore", () => {
-  it.scoped("returns a cache miss for an empty database", () =>
+  it.effect("returns a cache miss for an empty database", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -86,7 +86,7 @@ describe("WalkthroughStore", () => {
     }),
   )
 
-  it.scoped("FUN-47 AC: saves and reads a walkthrough for the same cache key", () =>
+  it.effect("FUN-47 AC: saves and reads a walkthrough for the same cache key", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -121,7 +121,7 @@ describe("WalkthroughStore", () => {
     }),
   )
 
-  it.scoped("FUN-47 AC: regenerate overwrites an existing walkthrough cache row", () =>
+  it.effect("FUN-47 AC: regenerate overwrites an existing walkthrough cache row", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -158,7 +158,7 @@ describe("WalkthroughStore", () => {
     }),
   )
 
-  it.scoped("FUN-47 AC: reuses migrated legacy cache rows for the same head SHA", () =>
+  it.effect("FUN-47 AC: reuses migrated legacy cache rows for the same head SHA", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -189,7 +189,7 @@ describe("WalkthroughStore", () => {
     }),
   )
 
-  it.scoped(
+  it.effect(
     "FUN-47 AC: cache is isolated by repository, review, revision, and prompt version",
     () =>
       Effect.gen(function* () {
@@ -258,7 +258,7 @@ describe("WalkthroughStore", () => {
       }),
   )
 
-  it.scoped("decodes outer walkthrough columns before content JSON", () =>
+  it.effect("decodes outer walkthrough columns before content JSON", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -284,19 +284,19 @@ describe("WalkthroughStore", () => {
           [repo.id],
         )
 
-        const corruptOuter = yield* Effect.either(walkthroughStore.get(key))
-        expect(Either.isLeft(corruptOuter)).toBe(true)
-        if (Either.isLeft(corruptOuter)) {
-          expect(corruptOuter.left).toBeInstanceOf(WalkthroughStoreError)
-          expect(corruptOuter.left.operation).toBe("get.decodeRow")
+        const corruptOuter = yield* Effect.result(walkthroughStore.get(key))
+        expect(Result.isFailure(corruptOuter)).toBe(true)
+        if (Result.isFailure(corruptOuter)) {
+          expect(corruptOuter.failure).toBeInstanceOf(WalkthroughStoreError)
+          expect(corruptOuter.failure.operation).toBe("get.decodeRow")
         }
 
         yield* database.run("UPDATE walkthroughs SET pr_number = 51 WHERE repo_id = ?", [repo.id])
-        const corruptContent = yield* Effect.either(walkthroughStore.get(key))
-        expect(Either.isLeft(corruptContent)).toBe(true)
-        if (Either.isLeft(corruptContent)) {
-          expect(corruptContent.left).toBeInstanceOf(WalkthroughStoreError)
-          expect(corruptContent.left.operation).toBe("get.decodeContent")
+        const corruptContent = yield* Effect.result(walkthroughStore.get(key))
+        expect(Result.isFailure(corruptContent)).toBe(true)
+        if (Result.isFailure(corruptContent)) {
+          expect(corruptContent.failure).toBeInstanceOf(WalkthroughStoreError)
+          expect(corruptContent.failure.operation).toBe("get.decodeContent")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

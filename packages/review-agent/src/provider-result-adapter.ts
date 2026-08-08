@@ -6,14 +6,14 @@ import {
   ReviewThreadAgentResponse,
 } from "@diffdash/domain/review-agent"
 import { ReviewAnchor } from "@diffdash/domain/review-thread"
-import { Context, Effect, Either, Schema } from "effect"
+import { Context, Effect, Result, Schema } from "effect"
 import { AgentArtifactNormalizer, normalizeAgentArtifactType } from "./agent-artifact-normalizer"
 
 /** Converts one validated provider result into bounded persisted review-agent data. */
 export const adaptProviderResult = (
   providerId: AgentProviderId,
   result: ReviewThreadResult,
-  normalizer: Context.Tag.Service<AgentArtifactNormalizer>,
+  normalizer: Context.Service.Shape<typeof AgentArtifactNormalizer>,
 ) =>
   Effect.forEach(
     result.artifacts,
@@ -57,6 +57,6 @@ export const adaptProviderResult = (
 
 const decodeReferencedAnchors = (locations: readonly string[]) =>
   locations.flatMap((location) => {
-    const decoded = Schema.decodeUnknownEither(Schema.parseJson(ReviewAnchor))(location)
-    return Either.isRight(decoded) ? [decoded.right] : []
+    const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(ReviewAnchor))(location)
+    return Result.isSuccess(decoded) ? [decoded.success] : []
   })

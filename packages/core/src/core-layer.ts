@@ -12,6 +12,7 @@ import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
+import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { ProcessService } from "@diffdash/process"
 import { TempResources } from "@diffdash/process/temp-resource"
@@ -26,7 +27,7 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Layer } from "effect"
 import type { CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
 import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
@@ -93,7 +94,7 @@ export const createCoreLayer = (
     platform: configuration.application.platform,
     analytics: configuration.analytics,
     settingsPath,
-  }).pipe(Layer.provideMerge(settingsLayer))
+  }).pipe(Layer.provideMerge(settingsLayer), Layer.provide(fileStorageLayer))
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
@@ -116,7 +117,7 @@ export const createCoreLayer = (
       const settings = yield* AppSettings
       return WalkthroughRouting.of({
         get: settings.get.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.catch(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
           Effect.map((current) => ({
             route:
               current.routes.walkthrough === "auto"
@@ -149,7 +150,7 @@ export const createCoreLayer = (
       const settings = yield* AppSettings
       return ReviewAgentRouting.of({
         get: settings.get.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.catch(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
           Effect.map((current) => ({
             route:
               current.routes.reviewThread === "auto"
@@ -219,6 +220,7 @@ export const createCoreLayer = (
     gitProviderLayer,
     walkthroughLayer,
     ViewedFileStore.layer,
+    WalkthroughOperationStore.layer,
     WalkthroughStore.layer,
     reviewAgentLayer,
     threadAnchorMapperLayer,
@@ -226,6 +228,8 @@ export const createCoreLayer = (
 
   return coreOperationLayer.pipe(
     Layer.provide(businessServicesLayer),
-    Layer.mapError(toCoreStartupError),
+    Layer.catchCause((cause) =>
+      Layer.effect(CoreOperationService, Effect.failCause(Cause.map(cause, toCoreStartupError))),
+    ),
   )
 }

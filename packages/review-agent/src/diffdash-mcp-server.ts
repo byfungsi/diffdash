@@ -18,18 +18,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { Scope } from "effect"
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Redacted,
-  Runtime,
-  Schema,
-} from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Redacted, Schema } from "effect"
 import { z } from "zod"
 import { paginateByOffset } from "./offset-pagination"
 import { orderedReviewFiles, orderedReviewHunks } from "./ordering"
@@ -104,16 +93,16 @@ interface ResolvedServerOptions {
 }
 
 interface CallbackRunFork {
-  <A, E>(effect: Effect.Effect<A, E>): Fiber.RuntimeFiber<A, E>
+  <A, E>(effect: Effect.Effect<A, E>): Fiber.Fiber<A, E>
 }
 
 interface StartedCallback<A, E> {
-  readonly fiber: Fiber.RuntimeFiber<A, E>
+  readonly fiber: Fiber.Fiber<A, E>
   readonly promise: Promise<A>
 }
 
 class CallbackFiberOwner {
-  readonly #fibers = new Set<Fiber.RuntimeFiber<unknown, unknown>>()
+  readonly #fibers = new Set<Fiber.Fiber<unknown, unknown>>()
   #closed = false
 
   constructor(readonly runFork: CallbackRunFork) {}
@@ -136,7 +125,7 @@ type CapabilityState = "active" | "revoking" | "revoked"
 
 class RequestLease {
   readonly #abortController = new AbortController()
-  readonly #fibers = new Map<Fiber.RuntimeFiber<unknown, unknown>, Promise<unknown>>()
+  readonly #fibers = new Map<Fiber.Fiber<unknown, unknown>, Promise<unknown>>()
   #closed = false
 
   constructor(
@@ -213,7 +202,7 @@ class RunCapability {
   }
 
   abortRequests() {
-    const fibers = new Set<Fiber.RuntimeFiber<unknown, unknown>>()
+    const fibers = new Set<Fiber.Fiber<unknown, unknown>>()
     const promises = new Set<Promise<unknown>>()
     for (const request of this.#requests) {
       const running = request.close()
@@ -241,19 +230,19 @@ export class DiffDashMcpServerError extends Schema.TaggedError<DiffDashMcpServer
   "DiffDashMcpServerError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Loopback-only MCP server with scoped, per-run bearer capabilities. */
-export class DiffDashMcpServer extends Context.Tag("@diffdash/DiffDashMcpServer")<
+export class DiffDashMcpServer extends Context.Service<
   DiffDashMcpServer,
   {
     readonly acquireRun: (
       context: DiffDashMcpRunContext,
     ) => Effect.Effect<DiffDashMcpRunAccess, DiffDashMcpServerError, Scope.Scope>
   }
->() {
+>()("@diffdash/DiffDashMcpServer") {
   static get layer() {
     return makeDiffDashMcpServerLayer({})
   }
@@ -267,15 +256,15 @@ export class DiffDashMcpServer extends Context.Tag("@diffdash/DiffDashMcpServer"
 type HttpServer = ReturnType<typeof createServer>
 
 const makeDiffDashMcpServerLayer = (input: DiffDashMcpServerLayerOptions) =>
-  Layer.scoped(
+  Layer.effect(
     DiffDashMcpServer,
     Effect.gen(function* () {
       const threads = yield* ReviewThreadStore
       const artifacts = yield* AgentRunArtifactStore
       const processes = yield* ProcessService
-      const runtime = yield* Effect.runtime<never>()
+      const runtimeContext = yield* Effect.context<never>()
       const options = resolveServerOptions(input)
-      const callbackOwner = new CallbackFiberOwner(Runtime.runFork(runtime))
+      const callbackOwner = new CallbackFiberOwner(Effect.runForkWith(runtimeContext))
       const capabilities = new Map<string, RunCapability>()
       const lifecycle = { accepting: true }
 
@@ -336,7 +325,7 @@ const makeDiffDashMcpServerLayer = (input: DiffDashMcpServerLayerOptions) =>
 const listen = (
   handler: (request: IncomingMessage, response: ServerResponse) => void,
 ): Effect.Effect<HttpServer, DiffDashMcpServerError> =>
-  Effect.async<HttpServer, DiffDashMcpServerError>((resume) => {
+  Effect.callback<HttpServer, DiffDashMcpServerError>((resume) => {
     const server = createServer(handler)
     const onError = (cause: Error) =>
       resume(Effect.fail(DiffDashMcpServerError.make({ operation: "listen", cause })))
@@ -353,13 +342,13 @@ const listen = (
   })
 
 interface HttpHandlerServices {
-  readonly artifacts: Context.Tag.Service<AgentRunArtifactStore>
+  readonly artifacts: Context.Service.Shape<typeof AgentRunArtifactStore>
   readonly callbackOwner: CallbackFiberOwner
   readonly capabilities: ReadonlyMap<string, RunCapability>
   readonly processes: ProcessRunner
   readonly lifecycle: { accepting: boolean }
   readonly options: ResolvedServerOptions
-  readonly threads: Context.Tag.Service<ReviewThreadStore>
+  readonly threads: Context.Service.Shape<typeof ReviewThreadStore>
 }
 
 const createHttpHandler =
@@ -391,7 +380,7 @@ const createHttpHandler =
       services.processes,
       services.options,
     ).pipe(
-      Effect.catchAll((failure) =>
+      Effect.catch((failure) =>
         Effect.sync(() =>
           writeJson(response, failure.status, rpcError(failure.code, failure.message)),
         ),
@@ -422,8 +411,8 @@ const handleHttpRequest = (
   response: ServerResponse,
   capability: RunCapability,
   lease: RequestLease,
-  threads: Context.Tag.Service<ReviewThreadStore>,
-  artifacts: Context.Tag.Service<AgentRunArtifactStore>,
+  threads: Context.Service.Shape<typeof ReviewThreadStore>,
+  artifacts: Context.Service.Shape<typeof AgentRunArtifactStore>,
   processes: ProcessRunner,
   options: ResolvedServerOptions,
 ): Effect.Effect<void, HttpRequestFailure> =>
@@ -456,8 +445,8 @@ const handleHttpRequest = (
 
 const createRunServer = (
   context: DiffDashMcpRunContext,
-  threads: Context.Tag.Service<ReviewThreadStore>,
-  artifacts: Context.Tag.Service<AgentRunArtifactStore>,
+  threads: Context.Service.Shape<typeof ReviewThreadStore>,
+  artifacts: Context.Service.Shape<typeof AgentRunArtifactStore>,
   processes: ProcessRunner,
   runEffect: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
 ) => {
@@ -787,7 +776,7 @@ const searchLinkedRepository = (
       truncated: Option.isSome(result) && matches.length === maxResults,
     })
   }).pipe(
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.succeed(
         unavailable(
           "The isolated worktree does not contain the immutable review head or could not be searched",
@@ -834,7 +823,7 @@ const readLinkedRepositoryFile = (
           content: result.stdout,
         }),
       ),
-      Effect.catchAll(() =>
+      Effect.catch(() =>
         Effect.succeed(unavailable("Repository file is unavailable at the immutable review head")),
       ),
     )
@@ -979,7 +968,7 @@ const readJsonBody = (request: IncomingMessage): Effect.Effect<unknown, HttpRequ
     request.resume()
     return Effect.fail(new HttpRequestFailure(413, -32003, "MCP request body exceeds size limit"))
   }
-  return Effect.async<unknown, HttpRequestFailure>((resume) => {
+  return Effect.callback<unknown, HttpRequestFailure>((resume) => {
     const chunks: Buffer[] = []
     let size = 0
     let settled = false
@@ -1068,7 +1057,7 @@ const observeDisconnect = (request: IncomingMessage, response: ServerResponse) =
 const interruptOnAbort = <A, E>(effect: Effect.Effect<A, E>, signal: AbortSignal) =>
   Effect.raceFirst(
     effect,
-    Effect.async<never>((resume) => {
+    Effect.callback<never>((resume) => {
       const interrupt = () => resume(Effect.interrupt)
       if (signal.aborted) {
         interrupt()
@@ -1196,7 +1185,9 @@ const revokeCapability = (
         if (grace.status === "completed") return
 
         const running = capability.abortRequests()
-        yield* Effect.forEach(running.fibers, Fiber.interruptFork, { discard: true })
+        yield* Effect.sync(() => {
+          for (const fiber of running.fibers) fiber.interruptUnsafe()
+        })
         const finalized = yield* Effect.promise(() =>
           settleWithin(Promise.allSettled(running.promises), options.requestFinalizerMs),
         )
@@ -1247,7 +1238,9 @@ const shutdownHttpServer = (
       )
 
       const fibers = callbackOwner.beginClose()
-      yield* Effect.forEach(fibers, Fiber.interruptFork, { discard: true })
+      yield* Effect.sync(() => {
+        for (const fiber of fibers) fiber.interruptUnsafe()
+      })
       const callbacks = yield* Effect.promise(() =>
         settleWithin(Promise.allSettled(fibers.map(fiberPromise)), options.requestFinalizerMs),
       )
@@ -1287,7 +1280,9 @@ const revokeStartedCapability = (
     )
     if (grace.status !== "completed") {
       const running = capability.abortRequests()
-      yield* Effect.forEach(running.fibers, Fiber.interruptFork, { discard: true })
+      yield* Effect.sync(() => {
+        for (const fiber of running.fibers) fiber.interruptUnsafe()
+      })
       const finalized = yield* Effect.promise(() =>
         settleWithin(Promise.allSettled(running.promises), options.requestFinalizerMs),
       )
@@ -1329,12 +1324,12 @@ const reportCleanupError = (options: ResolvedServerOptions, operation: string, _
   Effect.sync(() => {
     options.hooks.onCleanupError?.(operation)
   }).pipe(
-    Effect.catchAllCause(() => Effect.void),
-    Effect.zipRight(Effect.logError(`DiffDash MCP cleanup failed: ${operation}`)),
+    Effect.catchCause(() => Effect.void),
+    Effect.andThen(Effect.logError(`DiffDash MCP cleanup failed: ${operation}`)),
   )
 
 const runLifecycleProbe = (probe: (() => void) | undefined) =>
-  Effect.sync(() => probe?.()).pipe(Effect.catchAllCause(() => Effect.void))
+  Effect.sync(() => probe?.()).pipe(Effect.catchCause(() => Effect.void))
 
 const freshBearerToken = (capabilities: ReadonlyMap<string, RunCapability>) => {
   let token = randomBytes(32).toString("hex")
@@ -1354,7 +1349,7 @@ const resolveServerOptions = (options: DiffDashMcpServerLayerOptions): ResolvedS
 const finiteMilliseconds = (value: number | undefined, fallback: number) =>
   value === undefined || !Number.isSafeInteger(value) || value < 0 ? fallback : value
 
-const fiberPromise = <A, E>(fiber: Fiber.RuntimeFiber<A, E>) =>
+const fiberPromise = <A, E>(fiber: Fiber.Fiber<A, E>) =>
   new Promise<A>((resolve, reject) =>
     fiber.addObserver((exit) => {
       if (Exit.isSuccess(exit)) resolve(exit.value)

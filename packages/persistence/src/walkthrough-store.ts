@@ -19,19 +19,19 @@ const WalkthroughRow = Schema.Struct({
   created_at: Schema.String,
 })
 
-const WalkthroughJson = Schema.parseJson(Walkthrough)
+const WalkthroughJson = Schema.fromJsonString(Walkthrough)
 
 /** A typed failure from walkthrough persistence operations. */
 export class WalkthroughStoreError extends Schema.TaggedError<WalkthroughStoreError>()(
   "WalkthroughStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Domain-oriented persistence service for generated walkthrough artifacts. */
-export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
+export class WalkthroughStore extends Context.Service<
   WalkthroughStore,
   {
     readonly get: (
@@ -41,7 +41,7 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
       input: SaveWalkthroughInput,
     ) => Effect.Effect<StoredWalkthrough, WalkthroughStoreError>
   }
->() {
+>()("@diffdash/WalkthroughStore") {
   static readonly layer = Layer.effect(
     WalkthroughStore,
     Effect.gen(function* () {
@@ -79,7 +79,7 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
         get,
         save: Effect.fn("WalkthroughStore.save")(function (input) {
           const createdAt = new Date().toISOString()
-          return Schema.encode(WalkthroughJson)(input.walkthrough).pipe(
+          return Schema.encodeEffect(WalkthroughJson)(input.walkthrough).pipe(
             Effect.mapError((cause) =>
               WalkthroughStoreError.make({ operation: "save.encodeContent", cause }),
             ),
@@ -131,7 +131,7 @@ export class WalkthroughStore extends Context.Tag("@diffdash/WalkthroughStore")<
 }
 
 const decodeWalkthroughRow = (operation: string, input: unknown) =>
-  Schema.decodeUnknown(WalkthroughRow)(input).pipe(
+  Schema.decodeUnknownEffect(WalkthroughRow)(input).pipe(
     Effect.mapError((cause) => WalkthroughStoreError.make({ operation, cause })),
   )
 
@@ -139,7 +139,7 @@ const toStored = (
   operation: string,
   row: typeof WalkthroughRow.Type,
 ): Effect.Effect<StoredWalkthrough, WalkthroughStoreError> =>
-  Schema.decodeUnknown(WalkthroughJson)(row.content_json).pipe(
+  Schema.decodeUnknownEffect(WalkthroughJson)(row.content_json).pipe(
     Effect.mapError((cause) => WalkthroughStoreError.make({ operation, cause })),
     Effect.map((walkthrough) =>
       StoredWalkthrough.make({

@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 import { ChangedFile } from "./git-provider"
 
@@ -13,7 +13,7 @@ export const BranchComparison = Schema.TaggedStruct("branch", {
 })
 
 /** The comparison strategy used to build a local review. */
-export const LocalReviewComparison = Schema.Union(WorkingTreeComparison, BranchComparison)
+export const LocalReviewComparison = Schema.Union([WorkingTreeComparison, BranchComparison])
 
 /** The comparison strategy used to build a local review. */
 export type LocalReviewComparison = typeof LocalReviewComparison.Type
@@ -22,9 +22,10 @@ export type LocalReviewComparison = typeof LocalReviewComparison.Type
 export class LocalReviewTarget extends Schema.Class<LocalReviewTarget>("LocalReviewTarget")({
   kind: Schema.Literal("local"),
   rootPath: Schema.NonEmptyString,
-  comparison: Schema.optionalWith(LocalReviewComparison, {
-    default: () => WorkingTreeComparison.make({}),
-  }),
+  comparison: LocalReviewComparison.pipe(
+    Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+    Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+  ),
 }) {}
 
 /** Detailed metadata for reviewing local working tree changes. */
@@ -32,9 +33,10 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
   rootPath: Schema.String,
   repoName: Schema.String,
   branchName: Schema.NullOr(Schema.String),
-  comparison: Schema.optionalWith(LocalReviewComparison, {
-    default: () => WorkingTreeComparison.make({}),
-  }),
+  comparison: LocalReviewComparison.pipe(
+    Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+    Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+  ),
   baseSha: Schema.String,
   headSha: Schema.String,
   diffHash: Schema.String,
@@ -46,9 +48,10 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
 /** Raw unified diff output and cache metadata for local working tree changes. */
 export class LocalReviewDiff extends Schema.Class<LocalReviewDiff>("LocalReviewDiff")({
   rootPath: Schema.String,
-  comparison: Schema.optionalWith(LocalReviewComparison, {
-    default: () => WorkingTreeComparison.make({}),
-  }),
+  comparison: LocalReviewComparison.pipe(
+    Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+    Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
+  ),
   baseSha: Schema.String,
   headSha: Schema.String,
   diffHash: Schema.String,

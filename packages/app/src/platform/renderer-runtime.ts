@@ -1,5 +1,6 @@
-import { Atom, useAtomSuspense } from "@effect-atom/atom-react"
-import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
+import { useAtomSuspense } from "@effect/atom-react"
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Schedule, Stream } from "effect"
+import { Atom } from "effect/unstable/reactivity"
 import { useEffect, useEffectEvent } from "react"
 
 import { DesktopRuntime, desktopRuntimeLayer } from "./desktop-runtime"
@@ -36,7 +37,7 @@ export const rendererServicesLive: Layer.Layer<RendererServices> = Layer.fresh(
 /** Single atom-owned runtime used by every renderer query and imperative capability consumer. */
 export const rendererRuntime = Atom.runtime(rendererServicesLive).pipe(Atom.keepAlive)
 
-const useRendererContext = () => useAtomSuspense(rendererRuntime).value.context
+const useRendererContext = () => useAtomSuspense(rendererRuntime).value
 
 /** Returns the Electron-shell capability from the shared renderer runtime. */
 export const useDesktopRuntime = () => Context.get(useRendererContext(), DesktopRuntime)
@@ -60,22 +61,38 @@ export const useReviewContent = () => Context.get(useRendererContext(), ReviewCo
 export const runRendererPromise = async <A, E>(effect: Effect.Effect<A, E>): Promise<A> => {
   const exit = await Effect.runPromiseExit(effect)
   if (Exit.isSuccess(exit)) return exit.value
-  const failure = Cause.failureOption(exit.cause)
+  const failure = Cause.findErrorOption(exit.cause)
   if (Option.isSome(failure)) throw failure.value
   throw Cause.squash(exit.cause)
 }
 
-/** Runs a scoped renderer stream for a component lifetime and interrupts it during cleanup. */
+/** Consumes a renderer stream, reports typed failures, and reconnects after a bounded delay. */
+export const consumeRendererStream = <A, E, R, R2, R3>(
+  stream: Stream.Stream<A, E, R>,
+  onValue: (value: A) => Effect.Effect<void, never, R2>,
+  onError: (error: E) => Effect.Effect<void, never, R3>,
+): Effect.Effect<void, E, R | R2 | R3> =>
+  stream.pipe(
+    Stream.tapError(onError),
+    Stream.retry(Schedule.spaced("1 second")),
+    Stream.runForEach(onValue),
+  )
+
+/** Runs a supervised renderer stream for a component lifetime and interrupts it during cleanup. */
 export const useRendererStream = <A, E>(
   stream: Stream.Stream<A, E>,
   onValue: (value: A) => void | Promise<void>,
+  onError: (error: E) => void,
 ): void => {
   const emitValue = useEffectEvent(onValue)
+  const emitError = useEffectEvent(onError)
   useEffect(() => {
     const fiber = Effect.runFork(
-      Stream.runForEach(stream, (value) =>
-        Effect.promise(() => Promise.resolve(emitValue(value))),
-      ).pipe(Effect.catchAll(() => Effect.void)),
+      consumeRendererStream(
+        stream,
+        (value) => Effect.promise(() => Promise.resolve(emitValue(value))),
+        (error) => Effect.sync(() => emitError(error)),
+      ),
     )
     return () => {
       Effect.runFork(Fiber.interrupt(fiber))

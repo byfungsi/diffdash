@@ -22,8 +22,14 @@ const generateWalkthrough = async (
     defect: ({ defect }) => {
       throw defect
     },
-    cancelled: () => {
-      throw new Error("Walkthrough generation was cancelled.")
+    cancelled: (terminal) => {
+      throw terminal
+    },
+    superseded: (terminal) => {
+      throw terminal
+    },
+    interrupted: (terminal) => {
+      throw terminal
     },
   })
 }

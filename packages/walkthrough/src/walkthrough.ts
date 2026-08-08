@@ -38,10 +38,10 @@ export interface WalkthroughRouteSelection {
 }
 
 /** Supplies the current user-selected walkthrough route and model preferences. */
-export class WalkthroughRouting extends Context.Tag("@diffdash/WalkthroughRouting")<
+export class WalkthroughRouting extends Context.Service<
   WalkthroughRouting,
   { readonly get: Effect.Effect<WalkthroughRouteSelection> }
->() {}
+>()("@diffdash/WalkthroughRouting") {}
 
 /** The selected provider has no compatible model in its manifest catalog. */
 export class WalkthroughModelUnavailableError extends Schema.TaggedError<WalkthroughModelUnavailableError>()(
@@ -88,12 +88,12 @@ export class WalkthroughGenerationError extends Schema.TaggedError<WalkthroughGe
   {
     operation: Schema.String,
     output: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Domain service for generating validated walkthrough artifacts through registered providers. */
-export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughService")<
+export class WalkthroughService extends Context.Service<
   WalkthroughService,
   {
     readonly generate: (
@@ -109,7 +109,7 @@ export class WalkthroughService extends Context.Tag("@diffdash/WalkthroughServic
       | InvalidAgentProviderResponseError
     >
   }
->() {
+>()("@diffdash/WalkthroughService") {
   static readonly layer = (options: { readonly remoteWorkingDirectory: string }) =>
     Layer.effect(
       WalkthroughService,
@@ -163,7 +163,7 @@ const walkthroughWorkingDirectory = (
   explicitWorkingDirectory ??
   (review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory)
 
-type Registry = Context.Tag.Service<AgentProviderRegistry>
+type Registry = Context.Service.Shape<typeof AgentProviderRegistry>
 type WalkthroughRouteError =
   | WalkthroughModelUnavailableError
   | AgentProviderResolutionError
@@ -238,7 +238,7 @@ const executeWalkthroughRoute = (
           return WalkthroughModelUnavailableError.make({ providerId, modelId: null })
         }
         return executeCandidate(model, true).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             selection.route.mode === "auto" && rest.length > 0
               ? executeModel(rest)
               : Effect.fail(error),
@@ -260,7 +260,7 @@ const executeWalkthroughRoute = (
       return lastExecutionError ?? NoAgentProviderAvailableError.make({ capability: "walkthrough" })
     }
     return executeProvider(providerId).pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         executeAutomatic(rest, isWalkthroughSubstantiveError(error) ? error : lastExecutionError),
       ),
     )
@@ -546,11 +546,11 @@ const expandWalkthroughHunkAliases = (
   input: unknown,
   aliasToHunkId: ReadonlyMap<string, string>,
 ): unknown => {
-  if (!Predicate.isReadonlyRecord(input)) return input
+  if (!Predicate.isReadonlyObject(input)) return input
 
   const chapters = Array.isArray(input.chapters)
     ? input.chapters.map((chapter) => {
-        if (!Predicate.isReadonlyRecord(chapter)) return chapter
+        if (!Predicate.isReadonlyObject(chapter)) return chapter
         return {
           ...chapter,
           stops: Array.isArray(chapter.stops)
@@ -567,7 +567,7 @@ const expandWalkthroughHunkAliases = (
 }
 
 const expandHunkIds = (input: unknown, aliasToHunkId: ReadonlyMap<string, string>): unknown => {
-  if (!Predicate.isReadonlyRecord(input) || !Array.isArray(input.hunkIds)) return input
+  if (!Predicate.isReadonlyObject(input) || !Array.isArray(input.hunkIds)) return input
   return {
     ...input,
     hunkIds: input.hunkIds.map((hunkId) =>

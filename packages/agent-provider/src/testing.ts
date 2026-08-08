@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Fiber, Schema, TestClock } from "effect"
+import { Effect, Result, Fiber, Schema } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   AgentCapabilityReady,
@@ -40,7 +41,9 @@ export const agentManifestConformance = (
     it.effect("publishes a valid, internally coherent manifest", () =>
       Effect.gen(function* () {
         const registration = fixtures.create()
-        const manifest = yield* Schema.decodeUnknown(AgentProviderManifest)(registration.manifest)
+        const manifest = yield* Schema.decodeUnknownEffect(AgentProviderManifest)(
+          registration.manifest,
+        )
         const ids = manifest.models.map(({ id }) => id)
         expect(new Set(ids).size).toBe(ids.length)
         for (const model of manifest.models) expect(model.capabilities.length).toBeGreaterThan(0)
@@ -83,19 +86,19 @@ export const walkthroughConformance = (name: string, fixtures: WalkthroughConfor
         assertNonMutatingPolicy(request.policy)
         const before = yield* fixtures.temporaryFiles()
         const result = yield* capability.execute(request)
-        yield* Schema.decodeUnknown(WalkthroughResult)(result)
+        yield* Schema.decodeUnknownEffect(WalkthroughResult)(result)
         expect(yield* fixtures.temporaryFiles()).toEqual(before)
       }),
     )
 
     it.effect("uses only bounded SDK errors for expected failures", () =>
       Effect.gen(function* () {
-        const result = yield* fixtures.expectedFailure().pipe(Effect.either)
-        expect(Either.isLeft(result)).toBe(true)
-        if (!Either.isLeft(result)) return
+        const result = yield* fixtures.expectedFailure().pipe(Effect.result)
+        expect(Result.isFailure(result)).toBe(true)
+        if (!Result.isFailure(result)) return
         expect(
-          result.left instanceof InvalidAgentProviderResponseError ||
-            result.left instanceof AgentProviderOperationError,
+          result.failure instanceof InvalidAgentProviderResponseError ||
+            result.failure instanceof AgentProviderOperationError,
         ).toBe(true)
       }),
     )
@@ -120,7 +123,7 @@ export const reviewConformance = (name: string, fixtures: ReviewConformanceFixtu
         const request = fixtures.request()
         assertNonMutatingPolicy(request.policy)
         const result = yield* capability.execute(request)
-        yield* Schema.decodeUnknown(ReviewThreadResult)(result)
+        yield* Schema.decodeUnknownEffect(ReviewThreadResult)(result)
         if (registration.manifest.session.mode === "none") expect(result.sessionId).toBeNull()
         if (registration.manifest.session.mode === "resume" && request.sessionId !== null) {
           expect(result.sessionId).not.toBeNull()
@@ -147,12 +150,12 @@ export const reviewConformance = (name: string, fixtures: ReviewConformanceFixtu
               allowedTools: [...request.mcp.allowedTools, outOfPolicyTool],
             },
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
 
-        expect(Either.isLeft(result)).toBe(true)
-        if (Either.isLeft(result)) {
-          expect(result.left).toBeInstanceOf(AgentProviderOperationError)
-          expect(result.left.reason).toContain("outside the execution policy")
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(AgentProviderOperationError)
+          expect(result.failure.reason).toContain("outside the execution policy")
         }
       }),
     )
@@ -214,8 +217,8 @@ export const agentCancellationConformance = (
     it.effect("cleans up resources after interruption", () =>
       Effect.gen(function* () {
         const execution = fixtures.createRun()
-        const fiber = yield* Effect.fork(execution.run)
-        yield* Effect.yieldNow()
+        const fiber = yield* Effect.forkChild(execution.run)
+        yield* Effect.yieldNow
         yield* Fiber.interrupt(fiber)
         expect(yield* execution.cleanedUp).toBe(true)
       }),
@@ -224,7 +227,7 @@ export const agentCancellationConformance = (
     it.effect("cleans up resources after timeout", () =>
       Effect.gen(function* () {
         const execution = fixtures.createRun()
-        const fiber = yield* execution.run.pipe(Effect.timeout("1 millis"), Effect.fork)
+        const fiber = yield* execution.run.pipe(Effect.timeout("1 millis"), Effect.forkChild)
         yield* TestClock.adjust("1 millis")
         yield* Fiber.await(fiber)
         expect(yield* execution.cleanedUp).toBe(true)
@@ -272,15 +275,16 @@ export const agentRegistryConformance = (
         const registry = yield* AgentProviderRegistry
         const missing = yield* registry
           .resolveWalkthrough(providerRoute(AgentProviderId.make("missing")))
-          .pipe(Effect.either)
+          .pipe(Effect.result)
         const unsupported = yield* registry
           .resolveWalkthrough(providerRoute(fixtures.unsupportedWalkthroughProviderId))
-          .pipe(Effect.either)
-        expect(Either.isLeft(missing)).toBe(true)
-        expect(Either.isLeft(unsupported)).toBe(true)
-        if (Either.isLeft(missing)) expect(missing.left).toBeInstanceOf(MissingAgentProviderError)
-        if (Either.isLeft(unsupported)) {
-          expect(unsupported.left).toBeInstanceOf(UnsupportedAgentCapabilityError)
+          .pipe(Effect.result)
+        expect(Result.isFailure(missing)).toBe(true)
+        expect(Result.isFailure(unsupported)).toBe(true)
+        if (Result.isFailure(missing))
+          expect(missing.failure).toBeInstanceOf(MissingAgentProviderError)
+        if (Result.isFailure(unsupported)) {
+          expect(unsupported.failure).toBeInstanceOf(UnsupportedAgentCapabilityError)
         }
       }).pipe(
         Effect.provide(AgentProviderRegistry.layer(fixtures.registrations(), fixtures.policies)),
@@ -296,10 +300,11 @@ export const agentRegistryConformance = (
           Effect.provide(
             AgentProviderRegistry.layer([registration, registration], fixtures.policies),
           ),
-          Effect.either,
+          Effect.result,
         )
-        expect(Either.isLeft(result)).toBe(true)
-        if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(DuplicateAgentProviderError)
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result))
+          expect(result.failure).toBeInstanceOf(DuplicateAgentProviderError)
       }),
     )
   })

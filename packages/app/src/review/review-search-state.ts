@@ -14,8 +14,8 @@ import {
   ReviewSnapshotSearchRequest,
   ReviewSnapshotSearchResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { Atom, type Registry } from "@effect-atom/atom-react"
 import { Schema } from "effect"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 import type { ReviewNavigator } from "./review-navigation"
 import { type ReviewSearchPage, ReviewSearchPageCache } from "./review-search-page-cache"
@@ -269,7 +269,7 @@ export const reduceReviewSearch = (
 
 /** Coordinates revision-scoped atom commands with bounded cache, IPC, and navigation work. */
 export class ReviewSearchController {
-  readonly #registry: Registry.Registry
+  readonly #registry: AtomRegistry.AtomRegistry
   readonly #cache = new ReviewSearchPageCache()
   readonly #modelAtom: Atom.Writable<ReviewSearchModel>
   readonly #commandAtom: Atom.Writable<ReviewSearchCommandResult, ReviewSearchCommand>
@@ -286,7 +286,7 @@ export class ReviewSearchController {
   /** Read-only bounded match set retained by the private page cache. */
   readonly retainedMatchesAtom: Atom.Atom<readonly ReviewSnapshotSearchMatch[]>
 
-  constructor(registry: Registry.Registry) {
+  constructor(registry: AtomRegistry.AtomRegistry) {
     this.#registry = registry
     this.#modelAtom = Atom.make(makeInitialReviewSearchModel())
     const initialResult = commandResult(makeInitialReviewSearchModel())

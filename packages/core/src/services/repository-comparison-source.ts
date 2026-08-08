@@ -26,7 +26,7 @@ import { RepositoryLinker } from "./repository-linker"
 export class RepositoryComparisonSourceError extends Schema.TaggedError<RepositoryComparisonSourceError>()(
   "RepositoryComparisonSourceError",
   {
-    code: Schema.Literal(
+    code: Schema.Literals([
       "repository-not-found",
       "repository-ambiguous",
       "provider-unavailable",
@@ -35,15 +35,15 @@ export class RepositoryComparisonSourceError extends Schema.TaggedError<Reposito
       "no-common-ancestor",
       "revision-changed",
       "acquisition-failed",
-    ),
+    ]),
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Resolves saved repository selectors and pins immutable Git comparison coordinates. */
-export class RepositoryComparisonSource extends Context.Tag("@diffdash/RepositoryComparisonSource")<
+export class RepositoryComparisonSource extends Context.Service<
   RepositoryComparisonSource,
   {
     readonly resolve: (
@@ -60,7 +60,7 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
       run: (localPath: string) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | RepositoryComparisonSourceError>
   }
->() {
+>()("@diffdash/RepositoryComparisonSource") {
   static readonly layer = Layer.effect(
     RepositoryComparisonSource,
     Effect.gen(function* () {
@@ -210,7 +210,7 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
 }
 
 const resolveSavedRepository = (
-  repositories: RepositoryLinker["Type"],
+  repositories: RepositoryLinker["Service"],
   command: OpenRepositoryComparisonCommand,
 ) => {
   const selector = command.repository

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -99,7 +99,7 @@ const beginTurn = (provider: ReviewAgentProviderId, model: string) =>
   })
 
 describe("agent run persistence", () => {
-  it.scoped("FUN-69 AC: reads aggregate-owned run lifecycle records", () =>
+  it.effect("FUN-69 AC: reads aggregate-owned run lifecycle records", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -147,14 +147,14 @@ describe("agent run persistence", () => {
         expect(listed.map(({ id }) => id)).toEqual([begun.run.id])
 
         yield* database.run("UPDATE agent_runs SET model = '' WHERE id = ?", [begun.run.id])
-        const malformed = yield* Effect.either(runs.get(begun.run.id))
-        expect(Either.isLeft(malformed)).toBe(true)
-        if (Either.isLeft(malformed)) expect(malformed.left.operation).toBe("get.decode")
+        const malformed = yield* Effect.result(runs.get(begun.run.id))
+        expect(Result.isFailure(malformed)).toBe(true)
+        if (Result.isFailure(malformed)) expect(malformed.failure.operation).toBe("get.decode")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-69 AC: persists normalized artifacts and queries them by run and thread", () =>
+  it.effect("FUN-69 AC: persists normalized artifacts and queries them by run and thread", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -203,30 +203,31 @@ describe("agent run persistence", () => {
         })
 
         const wrongProvider = ReviewAgentArtifact.make({ ...normalized, provider: "codex" })
-        const rejected = yield* Effect.either(
+        const rejected = yield* Effect.result(
           artifacts.save({
             runId: begun.run.id,
             threadId: thread.thread.id,
             artifact: wrongProvider,
           }),
         )
-        expect(Either.isLeft(rejected)).toBe(true)
-        if (Either.isLeft(rejected)) {
-          expect(rejected.left).toBeInstanceOf(AgentRunArtifactStoreError)
+        expect(Result.isFailure(rejected)).toBe(true)
+        if (Result.isFailure(rejected)) {
+          expect(rejected.failure).toBeInstanceOf(AgentRunArtifactStoreError)
         }
 
         yield* database.run("UPDATE agent_run_artifacts SET metadata_json = ? WHERE id = ?", [
           "not-json",
           first.id,
         ])
-        const malformed = yield* Effect.either(artifacts.listForRun(begun.run.id))
-        expect(Either.isLeft(malformed)).toBe(true)
-        if (Either.isLeft(malformed)) expect(malformed.left.operation).toBe("listForRun.decode")
+        const malformed = yield* Effect.result(artifacts.listForRun(begun.run.id))
+        expect(Result.isFailure(malformed)).toBe(true)
+        if (Result.isFailure(malformed))
+          expect(malformed.failure.operation).toBe("listForRun.decode")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-69 AC: replaces compact thread memory and rejects malformed rows", () =>
+  it.effect("FUN-69 AC: replaces compact thread memory and rejects malformed rows", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -281,11 +282,11 @@ describe("agent run persistence", () => {
           "UPDATE thread_memory SET important_artifact_ids_json = ? WHERE thread_id = ?",
           ["not-json", thread.thread.id],
         )
-        const malformed = yield* Effect.either(memory.get(thread.thread.id))
-        expect(Either.isLeft(malformed)).toBe(true)
-        if (Either.isLeft(malformed)) {
-          expect(malformed.left).toBeInstanceOf(ThreadMemoryStoreError)
-          expect(malformed.left.operation).toBe("get.decode")
+        const malformed = yield* Effect.result(memory.get(thread.thread.id))
+        expect(Result.isFailure(malformed)).toBe(true)
+        if (Result.isFailure(malformed)) {
+          expect(malformed.failure).toBeInstanceOf(ThreadMemoryStoreError)
+          expect(malformed.failure.operation).toBe("get.decode")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

@@ -22,7 +22,7 @@ const RepoRow = Schema.Struct({
   name: Schema.String,
   remote_url: Schema.String,
   local_path: RepositoryLocalPath,
-  is_favorite: Schema.Literal(0, 1),
+  is_favorite: Schema.Literals([0, 1]),
   last_opened_at: Schema.NullOr(Schema.String),
   last_synced_at: Schema.NullOr(Schema.String),
   created_at: Schema.String,
@@ -52,12 +52,12 @@ export class RepositoryStoreError extends Schema.TaggedError<RepositoryStoreErro
   "RepositoryStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Domain-oriented persistence service for local and remote-only repositories. */
-export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
+export class RepositoryStore extends Context.Service<
   RepositoryStore,
   {
     readonly list: (query?: string) => Effect.Effect<readonly Repo[], RepositoryStoreError>
@@ -107,7 +107,7 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
     /** Hides a project from Home without deleting its repository or related records. */
     readonly forget: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
   }
->() {
+>()("@diffdash/RepositoryStore") {
   static readonly layer = Layer.effect(
     RepositoryStore,
     Effect.gen(function* () {
@@ -652,13 +652,15 @@ const mergeRepositoryAlias = (
   transaction.run(
     `DELETE FROM repos
      WHERE id = ?
-       AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE repo_id = ?)
-       AND NOT EXISTS (SELECT 1 FROM walkthroughs WHERE repo_id = ?)
-       AND NOT EXISTS (SELECT 1 FROM review_threads WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM walkthroughs WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM walkthrough_operations WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM review_threads WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM hosted_viewed_files WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM local_viewed_files WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM project_workspace_state WHERE repo_id = ?)`,
     [
+      aliasProjectId,
       aliasProjectId,
       aliasProjectId,
       aliasProjectId,
@@ -708,6 +710,46 @@ const moveAliasRows = (
      SELECT ?, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
      FROM walkthroughs WHERE repo_id = ?`,
     [canonicalProjectId, aliasProjectId],
+  )
+  const now = new Date().toISOString()
+  transaction.run(
+    `UPDATE walkthrough_operations AS alias_operation
+     SET state = 'superseded',
+         state_version = state_version + 1,
+         superseded_by_operation_id = (
+           SELECT canonical_operation.id
+           FROM walkthrough_operations AS canonical_operation
+           WHERE canonical_operation.repo_id = ?
+             AND canonical_operation.review_key = alias_operation.review_key
+             AND canonical_operation.base_sha = alias_operation.base_sha
+             AND canonical_operation.head_sha = alias_operation.head_sha
+             AND canonical_operation.prompt_version = alias_operation.prompt_version
+             AND canonical_operation.state IN ('accepted', 'running')
+           ORDER BY canonical_operation.accepted_at DESC, canonical_operation.id
+           LIMIT 1
+         ),
+         terminal_at = ?,
+         updated_at = ?
+     WHERE alias_operation.repo_id = ?
+       AND alias_operation.state IN ('accepted', 'running')
+       AND EXISTS (
+         SELECT 1
+         FROM walkthrough_operations AS canonical_operation
+         WHERE canonical_operation.repo_id = ?
+           AND canonical_operation.review_key = alias_operation.review_key
+           AND canonical_operation.base_sha = alias_operation.base_sha
+           AND canonical_operation.head_sha = alias_operation.head_sha
+           AND canonical_operation.prompt_version = alias_operation.prompt_version
+           AND canonical_operation.state IN ('accepted', 'running')
+       )`,
+    [canonicalProjectId, now, now, aliasProjectId, canonicalProjectId],
+  )
+  transaction.run(
+    `UPDATE walkthrough_operations
+     SET repo_id = ?,
+         artifact_repo_id = CASE WHEN artifact_repo_id IS NULL THEN NULL ELSE ? END
+     WHERE repo_id = ?`,
+    [canonicalProjectId, canonicalProjectId, aliasProjectId],
   )
   transaction.run("DELETE FROM walkthroughs WHERE repo_id = ?", [aliasProjectId])
 
@@ -861,13 +903,13 @@ const toRepo = (row: typeof RepoRow.Type) =>
   })
 
 const decodeRepo = (operation: string, input: unknown) =>
-  Schema.decodeUnknown(RepoRow)(input).pipe(
+  Schema.decodeUnknownEffect(RepoRow)(input).pipe(
     Effect.map(toRepo),
     Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
   )
 
 const decodeRepos = (operation: string, input: readonly unknown[]) =>
-  Schema.decodeUnknown(RepoRows)(input).pipe(
+  Schema.decodeUnknownEffect(RepoRows)(input).pipe(
     Effect.map((rows) => rows.map(toRepo)),
     Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
   )
@@ -875,7 +917,7 @@ const decodeRepos = (operation: string, input: readonly unknown[]) =>
 const decodeOptionalRepositoryId = (operation: string, input: unknown) =>
   input === undefined
     ? Effect.succeed(Option.none<string>())
-    : Schema.decodeUnknown(RepositoryIdRow)(input).pipe(
+    : Schema.decodeUnknownEffect(RepositoryIdRow)(input).pipe(
         Effect.map(({ id }) => Option.some(id)),
         Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
       )

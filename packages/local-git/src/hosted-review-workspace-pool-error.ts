@@ -4,7 +4,7 @@ import { Schema } from "effect"
 export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedReviewWorkspacePoolError>()(
   "HostedReviewWorkspacePoolError",
   {
-    code: Schema.Literal(
+    code: Schema.Literals([
       "link-required",
       "capacity",
       "filesystem",
@@ -16,10 +16,10 @@ export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedRev
       "no-common-ancestor",
       "revision-changed",
       "cleanup",
-    ),
+    ]),
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 

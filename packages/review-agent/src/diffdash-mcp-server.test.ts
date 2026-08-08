@@ -65,10 +65,9 @@ import {
   Context,
   Deferred,
   Effect,
-  Either,
+  Result,
   Exit,
   Fiber,
-  FiberRef,
   Layer,
   Option,
   Redacted,
@@ -305,12 +304,12 @@ const makeTestLayer = (
     ),
   )
 
-type ContextThreadGetter = Context.Tag.Service<ReviewThreadStore>["get"]
+type ContextThreadGetter = Context.Service.Shape<typeof ReviewThreadStore>["get"]
 type ContextProcessRunner = ProcessRunner["run"]
 const testLayer = makeTestLayer()
 
 describe("DiffDashMcpServer", () => {
-  it.scoped("FUN-71 AC: requires a scoped bearer token and revokes it", () =>
+  it.effect("FUN-71 AC: requires a scoped bearer token and revokes it", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -373,7 +372,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("FUN-71 AC: exposes read-only review tools with bounded results", () =>
+  it.effect("FUN-71 AC: exposes read-only review tools with bounded results", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -499,7 +498,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("hard-bounds output when the truncation envelope cannot fit", () =>
+  it.effect("hard-bounds output when the truncation envelope cannot fit", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -533,7 +532,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("searches immutable PR diff lines with deterministic metadata and bounds", () =>
+  it.effect("searches immutable PR diff lines with deterministic metadata and bounds", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -609,7 +608,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("searches and reads an isolated worktree at the immutable PR head", () =>
+  it.effect("searches and reads an isolated worktree at the immutable PR head", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -652,7 +651,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("serves exact repository tools for an immutable comparison workspace", () =>
+  it.effect("serves exact repository tools for an immutable comparison workspace", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -695,7 +694,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("FUN-71 AC: serves provider-neutral local review context", () =>
+  it.effect("FUN-71 AC: serves provider-neutral local review context", () =>
     Effect.gen(function* () {
       const server = yield* DiffDashMcpServer
       const access = yield* server.acquireRun({
@@ -737,7 +736,7 @@ describe("DiffDashMcpServer", () => {
     }).pipe(Effect.provide(testLayer)),
   )
 
-  it.scoped("linearizes admitted requests before capability revocation", () =>
+  it.effect("linearizes admitted requests before capability revocation", () =>
     Effect.gen(function* () {
       const admitted = yield* Deferred.make<void>()
       const releaseRequest = yield* Deferred.make<void>()
@@ -747,7 +746,7 @@ describe("DiffDashMcpServer", () => {
         hooks: {
           onCapabilityRevoking: () => revoking.resolve(undefined),
           onHttpRequest: Deferred.succeed(admitted, undefined).pipe(
-            Effect.zipRight(Deferred.await(releaseRequest)),
+            Effect.andThen(Deferred.await(releaseRequest)),
           ),
         },
       })
@@ -762,9 +761,9 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
-        const firstRequest = yield* Effect.promise(() => initialize(access)).pipe(Effect.fork)
+        const firstRequest = yield* Effect.promise(() => initialize(access)).pipe(Effect.forkChild)
         yield* Deferred.await(admitted)
 
         yield* Deferred.succeed(closeCapability, undefined)
@@ -780,7 +779,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("treats git grep exit code 1 as a successful empty search", () =>
+  it.effect("treats git grep exit code 1 as a successful empty search", () =>
     Effect.gen(function* () {
       const layer = makeTestLayer(
         {},
@@ -817,7 +816,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("allows an admitted gated tool call to finish during the revocation grace", () =>
+  it.effect("allows an admitted gated tool call to finish during the revocation grace", () =>
     Effect.gen(function* () {
       const toolStarted = yield* Deferred.make<void>()
       const releaseTool = yield* Deferred.make<void>()
@@ -830,7 +829,7 @@ describe("DiffDashMcpServer", () => {
         },
         () =>
           Deferred.succeed(toolStarted, undefined).pipe(
-            Effect.zipRight(Deferred.await(releaseTool)),
+            Effect.andThen(Deferred.await(releaseTool)),
             Effect.as(details),
             Effect.ensuring(Deferred.succeed(toolFinalized, undefined)),
           ),
@@ -846,17 +845,17 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
         const connected = yield* connectClient(access)
         const callFiber = yield* Effect.promise(() =>
           connected.client.callTool({ name: "getThreadContext", arguments: {} }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         yield* Deferred.await(toolStarted)
 
         yield* Deferred.succeed(closeCapability, undefined)
         yield* Effect.promise(() => revoking.promise)
-        expect(Option.isNone(yield* Fiber.poll(capabilityFiber))).toBe(true)
+        expect(capabilityFiber.pollUnsafe()).toBeUndefined()
         yield* Deferred.succeed(releaseTool, undefined)
 
         const result = yield* Fiber.join(callFiber)
@@ -868,7 +867,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("interrupts an in-flight repository subprocess effect after the grace", () =>
+  it.effect("interrupts an in-flight repository subprocess effect after the grace", () =>
     Effect.gen(function* () {
       const processStarted = yield* Deferred.make<void>()
       const processFinalized = yield* Deferred.make<void>()
@@ -877,7 +876,7 @@ describe("DiffDashMcpServer", () => {
         () => Effect.succeed(details),
         () =>
           Deferred.succeed(processStarted, undefined).pipe(
-            Effect.zipRight(Effect.never),
+            Effect.andThen(Effect.never),
             Effect.ensuring(Deferred.succeed(processFinalized, undefined)),
           ),
       )
@@ -895,7 +894,7 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
         const connected = yield* connectClient(access)
         const callFiber = yield* Effect.promise(() =>
@@ -903,7 +902,7 @@ describe("DiffDashMcpServer", () => {
             name: "searchRepository",
             arguments: { query: "needle" },
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         yield* Deferred.await(processStarted)
 
         yield* Deferred.succeed(closeCapability, undefined)
@@ -915,7 +914,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("does not strand a request lease when the client disconnects during the body", () =>
+  it.effect("does not strand a request lease when the client disconnects during the body", () =>
     Effect.gen(function* () {
       const admitted = yield* Deferred.make<void>()
       const layer = makeTestLayer({
@@ -934,7 +933,7 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
         const request = openPartialRequest(access)
         request.write("{")
@@ -949,7 +948,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("interrupts MCP setup when the response disconnects", () =>
+  it.effect("interrupts MCP setup when the response disconnects", () =>
     Effect.gen(function* () {
       const setupStarted = yield* Deferred.make<void>()
       const setupGate = yield* Deferred.make<void>()
@@ -958,7 +957,7 @@ describe("DiffDashMcpServer", () => {
         capabilityGraceMs: 1_000,
         hooks: {
           beforeMcpConnect: Deferred.succeed(setupStarted, undefined).pipe(
-            Effect.zipRight(Deferred.await(setupGate)),
+            Effect.andThen(Deferred.await(setupGate)),
             Effect.ensuring(Deferred.succeed(setupFinalized, undefined)),
           ),
         },
@@ -974,7 +973,7 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
         const request = openPartialRequest(access)
         request.end(INITIALIZE_BODY)
@@ -988,7 +987,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("rejects oversized bodies without stranding capability disposal", () =>
+  it.effect("rejects oversized bodies without stranding capability disposal", () =>
     Effect.gen(function* () {
       const layer = makeTestLayer({ capabilityGraceMs: 1_000 })
       yield* Effect.gen(function* () {
@@ -1006,7 +1005,7 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("bounds layer disposal with a slow request body and force-closes the listener", () =>
+  it.effect("bounds layer disposal with a slow request body and force-closes the listener", () =>
     Effect.gen(function* () {
       const requestAdmitted = yield* Deferred.make<void>()
       let callbacks = 0
@@ -1018,7 +1017,7 @@ describe("DiffDashMcpServer", () => {
         hooks: {
           onHttpRequest: Effect.sync(() => {
             callbacks += 1
-          }).pipe(Effect.zipRight(Deferred.succeed(requestAdmitted, undefined))),
+          }).pipe(Effect.andThen(Deferred.succeed(requestAdmitted, undefined))),
         },
       })
       const layerScope = yield* Scope.make()
@@ -1034,15 +1033,15 @@ describe("DiffDashMcpServer", () => {
 
       expect(yield* completesWithin(Scope.close(layerScope, Exit.void), 300)).toBe(true)
       const callbackCount = callbacks
-      const afterClose = yield* Effect.tryPromise(() => initialize(access)).pipe(Effect.either)
-      expect(Either.isLeft(afterClose)).toBe(true)
+      const afterClose = yield* Effect.tryPromise(() => initialize(access)).pipe(Effect.result)
+      expect(Result.isFailure(afterClose)).toBe(true)
       expect(callbacks).toBe(callbackCount)
       request.destroy()
       yield* Scope.close(capabilityScope, Exit.void)
     }),
   )
 
-  it.scoped("disconnects an initialized client when the server layer scope closes", () =>
+  it.effect("disconnects an initialized client when the server layer scope closes", () =>
     Effect.gen(function* () {
       let callbacks = 0
       const layer = makeTestLayer({
@@ -1061,16 +1060,16 @@ describe("DiffDashMcpServer", () => {
       const callbackCount = callbacks
 
       const afterClose = yield* Effect.tryPromise(() => connected.client.listTools()).pipe(
-        Effect.either,
+        Effect.result,
       )
-      expect(Either.isLeft(afterClose)).toBe(true)
+      expect(Result.isFailure(afterClose)).toBe(true)
       expect(callbacks).toBe(callbackCount)
       yield* Effect.promise(() => connected.client.close())
       yield* Scope.close(capabilityScope, Exit.void)
     }),
   )
 
-  it.scoped("awaits explicit transport and MCP server close finalizers", () =>
+  it.effect("awaits explicit transport and MCP server close finalizers", () =>
     Effect.gen(function* () {
       const closeStarted = yield* Deferred.make<void>()
       const allowClose = yield* Deferred.make<void>()
@@ -1080,8 +1079,8 @@ describe("DiffDashMcpServer", () => {
         hooks: {
           beforeMcpClose: (resource) =>
             Effect.sync(() => closed.push(resource)).pipe(
-              Effect.zipRight(Deferred.succeed(closeStarted, undefined)),
-              Effect.zipRight(Deferred.await(allowClose)),
+              Effect.andThen(Deferred.succeed(closeStarted, undefined)),
+              Effect.andThen(Deferred.await(allowClose)),
             ),
         },
       })
@@ -1096,12 +1095,12 @@ describe("DiffDashMcpServer", () => {
             yield* Deferred.succeed(accessReady, access)
             yield* Deferred.await(closeCapability)
           }),
-        ).pipe(Effect.fork)
+        ).pipe(Effect.forkChild)
         const access = yield* Deferred.await(accessReady)
-        const requestFiber = yield* Effect.promise(() => initialize(access)).pipe(Effect.fork)
+        const requestFiber = yield* Effect.promise(() => initialize(access)).pipe(Effect.forkChild)
         yield* Deferred.await(closeStarted)
         yield* Deferred.succeed(closeCapability, undefined)
-        expect(Option.isNone(yield* Fiber.poll(capabilityFiber))).toBe(true)
+        expect(capabilityFiber.pollUnsafe()).toBeUndefined()
 
         yield* Deferred.succeed(allowClose, undefined)
         expect((yield* Fiber.join(requestFiber)).status).toBe(200)
@@ -1111,17 +1110,18 @@ describe("DiffDashMcpServer", () => {
     }),
   )
 
-  it.scoped("inherits constructing FiberRefs in MCP callback fibers", () =>
+  it.effect("inherits constructing context references in MCP callback fibers", () =>
     Effect.gen(function* () {
-      const marker = yield* FiberRef.make("default")
+      const marker = Context.Reference<string>("@diffdash/test/McpCallbackMarker", {
+        defaultValue: () => "default",
+      })
       const observed: string[] = []
       const layer = makeTestLayer({}, () =>
-        FiberRef.get(marker).pipe(
+        marker.pipe(
           Effect.tap((value) => Effect.sync(() => observed.push(value))),
           Effect.as(details),
         ),
       )
-      yield* FiberRef.set(marker, "captured-runtime")
 
       yield* Effect.gen(function* () {
         const server = yield* DiffDashMcpServer
@@ -1131,7 +1131,11 @@ describe("DiffDashMcpServer", () => {
           connected.client.callTool({ name: "getThreadContext", arguments: {} }),
         )
         yield* Effect.promise(() => connected.client.close())
-      }).pipe(Effect.scoped, Effect.provide(layer))
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(layer),
+        Effect.provideService(marker, "captured-runtime"),
+      )
 
       expect(observed).toEqual(["captured-runtime"])
     }),
@@ -1216,7 +1220,7 @@ const completesWithin = <A, E, R>(effect: Effect.Effect<A, E, R>, milliseconds: 
   Effect.raceFirst(
     effect.pipe(
       Effect.as(true),
-      Effect.catchAllCause(() => Effect.succeed(true)),
+      Effect.catchCause(() => Effect.succeed(true)),
     ),
     Effect.promise(() => nativeDelay(milliseconds)).pipe(Effect.as(false)),
   )

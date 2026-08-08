@@ -12,7 +12,7 @@ import { Effect, Layer } from "effect"
 
 import { GitProvider } from "./git-provider"
 
-const unexpectedProviderOperation = () => Effect.dieMessage("Unexpected provider operation")
+const unexpectedProviderOperation = () => Effect.die(new Error("Unexpected provider operation"))
 
 describe("GitProvider", () => {
   it.effect("requires provider support and authentication for remote acquisition", () => {

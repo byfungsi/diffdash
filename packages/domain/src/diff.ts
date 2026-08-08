@@ -8,7 +8,7 @@ import {
 } from "./review-identity"
 
 /** File statuses derived from unified diff metadata. */
-export const DiffFileStatus = Schema.Literal("added", "modified", "deleted", "renamed", "binary")
+export const DiffFileStatus = Schema.Literals(["added", "modified", "deleted", "renamed", "binary"])
 
 /** File statuses derived from unified diff metadata. */
 export type DiffFileStatus = typeof DiffFileStatus.Type

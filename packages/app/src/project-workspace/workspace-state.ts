@@ -8,7 +8,7 @@ import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 
 import type { SelectedReviewTarget } from "@/review/review-subject"
 
@@ -62,14 +62,14 @@ export const resolveProjectWorkspaceState = (
 ): ResolvedProjectWorkspaceState => {
   if (persisted === null) return defaultProjectWorkspaceState(null)
 
-  const decoded = Schema.decodeUnknownEither(ProjectWorkspaceState)(persisted)
-  if (Either.isLeft(decoded)) {
+  const decoded = Schema.decodeUnknownResult(ProjectWorkspaceState)(persisted)
+  if (Result.isFailure(decoded)) {
     return defaultProjectWorkspaceState(
       "Saved workspace state was invalid. Reviews opened without a selected review.",
     )
   }
 
-  const state = decoded.right
+  const state = decoded.success
   if (state.projectId !== projectIdForRepo(repo)) {
     return defaultProjectWorkspaceState(
       "Saved workspace state belonged to another project. Reviews opened without a selected review.",

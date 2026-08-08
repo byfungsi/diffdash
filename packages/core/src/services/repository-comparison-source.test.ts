@@ -255,7 +255,7 @@ const testLayer = (options: TestOptions) =>
             ensureLocal: () => unavailable(),
             openProject: (localPath) =>
               Effect.sync(() => options.onOpenProject?.(localPath)).pipe(
-                Effect.zipRight(
+                Effect.andThen(
                   options.openProject === undefined
                     ? unavailable()
                     : Effect.succeed(options.openProject),
@@ -305,11 +305,11 @@ const testLayer = (options: TestOptions) =>
               }),
             useComparison: (input, run) =>
               Effect.sync(() => options.onRead?.(input)).pipe(
-                Effect.zipRight(run("/comparison-workspace")),
+                Effect.andThen(run("/comparison-workspace")),
               ),
             pinComparison: (comparison) =>
               Effect.sync(() => options.onPin?.(comparison)).pipe(
-                Effect.zipRight(
+                Effect.andThen(
                   options.pinError === undefined
                     ? Effect.succeed({ baseSha, headSha, mergeBaseSha })
                     : Effect.fail(options.pinError),
@@ -357,4 +357,4 @@ const repository = (
   })
 
 const unavailable = <A = never>(): Effect.Effect<A> =>
-  Effect.dieMessage("Unexpected test service call")
+  Effect.die(new Error("Unexpected test service call"))

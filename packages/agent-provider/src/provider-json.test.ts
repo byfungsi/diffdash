@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 
 import {
   nonNegativeNumberAt,
@@ -37,10 +37,10 @@ describe("provider JSON helpers", () => {
   it.effect("parses only JSONL object events", () =>
     Effect.gen(function* () {
       expect(yield* parseProviderJsonlObject('{"type":"event"}')).toEqual({ type: "event" })
-      const array = yield* parseProviderJsonlObject("[]").pipe(Effect.either)
-      const malformed = yield* parseProviderJsonlObject("{").pipe(Effect.either)
-      expect(Either.isLeft(array) && array.left.reason).toBe("event is not a JSON object")
-      expect(Either.isLeft(malformed)).toBe(true)
+      const array = yield* parseProviderJsonlObject("[]").pipe(Effect.result)
+      const malformed = yield* parseProviderJsonlObject("{").pipe(Effect.result)
+      expect(Result.isFailure(array) && array.failure.reason).toBe("event is not a JSON object")
+      expect(Result.isFailure(malformed)).toBe(true)
     }),
   )
 

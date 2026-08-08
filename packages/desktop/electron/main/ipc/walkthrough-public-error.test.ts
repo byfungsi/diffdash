@@ -17,7 +17,15 @@ import { InvokeChannel } from "@diffdash/protocol/channels"
 import { UNKNOWN_TRANSPORT_ERROR_MESSAGE } from "@diffdash/protocol/transport-error"
 import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
 import { describe, expect, it } from "vitest"
-import { ReviewContextError, WalkthroughOperationCapacityExceeded } from "@diffdash/core"
+import {
+  ReviewContextError,
+  WalkthroughOperationInterrupted,
+  WalkthroughOperationTerminalFailure,
+} from "@diffdash/core"
+import {
+  WalkthroughExpectedFailure,
+  WalkthroughOperationId,
+} from "@diffdash/domain/walkthrough-operation"
 import { toPublicWalkthroughError } from "./walkthrough-public-error"
 
 const operation = InvokeChannel.generateLocalWalkthrough
@@ -297,19 +305,29 @@ Unhandled provider call: --print --model private-model`,
     expect(JSON.stringify(result)).not.toContain("private")
   })
 
-  it("classifies walkthrough capacity as retryable load pressure", () => {
+  it("classifies privacy-safe persisted failures without exposing private diagnostics", () => {
     expect(
       toPublicWalkthroughError(
-        WalkthroughOperationCapacityExceeded.make({
-          capacity: 64,
-          message: "DiffDash already retains 64 active walkthrough operations.",
+        WalkthroughOperationTerminalFailure.make({
+          operationId: WalkthroughOperationId.make("persisted-operation"),
+          failure: WalkthroughExpectedFailure.make({
+            kind: "expected",
+            category: "provider",
+            code: "agent-provider-operation-error",
+          }),
         }),
         operation,
       ),
     ).toMatchObject({
-      code: "WalkthroughOperationCapacityExceeded",
-      message:
-        "DiffDash is already processing 64 walkthrough operations. Try again after one finishes.",
+      code: "WALKTHROUGH_PROVIDER_ERROR",
+      message: "The configured AI provider could not complete walkthrough generation.",
+      operation,
+    })
+
+    expect(
+      toPublicWalkthroughError(WalkthroughOperationInterrupted.make({}), operation),
+    ).toMatchObject({
+      code: "WALKTHROUGH_INTERRUPTED",
       operation,
     })
   })

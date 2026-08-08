@@ -4,7 +4,7 @@ import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
 
 /** Workspace-local identity for one managed review project. */
 export const ReviewProjectId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewProjectId"),
 )
 
@@ -12,14 +12,17 @@ export const ReviewProjectId = Schema.String.pipe(
 export type ReviewProjectId = typeof ReviewProjectId.Type
 
 /** Canonical identity for one repository review across revisions. */
-export const ReviewKey = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewKey"))
+export const ReviewKey = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewKey"),
+)
 
 /** Canonical identity for one repository review across revisions. */
 export type ReviewKey = typeof ReviewKey.Type
 
 /** A Git commit SHA or local working-tree diff digest identifying one review revision. */
 export const ReviewRevision = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewRevision"),
 )
 
@@ -28,7 +31,7 @@ export type ReviewRevision = typeof ReviewRevision.Type
 
 /** Stable digest identifying the exact raw diff captured by a review snapshot. */
 export const ReviewDiffIdentity = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewDiffIdentity"),
 )
 
@@ -37,7 +40,7 @@ export type ReviewDiffIdentity = typeof ReviewDiffIdentity.Type
 
 /** Immutable identity for one coherent review revision and exact diff. */
 export const ReviewSnapshotId = Schema.String.pipe(
-  Schema.pattern(/^snapshot:v1:[0-9a-f]{32}$/),
+  Schema.check(Schema.isPattern(/^snapshot:v1:[0-9a-f]{32}$/)),
   Schema.brand("ReviewSnapshotId"),
 )
 
@@ -45,14 +48,17 @@ export const ReviewSnapshotId = Schema.String.pipe(
 export type ReviewSnapshotId = typeof ReviewSnapshotId.Type
 
 /** Stable identity for one changed file within review data. */
-export const ReviewFileId = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewFileId"))
+export const ReviewFileId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewFileId"),
+)
 
 /** Stable identity for one changed file within review data. */
 export type ReviewFileId = typeof ReviewFileId.Type
 
 /** Canonical displayed-patch identity used to retain viewed state across revisions. */
 export const ReviewFilePatchHash = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewFilePatchHash"),
 )
 
@@ -60,14 +66,17 @@ export const ReviewFilePatchHash = Schema.String.pipe(
 export type ReviewFilePatchHash = typeof ReviewFilePatchHash.Type
 
 /** Snapshot-local identity for one parsed diff hunk. */
-export const ReviewHunkId = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewHunkId"))
+export const ReviewHunkId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewHunkId"),
+)
 
 /** Snapshot-local identity for one parsed diff hunk. */
 export type ReviewHunkId = typeof ReviewHunkId.Type
 
 /** Content identity used to carry unchanged hunks across review revisions. */
 export const ReviewHunkFingerprint = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewHunkFingerprint"),
 )
 

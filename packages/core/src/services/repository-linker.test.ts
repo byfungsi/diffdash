@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, Option } from "effect"
+import { Effect, Result, Layer, Option } from "effect"
 
 import type { HostedRepositoryLocator as HostedRepositoryLocatorType } from "@diffdash/domain/git-provider"
 import { Repo, repositoryLocalPath } from "@diffdash/domain/repository"
@@ -190,7 +190,7 @@ describe("RepositoryLinker", () => {
     const { layer, persisted } = makeLayer()
     return Effect.gen(function* () {
       const linker = yield* RepositoryLinker
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         linker.link(
           LinkRepositoryCheckoutRequest.make({
             repository: repository("other", "repository"),
@@ -199,8 +199,8 @@ describe("RepositoryLinker", () => {
         ),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(RepositoryLinkError)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(RepositoryLinkError)
       expect(persisted).toEqual([])
     }).pipe(Effect.provide(layer))
   })
@@ -226,11 +226,11 @@ describe("RepositoryLinker", () => {
     const { layer } = makeLayer("https://gitlab.com/fungsi/diffdash.git")
     return Effect.gen(function* () {
       const linker = yield* RepositoryLinker
-      const result = yield* Effect.either(linker.install("/workspace/diffdash"))
+      const result = yield* Effect.result(linker.install("/workspace/diffdash"))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left.reason).toContain("configured provider")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure.reason).toContain("configured provider")
       }
     }).pipe(Effect.provide(layer))
   })
@@ -395,13 +395,13 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const rejected = yield* Effect.either(
+      const rejected = yield* Effect.result(
         (yield* RepositoryLinker).openProject(
           "/workspace/diffdash/src",
           repository("missing", "repository"),
         ),
       )
-      expect(Either.isLeft(rejected)).toBe(true)
+      expect(Result.isFailure(rejected)).toBe(true)
       expect(persisted).toEqual([])
 
       const result = yield* (yield* RepositoryLinker).openProject(
@@ -470,13 +470,13 @@ describe("RepositoryLinker", () => {
     const { layer, forgotten } = makeOpenProjectLayer({ forgetFails: true })
     return Effect.gen(function* () {
       const projectId = ReviewProjectId.make(linkedRepo.id)
-      const result = yield* Effect.either((yield* RepositoryLinker).forget(projectId))
+      const result = yield* Effect.result((yield* RepositoryLinker).forget(projectId))
 
       expect(forgotten).toEqual([projectId])
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(RepositoryLinkError)
-        expect(result.left.operation).toBe("forget")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(RepositoryLinkError)
+        expect(result.failure.operation).toBe("forget")
       }
     }).pipe(Effect.provide(layer))
   })
@@ -572,8 +572,8 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
           RepositoryStore,
           RepositoryStore.of({
             list: () => Effect.succeed(options.listed ?? []),
-            findByLocalPath: () => Effect.succeed(Option.fromNullable(options.existing)),
-            findHosted: () => Effect.succeed(Option.fromNullable(options.existing)),
+            findByLocalPath: () => Effect.succeed(Option.fromNullishOr(options.existing)),
+            findHosted: () => Effect.succeed(Option.fromNullishOr(options.existing)),
             findByProviderRepositoryId: () => Effect.succeed(Option.none()),
             attachResolvedIdentity: (_repoId, resolved, localPath) =>
               Effect.succeed(

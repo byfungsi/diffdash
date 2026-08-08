@@ -32,8 +32,8 @@ export interface ReviewThreadCurrentMapping {
   readonly anchorStatus: ReviewAnchorStatusType
 }
 
-const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchorSchema)
-const AgentProviderFailureJson = Schema.NullOr(Schema.parseJson(AgentProviderFailure))
+const ReviewThreadAnchorJson = Schema.fromJsonString(ReviewThreadAnchorSchema)
+const AgentProviderFailureJson = Schema.NullOr(Schema.fromJsonString(AgentProviderFailure))
 
 const ReviewThreadRow = Schema.Struct({
   id: ReviewThreadId,
@@ -47,7 +47,7 @@ const ReviewThreadRow = Schema.Struct({
   original_anchor_json: ReviewThreadAnchorJson,
   current_anchor_json: Schema.NullOr(ReviewThreadAnchorJson),
   anchor_status: ReviewAnchorStatus,
-  status: Schema.Literal("open", "closed"),
+  status: Schema.Literals(["open", "closed"]),
   closed_at: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
@@ -56,7 +56,7 @@ const ReviewThreadRow = Schema.Struct({
 const ReviewThreadMessageRow = Schema.Struct({
   id: ReviewThreadMessageId,
   thread_id: ReviewThreadId,
-  sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
   author: ReviewThreadMessageAuthor,
   body_markdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
@@ -67,7 +67,7 @@ const ReviewThreadMessageRow = Schema.Struct({
 })
 
 const NextSequenceRow = Schema.Struct({
-  next_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  next_sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
 })
 
 /** A typed failure from local review thread persistence operations. */
@@ -75,12 +75,12 @@ export class ReviewThreadStoreError extends Schema.TaggedError<ReviewThreadStore
   "ReviewThreadStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Domain-oriented persistence for local review threads and Markdown messages. */
-export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore")<
+export class ReviewThreadStore extends Context.Service<
   ReviewThreadStore,
   {
     readonly create: (
@@ -102,7 +102,7 @@ export class ReviewThreadStore extends Context.Tag("@diffdash/ReviewThreadStore"
       input: AddReviewThreadUserMessageInput,
     ) => Effect.Effect<ReviewThreadDetails, ReviewThreadStoreError>
   }
->() {
+>()("@diffdash/ReviewThreadStore") {
   static readonly layer = Layer.effect(
     ReviewThreadStore,
     Effect.gen(function* () {

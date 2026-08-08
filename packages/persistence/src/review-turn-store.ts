@@ -42,13 +42,11 @@ import { makeRepositoryComparisonReviewKey } from "@diffdash/domain/repository-c
 import { Context, Effect, Layer, Schema } from "effect"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
-const ReviewThreadAnchorJson = Schema.parseJson(ReviewThreadAnchor)
-const AgentProviderFailureJson = Schema.NullOr(Schema.parseJson(AgentProviderFailure))
-const ReviewAgentUsageJson = Schema.NullOr(Schema.parseJson(ReviewAgentUsageSchema))
-const ArtifactMetadataJson = Schema.parseJson(
-  Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-)
-const ImportantArtifactIdsJson = Schema.parseJson(Schema.Array(ReviewAgentArtifactId))
+const ReviewThreadAnchorJson = Schema.fromJsonString(ReviewThreadAnchor)
+const AgentProviderFailureJson = Schema.NullOr(Schema.fromJsonString(AgentProviderFailure))
+const ReviewAgentUsageJson = Schema.NullOr(Schema.fromJsonString(ReviewAgentUsageSchema))
+const ArtifactMetadataJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+const ImportantArtifactIdsJson = Schema.fromJsonString(Schema.Array(ReviewAgentArtifactId))
 
 const ReviewThreadRow = Schema.Struct({
   id: ReviewThreadId,
@@ -62,7 +60,7 @@ const ReviewThreadRow = Schema.Struct({
   original_anchor_json: ReviewThreadAnchorJson,
   current_anchor_json: Schema.NullOr(ReviewThreadAnchorJson),
   anchor_status: ReviewAnchorStatus,
-  status: Schema.Literal("open", "closed"),
+  status: Schema.Literals(["open", "closed"]),
   closed_at: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
@@ -71,7 +69,7 @@ const ReviewThreadRow = Schema.Struct({
 const ReviewThreadMessageRow = Schema.Struct({
   id: ReviewThreadMessageId,
   thread_id: ReviewThreadId,
-  sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
   author: ReviewThreadMessageAuthor,
   body_markdown: MarkdownBody,
   status: ReviewThreadMessageStatus,
@@ -101,9 +99,9 @@ const AgentRunRow = Schema.Struct({
 const ThreadMemoryRow = Schema.Struct({
   thread_id: ReviewThreadId,
   summary: Schema.String,
-  summarized_through_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+  summarized_through_sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   summary_algorithm: ThreadMemorySummaryAlgorithm,
-  summary_version: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  summary_version: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
   important_artifact_ids_json: ImportantArtifactIdsJson,
   updated_at: Schema.String,
 })
@@ -117,7 +115,7 @@ const RepositoryTargetRow = Schema.Struct({
 })
 
 const NextSequenceRow = Schema.Struct({
-  next_sequence: Schema.Int.pipe(Schema.greaterThanOrEqualTo(1)),
+  next_sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(1))),
 })
 
 /** Identity supplied by the renderer and checked before expensive review-turn work. */
@@ -239,12 +237,12 @@ export class ReviewTurnStoreError extends Schema.TaggedError<ReviewTurnStoreErro
   "ReviewTurnStoreError",
   {
     operation: Schema.NonEmptyString,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Transactional persistence boundary for the complete durable lifecycle of one review turn. */
-export class ReviewTurnStore extends Context.Tag("@diffdash/ReviewTurnStore")<
+export class ReviewTurnStore extends Context.Service<
   ReviewTurnStore,
   {
     readonly validateTarget: (
@@ -264,7 +262,7 @@ export class ReviewTurnStore extends Context.Tag("@diffdash/ReviewTurnStore")<
     ) => Effect.Effect<ReviewThreadDetails, ReviewTurnOwnershipError | ReviewTurnStoreError>
     readonly recoverInterruptedTurns: Effect.Effect<number, ReviewTurnStoreError>
   }
->() {
+>()("@diffdash/ReviewTurnStore") {
   /** Builds the aggregate layer with optional synchronous write instrumentation. */
   static readonly layerWith = (options: ReviewTurnStoreOptions = {}) =>
     Layer.effect(
@@ -711,10 +709,10 @@ const requireOwnedActiveTurn = (
 
 const prepareCompleteInput = (input: CompleteReviewTurnInput) =>
   Effect.gen(function* () {
-    const usageJson = yield* Schema.encode(ReviewAgentUsageJson)(input.usage)
+    const usageJson = yield* Schema.encodeEffect(ReviewAgentUsageJson)(input.usage)
     const artifacts = yield* Effect.forEach(input.artifacts, ({ id, artifact }) =>
       Effect.gen(function* () {
-        const metadataJson = yield* Schema.encode(ArtifactMetadataJson)(artifact.metadata)
+        const metadataJson = yield* Schema.encodeEffect(ArtifactMetadataJson)(artifact.metadata)
         return {
           id,
           provider: artifact.provider,
@@ -733,7 +731,7 @@ const prepareCompleteInput = (input: CompleteReviewTurnInput) =>
         ? null
         : {
             ...input.memoryUpdate,
-            importantArtifactIdsJson: yield* Schema.encode(ImportantArtifactIdsJson)(
+            importantArtifactIdsJson: yield* Schema.encodeEffect(ImportantArtifactIdsJson)(
               input.memoryUpdate.importantArtifactIds,
             ),
           }

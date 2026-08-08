@@ -6,7 +6,7 @@ import { executablePath } from "./subprocess"
 
 /** Absolute path to one executable discovered through an explicit search path. */
 export const ExecutablePath = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ExecutablePath"),
 )
 
@@ -44,7 +44,7 @@ export const findExecutableInPath = Effect.fn("findExecutableInPath")(function* 
       catch: () => null,
     }).pipe(
       Effect.as(true),
-      Effect.catchAll(() => Effect.succeed(false)),
+      Effect.catch(() => Effect.succeed(false)),
     )
     if (available) return Option.some(ExecutablePath.make(candidate))
   }

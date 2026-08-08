@@ -1,7 +1,7 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
-import { RegistryContext, useAtomValue } from "@effect-atom/atom-react"
+import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { useContext, useEffect, useRef, useState } from "react"
 import { runRendererPromise, useReviewContent } from "@/platform/renderer-runtime"
 

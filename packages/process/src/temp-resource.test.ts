@@ -18,7 +18,7 @@ const tempResourcesLayer = TempResources.layer.pipe(
 )
 
 describe("secure temporary resources", () => {
-  it.scoped("creates private resources and cleans them after success", () =>
+  it.effect("creates private resources and cleans them after success", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources
       const parentDirectory = yield* makeTestParent
@@ -60,7 +60,7 @@ describe("secure temporary resources", () => {
     }).pipe(Effect.provide(tempResourcesLayer)),
   )
 
-  it.scoped("cleans resources after failure", () =>
+  it.effect("cleans resources after failure", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources
       const parentDirectory = yield* makeTestParent
@@ -80,7 +80,7 @@ describe("secure temporary resources", () => {
     }).pipe(Effect.provide(tempResourcesLayer)),
   )
 
-  it.scoped("cleans resources when the owning scope is interrupted", () =>
+  it.effect("cleans resources when the owning scope is interrupted", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources
       const parentDirectory = yield* makeTestParent
@@ -94,7 +94,7 @@ describe("secure temporary resources", () => {
           yield* Deferred.succeed(acquired, path)
           return yield* Effect.never
         }),
-      ).pipe(Effect.fork)
+      ).pipe(Effect.forkChild)
       const path = yield* Deferred.await(acquired)
 
       yield* Fiber.interrupt(fiber)

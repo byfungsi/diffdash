@@ -1,6 +1,6 @@
 import { AgentProviderId } from "@diffdash/agent-provider"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 
 const MAX_PUBLIC_ERROR_MESSAGE_LENGTH = 500
 const MAX_PUBLIC_ERROR_OPERATION_LENGTH = 200
@@ -14,22 +14,22 @@ const PUBLIC_REASON_ERROR_CODES = new Set([
   "ReviewTurnTargetError",
 ])
 const DiagnosticTag = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.maxLength(100),
-  Schema.pattern(/^[A-Za-z0-9._:-]+$/u),
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(Schema.isMaxLength(100)),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9._:-]+$/u)),
 )
 const DiagnosticStackFrame = Schema.String.pipe(
-  Schema.maxLength(MAX_PUBLIC_ERROR_OPERATION_LENGTH),
-  Schema.pattern(/^at [A-Za-z_$][A-Za-z0-9_$.<>-]*$/u),
+  Schema.check(Schema.isMaxLength(MAX_PUBLIC_ERROR_OPERATION_LENGTH)),
+  Schema.check(Schema.isPattern(/^at [A-Za-z_$][A-Za-z0-9_$.<>-]*$/u)),
 )
-const ProviderDiagnosticSummary = Schema.Literal(
+const ProviderDiagnosticSummary = Schema.Literals([
   "Authentication or authorization failure reported.",
   "Rate limit or quota failure reported.",
   "Network or connection failure reported.",
   "Provider diagnostics were redacted.",
   "No provider diagnostics were emitted.",
   "Unexpected walkthrough failure.",
-)
+])
 
 /** Stable renderer-facing message for failures that are not explicitly safe to disclose. */
 export const UNKNOWN_TRANSPORT_ERROR_MESSAGE = "DiffDash could not complete the request."
@@ -39,8 +39,8 @@ export class TransportErrorDiagnosticTrace extends Schema.Class<TransportErrorDi
   "TransportErrorDiagnosticTrace",
 )({
   provider: AgentProviderId.pipe(
-    Schema.maxLength(100),
-    Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+    Schema.check(Schema.isMaxLength(100)),
+    Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)),
   ),
   errorTag: DiagnosticTag,
   causeTag: DiagnosticTag,
@@ -48,7 +48,7 @@ export class TransportErrorDiagnosticTrace extends Schema.Class<TransportErrorDi
   signal: Schema.NullOr(DiagnosticTag),
   reason: ProviderDiagnosticSummary,
   stderr: ProviderDiagnosticSummary,
-  stackFrames: Schema.Array(DiagnosticStackFrame).pipe(Schema.maxItems(8)),
+  stackFrames: Schema.Array(DiagnosticStackFrame).pipe(Schema.check(Schema.isMaxLength(8))),
 }) {}
 
 /** User-safe, serializable failure that may cross a process boundary. */
@@ -106,8 +106,8 @@ export const bridgeTransportError = (error: unknown, operation?: string): Error 
 
 /** Structurally decodes either a protocol value or its standard Error bridge encoding. */
 export const decodeTransportError = (error: unknown): TransportError | null => {
-  const direct = Schema.decodeUnknownEither(TransportError)(error)
-  if (Either.isRight(direct)) return normalizedTransportError(direct.right)
+  const direct = Schema.decodeUnknownResult(TransportError)(error)
+  if (Result.isSuccess(direct)) return normalizedTransportError(direct.success)
 
   const message = errorMessage(error)
   if (message === null) return null
@@ -115,8 +115,8 @@ export const decodeTransportError = (error: unknown): TransportError | null => {
   if (markerIndex < 0) return null
   try {
     const encoded = JSON.parse(message.slice(markerIndex + BRIDGE_TRANSPORT_ERROR_PREFIX.length))
-    const bridged = Schema.decodeUnknownEither(TransportError)(encoded)
-    return Either.isRight(bridged) ? normalizedTransportError(bridged.right) : null
+    const bridged = Schema.decodeUnknownResult(TransportError)(encoded)
+    return Result.isSuccess(bridged) ? normalizedTransportError(bridged.success) : null
   } catch {
     return null
   }

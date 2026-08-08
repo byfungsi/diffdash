@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Context, Effect, Layer, Match, Schema } from "effect"
 import { PostHog } from "posthog-node"
 
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { AppSettings } from "@diffdash/settings/app-settings"
+import { FileStorage, type FileStorageOperations } from "@diffdash/settings/file-storage"
 import type { CoreAnalyticsState } from "../analytics-state"
 
 const AnalyticsState = Schema.Struct({
@@ -14,7 +14,7 @@ const AnalyticsState = Schema.Struct({
   installReported: Schema.Boolean,
 })
 type AnalyticsState = typeof AnalyticsState.Type
-const AnalyticsStateFromJson = Schema.parseJson(AnalyticsState)
+const AnalyticsStateFromJson = Schema.fromJsonString(AnalyticsState)
 
 interface AnalyticsClient {
   readonly capture: (message: {
@@ -29,13 +29,13 @@ interface AnalyticsClient {
 }
 
 /** Main-process service for anonymous, privacy-reviewed product analytics. */
-export class Analytics extends Context.Tag("@diffdash/Analytics")<
+export class Analytics extends Context.Service<
   Analytics,
   {
     readonly capture: (event: AnalyticsEvent) => Effect.Effect<void>
     readonly start: Effect.Effect<void>
   }
->() {
+>()("@diffdash/Analytics") {
   /** Creates the analytics service from host-decoded runtime configuration. */
   static makeLayer(options: {
     readonly appVersion: string
@@ -45,13 +45,14 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
     readonly analytics: CoreAnalyticsState
     readonly settingsPath: string
     readonly clientFactory?: (key: string, host: string) => AnalyticsClient
-  }): Layer.Layer<Analytics, never, AppSettings> {
-    return Layer.scoped(
+  }): Layer.Layer<Analytics, never, AppSettings | FileStorage> {
+    return Layer.effect(
       Analytics,
       Effect.gen(function* () {
         const settings = yield* AppSettings
+        const storage = yield* FileStorage
         const statePath = join(dirname(options.settingsPath), "analytics.json")
-        let state = readAnalyticsState(statePath)
+        let state = yield* readAnalyticsState(storage, statePath)
         let started = false
         const client = !options.packaged
           ? null
@@ -69,7 +70,7 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
           Effect.gen(function* () {
             if (client === null) return
             const currentSettings = yield* settings.get.pipe(
-              Effect.catchAll(() => Effect.succeed(null)),
+              Effect.catch(() => Effect.succeed(null)),
             )
             if (currentSettings?.telemetryEnabled !== true) {
               yield* ignorePromise(() => client.disable())
@@ -98,16 +99,14 @@ export class Analytics extends Context.Tag("@diffdash/Analytics")<
 
         const start = Effect.gen(function* () {
           if (started) return
-          const currentSettings = yield* settings.get.pipe(
-            Effect.catchAll(() => Effect.succeed(null)),
-          )
+          const currentSettings = yield* settings.get.pipe(Effect.catch(() => Effect.succeed(null)))
           if (currentSettings?.telemetryEnabled !== true) return
           started = true
 
           if (!state.installReported && client !== null) {
             yield* send({ event: "app_installed" })
             state = { ...state, installReported: true }
-            writeAnalyticsState(statePath, state)
+            yield* writeAnalyticsState(storage, statePath, state)
           }
           yield* send({ event: "app_opened" })
         })
@@ -134,26 +133,24 @@ const makePostHogClient = (key: string, host: string): AnalyticsClient =>
     privacyMode: true,
   })
 
-const readAnalyticsState = (path: string): AnalyticsState => {
-  try {
-    return Schema.decodeUnknownSync(AnalyticsStateFromJson)(readFileSync(path, "utf8"))
-  } catch {
-    return {
-      distinctId: randomUUID(),
-      installedAt: new Date().toISOString(),
-      installReported: false,
-    }
-  }
-}
+const newAnalyticsState = (): AnalyticsState => ({
+  distinctId: randomUUID(),
+  installedAt: new Date().toISOString(),
+  installReported: false,
+})
 
-const writeAnalyticsState = (path: string, state: AnalyticsState) => {
-  try {
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, "utf8")
-  } catch {
-    // Analytics must never prevent the application from running.
-  }
-}
+const readAnalyticsState = (storage: FileStorageOperations, path: string) =>
+  storage.readOptionalTextFile(path).pipe(
+    Effect.flatMap((source) =>
+      source === null
+        ? Effect.succeed(newAnalyticsState())
+        : Schema.decodeUnknownEffect(AnalyticsStateFromJson)(source),
+    ),
+    Effect.catch(() => Effect.succeed(newAnalyticsState())),
+  )
+
+const writeAnalyticsState = (storage: FileStorageOperations, path: string, state: AnalyticsState) =>
+  storage.writePrettyJsonFile(path, state).pipe(Effect.catch(() => Effect.void))
 
 const eventProperties = (
   event: AnalyticsEvent | { readonly event: "app_installed" | "app_opened" },

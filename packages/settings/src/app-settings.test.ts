@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -28,7 +28,7 @@ const makeLayer = (directory: string) =>
   )
 
 describe("AppSettings", () => {
-  it.scoped("returns default settings when the file is missing", () =>
+  it.effect("returns default settings when the file is missing", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
 
@@ -41,25 +41,25 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("maps non-ENOENT filesystem failures to read errors", () =>
+  it.effect("maps non-ENOENT filesystem failures to read errors", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       mkdirSync(join(directory, "diffdash", "settings.json"), { recursive: true })
 
       const result = yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
-        return yield* Effect.either(appSettings.get)
+        return yield* Effect.result(appSettings.get)
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(AppSettingsError)
-        expect(result.left.operation).toBe("read")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppSettingsError)
+        expect(result.failure.operation).toBe("read")
       }
     }),
   )
 
-  it.scoped("preserves settings owned by unavailable future providers", () =>
+  it.effect("preserves settings owned by unavailable future providers", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsPath = join(directory, "diffdash", "settings.json")
@@ -91,7 +91,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("FUN-131 AC: upgrades the committed current settings fixture", () =>
+  it.effect("FUN-131 AC: upgrades the committed current settings fixture", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installSettingsFixture(directory, "settings-current.json")
@@ -125,7 +125,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("persists settings as JSON", () =>
+  it.effect("persists settings as JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsPath = join(directory, "diffdash", "settings.json")
@@ -174,7 +174,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("defaults the auto model tier for existing settings files", () =>
+  it.effect("defaults the auto model tier for existing settings files", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installSettingsFixture(directory, "settings-legacy.json")
@@ -192,7 +192,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("migrates version 2 settings without losing capability routes", () =>
+  it.effect("migrates version 2 settings without losing capability routes", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -243,7 +243,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("decodes light and dark theme preferences independently", () =>
+  it.effect("decodes light and dark theme preferences independently", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -282,7 +282,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("migrates and decodes light and dark code themes independently", () =>
+  it.effect("migrates and decodes light and dark code themes independently", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -325,7 +325,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("migrates the version 6 dark code-theme default without replacing other choices", () =>
+  it.effect("migrates the version 6 dark code-theme default without replacing other choices", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -365,7 +365,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("defaults malformed pane widths without resetting unrelated settings", () =>
+  it.effect("defaults malformed pane widths without resetting unrelated settings", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -406,7 +406,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("reads a manual telemetry opt-out from settings JSON", () =>
+  it.effect("reads a manual telemetry opt-out from settings JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installSettingsFixture(directory, "settings-telemetry-disabled.json")
@@ -420,7 +420,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("FUN-131 AC: isolates telemetry and appearance from malformed provider settings", () =>
+  it.effect("FUN-131 AC: isolates telemetry and appearance from malformed provider settings", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -451,7 +451,7 @@ describe("AppSettings", () => {
     }),
   )
 
-  it.scoped("falls back to defaults for invalid JSON", () =>
+  it.effect("falls back to defaults for invalid JSON", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installSettingsFixture(directory, "settings-malformed.txt")

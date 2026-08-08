@@ -16,7 +16,7 @@ import {
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, Schema } from "effect"
+import { Effect, Result, Layer, Schema } from "effect"
 import { DatabaseService } from "./database"
 import { ProjectWorkspaceStore, ProjectWorkspaceStoreError } from "./project-workspace-store"
 
@@ -84,7 +84,7 @@ const saveInput = (
   })
 
 describe("ProjectWorkspaceStore", () => {
-  it.scoped("returns null when a project has no workspace state", () =>
+  it.effect("returns null when a project has no workspace state", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -95,7 +95,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips workspace state with no selected review", () =>
+  it.effect("round trips workspace state with no selected review", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -116,7 +116,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips a hosted target independently from the active ribbon", () =>
+  it.effect("round trips a hosted target independently from the active ribbon", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -132,7 +132,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips a working-tree target", () =>
+  it.effect("round trips a working-tree target", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -147,7 +147,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips an exact branch comparison target", () =>
+  it.effect("round trips an exact branch comparison target", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -164,7 +164,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips every immutable repository comparison revision", () =>
+  it.effect("round trips every immutable repository comparison revision", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -184,7 +184,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("updates one row with the last saved state and timestamp", () =>
+  it.effect("updates one row with the last saved state and timestamp", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -212,7 +212,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("reports invalid persisted target JSON as a typed decode error", () =>
+  it.effect("reports invalid persisted target JSON as a typed decode error", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -226,8 +226,8 @@ describe("ProjectWorkspaceStore", () => {
           [projectId],
         )
 
-        const result = yield* Effect.either(store.get(projectId))
-        expect(Either.isLeft(result) && result.left).toEqual(
+        const result = yield* Effect.result(store.get(projectId))
+        expect(Result.isFailure(result) && result.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({
             _tag: "ProjectWorkspaceStoreError",
             operation: "get.decode",
@@ -237,15 +237,15 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("rejects orphan state and cascades state when its repository is deleted", () =>
+  it.effect("rejects orphan state and cascades state when its repository is deleted", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         const store = yield* ProjectWorkspaceStore
         const database = yield* DatabaseService
-        const orphan = yield* Effect.either(store.save(saveInput("reviews", null)))
-        expect(Either.isLeft(orphan) && orphan.left).toEqual(
+        const orphan = yield* Effect.result(store.save(saveInput("reviews", null)))
+        expect(Result.isFailure(orphan) && orphan.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({
             _tag: "ProjectWorkspaceStoreError",
             operation: "save.query",

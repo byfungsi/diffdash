@@ -12,8 +12,8 @@ import {
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { DatabaseService, type DatabaseTransaction } from "./database"
 
-const ArtifactMetadata = Schema.Record({ key: Schema.String, value: Schema.Unknown })
-const ArtifactMetadataJson = Schema.parseJson(ArtifactMetadata)
+const ArtifactMetadata = Schema.Record(Schema.String, Schema.Unknown)
+const ArtifactMetadataJson = Schema.fromJsonString(ArtifactMetadata)
 
 const AgentRunArtifactRow = Schema.Struct({
   id: ReviewAgentArtifactId,
@@ -25,8 +25,8 @@ const AgentRunArtifactRow = Schema.Struct({
   content: Schema.String,
   content_digest: Schema.String,
   metadata_json: ArtifactMetadataJson,
-  truncated: Schema.Literal(0, 1),
-  original_size: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+  truncated: Schema.Literals([0, 1]),
+  original_size: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   created_at: Schema.String,
 })
 
@@ -40,12 +40,12 @@ export class AgentRunArtifactStoreError extends Schema.TaggedError<AgentRunArtif
   "AgentRunArtifactStoreError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Persistence and thread/run queries for normalized provider artifacts. */
-export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifactStore")<
+export class AgentRunArtifactStore extends Context.Service<
   AgentRunArtifactStore,
   {
     readonly save: (
@@ -61,7 +61,7 @@ export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifa
       threadId: ReviewThreadId,
     ) => Effect.Effect<readonly StoredAgentRunArtifact[], AgentRunArtifactStoreError>
   }
->() {
+>()("@diffdash/AgentRunArtifactStore") {
   static readonly layer = Layer.effect(
     AgentRunArtifactStore,
     Effect.gen(function* () {
@@ -93,7 +93,7 @@ export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifa
 
       return AgentRunArtifactStore.of({
         save: Effect.fn("AgentRunArtifactStore.save")(function (input) {
-          return Schema.encode(ArtifactMetadataJson)(input.artifact.metadata).pipe(
+          return Schema.encodeEffect(ArtifactMetadataJson)(input.artifact.metadata).pipe(
             Effect.mapError((cause) =>
               AgentRunArtifactStoreError.make({ operation: "save.encodeMetadata", cause }),
             ),

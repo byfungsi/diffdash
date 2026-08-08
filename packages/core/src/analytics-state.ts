@@ -1,17 +1,19 @@
-import { Schema } from "effect"
+import { Schema, SchemaTransformation } from "effect"
 
 /** HTTP or HTTPS URL decoded at the native host boundary. */
 export const CoreWebUrl = Schema.String.pipe(
-  Schema.filter(
-    (value) => {
-      try {
-        const url = new URL(value)
-        return url.protocol === "http:" || url.protocol === "https:"
-      } catch {
-        return false
-      }
-    },
-    { message: () => "Expected an HTTP or HTTPS URL" },
+  Schema.check(
+    Schema.makeFilter(
+      (value) => {
+        try {
+          const url = new URL(value)
+          return url.protocol === "http:" || url.protocol === "https:"
+        } catch {
+          return false
+        }
+      },
+      { message: "Expected an HTTP or HTTPS URL" },
+    ),
   ),
   Schema.brand("CoreWebUrl"),
 )
@@ -19,7 +21,7 @@ export const CoreWebUrl = Schema.String.pipe(
 /** HTTP or HTTPS URL decoded at the native host boundary. */
 export type CoreWebUrl = typeof CoreWebUrl.Type
 
-const AnalyticsProjectKey = Schema.String.pipe(Schema.minLength(1))
+const AnalyticsProjectKey = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
 
 /** Analytics configuration that cannot produce a client. */
 export class CoreAnalyticsDisabled extends Schema.TaggedClass<CoreAnalyticsDisabled>()(
@@ -42,20 +44,20 @@ const EncodedAnalyticsState = Schema.Struct({
  * Decodes nullable host configuration into one closed analytics availability state.
  * Partial credentials are intentionally normalized to disabled.
  */
-export const CoreAnalyticsState = Schema.transform(
-  EncodedAnalyticsState,
-  Schema.Union(CoreAnalyticsDisabled, CoreAnalyticsEnabled),
-  {
-    strict: true,
-    decode: ({ host, projectKey }) =>
-      host === null || projectKey === null
-        ? CoreAnalyticsDisabled.make()
-        : CoreAnalyticsEnabled.make({ host, projectKey }),
-    encode: (_encodedState, state) =>
-      state instanceof CoreAnalyticsDisabled
-        ? { host: null, projectKey: null }
-        : { host: state.host, projectKey: state.projectKey },
-  },
+export const CoreAnalyticsState = EncodedAnalyticsState.pipe(
+  Schema.decodeTo(
+    Schema.toType(Schema.Union([CoreAnalyticsDisabled, CoreAnalyticsEnabled])),
+    SchemaTransformation.transform({
+      decode: ({ host, projectKey }) =>
+        host === null || projectKey === null
+          ? CoreAnalyticsDisabled.make()
+          : CoreAnalyticsEnabled.make({ host, projectKey }),
+      encode: (state) =>
+        state instanceof CoreAnalyticsDisabled
+          ? { host: null, projectKey: null }
+          : { host: state.host, projectKey: state.projectKey },
+    }),
+  ),
 )
 
 /** Closed internal analytics availability state. */

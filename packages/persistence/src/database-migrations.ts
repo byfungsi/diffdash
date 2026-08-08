@@ -9,7 +9,7 @@ interface DatabaseMigration {
   readonly migrate: (database: BetterSqliteDatabase) => void
 }
 
-const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 12
+const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 13
 const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
 const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
 const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
@@ -626,6 +626,120 @@ const migrations: readonly DatabaseMigration[] = [
         SELECT * FROM local_viewed_files;
         DROP TABLE local_viewed_files;
         ALTER TABLE local_viewed_files_v12 RENAME TO local_viewed_files;
+      `)
+    },
+  },
+  {
+    version: 13,
+    migrate: (database) => {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS walkthrough_operations (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          review_key TEXT NOT NULL,
+          base_sha TEXT NOT NULL,
+          head_sha TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN (
+            'accepted', 'running', 'completed', 'failed', 'cancelled',
+            'superseded', 'interrupted'
+          )),
+          state_version INTEGER NOT NULL CHECK (state_version >= 1),
+          regeneration_of_operation_id TEXT REFERENCES walkthrough_operations(id),
+          superseded_by_operation_id TEXT REFERENCES walkthrough_operations(id),
+          accepted_at TEXT NOT NULL,
+          started_at TEXT,
+          cancellation_requested_at TEXT,
+          terminal_at TEXT,
+          updated_at TEXT NOT NULL,
+          failure_kind TEXT CHECK (failure_kind IN ('expected', 'internal')),
+          failure_category TEXT CHECK (failure_category IN (
+            'review-resolution', 'prompt-preparation', 'provider', 'validation',
+            'artifact-persistence', 'operation-persistence', 'internal'
+          )),
+          failure_code TEXT,
+          artifact_repo_id TEXT,
+          artifact_review_key TEXT,
+          artifact_base_sha TEXT,
+          artifact_head_sha TEXT,
+          artifact_prompt_version TEXT,
+          FOREIGN KEY (
+            artifact_repo_id, artifact_review_key, artifact_base_sha,
+            artifact_head_sha, artifact_prompt_version
+          ) REFERENCES walkthroughs (
+            repo_id, review_key, base_sha, head_sha, prompt_version
+          ) ON UPDATE CASCADE,
+          CHECK (
+            (failure_kind IS NULL AND failure_category IS NULL AND failure_code IS NULL) OR
+            (failure_kind IS NOT NULL AND failure_category IS NOT NULL AND failure_code IS NOT NULL)
+          ),
+          CHECK (
+            failure_code IS NULL OR (
+              length(failure_code) BETWEEN 1 AND 100 AND
+              failure_code GLOB '[a-z]*' AND
+              failure_code NOT GLOB '*[^a-z0-9-]*' AND
+              failure_code NOT GLOB '*--*' AND
+              substr(failure_code, -1) <> '-'
+            )
+          ),
+          CHECK (
+            failure_kind IS NULL OR
+            (failure_kind = 'internal' AND failure_category = 'internal' AND
+             failure_code = 'unexpected-defect') OR
+            (failure_kind = 'expected' AND failure_category <> 'internal')
+          ),
+          CHECK (
+            (artifact_repo_id IS NULL AND artifact_review_key IS NULL AND
+             artifact_base_sha IS NULL AND artifact_head_sha IS NULL AND
+             artifact_prompt_version IS NULL) OR
+            (artifact_repo_id IS NOT NULL AND artifact_review_key IS NOT NULL AND
+             artifact_base_sha IS NOT NULL AND artifact_head_sha IS NOT NULL AND
+             artifact_prompt_version IS NOT NULL)
+          ),
+          CHECK (
+            (state = 'accepted' AND started_at IS NULL AND terminal_at IS NULL) OR
+            (state = 'running' AND started_at IS NOT NULL AND terminal_at IS NULL) OR
+            (state IN ('completed', 'failed', 'cancelled', 'superseded', 'interrupted') AND
+             terminal_at IS NOT NULL)
+          ),
+          CHECK (
+            (state = 'completed' AND started_at IS NOT NULL AND
+             artifact_repo_id = repo_id AND artifact_review_key = review_key AND
+             artifact_base_sha = base_sha AND artifact_head_sha = head_sha AND
+             artifact_prompt_version = prompt_version) OR
+            (state <> 'completed' AND artifact_repo_id IS NULL)
+          ),
+          CHECK (
+            (state = 'failed' AND failure_kind IS NOT NULL) OR
+            (state <> 'failed' AND failure_kind IS NULL)
+          ),
+          CHECK (
+            (state = 'cancelled' AND cancellation_requested_at IS NOT NULL) OR
+            (state <> 'cancelled' AND cancellation_requested_at IS NULL)
+          ),
+          CHECK (
+            (state = 'superseded' AND superseded_by_operation_id IS NOT NULL) OR
+            (state <> 'superseded' AND superseded_by_operation_id IS NULL)
+          )
+        );
+
+        CREATE INDEX IF NOT EXISTS walkthrough_operations_identity_idx
+          ON walkthrough_operations(
+            repo_id, review_key, base_sha, head_sha, prompt_version,
+            accepted_at DESC, id
+          );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS walkthrough_operations_one_active_generation_idx
+          ON walkthrough_operations(repo_id, review_key, base_sha, head_sha, prompt_version)
+          WHERE state IN ('accepted', 'running');
+
+        CREATE INDEX IF NOT EXISTS walkthrough_operations_active_idx
+          ON walkthrough_operations(state, accepted_at, id)
+          WHERE state IN ('accepted', 'running');
+
+        CREATE INDEX IF NOT EXISTS walkthrough_operations_regeneration_idx
+          ON walkthrough_operations(regeneration_of_operation_id)
+          WHERE regeneration_of_operation_id IS NOT NULL;
       `)
     },
   },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, Option } from "effect"
+import { Effect, Result, Layer, Option } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -35,7 +35,7 @@ const INSERT_REVIEW_THREAD_SQL = `INSERT INTO review_threads (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'open', NULL, ?, ?)`
 
 describe("RepositoryStore", () => {
-  it.scoped("persists local and remote-only repositories", () =>
+  it.effect("persists local and remote-only repositories", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -67,7 +67,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("updates favorite state and supports search", () =>
+  it.effect("updates favorite state and supports search", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -99,7 +99,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("prefers a hosted repository when legacy rows share a local path", () =>
+  it.effect("prefers a hosted repository when legacy rows share a local path", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -130,7 +130,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("returns None when no repository matches a lookup", () =>
+  it.effect("returns None when no repository matches a lookup", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -152,7 +152,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("reconciles local repository artifacts into the canonical hosted project", () =>
+  it.effect("reconciles local repository artifacts into the canonical hosted project", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -200,6 +200,31 @@ describe("RepositoryStore", () => {
             content_json, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [alias.id, 17, "github:17", "base", "head", "v1", "{}", "2026-08-02T00:00:00.000Z"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthrough_operations (
+            id, repo_id, review_key, base_sha, head_sha, prompt_version, state,
+            state_version, accepted_at, started_at, terminal_at, updated_at,
+            artifact_repo_id, artifact_review_key, artifact_base_sha,
+            artifact_head_sha, artifact_prompt_version
+          ) VALUES (?, ?, ?, ?, ?, ?, 'completed', 3, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "alias-walkthrough-operation",
+            alias.id,
+            "github:17",
+            "base",
+            "head",
+            "v1",
+            "2026-08-02T00:00:00.000Z",
+            "2026-08-02T00:00:01.000Z",
+            "2026-08-02T00:00:02.000Z",
+            "2026-08-02T00:00:02.000Z",
+            alias.id,
+            "github:17",
+            "base",
+            "head",
+            "v1",
+          ],
         )
         yield* database.run(
           `INSERT INTO hosted_viewed_files (
@@ -321,6 +346,12 @@ describe("RepositoryStore", () => {
           ]),
         ).toEqual({ repo_id: hosted.id })
         expect(
+          yield* database.get(
+            `SELECT repo_id, artifact_repo_id FROM walkthrough_operations WHERE id = ?`,
+            ["alias-walkthrough-operation"],
+          ),
+        ).toEqual({ repo_id: hosted.id, artifact_repo_id: hosted.id })
+        expect(
           yield* database.get("SELECT repo_id FROM hosted_viewed_files WHERE patch_hash = ?", [
             "hosted-patch",
           ]),
@@ -364,7 +395,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("merges colliding alias conversations into the canonical thread", () =>
+  it.effect("merges colliding alias conversations into the canonical thread", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -422,6 +453,38 @@ describe("RepositoryStore", () => {
             content_json, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [alias.id, 4, "github:4", "base", "head", "v1", "alias", "2026-08-03"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthrough_operations (
+            id, repo_id, review_key, base_sha, head_sha, prompt_version,
+            state, state_version, accepted_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 1, ?, ?)`,
+          [
+            "canonical-active-operation",
+            hosted.id,
+            "github:4",
+            "base",
+            "head",
+            "v1",
+            "2026-08-02T00:00:00.000Z",
+            "2026-08-02T00:00:00.000Z",
+          ],
+        )
+        yield* database.run(
+          `INSERT INTO walkthrough_operations (
+            id, repo_id, review_key, base_sha, head_sha, prompt_version,
+            state, state_version, accepted_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 1, ?, ?)`,
+          [
+            "alias-active-operation",
+            alias.id,
+            "github:4",
+            "base",
+            "head",
+            "v1",
+            "2026-08-03T00:00:00.000Z",
+            "2026-08-03T00:00:00.000Z",
+          ],
         )
         yield* database.run(
           `INSERT INTO project_workspace_state (
@@ -505,6 +568,18 @@ describe("RepositoryStore", () => {
         ).toEqual({ content_json: "canonical" })
         expect(
           yield* database.get(
+            `SELECT repo_id, state, state_version, superseded_by_operation_id
+             FROM walkthrough_operations WHERE id = ?`,
+            ["alias-active-operation"],
+          ),
+        ).toEqual({
+          repo_id: hosted.id,
+          state: "superseded",
+          state_version: 2,
+          superseded_by_operation_id: "canonical-active-operation",
+        })
+        expect(
+          yield* database.get(
             "SELECT active_ribbon, updated_at FROM project_workspace_state WHERE repo_id = ?",
             [hosted.id],
           ),
@@ -531,7 +606,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("forgets Home state without deleting the repository and touch restores recency", () =>
+  it.effect("forgets Home state without deleting the repository and touch restores recency", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -561,7 +636,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("upgrades a hosted favorite with its local checkout without duplicating it", () =>
+  it.effect("upgrades a hosted favorite with its local checkout without duplicating it", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -594,7 +669,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("converges renamed hosted locators through the stable provider repository ID", () =>
+  it.effect("converges renamed hosted locators through the stable provider repository ID", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -644,7 +719,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("repairs same-checkout local aliases while preserving their artifacts", () =>
+  it.effect("repairs same-checkout local aliases while preserving their artifacts", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -692,7 +767,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("FUN-130 AC: isolates nested repositories across provider IDs", () =>
+  it.effect("FUN-130 AC: isolates nested repositories across provider IDs", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -729,7 +804,7 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.scoped("rejects corrupt repository text, nullable, and favorite columns", () =>
+  it.effect("rejects corrupt repository text, nullable, and favorite columns", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -749,11 +824,11 @@ describe("RepositoryStore", () => {
           "UPDATE repository_identities SET canonical_owner = x'01' WHERE repo_id = ?",
           [repo.id],
         )
-        const corruptText = yield* Effect.either(store.list())
-        expect(Either.isLeft(corruptText)).toBe(true)
-        if (Either.isLeft(corruptText)) {
-          expect(corruptText.left).toBeInstanceOf(RepositoryStoreError)
-          expect(corruptText.left.operation).toBe("list.decode")
+        const corruptText = yield* Effect.result(store.list())
+        expect(Result.isFailure(corruptText)).toBe(true)
+        if (Result.isFailure(corruptText)) {
+          expect(corruptText.failure).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptText.failure.operation).toBe("list.decode")
         }
 
         yield* database.run("UPDATE repos SET owner = ?, local_path = x'01' WHERE id = ?", [
@@ -768,21 +843,21 @@ describe("RepositoryStore", () => {
           "UPDATE repository_checkouts SET local_path = x'01' WHERE repo_id = ?",
           [repo.id],
         )
-        const corruptNullable = yield* Effect.either(store.touch(repo.id))
-        expect(Either.isLeft(corruptNullable)).toBe(true)
-        if (Either.isLeft(corruptNullable)) {
-          expect(corruptNullable.left).toBeInstanceOf(RepositoryStoreError)
-          expect(corruptNullable.left.operation).toBe("getById.decode")
+        const corruptNullable = yield* Effect.result(store.touch(repo.id))
+        expect(Result.isFailure(corruptNullable)).toBe(true)
+        if (Result.isFailure(corruptNullable)) {
+          expect(corruptNullable.failure).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptNullable.failure.operation).toBe("getById.decode")
         }
 
         yield* database.run("UPDATE repos SET local_path = NULL, is_favorite = 2 WHERE id = ?", [
           repo.id,
         ])
-        const corruptFavorite = yield* Effect.either(store.list())
-        expect(Either.isLeft(corruptFavorite)).toBe(true)
-        if (Either.isLeft(corruptFavorite)) {
-          expect(corruptFavorite.left).toBeInstanceOf(RepositoryStoreError)
-          expect(corruptFavorite.left.operation).toBe("list.decode")
+        const corruptFavorite = yield* Effect.result(store.list())
+        expect(Result.isFailure(corruptFavorite)).toBe(true)
+        if (Result.isFailure(corruptFavorite)) {
+          expect(corruptFavorite.failure).toBeInstanceOf(RepositoryStoreError)
+          expect(corruptFavorite.failure.operation).toBe("list.decode")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -64,7 +64,7 @@ const createRepo = Effect.gen(function* () {
 })
 
 describe("ReviewThreadStore", () => {
-  it.scoped("FUN-67 AC: atomically creates a thread and initial Markdown message", () =>
+  it.effect("FUN-67 AC: atomically creates a thread and initial Markdown message", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -96,7 +96,7 @@ describe("ReviewThreadStore", () => {
     }),
   )
 
-  it.scoped("FUN-67 AC: allows only one thread for an exact review line", () =>
+  it.effect("FUN-67 AC: allows only one thread for an exact review line", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -113,16 +113,16 @@ describe("ReviewThreadStore", () => {
           bodyMarkdown: MarkdownBody.make("Only one comment belongs here."),
         }
         yield* store.create(input)
-        const duplicate = yield* Effect.either(store.create(input))
+        const duplicate = yield* Effect.result(store.create(input))
         const threads = yield* store.listForReview({ repoId: repo.id, reviewKey })
 
-        expect(Either.isLeft(duplicate)).toBe(true)
+        expect(Result.isFailure(duplicate)).toBe(true)
         expect(threads).toHaveLength(1)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-67 AC: persists a line-only anchor", () =>
+  it.effect("FUN-67 AC: persists a line-only anchor", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -164,7 +164,7 @@ index 1111111..2222222 100644
     }),
   )
 
-  it.scoped("FUN-67 AC: appends a follow-up after the prior agent response", () =>
+  it.effect("FUN-67 AC: appends a follow-up after the prior agent response", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -182,7 +182,7 @@ index 1111111..2222222 100644
           bodyMarkdown: MarkdownBody.make("Initial question"),
         })
 
-        const blocked = yield* Effect.either(
+        const blocked = yield* Effect.result(
           store.addUserMessage({
             threadId: created.thread.id,
             bodyMarkdown: MarkdownBody.make("Too soon"),
@@ -224,12 +224,12 @@ index 1111111..2222222 100644
           { author: "agent", sequence: 2 },
           { author: "user", sequence: 3 },
         ])
-        expect(Either.isLeft(blocked)).toBe(true)
+        expect(Result.isFailure(blocked)).toBe(true)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-67 AC: scopes lists by review key and current head revision", () =>
+  it.effect("FUN-67 AC: scopes lists by review key and current head revision", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -265,7 +265,7 @@ index 1111111..2222222 100644
     }),
   )
 
-  it.scoped("FUN-67 AC: rejects malformed persisted rows at the store boundary", () =>
+  it.effect("FUN-67 AC: rejects malformed persisted rows at the store boundary", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -287,19 +287,19 @@ index 1111111..2222222 100644
           created.thread.id,
         ])
 
-        const result = yield* Effect.either(store.get(created.thread.id))
-        const listResult = yield* Effect.either(store.listForReview({ repoId: repo.id, reviewKey }))
+        const result = yield* Effect.result(store.get(created.thread.id))
+        const listResult = yield* Effect.result(store.listForReview({ repoId: repo.id, reviewKey }))
 
-        expect(Either.isLeft(result)).toBe(true)
-        if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewThreadStoreError)
-        expect(Either.isLeft(listResult)).toBe(true)
-        if (Either.isLeft(listResult))
-          expect(listResult.left.operation).toBe("listForReview.decode")
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewThreadStoreError)
+        expect(Result.isFailure(listResult)).toBe(true)
+        if (Result.isFailure(listResult))
+          expect(listResult.failure.operation).toBe("listForReview.decode")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("rejects corrupt ignored columns and message rows", () =>
+  it.effect("rejects corrupt ignored columns and message rows", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -320,11 +320,11 @@ index 1111111..2222222 100644
         yield* database.run("UPDATE review_threads SET closed_at = x'01' WHERE id = ?", [
           created.thread.id,
         ])
-        const corruptThread = yield* Effect.either(store.get(created.thread.id))
-        expect(Either.isLeft(corruptThread)).toBe(true)
-        if (Either.isLeft(corruptThread)) {
-          expect(corruptThread.left).toBeInstanceOf(ReviewThreadStoreError)
-          expect(corruptThread.left.operation).toBe("get")
+        const corruptThread = yield* Effect.result(store.get(created.thread.id))
+        expect(Result.isFailure(corruptThread)).toBe(true)
+        if (Result.isFailure(corruptThread)) {
+          expect(corruptThread.failure).toBeInstanceOf(ReviewThreadStoreError)
+          expect(corruptThread.failure.operation).toBe("get")
         }
 
         yield* database.run("UPDATE review_threads SET closed_at = NULL WHERE id = ?", [
@@ -334,31 +334,31 @@ index 1111111..2222222 100644
           "UPDATE review_thread_messages SET sequence = 1.5 WHERE thread_id = ?",
           [created.thread.id],
         )
-        const corruptMessage = yield* Effect.either(store.get(created.thread.id))
-        expect(Either.isLeft(corruptMessage)).toBe(true)
-        if (Either.isLeft(corruptMessage)) {
-          expect(corruptMessage.left).toBeInstanceOf(ReviewThreadStoreError)
-          expect(corruptMessage.left.operation).toBe("get")
+        const corruptMessage = yield* Effect.result(store.get(created.thread.id))
+        expect(Result.isFailure(corruptMessage)).toBe(true)
+        if (Result.isFailure(corruptMessage)) {
+          expect(corruptMessage.failure).toBeInstanceOf(ReviewThreadStoreError)
+          expect(corruptMessage.failure.operation).toBe("get")
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-67 AC: reports missing thread IDs as typed store errors", () =>
+  it.effect("FUN-67 AC: reports missing thread IDs as typed store errors", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         const store = yield* ReviewThreadStore
-        const result = yield* Effect.either(store.get(ReviewThreadId.make("missing")))
+        const result = yield* Effect.result(store.get(ReviewThreadId.make("missing")))
 
-        expect(Either.isLeft(result)).toBe(true)
-        if (Either.isLeft(result)) expect(result.left.operation).toBe("get")
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) expect(result.failure.operation).toBe("get")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("FUN-66 AC: atomically updates current mappings without changing originals", () =>
+  it.effect("FUN-66 AC: atomically updates current mappings without changing originals", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -396,7 +396,7 @@ index 1111111..2222222 100644
           anchorStatus: "outdated",
         })
 
-        const failed = yield* Effect.either(
+        const failed = yield* Effect.result(
           store.updateCurrentMappings([
             {
               threadId: created.thread.id,
@@ -414,7 +414,7 @@ index 1111111..2222222 100644
             },
           ]),
         )
-        expect(Either.isLeft(failed)).toBe(true)
+        expect(Result.isFailure(failed)).toBe(true)
 
         const afterRollback = yield* store.get(created.thread.id)
         expect(afterRollback.thread).toMatchObject({

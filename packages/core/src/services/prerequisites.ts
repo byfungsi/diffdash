@@ -37,18 +37,18 @@ export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteIns
   {
     operation: Schema.String,
     message: Schema.String,
-    cause: Schema.NullOr(Schema.Defect),
+    cause: Schema.NullOr(Schema.Defect()),
   },
 ) {}
 
 /** Main-process service for setup prerequisite checks and install actions. */
-export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
+export class Prerequisites extends Context.Service<
   Prerequisites,
   {
     readonly get: Effect.Effect<AppPrerequisites>
     readonly installDiffDashCli: Effect.Effect<DiffDashCliInstallResult, PrerequisiteInstallError>
   }
->() {
+>()("@diffdash/Prerequisites") {
   /** Creates prerequisite checks from host-decoded executable and home paths. */
   static layer(options: {
     readonly appImagePath: string | null
@@ -177,7 +177,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
 const commandAvailable = (processes: ProcessRunner, command: string) =>
   processes.run(processRequest(command, ["--version"], { timeoutMs: 5_000 })).pipe(
     Effect.as(true),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   )
 
 const agentSetupRequirement = (provider: AgentProviderStatus) => {

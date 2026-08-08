@@ -5,7 +5,7 @@ export class CoreConfigurationError extends Schema.TaggedError<CoreConfiguration
   "CoreConfigurationError",
   {
     message: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
@@ -13,7 +13,7 @@ export class CoreConfigurationError extends Schema.TaggedError<CoreConfiguration
 export class CoreStartupError extends Schema.TaggedError<CoreStartupError>()("CoreStartupError", {
   operation: Schema.String,
   message: Schema.String,
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
 /** Complete expected failure union while acquiring the embedded Core runtime. */

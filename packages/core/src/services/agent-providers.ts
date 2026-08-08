@@ -15,10 +15,10 @@ import {
 } from "@diffdash/protocol/agent-providers"
 
 /** Renderer-safe catalog assembled from registered provider manifests and probes. */
-export class AgentProviders extends Context.Tag("@diffdash/AgentProviders")<
+export class AgentProviders extends Context.Service<
   AgentProviders,
   { readonly catalog: Effect.Effect<AgentProviderCatalog> }
->() {
+>()("@diffdash/AgentProviders") {
   static readonly layer = Layer.effect(
     AgentProviders,
     Effect.gen(function* () {
@@ -105,7 +105,7 @@ const capabilityStatus = (
           }),
       }),
     ),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.succeed(
         AgentProviderCapabilityStatus.make({
           capability,

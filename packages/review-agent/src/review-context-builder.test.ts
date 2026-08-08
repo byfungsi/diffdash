@@ -16,7 +16,7 @@ import {
   ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 import {
   type BuildReviewPromptContextInput,
   ReviewContextBuilder,
@@ -396,14 +396,14 @@ describe("ReviewContextBuilder", () => {
   it.effect("fails closed when the required stable prefix cannot fit", () =>
     Effect.gen(function* () {
       const service = yield* ReviewContextBuilder
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         service.build(makeInput(undefined, { totalPromptBudgetBytes: 1 })),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isRight(result)) return
-      expect(result.left).toBeInstanceOf(ReviewContextBuilderError)
-      expect(result.left.requiredBytes).toBeGreaterThan(result.left.budgetBytes)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isSuccess(result)) return
+      expect(result.failure).toBeInstanceOf(ReviewContextBuilderError)
+      expect(result.failure.requiredBytes).toBeGreaterThan(result.failure.budgetBytes)
     }).pipe(Effect.provide(ReviewContextBuilder.layer)),
   )
 })

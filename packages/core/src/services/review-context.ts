@@ -25,12 +25,12 @@ export class ReviewContextError extends Schema.TaggedError<ReviewContextError>()
   {
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   },
 ) {}
 
 /** Main-process service that captures immutable local and provider review snapshots. */
-export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextService")<
+export class ReviewContextService extends Context.Service<
   ReviewContextService,
   {
     readonly getHostedReviewSnapshot: (
@@ -40,7 +40,7 @@ export class ReviewContextService extends Context.Tag("@diffdash/ReviewContextSe
       target: LocalReviewTarget,
     ) => Effect.Effect<LocalReviewSnapshot, ReviewContextError>
   }
->() {
+>()("@diffdash/ReviewContextService") {
   /** Builds the hosted snapshot acquisition layer. */
   static readonly layerWith = (options: ReviewContextLayerOptions = {}) =>
     Layer.effect(

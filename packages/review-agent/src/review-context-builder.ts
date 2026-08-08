@@ -67,14 +67,14 @@ export class ReviewContextBuilderError extends Schema.TaggedError<ReviewContextB
 ) {}
 
 /** Main-process service that creates deterministic, cache-friendly review thread prompts. */
-export class ReviewContextBuilder extends Context.Tag("@diffdash/ReviewContextBuilder")<
+export class ReviewContextBuilder extends Context.Service<
   ReviewContextBuilder,
   {
     readonly build: (
       input: BuildReviewPromptContextInput,
     ) => Effect.Effect<ReviewPromptContext, ReviewContextBuilderError>
   }
->() {
+>()("@diffdash/ReviewContextBuilder") {
   static readonly layer = Layer.succeed(
     ReviewContextBuilder,
     ReviewContextBuilder.of({

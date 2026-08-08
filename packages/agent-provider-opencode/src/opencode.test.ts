@@ -119,9 +119,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
       }),
     streamLines: (request) => {
       calls.push({ command: request.command, args: request.args, options: request, prompt: null })
-      return Stream.acquireRelease(
-        Effect.sync(() => void (serverAcquired = true)),
-        () => Effect.sync(() => void (serverReleased = true)),
+      return Stream.scoped(
+        Stream.fromEffect(
+          Effect.acquireRelease(
+            Effect.sync(() => void (serverAcquired = true)),
+            () => Effect.sync(() => void (serverReleased = true)),
+          ),
+        ),
       ).pipe(
         Stream.flatMap(() =>
           Stream.concat(
