@@ -129,12 +129,12 @@
   --diff-separator: color-mix(in oklch, var(--theme-base) 58%, var(--theme-surface-1));
   --diff-separator-border: color-mix(in oklch, var(--theme-base) 74%, var(--theme-overlay-0));
   --diff-separator-foreground: color-mix(in oklch, var(--theme-subtext-0) 76%, var(--theme-text));
-  --diff-addition: color-mix(in oklch, var(--theme-green) 12%, var(--diff-canvas));
-  --diff-addition-emphasis: color-mix(in oklch, var(--theme-green) 24%, var(--diff-canvas));
-  --diff-deletion: color-mix(in oklch, var(--theme-red) 12%, var(--diff-canvas));
-  --diff-deletion-emphasis: color-mix(in oklch, var(--theme-red) 24%, var(--diff-canvas));
-  --diff-hover: color-mix(in oklch, var(--theme-mauve) 9%, var(--diff-canvas));
-  --diff-selection: color-mix(in oklch, var(--theme-mauve) 16%, var(--diff-canvas));
+  --diff-addition: color-mix(in srgb, var(--theme-green) 8%, var(--diff-canvas));
+  --diff-addition-emphasis: color-mix(in srgb, var(--theme-green) 16%, var(--diff-canvas));
+  --diff-deletion: color-mix(in srgb, var(--theme-red) 8%, var(--diff-canvas));
+  --diff-deletion-emphasis: color-mix(in srgb, var(--theme-red) 16%, var(--diff-canvas));
+  --diff-hover: color-mix(in srgb, var(--theme-mauve) 6%, var(--diff-canvas));
+  --diff-selection: color-mix(in srgb, var(--theme-mauve) 10%, var(--diff-canvas));
   --pr-open: var(--theme-green);
   --pr-closed: var(--theme-red);
   --pr-merged: var(--theme-mauve);

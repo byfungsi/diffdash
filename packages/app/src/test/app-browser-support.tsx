@@ -1210,6 +1210,24 @@ index 7777777..8888888 100644
     const expectedSeparatorBorder = document.createElement("div")
     const expectedSeparatorForeground = document.createElement("div")
     const expectedSuccess = document.createElement("div")
+    const expectedDiffColors = [
+      ["--diff-addition", "color-mix(in srgb, var(--theme-green) 8%, var(--diff-canvas))"],
+      [
+        "--diff-addition-emphasis",
+        "color-mix(in srgb, var(--theme-green) 16%, var(--diff-canvas))",
+      ],
+      ["--diff-deletion", "color-mix(in srgb, var(--theme-red) 8%, var(--diff-canvas))"],
+      ["--diff-deletion-emphasis", "color-mix(in srgb, var(--theme-red) 16%, var(--diff-canvas))"],
+      ["--diff-hover", "color-mix(in srgb, var(--theme-mauve) 6%, var(--diff-canvas))"],
+      ["--diff-selection", "color-mix(in srgb, var(--theme-mauve) 10%, var(--diff-canvas))"],
+    ] as const
+    const diffColorElements = expectedDiffColors.map(([token, expectedColor]) => {
+      const actual = document.createElement("div")
+      const expected = document.createElement("div")
+      actual.style.color = `var(${token})`
+      expected.style.color = expectedColor
+      return { actual, expected }
+    })
     expectedBorder.style.color = "var(--review-sidebar-border)"
     expectedSeparator.style.color = "var(--diff-separator)"
     expectedSeparatorBorder.style.color = "var(--diff-separator-border)"
@@ -1221,6 +1239,7 @@ index 7777777..8888888 100644
       expectedSeparatorBorder,
       expectedSeparatorForeground,
       expectedSuccess,
+      ...diffColorElements.flatMap(({ actual, expected }) => [actual, expected]),
     )
     expect(getComputedStyle(card).borderTopColor).toBe(getComputedStyle(expectedBorder).color)
     expect(getComputedStyle(additionMarker!, "::before").backgroundColor).toBe(
@@ -1236,11 +1255,18 @@ index 7777777..8888888 100644
       getComputedStyle(expectedSeparatorForeground).color,
     )
     expect(getComputedStyle(hunkSeparatorContent!).fontWeight).toBe("500")
+    for (const { actual, expected } of diffColorElements) {
+      expect(getComputedStyle(actual).color).toBe(getComputedStyle(expected).color)
+    }
     expectedBorder.remove()
     expectedSeparator.remove()
     expectedSeparatorBorder.remove()
     expectedSeparatorForeground.remove()
     expectedSuccess.remove()
+    for (const { actual, expected } of diffColorElements) {
+      actual.remove()
+      expected.remove()
+    }
   })
   expect(document.querySelector('button[aria-label^="Use "][aria-label$=" theme"]')).toBeNull()
 })
