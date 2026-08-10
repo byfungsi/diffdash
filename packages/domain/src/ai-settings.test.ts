@@ -1,14 +1,71 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Result, Schema } from "effect"
 import {
+  AIAgentSelection,
+  AIAgentSelections,
+  AIModelId,
+  AIProviderId,
+  AISettings,
   CodeThemePreferences,
   DarkCodeTheme,
   DarkTheme,
   DEFAULT_CODE_THEME_PREFERENCES,
+  DEFAULT_AI_SETTINGS,
   LightCodeTheme,
   LightTheme,
   ThemePreferences,
 } from "./ai-settings"
+
+describe("AI settings routing", () => {
+  it("requires one tagged selection for each canonical capability", () => {
+    const decode = Schema.decodeUnknownResult(AISettings)
+
+    expect(
+      Result.isSuccess(
+        decode({
+          ...Schema.encodeUnknownSync(AISettings)(
+            AISettings.make({
+              ...DEFAULT_AI_SETTINGS,
+              selections: {
+                walkthrough: AIAgentSelection.cases.Automatic.make({ quality: "best" }),
+                "review-thread": AIAgentSelection.cases.Pinned.make({
+                  providerId: AIProviderId.make("unavailable-provider"),
+                  modelId: AIModelId.make("unavailable-model"),
+                }),
+              },
+            }),
+          ),
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it("rejects incomplete records and strips unknown capability keys", () => {
+    const decode = Schema.decodeUnknownResult(AIAgentSelections)
+
+    expect(Result.isFailure(decode({ walkthrough: { _tag: "Automatic", quality: "best" } }))).toBe(
+      true,
+    )
+    const extraKey = decode({
+      walkthrough: { _tag: "Automatic", quality: "best" },
+      "review-thread": { _tag: "Automatic", quality: "fast" },
+      future: { _tag: "Automatic", quality: "balanced" },
+    })
+    expect(Result.isSuccess(extraKey)).toBe(true)
+    const decodedKeys = Result.isSuccess(extraKey) ? Object.keys(extraKey.success) : []
+    expect(decodedKeys).toHaveLength(2)
+  })
+
+  it("represents a pinned provider using its capability default model", () => {
+    const result = Schema.decodeUnknownResult(AIAgentSelection)({
+      _tag: "Pinned",
+      providerId: "codex",
+      modelId: null,
+    })
+
+    expect(Result.isSuccess(result)).toBe(true)
+  })
+})
 
 describe("theme preferences", () => {
   it("accepts every supported light and dark theme", () => {

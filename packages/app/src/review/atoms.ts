@@ -19,13 +19,14 @@ const localReviewAtomKeyCodec = makeSchemaAtomKeyCodec(LocalReviewTarget)
 const hostedRepositoryAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositoryLocator)
 const hostedReviewAtomKeyCodec = makeSchemaAtomKeyCodec(HostedReviewLocator)
 const repositoryComparisonAtomKeyCodec = makeSchemaAtomKeyCodec(RepositoryComparisonTarget)
+const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
 
 /** Open hosted reviews for one repository. */
 export const pullRequestsAtom = Atom.family((key: string) =>
   rendererRuntime.atom(
     Effect.gen(function* () {
-      const parsedKey = parseRepoAtomKey(key)
-      if (parsedKey === null) return [] as readonly HostedReviewSummary[]
+      const parsedKey = key.length === 0 ? null : hostedRepositoryAtomKeyCodec.decode(key)
+      if (parsedKey === null) return EMPTY_HOSTED_REVIEWS
       const reviews = yield* ReviewContent
       return yield* reviews.hostedReviews.list(
         HostedRepositoryRequest.make({
@@ -33,7 +34,7 @@ export const pullRequestsAtom = Atom.family((key: string) =>
         }),
       )
     }),
-    { initialValue: [] as readonly HostedReviewSummary[] },
+    { initialValue: EMPTY_HOSTED_REVIEWS },
   ),
 )
 
@@ -41,7 +42,7 @@ export const pullRequestsAtom = Atom.family((key: string) =>
 export const hostedReviewManifestAtom = Atom.family((key: string) =>
   rendererRuntime.atom(
     Effect.gen(function* () {
-      const parsedKey = parseHostedReviewAtomKey(key)
+      const parsedKey = key.length === 0 ? null : hostedReviewAtomKeyCodec.decode(key)
       if (parsedKey === null) return null
       const reviews = yield* ReviewContent
       return yield* reviews.snapshots.acquireHosted(HostedReviewRequest.make({ review: parsedKey }))
@@ -54,7 +55,7 @@ export const hostedReviewManifestAtom = Atom.family((key: string) =>
 export const localReviewManifestAtom = Atom.family((key: string) =>
   rendererRuntime.atom(
     Effect.gen(function* () {
-      const target = parseLocalReviewAtomKey(key)
+      const target = key.length === 0 ? null : localReviewAtomKeyCodec.decode(key)
       if (target === null) return null
       const reviews = yield* ReviewContent
       return yield* reviews.snapshots.acquireLocal(target)
@@ -67,7 +68,7 @@ export const localReviewManifestAtom = Atom.family((key: string) =>
 export const repositoryComparisonManifestAtom = Atom.family((key: string) =>
   rendererRuntime.atom(
     Effect.gen(function* () {
-      const target = parseRepositoryComparisonAtomKey(key)
+      const target = key.length === 0 ? null : repositoryComparisonAtomKeyCodec.decode(key)
       if (target === null) return null
       const reviews = yield* ReviewContent
       return yield* reviews.snapshots.acquireRepositoryComparison(target)
@@ -100,15 +101,3 @@ export const serializeLocalReviewAtomKey = (target: LocalReviewTarget) =>
 /** Stable immutable repository comparison atom key. */
 export const serializeRepositoryComparisonAtomKey = (target: RepositoryComparisonTarget) =>
   repositoryComparisonAtomKeyCodec.encode(target)
-
-const parseLocalReviewAtomKey = (key: string) =>
-  key.length === 0 ? null : localReviewAtomKeyCodec.decode(key)
-
-const parseRepoAtomKey = (key: string) =>
-  key.length === 0 ? null : hostedRepositoryAtomKeyCodec.decode(key)
-
-const parseHostedReviewAtomKey = (key: string) =>
-  key.length === 0 ? null : hostedReviewAtomKeyCodec.decode(key)
-
-const parseRepositoryComparisonAtomKey = (key: string) =>
-  key.length === 0 ? null : repositoryComparisonAtomKeyCodec.decode(key)

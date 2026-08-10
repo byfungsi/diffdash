@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 import "./load-local-env.mjs"
 import { parseNotarizeArguments } from "./release-arguments.mjs"
 import { requiredEnvironment } from "./release-environment.mjs"
+import { withTemporaryDirectory } from "./temporary-directory.mjs"
 
 const cli = parseNotarizeArguments()
 const timeoutMinutes = Number(
@@ -30,33 +31,39 @@ const authArgs = [
   "--issuer",
   requiredEnvironment("APPLE_API_ISSUER"),
 ]
-const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-notarize-"))
-const zipPath = path.join(tempDir, "DiffDash.zip")
 let submissionId = cli.submissionId
 
 if (typeof submissionId !== "string" || submissionId.length === 0) {
-  console.log(`Creating notarization archive for ${appPath}`)
-  const zipResult = await run(
-    "ditto",
-    ["-c", "-k", "--sequesterRsrc", "--keepParent", path.basename(appPath), zipPath],
-    { cwd: path.dirname(appPath), inherit: true, timeoutMs: 10 * 60_000 },
-  )
-  if (zipResult.code !== 0) failWithOutput("Failed to create notarization archive.", zipResult)
+  submissionId = await withTemporaryDirectory(
+    path.join(tmpdir(), "diffdash-notarize-"),
+    async (tempDir) => {
+      const zipPath = path.join(tempDir, "DiffDash.zip")
+      console.log(`Creating notarization archive for ${appPath}`)
+      const zipResult = await run(
+        "ditto",
+        ["-c", "-k", "--sequesterRsrc", "--keepParent", path.basename(appPath), zipPath],
+        { cwd: path.dirname(appPath), inherit: true, timeoutMs: 10 * 60_000 },
+      )
+      if (zipResult.code !== 0) failWithOutput("Failed to create notarization archive.", zipResult)
 
-  console.log("Submitting app to Apple notarization service")
-  const submitResult = await run(
-    "xcrun",
-    ["notarytool", "submit", zipPath, ...authArgs, "--output-format", "json"],
-    { timeoutMs: 20 * 60_000 },
-  )
-  if (submitResult.code !== 0)
-    failWithOutput("Failed to submit app for notarization.", submitResult)
+      console.log("Submitting app to Apple notarization service")
+      const submitResult = await run(
+        "xcrun",
+        ["notarytool", "submit", zipPath, ...authArgs, "--output-format", "json"],
+        { timeoutMs: 20 * 60_000 },
+      )
+      if (submitResult.code !== 0) {
+        failWithOutput("Failed to submit app for notarization.", submitResult)
+      }
 
-  const submission = parseJson(submitResult.stdout, "notarytool submit")
-  submissionId = submission.id
-  if (typeof submissionId !== "string" || submissionId.length === 0) {
-    failWithOutput("Notarization submission did not return an id.", submitResult)
-  }
+      const submission = parseJson(submitResult.stdout, "notarytool submit")
+      const submittedId = submission.id
+      if (typeof submittedId !== "string" || submittedId.length === 0) {
+        failWithOutput("Notarization submission did not return an id.", submitResult)
+      }
+      return submittedId
+    },
+  )
   console.log(`Notarization submitted: ${submissionId}`)
 } else {
   console.log(`Resuming notarization submission: ${submissionId}`)
@@ -175,7 +182,7 @@ function failWithOutput(message, result) {
   if (result?.timedOut) console.error("Command timed out.")
   if (result?.stdout) console.error(result.stdout)
   if (result?.stderr) console.error(result.stderr)
-  process.exit(1)
+  throw new Error(message)
 }
 
 function parseJson(text, context) {
@@ -186,8 +193,4 @@ function parseJson(text, context) {
     console.error(text)
     throw error
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }

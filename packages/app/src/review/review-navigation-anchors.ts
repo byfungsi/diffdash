@@ -14,7 +14,7 @@ interface RegisteredAnchor extends MountedReviewAnchor {
 
 interface AnchorWaiter {
   readonly resolve: (anchor: MountedReviewAnchor) => void
-  readonly reject: (error: unknown) => void
+  readonly reject: (error: DOMException) => void
   readonly signal: AbortSignal
   readonly onAbort: () => void
 }

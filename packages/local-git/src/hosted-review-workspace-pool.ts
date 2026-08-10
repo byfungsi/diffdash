@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Context, Effect, Exit, Fiber, Layer, Option, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Match, Option, Schema, Stream } from "effect"
 
 import {
   makeHostedRepositoryKey,
@@ -7,19 +7,26 @@ import {
 } from "@diffdash/domain/git-provider"
 import { VERY_LARGE_DIFF_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
 import { GitCommitSha, type RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { RepositoryCheckoutPath, type RepositoryLocalPath } from "@diffdash/domain/repository"
 import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
+import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import { ProcessService, type ProcessResult, type ProcessRunner } from "@diffdash/process"
 import { gitProcessRequest } from "./git-environment"
 import { isProcessAlive, withFileLock } from "./hosted-review-workspace-file-lock"
+import { completeWithFinalizer } from "./hosted-review-workspace-finalizer"
 import {
   type Manifest,
   type Slot,
   mutateManifest,
   updateSlot,
 } from "./hosted-review-workspace-manifest"
-import { HostedReviewWorkspacePoolError, poolError } from "./hosted-review-workspace-pool-error"
+import {
+  HostedReviewWorkspacePoolError,
+  poolError,
+  toError,
+} from "./hosted-review-workspace-pool-error"
 import {
   makeManagedWorkspaceFilesystem,
   type ManagedWorkspaceFilesystem,
@@ -36,25 +43,29 @@ export interface HostedReviewWorkspaceInput {
   readonly runId: AgentRunId
   readonly threadId: ReviewThreadId
   readonly checkout: HostedReviewCheckoutSpec
-  readonly sourcePath: string | null
-  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
+  readonly sourcePath: RepositoryLocalPath
+  readonly bootstrapBareRepository: (
+    destination: RepositoryCheckoutPath,
+  ) => Effect.Effect<void, Error, never>
 }
 
 /** One exclusively leased, detached review worktree. */
 export interface HostedReviewWorkspaceLease {
-  readonly localPath: string
-  readonly headSha: string
+  readonly localPath: RepositoryCheckoutPath
+  readonly headSha: GitCommitSha
   readonly slotId: string
 }
 
 /** Input required to pin one immutable repository comparison. */
 export interface HostedRepositoryComparisonInput {
   readonly repository: HostedRepositoryLocator
-  readonly sourcePath: string | null
+  readonly sourcePath: RepositoryLocalPath
   readonly remoteUrl: string
   readonly baseRef: RepositoryComparisonRef
   readonly headRef: RepositoryComparisonRef
-  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
+  readonly bootstrapBareRepository: (
+    destination: RepositoryCheckoutPath,
+  ) => Effect.Effect<void, Error, never>
 }
 
 /** Immutable Git coordinates resolved for one repository comparison. */
@@ -67,12 +78,14 @@ export interface PinnedRepositoryComparison {
 /** Input required to read or materialize an already pinned comparison. */
 export interface PinnedRepositoryComparisonInput {
   readonly repository: HostedRepositoryLocator
-  readonly sourcePath: string | null
+  readonly sourcePath: RepositoryLocalPath
   readonly remoteUrl: string | null
   readonly baseSha: GitCommitSha
   readonly headSha: GitCommitSha
   readonly mergeBaseSha: GitCommitSha
-  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
+  readonly bootstrapBareRepository: (
+    destination: RepositoryCheckoutPath,
+  ) => Effect.Effect<void, Error, never>
 }
 
 export { HostedReviewWorkspacePoolError } from "./hosted-review-workspace-pool-error"
@@ -94,13 +107,13 @@ export class HostedReviewWorkspacePool extends Context.Service<
     ) => Effect.Effect<string, HostedReviewWorkspacePoolError>
     readonly useComparison: <A, E>(
       input: PinnedRepositoryComparisonInput,
-      run: (localPath: string) => Effect.Effect<A, E>,
+      run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError>
   }
 >()("@diffdash/HostedReviewWorkspacePool") {
   static readonly layer = (config: {
-    readonly worktreePoolPath: string
-    readonly remoteWorktreePoolPath: string
+    readonly worktreePoolPath: RepositoryCheckoutPath
+    readonly remoteWorktreePoolPath: RepositoryCheckoutPath
   }) =>
     Layer.effect(
       HostedReviewWorkspacePool,
@@ -125,17 +138,13 @@ export class HostedReviewWorkspacePool extends Context.Service<
               const lease = yield* restore(
                 reserveAndPrepare(filesystem, instanceId, processes, input, onProgress),
               )
-              const runExit = yield* restore(run(lease)).pipe(Effect.exit)
-              yield* reportProgress(onProgress, "restoring-workspace")
-              const cleanupExit = yield* restoreAndRelease(
-                filesystem,
-                processes,
-                input,
-                lease,
-              ).pipe(Effect.exit)
-              if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause)
-              if (Exit.isFailure(runExit)) return yield* Effect.failCause(runExit.cause)
-              return runExit.value
+              return yield* completeWithFinalizer(
+                restore(run(lease)),
+                completeWithFinalizer(
+                  restoreAndRelease(filesystem, processes, input, lease),
+                  restore(reportProgress(onProgress, "restoring-workspace")),
+                ),
+              )
             }),
           )
         }
@@ -245,7 +254,7 @@ export class HostedReviewWorkspacePool extends Context.Service<
 
         const useComparison = <A, E>(
           input: PinnedRepositoryComparisonInput,
-          run: (localPath: string) => Effect.Effect<A, E>,
+          run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
         ): Effect.Effect<A, E | HostedReviewWorkspacePoolError> => {
           const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
           const repositoryRoot = pathForRepository(
@@ -277,16 +286,15 @@ export class HostedReviewWorkspacePool extends Context.Service<
                   }),
                 REPOSITORY_LOCK_TIMEOUT_MS,
               )
-              const result = yield* restore(run(workspacePath)).pipe(Effect.exit)
-              const cleanup = yield* withFileLock(
-                filesystem,
-                filesystem.child(repositoryRoot, "repository.lock"),
-                () => removeWorktree(filesystem, processes, barePath, workspacePath),
-                REPOSITORY_LOCK_TIMEOUT_MS,
-              ).pipe(Effect.exit)
-              if (Exit.isFailure(cleanup)) return yield* Effect.failCause(cleanup.cause)
-              if (Exit.isFailure(result)) return yield* Effect.failCause(result.cause)
-              return result.value
+              return yield* completeWithFinalizer(
+                restore(run(RepositoryCheckoutPath.make(workspacePath))),
+                withFileLock(
+                  filesystem,
+                  filesystem.child(repositoryRoot, "repository.lock"),
+                  () => removeWorktree(filesystem, processes, barePath, workspacePath),
+                  REPOSITORY_LOCK_TIMEOUT_MS,
+                ),
+              )
             }),
           )
         }
@@ -308,9 +316,11 @@ interface Reservation {
 
 interface HostedRepositoryCacheInput {
   readonly repository: HostedRepositoryLocator
-  readonly sourcePath: string | null
+  readonly sourcePath: RepositoryLocalPath
   readonly remoteUrl: string | null
-  readonly bootstrapBareRepository: (destination: string) => Effect.Effect<void, unknown>
+  readonly bootstrapBareRepository: (
+    destination: RepositoryCheckoutPath,
+  ) => Effect.Effect<void, Error, never>
 }
 
 const reserveAndPrepare = (
@@ -325,27 +335,23 @@ const reserveAndPrepare = (
       reserveSlot(manifest, instanceId, input),
     )
 
-    const slotPath = pathForSlot(filesystem, reservation.slot)
-    const lease = {
-      localPath: slotPath,
-      headSha: input.checkout.revision,
-      slotId: reservation.slot.id,
-    } satisfies HostedReviewWorkspaceLease
-
     const prepared = prepareSlot(filesystem, processes, input, reservation, onProgress).pipe(
-      Effect.tap(() =>
+      Effect.flatMap((headSha) =>
         mutateManifest(filesystem, (manifest) => ({
           manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
             ...slot,
             state: "leased",
-            headSha: input.checkout.revision,
+            headSha,
             reviewNumber: input.checkout.review.number,
             lastError: null,
           })),
-          value: undefined,
+          value: {
+            localPath: RepositoryCheckoutPath.make(pathForSlot(filesystem, reservation.slot)),
+            headSha,
+            slotId: reservation.slot.id,
+          } satisfies HostedReviewWorkspaceLease,
         })),
       ),
-      Effect.as(lease),
     )
 
     const quarantine = (reason: string) =>
@@ -426,8 +432,8 @@ const prepareSlot = (
               "--verify",
               `${fetchedRef}^{commit}`,
             ])
-            const fetchedSha = fetched.stdout.trim()
-            if (fetchedSha !== input.checkout.revision) {
+            const fetchedSha = yield* parseCommitSha(fetched.stdout, "prepare.verifyRevision")
+            if (String(fetchedSha) !== String(input.checkout.revision)) {
               return yield* poolError(
                 "revision-changed",
                 "prepare.verifyRevision",
@@ -446,6 +452,7 @@ const prepareSlot = (
             )
             if (input.sourcePath === null)
               yield* recordRemoteRepositoryUse(filesystem, input.checkout.repository, false)
+            return fetchedSha
           }),
         REPOSITORY_LOCK_TIMEOUT_MS,
       ),
@@ -474,7 +481,7 @@ const prepareBareRepository = (
       yield* filesystem.validate(barePath, "repository.create.path")
       if (sourcePath === null) {
         yield* input
-          .bootstrapBareRepository(barePath)
+          .bootstrapBareRepository(RepositoryCheckoutPath.make(barePath))
           .pipe(
             Effect.mapError((cause) =>
               poolError(
@@ -626,8 +633,12 @@ const resolveComparisonRevision = (
   }
 
   return Effect.all([
-    tryResolveCommit(filesystem, processes, barePath, `${COMPARISON_HEAD_PREFIX}${revision}`),
-    tryResolveCommit(filesystem, processes, barePath, `${COMPARISON_TAG_PREFIX}${revision}`),
+    Effect.option(
+      resolveCommit(filesystem, processes, barePath, `${COMPARISON_HEAD_PREFIX}${revision}`),
+    ),
+    Effect.option(
+      resolveCommit(filesystem, processes, barePath, `${COMPARISON_TAG_PREFIX}${revision}`),
+    ),
   ]).pipe(
     Effect.flatMap(([branch, tag]) => {
       if (Option.isSome(branch) && Option.isSome(tag)) {
@@ -658,13 +669,6 @@ const resolveRequiredCommit = (
     Effect.mapError((cause) => revisionNotFound(side, revision, cause)),
   )
 
-const tryResolveCommit = (
-  filesystem: ManagedWorkspaceFilesystem,
-  processes: ProcessRunner,
-  barePath: ManagedWorkspacePath,
-  revision: string,
-) => Effect.option(resolveCommit(filesystem, processes, barePath, revision))
-
 const resolveCommit = (
   filesystem: ManagedWorkspaceFilesystem,
   processes: ProcessRunner,
@@ -684,13 +688,18 @@ const parseCommitSha = (output: string, operation: string) =>
   Effect.try({
     try: () => GitCommitSha.make(output.trim()),
     catch: (cause) =>
-      poolError("git", operation, "Git returned an invalid commit object identity.", cause),
+      poolError(
+        "git",
+        operation,
+        "Git returned an invalid commit object identity.",
+        toError(cause),
+      ),
   })
 
 const revisionNotFound = (
   side: "base" | "head",
   revision: string,
-  cause: unknown = new Error(`Missing ${side} revision: ${revision}`),
+  cause: Error = new Error(`Missing ${side} revision: ${revision}`),
 ) =>
   poolError(
     "revision-not-found",
@@ -828,7 +837,7 @@ const recreateWorktree = (
   processes: ProcessRunner,
   barePath: ManagedWorkspacePath,
   worktreePath: ManagedWorkspacePath,
-  headSha: string,
+  headSha: GitCommitSha | ReviewRevision,
 ) =>
   Effect.gen(function* () {
     if (yield* filesystem.exists(worktreePath, "worktree.exists")) {
@@ -896,7 +905,7 @@ const verifyWorktree = (
   filesystem: ManagedWorkspaceFilesystem,
   processes: ProcessRunner,
   worktreePath: ManagedWorkspacePath,
-  headSha: string,
+  headSha: GitCommitSha | ReviewRevision,
 ) =>
   Effect.gen(function* () {
     yield* filesystem.validate(worktreePath, "worktree.verify.path")
@@ -1062,23 +1071,25 @@ const runGit = (
               new Error("No exit event"),
             ),
           ),
-        onSome: (event) => {
-          const { _tag: tag } = event
-          return tag === "ProcessExit"
-            ? Effect.succeed(event.result)
-            : Effect.fail(
+        onSome: (event) =>
+          Match.value(event).pipe(
+            Match.tag("ProcessExit", (exit) => Effect.succeed(exit.result)),
+            Match.tag("ProcessLine", (line) =>
+              Effect.fail(
                 poolError(
                   "git",
                   "git.run",
                   "A Git command ended without an exit event.",
-                  new Error(event.line),
+                  new Error(line.line),
                 ),
-              )
-        },
+              ),
+            ),
+            Match.exhaustive,
+          ),
       })
     }).pipe(
       Effect.mapError((cause) =>
-        cause instanceof HostedReviewWorkspacePoolError
+        Schema.is(HostedReviewWorkspacePoolError)(cause)
           ? cause
           : poolError(
               "git",

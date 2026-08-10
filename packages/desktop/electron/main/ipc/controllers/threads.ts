@@ -1,6 +1,7 @@
 import { CoreMethod } from "@diffdash/core"
-import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+import { EventContract } from "@diffdash/protocol/ipc"
+import { Schema } from "effect"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { toPublicReviewThreadError } from "../review-thread-public-error"
 import { sendProtocolEvent } from "../transport"
@@ -11,18 +12,10 @@ export const defineThreadHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.define(InvokeChannel.listReviewThreads, async (_event, request) =>
-    runtime.execute(CoreMethod.listReviewThreads, request),
-  )
-  handlers.define(InvokeChannel.addReviewThreadUserMessage, async (_event, request) =>
-    runtime.execute(CoreMethod.addReviewThreadUserMessage, request),
-  )
-  handlers.define(InvokeChannel.createReviewThread, async (_event, request) =>
-    runtime.execute(CoreMethod.createReviewThread, request),
-  )
-  handlers.define(InvokeChannel.getReviewThread, async (_event, request) =>
-    runtime.execute(CoreMethod.getReviewThread, request),
-  )
+  handlers.defineCore(CoreMethod.listReviewThreads, runtime.execute)
+  handlers.defineCore(CoreMethod.addReviewThreadUserMessage, runtime.execute)
+  handlers.defineCore(CoreMethod.createReviewThread, runtime.execute)
+  handlers.defineCore(CoreMethod.getReviewThread, runtime.execute)
   handlers.define(
     InvokeChannel.runReviewThreadAgent,
     async (event, request) =>
@@ -31,7 +24,12 @@ export const defineThreadHandlers = (
           sendProtocolEvent(
             event.sender,
             EventChannel.reviewThreadAgentProgress,
-            ReviewAgentProgress.make({ threadId: request.threadId, stage }),
+            Schema.decodeUnknownSync(EventContract[EventChannel.reviewThreadAgentProgress].payload)(
+              {
+                threadId: request.threadId,
+                stage,
+              },
+            ),
           )
         },
       }),

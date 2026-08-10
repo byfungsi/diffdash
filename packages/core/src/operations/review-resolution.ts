@@ -1,4 +1,4 @@
-import type { Repo } from "@diffdash/domain/repository"
+import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
 import type {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
@@ -64,7 +64,9 @@ export const makeReviewResolution: Effect.Effect<
   const resolveLocal: ReviewResolution["resolveLocal"] = Effect.fn("Core.Reviews.resolveLocal")(
     function* (target) {
       const snapshot = yield* snapshots.acquireLocal(target)
-      const repo = yield* repositories.ensureLocal(snapshot.detail.rootPath)
+      const repo = yield* repositories.ensureLocal(
+        RepositoryCheckoutPath.make(snapshot.detail.rootPath),
+      )
       return { repo, snapshot, prNumber: null }
     },
   )

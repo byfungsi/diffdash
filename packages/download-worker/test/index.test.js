@@ -4,10 +4,53 @@ import worker from "../src/index.js"
 
 const publicBaseUrl = "https://download.usediffdash.com"
 
-function createBucket(pages, stableTag, bodies) {
+const completeAssetNames = (tag) => {
+  const version = tag.slice(1)
+  return [
+    `DiffDash-${version}-mac-arm64.dmg`,
+    `DiffDash-${version}-mac-arm64.zip`,
+    `DiffDash-${version}-mac-arm64.zip.blockmap`,
+    `DiffDash-${version}-mac-x64.dmg`,
+    `DiffDash-${version}-mac-x64.zip`,
+    `DiffDash-${version}-mac-x64.zip.blockmap`,
+    `DiffDash-${version}-linux-amd64.deb`,
+    `DiffDash-${version}-linux-x86_64.AppImage`,
+    "latest-mac-arm64.yml",
+    "latest-mac-x64.yml",
+    "latest-linux.yml",
+  ]
+}
+
+function createBucket(pages, stableTag, bodies, complete, releaseOrigin) {
+  const listedNames = pages
+    .flat()
+    .filter((key) => key.startsWith(`releases/${stableTag}/`))
+    .map((key) => key.slice(`releases/${stableTag}/`.length))
+  const defaults = completeAssetNames(stableTag).filter(
+    (name) =>
+      !(name.endsWith(".AppImage") && listedNames.some((listed) => listed.endsWith(".AppImage"))) &&
+      !(name.endsWith(".deb") && listedNames.some((listed) => listed.endsWith(".deb"))),
+  )
+  const names = [...new Set([...(complete ? defaults : []), ...listedNames])]
+  const latest = JSON.stringify({
+    version: stableTag.slice(1),
+    tag: stableTag,
+    generatedAt: "2026-07-20T00:00:00.000Z",
+    assets: names.map((name) => ({
+      name,
+      url: `${releaseOrigin}/releases/${stableTag}/${encodeURIComponent(name)}`,
+      size: 1,
+      sha256: "a".repeat(64),
+    })),
+  })
   return {
     async get(key) {
-      const value = key === "stable.json" ? JSON.stringify({ tag: stableTag }) : bodies[key]
+      const value =
+        key === "stable.json"
+          ? JSON.stringify({ tag: stableTag })
+          : key === `releases/${stableTag}/latest.json`
+            ? (bodies[key] ?? latest)
+            : bodies[key]
       return value === undefined ? null : { text: async () => value }
     },
     async list({ cursor, prefix }) {
@@ -24,9 +67,17 @@ function createBucket(pages, stableTag, bodies) {
 }
 
 function createEnvironment(pages, options = {}) {
+  const stableTag = options.stableTag ?? "v0.1.5"
+  const releaseOrigin = options.publicBaseUrl ?? publicBaseUrl
   return {
-    PUBLIC_RELEASE_BASE_URL: publicBaseUrl,
-    RELEASES_BUCKET: createBucket(pages, options.stableTag ?? "v0.1.5", options.bodies ?? {}),
+    PUBLIC_RELEASE_BASE_URL: releaseOrigin,
+    RELEASES_BUCKET: createBucket(
+      pages,
+      stableTag,
+      options.bodies ?? {},
+      options.complete ?? true,
+      releaseOrigin,
+    ),
   }
 }
 
@@ -73,7 +124,9 @@ test("redirects the AppImage endpoint to the latest requested architecture", asy
 test("falls back when the latest release has no AppImage", async () => {
   const response = await worker.fetch(
     new Request("https://download.usediffdash.com/linux/appimage"),
-    createEnvironment([["releases/v0.1.5/DiffDash-0.1.5-linux-amd64.deb"]]),
+    createEnvironment([["releases/v0.1.5/DiffDash-0.1.5-linux-amd64.deb"]], {
+      complete: false,
+    }),
   )
 
   assert.equal(response.status, 302)
@@ -81,6 +134,30 @@ test("falls back when the latest release has no AppImage", async () => {
     response.headers.get("Location"),
     "https://github.com/byfungsi/diffdash/releases/latest",
   )
+})
+
+test("accepts native-valid public origins and rejects non-origin configuration", async () => {
+  const keys = [["releases/v0.1.5/DiffDash-0.1.5-linux-amd64.deb"]]
+  const schemeless = createEnvironment(keys, {
+    publicBaseUrl: "https://downloads.example.test:8443",
+  })
+  schemeless.PUBLIC_RELEASE_BASE_URL = "downloads.example.test:8443/"
+  const validResponse = await worker.fetch(
+    new Request("https://download.usediffdash.com/linux"),
+    schemeless,
+  )
+  assert.equal(
+    validResponse.headers.get("Location"),
+    "https://downloads.example.test:8443/releases/v0.1.5/DiffDash-0.1.5-linux-amd64.deb",
+  )
+
+  const withPath = createEnvironment(keys)
+  withPath.PUBLIC_RELEASE_BASE_URL = "https://downloads.example.test/public"
+  const invalidResponse = await worker.fetch(
+    new Request("https://download.usediffdash.com/linux"),
+    withPath,
+  )
+  assert.equal(invalidResponse.headers.get("Location"), fallbackUrl)
 })
 
 test("ignores a newer uploaded candidate until it is promoted", async () => {
@@ -205,7 +282,7 @@ test("supports the mac, darwin, and deb aliases", async () => {
 test("does not substitute the wrong architecture", async () => {
   const response = await worker.fetch(
     new Request("https://download.usediffdash.com/macos?arch=x64"),
-    createEnvironment([["releases/v0.1.5/DiffDash-0.1.5-mac-arm64.dmg"]]),
+    createEnvironment([["releases/v0.1.5/DiffDash-0.1.5-mac-arm64.dmg"]], { complete: false }),
   )
   assert.equal(response.headers.get("Location"), fallbackUrl)
 })

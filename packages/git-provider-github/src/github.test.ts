@@ -3,12 +3,15 @@ import { Effect, Result, Stream } from "effect"
 
 import {
   GitProviderId,
+  GitFileRevision,
   GitProviderOperationError,
   HostedRepositoryLocator,
   HostedRepositoryName,
   HostedReviewLocator,
   HostedReviewNumber,
   RepositoryNamespace,
+  RepositoryRelativePath,
+  ReviewRevision,
 } from "@diffdash/git-provider"
 import { gitProviderConformance } from "@diffdash/git-provider/testing"
 import {
@@ -153,9 +156,13 @@ describe("GitHub provider", () => {
       )
       const locator = repository("github-acme")
       expect(yield* provider.repositoryUrl(locator)).toBe("https://git.acme.test/fungsi/diffdash")
-      expect(yield* provider.fileUrl(locator, "src/a file.ts", "feature/x")).toBe(
-        "https://git.acme.test/fungsi/diffdash/blob/feature%2Fx/src/a%20file.ts",
-      )
+      expect(
+        yield* provider.fileUrl(
+          locator,
+          RepositoryRelativePath.make("src/a file.ts"),
+          GitFileRevision.make("feature/x"),
+        ),
+      ).toBe("https://git.acme.test/fungsi/diffdash/blob/feature%2Fx/src/a%20file.ts")
     }),
   )
 
@@ -229,7 +236,7 @@ describe("GitHub provider", () => {
     const calls: Call[] = []
     const provider = createGitHubProvider({}, fakeProcesses(calls))
     return Effect.gen(function* () {
-      const checkout = yield* provider.checkoutSpecAtRevision(review(), "head-sha")
+      const checkout = yield* provider.checkoutSpec(review(), ReviewRevision.make("head-sha"))
       yield* provider.bootstrapBareRepository(repository(), "/tmp/repository.git")
       expect(checkout).toMatchObject({
         remoteUrl: "https://github.com/fungsi/diffdash.git",

@@ -5,8 +5,8 @@ import {
 } from "@diffdash/domain/review-thread"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
-import { ReviewAgentService } from "@diffdash/review-agent"
-import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
+import { ReviewAgentService } from "../services/review-agent"
+import { ReviewThreadAnchorMapper } from "../services/review-thread-anchor-mapper"
 import { Effect } from "effect"
 
 import { CoreMethod } from "../core-contract"

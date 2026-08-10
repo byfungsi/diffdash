@@ -160,7 +160,7 @@ describe("provider runtime helpers", () => {
     expect(() =>
       AgentProviderFailure.make({
         version: 1,
-        providerId: "fixture",
+        providerId: AgentProviderId.make("fixture"),
         capability: "walkthrough",
         category: "usage-limited",
         processKind: null,

@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
@@ -26,8 +26,10 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
-import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { GitCommitSha, RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { AgentRunId } from "@diffdash/domain/review-agent"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import { ProcessService, type ProcessRunner } from "@diffdash/process"
@@ -35,18 +37,18 @@ import {
   HostedReviewWorkspacePool as ReviewWorktreePool,
   HostedReviewWorkspacePoolError as ReviewWorktreePoolError,
 } from "./hosted-review-workspace-pool"
-import { sanitizedGitEnvironment } from "./git-environment"
+import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
 interface GitFixture {
-  readonly root: string
-  readonly source: string
-  readonly remote: string
-  readonly pool: string
-  readonly remotePool: string
-  readonly baseSha: string
-  readonly headSha: string
-  readonly secondHeadSha: string
-  readonly disconnectedSha: string
+  readonly root: RepositoryCheckoutPath
+  readonly source: RepositoryCheckoutPath
+  readonly remote: RepositoryCheckoutPath
+  readonly pool: RepositoryCheckoutPath
+  readonly remotePool: RepositoryCheckoutPath
+  readonly baseSha: GitCommitSha
+  readonly headSha: GitCommitSha
+  readonly secondHeadSha: GitCommitSha
+  readonly disconnectedSha: GitCommitSha
   readonly snapshot: HostedReviewCheckoutSpec
   readonly secondSnapshot: HostedReviewCheckoutSpec
 }
@@ -572,6 +574,70 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
+  it.effect("restores and releases before waiting for a stuck progress reporter", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const restoring = yield* Deferred.make<void>()
+      let leasedPath = ""
+      const fiber = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(
+          workspaceInput(value, "stuck-progress"),
+          (lease) =>
+            Effect.sync(() => {
+              leasedPath = lease.localPath
+              writeFileSync(join(lease.localPath, "untracked.txt"), "remove me")
+            }),
+          (stage) =>
+            stage === "restoring-workspace"
+              ? Deferred.succeed(restoring, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.void,
+        )
+      }).pipe(Effect.provide(poolLayer(value)), Effect.forkChild)
+
+      yield* Deferred.await(restoring)
+      const manifest = JSON.parse(readFileSync(join(value.pool, "manifest.json"), "utf8")) as {
+        readonly slots: ReadonlyArray<{ readonly lease: unknown; readonly state: string }>
+      }
+      expect(manifest.slots[0]).toMatchObject({ lease: null, state: "available" })
+      expect(git(leasedPath, "status", "--porcelain", "--untracked-files=all")).toBe("")
+      yield* Fiber.interrupt(fiber)
+    }),
+  )
+
+  it.effect("preserves provider and cleanup causes when both fail", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const providerFailure = new Error("provider failed")
+
+      const cause = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool
+          .use(workspaceInput(value, "combined-failure"), () =>
+            Effect.sync(() => {
+              rmSync(join(repositoryPoolPath(value.pool, "github:Acme/Widget"), "repository.git"), {
+                recursive: true,
+                force: true,
+              })
+            }).pipe(Effect.andThen(Effect.fail(providerFailure))),
+          )
+          .pipe(Effect.sandbox, Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(cause.reasons).toHaveLength(2)
+      expect(Cause.pretty(cause)).toContain("provider failed")
+      expect(
+        cause.reasons.some(
+          (reason) =>
+            Cause.isFailReason(reason) &&
+            reason.error instanceof ReviewWorktreePoolError &&
+            reason.error.code === "cleanup" &&
+            reason.error.operation === "release.restore",
+        ),
+      ).toBe(true)
+    }),
+  )
+
   it.effect("evicts and reuses the globally oldest idle slot at capacity", () =>
     Effect.gen(function* () {
       const value = yield* fixture
@@ -698,7 +764,7 @@ describe("HostedReviewWorkspacePool", () => {
       const value = yield* fixture
       const movedSnapshot = HostedReviewCheckoutSpec.make({
         ...value.snapshot,
-        revision: "0000000000000000000000000000000000000000",
+        revision: ReviewRevision.make("0000000000000000000000000000000000000000"),
       })
       let providerStarted = false
 
@@ -822,10 +888,41 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
+  it.effect("preserves comparison operation and cleanup causes when both fail", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const operationFailure = new Error("comparison operation failed")
+      const cause = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const requested = comparisonInput(value, "base", "feature")
+        const pinned = yield* pool.pinComparison(requested)
+        return yield* pool
+          .useComparison({ ...requested, ...pinned }, (localPath) =>
+            Effect.sync(() => {
+              rmSync(localPath, { recursive: true, force: true })
+              symlinkSync(value.source, localPath, "dir")
+            }).pipe(Effect.andThen(Effect.fail(operationFailure))),
+          )
+          .pipe(Effect.sandbox, Effect.flip)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(cause.reasons).toHaveLength(2)
+      expect(Cause.pretty(cause)).toContain("comparison operation failed")
+      expect(
+        cause.reasons.some(
+          (reason) =>
+            Cause.isFailReason(reason) &&
+            reason.error instanceof ReviewWorktreePoolError &&
+            reason.error.operation === "comparison.workspace.exists",
+        ),
+      ).toBe(true)
+    }),
+  )
+
   it.effect("deepens a shallow linked checkout before resolving merge-base", () =>
     Effect.gen(function* () {
       const value = yield* fixture
-      const shallow = join(value.root, "shallow")
+      const shallow = RepositoryCheckoutPath.make(join(value.root, "shallow"))
       git(
         value.root,
         "clone",
@@ -1214,18 +1311,18 @@ const movingProcessLayer = (
   )
 
 function makeGitFixture(): GitFixture {
-  const root = mkdtempSync(join(tmpdir(), "diffdash-worktree-pool-"))
-  const source = join(root, "source")
-  const remote = join(root, "origin.git")
-  const pool = join(root, "pool")
-  const remotePool = join(root, "remote-pool")
+  const root = RepositoryCheckoutPath.make(mkdtempSync(join(tmpdir(), "diffdash-worktree-pool-")))
+  const source = RepositoryCheckoutPath.make(join(root, "source"))
+  const remote = RepositoryCheckoutPath.make(join(root, "origin.git"))
+  const pool = RepositoryCheckoutPath.make(join(root, "pool"))
+  const remotePool = RepositoryCheckoutPath.make(join(root, "remote-pool"))
 
   git(root, "init", source)
   writeFileSync(join(source, ".gitignore"), "*.log\n")
   writeFileSync(join(source, "tracked.txt"), "base\n")
   git(source, "add", ".")
   commit(source, "base")
-  const baseSha = git(source, "rev-parse", "HEAD")
+  const baseSha = GitCommitSha.make(git(source, "rev-parse", "HEAD"))
   const sourceBranch = git(source, "branch", "--show-current")
   git(root, "clone", "--bare", source, remote)
   git(source, "remote", "add", "origin", remote)
@@ -1233,7 +1330,7 @@ function makeGitFixture(): GitFixture {
   writeFileSync(join(source, "tracked.txt"), "feature\n")
   git(source, "add", "tracked.txt")
   commit(source, "feature")
-  const headSha = git(source, "rev-parse", "HEAD")
+  const headSha = GitCommitSha.make(git(source, "rev-parse", "HEAD"))
   git(source, "push", "origin", `HEAD:refs/pull/1/head`)
   git(source, "push", "origin", `${baseSha}:refs/heads/base`)
   git(source, "push", "origin", `${baseSha}:refs/tags/base-tag`)
@@ -1244,14 +1341,14 @@ function makeGitFixture(): GitFixture {
   writeFileSync(join(source, "tracked.txt"), "feature two\n")
   git(source, "add", "tracked.txt")
   commit(source, "feature two")
-  const secondHeadSha = git(source, "rev-parse", "HEAD")
+  const secondHeadSha = GitCommitSha.make(git(source, "rev-parse", "HEAD"))
   git(source, "push", "origin", `HEAD:refs/pull/2/head`)
   git(source, "checkout", "--orphan", "disconnected")
   git(source, "rm", "-rf", ".")
   writeFileSync(join(source, "disconnected.txt"), "disconnected\n")
   git(source, "add", "disconnected.txt")
   commit(source, "disconnected")
-  const disconnectedSha = git(source, "rev-parse", "HEAD")
+  const disconnectedSha = GitCommitSha.make(git(source, "rev-parse", "HEAD"))
   git(source, "push", "origin", "HEAD:refs/heads/disconnected")
   git(source, "checkout", sourceBranch)
   git(source, "reset", "--hard", baseSha)
@@ -1269,8 +1366,8 @@ function makeGitFixture(): GitFixture {
       number: HostedReviewNumber.make(1),
     }),
     remoteUrl: remote,
-    fetchRef: "refs/pull/1/head",
-    revision: headSha,
+    fetchRef: RepositoryComparisonRef.make("refs/pull/1/head"),
+    revision: ReviewRevision.make(headSha),
   })
 
   const secondSnapshot = HostedReviewCheckoutSpec.make({
@@ -1280,8 +1377,8 @@ function makeGitFixture(): GitFixture {
       number: HostedReviewNumber.make(2),
     }),
     remoteUrl: remote,
-    fetchRef: "refs/pull/2/head",
-    revision: secondHeadSha,
+    fetchRef: RepositoryComparisonRef.make("refs/pull/2/head"),
+    revision: ReviewRevision.make(secondHeadSha),
   })
 
   return {
@@ -1337,12 +1434,12 @@ const makeCheckout = (input: {
       number: HostedReviewNumber.make(input.number),
     }),
     remoteUrl: input.remoteUrl,
-    fetchRef: input.fetchRef,
-    revision: input.revision,
+    fetchRef: RepositoryComparisonRef.make(input.fetchRef),
+    revision: ReviewRevision.make(input.revision),
   })
 }
 
-const bootstrapWithGh = (destination: string) =>
+const bootstrapWithGh = (destination: RepositoryCheckoutPath) =>
   Effect.sync(() => {
     execFileSync("gh", ["repo", "clone", "Acme/Widget", destination, "--", "--bare"], {
       env: process.env,
@@ -1354,7 +1451,7 @@ const git = (cwd: string, ...args: readonly string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: sanitizedGitEnvironment(process.env),
+    env: sanitizedGitTestEnvironment(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim()
 

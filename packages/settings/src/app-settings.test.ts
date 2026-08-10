@@ -7,6 +7,9 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 import {
+  AIAgentSelection,
+  AIModelId,
+  AIProviderId,
   AISettings,
   CodeThemePreferences,
   DEFAULT_AI_SETTINGS,
@@ -69,24 +72,27 @@ describe("AppSettings", () => {
         JSON.stringify({
           ...DEFAULT_AI_SETTINGS,
           futureProvider: { enabled: true },
-          routes: { walkthrough: "future", reviewThread: "auto" },
-          models: { ...DEFAULT_AI_SETTINGS.models, future: "future-model" },
+          selections: {
+            walkthrough: pinned("future", "future-model"),
+            "review-thread": automatic(),
+          },
         }),
       )
 
       yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
         const loaded = yield* appSettings.get
-        expect(loaded.routes.walkthrough).toBe("future")
-        expect(loaded.models.future).toBe("future-model")
+        expect(loaded.selections.walkthrough).toEqual(pinned("future", "future-model"))
         yield* appSettings.save(AISettings.make({ ...loaded, appearance: "dark" }))
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
         appearance: "dark",
         futureProvider: { enabled: true },
-        routes: { walkthrough: "future", reviewThread: "auto" },
-        models: { future: "future-model" },
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "future", modelId: "future-model" },
+          "review-thread": { _tag: "Automatic", quality: "balanced" },
+        },
       })
     }),
   )
@@ -102,7 +108,7 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual({
-        version: 7,
+        version: 8,
         appearance: "dark",
         themes: { light: "diffdash", dark: "diffdash" },
         codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
@@ -110,13 +116,10 @@ describe("AppSettings", () => {
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        routes: { walkthrough: "codex", reviewThread: "codex" },
-        models: {
-          codex: "gpt-5.6-luna",
-          claude: "claude-haiku-4-5",
-          opencode: "openai/gpt-5.6-luna",
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "codex", modelId: "gpt-5.6-luna" },
+          "review-thread": { _tag: "Pinned", providerId: "codex", modelId: "gpt-5.6-luna" },
         },
-        autoQuality: "fast",
         telemetryEnabled: true,
       })
       expect(
@@ -141,12 +144,9 @@ describe("AppSettings", () => {
           dark: "pierre-dark-soft",
         }),
         diffViewMode: "split",
-        routes: { walkthrough: "claude", reviewThread: "opencode" },
-        autoQuality: "best",
-        models: {
-          claude: "claude-opus-4-8",
-          codex: "gpt-5.5",
-          opencode: "anthropic/claude-sonnet-5",
+        selections: {
+          walkthrough: pinned("claude", "claude-opus-4-8"),
+          "review-thread": pinned("opencode", "anthropic/claude-sonnet-5"),
         },
       })
 
@@ -165,11 +165,16 @@ describe("AppSettings", () => {
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        version: 7,
-        routes: { walkthrough: "claude", reviewThread: "opencode" },
+        version: 8,
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "claude", modelId: "claude-opus-4-8" },
+          "review-thread": {
+            _tag: "Pinned",
+            providerId: "opencode",
+            modelId: "anthropic/claude-sonnet-5",
+          },
+        },
         telemetryEnabled: true,
-        autoQuality: "best",
-        models: { claude: "claude-opus-4-8" },
       })
     }),
   )
@@ -184,15 +189,14 @@ describe("AppSettings", () => {
         return yield* appSettings.get
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(settings.autoQuality).toBe("balanced")
-      expect(settings.models.claude).toBe("claude-opus-4-8")
-      expect(settings.models.codex).toBe("gpt-5.5")
+      expect(settings.selections.walkthrough).toEqual(automatic())
+      expect(settings.selections["review-thread"]).toEqual(automatic())
       expect(settings.appearance).toBe("system")
       expect(settings.telemetryEnabled).toBe(true)
     }),
   )
 
-  it.effect("migrates version 2 settings without losing capability routes", () =>
+  it.effect("migrates version 7 routes and provider models independently per capability", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const settingsDirectory = join(directory, "diffdash")
@@ -201,7 +205,7 @@ describe("AppSettings", () => {
       writeFileSync(
         settingsPath,
         JSON.stringify({
-          version: 2,
+          version: 7,
           appearance: "dark",
           routes: { walkthrough: "future", reviewThread: "claude" },
           models: { future: "future-model", claude: "claude-opus-4-8" },
@@ -217,7 +221,7 @@ describe("AppSettings", () => {
       }).pipe(Effect.provide(makeLayer(directory)))
 
       expect(settings).toEqual({
-        version: 7,
+        version: 8,
         appearance: "dark",
         themes: { light: "diffdash", dark: "diffdash" },
         codeThemes: { light: "rose-pine-dawn", dark: "diffdash-dark" },
@@ -225,20 +229,103 @@ describe("AppSettings", () => {
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        routes: { walkthrough: "future", reviewThread: "claude" },
-        models: { future: "future-model", claude: "claude-opus-4-8" },
-        autoQuality: "best",
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "future", modelId: "future-model" },
+          "review-thread": {
+            _tag: "Pinned",
+            providerId: "claude",
+            modelId: "claude-opus-4-8",
+          },
+        },
         telemetryEnabled: false,
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 7,
+        version: 8,
         diffViewMode: "auto",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        routes: { walkthrough: "future", reviewThread: "claude" },
-        models: { future: "future-model", claude: "claude-opus-4-8" },
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "future", modelId: "future-model" },
+          "review-thread": {
+            _tag: "Pinned",
+            providerId: "claude",
+            modelId: "claude-opus-4-8",
+          },
+        },
         futureProvider: { enabled: true },
+      })
+    }),
+  )
+
+  it.effect("preserves a version 7 provider route without a model as provider-default pinned", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          version: 7,
+          routes: { walkthrough: "codex", reviewThread: "auto" },
+          models: {},
+          autoQuality: "best",
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.selections).toEqual({
+        walkthrough: { _tag: "Pinned", providerId: "codex", modelId: null },
+        "review-thread": { _tag: "Automatic", quality: "best" },
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        version: 8,
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "codex", modelId: null },
+          "review-thread": { _tag: "Automatic", quality: "best" },
+        },
+      })
+    }),
+  )
+
+  it.effect("repairs malformed version 8 capability selections independently and rewrites", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const settingsDirectory = join(directory, "diffdash")
+      const settingsPath = join(settingsDirectory, "settings.json")
+      mkdirSync(settingsDirectory, { recursive: true })
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          ...DEFAULT_AI_SETTINGS,
+          appearance: "dark",
+          selections: {
+            walkthrough: pinned("codex", "gpt-5"),
+            "review-thread": { _tag: "Pinned", providerId: 42, modelId: null },
+          },
+        }),
+      )
+
+      const settings = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* appSettings.get
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(settings.appearance).toBe("dark")
+      expect(settings.selections).toEqual({
+        walkthrough: pinned("codex", "gpt-5"),
+        "review-thread": automatic(),
+      })
+      expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
+        selections: {
+          walkthrough: { _tag: "Pinned", providerId: "codex", modelId: "gpt-5" },
+          "review-thread": { _tag: "Automatic", quality: "balanced" },
+        },
       })
     }),
   )
@@ -315,7 +402,7 @@ describe("AppSettings", () => {
         dark: "github-dark-default",
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 7,
+        version: 8,
         codeThemes: {
           light: "catppuccin-latte",
           dark: "github-dark-default",
@@ -349,13 +436,13 @@ describe("AppSettings", () => {
         return yield* appSettings.get
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(settings.version).toBe(7)
+      expect(settings.version).toBe(8)
       expect(settings.codeThemes).toEqual({
         light: "github-light-default",
         dark: "diffdash-dark",
       })
       expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toMatchObject({
-        version: 7,
+        version: 8,
         codeThemes: {
           light: "github-light-default",
           dark: "diffdash-dark",
@@ -446,22 +533,56 @@ describe("AppSettings", () => {
       expect(settings.appearance).toBe("dark")
       expect(settings.diffViewMode).toBe("auto")
       expect(settings.telemetryEnabled).toBe(false)
-      expect(settings.routes).toEqual(DEFAULT_AI_SETTINGS.routes)
-      expect(settings.models).toEqual(DEFAULT_AI_SETTINGS.models)
+      expect(settings.selections).toEqual({
+        walkthrough: { _tag: "Automatic", quality: "fast" },
+        "review-thread": {
+          _tag: "Pinned",
+          providerId: "missing-provider",
+          modelId: null,
+        },
+      })
     }),
   )
 
-  it.effect("falls back to defaults for invalid JSON", () =>
+  it.effect("reports invalid JSON as a typed corruption error without rewriting it", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       installSettingsFixture(directory, "settings-malformed.txt")
+      const settingsPath = join(directory, "diffdash", "settings.json")
+      const corrupted = readFileSync(settingsPath, "utf8")
 
-      const settings = yield* Effect.gen(function* () {
+      const result = yield* Effect.gen(function* () {
         const appSettings = yield* AppSettings
-        return yield* appSettings.get
+        return yield* Effect.result(appSettings.get)
       }).pipe(Effect.provide(makeLayer(directory)))
 
-      expect(settings).toEqual(DEFAULT_AI_SETTINGS)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppSettingsError)
+        expect(result.failure.operation).toBe("decode")
+      }
+      expect(readFileSync(settingsPath, "utf8")).toBe(corrupted)
+    }),
+  )
+
+  it.effect("does not overwrite corrupted JSON when saving settings", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      installSettingsFixture(directory, "settings-malformed.txt")
+      const settingsPath = join(directory, "diffdash", "settings.json")
+      const corrupted = readFileSync(settingsPath, "utf8")
+
+      const result = yield* Effect.gen(function* () {
+        const appSettings = yield* AppSettings
+        return yield* Effect.result(appSettings.save(DEFAULT_AI_SETTINGS))
+      }).pipe(Effect.provide(makeLayer(directory)))
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(AppSettingsError)
+        expect(result.failure.operation).toBe("decode")
+      }
+      expect(readFileSync(settingsPath, "utf8")).toBe(corrupted)
     }),
   )
 })
@@ -471,3 +592,11 @@ const installSettingsFixture = (directory: string, fixtureName: string) => {
   mkdirSync(settingsDirectory, { recursive: true })
   copyFileSync(resolve("src/fixtures", fixtureName), join(settingsDirectory, "settings.json"))
 }
+
+const automatic = () => AIAgentSelection.cases.Automatic.make({ quality: "balanced" })
+
+const pinned = (providerId: string, modelId: string) =>
+  AIAgentSelection.cases.Pinned.make({
+    providerId: AIProviderId.make(providerId),
+    modelId: AIModelId.make(modelId),
+  })

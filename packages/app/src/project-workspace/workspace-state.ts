@@ -1,12 +1,8 @@
-import { sameHostedRepository, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
-import type {
-  ProjectWorkspaceRibbon,
-  ProjectWorkspaceStateInput,
-} from "@diffdash/domain/project-workspace"
+import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
 import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
 import type { Repo } from "@diffdash/domain/repository"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { Result, Schema } from "effect"
 
@@ -18,24 +14,6 @@ export interface ResolvedProjectWorkspaceState {
   readonly notice: string | null
   readonly selectedReview: SelectedReviewTarget | null
 }
-
-/** Returns the branded project identity shared by repository and workspace persistence. */
-export const projectIdForRepo = (repo: Repo) => ReviewProjectId.make(repo.id)
-
-/** Queues one workspace write after prior writes so the latest requested state commits last. */
-export const enqueueProjectWorkspaceSave = (
-  previous: Promise<void>,
-  input: ProjectWorkspaceStateInput,
-  save: (input: ProjectWorkspaceStateInput) => Promise<unknown>,
-  onFailure: (error: unknown) => void,
-): Promise<void> =>
-  previous
-    .catch(() => undefined)
-    .then(async () => {
-      await save(input)
-      return undefined
-    })
-    .catch(onFailure)
 
 /** Converts renderer selection into the lossless persisted review-target representation. */
 export const selectedReviewTargetForPersistence = (selection: SelectedReviewTarget | null) => {
@@ -56,9 +34,9 @@ export const selectedReviewTargetForPersistence = (selection: SelectedReviewTarg
 }
 
 /** Restores persisted state only when its project and selected target still match the repository. */
-export const resolveProjectWorkspaceState = (
+export const resolveProjectWorkspaceState = <Persisted>(
   repo: Repo,
-  persisted: unknown,
+  persisted: Persisted,
 ): ResolvedProjectWorkspaceState => {
   if (persisted === null) return defaultProjectWorkspaceState(null)
 
@@ -70,7 +48,7 @@ export const resolveProjectWorkspaceState = (
   }
 
   const state = decoded.success
-  if (state.projectId !== projectIdForRepo(repo)) {
+  if (state.projectId !== repo.id) {
     return defaultProjectWorkspaceState(
       "Saved workspace state belonged to another project. Reviews opened without a selected review.",
     )
@@ -82,12 +60,7 @@ export const resolveProjectWorkspaceState = (
   }
 
   if (target.kind === "hosted") {
-    const belongsToProject =
-      repo.provider !== "local" &&
-      sameHostedRepository(
-        target.review.repository,
-        makeHostedRepositoryLocator(repo.provider, repo.owner, repo.name),
-      )
+    const belongsToProject = repo.matchesHosted(target.review.repository)
     return belongsToProject
       ? {
           activeRibbon: state.activeRibbon,
@@ -100,12 +73,7 @@ export const resolveProjectWorkspaceState = (
   }
 
   if (target.kind === "repositoryComparison") {
-    const belongsToProject =
-      repo.provider !== "local" &&
-      sameHostedRepository(
-        target.repository,
-        makeHostedRepositoryLocator(repo.provider, repo.owner, repo.name),
-      )
+    const belongsToProject = repo.matchesHosted(target.repository)
     return belongsToProject
       ? {
           activeRibbon: state.activeRibbon,

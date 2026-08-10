@@ -17,10 +17,17 @@
     "node",
     "vitest"
   ],
+  "options": {
+    "typeAware": true
+  },
   "jsPlugins": [
     {
       "name": "react-doctor",
       "specifier": "oxlint-plugin-react-doctor"
+    },
+    {
+      "name": "diffdash",
+      "specifier": "./scripts/lint/oxlint-plugin-diffdash.mjs"
     }
   ],
   "env": {
@@ -37,6 +44,19 @@
   ],
   "rules": {
     "no-console": "warn",
+    "typescript/no-explicit-any": "error",
+    "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "typescript/no-misused-spread": "off",
+    "typescript/no-floating-promises": "off",
+    "typescript/unbound-method": "off",
+    "typescript/restrict-template-expressions": "off",
+    "typescript/no-duplicate-type-constituents": "off",
+    "typescript/no-useless-default-assignment": "off",
+    "diffdash/no-runtime-typeof": "error",
+    "diffdash/no-manual-tag-match": "error",
+    "diffdash/no-instanceof": "error",
     "import/no-unassigned-import": "off",
     "react/react-in-jsx-scope": "off",
     "react/jsx-key": "error",
@@ -45,6 +65,31 @@
     "react-perf/jsx-no-new-array-as-prop": "off",
     "react-perf/jsx-no-new-function-as-prop": "off",
     "react-perf/jsx-no-new-object-as-prop": "off",
+    "typescript/no-restricted-types": [
+      "error",
+      {
+        "types": {
+          "Record<string, unknown>": "Convert each instance to strongly typed domain types that have been parsed at the earliest time possible and as close to the I/O boundary the data originated from.",
+          "unknown": "Unknown values are permitted only in exact reviewed boundary files. Parse the value immediately.",
+          "Schema.Unknown": "Use Schema.Json or a concrete schema instead of Schema.Unknown.",
+          "Schema.Defect": "Use a concrete schema or bounded typed defect summary instead of Schema.Defect.",
+          "Schema.Defect[\"Type\"]": "Use a concrete value, state, or failure type instead of Schema.Defect[\"Type\"]."
+        }
+      }
+    ],
+    "no-restricted-properties": [
+      "error",
+      {
+        "object": "Schema",
+        "property": "Unknown",
+        "message": "Use Schema.Json or a concrete schema instead of Schema.Unknown."
+      },
+      {
+        "object": "Schema",
+        "property": "Defect",
+        "message": "Use a concrete schema or bounded typed defect summary instead of Schema.Defect."
+      }
+    ],
     "react-doctor/no-fetch-in-effect": "warn",
     "react-doctor/no-derived-state-effect": "warn",
     "react-doctor/rules-of-hooks": "error"
@@ -59,6 +104,67 @@
       ],
       "rules": {
         "no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/agent-provider-*/**/*.{ts,tsx}",
+        "packages/git-provider-*/**/*.{ts,tsx}",
+        "packages/local-git/**/*.{ts,tsx}",
+        "packages/process/**/*.{ts,tsx}",
+        "packages/download-worker/**/*.{ts,tsx}",
+        "packages/*-fixture/**/*.{ts,tsx}",
+        "packages/e2e/**/*.{ts,tsx}",
+        "tools/**/*.{ts,tsx}",
+        "scripts/**/*.{ts,tsx,mjs}",
+        "packages/*/scripts/**/*.{ts,tsx,mjs}",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/test/**",
+        "**/tests/**",
+        "**/*.config.ts",
+        "**/*.config.tsx",
+        "**/*.config.mjs"
+      ],
+      "rules": {
+        "typescript/no-restricted-types": "off",
+        "no-restricted-properties": "off",
+        "typescript/consistent-type-assertions": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "diffdash/no-runtime-typeof": "off",
+        "diffdash/no-manual-tag-match": "off",
+        "diffdash/no-instanceof": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/core/src/core-defect-boundary.ts",
+        "packages/app/src/shared/ui/app-error-boundary.tsx",
+        "packages/desktop/electron/preload/transport.ts",
+        "packages/desktop/electron/main/ipc/public-error.ts",
+        "packages/desktop/electron/main/ipc/walkthrough-public-error.ts",
+        "packages/process/src/subprocess.ts",
+        "packages/persistence/src/database-node.ts",
+        "packages/persistence/src/database-bun.ts",
+        "packages/mcp/src/http-json-boundary.ts",
+        "packages/mcp/src/mcp-server.ts",
+        "packages/settings/src/app-settings.ts",
+        "packages/agent-provider/src/provider-json.ts"
+      ],
+      "rules": {
+        "typescript/no-restricted-types": [
+          "error",
+          {
+            "types": {
+              "Record<string, unknown>": "Convert each instance to a schema-derived JSON or domain type.",
+              "Schema.Unknown": "Use Schema.Json or a concrete schema instead of Schema.Unknown.",
+              "Schema.Defect": "Use a bounded typed defect summary instead of Schema.Defect."
+            }
+          }
+        ]
       }
     },
     {

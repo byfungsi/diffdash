@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Option, Schema } from "effect"
 
 import { CoreAnalyticsEnabled } from "./analytics-state"
-import { CoreConfiguration } from "./core-configuration"
+import { CoreConfiguration, GitFixtureRemote } from "./core-configuration"
 
 const encodedConfiguration = {
   application: {
@@ -82,5 +82,25 @@ describe("CoreConfiguration", () => {
       agentProviderNeverCompletes: false,
       gitProvider: null,
     })
+  })
+
+  it("rejects unknown process architectures", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(CoreConfiguration)({
+        ...encodedConfiguration,
+        application: { ...encodedConfiguration.application, architecture: "quantum" },
+      }),
+    ).toThrow(/architecture/)
+  })
+
+  it("accepts standard URL, scp-like, and file Git fixture remotes", () => {
+    for (const remote of [
+      "https://example.com/team/repository.git",
+      "ssh://git@example.com/team/repository.git",
+      "git@example.com:team/repository.git",
+      "file:///tmp/repository.git",
+    ]) {
+      expect(Schema.decodeUnknownSync(GitFixtureRemote)(remote)).toBe(remote)
+    }
   })
 })

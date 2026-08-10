@@ -4,8 +4,15 @@ import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import {
+  AIAgentSelection,
+  AIModelId,
+  AIProviderId,
+  DEFAULT_AI_SETTINGS,
+} from "@diffdash/domain/ai-settings"
+import { GitFileRevision, makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   BranchComparison,
   LocalReviewTarget,
@@ -17,9 +24,11 @@ import {
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { StoredWalkthrough, Walkthrough } from "@diffdash/domain/walkthrough"
 import {
   CoreFileOpenIntent,
+  CoreDefectSummary,
   CoreLifecycleError,
   CoreMethod,
   type CoreOperationFailure,
@@ -38,12 +47,8 @@ import {
   type WalkthroughOperationTerminalFailure,
 } from "./core"
 import { CoreConfiguration } from "./core-configuration"
-import {
-  coreResultFromExit,
-  createEmbeddedCore,
-  type EmbeddedCoreRuntime,
-  makeEmbeddedCore,
-} from "./embedded-core"
+import { coreResultFromExit, type EmbeddedCoreRuntime, makeEmbeddedCore } from "./embedded-core"
+import { createE2EEmbeddedCore as createEmbeddedCore } from "./e2e"
 import { comparisonViewedFileScope, localViewedFileScope } from "./operations/viewed-file-scope"
 
 const makeTempDirectory = Effect.acquireRelease(
@@ -94,11 +99,11 @@ const fixtureTarget = HostedReviewTarget.make({
 })
 
 const storedWalkthrough = StoredWalkthrough.make({
-  repoId: "fixture:platform/backend/service",
+  repoId: ReviewProjectId.make("fixture:platform/backend/service"),
   prNumber: 73,
-  reviewKey: "fixture:platform/backend/service#73",
-  baseSha: "b".repeat(40),
-  headSha: "a".repeat(40),
+  reviewKey: ReviewKey.make("fixture:platform/backend/service#73"),
+  baseSha: ReviewRevision.make("b".repeat(40)),
+  headSha: ReviewRevision.make("a".repeat(40)),
   promptVersion: "walkthrough-v1",
   walkthrough: Walkthrough.make({
     title: "Fixture review path",
@@ -130,8 +135,16 @@ const fixtureConfiguration = (
     configuration.paths.settings,
     JSON.stringify({
       ...DEFAULT_AI_SETTINGS,
-      routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
-      models: { "fixture-agent": "fixture-model" },
+      selections: {
+        walkthrough: AIAgentSelection.cases.Pinned.make({
+          providerId: AIProviderId.make("fixture-agent"),
+          modelId: AIModelId.make("fixture-model"),
+        }),
+        "review-thread": AIAgentSelection.cases.Pinned.make({
+          providerId: AIProviderId.make("fixture-agent"),
+          modelId: AIModelId.make("fixture-model"),
+        }),
+      },
       telemetryEnabled: false,
     }),
   )
@@ -154,7 +167,7 @@ describe("EmbeddedCore", () => {
 
   it("constructs every walkthrough terminal variant and keeps Core defects dominant", () => {
     const expected = RepositoryLinkError.make({
-      operation: "test",
+      operation: "list",
       reason: "Expected test failure.",
       cause: new Error("expected"),
     })
@@ -167,7 +180,9 @@ describe("EmbeddedCore", () => {
       supersededByOperationId: WalkthroughOperationId.make("replacement-operation"),
     })
     const interruptedTerminal = WalkthroughOperationInterrupted.make({})
-    const defectTerminal = WalkthroughOperationDefect.make({ defect })
+    const defectTerminal = WalkthroughOperationDefect.make({
+      defect: CoreDefectSummary.make({ tag: "Error", name: "Error", message: defect.message }),
+    })
     const terminals = [
       completedTerminal,
       failedTerminal,
@@ -196,17 +211,22 @@ describe("EmbeddedCore", () => {
       _tag: "completed",
       walkthrough: { repoId: storedWalkthrough.repoId },
     })
+    expect(Schema.encodeSync(WalkthroughOperationResult)(defectTerminal)).toEqual({
+      _tag: "defect",
+      defect: { tag: "Error", name: "Error", message: "defect" },
+    })
   })
 
   it("preserves local, detached, branch, and repository-comparison viewed-file identities", () => {
-    const workingTree = workingTreeReviewTarget("/workspace/diffdash")
+    const rootPath = RepositoryCheckoutPath.make("/workspace/diffdash")
+    const workingTree = workingTreeReviewTarget(rootPath)
     const branch = LocalReviewTarget.make({
       kind: "local",
-      rootPath: "/workspace/diffdash",
+      rootPath,
       comparison: BranchComparison.make({
-        branchName: "main",
-        baseRef: "refs/heads/main",
-        baseSha: "a".repeat(40),
+        branchName: RepositoryComparisonRef.make("main"),
+        baseRef: RepositoryComparisonRef.make("refs/heads/main"),
+        baseSha: ReviewRevision.make("a".repeat(40)),
       }),
     })
     const repositoryComparison = RepositoryComparisonTarget.make({
@@ -219,30 +239,38 @@ describe("EmbeddedCore", () => {
       mergeBaseSha: GitCommitSha.make("c".repeat(40)),
     })
 
-    expect(localViewedFileScope("repo-1", workingTree, null)).toEqual({
+    expect(localViewedFileScope(ReviewProjectId.make("repo-1"), workingTree, null)).toEqual({
       repoId: "repo-1",
       sourceIdentity: "detached",
       comparisonKind: "workingTree",
       comparisonTarget: "",
     })
-    expect(localViewedFileScope("repo-1", workingTree, "feature/source")).toEqual({
+    expect(
+      localViewedFileScope(
+        ReviewProjectId.make("repo-1"),
+        workingTree,
+        RepositoryComparisonRef.make("feature/source"),
+      ),
+    ).toEqual({
       repoId: "repo-1",
       sourceIdentity: "branch:feature/source",
       comparisonKind: "workingTree",
       comparisonTarget: "",
     })
-    expect(localViewedFileScope("repo-1", branch, null)).toEqual({
+    expect(localViewedFileScope(ReviewProjectId.make("repo-1"), branch, null)).toEqual({
       repoId: "repo-1",
       sourceIdentity: "detached",
       comparisonKind: "branch",
       comparisonTarget: "main",
     })
-    expect(comparisonViewedFileScope("repo-1", repositoryComparison)).toEqual({
-      repoId: "repo-1",
-      sourceIdentity: `comparison:repository-comparison:v1:fixture:platform/backend/service:${"a".repeat(40)}:${"b".repeat(40)}:${"c".repeat(40)}`,
-      comparisonKind: "repositoryComparison",
-      comparisonTarget: "b".repeat(40),
-    })
+    expect(comparisonViewedFileScope(ReviewProjectId.make("repo-1"), repositoryComparison)).toEqual(
+      {
+        repoId: "repo-1",
+        sourceIdentity: `comparison:repository-comparison:v1:fixture:platform/backend/service:${"a".repeat(40)}:${"b".repeat(40)}:${"c".repeat(40)}`,
+        comparisonKind: "repositoryComparison",
+        comparisonTarget: "b".repeat(40),
+      },
+    )
   })
 
   it.effect("constructs every local and external file-open intent path", () =>
@@ -268,17 +296,17 @@ describe("EmbeddedCore", () => {
         yield* Effect.promise(() =>
           core.execute(CoreMethod.appOpenRepositoryFile, {
             review: fixtureTarget.review,
-            filePath: "src/external.ts",
-            headRefName: "feature/core",
-            headRevision: "a".repeat(40),
+            filePath: RepositoryRelativePath.make("src/external.ts"),
+            headRefName: GitFileRevision.make("feature/core"),
+            headRevision: ReviewRevision.make("a".repeat(40)),
           }),
         ),
       )
       const localDirect = successValue(
         yield* Effect.promise(() =>
           core.execute(CoreMethod.appOpenLocalRepositoryFile, {
-            rootPath: repositoryPath,
-            filePath: "src/local.ts",
+            rootPath: RepositoryCheckoutPath.make(repositoryPath),
+            filePath: RepositoryRelativePath.make("src/local.ts"),
           }),
         ),
       )
@@ -295,22 +323,24 @@ describe("EmbeddedCore", () => {
         yield* Effect.promise(() =>
           core.execute(CoreMethod.appOpenRepositoryComparisonFile, {
             target: comparisonTarget,
-            filePath: "src/comparison.ts",
+            filePath: RepositoryRelativePath.make("src/comparison.ts"),
           }),
         ),
       )
       successValue(
         yield* Effect.promise(() =>
-          core.execute(CoreMethod.installRepository, { localPath: repositoryPath }),
+          core.execute(CoreMethod.installRepository, {
+            localPath: RepositoryCheckoutPath.make(repositoryPath),
+          }),
         ),
       )
       const localHosted = successValue(
         yield* Effect.promise(() =>
           core.execute(CoreMethod.appOpenRepositoryFile, {
             review: fixtureTarget.review,
-            filePath: "src/linked.ts",
-            headRefName: "feature/core",
-            headRevision: "a".repeat(40),
+            filePath: RepositoryRelativePath.make("src/linked.ts"),
+            headRefName: GitFileRevision.make("feature/core"),
+            headRevision: ReviewRevision.make("a".repeat(40)),
           }),
         ),
       )
@@ -318,9 +348,9 @@ describe("EmbeddedCore", () => {
         yield* Effect.promise(() =>
           core.execute(CoreMethod.appOpenRepositoryFile, {
             review: fixtureTarget.review,
-            filePath: "src/mismatch.ts",
-            headRefName: "feature/other",
-            headRevision: "a".repeat(40),
+            filePath: RepositoryRelativePath.make("src/mismatch.ts"),
+            headRefName: GitFileRevision.make("feature/other"),
+            headRevision: ReviewRevision.make("a".repeat(40)),
           }),
         ),
       )
@@ -440,7 +470,9 @@ describe("EmbeddedCore", () => {
       successValue(yield* Effect.promise(core.start))
 
       const result = yield* Effect.promise(() =>
-        core.execute(CoreMethod.installRepository, { localPath: join(directory, "missing") }),
+        core.execute(CoreMethod.installRepository, {
+          localPath: RepositoryCheckoutPath.make(join(directory, "missing")),
+        }),
       )
 
       expect(result.ok).toBe(false)
@@ -461,8 +493,8 @@ describe("EmbeddedCore", () => {
           yield* Effect.promise(() =>
             core.walkthroughs.getStored({
               target: fixtureTarget,
-              expectedBaseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              expectedHeadRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              expectedBaseRevision: ReviewRevision.make("b".repeat(40)),
+              expectedHeadRevision: ReviewRevision.make("a".repeat(40)),
             }),
           ),
         ),
@@ -502,8 +534,8 @@ describe("EmbeddedCore", () => {
           yield* Effect.promise(() =>
             core.walkthroughs.getStored({
               target: fixtureTarget,
-              expectedBaseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              expectedHeadRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              expectedBaseRevision: ReviewRevision.make("b".repeat(40)),
+              expectedHeadRevision: ReviewRevision.make("a".repeat(40)),
             }),
           ),
         ),
@@ -513,8 +545,8 @@ describe("EmbeddedCore", () => {
           yield* Effect.promise(() =>
             core.walkthroughs.getStored({
               target: fixtureTarget,
-              expectedBaseRevision: "c".repeat(40),
-              expectedHeadRevision: "a".repeat(40),
+              expectedBaseRevision: ReviewRevision.make("c".repeat(40)),
+              expectedHeadRevision: ReviewRevision.make("a".repeat(40)),
             }),
           ),
         ),
@@ -524,8 +556,8 @@ describe("EmbeddedCore", () => {
           yield* Effect.promise(() =>
             core.walkthroughs.getStored({
               target: fixtureTarget,
-              expectedBaseRevision: "b".repeat(40),
-              expectedHeadRevision: "d".repeat(40),
+              expectedBaseRevision: ReviewRevision.make("b".repeat(40)),
+              expectedHeadRevision: ReviewRevision.make("d".repeat(40)),
             }),
           ),
         ),

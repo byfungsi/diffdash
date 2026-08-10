@@ -3,6 +3,7 @@ import { Effect, Result } from "effect"
 
 import {
   GitProviderOperationError,
+  ReviewRevision,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/git-provider"
@@ -33,7 +34,10 @@ describe("Fixture Forge provider", () => {
 
       const detail = yield* provider.getReview(review.locator)
       const diff = yield* provider.getReviewDiff(review.locator)
-      const checkout = yield* provider.checkoutSpec(review.locator)
+      const checkout = yield* provider.checkoutSpec(
+        review.locator,
+        ReviewRevision.make("fixture-head"),
+      )
 
       expect(detail.summary.title).toBe("Fixture merge request flow")
       expect(detail.files[0]?.path).toBe("src/fixture.ts")

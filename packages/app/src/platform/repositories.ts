@@ -11,7 +11,8 @@ import type {
   RepositoryIdentityRepairSummary,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
-import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type {
   HostedProviderRequest,
   HostedRepositorySearchRequest,
@@ -88,17 +89,22 @@ export const repositoriesLayer = Layer.effect(
         ),
       setFavorite: (id, isFavorite) =>
         invokePreload(InvokeChannel.setRepositoryFavorite, () =>
-          api.repositories.setFavorite(id, isFavorite),
+          api.repositories.setFavorite(ReviewProjectId.make(id), isFavorite),
         ),
       install: (localPath) =>
-        invokePreload(InvokeChannel.installRepository, () => api.repositories.install(localPath)),
+        invokePreload(InvokeChannel.installRepository, () =>
+          api.repositories.install(RepositoryCheckoutPath.make(localPath)),
+        ),
       link: (request) =>
         invokePreload(InvokeChannel.linkRepository, () => api.repositories.link(request)),
       forget: (projectId) =>
         invokePreload(InvokeChannel.forgetRepository, () => api.repositories.forget(projectId)),
       openProject: (localPath, selectedRepository) =>
         invokePreload(InvokeChannel.openProject, () =>
-          api.repositories.openProject(localPath, Option.getOrUndefined(selectedRepository)),
+          api.repositories.openProject(
+            RepositoryCheckoutPath.make(localPath),
+            Option.getOrUndefined(selectedRepository),
+          ),
         ),
       selectLocalFolder: () =>
         invokePreload(InvokeChannel.selectLocalFolder, () =>

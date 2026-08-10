@@ -1,23 +1,29 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Result, Layer, Option } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
-  noRepositoryLocalPath,
-  repositoryLocalPath,
-  repositorySource,
+  hostedRepositoryInput,
+  linkedRepositoryCheckout,
+  localRepositoryInput,
+  remoteOnlyRepositoryCheckout,
+  RepositoryCheckoutPath,
 } from "@diffdash/domain/repository"
 import {
   HostedRepositorySource,
+  GitProviderId,
   LocalRepositorySource,
   makeHostedRepositoryLocator,
   ProviderRepositoryId,
   ResolvedHostedRepository,
 } from "@diffdash/domain/git-provider"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { DatabaseService } from "./database"
+import { WebUrl } from "@diffdash/domain/web-url"
+import { type Database, makeDatabase, type SqlParams } from "./database"
+import * as DatabaseNode from "./database-node"
 import { RepositoryStore, RepositoryStoreError } from "./repository-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
@@ -26,7 +32,32 @@ const makeTempDatabasePath = Effect.acquireRelease(
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
 const makeLayer = (databasePath: string) =>
-  RepositoryStore.layer.pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
+  RepositoryStore.layer.pipe(Layer.provideMerge(DatabaseNode.layer(databasePath)))
+
+const githubProviderId = GitProviderId.make("github")
+const githubEnterpriseProviderId = GitProviderId.make("github-enterprise")
+
+const hostedInput = (
+  owner: string,
+  name: string,
+  remoteUrl: string,
+  localPath: string | null = null,
+  providerId: GitProviderId = githubProviderId,
+  isFavorite?: boolean,
+) =>
+  hostedRepositoryInput(
+    makeHostedRepositoryLocator(providerId, owner, name),
+    localPath === null
+      ? remoteOnlyRepositoryCheckout(remoteUrl)
+      : linkedRepositoryCheckout(remoteUrl, localPath),
+    isFavorite,
+  )
+
+const localInput = (localPath: string, remoteUrl: string, isFavorite?: boolean) =>
+  localRepositoryInput(linkedRepositoryCheckout(remoteUrl, localPath), isFavorite)
+
+const getRow = (database: Database, statement: string, params?: SqlParams) =>
+  database.get(statement, params).pipe(Effect.map(Option.getOrUndefined))
 
 const INSERT_REVIEW_THREAD_SQL = `INSERT INTO review_threads (
   id, repo_id, review_key, pr_number, base_sha, head_sha,
@@ -41,22 +72,24 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const remote = yield* store.upsertRepository({
-          isFavorite: true,
-          localPath: noRepositoryLocalPath,
-          name: "remote-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/remote-repo",
-        })
-        const local = yield* store.upsertRepository({
-          isFavorite: false,
-          localPath: repositoryLocalPath("/tmp/local-repo"),
-          name: "local-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/local-repo",
-        })
+        const remote = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "remote-repo",
+            "https://github.com/fungsi/remote-repo",
+            null,
+            githubProviderId,
+            true,
+          ),
+        )
+        const local = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "local-repo",
+            "https://github.com/fungsi/local-repo",
+            "/tmp/local-repo",
+          ),
+        )
         const repos = yield* store.list()
 
         expect(remote.localPath).toBeNull()
@@ -67,20 +100,57 @@ describe("RepositoryStore", () => {
     }),
   )
 
+  it.effect("rolls back repository upserts when compatibility writes fail", () =>
+    Effect.gen(function* () {
+      for (const table of ["repository_identities", "repository_checkouts"] as const) {
+        const databasePath = yield* makeTempDatabasePath
+        yield* Effect.gen(function* () {
+          const store = yield* RepositoryStore
+          const database = makeDatabase(yield* SqlClient.SqlClient)
+          yield* database.run(
+            `CREATE TRIGGER fail_${table}_insert
+             BEFORE INSERT ON ${table}
+             BEGIN
+               SELECT RAISE(FAIL, 'injected ${table} failure');
+             END`,
+          )
+
+          const result = yield* Effect.result(
+            store.upsertRepository(
+              hostedInput(
+                "fungsi",
+                `rollback-${table}`,
+                `https://github.com/fungsi/rollback-${table}`,
+                `/tmp/rollback-${table}`,
+              ),
+            ),
+          )
+
+          expect(Result.isFailure(result)).toBe(true)
+          expect(
+            yield* getRow(database, "SELECT id FROM repos WHERE name = ?", [`rollback-${table}`]),
+          ).toBeUndefined()
+          expect(
+            yield* getRow(database, "SELECT repo_id FROM repository_identities LIMIT 1"),
+          ).toBeUndefined()
+          expect(
+            yield* getRow(database, "SELECT repo_id FROM repository_checkouts LIMIT 1"),
+          ).toBeUndefined()
+        }).pipe(Effect.provide(makeLayer(databasePath)))
+      }
+    }),
+  )
+
   it.effect("updates favorite state and supports search", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const database = yield* DatabaseService
-        const repo = yield* store.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "searchable",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/searchable",
-        })
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const repo = yield* store.upsertRepository(
+          hostedInput("fungsi", "searchable", "https://github.com/fungsi/searchable"),
+        )
 
         const updated = yield* store.setFavorite(repo.id, true)
         const matches = yield* store.list("fungsi/search")
@@ -105,26 +175,21 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const hosted = yield* store.upsertRepository({
-          localPath: repositoryLocalPath("/tmp/shared-repo"),
-          name: "shared-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/shared-repo",
-        })
-        yield* store.upsertRepository({
-          localPath: repositoryLocalPath("/tmp/shared-repo"),
-          name: "shared-repo-local",
-          owner: "local",
-          provider: "local",
-          remoteUrl: "",
-        })
+        const hosted = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "shared-repo",
+            "https://github.com/fungsi/shared-repo",
+            "/tmp/shared-repo",
+          ),
+        )
+        yield* store.upsertRepository(localInput("/tmp/shared-repo", "file:///tmp/shared-repo"))
 
-        const found = yield* store.findByLocalPath("/tmp/shared-repo")
+        const found = yield* store.findByLocalPath(RepositoryCheckoutPath.make("/tmp/shared-repo"))
 
         expect(Option.getOrUndefined(found)).toMatchObject({
           id: hosted.id,
-          provider: "github",
+          source: { locator: { providerId: githubProviderId } },
         })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -137,7 +202,11 @@ describe("RepositoryStore", () => {
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
 
-        expect(Option.isNone(yield* store.findByLocalPath("/tmp/missing-repo"))).toBe(true)
+        expect(
+          Option.isNone(
+            yield* store.findByLocalPath(RepositoryCheckoutPath.make("/tmp/missing-repo")),
+          ),
+        ).toBe(true)
         expect(
           Option.isNone(
             yield* store.findHosted(
@@ -145,9 +214,14 @@ describe("RepositoryStore", () => {
             ),
           ),
         ).toBe(true)
-        expect(Option.isNone(yield* store.findByProviderRepositoryId("github", "R_missing"))).toBe(
-          true,
-        )
+        expect(
+          Option.isNone(
+            yield* store.findByProviderRepositoryId(
+              GitProviderId.make("github"),
+              ProviderRepositoryId.make("R_missing"),
+            ),
+          ),
+        ).toBe(true)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -158,22 +232,19 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const localPath = "/tmp/reconciled-repo"
-        const hosted = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "reconciled-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/reconciled-repo",
-        })
-        const alias = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "reconciled-repo-local",
-          owner: "local",
-          provider: "local",
-          remoteUrl: "file:///tmp/reconciled-repo",
-        })
+        const hosted = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "reconciled-repo",
+            "https://github.com/fungsi/reconciled-repo",
+            localPath,
+          ),
+        )
+        const alias = yield* store.upsertRepository(
+          localInput(localPath, "file:///tmp/reconciled-repo"),
+        )
         const anchor = '{"_tag":"line","path":"src/index.ts","side":"right","line":1}'
 
         yield* database.run(
@@ -328,7 +399,7 @@ describe("RepositoryStore", () => {
 
         const result = yield* store.reconcileLocalAliases(
           ReviewProjectId.make(hosted.id),
-          localPath,
+          RepositoryCheckoutPath.make(localPath),
         )
 
         expect(result).toEqual({
@@ -336,58 +407,65 @@ describe("RepositoryStore", () => {
           removedAliasCount: 1,
           preservedAliasCount: 0,
         })
-        expect(yield* database.get("SELECT id FROM repos WHERE id = ?", [alias.id])).toBeUndefined()
         expect(
-          yield* database.get("SELECT repo_id FROM pull_requests WHERE id = ?", ["alias-pr"]),
+          yield* getRow(database, "SELECT id FROM repos WHERE id = ?", [alias.id]),
+        ).toBeUndefined()
+        expect(
+          yield* getRow(database, "SELECT repo_id FROM pull_requests WHERE id = ?", ["alias-pr"]),
         ).toEqual({ repo_id: hosted.id })
         expect(
-          yield* database.get("SELECT repo_id FROM walkthroughs WHERE review_key = ?", [
+          yield* getRow(database, "SELECT repo_id FROM walkthroughs WHERE review_key = ?", [
             "github:17",
           ]),
         ).toEqual({ repo_id: hosted.id })
         expect(
-          yield* database.get(
+          yield* getRow(
+            database,
             `SELECT repo_id, artifact_repo_id FROM walkthrough_operations WHERE id = ?`,
             ["alias-walkthrough-operation"],
           ),
         ).toEqual({ repo_id: hosted.id, artifact_repo_id: hosted.id })
         expect(
-          yield* database.get("SELECT repo_id FROM hosted_viewed_files WHERE patch_hash = ?", [
+          yield* getRow(database, "SELECT repo_id FROM hosted_viewed_files WHERE patch_hash = ?", [
             "hosted-patch",
           ]),
         ).toEqual({ repo_id: hosted.id })
         expect(
-          yield* database.get("SELECT repo_id FROM local_viewed_files WHERE patch_hash = ?", [
+          yield* getRow(database, "SELECT repo_id FROM local_viewed_files WHERE patch_hash = ?", [
             "local-patch",
           ]),
         ).toEqual({ repo_id: hosted.id })
         expect(
-          yield* database.get(
+          yield* getRow(
+            database,
             "SELECT repo_id, active_ribbon FROM project_workspace_state WHERE repo_id = ?",
             [hosted.id],
           ),
         ).toEqual({ repo_id: hosted.id, active_ribbon: "threads" })
         expect(
-          yield* database.get("SELECT id, repo_id FROM review_threads WHERE id = ?", [
+          yield* getRow(database, "SELECT id, repo_id FROM review_threads WHERE id = ?", [
             "alias-thread",
           ]),
         ).toEqual({ id: "alias-thread", repo_id: hosted.id })
         expect(
-          yield* database.get(
+          yield* getRow(
+            database,
             "SELECT thread_id, agent_run_id FROM review_thread_messages WHERE id = ?",
             ["alias-message"],
           ),
         ).toEqual({ thread_id: "alias-thread", agent_run_id: "alias-run" })
         expect(
-          yield* database.get("SELECT thread_id FROM agent_runs WHERE id = ?", ["alias-run"]),
+          yield* getRow(database, "SELECT thread_id FROM agent_runs WHERE id = ?", ["alias-run"]),
         ).toEqual({ thread_id: "alias-thread" })
         expect(
-          yield* database.get("SELECT run_id, thread_id FROM agent_run_artifacts WHERE id = ?", [
-            "alias-artifact",
-          ]),
+          yield* getRow(
+            database,
+            "SELECT run_id, thread_id FROM agent_run_artifacts WHERE id = ?",
+            ["alias-artifact"],
+          ),
         ).toEqual({ run_id: "alias-run", thread_id: "alias-thread" })
         expect(
-          yield* database.get("SELECT thread_id FROM thread_memory WHERE thread_id = ?", [
+          yield* getRow(database, "SELECT thread_id FROM thread_memory WHERE thread_id = ?", [
             "alias-thread",
           ]),
         ).toEqual({ thread_id: "alias-thread" })
@@ -395,28 +473,25 @@ describe("RepositoryStore", () => {
     }),
   )
 
-  it.effect("merges colliding alias conversations into the canonical thread", () =>
+  it.effect("merges collisions by newest durable timestamp and keeps canonical ties", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const localPath = "/tmp/conflicting-repo"
-        const hosted = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "conflicting-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/conflicting-repo",
-        })
-        const alias = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "conflicting-repo-local",
-          owner: "local",
-          provider: "local",
-          remoteUrl: "file:///tmp/conflicting-repo",
-        })
+        const hosted = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "conflicting-repo",
+            "https://github.com/fungsi/conflicting-repo",
+            localPath,
+          ),
+        )
+        const alias = yield* store.upsertRepository(
+          localInput(localPath, "file:///tmp/conflicting-repo"),
+        )
         const anchor = '{"_tag":"line","path":"src/conflict.ts","side":"right","line":4}'
         const viewedFileValues = [
           "working-tree",
@@ -440,6 +515,19 @@ describe("RepositoryStore", () => {
           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [alias.id, ...viewedFileValues, "2026-08-02T03:00:00.000Z"],
         )
+        const hostedViewedFileValues = [5, "main", "github:5", "hosted-same-patch"] as const
+        yield* database.run(
+          `INSERT INTO hosted_viewed_files (
+            repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          [hosted.id, ...hostedViewedFileValues, "2026-08-04T03:00:00.000Z"],
+        )
+        yield* database.run(
+          `INSERT INTO hosted_viewed_files (
+            repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          [alias.id, ...hostedViewedFileValues, "2026-08-04T02:00:00.000Z"],
+        )
         yield* database.run(
           `INSERT INTO walkthroughs (
             repo_id, pr_number, review_key, base_sha, head_sha, prompt_version,
@@ -453,6 +541,34 @@ describe("RepositoryStore", () => {
             content_json, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [alias.id, 4, "github:4", "base", "head", "v1", "alias", "2026-08-03"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthroughs (
+            repo_id, pr_number, review_key, base_sha, head_sha, prompt_version,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [hosted.id, 5, "github:5", "base", "head", "v1", "canonical-newer", "2026-08-05"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthroughs (
+            repo_id, pr_number, review_key, base_sha, head_sha, prompt_version,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [alias.id, 5, "github:5", "base", "head", "v1", "alias-older", "2026-08-04"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthroughs (
+            repo_id, pr_number, review_key, base_sha, head_sha, prompt_version,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [hosted.id, 6, "github:6", "base", "head", "v1", "canonical-tie", "2026-08-06"],
+        )
+        yield* database.run(
+          `INSERT INTO walkthroughs (
+            repo_id, pr_number, review_key, base_sha, head_sha, prompt_version,
+            content_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [alias.id, 6, "github:6", "base", "head", "v1", "alias-tie", "2026-08-06"],
         )
         yield* database.run(
           `INSERT INTO walkthrough_operations (
@@ -542,7 +658,7 @@ describe("RepositoryStore", () => {
 
         const result = yield* store.reconcileLocalAliases(
           ReviewProjectId.make(hosted.id),
-          localPath,
+          RepositoryCheckoutPath.make(localPath),
         )
 
         expect(result).toEqual({
@@ -550,24 +666,50 @@ describe("RepositoryStore", () => {
           removedAliasCount: 1,
           preservedAliasCount: 0,
         })
-        expect(yield* database.get("SELECT id FROM repos WHERE id = ?", [alias.id])).toBeUndefined()
         expect(
-          yield* database.get(
+          yield* getRow(database, "SELECT id FROM repos WHERE id = ?", [alias.id]),
+        ).toBeUndefined()
+        expect(
+          yield* getRow(
+            database,
             "SELECT viewed_at FROM local_viewed_files WHERE repo_id = ? AND patch_hash = ?",
             [hosted.id, "same-patch"],
           ),
-        ).toEqual({ viewed_at: "2026-08-02T02:00:00.000Z" })
+        ).toEqual({ viewed_at: "2026-08-02T03:00:00.000Z" })
         expect(
-          yield* database.get("SELECT 1 FROM local_viewed_files WHERE repo_id = ?", [alias.id]),
+          yield* getRow(
+            database,
+            "SELECT viewed_at FROM hosted_viewed_files WHERE repo_id = ? AND patch_hash = ?",
+            [hosted.id, "hosted-same-patch"],
+          ),
+        ).toEqual({ viewed_at: "2026-08-04T03:00:00.000Z" })
+        expect(
+          yield* getRow(database, "SELECT 1 FROM local_viewed_files WHERE repo_id = ?", [alias.id]),
         ).toBeUndefined()
         expect(
-          yield* database.get(
-            "SELECT content_json FROM walkthroughs WHERE repo_id = ? AND review_key = ?",
+          yield* getRow(
+            database,
+            "SELECT content_json, created_at FROM walkthroughs WHERE repo_id = ? AND review_key = ?",
             [hosted.id, "github:4"],
           ),
-        ).toEqual({ content_json: "canonical" })
+        ).toEqual({ content_json: "alias", created_at: "2026-08-03" })
         expect(
-          yield* database.get(
+          yield* getRow(
+            database,
+            "SELECT content_json, created_at FROM walkthroughs WHERE repo_id = ? AND review_key = ?",
+            [hosted.id, "github:5"],
+          ),
+        ).toEqual({ content_json: "canonical-newer", created_at: "2026-08-05" })
+        expect(
+          yield* getRow(
+            database,
+            "SELECT content_json, created_at FROM walkthroughs WHERE repo_id = ? AND review_key = ?",
+            [hosted.id, "github:6"],
+          ),
+        ).toEqual({ content_json: "canonical-tie", created_at: "2026-08-06" })
+        expect(
+          yield* getRow(
+            database,
             `SELECT repo_id, state, state_version, superseded_by_operation_id
              FROM walkthrough_operations WHERE id = ?`,
             ["alias-active-operation"],
@@ -579,7 +721,8 @@ describe("RepositoryStore", () => {
           superseded_by_operation_id: "canonical-active-operation",
         })
         expect(
-          yield* database.get(
+          yield* getRow(
+            database,
             "SELECT active_ribbon, updated_at FROM project_workspace_state WHERE repo_id = ?",
             [hosted.id],
           ),
@@ -588,17 +731,17 @@ describe("RepositoryStore", () => {
           updated_at: "2026-08-02T04:00:00.000Z",
         })
         expect(
-          yield* database.get("SELECT repo_id FROM review_threads WHERE id = ?", [
+          yield* getRow(database, "SELECT repo_id FROM review_threads WHERE id = ?", [
             "canonical-thread",
           ]),
         ).toEqual({ repo_id: hosted.id })
         expect(
-          yield* database.get("SELECT repo_id FROM review_threads WHERE id = ?", [
+          yield* getRow(database, "SELECT repo_id FROM review_threads WHERE id = ?", [
             "alias-conflicting-thread",
           ]),
         ).toBeUndefined()
         expect(
-          yield* database.get("SELECT thread_id FROM review_thread_messages WHERE id = ?", [
+          yield* getRow(database, "SELECT thread_id FROM review_thread_messages WHERE id = ?", [
             "alias-conflicting-message",
           ]),
         ).toEqual({ thread_id: "canonical-thread" })
@@ -612,14 +755,16 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const repo = yield* store.upsertRepository({
-          isFavorite: true,
-          localPath: repositoryLocalPath("/tmp/forgettable-repo"),
-          name: "forgettable-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/forgettable-repo",
-        })
+        const repo = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "forgettable-repo",
+            "https://github.com/fungsi/forgettable-repo",
+            "/tmp/forgettable-repo",
+            githubProviderId,
+            true,
+          ),
+        )
 
         const forgotten = yield* store.forget(ReviewProjectId.make(repo.id))
         const persisted = (yield* store.list()).find((candidate) => candidate.id === repo.id)
@@ -642,22 +787,24 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const hosted = yield* store.upsertRepository({
-          isFavorite: true,
-          localPath: noRepositoryLocalPath,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
-        const linked = yield* store.upsertRepository({
-          isFavorite: false,
-          localPath: repositoryLocalPath("/tmp/diffdash"),
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash.git",
-        })
+        const hosted = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "diffdash",
+            "https://github.com/fungsi/diffdash",
+            null,
+            githubProviderId,
+            true,
+          ),
+        )
+        const linked = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "diffdash",
+            "https://github.com/fungsi/diffdash.git",
+            "/tmp/diffdash",
+          ),
+        )
         const repositories = yield* store.list()
 
         expect(repositories).toHaveLength(1)
@@ -675,46 +822,51 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const old = yield* store.upsertRepository({
-          isFavorite: true,
-          localPath: repositoryLocalPath("/tmp/xenith-operator-dashboard-fe"),
-          name: "xenith-operator-dashboard-fe",
-          owner: "xenithlabs",
-          provider: "github",
-          remoteUrl: "git@github.com:xenithlabs/xenith-operator-dashboard-fe.git",
-        })
-        const current = yield* store.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "xenith-dashboard",
-          owner: "xenithlabs",
-          provider: "github",
-          remoteUrl: "https://github.com/xenithlabs/xenith-dashboard",
-        })
+        const old = yield* store.upsertRepository(
+          hostedInput(
+            "xenithlabs",
+            "xenith-operator-dashboard-fe",
+            "git@github.com:xenithlabs/xenith-operator-dashboard-fe.git",
+            "/tmp/xenith-operator-dashboard-fe",
+            githubProviderId,
+            true,
+          ),
+        )
+        const current = yield* store.upsertRepository(
+          hostedInput(
+            "xenithlabs",
+            "xenith-dashboard",
+            "https://github.com/xenithlabs/xenith-dashboard",
+          ),
+        )
         const resolved = ResolvedHostedRepository.make({
           locator: makeHostedRepositoryLocator("github", "xenithlabs", "xenith-dashboard"),
           providerRepositoryId: ProviderRepositoryId.make("R_xenith_dashboard"),
-          url: "https://github.com/xenithlabs/xenith-dashboard",
+          url: WebUrl.make("https://github.com/xenithlabs/xenith-dashboard"),
         })
 
         const attached = yield* store.attachResolvedIdentity(
           ReviewProjectId.make(old.id),
           resolved,
-          old.localPath,
-          old.remoteUrl,
+          old.checkout,
         )
         const repositories = yield* store.list()
 
         expect(attached.id).toBe(old.id)
-        expect(attached.owner).toBe("xenithlabs")
-        expect(attached.name).toBe("xenith-dashboard")
+        expect(attached.displayIdentity).toBe("xenithlabs/xenith-dashboard")
         expect(attached.isFavorite).toBe(true)
-        expect(repositories.filter((repo) => repo.name === "xenith-dashboard")).toHaveLength(1)
+        expect(
+          repositories.filter((repo) => repo.displayIdentity === "xenithlabs/xenith-dashboard"),
+        ).toHaveLength(1)
         expect(repositories.some((repo) => repo.id === current.id)).toBe(false)
         expect(
           Option.getOrUndefined(
-            yield* store.findByProviderRepositoryId("github", "R_xenith_dashboard"),
+            yield* store.findByProviderRepositoryId(
+              GitProviderId.make("github"),
+              ProviderRepositoryId.make("R_xenith_dashboard"),
+            ),
           ),
-        ).toMatchObject({ id: old.id, name: "xenith-dashboard" })
+        ).toMatchObject({ id: old.id })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -725,22 +877,12 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const localPath = "/tmp/diffdash"
-        const hosted = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "diffdash",
-          owner: "byfungsi",
-          provider: "github",
-          remoteUrl: "git@github.com:byfungsi/diffdash.git",
-        })
-        const local = yield* store.upsertRepository({
-          localPath: repositoryLocalPath(localPath),
-          name: "diffdash-local",
-          owner: "local",
-          provider: "local",
-          remoteUrl: "file:///tmp/diffdash",
-        })
+        const hosted = yield* store.upsertRepository(
+          hostedInput("byfungsi", "diffdash", "git@github.com:byfungsi/diffdash.git", localPath),
+        )
+        const local = yield* store.upsertRepository(localInput(localPath, "file:///tmp/diffdash"))
         yield* database.run(
           `INSERT INTO local_viewed_files (
              repo_id, source_identity, comparison_kind, comparison_target,
@@ -761,7 +903,10 @@ describe("RepositoryStore", () => {
           expect.objectContaining({ id: hosted.id }),
         ])
         expect(
-          yield* database.get("SELECT repo_id FROM local_viewed_files WHERE patch_hash = 'patch'"),
+          yield* getRow(
+            database,
+            "SELECT repo_id FROM local_viewed_files WHERE patch_hash = 'patch'",
+          ),
         ).toEqual({ repo_id: hosted.id })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -773,33 +918,68 @@ describe("RepositoryStore", () => {
 
       return yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const github = yield* store.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "service",
-          owner: "platform/backend",
-          provider: "github",
-          remoteUrl: "https://github.com/platform/backend/service",
-        })
-        const enterprise = yield* store.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "service",
-          owner: "platform/backend",
-          provider: "github-enterprise",
-          remoteUrl: "https://git.example.com/platform/backend/service",
-        })
-        const legacyLocal = yield* store.upsertRepository({
-          localPath: repositoryLocalPath("/tmp/service"),
-          name: "service-local-id",
-          owner: "local",
-          provider: "local",
-          remoteUrl: "",
-        })
+        const github = yield* store.upsertRepository(
+          hostedInput("platform/backend", "service", "https://github.com/platform/backend/service"),
+        )
+        const enterprise = yield* store.upsertRepository(
+          hostedInput(
+            "platform/backend",
+            "service",
+            "https://git.example.com/platform/backend/service",
+            null,
+            githubEnterpriseProviderId,
+          ),
+        )
+        const legacyLocal = yield* store.upsertRepository(
+          localInput("/tmp/service", "file:///tmp/service"),
+        )
 
         expect(github.id).toBe("github:platform/backend/service")
         expect(enterprise.id).toBe("github-enterprise:platform/backend/service")
-        expect(repositorySource(github)).toBeInstanceOf(HostedRepositorySource)
-        expect(repositorySource(legacyLocal)).toBeInstanceOf(LocalRepositorySource)
+        expect(github.source).toBeInstanceOf(HostedRepositorySource)
+        expect(legacyLocal.source).toBeInstanceOf(LocalRepositorySource)
         expect(yield* store.list()).toHaveLength(3)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects legacy rows that cannot form valid repository source and checkout pairs", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const local = yield* store.upsertRepository(
+          localInput("/tmp/local-invalid", "file:///tmp/local-invalid"),
+        )
+
+        yield* database.run("DELETE FROM repository_checkouts WHERE repo_id = ?", [local.id])
+        yield* database.run("UPDATE repos SET local_path = NULL WHERE id = ?", [local.id])
+        const unlinkedLocal = yield* Effect.result(store.list())
+
+        expect(Result.isFailure(unlinkedLocal)).toBe(true)
+        if (Result.isFailure(unlinkedLocal)) {
+          expect(unlinkedLocal.failure.operation).toBe("list.decode")
+        }
+
+        yield* database.run("UPDATE repos SET local_path = ? WHERE id = ?", [
+          "/tmp/local-invalid",
+          local.id,
+        ])
+        const hosted = yield* store.upsertRepository(
+          hostedInput("fungsi", "invalid-hosted", "https://github.com/fungsi/invalid-hosted"),
+        )
+        yield* database.run(
+          "UPDATE repository_identities SET canonical_owner = ? WHERE repo_id = ?",
+          ["bad:owner", hosted.id],
+        )
+        const malformedHosted = yield* Effect.result(store.list())
+
+        expect(Result.isFailure(malformedHosted)).toBe(true)
+        if (Result.isFailure(malformedHosted)) {
+          expect(malformedHosted.failure.operation).toBe("list.decode")
+        }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -810,14 +990,15 @@ describe("RepositoryStore", () => {
 
       yield* Effect.gen(function* () {
         const store = yield* RepositoryStore
-        const database = yield* DatabaseService
-        const repo = yield* store.upsertRepository({
-          localPath: repositoryLocalPath("/tmp/corrupt-repo"),
-          name: "corrupt-repo",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/corrupt-repo",
-        })
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const repo = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "corrupt-repo",
+            "https://github.com/fungsi/corrupt-repo",
+            "/tmp/corrupt-repo",
+          ),
+        )
 
         yield* database.run("UPDATE repos SET owner = x'01' WHERE id = ?", [repo.id])
         yield* database.run(

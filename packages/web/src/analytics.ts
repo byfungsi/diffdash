@@ -2,9 +2,9 @@ export type DownloadPlatform = "linux_appimage" | "linux_deb" | "macos"
 export type DownloadPlacement = "hero" | "footer"
 
 const distinctIdStorageKey = "diffdash.posthog.distinct_id"
-const posthogKey = (import.meta.env.VITE_POSTHOG_KEY as string | undefined)?.trim()
-const posthogHost = (import.meta.env.VITE_POSTHOG_HOST as string | undefined)
-  ?.trim()
+const posthogKey = String(import.meta.env.VITE_POSTHOG_KEY ?? "").trim()
+const posthogHost = String(import.meta.env.VITE_POSTHOG_HOST ?? "")
+  .trim()
   .replace(/\/+$/, "")
 
 /** Returns whether PostHog has enough configuration to send events. */

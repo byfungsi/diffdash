@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Option, Stream } from "effect"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { CoreAbsolutePath, GitFixtureRemote } from "./core-configuration"
 
 import {
   createAgentProviderComposition,
   createGitProviderComposition,
-} from "./provider-composition"
+} from "./provider-composition.e2e"
 
 const processes = {
   run: () => Effect.die(new Error("probe is not evaluated during composition")),
@@ -20,7 +22,7 @@ describe("provider composition", () => {
         makeTempFileScoped: () => Effect.die(new Error("temp resources are not evaluated")),
         makeTempOutputPathScoped: () => Effect.die(new Error("temp resources are not evaluated")),
       },
-      tempDirectory: "/tmp/diffdash-agent-composition",
+      tempDirectory: CoreAbsolutePath.make("/tmp/diffdash-agent-composition"),
       fixture: Option.some({ walkthroughNeverCompletes: false }),
     })
 
@@ -43,9 +45,9 @@ describe("provider composition", () => {
       createGitProviderComposition(
         processes,
         Option.some({
-          remoteUrl: "/tmp/fixture.git",
-          baseRevision: Option.some("a".repeat(40)),
-          headRevision: Option.some("b".repeat(40)),
+          remoteUrl: GitFixtureRemote.make("/tmp/fixture.git"),
+          baseRevision: Option.some(ReviewRevision.make("a".repeat(40))),
+          headRevision: Option.some(ReviewRevision.make("b".repeat(40))),
         }),
       ).map(({ descriptor }) => descriptor.id),
     ).toEqual(["github", "fixture"])
@@ -59,7 +61,7 @@ describe("provider composition", () => {
         makeTempFileScoped: () => Effect.die(new Error("temp resources are not evaluated")),
         makeTempOutputPathScoped: () => Effect.die(new Error("temp resources are not evaluated")),
       },
-      tempDirectory: "/tmp/diffdash-agent-composition",
+      tempDirectory: CoreAbsolutePath.make("/tmp/diffdash-agent-composition"),
       fixture: Option.none(),
     })
 

@@ -24,7 +24,9 @@ import {
   UnavailableReviewNavigationOutcome,
 } from "@diffdash/domain/review-navigation"
 import { isTransientTransportError } from "@diffdash/protocol/transport-error"
-import { Equal, Result, Schema } from "effect"
+import { isAbortDOMException } from "@/shared/dom"
+import { rendererFailureInput } from "@/shared/errors"
+import { Equal, Match, Predicate, Result, Schema } from "effect"
 import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 /** Exact active review attached to the renderer-local navigator. */
@@ -149,167 +151,187 @@ export const makeInitialReviewNavigationModel = (): ReviewNavigationModel => ({
 export const reduceReviewNavigation = (
   model: ReviewNavigationModel,
   command: ReviewNavigationCommand,
-): ReviewNavigationCommandResult => {
-  if (command._tag === "attach") {
-    const outcomes = activeCancellation(
-      model.machine,
-      model.machine._tag === "active" &&
-        (model.machine.context.projectId !== command.session.projectId ||
-          model.machine.context.snapshotId !== command.session.snapshotId)
-        ? "review-changed"
-        : "bridge-lost",
-    )
-    const context = {
-      ...command.session,
-      sessionEpoch: model.nextSessionEpoch,
-      bridgeEpoch: model.nextBridgeEpoch,
-    }
-    return commandResult(
-      {
-        machine: { _tag: "idle", context },
-        presentation: EMPTY_PRESENTATION,
-        lastOutcome: outcomes.at(-1) ?? model.lastOutcome,
-        nextSessionEpoch: model.nextSessionEpoch + 1,
-        nextBridgeEpoch: model.nextBridgeEpoch + 1,
-      },
-      null,
-      outcomes,
-    )
-  }
-
-  if (command._tag === "detach") {
-    const outcomes = activeCancellation(
-      model.machine,
-      command.reason === "bridge-lost" ? "bridge-lost" : "review-changed",
-    )
-    return commandResult(
-      {
-        ...model,
-        machine: { _tag: "detached", reason: command.reason },
-        presentation: EMPTY_PRESENTATION,
-        lastOutcome: outcomes.at(-1) ?? model.lastOutcome,
-      },
-      null,
-      outcomes,
-    )
-  }
-
-  if (command._tag === "record") {
-    return commandResult({ ...model, lastOutcome: command.outcome }, null, [command.outcome])
-  }
-
-  if (command._tag === "cancel") {
-    if (model.machine._tag !== "active") return staleCommand(model)
-    const outcome = CancelledReviewNavigationOutcome.make({
-      requestId: model.machine.operation.key.requestId,
-      reason: command.reason,
-    })
-    return commandResult(idleModel(model, model.machine.context, outcome), null, [outcome])
-  }
-
-  if (command._tag === "submit") {
-    const superseded =
-      model.machine._tag === "active"
-        ? [
-            SupersededReviewNavigationOutcome.make({
-              requestId: model.machine.operation.key.requestId,
-              by: command.requestId,
-            }),
-          ]
-        : []
-    if (model.machine._tag === "detached") {
-      const unavailable = UnavailableReviewNavigationOutcome.make({
-        requestId: command.requestId,
-        reason: "noActiveReview",
+): ReviewNavigationCommandResult =>
+  Match.valueTags(command, {
+    attach: (command) => {
+      const outcomes = activeCancellation(
+        model.machine,
+        Match.valueTags(model.machine, {
+          active: (machine) =>
+            machine.context.projectId !== command.session.projectId ||
+            machine.context.snapshotId !== command.session.snapshotId
+              ? ("review-changed" as const)
+              : ("bridge-lost" as const),
+          detached: () => "bridge-lost" as const,
+          idle: () => "bridge-lost" as const,
+        }),
+      )
+      const context = {
+        ...command.session,
+        sessionEpoch: model.nextSessionEpoch,
+        bridgeEpoch: model.nextBridgeEpoch,
+      }
+      return commandResult(
+        {
+          machine: { _tag: "idle", context },
+          presentation: EMPTY_PRESENTATION,
+          lastOutcome: outcomes.at(-1) ?? model.lastOutcome,
+          nextSessionEpoch: model.nextSessionEpoch + 1,
+          nextBridgeEpoch: model.nextBridgeEpoch + 1,
+        },
+        null,
+        outcomes,
+      )
+    },
+    detach: (command) => {
+      const outcomes = activeCancellation(
+        model.machine,
+        command.reason === "bridge-lost" ? "bridge-lost" : "review-changed",
+      )
+      return commandResult(
+        {
+          ...model,
+          machine: { _tag: "detached", reason: command.reason },
+          presentation: EMPTY_PRESENTATION,
+          lastOutcome: outcomes.at(-1) ?? model.lastOutcome,
+        },
+        null,
+        outcomes,
+      )
+    },
+    record: (command) =>
+      commandResult({ ...model, lastOutcome: command.outcome }, null, [command.outcome]),
+    cancel: (command) =>
+      Match.valueTags(model.machine, {
+        active: (machine) => {
+          const outcome = CancelledReviewNavigationOutcome.make({
+            requestId: machine.operation.key.requestId,
+            reason: command.reason,
+          })
+          return commandResult(idleModel(model, machine.context, outcome), null, [outcome])
+        },
+        detached: () => staleCommand(model),
+        idle: () => staleCommand(model),
+      }),
+    submit: (command) => {
+      const superseded = Match.valueTags(model.machine, {
+        active: (machine) => [
+          SupersededReviewNavigationOutcome.make({
+            requestId: machine.operation.key.requestId,
+            by: command.requestId,
+          }),
+        ],
+        detached: () => [],
+        idle: () => [],
       })
-      return commandResult({ ...model, lastOutcome: unavailable }, null, [
-        ...superseded,
-        unavailable,
-      ])
-    }
-
-    const context = model.machine.context
-    const mismatch = localLocationMismatch(command.input.location, context)
-    if (mismatch !== null) {
-      const unavailable = UnavailableReviewNavigationOutcome.make({
-        requestId: command.requestId,
-        reason: mismatch,
+      return Match.valueTags(model.machine, {
+        detached: () => {
+          const unavailable = UnavailableReviewNavigationOutcome.make({
+            requestId: command.requestId,
+            reason: "noActiveReview",
+          })
+          return commandResult({ ...model, lastOutcome: unavailable }, null, [
+            ...superseded,
+            unavailable,
+          ])
+        },
+        idle: (machine) => submitWithContext(machine.context),
+        active: (machine) => submitWithContext(machine.context),
       })
-      return commandResult(idleModel(model, context, unavailable), null, [
-        ...superseded,
-        unavailable,
-      ])
-    }
 
-    const operation: ReviewNavigationOperation = {
-      key: { ...context, requestId: command.requestId },
-      input: command.input,
-      submittedAt: command.now,
-      phaseStartedAt: command.now,
-      deadlineAt: command.now + command.deadlineMs,
-    }
-    const fileId = targetFileId(command.input.location.target)
-    const presentation: ReviewNavigationPresentation = {
-      requestId: command.requestId,
-      selectedFileId: command.input.behavior.selection === "update" ? fileId : null,
-      forceVisibleFileIds:
-        command.input.behavior.visibility === "temporarily-reveal" && fileId !== null
-          ? [fileId]
-          : [],
-      forceExpandedFileIds: fileId === null ? [] : [fileId],
-      pinnedFileIds: fileId === null ? [] : [fileId],
-      activeTarget: command.input.location.target,
-    }
-    return commandResult(
-      {
-        ...model,
-        machine: { _tag: "active", context, operation, phase: "validating" },
-        presentation,
-        lastOutcome: superseded.at(-1) ?? model.lastOutcome,
-      },
-      operation,
-      superseded,
-    )
-  }
+      function submitWithContext(context: ReviewNavigationContext): ReviewNavigationCommandResult {
+        const mismatch = localLocationMismatch(command.input.location, context)
+        if (mismatch !== null) {
+          const unavailable = UnavailableReviewNavigationOutcome.make({
+            requestId: command.requestId,
+            reason: mismatch,
+          })
+          return commandResult(idleModel(model, context, unavailable), null, [
+            ...superseded,
+            unavailable,
+          ])
+        }
 
-  if (
-    model.machine._tag !== "active" ||
-    !sameOperationKey(model.machine.operation.key, command.key)
-  ) {
-    return staleCommand(model)
-  }
-
-  if (command._tag === "phase") {
-    const operation = { ...model.machine.operation, phaseStartedAt: command.now }
-    return commandResult(
-      { ...model, machine: { ...model.machine, operation, phase: command.phase } },
-      operation,
-      [],
-    )
-  }
-
-  if (command._tag === "resolved") {
-    if (command.fileId === null) return commandResult(model, model.machine.operation, [])
-    const presentation = {
-      ...model.presentation,
-      selectedFileId:
-        model.machine.operation.input.behavior.selection === "update"
-          ? command.fileId
-          : model.presentation.selectedFileId,
-      forceVisibleFileIds:
-        model.machine.operation.input.behavior.visibility === "temporarily-reveal"
-          ? [command.fileId]
-          : [],
-      forceExpandedFileIds: [command.fileId],
-      pinnedFileIds: [command.fileId],
-    }
-    return commandResult({ ...model, presentation }, model.machine.operation, [])
-  }
-
-  return commandResult(idleModel(model, model.machine.context, command.outcome), null, [
-    command.outcome,
-  ])
-}
+        const operation: ReviewNavigationOperation = {
+          key: { ...context, requestId: command.requestId },
+          input: command.input,
+          submittedAt: command.now,
+          phaseStartedAt: command.now,
+          deadlineAt: command.now + command.deadlineMs,
+        }
+        const fileId = targetFileId(command.input.location.target)
+        const presentation: ReviewNavigationPresentation = {
+          requestId: command.requestId,
+          selectedFileId: command.input.behavior.selection === "update" ? fileId : null,
+          forceVisibleFileIds:
+            command.input.behavior.visibility === "temporarily-reveal" && fileId !== null
+              ? [fileId]
+              : [],
+          forceExpandedFileIds: fileId === null ? [] : [fileId],
+          pinnedFileIds: fileId === null ? [] : [fileId],
+          activeTarget: command.input.location.target,
+        }
+        return commandResult(
+          {
+            ...model,
+            machine: { _tag: "active", context, operation, phase: "validating" },
+            presentation,
+            lastOutcome: superseded.at(-1) ?? model.lastOutcome,
+          },
+          operation,
+          superseded,
+        )
+      }
+    },
+    phase: (command) =>
+      Match.valueTags(model.machine, {
+        active: (machine) => {
+          if (!sameOperationKey(machine.operation.key, command.key)) return staleCommand(model)
+          const operation = { ...machine.operation, phaseStartedAt: command.now }
+          return commandResult(
+            { ...model, machine: { ...machine, operation, phase: command.phase } },
+            operation,
+            [],
+          )
+        },
+        detached: () => staleCommand(model),
+        idle: () => staleCommand(model),
+      }),
+    resolved: (command) =>
+      Match.valueTags(model.machine, {
+        active: (machine) => {
+          if (!sameOperationKey(machine.operation.key, command.key)) return staleCommand(model)
+          if (command.fileId === null) return commandResult(model, machine.operation, [])
+          const presentation = {
+            ...model.presentation,
+            selectedFileId:
+              machine.operation.input.behavior.selection === "update"
+                ? command.fileId
+                : model.presentation.selectedFileId,
+            forceVisibleFileIds:
+              machine.operation.input.behavior.visibility === "temporarily-reveal"
+                ? [command.fileId]
+                : [],
+            forceExpandedFileIds: [command.fileId],
+            pinnedFileIds: [command.fileId],
+          }
+          return commandResult({ ...model, presentation }, machine.operation, [])
+        },
+        detached: () => staleCommand(model),
+        idle: () => staleCommand(model),
+      }),
+    settle: (command) =>
+      Match.valueTags(model.machine, {
+        active: (machine) =>
+          sameOperationKey(machine.operation.key, command.key)
+            ? commandResult(idleModel(model, machine.context, command.outcome), null, [
+                command.outcome,
+              ])
+            : staleCommand(model),
+        detached: () => staleCommand(model),
+        idle: () => staleCommand(model),
+      }),
+  })
 
 const privateReviewNavigationModelAtom = Atom.make(makeInitialReviewNavigationModel())
 
@@ -550,32 +572,34 @@ export class ReviewNavigatorController implements ReviewNavigator {
       deadlineMs: Math.min(this.#budgets.requestMs, this.#budgets.hardCapMs),
     })
     this.#abortActive()
-    if (result.accepted !== null) {
+    const accepted = result.accepted
+    if (accepted !== null) {
       const abort = new AbortController()
       this.#activeAbort = abort
       this.#activeDeadline = this.#scheduler.schedule(
-        Math.max(0, result.accepted.deadlineAt - this.#scheduler.now()),
+        Math.max(0, accepted.deadlineAt - this.#scheduler.now()),
         () => {
           abort.abort()
           const state = this.#registry.get(privateReviewNavigationModelAtom).machine
-          if (
-            state._tag !== "active" ||
-            !sameOperationKey(state.operation.key, result.accepted!.key)
-          ) {
-            return
-          }
-          this.#settle(
-            result.accepted!.key,
-            FailedReviewNavigationOutcome.make({
-              requestId,
-              phase: state.phase,
-              reason: "deadlineExceeded",
-              retryable: true,
-            }),
-          )
+          Match.valueTags(state, {
+            active: (state) => {
+              if (!sameOperationKey(state.operation.key, accepted.key)) return
+              this.#settle(
+                accepted.key,
+                FailedReviewNavigationOutcome.make({
+                  requestId,
+                  phase: state.phase,
+                  reason: "deadlineExceeded",
+                  retryable: true,
+                }),
+              )
+            },
+            detached: () => undefined,
+            idle: () => undefined,
+          })
         },
       )
-      void this.#execute(result.accepted, abort.signal)
+      void this.#execute(accepted, abort.signal)
     }
     return promise
   }
@@ -591,7 +615,12 @@ export class ReviewNavigatorController implements ReviewNavigator {
   readonly cancelActiveForOrigins = (origins: readonly ReviewNavigationOrigin[]) => {
     if (this.#disposed) return false
     const machine = this.#registry.get(privateReviewNavigationModelAtom).machine
-    if (machine._tag !== "active" || !origins.includes(machine.operation.input.origin)) return false
+    const canCancel = Match.valueTags(machine, {
+      active: (machine) => origins.includes(machine.operation.input.origin),
+      detached: () => false,
+      idle: () => false,
+    })
+    if (!canCancel) return false
     this.cancelActive()
     return true
   }
@@ -644,10 +673,10 @@ export class ReviewNavigatorController implements ReviewNavigator {
       const target = await this.#runPhase(
         operation,
         phase,
-        operation.input.location.target._tag === "extension"
+        isExtensionNavigationTarget(operation.input.location.target)
           ? this.#budgets.extensionResolutionMs
           : this.#remainingRequestMs(operation),
-        operation.input.location.target._tag === "extension"
+        isExtensionNavigationTarget(operation.input.location.target)
           ? "extensionResolveFailed"
           : "positioningFailed",
         true,
@@ -681,7 +710,7 @@ export class ReviewNavigatorController implements ReviewNavigator {
         operation,
         phase,
         this.#budgets.awaitingMountMs,
-        target.target._tag === "extension" ? "extensionMountFailed" : "positioningFailed",
+        isExtensionNavigationTarget(target.target) ? "extensionMountFailed" : "positioningFailed",
         true,
         signal,
         (phaseSignal) =>
@@ -759,35 +788,37 @@ export class ReviewNavigatorController implements ReviewNavigator {
       )
     } catch (error) {
       if (signal.aborted) return
-      if (error instanceof ReviewNavigationUnavailableError) {
-        this.#settle(
-          operation.key,
-          UnavailableReviewNavigationOutcome.make({
-            requestId: operation.key.requestId,
-            reason: error.reason,
-          }),
-        )
-        return
-      }
-      if (error instanceof ReviewNavigationOperationalError) {
-        this.#settle(
-          operation.key,
-          FailedReviewNavigationOutcome.make({
-            requestId: operation.key.requestId,
-            phase,
-            reason: error.reason,
-            retryable: error.retryable,
-          }),
-        )
-        return
-      }
-      this.#settle(
-        operation.key,
-        FailedReviewNavigationOutcome.make({
-          requestId: operation.key.requestId,
-          phase,
-          reason: failureReasonForPhase(phase),
-          retryable: phase !== "activating-window" && phase !== "focusing",
+      Match.value(error).pipe(
+        Match.when(isReviewNavigationUnavailableError, (error) => {
+          this.#settle(
+            operation.key,
+            UnavailableReviewNavigationOutcome.make({
+              requestId: operation.key.requestId,
+              reason: error.reason,
+            }),
+          )
+        }),
+        Match.when(isReviewNavigationOperationalError, (error) => {
+          this.#settle(
+            operation.key,
+            FailedReviewNavigationOutcome.make({
+              requestId: operation.key.requestId,
+              phase,
+              reason: error.reason,
+              retryable: error.retryable,
+            }),
+          )
+        }),
+        Match.orElse(() => {
+          this.#settle(
+            operation.key,
+            FailedReviewNavigationOutcome.make({
+              requestId: operation.key.requestId,
+              phase,
+              reason: failureReasonForPhase(phase),
+              retryable: phase !== "activating-window" && phase !== "focusing",
+            }),
+          )
         }),
       )
     }
@@ -816,7 +847,11 @@ export class ReviewNavigatorController implements ReviewNavigator {
         )
         return
       } catch (error) {
-        if (!(error instanceof ReviewNavigationSnapshotExpiredError)) throw error
+        const snapshotExpired = Match.value(error).pipe(
+          Match.when(isReviewNavigationSnapshotExpiredError, () => true),
+          Match.orElse(() => false),
+        )
+        if (!snapshotExpired) throw error
         if (reacquired) {
           throw new ReviewNavigationOperationalError("snapshotLoadFailed", true)
         }
@@ -885,7 +920,7 @@ export class ReviewNavigatorController implements ReviewNavigator {
       signal.addEventListener("abort", onAbort, { once: true })
       void task(phaseAbort.signal).then(
         (value) => settle(() => resolve(value)),
-        (error: unknown) =>
+        <Value>(error: Value) =>
           settle(() => reject(normalizePhaseFailure(error, failureReason, retryable))),
       )
     })
@@ -901,7 +936,7 @@ export class ReviewNavigatorController implements ReviewNavigator {
       try {
         return await task()
       } catch (error) {
-        if (!isTransientTransportError(error) || delayMs === null) throw error
+        if (!isTransientTransportError(rendererFailureInput(error)) || delayMs === null) throw error
         const remainingMs = operation.deadlineAt - this.#scheduler.now()
         if (remainingMs <= 0) {
           throw new ReviewNavigationOperationalError("deadlineExceeded", true)
@@ -973,19 +1008,29 @@ export class ReviewNavigatorController implements ReviewNavigator {
 
 const projectReviewNavigationStatus = (
   machine: ReviewNavigationMachineState,
-): ReviewNavigationStatus => {
-  if (machine._tag !== "active") return IdleReviewNavigationStatus.make()
-  return ActiveReviewNavigationStatus.make({
-    requestId: machine.operation.key.requestId,
-    phase: machine.phase,
-    targetKind: machine.operation.input.location.target._tag,
-    origin: machine.operation.input.origin,
-    startedAt: machine.operation.submittedAt,
-    phaseStartedAt: machine.operation.phaseStartedAt,
-    viewportInput: "locked",
-    canCancel: true,
+): ReviewNavigationStatus =>
+  Match.valueTags(machine, {
+    detached: () => IdleReviewNavigationStatus.make(),
+    idle: () => IdleReviewNavigationStatus.make(),
+    active: (machine) =>
+      ActiveReviewNavigationStatus.make({
+        requestId: machine.operation.key.requestId,
+        phase: machine.phase,
+        targetKind: Match.valueTags(machine.operation.input.location.target, {
+          extension: () => "extension" as const,
+          file: () => "file" as const,
+          hunk: () => "hunk" as const,
+          line: () => "line" as const,
+          range: () => "range" as const,
+          thread: () => "thread" as const,
+        }),
+        origin: machine.operation.input.origin,
+        startedAt: machine.operation.submittedAt,
+        phaseStartedAt: machine.operation.phaseStartedAt,
+        viewportInput: "locked",
+        canCancel: true,
+      }),
   })
-}
 
 const localLocationMismatch = (
   location: ReviewLocationV1,
@@ -998,7 +1043,14 @@ const localLocationMismatch = (
 }
 
 const targetFileId = (target: ReviewNavigationTarget): ReviewFileId | null =>
-  target._tag === "thread" || target._tag === "extension" ? null : target.fileId
+  Match.valueTags(target, {
+    extension: () => null,
+    file: (target) => target.fileId,
+    hunk: (target) => target.fileId,
+    line: (target) => target.fileId,
+    range: (target) => target.fileId,
+    thread: () => null,
+  })
 
 const sameOperationKey = (
   left: ReviewNavigationOperationKey,
@@ -1014,14 +1066,16 @@ const activeCancellation = (
   machine: ReviewNavigationMachineState,
   reason: "review-changed" | "bridge-lost",
 ): readonly ReviewNavigationOutcome[] =>
-  machine._tag === "active"
-    ? [
-        CancelledReviewNavigationOutcome.make({
-          requestId: machine.operation.key.requestId,
-          reason,
-        }),
-      ]
-    : []
+  Match.valueTags(machine, {
+    active: (machine) => [
+      CancelledReviewNavigationOutcome.make({
+        requestId: machine.operation.key.requestId,
+        reason,
+      }),
+    ],
+    detached: () => [],
+    idle: () => [],
+  })
 
 const idleModel = (
   model: ReviewNavigationModel,
@@ -1075,16 +1129,76 @@ const assertNavigationBudgets = (budgets: ReviewNavigationBudgets): void => {
   }
 }
 
-const normalizePhaseFailure = (
-  error: unknown,
+const isReviewNavigationUnavailableError = (
+  value: object,
+): value is ReviewNavigationUnavailableError =>
+  Match.value(value).pipe(
+    Match.when(
+      Predicate.isObject,
+      (value) =>
+        "name" in value &&
+        value.name === "ReviewNavigationUnavailableError" &&
+        "reason" in value &&
+        Predicate.isString(value.reason),
+    ),
+    Match.orElse(() => false),
+  )
+
+const isReviewNavigationSnapshotExpiredError = (
+  value: object,
+): value is ReviewNavigationSnapshotExpiredError =>
+  Match.value(value).pipe(
+    Match.when(
+      Predicate.isObject,
+      (value) => "name" in value && value.name === "ReviewNavigationSnapshotExpiredError",
+    ),
+    Match.orElse(() => false),
+  )
+
+const isReviewNavigationOperationalError = (
+  value: object,
+): value is ReviewNavigationOperationalError =>
+  Match.value(value).pipe(
+    Match.when(
+      Predicate.isObject,
+      (value) =>
+        "name" in value &&
+        value.name === "ReviewNavigationOperationalError" &&
+        "reason" in value &&
+        Predicate.isString(value.reason) &&
+        "retryable" in value &&
+        Predicate.isBoolean(value.retryable),
+    ),
+    Match.orElse(() => false),
+  )
+
+const isExtensionNavigationTarget = (target: ReviewNavigationTarget): boolean =>
+  Match.valueTags(target, {
+    extension: () => true,
+    file: () => false,
+    hunk: () => false,
+    line: () => false,
+    range: () => false,
+    thread: () => false,
+  })
+
+const normalizePhaseFailure = <Value>(
+  error: Value,
   reason: ReviewNavigationFailureReason,
   retryable: boolean,
-): unknown =>
-  error instanceof ReviewNavigationUnavailableError ||
-  error instanceof ReviewNavigationSnapshotExpiredError ||
-  error instanceof ReviewNavigationOperationalError ||
-  (error instanceof DOMException && error.name === "AbortError")
-    ? error
-    : new ReviewNavigationOperationalError(reason, retryable)
+):
+  | ReviewNavigationUnavailableError
+  | ReviewNavigationSnapshotExpiredError
+  | ReviewNavigationOperationalError
+  | DOMException => {
+  const input: object = Predicate.isObject(error) ? error : {}
+  return Match.value(input).pipe(
+    Match.when(isReviewNavigationUnavailableError, (error) => error),
+    Match.when(isReviewNavigationSnapshotExpiredError, (error) => error),
+    Match.when(isReviewNavigationOperationalError, (error) => error),
+    Match.when(isAbortDOMException, (error) => error),
+    Match.orElse(() => new ReviewNavigationOperationalError(reason, retryable)),
+  )
+}
 
 const abortError = (): DOMException => new DOMException("Navigation aborted", "AbortError")

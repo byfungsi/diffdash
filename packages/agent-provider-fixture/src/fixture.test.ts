@@ -5,11 +5,11 @@ import {
   AgentModelId,
   AgentProviderOperationError,
   McpToolName,
-  ReviewRevision,
   type ReviewThreadRequest,
   ScopedMcpResult,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   agentManifestConformance,
   agentSecurityConformance,

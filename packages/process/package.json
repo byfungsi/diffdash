@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/process.ts",
     "./executable": "./src/executable.ts",
+    "./file-system": "./src/file-system.ts",
     "./temp-resource": "./src/temp-resource.ts"
   },
   "scripts": {
@@ -15,6 +16,7 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@diffdash/domain": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

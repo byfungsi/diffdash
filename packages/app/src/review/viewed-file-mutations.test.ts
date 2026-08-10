@@ -1,4 +1,4 @@
-import { ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { ReviewFilePatchHash, ReviewKey } from "@diffdash/domain/review-identity"
 import { describe, expect, it } from "vitest"
 import {
   type ViewedFileMutation,
@@ -12,7 +12,11 @@ const mutation = (
   viewed: boolean,
   previousViewed = !viewed,
 ): ViewedFileMutation => ({
-  write: { reviewKey, patchHash: ReviewFilePatchHash.make(`patch-${reviewKey}`), viewed },
+  write: {
+    reviewKey: ReviewKey.make(reviewKey),
+    patchHash: ReviewFilePatchHash.make(`patch-${reviewKey}`),
+    viewed,
+  },
   previous: { viewed: previousViewed, expanded: !previousViewed },
   next: { viewed, expanded: !viewed },
 })

@@ -1,4 +1,5 @@
 import { GitService } from "@diffdash/local-git/local-git"
+import { GitFileRevision } from "@diffdash/domain/git-provider"
 import { AppState } from "@diffdash/settings/app-state"
 import { Effect, Option } from "effect"
 
@@ -48,7 +49,7 @@ export const makeApplicationOperationHandlers: Effect.Effect<
       ),
     [CoreMethod.appOpenRepositoryComparisonFile]: ({ target, filePath }) =>
       gitProvider
-        .fileUrl(target.repository, filePath, target.headSha)
+        .fileUrl(target.repository, filePath, GitFileRevision.make(target.headSha))
         .pipe(Effect.map((url) => CoreExternalFileOpenIntent.make({ url: CoreWebUrl.make(url) }))),
     [CoreMethod.appOpenRepositoryFile]: (request) =>
       Effect.gen(function* () {
@@ -56,7 +57,10 @@ export const makeApplicationOperationHandlers: Effect.Effect<
         if (Option.isSome(linkedRepository) && linkedRepository.value.localPath !== null) {
           const localPath = linkedRepository.value.localPath
           const currentBranch = yield* git.currentBranch(localPath).pipe(Effect.option)
-          if (Option.isSome(currentBranch) && currentBranch.value === request.headRefName) {
+          if (
+            Option.isSome(currentBranch) &&
+            String(currentBranch.value) === String(request.headRefName)
+          ) {
             return CoreLocalFileOpenIntent.make({
               rootPath: CoreAbsolutePath.make(localPath),
               filePath: request.filePath,
@@ -66,7 +70,7 @@ export const makeApplicationOperationHandlers: Effect.Effect<
         const url = yield* gitProvider.fileUrl(
           request.review.repository,
           request.filePath,
-          request.headRevision ?? request.headRefName,
+          GitFileRevision.make(request.headRevision ?? request.headRefName),
         )
         return CoreExternalFileOpenIntent.make({ url: CoreWebUrl.make(url) })
       }),

@@ -17,8 +17,8 @@ graph TD
   core --> settings["@diffdash/settings"]
   core --> persistence["@diffdash/persistence"]
   core --> localGit["@diffdash/local-git"]
-  core --> walkthrough["@diffdash/walkthrough"]
-  core --> reviewAgent["@diffdash/review-agent"]
+  core --> agents["@diffdash/agents"]
+  core --> mcp["@diffdash/mcp"]
   core --> gitSdk["@diffdash/git-provider"]
   core --> agentSdk["@diffdash/agent-provider"]
   core --> gitProviders["Git provider leaves"]
@@ -32,15 +32,9 @@ graph TD
   localGit --> domain
   localGit --> gitSdk
   localGit --> process["@diffdash/process"]
-  walkthrough --> domain
-  walkthrough --> agentSdk
-  walkthrough --> persistence
-  reviewAgent --> domain
-  reviewAgent --> agentSdk
-  reviewAgent --> gitSdk
-  reviewAgent --> localGit
-  reviewAgent --> persistence
-  reviewAgent --> process
+  agents --> domain
+  agents --> agentSdk
+  mcp --> agentSdk
   gitSdk --> domain
   gitProviders --> gitSdk
   gitProviders --> process
@@ -60,21 +54,37 @@ demo and promotional output but is never shipped in the desktop application.
 - `@diffdash/app` is browser-safe. Renderer code reaches privileged capabilities only through the
   typed protocol implemented by preload.
 - `@diffdash/process`, `@diffdash/settings`, and `@diffdash/persistence` own subprocess, JSON, and
-  SQLite infrastructure respectively. Process execution is exposed as one scoped Effect service;
-  concrete command protocols remain outside the package. Electron supplies schema-validated plain
-  runtime configuration at the Core boundary.
+  SQLite infrastructure respectively. Persistence stores require Effect's generic `SqlClient`;
+  runtime-specific Node and Bun adapters own SQLite startup, backup, and migrations. Process
+  execution is exposed as one scoped Effect service; concrete command protocols remain outside the
+  package. Electron supplies schema-validated plain runtime configuration at the Core boundary.
 - `@diffdash/git-provider` and `@diffdash/agent-provider` own provider-neutral contracts,
   registries, errors, and conformance suites. They never import concrete providers.
+- `@diffdash/agents` owns provider-neutral walkthrough and review-thread engines. Its two explicit
+  exports depend only on `@diffdash/agent-provider`, `@diffdash/domain`, and Effect; Core supplies
+  resolved provider context and retains routing, persistence, target resolution, workspace leases,
+  MCP access, progress, and transaction ownership.
+- `@diffdash/mcp` is the sole MCP SDK owner. It exposes loopback HTTP lifecycle, scoped bearer
+  capabilities, request decoding, tool registration, bounded output, and cleanup, while Core supplies
+  a typed handler bundle. It never imports persistence, process, local-git, Core, or review-domain
+  implementation services.
 - Concrete provider packages are inward-facing leaves. They may depend on their SDK, Effect,
   `@diffdash/process` when needed, and provider-owned libraries. They never depend on desktop,
   renderer, protocol, settings, persistence, orchestration, or another concrete provider.
 - Provider-neutral orchestration may depend on SDKs and infrastructure, but not concrete providers.
 - `@diffdash/core` owns the single business `ManagedRuntime`, service Layer graph, and concrete
-  provider registration. Its public `core.ts` entrypoint is an export-only facade; internal code
-  depends on the closed `core-contract.ts` leaf instead of importing the public entrypoint. Core
-  imports no Electron, updater, renderer, or desktop modules.
+  provider registration, review-thread anchor mapping, prompt construction, artifact normalization,
+  deterministic review ordering, and offset pagination. Its public `core.ts` entrypoint is an
+  export-only facade; internal code depends on the closed `core-contract.ts` leaf instead of
+  importing the public entrypoint. Core imports no Electron, updater, renderer, or desktop modules.
 - `@diffdash/desktop` owns windows, preload security, dialogs, shell integration, the updater,
   single-instance behavior, and embedded Core lifecycle.
+
+The desktop build has two explicit main-process composition roots. Normal `build`, `pack`, and
+`dist` tasks select the production entrypoint, which contains no E2E environment-controlled policy
+or fixture providers. Playwright tasks select the `e2e` build mode and its separate entrypoint,
+which may decode `DIFFDASH_E2E_*` values and composes Core's fixture-provider export. The E2E
+entrypoint and fixture provider implementations are not reachable from the production main bundle.
 
 Dependencies must remain acyclic and use `workspace:*`. Relative imports cannot cross package
 roots. Browser-safe exports are bundled in a browser target during the boundary test to reject Node,

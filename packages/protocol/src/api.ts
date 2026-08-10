@@ -9,6 +9,7 @@ import type {
 } from "@diffdash/domain/git-provider"
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
 import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
+import type { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import type {
   ProjectOpenResult,
   ProjectWorkspaceState,
@@ -16,9 +17,11 @@ import type {
 } from "@diffdash/domain/project-workspace"
 import type {
   Repo,
+  RepositoryCheckoutPath,
   RepositoryIdentityRepairSummary,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
+import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type {
   HostedReviewSnapshotManifest,
@@ -31,8 +34,9 @@ import type {
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import type { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type { WebUrl } from "@diffdash/domain/web-url"
 import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
@@ -72,6 +76,9 @@ import type {
   SetRepositoryComparisonViewedFileRequest,
   ViewedFileRecord,
 } from "./viewed-files"
+import type { BridgeResult } from "./ipc"
+
+type EventSubscription<Value> = (listener: (value: Value) => void) => () => void
 
 /** Complete renderer-facing platform contract implemented by preload and demo runtimes. */
 export interface DiffDashApi {
@@ -84,34 +91,37 @@ export interface DiffDashApi {
     readonly check: () => Promise<void>
     readonly download: () => Promise<void>
     readonly restartAndInstall: () => Promise<void>
-    readonly onStateChanged: (listener: (state: AppUpdateState) => void) => () => void
+    readonly onStateChanged: EventSubscription<AppUpdateState>
   }
   readonly navigation: {
     readonly activateWindow: () => Promise<void>
     readonly drainCommands: () => Promise<readonly CliNavigationCommand[]>
-    readonly onCommandsAvailable: (listener: () => void) => () => void
+    readonly onCommandsAvailable: EventSubscription<void>
   }
   readonly diagnostics: () => Promise<AppPrerequisites>
   readonly agentProviders: {
     readonly getCatalog: () => Promise<AgentProviderCatalog>
   }
   readonly installDiffDashCli: () => Promise<DiffDashCliInstallResult>
-  readonly openExternalUrl: (url: string) => Promise<void>
+  readonly openExternalUrl: (url: WebUrl) => Promise<void>
   readonly openRepositoryFile: (request: OpenHostedReviewFileRequest) => Promise<void>
-  readonly openLocalRepositoryFile: (rootPath: string, filePath: string) => Promise<void>
+  readonly openLocalRepositoryFile: (
+    rootPath: RepositoryCheckoutPath,
+    filePath: RepositoryRelativePath,
+  ) => Promise<void>
   readonly repositories: {
     readonly list: (query?: string) => Promise<readonly Repo[]>
-    readonly setFavorite: (id: string, isFavorite: boolean) => Promise<Repo>
+    readonly setFavorite: (id: ReviewProjectId, isFavorite: boolean) => Promise<Repo>
     readonly favoriteRemote: (repo: HostedRepository) => Promise<Repo>
-    readonly install: (localPath: string) => Promise<Repo>
+    readonly install: (localPath: RepositoryCheckoutPath) => Promise<Repo>
     readonly link: (input: LinkRepositoryCheckoutRequest) => Promise<Repo>
     readonly openProject: (
-      localPath: string,
+      localPath: RepositoryCheckoutPath,
       selectedRepository?: HostedRepositoryLocator,
     ) => Promise<ProjectOpenResult>
     readonly repairIdentities: () => Promise<RepositoryIdentityRepairSummary>
     readonly forget: (projectId: ReviewProjectId) => Promise<Repo>
-    readonly selectLocalFolder: () => Promise<string | null>
+    readonly selectLocalFolder: () => Promise<RepositoryCheckoutPath | null>
   }
   readonly projectWorkspace: {
     readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>
@@ -125,7 +135,7 @@ export interface DiffDashApi {
     ) => Promise<ReviewThreadDetails>
     readonly get: (threadId: ReviewThreadId) => Promise<ReviewThreadDetails>
     readonly runAgent: (input: RunReviewThreadAgentRequest) => Promise<ReviewThreadDetails>
-    readonly onAgentProgress: (listener: (progress: ReviewAgentProgress) => void) => () => void
+    readonly onAgentProgress: EventSubscription<ReviewAgentProgress>
   }
   readonly settings: {
     readonly get: () => Promise<AISettings>
@@ -156,8 +166,8 @@ export interface DiffDashApi {
   }
   readonly localReviews: {
     readonly resolveBranch: (
-      localPath: string,
-      branchName: string | null,
+      localPath: RepositoryCheckoutPath,
+      branchName: RepositoryComparisonRef | null,
     ) => Promise<LocalReviewTarget>
   }
   readonly repositoryComparisons: {
@@ -194,8 +204,8 @@ export interface DiffDashApi {
   readonly localWalkthroughs: {
     readonly get: (
       target: LocalReviewTarget,
-      baseSha: string,
-      headSha: string,
+      baseSha: ReviewRevision,
+      headSha: ReviewRevision,
     ) => Promise<StoredWalkthrough | null>
     readonly generate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
     readonly regenerate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
@@ -205,4 +215,21 @@ export interface DiffDashApi {
     readonly generate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
     readonly regenerate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
   }
+}
+
+type BridgeApiMember<Value> = Value extends (
+  ...arguments_: infer Arguments
+) => Promise<infer Result>
+  ? (...arguments_: Arguments) => Promise<BridgeResult<Result>>
+  : Value extends EventSubscription<infer Event>
+    ? EventSubscription<BridgeResult<Event>>
+    : Value extends (...arguments_: infer Arguments) => infer Result
+      ? (...arguments_: Arguments) => Result
+      : Value extends object
+        ? { readonly [Key in keyof Value]: BridgeApiMember<Value[Key]> }
+        : Value
+
+/** Electron bridge variant wrapping invoke results and event notifications. */
+export type DiffDashBridgeApi = {
+  readonly [Key in keyof DiffDashApi]: BridgeApiMember<DiffDashApi[Key]>
 }

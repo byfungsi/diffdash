@@ -3,11 +3,14 @@ import {
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewSnapshotId,
+  ReviewKey,
 } from "@diffdash/domain/review-identity"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
+  ReviewSnapshotSearchMatchId,
 } from "@diffdash/protocol/review-snapshot"
 import { describe, expect, it } from "@effect/vitest"
 import { type ReviewSearchPage, ReviewSearchPageCache } from "./review-search-page-cache"
@@ -29,10 +32,10 @@ const makePage = (
       matches: Array.from({ length: matchCount }, (_, localIndex) => {
         const globalIndex = startIndex + localIndex
         return ReviewSnapshotSearchMatch.make({
-          id: `match-${globalIndex}`,
+          id: ReviewSnapshotSearchMatchId.make(`match-${globalIndex}`),
           fileId: ReviewFileId.make(`file-${globalIndex}`),
-          filePath: `src/file-${globalIndex}.ts`,
-          reviewKey: `review-${globalIndex}`,
+          filePath: RepositoryRelativePath.make(`src/file-${globalIndex}.ts`),
+          reviewKey: ReviewKey.make(`review-${globalIndex}`),
           hunkId: ReviewHunkId.make(`hunk-${globalIndex}`),
           hunkFingerprint: ReviewHunkFingerprint.make(`fingerprint-${globalIndex}`),
           hunkLineIndex: globalIndex,

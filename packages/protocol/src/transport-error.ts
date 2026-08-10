@@ -1,11 +1,14 @@
-import { AgentProviderId } from "@diffdash/agent-provider"
+import { AgentProviderId } from "@diffdash/domain/agent-provider"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
-import { Result, Schema } from "effect"
+import { Predicate, Result, Schema, SchemaGetter } from "effect"
+
+type TransportErrorInput = Schema.Json | object | bigint | symbol | undefined
 
 const MAX_PUBLIC_ERROR_MESSAGE_LENGTH = 500
 const MAX_PUBLIC_ERROR_OPERATION_LENGTH = 200
 const MAX_PUBLIC_ERROR_CODE_LENGTH = 100
-const BRIDGE_TRANSPORT_ERROR_PREFIX = "DIFFDASH_TRANSPORT_ERROR_V1:"
+const LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX = "DIFFDASH_TRANSPORT_ERROR_V1:"
 const PUBLIC_REASON_ERROR_CODES = new Set([
   "LocalReviewTargetError",
   "RepositoryLinkError",
@@ -30,6 +33,14 @@ const ProviderDiagnosticSummary = Schema.Literals([
   "No provider diagnostics were emitted.",
   "Unexpected walkthrough failure.",
 ])
+const TransportDiagnosticOperation = Schema.String.pipe(
+  Schema.decodeTo(DiagnosticOperation, {
+    decode: SchemaGetter.transform((operation) =>
+      sanitizeTransportErrorMessage(operation).slice(0, MAX_PUBLIC_ERROR_OPERATION_LENGTH),
+    ),
+    encode: SchemaGetter.transform((operation) => operation),
+  }),
+)
 
 /** Stable renderer-facing message for failures that are not explicitly safe to disclose. */
 export const UNKNOWN_TRANSPORT_ERROR_MESSAGE = "DiffDash could not complete the request."
@@ -55,13 +66,23 @@ export class TransportErrorDiagnosticTrace extends Schema.Class<TransportErrorDi
 export class TransportError extends Schema.TaggedError<TransportError>()("TransportError", {
   code: Schema.NonEmptyString,
   message: Schema.String,
-  operation: Schema.optional(Schema.String),
+  operation: Schema.optional(TransportDiagnosticOperation),
   diagnostic: Schema.optional(TransportErrorDiagnosticTrace),
   providerFailure: Schema.optional(AgentProviderFailure),
 }) {}
 
+/** Plain structured-clone-safe representation used by the Electron failure envelope. */
+export const TransportErrorPayload = Schema.Struct({
+  _tag: Schema.Literal("TransportError"),
+  code: Schema.NonEmptyString,
+  message: Schema.String,
+  operation: Schema.optional(TransportDiagnosticOperation),
+  diagnostic: Schema.optional(TransportErrorDiagnosticTrace),
+  providerFailure: Schema.optional(AgentProviderFailure),
+})
+
 /** Converts an unknown boundary failure without exposing its stack or cause. */
-export const toTransportError = (error: unknown, operation?: string) => {
+export const toTransportError = (error: TransportErrorInput, operation?: string) => {
   const decoded = decodeTransportError(error)
   return decoded === null
     ? normalizedTransportError({
@@ -96,25 +117,22 @@ export const transportError = (
     ...(providerFailure === undefined ? {} : { providerFailure }),
   })
 
-/** Encodes a protocol error into a standard Error whose message survives Electron contextBridge. */
-export const bridgeTransportError = (error: unknown, operation?: string): Error => {
-  const encoded = Schema.encodeSync(TransportError)(toTransportError(error, operation))
-  const bridgeError = new Error(`${BRIDGE_TRANSPORT_ERROR_PREFIX}${JSON.stringify(encoded)}`)
-  delete bridgeError.stack
-  return bridgeError
-}
-
 /** Structurally decodes either a protocol value or its standard Error bridge encoding. */
-export const decodeTransportError = (error: unknown): TransportError | null => {
+export const decodeTransportError = (error: TransportErrorInput): TransportError | null => {
   const direct = Schema.decodeUnknownResult(TransportError)(error)
   if (Result.isSuccess(direct)) return normalizedTransportError(direct.success)
 
+  const payload = Schema.decodeUnknownResult(TransportErrorPayload)(error)
+  if (Result.isSuccess(payload)) return normalizedTransportError(payload.success)
+
   const message = errorMessage(error)
   if (message === null) return null
-  const markerIndex = message.lastIndexOf(BRIDGE_TRANSPORT_ERROR_PREFIX)
+  const markerIndex = message.lastIndexOf(LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX)
   if (markerIndex < 0) return null
   try {
-    const encoded = JSON.parse(message.slice(markerIndex + BRIDGE_TRANSPORT_ERROR_PREFIX.length))
+    const encoded = JSON.parse(
+      message.slice(markerIndex + LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX.length),
+    )
     const bridged = Schema.decodeUnknownResult(TransportError)(encoded)
     return Result.isSuccess(bridged) ? normalizedTransportError(bridged.success) : null
   } catch {
@@ -123,11 +141,11 @@ export const decodeTransportError = (error: unknown): TransportError | null => {
 }
 
 /** Returns whether an error-like value carries the protocol bridge marker, even if malformed. */
-export const hasBridgeTransportErrorEncoding = (error: unknown): boolean =>
-  errorMessage(error)?.includes(BRIDGE_TRANSPORT_ERROR_PREFIX) === true
+export const hasBridgeTransportErrorEncoding = (error: TransportErrorInput): boolean =>
+  errorMessage(error)?.includes(LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX) === true
 
 /** Returns a bounded single-line message from a protocol error, or the safe fallback. */
-export const safeTransportErrorMessage = (error: unknown) => {
+export const safeTransportErrorMessage = (error: TransportErrorInput) => {
   const decoded = decodeTransportError(error)
   return decoded === null
     ? UNKNOWN_TRANSPORT_ERROR_MESSAGE
@@ -135,7 +153,7 @@ export const safeTransportErrorMessage = (error: unknown) => {
 }
 
 /** Identifies the narrow transport failures that are safe to retry idempotently. */
-export const isTransientTransportError = (error: unknown): boolean => {
+export const isTransientTransportError = (error: TransportErrorInput): boolean => {
   const decoded = decodeTransportError(error)
   return decoded?.code === "IPC_FAILURE"
 }
@@ -168,7 +186,12 @@ const normalizedTransportError = (error: {
   const operation =
     error.operation === undefined
       ? undefined
-      : sanitizeTransportErrorMessage(error.operation).slice(0, MAX_PUBLIC_ERROR_OPERATION_LENGTH)
+      : DiagnosticOperation.make(
+          sanitizeTransportErrorMessage(error.operation).slice(
+            0,
+            MAX_PUBLIC_ERROR_OPERATION_LENGTH,
+          ),
+        )
   return TransportError.make({
     code: /^[A-Za-z0-9._:-]+$/.test(error.code)
       ? error.code.slice(0, MAX_PUBLIC_ERROR_CODE_LENGTH)
@@ -180,10 +203,8 @@ const normalizedTransportError = (error: {
   })
 }
 
-const errorMessage = (error: unknown): string | null =>
-  typeof error === "object" &&
-  error !== null &&
-  "message" in error &&
-  typeof error.message === "string"
-    ? error.message
-    : null
+const errorMessage = (error: TransportErrorInput): string | null => {
+  if (!Predicate.isReadonlyObject(error)) return null
+  const message = error.message
+  return Predicate.isString(message) ? message : null
+}

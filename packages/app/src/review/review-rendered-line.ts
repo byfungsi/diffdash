@@ -1,9 +1,10 @@
 import type { SelectionSide, VirtualizedFileDiff } from "./pierre"
+import type { TransportError } from "@diffdash/protocol/transport-error"
 
 /** Finds a rendered Pierre content row without assuming unified or split DOM structure. */
 export const findRenderedDiffLine = (
   host: HTMLElement,
-  instance: VirtualizedFileDiff<unknown>,
+  instance: VirtualizedFileDiff<TransportError>,
   lineNumber: number,
   side: SelectionSide,
 ): HTMLElement | null => {

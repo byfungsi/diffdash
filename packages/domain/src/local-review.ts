@@ -1,15 +1,18 @@
-import { Effect, Schema } from "effect"
+import { Effect, Match, Schema } from "effect"
 
 import { ChangedFile } from "./git-provider"
+import { RepositoryCheckoutPath } from "./repository"
+import { RepositoryComparisonRef } from "./repository-comparison"
+import { ReviewDiffIdentity, ReviewRevision } from "./review-identity"
 
 /** Local changes compared with the checkout's current HEAD. */
 export const WorkingTreeComparison = Schema.TaggedStruct("workingTree", {})
 
 /** Local checkout compared from its merge base with one resolved comparison branch. */
 export const BranchComparison = Schema.TaggedStruct("branch", {
-  branchName: Schema.NonEmptyString,
-  baseRef: Schema.NonEmptyString,
-  baseSha: Schema.NonEmptyString,
+  branchName: RepositoryComparisonRef,
+  baseRef: RepositoryComparisonRef,
+  baseSha: ReviewRevision,
 })
 
 /** The comparison strategy used to build a local review. */
@@ -21,7 +24,7 @@ export type LocalReviewComparison = typeof LocalReviewComparison.Type
 /** Renderer-safe locator for one local review. */
 export class LocalReviewTarget extends Schema.Class<LocalReviewTarget>("LocalReviewTarget")({
   kind: Schema.Literal("local"),
-  rootPath: Schema.NonEmptyString,
+  rootPath: RepositoryCheckoutPath,
   comparison: LocalReviewComparison.pipe(
     Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
     Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
@@ -30,16 +33,16 @@ export class LocalReviewTarget extends Schema.Class<LocalReviewTarget>("LocalRev
 
 /** Detailed metadata for reviewing local working tree changes. */
 export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalReviewDetail")({
-  rootPath: Schema.String,
+  rootPath: RepositoryCheckoutPath,
   repoName: Schema.String,
-  branchName: Schema.NullOr(Schema.String),
+  branchName: Schema.NullOr(RepositoryComparisonRef),
   comparison: LocalReviewComparison.pipe(
     Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
     Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
   ),
-  baseSha: Schema.String,
-  headSha: Schema.String,
-  diffHash: Schema.String,
+  baseSha: ReviewRevision,
+  headSha: ReviewRevision,
+  diffHash: ReviewDiffIdentity,
   title: Schema.String,
   files: Schema.Array(ChangedFile),
   fetchedAt: Schema.String,
@@ -47,20 +50,20 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
 
 /** Raw unified diff output and cache metadata for local working tree changes. */
 export class LocalReviewDiff extends Schema.Class<LocalReviewDiff>("LocalReviewDiff")({
-  rootPath: Schema.String,
+  rootPath: RepositoryCheckoutPath,
   comparison: LocalReviewComparison.pipe(
     Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
     Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
   ),
-  baseSha: Schema.String,
-  headSha: Schema.String,
-  diffHash: Schema.String,
+  baseSha: ReviewRevision,
+  headSha: ReviewRevision,
+  diffHash: ReviewDiffIdentity,
   diff: Schema.String,
   fetchedAt: Schema.String,
 }) {}
 
 /** Creates the legacy working-tree-versus-HEAD review target. */
-export const workingTreeReviewTarget = (rootPath: string) =>
+export const workingTreeReviewTarget = (rootPath: RepositoryCheckoutPath) =>
   LocalReviewTarget.make({
     kind: "local",
     rootPath,
@@ -69,6 +72,12 @@ export const workingTreeReviewTarget = (rootPath: string) =>
 
 /** Stable cache key for one local review target. */
 export const localReviewTargetKey = (target: LocalReviewTarget) =>
-  target.comparison["_tag"] === "workingTree"
-    ? `${target.rootPath}\u0000workingTree`
-    : `${target.rootPath}\u0000branch\u0000${target.comparison.baseRef}\u0000${target.comparison.baseSha}`
+  Match.value(target.comparison).pipe(
+    Match.tag("workingTree", () => `${target.rootPath}\u0000workingTree`),
+    Match.tag(
+      "branch",
+      (comparison) =>
+        `${target.rootPath}\u0000branch\u0000${comparison.baseRef}\u0000${comparison.baseSha}`,
+    ),
+    Match.exhaustive,
+  )

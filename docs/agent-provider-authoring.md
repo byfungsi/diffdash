@@ -60,7 +60,7 @@ results.
 
 Execution must honor `AgentExecutionPolicy`, scoped MCP endpoint/token/tool access, selected model,
 working directory, timeout, and interruption. Return SDK `WalkthroughResult` or
-`ReviewThreadResult` values. Provider artifacts remain candidates; Core review-agent normalization owns
+`ReviewThreadResult` values. Provider artifacts remain candidates; Core artifact normalization owns
 allowlisting, redaction, bounding, and persistence. Expected failures use bounded SDK errors.
 
 ## Core Registration

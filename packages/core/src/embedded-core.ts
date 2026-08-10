@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit, ManagedRuntime, Match, Option, Result } from "effect"
+import * as DatabaseNode from "@diffdash/persistence/database-node"
 import type {
   CoreBoundaryFailure,
   CoreMethod,
@@ -13,6 +14,11 @@ import type { CoreConfiguration } from "./core-configuration"
 import { createCoreLayer } from "./core-layer"
 import { CoreOperationService } from "./core-operation-service"
 import type { CoreStartupFailure } from "./core-startup-error"
+import { captureCoreDefect, type CapturedCoreDefect } from "./core-defect-boundary"
+import { productionProviderComposition, type CoreProviderComposition } from "./provider-composition"
+
+// Binding preserves the service key while avoiding React hook lint treating Effect's use as React.use.
+const withCoreOperations = CoreOperationService.use.bind(CoreOperationService)
 
 type CoreLifecycle =
   | { readonly _tag: "created" }
@@ -22,7 +28,7 @@ type CoreLifecycle =
     }
   | { readonly _tag: "started" }
   | { readonly _tag: "failed"; readonly failure: CoreStartFailure }
-  | { readonly _tag: "defective"; readonly defect: unknown }
+  | { readonly _tag: "defective"; readonly defect: CapturedCoreDefect }
   | { readonly _tag: "disposing"; readonly promise: Promise<void> }
   | { readonly _tag: "disposed" }
 
@@ -61,7 +67,7 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
     Match.value(lifecycle).pipe(
       Match.tag("started", () => runRuntime(program)),
       Match.tag("failed", ({ failure }) => Promise.resolve({ ok: false as const, error: failure })),
-      Match.tag("defective", ({ defect }) => Promise.reject(defect)),
+      Match.tag("defective", ({ defect }) => Promise.reject(defect.cause)),
       Match.tag("created", () => Promise.resolve(unavailable("notStarted"))),
       Match.tag("starting", () => Promise.resolve(unavailable("starting"))),
       Match.tag("disposing", () => Promise.resolve(unavailable("disposing"))),
@@ -72,19 +78,25 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
   const start: EmbeddedCore["start"] = () =>
     Match.value(lifecycle).pipe(
       Match.tag("created", () => {
-        const promise = runRuntime(
-          Effect.flatMap(CoreOperationService, (operations) => operations.start),
-        )
+        const promise = runRuntime(withCoreOperations((operations) => operations.start))
         lifecycle = { _tag: "starting", promise }
         void promise.then(
           (result) => {
-            if (lifecycle._tag !== "starting" || lifecycle.promise !== promise) return undefined
+            const isCurrentStart = Match.value(lifecycle).pipe(
+              Match.tag("starting", ({ promise: currentPromise }) => currentPromise === promise),
+              Match.orElse(() => false),
+            )
+            if (!isCurrentStart) return undefined
             lifecycle = result.ok ? { _tag: "started" } : { _tag: "failed", failure: result.error }
             return undefined
           },
-          (defect: unknown) => {
-            if (lifecycle._tag !== "starting" || lifecycle.promise !== promise) return undefined
-            lifecycle = { _tag: "defective", defect }
+          (defect) => {
+            const isCurrentStart = Match.value(lifecycle).pipe(
+              Match.tag("starting", ({ promise: currentPromise }) => currentPromise === promise),
+              Match.orElse(() => false),
+            )
+            if (!isCurrentStart) return undefined
+            lifecycle = { _tag: "defective", defect: captureCoreDefect(defect) }
             return undefined
           },
         )
@@ -93,7 +105,7 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
       Match.tag("starting", ({ promise }) => promise),
       Match.tag("started", () => Promise.resolve({ ok: true as const, value: undefined })),
       Match.tag("failed", ({ failure }) => Promise.resolve({ ok: false as const, error: failure })),
-      Match.tag("defective", ({ defect }) => Promise.reject(defect)),
+      Match.tag("defective", ({ defect }) => Promise.reject(defect.cause)),
       Match.tag("disposing", () => Promise.resolve(unavailable("disposing"))),
       Match.tag("disposed", () => Promise.resolve(unavailable("disposed"))),
       Match.exhaustive,
@@ -104,17 +116,23 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
       Match.tag("disposing", ({ promise }) => promise),
       Match.tag("disposed", () => Promise.resolve()),
       Match.orElse((current) => {
-        const started =
-          current._tag === "starting"
-            ? current.promise.then(
-                () => undefined,
-                () => undefined,
-              )
-            : Promise.resolve()
+        const started = Match.value(current).pipe(
+          Match.tag("starting", ({ promise }) =>
+            promise.then(
+              () => undefined,
+              () => undefined,
+            ),
+          ),
+          Match.orElse(() => Promise.resolve()),
+        )
         const promise = started.then(() => runtime.dispose())
         lifecycle = { _tag: "disposing", promise }
         const finishDisposal = () => {
-          if (lifecycle._tag === "disposing" && lifecycle.promise === promise) {
+          const isCurrentDisposal = Match.value(lifecycle).pipe(
+            Match.tag("disposing", ({ promise: currentPromise }) => currentPromise === promise),
+            Match.orElse(() => false),
+          )
+          if (isCurrentDisposal) {
             lifecycle = { _tag: "disposed" }
           }
         }
@@ -127,38 +145,21 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
     method: Method,
     input: CoreMethodInput<Method>,
     options?: CoreOperationOptions,
-  ) =>
-    run(
-      Effect.flatMap(CoreOperationService, (operations) =>
-        operations.execute(method, input, options),
-      ),
-    )
+  ) => run(withCoreOperations((operations) => operations.execute(method, input, options)))
 
   return {
     start,
     execute,
     walkthroughs: {
       start: (request) =>
-        run(
-          Effect.flatMap(CoreOperationService, (operations) =>
-            operations.walkthroughs.start(request),
-          ),
-        ),
+        run(withCoreOperations((operations) => operations.walkthroughs.start(request))),
       getOperation: (operationId) =>
-        run(
-          Effect.flatMap(CoreOperationService, (operations) =>
-            operations.walkthroughs.getOperation(operationId),
-          ),
-        ),
+        run(withCoreOperations((operations) => operations.walkthroughs.getOperation(operationId))),
       cancel: (operationId) =>
-        run(
-          Effect.flatMap(CoreOperationService, (operations) =>
-            operations.walkthroughs.cancel(operationId),
-          ),
-        ),
+        run(withCoreOperations((operations) => operations.walkthroughs.cancel(operationId))),
       getStored: (request) =>
         run(
-          Effect.flatMap(CoreOperationService, (operations) =>
+          withCoreOperations((operations) =>
             operations.walkthroughs.getStored(request).pipe(Effect.map(Option.getOrNull)),
           ),
         ),
@@ -167,9 +168,24 @@ export const makeEmbeddedCore = (runtime: EmbeddedCoreRuntime): EmbeddedCore => 
   }
 }
 
-/** Creates the single managed embedded DiffDash Core runtime. */
+/** Creates the single managed embedded DiffDash Core runtime from a required provider composition. */
+export const createEmbeddedCoreWithProviderComposition = (
+  configuration: CoreConfiguration,
+  providerComposition: CoreProviderComposition,
+): EmbeddedCore =>
+  makeEmbeddedCore(
+    ManagedRuntime.make(
+      createCoreLayer(
+        configuration,
+        DatabaseNode.layer(configuration.paths.database),
+        providerComposition,
+      ),
+    ),
+  )
+
+/** Creates the production embedded DiffDash Core runtime. */
 export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCore =>
-  makeEmbeddedCore(ManagedRuntime.make(createCoreLayer(configuration)))
+  createEmbeddedCoreWithProviderComposition(configuration, productionProviderComposition)
 
 /** Converts expected Effect failures to CoreResult while preserving defects as rejected promises. */
 export const coreResultFromExit = <Value, Failure>(
@@ -177,7 +193,7 @@ export const coreResultFromExit = <Value, Failure>(
 ): CoreResult<Value, Failure> => {
   if (Exit.isSuccess(exit)) return { ok: true, value: exit.value }
   const defect = Cause.findDefect(exit.cause)
-  if (Result.isSuccess(defect)) throw defect.success
+  if (Result.isSuccess(defect)) throw captureCoreDefect(defect.success).cause
   const failure = Cause.findErrorOption(exit.cause)
   if (Option.isSome(failure)) return { ok: false, error: failure.value }
   throw Cause.squash(exit.cause)

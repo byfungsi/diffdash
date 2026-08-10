@@ -15,7 +15,7 @@ The pinned package is the compatibility authority because the reference follows 
 - Git hooks: Husky + lint-staged for pre-commit formatting/checks when `.git` is present.
 - Testing: Vitest with `@effect/vitest` for Effect-aware tests and scoped resources.
 - Main process services: Effect `Context.Service` services and `Layer` composition.
-- Persistence: SQLite through `better-sqlite3`, accessed from main-process Effect services only.
+- Persistence: Effect SQL with runtime-specific `node:sqlite` and `bun:sqlite` adapters, composed by Core only.
 - CLI integration: `git`, `gh`, and `codex` are executed from main-process Effect services only.
 
 ## Testing Strategy

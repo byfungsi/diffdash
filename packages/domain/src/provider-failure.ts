@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+import { ReviewAgentProviderId } from "./review-agent-provider-id"
+
 /** Stable categories for provider failures that may be persisted or shown to users. */
 export const AgentProviderFailureCategory = Schema.Literals([
   "authentication",
@@ -41,7 +43,7 @@ export const AgentProviderProcessFailureKind = Schema.Literals([
 /** Local process stage that failed before a provider operation completed. */
 export type AgentProviderProcessFailureKind = typeof AgentProviderProcessFailureKind.Type
 
-const PublicProviderId = Schema.String.pipe(
+const PublicProviderId = ReviewAgentProviderId.pipe(
   Schema.check(Schema.isMinLength(1)),
   Schema.check(Schema.isMaxLength(100)),
   Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)),

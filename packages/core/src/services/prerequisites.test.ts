@@ -24,12 +24,19 @@ import {
   ProcessResult,
   ProcessService,
 } from "@diffdash/process"
+import { ProcessFileSystem } from "@diffdash/process/file-system"
 import {
   findExecutableInPath,
   Prerequisites,
   refreshAppImageCliLaunchers,
   replaceExecutableAtomically,
 } from "./prerequisites"
+import { ExecutablePath } from "@diffdash/process/executable"
+import {
+  CoreAbsolutePath,
+  ExecutablePathExtensions,
+  ExecutableSearchPath,
+} from "../core-configuration"
 import { GitProvider } from "./git-provider"
 import { AgentProviders } from "./agent-providers"
 import {
@@ -115,16 +122,21 @@ const makeLayer = (
   },
 ) =>
   Prerequisites.layer({
-    appImagePath: options.appImagePath ?? null,
-    diffDashCliPath: options.diffDashCliPath ?? "",
-    executableSearchPath: process.env.PATH ?? "",
-    executablePathExtensions: process.env.PATHEXT ?? null,
-    homeDirectory: process.env.HOME ?? null,
+    appImagePath:
+      options.appImagePath === undefined ? null : CoreAbsolutePath.make(options.appImagePath),
+    diffDashCliPath: CoreAbsolutePath.make(
+      options.diffDashCliPath ?? join(directory, "missing-diffdash-cli"),
+    ),
+    executableSearchPath: ExecutableSearchPath.make(process.env.PATH ?? ""),
+    executablePathExtensions:
+      process.env.PATHEXT === undefined ? null : ExecutablePathExtensions.make(process.env.PATHEXT),
+    homeDirectory: process.env.HOME === undefined ? null : CoreAbsolutePath.make(process.env.HOME),
     platform: process.platform,
   }).pipe(
     Layer.provideMerge(fakeProcessLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
     Layer.provideMerge(fakeAgentProvidersLayer(options)),
+    Layer.provideMerge(ProcessFileSystem.layer),
   )
 
 describe("Prerequisites", () => {
@@ -429,13 +441,13 @@ describe("Prerequisites", () => {
       yield* withPath(fakeBin)
 
       yield* refreshAppImageCliLaunchers({
-        sourcePath,
-        appImagePath,
-        executableSearchPath: fakeBin,
+        sourcePath: CoreAbsolutePath.make(sourcePath),
+        appImagePath: CoreAbsolutePath.make(appImagePath),
+        executableSearchPath: ExecutableSearchPath.make(fakeBin),
         executablePathExtensions: null,
-        homeDirectory: directory,
+        homeDirectory: CoreAbsolutePath.make(directory),
         platform: process.platform,
-      })
+      }).pipe(Effect.provide(ProcessFileSystem.layer))
 
       const launcher = readFileSync(launcherPath, "utf8")
       expect(launcher).toContain("--diffdash-cli-v1")
@@ -450,15 +462,15 @@ describe("Prerequisites", () => {
       const blockedTarget = join(directory, "blocked")
       yield* Effect.sync(() => {
         writeFileSync(executablePath, "old", "utf8")
-        replaceExecutableAtomically(executablePath, "new")
+        replaceExecutableAtomically(ExecutablePath.make(executablePath), "new")
         mkdirSync(blockedTarget)
       })
 
       expect(readFileSync(executablePath, "utf8")).toBe("new")
       expect(statSync(executablePath).mode & 0o777).toBe(0o755)
-      expect(() => replaceExecutableAtomically(blockedTarget, "cannot replace directory")).toThrow(
-        /EISDIR|ENOTDIR|EPERM/,
-      )
+      expect(() =>
+        replaceExecutableAtomically(ExecutablePath.make(blockedTarget), "cannot replace directory"),
+      ).toThrow(/EISDIR|ENOTDIR|EPERM/)
       expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([])
     }),
   )
@@ -528,9 +540,7 @@ const fakeGitProviderLayer = (options: {
       listSearchScopes: () => unavailableProviderMethod(),
       listHostedReviews: () => unavailableProviderMethod(),
       listAssignedReviews: () => unavailableProviderMethod(),
-      getHostedReview: () => unavailableProviderMethod(),
-      refreshHostedReview: () => unavailableProviderMethod(),
-      getHostedReviewDiff: () => unavailableProviderMethod(),
+      acquireHostedReviewSnapshot: () => unavailableProviderMethod(),
       getReviewDecision: () => unavailableProviderMethod(),
       submitReviewDecision: () => unavailableProviderMethod(),
       hostedReviewCheckoutSpec: () => unavailableProviderMethod(),
@@ -553,14 +563,18 @@ const fakeAgentProvidersLayer = (options: { readonly availableCommands: Readonly
               displayName: id,
               description: `${id} fixture`,
               homepage: null,
-              capabilities: [
-                AgentProviderCapabilityStatus.make({
-                  capability: "walkthrough",
-                  status: ready ? "ready" : "unavailable",
-                  runtimeVersion: ready ? "1.0.0" : null,
-                  reason: ready ? null : `${id} is unavailable`,
+              capabilities: {
+                walkthrough: ready
+                  ? AgentProviderCapabilityStatus.cases.Ready.make({
+                      runtimeVersion: "1.0.0",
+                    })
+                  : AgentProviderCapabilityStatus.cases.Unavailable.make({
+                      reason: `${id} is unavailable`,
+                    }),
+                "review-thread": AgentProviderCapabilityStatus.cases.Unsupported.make({
+                  reason: "This provider does not implement this capability.",
                 }),
-              ],
+              },
               models: [],
               defaults: AgentProviderDefaults.make({
                 walkthroughModel: null,

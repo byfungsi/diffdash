@@ -8,16 +8,19 @@ import {
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Layer, Schema } from "effect"
-import { DatabaseService } from "./database"
+import { Effect, Result, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { ProjectWorkspaceStore, ProjectWorkspaceStoreError } from "./project-workspace-store"
 
 const projectId = ReviewProjectId.make("github:fungsi/diffdash")
@@ -25,14 +28,15 @@ const hostedTarget = HostedReviewTarget.make({
   kind: "hosted",
   review: makeHostedReviewLocator("github", "fungsi", "diffdash", 147),
 })
-const workingTreeTarget = workingTreeReviewTarget("/workspace/diffdash")
+const checkoutPath = RepositoryCheckoutPath.make("/workspace/diffdash")
+const workingTreeTarget = workingTreeReviewTarget(checkoutPath)
 const branchTarget = LocalReviewTarget.make({
   kind: "local",
-  rootPath: "/workspace/diffdash",
+  rootPath: checkoutPath,
   comparison: BranchComparison.make({
-    branchName: "main",
-    baseRef: "refs/heads/main",
-    baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    branchName: RepositoryComparisonRef.make("main"),
+    baseRef: RepositoryComparisonRef.make("refs/heads/main"),
+    baseSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   }),
 })
 const comparisonTarget = RepositoryComparisonTarget.make({
@@ -54,10 +58,10 @@ const makeTempDatabasePath = Effect.acquireRelease(
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
 const makeLayer = (databasePath: string) =>
-  ProjectWorkspaceStore.layer.pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
+  ProjectWorkspaceStore.layer.pipe(Layer.provideMerge(DatabaseNode.layer(databasePath)))
 
 const insertProject = Effect.gen(function* () {
-  const database = yield* DatabaseService
+  const database = makeDatabase(yield* SqlClient.SqlClient)
   yield* database.run(
     `INSERT INTO repos (
       id, provider, owner, name, remote_url, local_path, is_favorite,
@@ -191,7 +195,7 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* store.save(saveInput("reviews", hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET updated_at = '2000-01-01T00:00:00.000Z' WHERE repo_id = ?",
@@ -200,7 +204,9 @@ describe("ProjectWorkspaceStore", () => {
 
         const latest = yield* store.save(saveInput("threads", branchTarget))
         const count = decodeCountRow(
-          yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+          Option.getOrThrow(
+            yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+          ),
         )
 
         expect(count.count).toBe(1)
@@ -219,7 +225,7 @@ describe("ProjectWorkspaceStore", () => {
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* store.save(saveInput("reviews", hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET selected_review_target_json = '{' WHERE repo_id = ?",
@@ -243,7 +249,7 @@ describe("ProjectWorkspaceStore", () => {
 
       yield* Effect.gen(function* () {
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const orphan = yield* Effect.result(store.save(saveInput("reviews", null)))
         expect(Result.isFailure(orphan) && orphan.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({

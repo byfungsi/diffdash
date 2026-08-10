@@ -7,10 +7,36 @@ import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { FileStorage, type FileStorageOperations } from "@diffdash/settings/file-storage"
 import type { CoreAnalyticsState } from "../analytics-state"
+import type {
+  ApplicationVersion,
+  CoreAbsolutePath,
+  OperatingSystemPlatform,
+  ProcessArchitecture,
+} from "../core-configuration"
+
+const AnalyticsDistinctId = Schema.String.pipe(
+  Schema.check(
+    Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu),
+  ),
+  Schema.brand("AnalyticsDistinctId"),
+)
+
+const AnalyticsInstalledAt = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter(
+      (value) => {
+        const parsed = new Date(value)
+        return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
+      },
+      { message: "Expected a canonical UTC analytics installation timestamp" },
+    ),
+  ),
+  Schema.brand("AnalyticsInstalledAt"),
+)
 
 const AnalyticsState = Schema.Struct({
-  distinctId: Schema.String,
-  installedAt: Schema.String,
+  distinctId: AnalyticsDistinctId,
+  installedAt: AnalyticsInstalledAt,
   installReported: Schema.Boolean,
 })
 type AnalyticsState = typeof AnalyticsState.Type
@@ -38,12 +64,12 @@ export class Analytics extends Context.Service<
 >()("@diffdash/Analytics") {
   /** Creates the analytics service from host-decoded runtime configuration. */
   static makeLayer(options: {
-    readonly appVersion: string
-    readonly architecture: string
+    readonly appVersion: ApplicationVersion
+    readonly architecture: ProcessArchitecture
     readonly packaged: boolean
-    readonly platform: string
+    readonly platform: OperatingSystemPlatform
     readonly analytics: CoreAnalyticsState
-    readonly settingsPath: string
+    readonly settingsPath: CoreAbsolutePath
     readonly clientFactory?: (key: string, host: string) => AnalyticsClient
   }): Layer.Layer<Analytics, never, AppSettings | FileStorage> {
     return Layer.effect(
@@ -134,8 +160,8 @@ const makePostHogClient = (key: string, host: string): AnalyticsClient =>
   })
 
 const newAnalyticsState = (): AnalyticsState => ({
-  distinctId: randomUUID(),
-  installedAt: new Date().toISOString(),
+  distinctId: AnalyticsDistinctId.make(randomUUID()),
+  installedAt: AnalyticsInstalledAt.make(new Date().toISOString()),
   installReported: false,
 })
 

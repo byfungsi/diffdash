@@ -8,13 +8,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
+import { OpenRepositoryFilePath } from "@diffdash/protocol/hosted-git"
 
 import { openCoreFileIntent } from "./core-file-open-intent"
 
 describe("openCoreFileIntent", () => {
   it("routes external intents only through the external URL capability", async () => {
-    const openExternal = vi.fn<(url: string) => Promise<unknown>>(async () => true)
-    const openLocal = vi.fn<(path: string) => Promise<void>>(async () => undefined)
+    const openExternal = vi.fn<(url: CoreWebUrl) => Promise<boolean>>(async () => true)
+    const openLocal = vi.fn<(path: CoreAbsolutePath) => Promise<void>>(async () => undefined)
 
     await openCoreFileIntent(
       CoreExternalFileOpenIntent.make({
@@ -30,8 +31,8 @@ describe("openCoreFileIntent", () => {
   })
 
   it("resolves local intents inside their repository before opening", async () => {
-    const openExternal = vi.fn<(url: string) => Promise<unknown>>(async () => true)
-    const openLocal = vi.fn<(path: string) => Promise<void>>(async () => undefined)
+    const openExternal = vi.fn<(url: CoreWebUrl) => Promise<boolean>>(async () => true)
+    const openLocal = vi.fn<(path: CoreAbsolutePath) => Promise<void>>(async () => undefined)
     const directory = mkdtempSync(join(tmpdir(), "diffdash-file-intent-test-"))
     const repositoryPath = join(directory, "repository")
     const filePath = join(repositoryPath, "src", "app.ts")
@@ -42,7 +43,7 @@ describe("openCoreFileIntent", () => {
       await openCoreFileIntent(
         CoreLocalFileOpenIntent.make({
           rootPath: CoreAbsolutePath.make(repositoryPath),
-          filePath: "src/app.ts",
+          filePath: OpenRepositoryFilePath.make("src/app.ts"),
         }),
         { openExternal, openLocal },
       )

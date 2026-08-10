@@ -103,6 +103,7 @@ export const coreOperationLayer = Layer.effect(
       const handler = handlers[method]
       // SAFETY: OperationHandlers preserves the method/input/output correlation; indexed access
       // widens that relationship before TypeScript can invoke the selected generic member.
+      // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: The indexed handler retains the method correlation that TypeScript loses during generic lookup.
       return handler(input as never, options) as Effect.Effect<
         CoreOperationOutput<typeof method>,
         CoreOperationFailure<typeof method>
@@ -131,12 +132,7 @@ export const coreOperationLayer = Layer.effect(
         )
       }),
       execute,
-      walkthroughs: {
-        start: walkthroughs.start,
-        getOperation: walkthroughs.getOperation,
-        cancel: walkthroughs.cancel,
-        getStored: walkthroughs.getStored,
-      },
+      walkthroughs,
     })
   }),
 )

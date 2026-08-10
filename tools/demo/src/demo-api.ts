@@ -1,4 +1,5 @@
 import {
+  AIAgentSelection,
   AISettings,
   CodeThemePreferences,
   DEFAULT_AI_SETTINGS,
@@ -17,6 +18,7 @@ import {
   GitProviderKind,
   GitProviderTerminology,
   HostedRepository,
+  HostedRepositorySource,
   makeHostedRepositoryLocator,
   sameHostedRepository,
 } from "@diffdash/domain/git-provider"
@@ -27,23 +29,41 @@ import {
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import {
-  noRepositoryLocalPath,
+  LinkedCheckout,
+  RemoteOnly,
   Repo,
-  repositoryLocalPath,
+  RepositoryCheckoutPath,
   RepositoryIdentityRepairSummary,
 } from "@diffdash/domain/repository"
-import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
-import { ReviewProjectId, type ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
+  AgentRunId,
+  ReviewAgentProgress,
+  ReviewAgentProviderId,
+} from "@diffdash/domain/review-agent"
+import { AgentPromptVersion, CompletedAgentRun, RunningAgentRun } from "@diffdash/domain/agent-run"
+import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  ReviewProjectId,
+  type ReviewFilePatchHash,
+  type ReviewKey,
+} from "@diffdash/domain/review-identity"
+import {
+  CurrentReviewAnchor,
+  CompletedAgentReviewThreadMessage,
+  CompletedAgentReviewTurn,
   MarkdownBody,
+  PendingAgentReviewThreadMessage,
+  PendingAgentReviewTurn,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
-  ReviewThreadMessage,
   ReviewThreadMessageId,
+  UserReviewThreadMessage,
+  UserReviewTurn,
   type ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
+import { WebUrl } from "@diffdash/domain/web-url"
 import {
   AgentProviderAutoCandidates,
   AgentProviderCapabilityStatus,
@@ -67,7 +87,12 @@ import {
   type AppUpdateState,
   AppUpdateUnsupported,
 } from "@diffdash/protocol/app-update"
-import { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
+import {
+  AppPrerequisites,
+  CodingAgentName,
+  DiffDashCliInstallResult,
+} from "@diffdash/protocol/prerequisites"
+import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
   REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
   ReviewSnapshotExpired,
@@ -75,8 +100,9 @@ import {
   ReviewSnapshotPageCursor,
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchMatch,
+  ReviewSnapshotSearchMatchId,
 } from "@diffdash/protocol/review-snapshot"
-import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
+import type { MaterializedDemoScenario } from "./demo-scenario"
 import { createDemoLocalReviewFixtures, type DemoLocalReviewFixture } from "./local-review-fixtures"
 
 /** One deterministic renderer action recorded by the demo runtime. */
@@ -136,8 +162,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   let repositories: Repo[] = []
   let currentRevision = firstRevision
   let approved = false
-  let hostedViewedFiles = new Map<string, ReviewFilePatchHash>()
-  let localViewedFiles = new Map<string, Map<string, ReviewFilePatchHash>>()
+  let hostedViewedFiles = new Map<ReviewKey, ReviewFilePatchHash>()
+  let localViewedFiles = new Map<string, Map<ReviewKey, ReviewFilePatchHash>>()
   let settings = cloneSettings(DEFAULT_AI_SETTINGS)
   let appState = AppState.make({ onboardingCompleted: true })
   const diagnostics = readyDemoPrerequisites()
@@ -211,7 +237,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     )
     threadDetails = new Map([
       ...scenario.threads.map((details) => {
-        const initialMessages = details.messages.filter((message) => message.sequence <= 1)
+        const initialConversation = details.conversation.filter(
+          (turn) => turn.message.sequence <= 1,
+        )
         return [
           details.thread.id,
           ReviewThreadDetails.make({
@@ -219,11 +247,12 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
               ...details.thread,
               currentBaseRevision: firstRevision.snapshot.baseRevision,
               currentHeadRevision: firstRevision.snapshot.headRevision,
-              currentAnchor: details.thread.originalAnchor,
-              anchorStatus: "active",
-              updatedAt: initialMessages.at(-1)?.updatedAt ?? details.thread.createdAt,
+              currentAnchor: CurrentReviewAnchor.cases.Active.make({
+                anchor: details.thread.originalAnchor,
+              }),
+              updatedAt: initialConversation.at(-1)?.message.updatedAt ?? details.thread.createdAt,
             }),
-            messages: initialMessages,
+            conversation: initialConversation,
           }),
         ] as const
       }),
@@ -248,8 +277,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
 
   const requireReview = (owner: string, name: string, number: number) => {
     if (
-      owner !== scenario.repository.owner ||
-      name !== scenario.repository.name ||
+      owner !== scenario.manifest.repository.owner ||
+      name !== scenario.manifest.repository.name ||
       number !== scenario.manifest.pullRequest.number
     ) {
       throw new Error(`Unknown demo pull request: ${owner}/${name}#${number}`)
@@ -318,9 +347,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
                 currentBaseRevision: sourceDetails.thread.currentBaseRevision,
                 currentHeadRevision: sourceDetails.thread.currentHeadRevision,
                 currentAnchor: sourceDetails.thread.currentAnchor,
-                anchorStatus: sourceDetails.thread.anchorStatus,
               }),
-              messages: current.messages,
+              conversation: current.conversation,
             }),
           )
         }
@@ -346,15 +374,17 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       }
       if (checkpointId === "navigation-working-tree") {
         enqueueNavigation(
-          OpenWorkingTreeCommand.make({ localPath: "/Users/demo/emberline-dispatch" }),
+          OpenWorkingTreeCommand.make({
+            localPath: RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch"),
+          }),
         )
         return
       }
       if (checkpointId === "navigation-branch-diff") {
         enqueueNavigation(
           OpenBranchDiffCommand.make({
-            localPath: "/Users/demo/emberline-dispatch",
-            branchName: "dev",
+            localPath: RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch"),
+            branchName: RepositoryComparisonRef.make("dev"),
           }),
         )
         return
@@ -373,32 +403,50 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         for (const listener of progressListeners) listener(event)
       }
       const current = requireThread(pending.threadId)
-      const sourceMessage = scenario.threads
-        .flatMap((details) => details.messages)
+      const sourceTurn = scenario.threads
+        .flatMap((details) => details.conversation)
         .find(
-          (message) =>
-            message.agentRunId !== null && message.bodyMarkdown === turn.response.bodyMarkdown,
+          (entry) =>
+            entry._tag === "Completed" && entry.message.bodyMarkdown === turn.response.bodyMarkdown,
         )
-      const pendingMessage = current.messages.find((message) => message.status === "pending")
-      if (pendingMessage === undefined) {
+      const pendingTurn = current.conversation.find((entry) => entry._tag === "Pending")
+      if (pendingTurn?._tag !== "Pending") {
         pending.reject(new Error(`Pending agent message is missing for ${checkpointId}`))
         pendingRuns.delete(checkpointId)
         return
       }
-      const completed = ReviewThreadMessage.make({
-        ...pendingMessage,
+      const completedMessage = CompletedAgentReviewThreadMessage.make({
+        id: pendingTurn.message.id,
+        threadId: pendingTurn.message.threadId,
+        sequence: pendingTurn.message.sequence,
+        agentRunId: pendingTurn.message.agentRunId,
         bodyMarkdown: MarkdownBody.make(turn.response.bodyMarkdown),
-        status: "complete",
-        updatedAt: sourceMessage?.updatedAt ?? current.thread.updatedAt,
+        createdAt: pendingTurn.message.createdAt,
+        updatedAt: sourceTurn?.message.updatedAt ?? current.thread.updatedAt,
+      })
+      const completedTurn = CompletedAgentReviewTurn.make({
+        message: completedMessage,
+        run: CompletedAgentRun.make({
+          id: pendingTurn.run.id,
+          threadId: pendingTurn.run.threadId,
+          reviewKey: pendingTurn.run.reviewKey,
+          baseRevision: pendingTurn.run.baseRevision,
+          headRevision: pendingTurn.run.headRevision,
+          provider: pendingTurn.run.provider,
+          model: pendingTurn.run.model,
+          promptVersion: pendingTurn.run.promptVersion,
+          startedAt: pendingTurn.run.startedAt,
+          completedAt: completedMessage.updatedAt,
+        }),
       })
       const result = replaceThread(
         ReviewThreadDetails.make({
           thread: ReviewThread.make({
             ...current.thread,
-            updatedAt: completed.updatedAt,
+            updatedAt: completedMessage.updatedAt,
           }),
-          messages: current.messages.map((message) =>
-            message.id === pendingMessage.id ? completed : message,
+          conversation: current.conversation.map((entry) =>
+            entry.message.id === pendingTurn.message.id ? completedTurn : entry,
           ),
         }),
       )
@@ -480,7 +528,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     installDiffDashCli: async () => {
       record("app.installDiffDashCli")
       return DiffDashCliInstallResult.make({
-        path: "/usr/local/bin/diffdash",
+        path: ExecutablePath.make("/usr/local/bin/diffdash"),
         pathSetupCommand: null,
       })
     },
@@ -504,9 +552,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const normalized = query?.trim().toLowerCase() ?? ""
         return normalized.length === 0
           ? repositories
-          : repositories.filter((repo) =>
-              `${repo.owner}/${repo.name}`.toLowerCase().includes(normalized),
-            )
+          : repositories.filter((repo) => repo.displayIdentity.toLowerCase().includes(normalized))
       },
       setFavorite: async (id, isFavorite) => {
         const current = repositories.find((repo) => repo.id === id)
@@ -518,12 +564,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
       favoriteRemote: async (remote) => {
         const favorite = Repo.make({
-          id: `${remote.locator.providerId}:${remote.locator.namespace}/${remote.locator.name}`,
-          provider: remote.locator.providerId,
-          owner: remote.locator.namespace,
-          name: remote.locator.name,
-          remoteUrl: remote.url,
-          localPath: noRepositoryLocalPath,
+          id: ReviewProjectId.make(
+            `${remote.locator.providerId}:${remote.locator.namespace}/${remote.locator.name}`,
+          ),
+          source: HostedRepositorySource.make({ locator: remote.locator }),
+          checkout: RemoteOnly.make({ remoteUrl: remote.url }),
           isFavorite: true,
           lastOpenedAt: null,
           lastSyncedAt: remote.updatedAt,
@@ -546,8 +591,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       openProject: async (localPath, selectedRepository) => {
         const demoRepository = makeHostedRepositoryLocator(
           provider.id,
-          scenario.repository.owner,
-          scenario.repository.name,
+          scenario.manifest.repository.owner,
+          scenario.manifest.repository.name,
         )
         if (
           selectedRepository !== undefined &&
@@ -561,7 +606,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
       repairIdentities: async () =>
         RepositoryIdentityRepairSummary.make({
-          resolvedCount: repositories.filter((repo) => repo.provider !== "local").length,
+          resolvedCount: repositories.filter((repo) => repo.hostedLocator !== null).length,
           unresolvedCount: 0,
           localAliasCount: 0,
         }),
@@ -611,33 +656,32 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const id = ReviewThreadId.make(`thread-captured-${createdThreadCounter}`)
         createdThreadCounter += 1
         const now = `2026-07-10T09:${String(createdThreadCounter).padStart(2, "0")}:00Z`
+        const thread = ReviewThread.make({
+          id,
+          repoId: scenario.repository.id,
+          reviewKey: targetReviewKey(input.target),
+          prNumber: input.target.kind === "hosted" ? input.target.review.number : null,
+          baseRevision: input.expectedBaseRevision,
+          headRevision: input.expectedHeadRevision,
+          currentBaseRevision: input.expectedBaseRevision,
+          currentHeadRevision: input.expectedHeadRevision,
+          originalAnchor: input.anchor,
+          currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor: input.anchor }),
+          createdAt: now,
+          updatedAt: now,
+        })
         const details = ReviewThreadDetails.make({
-          thread: ReviewThread.make({
-            id,
-            repoId: scenario.repository.id,
-            reviewKey: targetReviewKey(input.target),
-            prNumber: input.target.kind === "hosted" ? input.target.review.number : null,
-            baseRevision: input.expectedBaseRevision,
-            headRevision: input.expectedHeadRevision,
-            currentBaseRevision: input.expectedBaseRevision,
-            currentHeadRevision: input.expectedHeadRevision,
-            originalAnchor: input.anchor,
-            currentAnchor: input.anchor,
-            anchorStatus: "active",
-            createdAt: now,
-            updatedAt: now,
-          }),
-          messages: [
-            ReviewThreadMessage.make({
-              id: ReviewThreadMessageId.make(`message-captured-${createdMessageCounter}`),
-              threadId: id,
-              sequence: 0,
-              author: "user",
-              bodyMarkdown: input.bodyMarkdown,
-              status: "complete",
-              agentRunId: null,
-              createdAt: now,
-              updatedAt: now,
+          thread,
+          conversation: [
+            UserReviewTurn.make({
+              message: UserReviewThreadMessage.make({
+                id: ReviewThreadMessageId.make(`message-captured-${createdMessageCounter}`),
+                threadId: id,
+                sequence: 0,
+                bodyMarkdown: input.bodyMarkdown,
+                createdAt: now,
+                updatedAt: now,
+              }),
             }),
           ],
         })
@@ -650,19 +694,16 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const sourceMessage = scenario.threads
           .flatMap((details) => details.messages)
           .find(
-            (message) => message.author === "user" && message.sequence === current.messages.length,
+            (message) => message._tag === "User" && message.sequence === current.messages.length,
           )
         const now = sourceMessage?.createdAt ?? current.thread.updatedAt
-        const message = ReviewThreadMessage.make({
+        const message = UserReviewThreadMessage.make({
           id: ReviewThreadMessageId.make(
             sourceMessage?.id ?? `message-captured-${createdMessageCounter}`,
           ),
           threadId: input.threadId,
           sequence: current.messages.length,
-          author: "user",
           bodyMarkdown: input.bodyMarkdown,
-          status: "complete",
-          agentRunId: null,
           createdAt: now,
           updatedAt: now,
         })
@@ -671,7 +712,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return replaceThread(
           ReviewThreadDetails.make({
             thread: ReviewThread.make({ ...current.thread, updatedAt: now }),
-            messages: [...current.messages, message],
+            conversation: [...current.conversation, UserReviewTurn.make({ message })],
           }),
         )
       },
@@ -679,36 +720,56 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       runAgent: async (input) => {
         requireTarget(input.target)
         const current = requireThread(input.threadId)
-        const completedAgentTurns = current.messages.filter(
-          (message) => message.author === "agent" && message.status === "complete",
+        const completedAgentTurns = current.conversation.filter(
+          (turn) => turn._tag === "Completed",
         ).length
         const turns = Object.entries(scenario.agentTurns)
         const selected = turns[completedAgentTurns] ?? turns.at(-1)
         if (selected === undefined) throw new Error("Demo scenario has no scripted agent turns")
         const [turnId, turn] = selected
         if (pendingRuns.has(turnId)) throw new Error(`Agent turn ${turnId} is already pending`)
-        const sourceMessage = scenario.threads
-          .flatMap((details) => details.messages)
-          .find((message) => message.bodyMarkdown === turn.response.bodyMarkdown)
+        const sourceTurn = scenario.threads
+          .flatMap((details) => details.conversation)
+          .find(
+            (entry) =>
+              entry._tag === "Completed" &&
+              entry.message.bodyMarkdown === turn.response.bodyMarkdown,
+          )
         const messageId = ReviewThreadMessageId.make(
-          sourceMessage?.id ?? `message-captured-${createdMessageCounter}`,
+          sourceTurn?.message.id ?? `message-captured-${createdMessageCounter}`,
         )
         createdMessageCounter += 1
-        const pendingMessage = ReviewThreadMessage.make({
+        const pendingTimestamp = sourceTurn?.message.createdAt ?? current.thread.updatedAt
+        const runId =
+          sourceTurn?._tag === "Completed"
+            ? sourceTurn.run.id
+            : AgentRunId.make(`run-captured-${createdMessageCounter}`)
+        const pendingMessage = PendingAgentReviewThreadMessage.make({
           id: messageId,
           threadId: input.threadId,
           sequence: current.messages.length,
-          author: "agent",
-          bodyMarkdown: MarkdownBody.make(""),
-          status: "pending",
-          agentRunId: sourceMessage?.agentRunId ?? `run-captured-${createdMessageCounter}`,
-          createdAt: sourceMessage?.createdAt ?? current.thread.updatedAt,
-          updatedAt: sourceMessage?.createdAt ?? current.thread.updatedAt,
+          agentRunId: runId,
+          createdAt: pendingTimestamp,
+          updatedAt: pendingTimestamp,
+        })
+        const pendingTurn = PendingAgentReviewTurn.make({
+          message: pendingMessage,
+          run: RunningAgentRun.make({
+            id: runId,
+            threadId: current.thread.id,
+            reviewKey: current.thread.reviewKey,
+            baseRevision: current.thread.baseRevision,
+            headRevision: current.thread.headRevision,
+            provider: ReviewAgentProviderId.make("demo"),
+            model: "demo-model",
+            promptVersion: AgentPromptVersion.make("demo-v1"),
+            startedAt: pendingTimestamp,
+          }),
         })
         replaceThread(
           ReviewThreadDetails.make({
             thread: current.thread,
-            messages: [...current.messages, pendingMessage],
+            conversation: [...current.conversation, pendingTurn],
           }),
         )
         const firstProgress = turn.progress[0]
@@ -730,7 +791,11 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       get: async () => settings,
       update: async (next) => {
         settings = cloneSettings(next)
-        record("settings.update", { provider: next.routes.walkthrough })
+        record("settings.update", {
+          provider: AIAgentSelection.guards.Automatic(next.selections.walkthrough)
+            ? "auto"
+            : next.selections.walkthrough.providerId,
+        })
         return settings
       },
     },
@@ -745,20 +810,22 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     providers: { list: async () => [provider] },
     hostedRepositories: {
       searchRepositories: async (request) => {
-        const matchesQuery = `${scenario.repository.owner}/${scenario.repository.name}`
-          .toLowerCase()
-          .includes(request.query.trim().toLowerCase())
+        const matchesQuery =
+          `${scenario.manifest.repository.owner}/${scenario.manifest.repository.name}`
+            .toLowerCase()
+            .includes(request.query.trim().toLowerCase())
         const matchesOwner =
-          request.namespaces.length === 0 || request.namespaces.includes(scenario.repository.owner)
+          request.namespaces.length === 0 ||
+          request.namespaces.includes(scenario.manifest.repository.owner)
         return matchesQuery && matchesOwner
           ? [
               HostedRepository.make({
                 locator: makeHostedRepositoryLocator(
                   provider.id,
-                  scenario.repository.owner,
-                  scenario.repository.name,
+                  scenario.manifest.repository.owner,
+                  scenario.manifest.repository.name,
                 ),
-                url: scenario.repository.remoteUrl,
+                url: WebUrl.make(scenario.repository.remoteUrl),
                 description: scenario.manifest.repository.description,
                 isPrivate: false,
                 updatedAt: currentRevision.detail.summary.updatedAt,
@@ -775,9 +842,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.repository.name,
           scenario.manifest.pullRequest.number,
         )
-        return [pullRequestSummary(currentRevision)]
+        return [currentRevision.detail.summary]
       },
-      listAssigned: async () => [pullRequestSummary(currentRevision)],
+      listAssigned: async () => [currentRevision.detail.summary],
       getDecision: async (request) => {
         requireReview(
           request.review.repository.namespace,
@@ -988,7 +1055,13 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   }
 
   function linkLocalPath(localPath: string) {
-    const linked = Repo.make({ ...scenario.repository, localPath: repositoryLocalPath(localPath) })
+    const linked = Repo.make({
+      ...scenario.repository,
+      checkout: LinkedCheckout.make({
+        remoteUrl: scenario.repository.remoteUrl,
+        path: RepositoryCheckoutPath.make(localPath),
+      }),
+    })
     repositories = repositories.map((repo) => (repo.id === linked.id ? linked : repo))
     record("repositories.link", { localPath })
     return linked
@@ -1010,20 +1083,12 @@ const demoAgentProvider = (
     displayName,
     description: `${displayName} demo runtime`,
     homepage: null,
-    capabilities: [
-      AgentProviderCapabilityStatus.make({
-        capability: "walkthrough",
-        status: "ready",
+    capabilities: {
+      walkthrough: AgentProviderCapabilityStatus.cases.Ready.make({ runtimeVersion: "demo" }),
+      "review-thread": AgentProviderCapabilityStatus.cases.Ready.make({
         runtimeVersion: "demo",
-        reason: null,
       }),
-      AgentProviderCapabilityStatus.make({
-        capability: "review-thread",
-        status: "ready",
-        runtimeVersion: "demo",
-        reason: null,
-      }),
-    ],
+    },
     models: [
       AgentProviderModel.make({
         id: AgentModelId.make(modelId),
@@ -1048,10 +1113,12 @@ const readyDemoPrerequisites = () =>
     ghSupported: true,
     ghAuthenticated: true,
     codingAgentInstalled: true,
-    installedCodingAgents: ["codex", "claude", "opencode"],
+    installedCodingAgents: ["codex", "claude", "opencode"].map((name) =>
+      CodingAgentName.make(name),
+    ),
     diffDashCliInstalled: true,
     diffDashCliInPath: true,
-    diffDashCliPath: "/usr/local/bin/diffdash",
+    diffDashCliPath: ExecutablePath.make("/usr/local/bin/diffdash"),
     checkedAt: "2026-07-10T08:36:19Z",
   })
 
@@ -1071,11 +1138,8 @@ const cloneSettings = (settings: AISettings) =>
     layout: RendererLayoutSettings.make({
       review: ReviewPaneSettings.make({ ...settings.layout.review }),
     }),
-    routes: { ...settings.routes },
-    models: { ...settings.models },
+    selections: { ...settings.selections },
   })
-
-const pullRequestSummary = (revision: MaterializedDemoRevision) => revision.detail.summary
 
 const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
   const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
@@ -1092,7 +1156,9 @@ const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
         ) {
           matches.push(
             ReviewSnapshotSearchMatch.make({
-              id: `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
+              id: ReviewSnapshotSearchMatchId.make(
+                `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
+              ),
               fileId: file.fileId,
               filePath: file.path,
               reviewKey: file.reviewKey,

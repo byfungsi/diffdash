@@ -11,13 +11,14 @@ import {
   AgentCapabilityPolicyUnsupported,
   AgentExecutionPolicy,
   AgentModelId,
+  AgentProviderId,
   AgentProviderOperationError,
   AgentSessionId,
   McpToolName,
-  ReviewRevision,
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
@@ -36,17 +37,15 @@ import {
 } from "@diffdash/process"
 import { TempResources } from "@diffdash/process/temp-resource"
 import {
-  CLAUDE_AUTO_MODELS,
   CLAUDE_DEFAULT_MODEL,
   CLAUDE_MODELS,
-  CLAUDE_PROVIDER_ID,
   CLAUDE_REVIEW_POLICY,
   CLAUDE_WALKTHROUGH_POLICY,
   makeClaudeProvider,
 } from "./claude"
 
 const operationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: CLAUDE_PROVIDER_ID,
+  providerId: AgentProviderId.make("claude"),
   fallbackReason: "Claude test execution failed",
 })
 
@@ -381,18 +380,13 @@ describe("Claude provider", () => {
     }),
   )
 
-  it("owns defaults and all automatic quality candidates", () => {
+  it("owns models, defaults, and execution policies", () => {
     expect(CLAUDE_DEFAULT_MODEL).toBe(AgentModelId.make("claude-sonnet-5"))
     expect(CLAUDE_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
       { id: "claude-opus-5", displayName: "Opus 5" },
       { id: "claude-sonnet-5", displayName: "Sonnet 5" },
       { id: "claude-haiku-4-5", displayName: "Haiku 4.5" },
     ])
-    expect(CLAUDE_AUTO_MODELS).toEqual({
-      best: "claude-opus-5",
-      balanced: "claude-sonnet-5",
-      fast: "claude-haiku-4-5",
-    })
     expect(CLAUDE_WALKTHROUGH_POLICY).toMatchObject({
       repository: "local-working-copy",
       shell: "deny",

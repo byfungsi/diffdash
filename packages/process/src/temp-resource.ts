@@ -7,7 +7,7 @@ export class TempResourceError extends Schema.TaggedError<TempResourceError>()(
   {
     operation: Schema.Literals(["create-directory", "create-file", "prepare-output-path"]),
     path: Schema.NullOr(Schema.String),
-    cause: Schema.Defect(),
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 

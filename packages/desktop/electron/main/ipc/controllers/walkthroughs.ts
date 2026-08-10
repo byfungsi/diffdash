@@ -1,6 +1,8 @@
-import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import { HostedReviewTarget } from "@diffdash/domain/review-thread"
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import {
+  CoreHostedReviewTarget,
+  type StartWalkthroughOperation,
+  type WalkthroughOperationResult,
+} from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { Match } from "effect"
 import type { ApplicationRuntime } from "../../application-runtime"
@@ -9,9 +11,9 @@ import { IpcControllerRegistry } from "./controller-registry"
 
 const generateWalkthrough = async (
   runtime: ApplicationRuntime,
-  target: ReviewThreadTarget,
+  target: StartWalkthroughOperation["target"],
   regenerate: boolean,
-): Promise<StoredWalkthrough> => {
+): Promise<Extract<WalkthroughOperationResult, { readonly _tag: "completed" }>["walkthrough"]> => {
   const accepted = await runtime.walkthroughs.start({ target, regenerate })
   const result = await runtime.walkthroughs.getOperation(accepted.operationId)
   return Match.valueTags(result, {
@@ -41,7 +43,7 @@ export const defineWalkthroughHandlers = (
 ) => {
   handlers.define(InvokeChannel.getWalkthrough, async (_event, request) =>
     runtime.walkthroughs.getStored({
-      target: HostedReviewTarget.make({ kind: "hosted", review: request.review }),
+      target: CoreHostedReviewTarget.make({ kind: "hosted", review: request.review }),
       expectedBaseRevision: request.baseRevision,
       expectedHeadRevision: request.headRevision,
     }),
@@ -58,7 +60,7 @@ export const defineWalkthroughHandlers = (
     async (_event, request) =>
       generateWalkthrough(
         runtime,
-        HostedReviewTarget.make({ kind: "hosted", review: request.review }),
+        CoreHostedReviewTarget.make({ kind: "hosted", review: request.review }),
         request.regenerate,
       ),
     toPublicWalkthroughError,

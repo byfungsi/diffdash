@@ -1,27 +1,16 @@
-import { Schema, SchemaTransformation } from "effect"
+import { Match, Schema, SchemaTransformation } from "effect"
+import { WebUrl } from "@diffdash/domain/web-url"
 
 /** HTTP or HTTPS URL decoded at the native host boundary. */
-export const CoreWebUrl = Schema.String.pipe(
-  Schema.check(
-    Schema.makeFilter(
-      (value) => {
-        try {
-          const url = new URL(value)
-          return url.protocol === "http:" || url.protocol === "https:"
-        } catch {
-          return false
-        }
-      },
-      { message: "Expected an HTTP or HTTPS URL" },
-    ),
-  ),
-  Schema.brand("CoreWebUrl"),
-)
+export const CoreWebUrl = WebUrl
 
 /** HTTP or HTTPS URL decoded at the native host boundary. */
 export type CoreWebUrl = typeof CoreWebUrl.Type
 
-const AnalyticsProjectKey = Schema.String.pipe(Schema.check(Schema.isMinLength(1)))
+const AnalyticsProjectKey = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("AnalyticsProjectKey"),
+)
 
 /** Analytics configuration that cannot produce a client. */
 export class CoreAnalyticsDisabled extends Schema.TaggedClass<CoreAnalyticsDisabled>()(
@@ -53,9 +42,14 @@ export const CoreAnalyticsState = EncodedAnalyticsState.pipe(
           ? CoreAnalyticsDisabled.make()
           : CoreAnalyticsEnabled.make({ host, projectKey }),
       encode: (state) =>
-        state instanceof CoreAnalyticsDisabled
-          ? { host: null, projectKey: null }
-          : { host: state.host, projectKey: state.projectKey },
+        Match.value(state).pipe(
+          Match.tag("disabled", () => ({ host: null, projectKey: null })),
+          Match.tag("enabled", (enabled) => ({
+            host: enabled.host,
+            projectKey: enabled.projectKey,
+          })),
+          Match.exhaustive,
+        ),
     }),
   ),
 )

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Layer } from "effect"
+import { Effect, Result, Layer, Option } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
-import { noRepositoryLocalPath } from "@diffdash/domain/repository"
+import { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   makeReviewKey,
   ReviewFileId,
@@ -16,15 +18,19 @@ import {
 } from "@diffdash/domain/review-identity"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import {
+  CurrentReviewAnchor,
   HostedReviewTarget,
   LineReviewAnchor,
   MarkdownBody,
   ReviewThreadId,
 } from "@diffdash/domain/review-thread"
-import { DatabaseService } from "./database"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
 import { ReviewTurnStore } from "./review-turn-store"
+import { ReviewLifecycleRowDecodeError } from "./review-turn-row"
+import { hostedTestRepositoryInput } from "./test-support/repository"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-thread-test-"))),
@@ -33,7 +39,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
 
 const makeLayer = (databasePath: string) =>
   Layer.mergeAll(RepositoryStore.layer, ReviewThreadStore.layer, ReviewTurnStore.layer).pipe(
-    Layer.provideMerge(DatabaseService.layer(databasePath)),
+    Layer.provideMerge(DatabaseNode.layer(databasePath)),
   )
 
 const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 51)
@@ -42,7 +48,7 @@ const baseRevision = ReviewRevision.make("base-sha")
 const headRevision = ReviewRevision.make("head-sha")
 const lineAnchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-51"),
-  filePath: "src/app.ts",
+  filePath: RepositoryRelativePath.make("src/app.ts"),
   oldPath: null,
   hunkId: ReviewHunkId.make("hunk-51"),
   hunkFingerprint: ReviewHunkFingerprint.make("fingerprint-51"),
@@ -54,13 +60,7 @@ const lineAnchor = LineReviewAnchor.make({
 
 const createRepo = Effect.gen(function* () {
   const repositories = yield* RepositoryStore
-  return yield* repositories.upsertRepository({
-    provider: "github",
-    owner: "fungsi",
-    name: "diffdash",
-    remoteUrl: "https://github.com/fungsi/diffdash",
-    localPath: noRepositoryLocalPath,
-  })
+  return yield* repositories.upsertRepository(hostedTestRepositoryInput())
 })
 
 describe("ReviewThreadStore", () => {
@@ -82,15 +82,14 @@ describe("ReviewThreadStore", () => {
         })
 
         expect(created.thread).toMatchObject({
-          anchorStatus: "active",
+          currentAnchor: { _tag: "Active", anchor: lineAnchor },
           reviewKey,
         })
         expect(created.thread.originalAnchor).toBeInstanceOf(LineReviewAnchor)
         expect(created.messages).toHaveLength(1)
         expect(created.messages[0]).toMatchObject({
-          author: "user",
+          _tag: "User",
           sequence: 1,
-          status: "complete",
         })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -118,6 +117,74 @@ describe("ReviewThreadStore", () => {
 
         expect(Result.isFailure(duplicate)).toBe(true)
         expect(threads).toHaveLength(1)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("decodes legacy carried_forward rows deterministically", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const repo = yield* createRepo
+        const store = yield* ReviewThreadStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const created = yield* store.create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: 51,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Legacy carried anchor"),
+        })
+
+        yield* database.run(
+          "UPDATE review_threads SET anchor_status = 'carried_forward' WHERE id = ?",
+          [created.thread.id],
+        )
+        expect((yield* store.get(created.thread.id)).thread.currentAnchor).toMatchObject({
+          _tag: "Active",
+          anchor: lineAnchor,
+        })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects impossible legacy message lifecycle rows with a typed decode cause", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        const repo = yield* createRepo
+        const store = yield* ReviewThreadStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const created = yield* store.create({
+          repoId: repo.id,
+          reviewKey,
+          prNumber: 51,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Impossible legacy message"),
+        })
+        yield* database.run(
+          "UPDATE review_thread_messages SET status = 'pending' WHERE thread_id = ?",
+          [created.thread.id],
+        )
+
+        const result = yield* Effect.result(store.get(created.thread.id))
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(ReviewThreadStoreError)
+          expect(result.failure.cause).toBeInstanceOf(ReviewLifecycleRowDecodeError)
+          if (!(result.failure.cause instanceof ReviewLifecycleRowDecodeError)) {
+            throw new Error("Expected lifecycle row decode error")
+          }
+          expect(result.failure.cause.reason).toContain(
+            "User messages must be complete and cannot own runs or failures.",
+          )
+        }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -200,7 +267,7 @@ index 1111111..2222222 100644
         const begun = yield* turns.beginTurn({
           ...targetInput,
           mapping,
-          provider: "opencode",
+          provider: ReviewAgentProviderId.make("opencode"),
           model: "test-model",
           promptVersion: AgentPromptVersion.make("review-thread-v3"),
         })
@@ -219,10 +286,10 @@ index 1111111..2222222 100644
           bodyMarkdown: MarkdownBody.make("Follow-up question"),
         })
 
-        expect(updated.messages.map(({ author, sequence }) => ({ author, sequence }))).toEqual([
-          { author: "user", sequence: 1 },
-          { author: "agent", sequence: 2 },
-          { author: "user", sequence: 3 },
+        expect(updated.messages.map(({ _tag, sequence }) => ({ _tag, sequence }))).toEqual([
+          { _tag: "User", sequence: 1 },
+          { _tag: "Completed", sequence: 2 },
+          { _tag: "User", sequence: 3 },
         ])
         expect(Result.isFailure(blocked)).toBe(true)
       }).pipe(Effect.provide(makeLayer(databasePath)))
@@ -272,7 +339,7 @@ index 1111111..2222222 100644
       yield* Effect.gen(function* () {
         const repo = yield* createRepo
         const store = yield* ReviewThreadStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const created = yield* store.create({
           repoId: repo.id,
           reviewKey,
@@ -306,7 +373,7 @@ index 1111111..2222222 100644
       yield* Effect.gen(function* () {
         const repo = yield* createRepo
         const store = yield* ReviewThreadStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const created = yield* store.create({
           repoId: repo.id,
           reviewKey,
@@ -365,6 +432,7 @@ index 1111111..2222222 100644
       yield* Effect.gen(function* () {
         const repo = yield* createRepo
         const store = yield* ReviewThreadStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const created = yield* store.create({
           repoId: repo.id,
           reviewKey,
@@ -381,8 +449,7 @@ index 1111111..2222222 100644
             threadId: created.thread.id,
             currentBaseRevision: nextBase,
             currentHeadRevision: nextHead,
-            currentAnchor: null,
-            anchorStatus: "outdated",
+            currentAnchor: CurrentReviewAnchor.cases.Outdated.make({}),
           },
         ])
 
@@ -392,9 +459,16 @@ index 1111111..2222222 100644
           originalAnchor: lineAnchor,
           currentBaseRevision: nextBase,
           currentHeadRevision: nextHead,
-          currentAnchor: null,
-          anchorStatus: "outdated",
+          currentAnchor: { _tag: "Outdated" },
         })
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT current_anchor_json, anchor_status FROM review_threads WHERE id = ?",
+              [created.thread.id],
+            ),
+          ),
+        ).toEqual({ current_anchor_json: null, anchor_status: "outdated" })
 
         const failed = yield* Effect.result(
           store.updateCurrentMappings([
@@ -402,15 +476,13 @@ index 1111111..2222222 100644
               threadId: created.thread.id,
               currentBaseRevision: ReviewRevision.make("rolled-back-base"),
               currentHeadRevision: ReviewRevision.make("rolled-back-head"),
-              currentAnchor: lineAnchor,
-              anchorStatus: "active",
+              currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor: lineAnchor }),
             },
             {
               threadId: ReviewThreadId.make("missing"),
               currentBaseRevision: nextBase,
               currentHeadRevision: nextHead,
-              currentAnchor: null,
-              anchorStatus: "outdated",
+              currentAnchor: CurrentReviewAnchor.cases.Outdated.make({}),
             },
           ]),
         )
@@ -420,8 +492,7 @@ index 1111111..2222222 100644
         expect(afterRollback.thread).toMatchObject({
           currentBaseRevision: nextBase,
           currentHeadRevision: nextHead,
-          currentAnchor: null,
-          anchorStatus: "outdated",
+          currentAnchor: { _tag: "Outdated" },
         })
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

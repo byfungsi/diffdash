@@ -4,7 +4,8 @@ import { Effect } from "effect"
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { repositoryLocalPath } from "@diffdash/domain/repository"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   AddReviewThreadUserMessageRequest,
   RunReviewThreadAgentRequest,
@@ -46,11 +47,13 @@ describe("scenario-backed DiffDash API", () => {
       const projectId = ReviewProjectId.make(scenario.repository.id)
 
       const opened = yield* Effect.promise(() =>
-        api.repositories.openProject("/Users/demo/emberline-dispatch"),
+        api.repositories.openProject(RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch")),
       )
       expect(opened["_tag"]).toBe("opened")
       if (opened["_tag"] !== "opened") return
-      expect(opened.repo.localPath).toEqual(repositoryLocalPath("/Users/demo/emberline-dispatch"))
+      expect(opened.repo.localPath).toEqual(
+        RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch"),
+      )
 
       const saved = yield* Effect.promise(() =>
         api.projectWorkspace.save(
@@ -139,7 +142,7 @@ describe("scenario-backed DiffDash API", () => {
         RunReviewThreadAgentRequest.make({
           threadId,
           target,
-          repoId: initial.thread.repoId,
+          repoId: ReviewProjectId.make(initial.thread.repoId),
           reviewKey: initial.thread.reviewKey,
           expectedBaseRevision: initial.thread.currentBaseRevision,
           expectedHeadRevision: initial.thread.currentHeadRevision,
@@ -147,15 +150,17 @@ describe("scenario-backed DiffDash API", () => {
       )
       const pendingDetails = yield* Effect.promise(() => api.reviewThreads.get(threadId))
 
-      expect(pendingDetails.messages.at(-1)?.status).toBe("pending")
+      expect(pendingDetails.messages.at(-1)?._tag).toBe("Pending")
       expect(timeline.getState().pendingAgentTurnIds).toEqual(["turn-lease-follow-up"])
 
       yield* Effect.promise(() => timeline.release("turn-lease-follow-up"))
       const completed = yield* Effect.promise(() => pending)
       unsubscribe()
 
-      expect(completed.messages.at(-1)?.status).toBe("complete")
-      expect(completed.messages.at(-1)?.bodyMarkdown).toContain("transaction_timestamp()")
+      const completedMessage = completed.messages.at(-1)
+      expect(completedMessage?._tag).toBe("Completed")
+      if (completedMessage?._tag !== "Completed") throw new Error("Expected completed response")
+      expect(completedMessage.bodyMarkdown).toContain("transaction_timestamp()")
       expect(progressStages).toContain("reviewing")
       expect(progressStages.at(-1)).toBe("restoring-workspace")
       expect(timeline.getState().pendingAgentTurnIds).toEqual([])
@@ -202,7 +207,10 @@ describe("scenario-backed DiffDash API", () => {
       const [working, branch] = createDemoLocalReviewFixtures(scenario)
       const { api } = createDemoRuntime(scenario)
       const resolvedBranch = yield* Effect.promise(() =>
-        api.localReviews.resolveBranch(working.target.rootPath, "dev"),
+        api.localReviews.resolveBranch(
+          working.target.rootPath,
+          RepositoryComparisonRef.make("dev"),
+        ),
       )
       const [workingManifest, branchManifest] = yield* Effect.promise(() =>
         Promise.all([
@@ -221,13 +229,13 @@ describe("scenario-backed DiffDash API", () => {
           api.viewedFiles.listLocal(
             LocalViewedFilesRequest.make({
               target: working.target,
-              sourceBranch: "nina/webhook-replay-claims",
+              sourceBranch: RepositoryComparisonRef.make("nina/webhook-replay-claims"),
             }),
           ),
           api.viewedFiles.listLocal(
             LocalViewedFilesRequest.make({
               target: resolvedBranch,
-              sourceBranch: "nina/webhook-replay-claims",
+              sourceBranch: RepositoryComparisonRef.make("nina/webhook-replay-claims"),
             }),
           ),
         ]),

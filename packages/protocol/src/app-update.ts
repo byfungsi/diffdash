@@ -1,4 +1,11 @@
 import { Schema } from "effect"
+import { WebUrl } from "@diffdash/domain/web-url"
+
+/** HTTP(S) base URL used by the native updater feed. */
+export const AppUpdateFeedUrl = WebUrl
+
+/** HTTP(S) base URL used by the native updater feed. */
+export type AppUpdateFeedUrl = typeof AppUpdateFeedUrl.Type
 
 /** Why automatic updates are unavailable for the current installation. */
 export const AppUpdateUnsupportedReason = Schema.Literals([

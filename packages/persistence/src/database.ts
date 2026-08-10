@@ -1,185 +1,84 @@
-import BetterSqlite3, { type Database as BetterSqliteDatabase } from "better-sqlite3"
-import { Context, Effect, Layer, Schema } from "effect"
-import { basename, dirname, join } from "node:path"
-import { existsSync, mkdirSync, rmSync } from "node:fs"
+import { Array as EffectArray, Effect, Option, Schema } from "effect"
+import type * as SqlClient from "effect/unstable/sql/SqlClient"
+import type { SqlError } from "effect/unstable/sql/SqlError"
 
-import {
-  databaseRequiresMigration,
-  maxSupportedDatabaseSchemaVersion,
-  readDatabaseUserVersion,
-  runDatabaseMigrations,
-} from "./database-migrations"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 
-type SqlParams = readonly unknown[] | Record<string, unknown>
+/** Primitive values accepted as positional parameters by the SQLite adapters. */
+export type SqlValue = string | number | bigint | boolean | Date | null | Int8Array | Uint8Array
 
-/** Synchronous statements available inside one SQLite transaction callback. */
-export interface DatabaseTransaction {
-  readonly get: (sql: string, params?: SqlParams) => unknown
-  readonly all: (sql: string, params?: SqlParams) => readonly unknown[]
-  readonly run: (sql: string, params?: SqlParams) => void
+/** Positional values bound to one raw SQL statement. */
+export type SqlParams = ReadonlyArray<SqlValue>
+
+/** Converts an infrastructure value into the concrete error type used by persistence failures. */
+export const toError = <A>(cause: A): Error =>
+  Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))
+
+/** Untrusted object row returned by a SQLite driver. */
+export interface DatabaseRow {
+  readonly [column: string]: SqlValue
 }
 
-/** A typed SQLite persistence failure. */
+/** Generic Effect SQL operations used by persistence adapters. */
+export interface Database {
+  /** Returns the first result row when the statement produces one. */
+  readonly get: (
+    statement: string,
+    params?: SqlParams,
+  ) => Effect.Effect<Option.Option<DatabaseRow>, SqlError>
+
+  /** Returns every result row produced by the statement. */
+  readonly all: (
+    statement: string,
+    params?: SqlParams,
+  ) => Effect.Effect<ReadonlyArray<DatabaseRow>, SqlError>
+
+  /** Executes a statement and discards driver-specific write metadata. */
+  readonly run: (statement: string, params?: SqlParams) => Effect.Effect<void, SqlError>
+
+  /** Runs an Effect program on the client's reserved transaction connection. */
+  readonly transaction: <A, E, R>(
+    program: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | SqlError | DatabaseError, R>
+}
+
+/** A typed SQLite startup or migration failure. */
 export class DatabaseError extends Schema.TaggedError<DatabaseError>()("DatabaseError", {
-  operation: Schema.String,
-  cause: Schema.Defect(),
+  operation: DiagnosticOperation,
+  cause: Schema.ErrorInstance(),
 }) {}
 
-/** Main-process SQLite service with typed Effect errors. */
-export class DatabaseService extends Context.Service<
-  DatabaseService,
-  {
-    readonly get: (sql: string, params?: SqlParams) => Effect.Effect<unknown, DatabaseError>
-    readonly all: (
-      sql: string,
-      params?: SqlParams,
-    ) => Effect.Effect<readonly unknown[], DatabaseError>
-    readonly run: (sql: string, params?: SqlParams) => Effect.Effect<void, DatabaseError>
-    readonly transaction: <A>(
-      operation: string,
-      execute: (transaction: DatabaseTransaction) => A,
-    ) => Effect.Effect<A, DatabaseError>
-  }
->()("@diffdash/DatabaseService") {
-  static readonly layer = (databasePath: string) =>
-    Layer.effect(
-      DatabaseService,
-      Effect.gen(function* () {
-        const db = yield* Effect.acquireRelease(
-          Effect.tryPromise({
-            try: async () => {
-              mkdirSync(dirname(databasePath), { recursive: true })
-              const existedBeforeOpen = existsSync(databasePath)
-              const database = new BetterSqlite3(databasePath)
-              try {
-                const currentVersion = readDatabaseUserVersion(database)
-                const maxSupportedVersion = maxSupportedDatabaseSchemaVersion()
-                if (currentVersion > maxSupportedVersion) {
-                  throw new Error(
-                    `Database schema version ${currentVersion} is newer than supported version ${maxSupportedVersion}`,
-                  )
-                }
-                database.pragma("journal_mode = WAL")
-                database.pragma("foreign_keys = ON")
-                await backupDatabaseBeforeMigration(database, databasePath, existedBeforeOpen)
-                runDatabaseMigrations(database)
-                return database
-              } catch (cause) {
-                database.close()
-                throw cause
-              }
-            },
-            catch: (cause) => DatabaseError.make({ operation: "open", cause }),
-          }),
-          (database) => Effect.sync(() => database.close()),
-        )
+class TransactionProgramDefect extends Schema.TaggedClass<TransactionProgramDefect>()(
+  "TransactionProgramDefect",
+  { cause: Schema.ErrorInstance() },
+) {}
 
-        return DatabaseService.of({
-          get: (sql: string, params: SqlParams = []) =>
-            runStatement(db, "get", () => db.prepare(sql).get(params)),
-          all: (sql: string, params: SqlParams = []) =>
-            runStatement(db, "all", () => db.prepare(sql).all(params)),
-          run: (sql: string, params: SqlParams = []) =>
-            runStatement(db, "run", () => {
-              db.prepare(sql).run(params)
-            }),
-          transaction: <A>(operation: string, execute: (transaction: DatabaseTransaction) => A) =>
-            runStatement(
-              db,
-              operation,
-              db.transaction(() => executeTransaction(db, execute)),
-            ),
-        })
-      }),
-    )
-}
-
-/** Creates a recovery-safe SQLite backup before applying a schema upgrade. */
-export const backupDatabaseBeforeMigration = async (
-  database: BetterSqliteDatabase,
-  databasePath: string,
-  existedBeforeOpen = existsSync(databasePath),
-) => {
-  if (!shouldBackupDatabase(database, existedBeforeOpen)) return null
-
-  const currentVersion = readDatabaseUserVersion(database)
-  const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "")
-  const backupPath = join(
-    dirname(databasePath),
-    `${basename(databasePath)}.pre-migration-v${currentVersion}-${stamp}`,
-  )
-  await database.backup(backupPath)
-  const backup = new BetterSqlite3(backupPath, { fileMustExist: true, readonly: true })
-  try {
-    const integrity: unknown = backup.pragma("quick_check", { simple: true })
-    if (integrity !== "ok")
-      throw new Error(`SQLite backup integrity check failed: ${String(integrity)}`)
-  } finally {
-    backup.close()
-    rmSync(`${backupPath}-shm`, { force: true })
-    rmSync(`${backupPath}-wal`, { force: true })
-  }
-  return backupPath
-}
-
-const shouldBackupDatabase = (database: BetterSqliteDatabase, existedBeforeOpen: boolean) => {
-  const currentVersion = readDatabaseUserVersion(database)
-  if (!databaseRequiresMigration(database)) return false
-  if (currentVersion > 0) return true
-  if (!existedBeforeOpen) return false
-  const tables = database
-    .prepare(
-      `SELECT name FROM sqlite_master
-       WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-       LIMIT 1`,
-    )
-    .all()
-  return tables.length > 0
-}
-
-const runStatement = <A>(_db: BetterSqliteDatabase, operation: string, execute: () => A) =>
-  Effect.try({
-    try: execute,
-    catch: (cause) => DatabaseError.make({ operation, cause }),
-  })
-
-const executeTransaction = <A>(
-  database: BetterSqliteDatabase,
-  execute: (transaction: DatabaseTransaction) => A,
-) => {
-  let active = true
-  try {
-    const result = execute(makeTransaction(database, () => active))
-    if (Effect.isEffect(result) || isPromiseLike(result)) {
-      throw new Error("Database transaction callbacks must complete synchronously")
-    }
-    return result
-  } finally {
-    active = false
-  }
-}
-
-const makeTransaction = (
-  database: BetterSqliteDatabase,
-  isActive: () => boolean,
-): DatabaseTransaction => ({
-  get: (sql: string, params: SqlParams = []) => {
-    assertTransactionActive(isActive)
-    return database.prepare(sql).get(params)
-  },
-  all: (sql: string, params: SqlParams = []) => {
-    assertTransactionActive(isActive)
-    return database.prepare(sql).all(params)
-  },
-  run: (sql: string, params: SqlParams = []) => {
-    assertTransactionActive(isActive)
-    database.prepare(sql).run(params)
-  },
+/** Adapts Effect's generic SQL client to DiffDash's raw-row persistence conventions. */
+export const makeDatabase = (client: SqlClient.SqlClient): Database => ({
+  get: (statement, params = []) =>
+    client.unsafe<DatabaseRow>(statement, params).pipe(Effect.map(EffectArray.head)),
+  all: (statement, params = []) => client.unsafe<DatabaseRow>(statement, params),
+  run: (statement, params = []) =>
+    client.unsafe<DatabaseRow>(statement, params).pipe(Effect.asVoid),
+  transaction: (program) =>
+    client
+      .withTransaction(
+        program.pipe(
+          Effect.catchDefect((cause) =>
+            Effect.die(TransactionProgramDefect.make({ cause: toError(cause) })),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.catchDefect((cause) =>
+          Schema.is(TransactionProgramDefect)(cause)
+            ? Effect.die(cause.cause)
+            : Effect.fail(
+                DatabaseError.make({
+                  operation: DiagnosticOperation.make("transaction.finalize"),
+                  cause: toError(cause),
+                }),
+              ),
+        ),
+      ),
 })
-
-const assertTransactionActive = (isActive: () => boolean) => {
-  if (!isActive()) throw new Error("Database transaction handle used after its callback completed")
-}
-
-const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
-  typeof value === "object" && value !== null && "then" in value && typeof value.then === "function"

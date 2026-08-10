@@ -7,10 +7,10 @@ import {
   AgentExecutionPolicy,
   AgentProviderId,
   AgentProviderManifest,
-  AgentProviderOperationError,
   type AgentProviderRegistration,
   DuplicateAgentProviderError,
   InvalidAgentProviderResponseError,
+  AgentProviderOperationError,
   McpToolName,
   MissingAgentProviderError,
   type ReviewThreadRequest,
@@ -70,7 +70,10 @@ export const agentManifestConformance = (
 export interface WalkthroughConformanceFixtures {
   readonly create: () => AgentProviderRegistration
   readonly request: () => WalkthroughRequest
-  readonly expectedFailure: () => Effect.Effect<never, unknown>
+  readonly expectedFailure: () => Effect.Effect<
+    never,
+    AgentProviderOperationError | InvalidAgentProviderResponseError
+  >
   readonly temporaryFiles: () => Effect.Effect<readonly string[]>
 }
 
@@ -81,7 +84,7 @@ export const walkthroughConformance = (name: string, fixtures: WalkthroughConfor
       Effect.gen(function* () {
         const capability = requireWalkthrough(fixtures.create())
         const probe = yield* capability.probe
-        expect(probe).toBeInstanceOf(AgentCapabilityReady)
+        expect(Schema.is(AgentCapabilityReady)(probe)).toBe(true)
         const request = fixtures.request()
         assertNonMutatingPolicy(request.policy)
         const before = yield* fixtures.temporaryFiles()
@@ -97,8 +100,8 @@ export const walkthroughConformance = (name: string, fixtures: WalkthroughConfor
         expect(Result.isFailure(result)).toBe(true)
         if (!Result.isFailure(result)) return
         expect(
-          result.failure instanceof InvalidAgentProviderResponseError ||
-            result.failure instanceof AgentProviderOperationError,
+          Schema.is(InvalidAgentProviderResponseError)(result.failure) ||
+            Schema.is(AgentProviderOperationError)(result.failure),
         ).toBe(true)
       }),
     )
@@ -119,7 +122,7 @@ export const reviewConformance = (name: string, fixtures: ReviewConformanceFixtu
         const registration = fixtures.create()
         const capability = requireReview(registration)
         const probe = yield* capability.probe
-        expect(probe).toBeInstanceOf(AgentCapabilityReady)
+        expect(Schema.is(AgentCapabilityReady)(probe)).toBe(true)
         const request = fixtures.request()
         assertNonMutatingPolicy(request.policy)
         const result = yield* capability.execute(request)
@@ -154,7 +157,7 @@ export const reviewConformance = (name: string, fixtures: ReviewConformanceFixtu
 
         expect(Result.isFailure(result)).toBe(true)
         if (Result.isFailure(result)) {
-          expect(result.failure).toBeInstanceOf(AgentProviderOperationError)
+          expect(Schema.is(AgentProviderOperationError)(result.failure)).toBe(true)
           expect(result.failure.reason).toContain("outside the execution policy")
         }
       }),
@@ -193,8 +196,10 @@ export const agentSecurityConformance = (
         for (const artifact of result.artifacts) {
           expect(artifact.content.length).toBeLessThanOrEqual(fixtures.maxArtifactLength)
         }
-        expect(result.artifacts.some(({ type }) => type === ("patch" as string))).toBe(false)
-        expect(result.artifacts.some(({ type }) => type === ("file-change" as string))).toBe(false)
+        const forbiddenArtifactTypes = ["patch", "file-change"]
+        expect(result.artifacts.some(({ type }) => forbiddenArtifactTypes.includes(type))).toBe(
+          false,
+        )
       }),
     )
   })
@@ -254,17 +259,12 @@ export const agentRegistryConformance = (
     it.effect("uses separate automatic routes for each capability", () =>
       Effect.gen(function* () {
         const registry = yield* AgentProviderRegistry
-        const walkthrough = yield* registry.resolveWalkthrough(autoRoute)
-        const review = yield* registry.resolveReviewThread(autoRoute)
-        const registrations = yield* registry.list
-        expect(
-          registrations.find(({ walkthrough: candidate }) => candidate === walkthrough)?.manifest
-            .descriptor.id,
-        ).toBe(fixtures.walkthroughAutoProviderId)
-        expect(
-          registrations.find(({ reviewThread: candidate }) => candidate === review)?.manifest
-            .descriptor.id,
-        ).toBe(fixtures.reviewAutoProviderId)
+        const walkthrough = yield* registry.resolveWalkthroughCandidates(autoRoute)
+        const review = yield* registry.resolveReviewThreadCandidates(autoRoute)
+        expect(walkthrough[0]?.registration.manifest.descriptor.id).toBe(
+          fixtures.walkthroughAutoProviderId,
+        )
+        expect(review[0]?.registration.manifest.descriptor.id).toBe(fixtures.reviewAutoProviderId)
       }).pipe(
         Effect.provide(AgentProviderRegistry.layer(fixtures.registrations(), fixtures.policies)),
       ),
@@ -274,17 +274,17 @@ export const agentRegistryConformance = (
       Effect.gen(function* () {
         const registry = yield* AgentProviderRegistry
         const missing = yield* registry
-          .resolveWalkthrough(providerRoute(AgentProviderId.make("missing")))
+          .resolveWalkthroughCandidates(providerRoute(AgentProviderId.make("missing")))
           .pipe(Effect.result)
         const unsupported = yield* registry
-          .resolveWalkthrough(providerRoute(fixtures.unsupportedWalkthroughProviderId))
+          .resolveWalkthroughCandidates(providerRoute(fixtures.unsupportedWalkthroughProviderId))
           .pipe(Effect.result)
         expect(Result.isFailure(missing)).toBe(true)
         expect(Result.isFailure(unsupported)).toBe(true)
         if (Result.isFailure(missing))
-          expect(missing.failure).toBeInstanceOf(MissingAgentProviderError)
+          expect(Schema.is(MissingAgentProviderError)(missing.failure)).toBe(true)
         if (Result.isFailure(unsupported)) {
-          expect(unsupported.failure).toBeInstanceOf(UnsupportedAgentCapabilityError)
+          expect(Schema.is(UnsupportedAgentCapabilityError)(unsupported.failure)).toBe(true)
         }
       }).pipe(
         Effect.provide(AgentProviderRegistry.layer(fixtures.registrations(), fixtures.policies)),
@@ -304,7 +304,7 @@ export const agentRegistryConformance = (
         )
         expect(Result.isFailure(result)).toBe(true)
         if (Result.isFailure(result))
-          expect(result.failure).toBeInstanceOf(DuplicateAgentProviderError)
+          expect(Schema.is(DuplicateAgentProviderError)(result.failure)).toBe(true)
       }),
     )
   })

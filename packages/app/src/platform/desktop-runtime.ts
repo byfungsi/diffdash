@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Queue, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Match, Queue, Stream } from "effect"
+import type { WebUrl } from "@diffdash/domain/web-url"
 
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
@@ -6,7 +7,12 @@ import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { PreloadClient } from "./preload-client"
-import { invokePreload, preloadEventStream, type RendererApiError } from "./renderer-api-error"
+import {
+  invokePreload,
+  preloadEventStream,
+  rendererApiError,
+  type RendererApiError,
+} from "./renderer-api-error"
 
 /** Renderer capabilities owned by the Electron shell rather than a product feature. */
 export class DesktopRuntime extends Context.Service<
@@ -14,7 +20,7 @@ export class DesktopRuntime extends Context.Service<
   {
     readonly getDiagnostics: () => Effect.Effect<AppPrerequisites, RendererApiError>
     readonly installCli: () => Effect.Effect<DiffDashCliInstallResult, RendererApiError>
-    readonly openExternalUrl: (url: string) => Effect.Effect<void, RendererApiError>
+    readonly openExternalUrl: (url: WebUrl) => Effect.Effect<void, RendererApiError>
     readonly analytics: {
       readonly start: () => Effect.Effect<void, RendererApiError>
       readonly capture: (event: AnalyticsEvent) => Effect.Effect<void, RendererApiError>
@@ -42,10 +48,21 @@ export const desktopRuntimeLayer = Layer.effect(
       (listener) => api.updates.onStateChanged(listener),
       invokePreload(InvokeChannel.updatesGetState, () => api.updates.getState()),
     )
-    const navigationNotifications = Stream.callback<void>((queue) =>
+    const navigationNotifications = Stream.callback<void, RendererApiError>((queue) =>
       Effect.acquireRelease(
         Effect.sync(() =>
-          api.navigation.onCommandsAvailable(() => void Queue.offerUnsafe(queue, undefined)),
+          api.navigation.onCommandsAvailable((result) => {
+            Match.valueTags(result, {
+              Failure: (failure) =>
+                Queue.failCauseUnsafe(
+                  queue,
+                  Cause.fail(
+                    rendererApiError(EventChannel.navigationCommandsAvailable, failure.error),
+                  ),
+                ),
+              Success: () => void Queue.offerUnsafe(queue, undefined),
+            })
+          }),
         ),
         (unsubscribe) => Effect.sync(unsubscribe),
       ).pipe(Effect.tap(() => Effect.sync(() => void Queue.offerUnsafe(queue, undefined)))),

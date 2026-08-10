@@ -1,6 +1,7 @@
 import { Keyboard, X } from "lucide-react"
 import { useEffect, useRef } from "react"
 import { Button } from "@/shared/ui/button"
+import { isHTMLElement } from "@/shared/dom"
 import { keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
 
 type ShortcutToken = "mod" | "shift" | "enter" | "escape" | "slash" | "f" | "g" | "k" | "v"
@@ -78,8 +79,9 @@ export function KeyboardShortcutReference({
   useEffect(() => {
     if (open) {
       if (!wasOpenRef.current) {
-        previousFocusRef.current =
-          document.activeElement instanceof HTMLElement ? document.activeElement : null
+        previousFocusRef.current = isHTMLElement(document.activeElement)
+          ? document.activeElement
+          : null
       }
       wasOpenRef.current = true
       const frame = window.requestAnimationFrame(() => closeButtonRef.current?.focus())

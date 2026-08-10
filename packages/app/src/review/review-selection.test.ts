@@ -12,18 +12,24 @@ import {
   ProviderActor,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, workingTreeReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import {
+  ReviewDiffIdentity,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
+import { WebUrl } from "@diffdash/domain/web-url"
+import { Result, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import { projectReviewSelection, reviewSelectionSourceKeys } from "./review-selection"
+import { RendererReview } from "./review-subject"
 
 const locator = makeHostedReviewLocator("github", "fungsi", "diffdash", 12)
 const summary = HostedReviewSummary.make({
@@ -34,16 +40,22 @@ const summary = HostedReviewSummary.make({
     displayName: null,
     avatarUrl: null,
   }),
-  base: BranchRevision.make({ name: "main", revision: "base" }),
+  base: BranchRevision.make({
+    name: RepositoryComparisonRef.make("main"),
+    revision: ReviewRevision.make("base"),
+  }),
   body: "Review body",
   createdAt: "2026-07-19T00:00:00Z",
   decision: "none",
-  head: BranchRevision.make({ name: "feature", revision: "head" }),
+  head: BranchRevision.make({
+    name: RepositoryComparisonRef.make("feature"),
+    revision: ReviewRevision.make("head"),
+  }),
   draft: false,
   state: "OPEN",
   title: "Normalize review selection",
   updatedAt: "2026-07-19T00:00:00Z",
-  url: "https://example.test/review/12",
+  url: WebUrl.make("https://example.test/review/12"),
 })
 const hostedManifest = HostedReviewSnapshotManifest.make({
   projectId: ReviewProjectId.make("github:fungsi/diffdash"),
@@ -54,7 +66,7 @@ const hostedManifest = HostedReviewSnapshotManifest.make({
   detail: HostedReviewDetail.make({ summary, commits: [], files: [] }),
   files: [],
 })
-const localTarget = workingTreeReviewTarget("/workspace/diffdash")
+const localTarget = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
 const localManifest = LocalReviewSnapshotManifest.make({
   projectId: ReviewProjectId.make("local:local/diffdash"),
   snapshotId: ReviewSnapshotId.make("snapshot:v1:11111111111111111111111111111111"),
@@ -62,13 +74,13 @@ const localManifest = LocalReviewSnapshotManifest.make({
   baseRevision: ReviewRevision.make("base"),
   headRevision: ReviewRevision.make("head"),
   detail: LocalReviewDetail.make({
-    rootPath: "/workspace/diffdash",
+    rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
     repoName: "diffdash",
-    branchName: "feature",
+    branchName: RepositoryComparisonRef.make("feature"),
     comparison: localTarget.comparison,
-    baseSha: "base",
-    headSha: "head",
-    diffHash: "diff",
+    baseSha: ReviewRevision.make("base"),
+    headSha: ReviewRevision.make("head"),
+    diffHash: ReviewDiffIdentity.make("diff"),
     title: "Local changes",
     files: [],
     fetchedAt: "2026-07-19T00:00:00Z",
@@ -126,7 +138,7 @@ describe("review selection projection", () => {
     expect(failure._tag === "failure" ? failure.status : "").toContain("Local snapshot unavailable")
   })
 
-  it("owns source key, normalized subject, provider, status, and inventory", () => {
+  it("owns one source-tagged renderer review with its authoritative manifest", () => {
     const hosted = projectReviewSelection({
       target: { kind: "hosted", review: locator },
       hosted: { _tag: "ready", manifest: hostedManifest, refreshing: false },
@@ -135,10 +147,17 @@ describe("review selection projection", () => {
     })
     expect(hosted).toMatchObject({
       _tag: "ready",
-      source: { _tag: "hosted", provider },
-      subject: { kind: "hosted" },
+      review: {
+        _tag: "hosted",
+        baseRevision: "base",
+        headRevision: "head",
+        identity: "hosted:github:fungsi/diffdash#12",
+        manifest: hostedManifest,
+        provider,
+        repositoryLabel: "fungsi/diffdash",
+        title: "Normalize review selection",
+      },
       status: "Opened PR #12: Normalize review selection",
-      inventory: [],
     })
 
     const local = projectReviewSelection({
@@ -149,10 +168,15 @@ describe("review selection projection", () => {
     })
     expect(local).toMatchObject({
       _tag: "ready",
-      source: { _tag: "local" },
-      subject: { kind: "localDiff" },
+      review: {
+        _tag: "local",
+        baseRevision: "base",
+        headRevision: "head",
+        manifest: localManifest,
+        repositoryLabel: "/workspace/diffdash",
+        title: "Local changes",
+      },
       status: "No local changes in diffdash",
-      inventory: [],
     })
   })
 
@@ -163,5 +187,15 @@ describe("review selection projection", () => {
     expect(reviewSelectionSourceKeys({ kind: "localDiff", target: localTarget })).toMatchObject({
       hosted: "",
     })
+  })
+
+  it("rejects a renderer source tag paired with another source manifest", () => {
+    const decoded = Schema.decodeUnknownResult(RendererReview)({
+      _tag: "hosted",
+      manifest: localManifest,
+      provider: null,
+    })
+
+    expect(Result.isFailure(decoded)).toBe(true)
   })
 })

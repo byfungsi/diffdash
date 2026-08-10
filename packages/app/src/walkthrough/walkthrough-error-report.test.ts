@@ -1,11 +1,9 @@
 import { AgentProviderId } from "@diffdash/protocol/agent-providers"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import {
-  bridgeTransportError,
-  transportError,
-  TransportErrorDiagnosticTrace,
-} from "@diffdash/protocol/transport-error"
+import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
+import { transportError, TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import { describe, expect, it } from "vitest"
 import { walkthroughErrorPresentation } from "./walkthrough-error-report"
 
@@ -21,7 +19,7 @@ const context = {
 
 describe("walkthroughErrorPresentation", () => {
   it("decodes bridge-safe provider diagnostics into an actionable report", () => {
-    const error = bridgeTransportError(
+    const error = legacyBridgeTransportError(
       transportError(
         "AgentProviderExitError",
         "Provider claude exited before completing the walkthrough.",
@@ -38,7 +36,7 @@ describe("walkthroughErrorPresentation", () => {
         }),
         AgentProviderFailure.make({
           version: 1,
-          providerId: "claude",
+          providerId: ReviewAgentProviderId.make("claude"),
           capability: "walkthrough",
           category: "authentication",
           processKind: "exit",
@@ -54,13 +52,14 @@ describe("walkthroughErrorPresentation", () => {
     const result = walkthroughErrorPresentation({ message: error.message }, context)
 
     expect(result.message).toBe(
-      "AI provider authentication failed or expired. Sign in again, then retry.",
+      "Provider claude authentication failed or expired. Sign in again, then retry.",
     )
     expect(result.report).toContain("Review type: Repository comparison")
     expect(result.report).toContain(
       `Operation: ${InvokeChannel.generateRepositoryComparisonWalkthrough}`,
     )
     expect(result.report).toContain("Error code: AgentProviderExitError")
+    expect(result.report).toContain("Error source: Main process")
     expect(result.report).toContain("Failure category: authentication")
     expect(result.report).toContain("Cause tag: ProcessExitError")
     expect(result.report).toContain("Exit code: 9")
@@ -78,6 +77,7 @@ describe("walkthroughErrorPresentation", () => {
     })
 
     expect(result.report).toContain("Error code: WALKTHROUGH_RENDERER_ERROR")
+    expect(result.report).toContain("Error source: Renderer")
     expect(result.report).toContain(`Operation: ${operation}`)
     expect(result.report).not.toContain("UNKNOWN_RENDERER_ERROR")
     expect(result.report).not.toContain("Operation: unknown")
@@ -86,7 +86,7 @@ describe("walkthroughErrorPresentation", () => {
 
   it("uses explicit internal and malformed transport fallback codes", () => {
     const internal = walkthroughErrorPresentation(
-      bridgeTransportError(transportError("INTERNAL_ERROR", "Safe generic failure")),
+      legacyBridgeTransportError(transportError("INTERNAL_ERROR", "Safe generic failure")),
       context,
     )
     const malformed = walkthroughErrorPresentation(
@@ -126,7 +126,7 @@ describe("walkthroughErrorPresentation", () => {
         undefined,
         AgentProviderFailure.make({
           version: 1,
-          providerId: "claude",
+          providerId: ReviewAgentProviderId.make("claude"),
           capability: "walkthrough",
           category: "timeout",
           processKind: null,
@@ -170,7 +170,7 @@ describe("walkthroughErrorPresentation", () => {
 
   it("normalizes copied context to bounded single lines", () => {
     const result = walkthroughErrorPresentation(
-      bridgeTransportError(transportError("EXPECTED", "Safe reason")),
+      legacyBridgeTransportError(transportError("EXPECTED", "Safe reason")),
       { ...context, model: `model\n${"x".repeat(600)}` },
     )
 

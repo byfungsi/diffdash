@@ -3,6 +3,7 @@ import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { Repo } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
@@ -13,6 +14,7 @@ import {
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
+  ReviewKey,
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
 import { Effect, Schema } from "effect"
@@ -47,6 +49,15 @@ export const ReviewSnapshotSearchCursor = Schema.String.pipe(
 
 /** Opaque stable cursor for a bounded revision-keyed search page. */
 export type ReviewSnapshotSearchCursor = typeof ReviewSnapshotSearchCursor.Type
+
+/** Stable identity for one exact literal occurrence in an immutable review snapshot. */
+export const ReviewSnapshotSearchMatchId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewSnapshotSearchMatchId"),
+)
+
+/** Stable identity for one exact literal occurrence in an immutable review snapshot. */
+export type ReviewSnapshotSearchMatchId = typeof ReviewSnapshotSearchMatchId.Type
 
 /** Reason a renderer must reacquire its review manifest. */
 export const ReviewSnapshotExpiredReason = Schema.Literals(["expired", "evicted", "mismatched"])
@@ -118,7 +129,7 @@ export class OpenRepositoryComparisonFileRequest extends Schema.Class<OpenReposi
   "OpenRepositoryComparisonFileRequest",
 )({
   target: RepositoryComparisonTarget,
-  filePath: Schema.String,
+  filePath: RepositoryRelativePath,
 }) {}
 
 /** Gets or generates a walkthrough for one immutable repository comparison. */
@@ -192,10 +203,10 @@ export type ReviewSnapshotSearchSide = typeof ReviewSnapshotSearchSide.Type
 export class ReviewSnapshotSearchMatch extends Schema.Class<ReviewSnapshotSearchMatch>(
   "ReviewSnapshotSearchMatch",
 )({
-  id: Schema.String,
+  id: ReviewSnapshotSearchMatchId,
   fileId: ReviewFileId,
-  filePath: Schema.String,
-  reviewKey: Schema.String,
+  filePath: RepositoryRelativePath,
+  reviewKey: ReviewKey,
   hunkId: ReviewHunkId,
   hunkFingerprint: ReviewHunkFingerprint,
   hunkLineIndex: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),

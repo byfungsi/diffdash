@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 
-import { makeHostedReviewLocator } from "./git-provider"
+import { HostedRepositorySource, makeHostedReviewLocator } from "./git-provider"
 import { BranchComparison, LocalReviewTarget, workingTreeReviewTarget } from "./local-review"
 import {
   ProjectOpened,
@@ -12,8 +12,9 @@ import {
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
 } from "./project-workspace"
-import { Repo, RepositoryCheckoutPath } from "./repository"
-import { ReviewProjectId } from "./review-identity"
+import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "./repository"
+import { RepositoryComparisonRef } from "./repository-comparison"
+import { ReviewProjectId, ReviewRevision } from "./review-identity"
 import { HostedReviewTarget } from "./review-thread"
 
 const projectId = ReviewProjectId.make("github:fungsi/diffdash")
@@ -23,14 +24,14 @@ const targets = [
     kind: "hosted",
     review: makeHostedReviewLocator("github", "fungsi", "diffdash", 147),
   }),
-  workingTreeReviewTarget("/workspace/diffdash"),
+  workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash")),
   LocalReviewTarget.make({
     kind: "local",
-    rootPath: "/workspace/diffdash",
+    rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
     comparison: BranchComparison.make({
-      branchName: "main",
-      baseRef: "refs/heads/main",
-      baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      branchName: RepositoryComparisonRef.make("main"),
+      baseRef: RepositoryComparisonRef.make("refs/heads/main"),
+      baseSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     }),
   }),
 ] as const
@@ -43,12 +44,12 @@ describe("project workspace", () => {
       repository: makeHostedReviewLocator("github", "fungsi", "diffdash-fork", 147).repository,
     })
     const repo = Repo.make({
-      id: "github:fungsi/diffdash",
-      provider: "github",
-      owner: "fungsi",
-      name: "diffdash",
-      remoteUrl: "git@github.com:fungsi/diffdash.git",
-      localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
+      id: projectId,
+      source: HostedRepositorySource.make({ locator: repository }),
+      checkout: LinkedCheckout.make({
+        remoteUrl: "git@github.com:fungsi/diffdash.git",
+        path: RepositoryCheckoutPath.make("/workspace/diffdash"),
+      }),
       isFavorite: false,
       lastOpenedAt: "2026-08-02T00:00:00.000Z",
       lastSyncedAt: "2026-08-02T00:00:00.000Z",
@@ -63,7 +64,7 @@ describe("project workspace", () => {
     expect(
       Schema.encodeSync(ProjectOpenResult)(
         ProjectRemoteSelectionRequired.make({
-          rootPath: "/workspace/diffdash",
+          rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
           candidates: [
             ProjectRemoteCandidate.make({ remoteName: "origin", repository }),
             forkCandidate,

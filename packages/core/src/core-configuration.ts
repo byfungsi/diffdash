@@ -1,6 +1,7 @@
 import { Option, Schema, SchemaTransformation } from "effect"
 import { isAbsolute } from "node:path"
 
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { CoreAnalyticsState, CoreWebUrl as CoreWebUrlSchema } from "./analytics-state"
 
 /** HTTP or HTTPS URL decoded at the native host boundary. */
@@ -19,17 +20,69 @@ export type CoreAbsolutePath = typeof CoreAbsolutePath.Type
 /** HTTP or HTTPS URL decoded at the native host boundary. */
 export type CoreWebUrl = typeof CoreWebUrl.Type
 
-const GitFixtureRemote = Schema.String.pipe(
+/** Absolute path or remote URL accepted by the deterministic Git fixture provider. */
+export const GitFixtureRemote = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
   Schema.check(
-    Schema.makeFilter((value) => isAbsolute(value) || /^(?:https?|ssh):\/\//u.test(value), {
-      message: "Expected an absolute path or Git remote URL",
-    }),
+    Schema.makeFilter(
+      (value) =>
+        isAbsolute(value) ||
+        /^[A-Za-z]:[\\/]/u.test(value) ||
+        value.startsWith("\\\\") ||
+        /^(?:file|git|https?|ssh):\/\//u.test(value) ||
+        /^[^@\s]+@[^:\s]+:.+$/u.test(value),
+      { message: "Expected an absolute path or Git remote URL" },
+    ),
   ),
   Schema.brand("GitFixtureRemote"),
 )
 
-const OperatingSystemPlatform = Schema.Literals([
+/** Absolute path or remote URL accepted by the deterministic Git fixture provider. */
+export type GitFixtureRemote = typeof GitFixtureRemote.Type
+
+/** Application version reported by the native host. */
+export const ApplicationVersion = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ApplicationVersion"),
+)
+
+/** Application version reported by the native host. */
+export type ApplicationVersion = typeof ApplicationVersion.Type
+
+/** Process architectures supported by the Node/Electron host. */
+const ProcessArchitectures = [
+  "arm",
+  "arm64",
+  "ia32",
+  "loong64",
+  "mips",
+  "mipsel",
+  "ppc64",
+  "riscv64",
+  "s390x",
+  "x64",
+] as const satisfies readonly NodeJS.Architecture[]
+
+/** Process architectures supported by the Node/Electron host. */
+export const ProcessArchitecture = Schema.Literals(ProcessArchitectures)
+
+/** Process architectures supported by the Node/Electron host. */
+export type ProcessArchitecture = typeof ProcessArchitecture.Type
+
+/** Platform-delimited executable search path supplied by the native host. */
+export const ExecutableSearchPath = Schema.String.pipe(Schema.brand("ExecutableSearchPath"))
+
+/** Platform-delimited executable search path supplied by the native host. */
+export type ExecutableSearchPath = typeof ExecutableSearchPath.Type
+
+/** Windows executable extension list supplied by the native host. */
+export const ExecutablePathExtensions = Schema.String.pipe(Schema.brand("ExecutablePathExtensions"))
+
+/** Windows executable extension list supplied by the native host. */
+export type ExecutablePathExtensions = typeof ExecutablePathExtensions.Type
+
+/** Operating-system platforms supported by the Node/Electron host. */
+export const OperatingSystemPlatform = Schema.Literals([
   "aix",
   "android",
   "darwin",
@@ -42,6 +95,9 @@ const OperatingSystemPlatform = Schema.Literals([
   "cygwin",
   "netbsd",
 ])
+
+/** Operating-system platforms supported by the Node/Electron host. */
+export type OperatingSystemPlatform = typeof OperatingSystemPlatform.Type
 
 const EncodedCorePaths = Schema.Struct({
   database: CoreAbsolutePath,
@@ -85,16 +141,16 @@ const CorePaths = EncodedCorePaths.pipe(
 )
 
 const EncodedCoreEnvironment = Schema.Struct({
-  executableSearchPath: Schema.String,
-  executablePathExtensions: Schema.NullOr(Schema.String),
+  executableSearchPath: ExecutableSearchPath,
+  executablePathExtensions: Schema.NullOr(ExecutablePathExtensions),
   homeDirectory: Schema.NullOr(CoreAbsolutePath),
 })
 
 class CoreEnvironmentConfiguration extends Schema.Class<CoreEnvironmentConfiguration>(
   "CoreEnvironmentConfiguration",
 )({
-  executableSearchPath: Schema.String,
-  executablePathExtensionsOption: Schema.Option(Schema.String),
+  executableSearchPath: ExecutableSearchPath,
+  executablePathExtensionsOption: Schema.Option(ExecutablePathExtensions),
   homeDirectoryOption: Schema.Option(CoreAbsolutePath),
 }) {}
 
@@ -123,8 +179,8 @@ const AgentProviderFixture = Schema.Struct({
 
 const GitProviderFixture = Schema.Struct({
   remoteUrl: GitFixtureRemote,
-  baseRevision: Schema.OptionFromNullOr(Schema.String),
-  headRevision: Schema.OptionFromNullOr(Schema.String),
+  baseRevision: Schema.OptionFromNullOr(ReviewRevision),
+  headRevision: Schema.OptionFromNullOr(ReviewRevision),
 })
 
 class CoreFixturesConfiguration extends Schema.Class<CoreFixturesConfiguration>(
@@ -140,8 +196,8 @@ const CoreFixtures = Schema.Struct({
   gitProvider: Schema.NullOr(
     Schema.Struct({
       remoteUrl: GitFixtureRemote,
-      baseRevision: Schema.NullOr(Schema.String),
-      headRevision: Schema.NullOr(Schema.String),
+      baseRevision: Schema.NullOr(ReviewRevision),
+      headRevision: Schema.NullOr(ReviewRevision),
     }),
   ),
 }).pipe(
@@ -184,8 +240,8 @@ const CoreFixtures = Schema.Struct({
 /** Plain runtime configuration supplied by the native host to DiffDash Core. */
 export class CoreConfiguration extends Schema.Class<CoreConfiguration>("CoreConfiguration")({
   application: Schema.Struct({
-    version: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
-    architecture: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+    version: ApplicationVersion,
+    architecture: ProcessArchitecture,
     platform: OperatingSystemPlatform,
     packaged: Schema.Boolean,
   }),

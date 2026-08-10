@@ -1,22 +1,15 @@
-import { type Effect, Redacted, Schema } from "effect"
+import { Predicate, type Effect, Redacted, Schema } from "effect"
+import { AgentModelId, AgentProviderId, McpToolName } from "@diffdash/domain/agent-provider"
+import {
+  AgentCapability as DomainAgentCapability,
+  AgentModelQuality as DomainAgentModelQuality,
+} from "@diffdash/domain/ai-settings"
+import { ReviewThreadAgentResponse } from "@diffdash/domain/review-agent"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { WebUrl } from "@diffdash/domain/web-url"
 
-/** Open identity owned by an agent provider package. */
-export const AgentProviderId = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.brand("AgentProviderId"),
-)
-
-/** Open identity owned by an agent provider package. */
-export type AgentProviderId = typeof AgentProviderId.Type
-
-/** Provider-owned model identity. */
-export const AgentModelId = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.brand("AgentModelId"),
-)
-
-/** Provider-owned model identity. */
-export type AgentModelId = typeof AgentModelId.Type
+export { WebUrl } from "@diffdash/domain/web-url"
+export { AgentModelId, AgentProviderId, McpToolName } from "@diffdash/domain/agent-provider"
 
 /** Provider-owned resumable session identity. */
 export const AgentSessionId = Schema.String.pipe(
@@ -27,35 +20,8 @@ export const AgentSessionId = Schema.String.pipe(
 /** Provider-owned resumable session identity. */
 export type AgentSessionId = typeof AgentSessionId.Type
 
-/** Identity of an MCP tool exposed for one run. */
-export const McpToolName = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.brand("McpToolName"),
-)
-
-/** Identity of an MCP tool exposed for one run. */
-export type McpToolName = typeof McpToolName.Type
-
-/** Canonical review-context tool names exposed by the DiffDash host. */
-export const DiffDashReviewMcpTool = {
-  getReviewContext: McpToolName.make("getReviewContext"),
-  getChangedFiles: McpToolName.make("getChangedFiles"),
-  searchReviewDiff: McpToolName.make("searchReviewDiff"),
-  getDiffHunk: McpToolName.make("getDiffHunk"),
-  getDiffFile: McpToolName.make("getDiffFile"),
-  searchRepository: McpToolName.make("searchRepository"),
-  readRepositoryFile: McpToolName.make("readRepositoryFile"),
-  getThreadContext: McpToolName.make("getThreadContext"),
-  getOlderThreadMessages: McpToolName.make("getOlderThreadMessages"),
-  getPriorArtifact: McpToolName.make("getPriorArtifact"),
-  getWalkthroughContext: McpToolName.make("getWalkthroughContext"),
-} as const
-
-/** Complete canonical review-context tool allowlist. */
-export const DIFFDASH_REVIEW_MCP_TOOLS = Object.values(DiffDashReviewMcpTool)
-
 /** Stable capabilities independently exposed by a provider. */
-export const AgentCapability = Schema.Literals(["walkthrough", "review-thread"])
+export const AgentCapability = DomainAgentCapability
 
 /** Stable capabilities independently exposed by a provider. */
 export type AgentCapability = typeof AgentCapability.Type
@@ -114,7 +80,7 @@ export class AgentProviderFailure extends Schema.Class<AgentProviderFailure>(
   "AgentProviderFailure",
 )({
   version: Schema.Literal(1),
-  providerId: Schema.String.pipe(
+  providerId: AgentProviderId.pipe(
     Schema.check(Schema.isMinLength(1)),
     Schema.check(Schema.isMaxLength(100)),
     Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u)),
@@ -142,11 +108,11 @@ export class AgentProviderDescriptor extends Schema.Class<AgentProviderDescripto
   id: AgentProviderId,
   displayName: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   description: Schema.String,
-  homepage: Schema.NullOr(Schema.String),
+  homepage: Schema.NullOr(WebUrl),
 }) {}
 
 /** Provider-neutral model quality used by automatic capability routing. */
-export const AgentModelQuality = Schema.Literals(["fast", "balanced", "best"])
+export const AgentModelQuality = DomainAgentModelQuality
 
 /** Provider-neutral model quality used by automatic capability routing. */
 export type AgentModelQuality = typeof AgentModelQuality.Type
@@ -285,7 +251,7 @@ export const isAgentExecutionPolicyEnforced = (
 /** Input to one scoped MCP invocation. */
 export class ScopedMcpCall extends Schema.Class<ScopedMcpCall>("ScopedMcpCall")({
   tool: McpToolName,
-  input: Schema.Unknown,
+  input: Schema.Json,
 }) {}
 
 /** Bounded output from one scoped MCP invocation. */
@@ -330,15 +296,6 @@ export class WalkthroughResult extends Schema.Class<WalkthroughResult>("Walkthro
   text: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
-/** Stable identity of the exact review revision made available to an agent. */
-export const ReviewRevision = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.brand("AgentReviewRevision"),
-)
-
-/** Stable identity of the exact review revision made available to an agent. */
-export type ReviewRevision = typeof ReviewRevision.Type
-
 /** Complete input for one review-thread provider turn. */
 export interface ReviewThreadRequest {
   readonly stablePrompt: string
@@ -352,15 +309,6 @@ export interface ReviewThreadRequest {
   readonly policy: AgentExecutionPolicy
 }
 
-/** Validated product response from a review-thread provider. */
-export class ReviewThreadResponse extends Schema.Class<ReviewThreadResponse>(
-  "ReviewThreadResponse",
-)({
-  bodyMarkdown: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
-  threadSummary: Schema.NullOr(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
-  referencedLocations: Schema.Array(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
-}) {}
-
 /** Normalized optional usage values for one provider turn. */
 export class AgentUsage extends Schema.Class<AgentUsage>("AgentUsage")({
   inputTokens: Schema.NullOr(Schema.Number),
@@ -369,6 +317,44 @@ export class AgentUsage extends Schema.Class<AgentUsage>("AgentUsage")({
   cacheWriteTokens: Schema.NullOr(Schema.Number),
   costUsd: Schema.NullOr(Schema.Number),
 }) {}
+
+/** Narrows an immutable JSON value to an object for artifact metadata. */
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+  Predicate.isObject(value) && !Array.isArray(value)
+
+/** Provider event candidate that the host must bound, redact, and normalize before persistence. */
+export const AgentArtifactMetadata = Schema.Json.pipe(
+  Schema.refine(isJsonObject, { message: "Artifact metadata must be a JSON object" }),
+)
+
+/** Provider-neutral JSON object carried as artifact metadata. */
+export type AgentArtifactMetadata = typeof AgentArtifactMetadata.Type
+
+/** Bounded diagnostics accepted from provider and process adapter seams. */
+const AgentProviderDiagnosticCause = Schema.Struct({
+  _tag: Schema.optional(Schema.String),
+  message: Schema.optional(Schema.String),
+  reason: Schema.optional(Schema.String),
+  stdout: Schema.optional(Schema.String),
+  stderr: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.Number),
+  statusCode: Schema.optional(Schema.Number),
+  exitCode: Schema.optional(Schema.NullOr(Schema.Number)),
+  signal: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+/** Bounded diagnostics accepted from provider and process adapter seams. */
+export type AgentProviderDiagnosticCause = typeof AgentProviderDiagnosticCause.Type
+
+/** Provider failure cause retained only as a finite diagnostic shape. */
+export const AgentProviderCause = Schema.Union([
+  Schema.instanceOf(Error),
+  Schema.Null,
+  AgentProviderDiagnosticCause,
+])
+
+/** Provider failure cause retained only as a finite diagnostic shape. */
+export type AgentProviderCause = typeof AgentProviderCause.Type
 
 /** Provider event candidate that the host must bound, redact, and normalize before persistence. */
 export class AgentArtifactCandidate extends Schema.Class<AgentArtifactCandidate>(
@@ -386,12 +372,12 @@ export class AgentArtifactCandidate extends Schema.Class<AgentArtifactCandidate>
   ]),
   title: Schema.String,
   content: Schema.String,
-  metadata: Schema.Record(Schema.String, Schema.Unknown),
+  metadata: AgentArtifactMetadata,
 }) {}
 
 /** Complete validated output from one review-thread turn. */
 export class ReviewThreadResult extends Schema.Class<ReviewThreadResult>("ReviewThreadResult")({
-  response: ReviewThreadResponse,
+  response: ReviewThreadAgentResponse,
   usage: Schema.NullOr(AgentUsage),
   artifacts: Schema.Array(AgentArtifactCandidate),
   sessionId: Schema.NullOr(AgentSessionId),
@@ -401,6 +387,12 @@ export class ReviewThreadResult extends Schema.Class<ReviewThreadResult>("Review
 export class DuplicateAgentProviderError extends Schema.TaggedError<DuplicateAgentProviderError>()(
   "DuplicateAgentProviderError",
   { providerId: AgentProviderId },
+) {}
+
+/** Provider registration contradicts its manifest or returns mismatched capability evidence. */
+export class InvalidAgentProviderRegistrationError extends Schema.TaggedError<InvalidAgentProviderRegistrationError>()(
+  "InvalidAgentProviderRegistrationError",
+  { providerId: AgentProviderId, capability: AgentCapability, reason: Schema.String },
 ) {}
 
 /** Explicitly selected provider is not registered. */
@@ -434,7 +426,7 @@ export class AgentProviderProbeError extends Schema.TaggedError<AgentProviderPro
     providerId: AgentProviderId,
     capability: AgentCapability,
     reason: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    cause: Schema.optional(AgentProviderCause),
   },
 ) {}
 
@@ -446,7 +438,7 @@ export class AgentProviderOperationError extends Schema.TaggedError<AgentProvide
     capability: AgentCapability,
     failure: AgentProviderFailure,
     reason: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    cause: Schema.optional(AgentProviderCause),
   },
 ) {}
 
@@ -463,6 +455,7 @@ export type AgentProviderResolutionError =
   | AgentCapabilityUnavailableError
   | AgentPolicyEnforcementError
   | AgentProviderProbeError
+  | InvalidAgentProviderRegistrationError
 
 /** Optional walkthrough implementation contributed by a provider. */
 export interface WalkthroughCapability {

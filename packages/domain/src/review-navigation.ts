@@ -127,6 +127,15 @@ export const ReviewNavigationJsonValue: Schema.Codec<ReviewNavigationJsonValue> 
     ]),
 )
 
+/** Extension-owned identity for one semantic navigation target. */
+export const ReviewNavigationExtensionTargetId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewNavigationExtensionTargetId"),
+)
+
+/** Extension-owned identity for one semantic navigation target. */
+export type ReviewNavigationExtensionTargetId = typeof ReviewNavigationExtensionTargetId.Type
+
 class UncheckedExtensionReviewNavigationTarget extends Schema.TaggedClass<UncheckedExtensionReviewNavigationTarget>()(
   "extension",
   {

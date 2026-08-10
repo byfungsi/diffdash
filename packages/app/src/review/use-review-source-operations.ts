@@ -1,11 +1,8 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
 import { useAtomRefresh, useAtomSet } from "@effect/atom-react"
-import { Effect, Option } from "effect"
-import {
-  runRendererPromise,
-  useReviewAutomation,
-  useReviewContent,
-} from "@/platform/renderer-runtime"
+import { Match } from "effect"
+import { useReviewSourceOperationsFactory } from "@/platform/renderer-runtime"
+import type { ReviewSourceOperationSet } from "@/platform/review-source-operations"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
@@ -14,7 +11,9 @@ import {
   repoKey,
 } from "./atoms"
 import type { ReviewSelectionProjection } from "./review-selection"
-import { type ReviewSourceOperations, mapReviewSourceOperations } from "./review-source-operations"
+
+/** Source operations plus cache-tier refresh behavior used by review UI. */
+export type ReviewSourceOperations = ReviewSourceOperationSet & { readonly refresh: () => void }
 
 /** Source-operation mapping while no ready review is available. */
 export type ReviewSourceOperationProjection =
@@ -25,97 +24,66 @@ export type ReviewSourceOperationProjection =
 export const useReviewSourceOperations = (
   selection: ReviewSelectionProjection,
 ): ReviewSourceOperationProjection => {
+  const readySelection = Match.valueTags(selection, {
+    ready: (ready) => ready,
+    loading: () => null,
+    failure: () => null,
+    none: () => null,
+  })
   const hostedKey =
-    selection._tag === "ready" && selection.target.kind === "hosted" ? selection.sourceKey : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => readySelection.sourceKey,
+          local: () => "",
+          repositoryComparison: () => "",
+        })
   const localKey =
-    selection._tag === "ready" && selection.target.kind === "localDiff" ? selection.sourceKey : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => "",
+          local: () => readySelection.sourceKey,
+          repositoryComparison: () => "",
+        })
   const refreshHostedManifest = useAtomRefresh(hostedReviewManifestAtom(hostedKey))
   const refreshLocalManifest = useAtomRefresh(localReviewManifestAtom(localKey))
   const comparisonKey =
-    selection._tag === "ready" && selection.target.kind === "repositoryComparison"
-      ? selection.sourceKey
-      : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => "",
+          local: () => "",
+          repositoryComparison: () => readySelection.sourceKey,
+        })
   const refreshRepositoryComparisonManifest = useAtomRefresh(
     repositoryComparisonManifestAtom(comparisonKey),
   )
   const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
-  const automation = useReviewAutomation()
-  const content = useReviewContent()
+  const sourceOperations = useReviewSourceOperationsFactory()
 
-  if (selection._tag !== "ready") return { _tag: "unavailable" }
+  if (readySelection === null) return { _tag: "unavailable" }
 
   return {
     _tag: "ready",
-    operations: mapReviewSourceOperations(selection, {
-      api: {
-        hostedReviews: {
-          getDecision: (request) => runRendererPromise(content.hostedReviews.getDecision(request)),
-          submitDecision: (request) =>
-            runRendererPromise(content.hostedReviews.submitDecision(request)),
-        },
-        localWalkthroughs: {
-          get: (target, baseSha, headSha) =>
-            runRendererPromise(
-              automation.walkthroughs
-                .getLocal(target, baseSha, headSha)
-                .pipe(Effect.map(Option.getOrNull)),
-            ),
-          generate: (target) =>
-            runRendererPromise(automation.walkthroughs.generateLocal(target, false)),
-          regenerate: (target) =>
-            runRendererPromise(automation.walkthroughs.generateLocal(target, true)),
-        },
-        openLocalRepositoryFile: (rootPath, filePath) =>
-          runRendererPromise(content.openLocalFile(rootPath, filePath)),
-        openRepositoryFile: (request) => runRendererPromise(content.openHostedFile(request)),
-        repositoryComparisons: {
-          openFile: (request) => runRendererPromise(content.openRepositoryComparisonFile(request)),
-        },
-        repositoryComparisonWalkthroughs: {
-          get: (target) =>
-            runRendererPromise(
-              automation.walkthroughs
-                .getRepositoryComparison(target)
-                .pipe(Effect.map(Option.getOrNull)),
-            ),
-          generate: (target) =>
-            runRendererPromise(automation.walkthroughs.generateRepositoryComparison(target, false)),
-          regenerate: (target) =>
-            runRendererPromise(automation.walkthroughs.generateRepositoryComparison(target, true)),
-        },
-        viewedFiles: {
-          list: (request) => runRendererPromise(content.viewedFiles.listHosted(request)),
-          set: (request) => runRendererPromise(content.viewedFiles.setHosted(request)),
-          listLocal: (request) => runRendererPromise(content.viewedFiles.listLocal(request)),
-          setLocal: (request) => runRendererPromise(content.viewedFiles.setLocal(request)),
-          listRepositoryComparison: (request) =>
-            runRendererPromise(content.viewedFiles.listRepositoryComparison(request)),
-          setRepositoryComparison: (request) =>
-            runRendererPromise(content.viewedFiles.setRepositoryComparison(request)),
-        },
-        walkthroughs: {
-          get: (request) =>
-            runRendererPromise(
-              automation.walkthroughs.getHosted(request).pipe(Effect.map(Option.getOrNull)),
-            ),
-          generate: (request) =>
-            runRendererPromise(automation.walkthroughs.generateHosted(request)),
-        },
+    operations: {
+      ...sourceOperations.make(readySelection.review),
+      refresh: () => {
+        Match.valueTags(readySelection.review, {
+          local: () => refreshLocalManifest(),
+          repositoryComparison: () => refreshRepositoryComparisonManifest(),
+          hosted: (hosted) => {
+            refreshHostedManifest()
+            refreshPullRequests(
+              repoKey(
+                hosted.target.repository.providerId,
+                hosted.target.repository.namespace,
+                hosted.target.repository.name,
+              ),
+            )
+          },
+        })
       },
-      refreshHosted: () => {
-        refreshHostedManifest()
-        if (selection.target.kind === "hosted") {
-          refreshPullRequests(
-            repoKey(
-              selection.target.review.repository.providerId,
-              selection.target.review.repository.namespace,
-              selection.target.review.repository.name,
-            ),
-          )
-        }
-      },
-      refreshLocal: refreshLocalManifest,
-      refreshRepositoryComparison: refreshRepositoryComparisonManifest,
-    }),
+    },
   }
 }

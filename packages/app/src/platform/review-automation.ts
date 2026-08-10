@@ -1,7 +1,5 @@
-import { Context, Effect, Layer, Option, Stream } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
 
-import type { LocalReviewTarget } from "@diffdash/domain/local-review"
-import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import type {
   ReviewThread,
@@ -9,13 +7,8 @@ import type {
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import type { AgentProviderCatalog } from "@diffdash/protocol/agent-providers"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import type {
-  GenerateHostedWalkthroughRequest,
-  HostedWalkthroughRequest,
-} from "@diffdash/protocol/hosted-git"
 import type {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
@@ -24,35 +17,11 @@ import type {
 import { PreloadClient } from "./preload-client"
 import { invokePreload, preloadEventStream, type RendererApiError } from "./renderer-api-error"
 
-/** Renderer walkthrough and review-agent capabilities. */
+/** Renderer agent-provider catalog and review-thread capabilities. */
 export class ReviewAutomation extends Context.Service<
   ReviewAutomation,
   {
     readonly getAgentCatalog: () => Effect.Effect<AgentProviderCatalog, RendererApiError>
-    readonly walkthroughs: {
-      readonly getHosted: (
-        request: HostedWalkthroughRequest,
-      ) => Effect.Effect<Option.Option<StoredWalkthrough>, RendererApiError>
-      readonly generateHosted: (
-        request: GenerateHostedWalkthroughRequest,
-      ) => Effect.Effect<StoredWalkthrough, RendererApiError>
-      readonly getLocal: (
-        target: LocalReviewTarget,
-        baseSha: string,
-        headSha: string,
-      ) => Effect.Effect<Option.Option<StoredWalkthrough>, RendererApiError>
-      readonly generateLocal: (
-        target: LocalReviewTarget,
-        regenerate: boolean,
-      ) => Effect.Effect<StoredWalkthrough, RendererApiError>
-      readonly getRepositoryComparison: (
-        target: RepositoryComparisonTarget,
-      ) => Effect.Effect<Option.Option<StoredWalkthrough>, RendererApiError>
-      readonly generateRepositoryComparison: (
-        target: RepositoryComparisonTarget,
-        regenerate: boolean,
-      ) => Effect.Effect<StoredWalkthrough, RendererApiError>
-    }
     readonly threads: {
       readonly list: (
         target: ReviewThreadTarget,
@@ -77,7 +46,7 @@ export class ReviewAutomation extends Context.Service<
   }
 >()("@diffdash/app/ReviewAutomation") {}
 
-/** Desktop implementation of renderer walkthrough and review-agent capabilities. */
+/** Desktop implementation of renderer provider-catalog and review-thread capabilities. */
 export const reviewAutomationLayer = Layer.effect(
   ReviewAutomation,
   Effect.gen(function* () {
@@ -92,36 +61,6 @@ export const reviewAutomationLayer = Layer.effect(
         invokePreload(InvokeChannel.agentProvidersGetCatalog, () =>
           api.agentProviders.getCatalog(),
         ),
-      walkthroughs: {
-        getHosted: (request) =>
-          invokePreload(InvokeChannel.getWalkthrough, () => api.walkthroughs.get(request)).pipe(
-            Effect.map(Option.fromNullishOr),
-          ),
-        generateHosted: (request) =>
-          invokePreload(InvokeChannel.generateWalkthrough, () =>
-            api.walkthroughs.generate(request),
-          ),
-        getLocal: (target, baseSha, headSha) =>
-          invokePreload(InvokeChannel.getLocalWalkthrough, () =>
-            api.localWalkthroughs.get(target, baseSha, headSha),
-          ).pipe(Effect.map(Option.fromNullishOr)),
-        generateLocal: (target, regenerate) =>
-          invokePreload(InvokeChannel.generateLocalWalkthrough, () =>
-            regenerate
-              ? api.localWalkthroughs.regenerate(target)
-              : api.localWalkthroughs.generate(target),
-          ),
-        getRepositoryComparison: (target) =>
-          invokePreload(InvokeChannel.getRepositoryComparisonWalkthrough, () =>
-            api.repositoryComparisonWalkthroughs.get(target),
-          ).pipe(Effect.map(Option.fromNullishOr)),
-        generateRepositoryComparison: (target, regenerate) =>
-          invokePreload(InvokeChannel.generateRepositoryComparisonWalkthrough, () =>
-            regenerate
-              ? api.repositoryComparisonWalkthroughs.regenerate(target)
-              : api.repositoryComparisonWalkthroughs.generate(target),
-          ),
-      },
       threads: {
         list: listThreads,
         listDetails: (target) =>

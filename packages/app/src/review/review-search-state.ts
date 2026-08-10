@@ -14,7 +14,7 @@ import {
   ReviewSnapshotSearchRequest,
   ReviewSnapshotSearchResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 import type { ReviewNavigator } from "./review-navigation"
@@ -110,7 +110,7 @@ export interface ReviewSearchToolbarState {
 export interface ReviewSearchRuntime {
   readonly navigator: Pick<ReviewNavigator, "navigate" | "cancelActiveForOrigins">
   readonly onSnapshotExpired: () => void
-  readonly search: (request: ReviewSnapshotSearchRequest) => Promise<unknown>
+  readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
 }
 
 const IDLE_RESULT_STATUS: ReviewSearchResultStatus = { _tag: "idle" }
@@ -141,129 +141,123 @@ export const reduceReviewSearch = (
   model: ReviewSearchModel,
   command: ReviewSearchCommand,
 ): ReviewSearchCommandResult => {
-  if (command._tag === "attach") {
-    return commandResult({
-      ...makeInitialReviewSearchModel(),
-      session: command.session,
-      sessionEpoch: model.sessionEpoch + 1,
-      queryEpoch: model.queryEpoch + 1,
-      moveEpoch: model.moveEpoch + 1,
-    })
-  }
-
-  if (command._tag === "replace") {
-    const next = resetResults({
-      ...model,
-      session: command.session,
-      sessionEpoch: model.sessionEpoch + 1,
-      queryEpoch: model.queryEpoch + 1,
-      moveEpoch: model.moveEpoch + 1,
-    })
-    return commandResult(
-      next,
-      next.open && next.query.length > 0 ? operationFor(next, "query", 0) : null,
-    )
-  }
-
-  if (command._tag === "detach") {
-    return commandResult({
-      ...makeInitialReviewSearchModel(),
-      sessionEpoch: model.sessionEpoch + 1,
-      queryEpoch: model.queryEpoch + 1,
-      moveEpoch: model.moveEpoch + 1,
-    })
-  }
-
-  if (model.session === null) return staleCommand(model)
-
-  if (command._tag === "open") {
-    const next = resetResults({
-      ...model,
-      open: true,
-      anchor: command.anchor,
-      queryEpoch: model.queryEpoch + 1,
-      moveEpoch: model.moveEpoch + 1,
-    })
-    return commandResult(next, next.query.length === 0 ? null : operationFor(next, "query", 0))
-  }
-
-  if (command._tag === "close") {
-    return commandResult(
-      resetResults({
-        ...model,
-        open: false,
+  return Match.valueTags(command, {
+    attach: (attach) =>
+      commandResult({
+        ...makeInitialReviewSearchModel(),
+        session: attach.session,
+        sessionEpoch: model.sessionEpoch + 1,
         queryEpoch: model.queryEpoch + 1,
         moveEpoch: model.moveEpoch + 1,
       }),
-    )
-  }
-
-  if (command._tag === "query") {
-    const next = resetResults({
-      ...model,
-      query: command.query,
-      anchor: command.anchor === undefined ? model.anchor : command.anchor,
-      queryEpoch: model.queryEpoch + 1,
-      moveEpoch: model.moveEpoch + 1,
-    })
-    return commandResult(
-      next,
-      next.open && next.query.length > 0 ? operationFor(next, "query", 0) : null,
-    )
-  }
-
-  if (command._tag === "move") {
-    if (!model.open || model.totalMatches === 0) return staleCommand(model)
-    const current = model.desiredGlobalIndex % model.totalMatches
-    const targetIndex = (current + command.direction + model.totalMatches) % model.totalMatches
-    const next = {
-      ...model,
-      desiredGlobalIndex: targetIndex,
-      moveEpoch: model.moveEpoch + 1,
-    }
-    return commandResult(next, operationFor(next, "move", targetIndex))
-  }
-
-  if (!sameOperationKey(model, command._tag === "failed" ? command.operation.key : command.key)) {
-    return staleCommand(model)
-  }
-
-  if (command._tag === "results") {
-    return commandResult({
-      ...model,
-      resultStatus: AVAILABLE_RESULT_STATUS,
-      totalMatches: command.totalMatches,
-      retainedMatches: command.retainedMatches,
-    })
-  }
-
-  if (command._tag === "activate") {
-    if (command.index < 0 || command.index >= model.totalMatches) return staleCommand(model)
-    return commandResult(
-      {
+    replace: (replace) => {
+      const next = resetResults({
         ...model,
-        desiredGlobalIndex: command.index,
-        activeGlobalIndex: command.index,
-        activeMatch: command.match,
-      },
-      null,
-      command.match,
-    )
-  }
-
-  if (command._tag === "expired") {
-    return commandResult({
-      ...resetResults(model),
-      resultStatus: EXPIRED_RESULT_STATUS,
-    })
-  }
-
-  if (command.operation.kind === "move") {
-    return commandResult({ ...model, desiredGlobalIndex: model.activeGlobalIndex })
-  }
-  return commandResult({
-    ...resetResults(model),
-    resultStatus: FAILED_RESULT_STATUS,
+        session: replace.session,
+        sessionEpoch: model.sessionEpoch + 1,
+        queryEpoch: model.queryEpoch + 1,
+        moveEpoch: model.moveEpoch + 1,
+      })
+      return commandResult(
+        next,
+        next.open && next.query.length > 0 ? operationFor(next, "query", 0) : null,
+      )
+    },
+    detach: () =>
+      commandResult({
+        ...makeInitialReviewSearchModel(),
+        sessionEpoch: model.sessionEpoch + 1,
+        queryEpoch: model.queryEpoch + 1,
+        moveEpoch: model.moveEpoch + 1,
+      }),
+    open: (open) => {
+      if (model.session === null) return staleCommand(model)
+      const next = resetResults({
+        ...model,
+        open: true,
+        anchor: open.anchor,
+        queryEpoch: model.queryEpoch + 1,
+        moveEpoch: model.moveEpoch + 1,
+      })
+      return commandResult(next, next.query.length === 0 ? null : operationFor(next, "query", 0))
+    },
+    close: () => {
+      if (model.session === null) return staleCommand(model)
+      return commandResult(
+        resetResults({
+          ...model,
+          open: false,
+          queryEpoch: model.queryEpoch + 1,
+          moveEpoch: model.moveEpoch + 1,
+        }),
+      )
+    },
+    query: (query) => {
+      if (model.session === null) return staleCommand(model)
+      const next = resetResults({
+        ...model,
+        query: query.query,
+        anchor: query.anchor === undefined ? model.anchor : query.anchor,
+        queryEpoch: model.queryEpoch + 1,
+        moveEpoch: model.moveEpoch + 1,
+      })
+      return commandResult(
+        next,
+        next.open && next.query.length > 0 ? operationFor(next, "query", 0) : null,
+      )
+    },
+    move: (move) => {
+      if (model.session === null || !model.open || model.totalMatches === 0) {
+        return staleCommand(model)
+      }
+      const current = model.desiredGlobalIndex % model.totalMatches
+      const targetIndex = (current + move.direction + model.totalMatches) % model.totalMatches
+      const next = {
+        ...model,
+        desiredGlobalIndex: targetIndex,
+        moveEpoch: model.moveEpoch + 1,
+      }
+      return commandResult(next, operationFor(next, "move", targetIndex))
+    },
+    results: (results) => {
+      if (!sameOperationKey(model, results.key)) return staleCommand(model)
+      return commandResult({
+        ...model,
+        resultStatus: AVAILABLE_RESULT_STATUS,
+        totalMatches: results.totalMatches,
+        retainedMatches: results.retainedMatches,
+      })
+    },
+    activate: (activate) => {
+      if (!sameOperationKey(model, activate.key)) return staleCommand(model)
+      if (activate.index < 0 || activate.index >= model.totalMatches) return staleCommand(model)
+      return commandResult(
+        {
+          ...model,
+          desiredGlobalIndex: activate.index,
+          activeGlobalIndex: activate.index,
+          activeMatch: activate.match,
+        },
+        null,
+        activate.match,
+      )
+    },
+    failed: (failed) => {
+      if (!sameOperationKey(model, failed.operation.key)) return staleCommand(model)
+      return failed.operation.kind === "move"
+        ? commandResult({ ...model, desiredGlobalIndex: model.activeGlobalIndex })
+        : commandResult({
+            ...resetResults(model),
+            resultStatus: FAILED_RESULT_STATUS,
+          })
+    },
+    expired: (expired) => {
+      if (!sameOperationKey(model, expired.key)) return staleCommand(model)
+      return commandResult({
+        ...resetResults(model),
+        resultStatus: EXPIRED_RESULT_STATUS,
+      })
+    },
   })
 }
 
@@ -461,7 +455,11 @@ export class ReviewSearchController {
     }
 
     if (!this.#isCurrent(operation.key)) return null
-    if (response._tag === "expired") {
+    const availableResponse = Match.valueTags(response, {
+      available: (available) => available,
+      expired: () => null,
+    })
+    if (availableResponse === null) {
       const result = this.#dispatch({ _tag: "expired", key: operation.key })
       if (!result.stale) {
         this.#cache.clear()
@@ -469,7 +467,7 @@ export class ReviewSearchController {
       }
       return null
     }
-    if (response.snapshotId !== operation.key.snapshotId) {
+    if (availableResponse.snapshotId !== operation.key.snapshotId) {
       this.#fail(operation)
       return null
     }
@@ -477,7 +475,7 @@ export class ReviewSearchController {
     const activeCursor = this.#cache.find(model.activeGlobalIndex)?.page.cursor
     const pinnedCursors = new Set<ReviewSnapshotSearchCursor | null>([cursor])
     if (activeCursor !== undefined) pinnedCursors.add(activeCursor)
-    const page = { cursor, response, startIndex }
+    const page = { cursor, response: availableResponse, startIndex }
     try {
       if (!this.#cache.put(page, pinnedCursors)) {
         this.#fail(operation)
@@ -491,7 +489,7 @@ export class ReviewSearchController {
     const result = this.#dispatch({
       _tag: "results",
       key: operation.key,
-      totalMatches: response.totalMatches,
+      totalMatches: availableResponse.totalMatches,
       retainedMatches,
     })
     return result.stale ? null : page

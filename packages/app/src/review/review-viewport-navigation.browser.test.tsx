@@ -1,5 +1,7 @@
+import { DiffFileVisibility } from "@diffdash/domain/diff"
 import { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
-import { ReviewFileId, ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { ReviewFileId, ReviewFilePatchHash, ReviewKey } from "@diffdash/domain/review-identity"
 import { FileReviewNavigationTarget } from "@diffdash/domain/review-navigation"
 import { describe, expect, it, vi } from "vitest"
 
@@ -15,10 +17,11 @@ describe("ReviewViewportNavigationBridge", () => {
     const file = ReviewSnapshotFileInventory.make({
       fileId,
       patchHash: ReviewFilePatchHash.make("1234567890abcdef"),
-      reviewKey: "src/app.ts",
-      path: "src/app.ts",
+      reviewKey: ReviewKey.make("src/app.ts"),
+      path: RepositoryRelativePath.make("src/app.ts"),
       oldPath: null,
       status: "modified",
+      visibility: DiffFileVisibility.cases.Visible.make({}),
       additions: 1,
       deletions: 1,
       hunkCount: 1,

@@ -1,12 +1,15 @@
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
-import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import { ReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import {
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
+import { ReviewFilePatchHash, ReviewKey } from "@diffdash/domain/review-identity"
 import { Schema } from "effect"
 
 /** Persisted viewed-file identity returned for one review scope. */
 export class ViewedFileRecord extends Schema.Class<ViewedFileRecord>("ViewedFileRecord")({
-  reviewKey: Schema.String,
+  reviewKey: ReviewKey,
   patchHash: ReviewFilePatchHash,
 }) {}
 
@@ -15,7 +18,7 @@ export class HostedViewedFilesRequest extends Schema.Class<HostedViewedFilesRequ
   "HostedViewedFilesRequest",
 )({
   review: HostedReviewLocator,
-  baseRefName: Schema.NonEmptyString,
+  baseRefName: RepositoryComparisonRef,
 }) {}
 
 /** Content-scoped viewed-file mutation for one hosted review target. */
@@ -23,8 +26,8 @@ export class SetHostedViewedFileRequest extends Schema.Class<SetHostedViewedFile
   "SetHostedViewedFileRequest",
 )({
   review: HostedReviewLocator,
-  baseRefName: Schema.NonEmptyString,
-  reviewKey: Schema.String,
+  baseRefName: RepositoryComparisonRef,
+  reviewKey: ReviewKey,
   patchHash: ReviewFilePatchHash,
   viewed: Schema.Boolean,
 }) {}
@@ -34,7 +37,7 @@ export class LocalViewedFilesRequest extends Schema.Class<LocalViewedFilesReques
   "LocalViewedFilesRequest",
 )({
   target: LocalReviewTarget,
-  sourceBranch: Schema.NullOr(Schema.NonEmptyString),
+  sourceBranch: Schema.NullOr(RepositoryComparisonRef),
 }) {}
 
 /** Content-scoped viewed-file mutation for one local review target. */
@@ -42,8 +45,8 @@ export class SetLocalViewedFileRequest extends Schema.Class<SetLocalViewedFileRe
   "SetLocalViewedFileRequest",
 )({
   target: LocalReviewTarget,
-  sourceBranch: Schema.NullOr(Schema.NonEmptyString),
-  reviewKey: Schema.String,
+  sourceBranch: Schema.NullOr(RepositoryComparisonRef),
+  reviewKey: ReviewKey,
   patchHash: ReviewFilePatchHash,
   viewed: Schema.Boolean,
 }) {}
@@ -60,7 +63,7 @@ export class SetRepositoryComparisonViewedFileRequest extends Schema.Class<SetRe
   "SetRepositoryComparisonViewedFileRequest",
 )({
   target: RepositoryComparisonTarget,
-  reviewKey: Schema.String,
+  reviewKey: ReviewKey,
   patchHash: ReviewFilePatchHash,
   viewed: Schema.Boolean,
 }) {}

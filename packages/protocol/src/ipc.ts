@@ -8,6 +8,7 @@ import {
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   ProjectOpenResult,
   ProjectWorkspaceState,
@@ -15,9 +16,11 @@ import {
 } from "@diffdash/domain/project-workspace"
 import {
   Repo,
+  RepositoryCheckoutPath,
   RepositoryIdentityRepairSummary,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewAgentProgress } from "@diffdash/domain/review-agent"
 import {
   HostedReviewSnapshotManifest,
@@ -29,8 +32,9 @@ import {
   ReviewThreadDetails,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import { WebUrl } from "@diffdash/domain/web-url"
 import { Schema, SchemaTransformation } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
 import { AnalyticsEvent } from "./analytics"
@@ -71,7 +75,7 @@ import {
   ReviewThreadIdRequest,
   RunReviewThreadAgentRequest,
 } from "./review-threads"
-import { TransportError, transportError } from "./transport-error"
+import { TransportErrorPayload, transportError, type TransportError } from "./transport-error"
 import {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
@@ -94,8 +98,17 @@ const EmptyResponse = Schema.Null.pipe(
 )
 /** Serializable failure envelope returned for every invoke operation. */
 export const FailureEnvelope = Schema.TaggedStruct("Failure", {
-  error: TransportError,
+  error: TransportErrorPayload,
 })
+/** Successful value envelope returned for every invoke operation. */
+export type SuccessEnvelope<Value> = {
+  readonly _tag: "Success"
+  readonly value: Value
+}
+
+/** Typed success or failure value crossing the Electron bridge. */
+export type BridgeResult<Value> = SuccessEnvelope<Value> | typeof FailureEnvelope.Type
+
 const BOUNDED_FAILURE_ENVELOPE = Schema.encodeSync(FailureEnvelope)({
   _tag: "Failure",
   error: transportError("PAYLOAD_TOO_LARGE", "IPC response exceeded its byte limit."),
@@ -107,7 +120,8 @@ const KIB = 1_024
 const DEFAULT_MAX_REQUEST_BYTES = 256 * KIB
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1_024 * KIB
 const DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * KIB
-type BoundarySchema = Schema.ConstraintCodec<unknown, unknown, never, never>
+type BoundaryValue = Schema.Json | object | undefined | void
+type BoundarySchema = Schema.ConstraintCodec<BoundaryValue, BoundaryValue>
 
 const defineInvoke = <
   Channel extends InvokeChannel,
@@ -172,12 +186,12 @@ export const InvokeContract = {
   ),
   [InvokeChannel.appOpenExternalUrl]: defineInvoke(
     InvokeChannel.appOpenExternalUrl,
-    Schema.Struct({ url: Schema.String }),
+    Schema.Struct({ url: WebUrl }),
     EmptyResponse,
   ),
   [InvokeChannel.appOpenLocalRepositoryFile]: defineInvoke(
     InvokeChannel.appOpenLocalRepositoryFile,
-    Schema.Struct({ rootPath: Schema.String, filePath: Schema.String }),
+    Schema.Struct({ rootPath: RepositoryCheckoutPath, filePath: RepositoryRelativePath }),
     EmptyResponse,
   ),
   [InvokeChannel.appOpenRepositoryFile]: defineInvoke(
@@ -233,7 +247,10 @@ export const InvokeContract = {
   ),
   [InvokeChannel.resolveLocalBranch]: defineInvoke(
     InvokeChannel.resolveLocalBranch,
-    Schema.Struct({ localPath: Schema.String, branchName: NullableString }),
+    Schema.Struct({
+      localPath: RepositoryCheckoutPath,
+      branchName: Schema.NullOr(RepositoryComparisonRef),
+    }),
     LocalReviewTarget,
   ),
   [InvokeChannel.resolveRepositoryComparison]: defineInvoke(
@@ -285,7 +302,7 @@ export const InvokeContract = {
   ),
   [InvokeChannel.getLocalWalkthrough]: defineInvoke(
     InvokeChannel.getLocalWalkthrough,
-    Schema.Struct({ target: LocalReviewTarget, baseSha: Schema.String, headSha: Schema.String }),
+    Schema.Struct({ target: LocalReviewTarget, baseSha: ReviewRevision, headSha: ReviewRevision }),
     Schema.NullOr(StoredWalkthrough),
   ),
   [InvokeChannel.generateRepositoryComparisonWalkthrough]: defineInvoke(
@@ -317,7 +334,7 @@ export const InvokeContract = {
   ),
   [InvokeChannel.installRepository]: defineInvoke(
     InvokeChannel.installRepository,
-    Schema.Struct({ localPath: Schema.String }),
+    Schema.Struct({ localPath: RepositoryCheckoutPath }),
     Repo,
   ),
   [InvokeChannel.linkRepository]: defineInvoke(
@@ -333,7 +350,7 @@ export const InvokeContract = {
   [InvokeChannel.openProject]: defineInvoke(
     InvokeChannel.openProject,
     Schema.Struct({
-      localPath: Schema.String,
+      localPath: RepositoryCheckoutPath,
       selectedRepository: Schema.NullOr(HostedRepositoryLocator),
     }),
     ProjectOpenResult,
@@ -346,11 +363,11 @@ export const InvokeContract = {
   [InvokeChannel.selectLocalFolder]: defineInvoke(
     InvokeChannel.selectLocalFolder,
     EmptyRequest,
-    NullableString,
+    Schema.NullOr(RepositoryCheckoutPath),
   ),
   [InvokeChannel.setRepositoryFavorite]: defineInvoke(
     InvokeChannel.setRepositoryFavorite,
-    Schema.Struct({ id: Schema.String, isFavorite: Schema.Boolean }),
+    Schema.Struct({ id: ReviewProjectId, isFavorite: Schema.Boolean }),
     Repo,
   ),
   [InvokeChannel.projectWorkspaceGet]: defineInvoke(
@@ -491,46 +508,23 @@ export type InvokeResponse<Channel extends InvokeChannel> =
 export type EventPayload<Channel extends EventChannel> =
   (typeof EventContract)[Channel]["payload"]["Type"]
 
-const createInvokeRegistry = <
-  const Registry extends Record<InvokeChannel, ReturnType<typeof defineInvoke>>,
->(
-  contracts: Registry,
-) => ({
-  contracts,
-  request: <Channel extends InvokeChannel>(channel: Channel) => contracts[channel].request,
-  response: <Channel extends InvokeChannel>(channel: Channel) => contracts[channel].response,
-})
-
-const createEventRegistry = <
-  const Registry extends Record<EventChannel, ReturnType<typeof defineEvent>>,
->(
-  contracts: Registry,
-) => ({
-  contracts,
-  payload: <Channel extends EventChannel>(channel: Channel) => contracts[channel].payload,
-})
-
-const invokeRegistry = createInvokeRegistry(InvokeContract)
-const eventRegistry = createEventRegistry(EventContract)
-
-/** Returns the request schema associated with one channel. */
-export const invokeRequestSchema = <Channel extends InvokeChannel>(channel: Channel) => {
-  return invokeRegistry.request(channel)
-}
-
 /** Returns the response schema associated with one channel. */
-export const invokeResponseSchema = <Channel extends InvokeChannel>(channel: Channel) => {
-  return invokeRegistry.response(channel)
-}
+export const invokeResponseSchema = <Channel extends InvokeChannel>(
+  channel: Channel,
+): (typeof InvokeContract)[Channel]["response"] => InvokeContract[channel].response
 
 /** Returns the payload schema associated with one event channel. */
-export const eventPayloadSchema = <Channel extends EventChannel>(channel: Channel) => {
-  return eventRegistry.payload(channel)
-}
+export const eventPayloadSchema = <Channel extends EventChannel>(
+  channel: Channel,
+): (typeof EventContract)[Channel]["payload"] => EventContract[channel].payload
 
 /** Serializable success envelope returned for every invoke operation. */
 export const successEnvelope = <Value extends BoundarySchema>(value: Value) =>
   Schema.TaggedStruct("Success", { value })
+
+/** Returns the schema for one typed bridge result. */
+export const bridgeResult = <Value extends BoundarySchema>(value: Value) =>
+  Schema.Union([successEnvelope(value), FailureEnvelope])
 
 /** Encodes one failure under a contract response budget, falling back to a fixed bounded error. */
 export const encodeFailureEnvelopeWithinBudget = (
@@ -547,28 +541,9 @@ export const encodeFailureEnvelopeWithinBudget = (
   }
 }
 
-const hasOwn = <Value extends object>(value: Value, key: PropertyKey): key is keyof Value =>
-  Object.hasOwn(value, key)
-
 function positiveSafeInteger(value: number, name: string) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive safe integer`)
   }
   return value
-}
-
-/** Looks up a known invoke contract while rejecting unknown channels deterministically. */
-export const getInvokeContract = (channel: unknown) => {
-  if (typeof channel === "string" && hasOwn(InvokeContract, channel)) {
-    return InvokeContract[channel]
-  }
-  throw transportError("UNKNOWN_CHANNEL", `Unknown IPC invoke channel: ${String(channel)}`)
-}
-
-/** Looks up a known event contract while rejecting unknown channels deterministically. */
-export const getEventContract = (channel: unknown) => {
-  if (typeof channel === "string" && hasOwn(EventContract, channel)) {
-    return EventContract[channel]
-  }
-  throw transportError("UNKNOWN_CHANNEL", `Unknown IPC event channel: ${String(channel)}`)
 }

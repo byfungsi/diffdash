@@ -8,7 +8,7 @@ const AppStateFromJson = Schema.fromJsonString(SharedAppState)
 /** A typed failure from reading or writing app-level state. */
 export class AppStateError extends Schema.TaggedError<AppStateError>()("AppStateError", {
   operation: Schema.String,
-  cause: Schema.Defect(),
+  cause: Schema.ErrorInstance(),
 }) {}
 
 /** Main-process service for JSON-backed app-level state. */
@@ -56,5 +56,8 @@ const writeStateFile = (
   state: SharedAppState,
 ): Effect.Effect<void, AppStateError> =>
   storage
-    .writePrettyJsonFile(path, state)
+    .writePrettyJsonFile(
+      path,
+      Schema.encodeUnknownSync(SharedAppState)(Schema.decodeUnknownSync(SharedAppState)(state)),
+    )
     .pipe(Effect.mapError((error) => AppStateError.make({ operation: "write", cause: error })))

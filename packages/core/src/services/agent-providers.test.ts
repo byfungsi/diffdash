@@ -13,6 +13,7 @@ import {
   AgentSessionSupport,
 } from "@diffdash/agent-provider"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
+import { AgentProviderCapabilityStatus } from "@diffdash/protocol/agent-providers"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { AgentProviders } from "./agent-providers"
@@ -100,12 +101,28 @@ Authorization: Bearer probe-bearer-secret refresh_token=probe-refresh-secret`,
       const failing = catalog.providers.find(({ id }) => id === failingProviderId)
       const policy = catalog.providers.find(({ id }) => id === "policy")
 
-      expect(failing?.capabilities[0]?.reason).toHaveLength(600)
-      expect(failing?.capabilities[0]?.reason).toContain("Authorization: [redacted]")
-      expect(failing?.capabilities[0]?.reason).toContain("refresh_token=[redacted]")
-      expect(failing?.capabilities[1]?.reason).toBe('headers={"Authorization":"[redacted]"}')
-      expect(policy?.capabilities[0]?.reason).toBe("GITHUB_TOKEN=[redacted]")
-      expect(policy?.capabilities[1]?.reason).toBe("access_token=[redacted]")
+      expect(failing?.capabilities.walkthrough).toMatchObject({
+        _tag: "Unavailable",
+        reason: expect.stringContaining("Authorization: [redacted]"),
+      })
+      expect(failing?.capabilities.walkthrough).toMatchObject({
+        reason: expect.stringContaining("refresh_token=[redacted]"),
+      })
+      if (AgentProviderCapabilityStatus.guards.Unavailable(failing?.capabilities.walkthrough)) {
+        expect(failing.capabilities.walkthrough.reason).toHaveLength(600)
+      }
+      expect(failing?.capabilities["review-thread"]).toEqual({
+        _tag: "Unavailable",
+        reason: 'headers={"Authorization":"[redacted]"}',
+      })
+      expect(policy?.capabilities.walkthrough).toEqual({
+        _tag: "Unavailable",
+        reason: "GITHUB_TOKEN=[redacted]",
+      })
+      expect(policy?.capabilities["review-thread"]).toEqual({
+        _tag: "PolicyUnsupported",
+        reason: "access_token=[redacted]",
+      })
       for (const secret of [
         "probe-bearer-secret",
         "probe-refresh-secret",

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "@effect/vitest"
 import {
+  CliRepositoryPath,
   OpenBranchDiffCommand,
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
@@ -76,7 +77,10 @@ describe("parseCliNavigationCommand", () => {
     )
     expect(
       hasRepositoryIdentityRepairCommand([
-        OpenBranchDiffCommand.make({ localPath: "/workspace/repo", branchName: null }),
+        OpenBranchDiffCommand.make({
+          localPath: CliRepositoryPath.make("/workspace/repo"),
+          branchName: null,
+        }),
       ]),
     ).toBe(false)
   })

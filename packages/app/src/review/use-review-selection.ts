@@ -1,6 +1,7 @@
 import type { GitProviderDescriptor } from "@diffdash/domain/git-provider"
 import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { useAtomValue } from "@effect/atom-react"
+import { Cause, Option } from "effect"
 import { AsyncResult } from "effect/unstable/reactivity"
 import {
   hostedReviewManifestAtom,
@@ -13,17 +14,26 @@ import {
   projectReviewSelection,
   reviewSelectionSourceKeys,
 } from "./review-selection"
+import { rendererTransportError, type RendererFailure } from "@/shared/errors"
 import type { SelectedReviewTarget } from "./review-subject"
 
 const manifestLoadState = <Manifest extends ReviewSnapshotManifest>(
-  result: AsyncResult.AsyncResult<Manifest | null, unknown>,
+  result: AsyncResult.AsyncResult<Manifest | null, RendererFailure>,
 ): ReviewManifestLoadState<Manifest> => {
   if (AsyncResult.isSuccess(result)) {
     return result.value === null
       ? { _tag: "loading" }
       : { _tag: "ready", manifest: result.value, refreshing: AsyncResult.isWaiting(result) }
   }
-  if (AsyncResult.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) {
+    const failure = Cause.findErrorOption(result.cause)
+    return {
+      _tag: "failure",
+      error: Option.isSome(failure)
+        ? failure.value
+        : rendererTransportError(result.cause, "renderer:review-selection"),
+    }
+  }
   return { _tag: "loading" }
 }
 

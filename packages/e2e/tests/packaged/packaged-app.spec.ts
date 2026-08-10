@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process"
 import { constants } from "node:fs"
-import { access, chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { delimiter, join, resolve as resolvePath } from "node:path"
 import { _electron as electron, expect, test } from "@playwright/test"
+import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
+import { installExecutableFixture, prependExecutablePath } from "../helpers/executable-fixture"
 
 test("FUN-141 AC: verifies final packaged composition and provider persistence", async ({
   browserName: _browserName,
@@ -63,7 +65,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
       FAKE_GIT_LOG: gitLog,
       HOME: home,
-      PATH: `${fakeBin}:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`,
+      PATH: prependExecutablePath(fakeBin, process.env.PATH),
       REAL_GIT_PATH: realGitPath,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
@@ -89,6 +91,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     }
 
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     expect(
       await window.evaluate(() => globalThis.window.open("file:///tmp/blocked-popup")),
     ).toBeNull()
@@ -104,29 +107,32 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     ).toBe(false)
     expect(
       await window.evaluate(async () => {
-        const providers = await globalThis.window.diffDash.providers.list()
-        const catalog = await globalThis.window.diffDash.agentProviders.getCatalog()
-        const settings = await globalThis.window.diffDash.settings.get()
+        const providers = await globalThis.window.diffDashForE2e.providers.list()
+        const catalog = await globalThis.window.diffDashForE2e.agentProviders.getCatalog()
+        const settings = await globalThis.window.diffDashForE2e.settings.get()
         const fixtureGit = providers.find(({ id }) => id === "fixture")
         if (fixtureGit === undefined) throw new Error("Fixture Git provider was not registered")
-        const results = await globalThis.window.diffDash.hostedRepositories.searchRepositories({
-          providerId: fixtureGit.id,
-          query: "service",
-          namespaces: [],
-        })
+        const results =
+          await globalThis.window.diffDashForE2e.hostedRepositories.searchRepositories({
+            providerId: fixtureGit.id,
+            query: "service",
+            namespaces: [],
+          })
         const result = results[0]
         if (result === undefined) throw new Error("Fixture repository was not discovered")
-        await globalThis.window.diffDash.repositories.favoriteRemote(result)
-        const repositories = await globalThis.window.diffDash.repositories.list()
-        const updater = await globalThis.window.diffDash.updates.getState()
+        await globalThis.window.diffDashForE2e.repositories.favoriteRemote(result)
+        const repositories = await globalThis.window.diffDashForE2e.repositories.list()
+        const updater = await globalThis.window.diffDashForE2e.updates.getState()
         return {
           agent: catalog.providers.find(({ id }) => id === "fixture-agent"),
           codeThemes: settings.codeThemes,
           diffViewMode: settings.diffViewMode,
           git: fixtureGit,
           opencode: catalog.providers.find(({ id }) => id === "opencode"),
-          repository: repositories.find(({ provider }) => provider === "fixture"),
-          routes: settings.routes,
+          repository: repositories.find(
+            ({ source }) => source._tag === "hosted" && source.locator.providerId === "fixture",
+          ),
+          selections: settings.selections,
           themes: settings.themes,
           updater,
         }
@@ -134,9 +140,9 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     ).toEqual({
       agent: expect.objectContaining({
         id: "fixture-agent",
-        capabilities: expect.arrayContaining([
-          expect.objectContaining({ capability: "review-thread", status: "ready" }),
-        ]),
+        capabilities: expect.objectContaining({
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        }),
         defaults: { reviewThreadModel: "fixture-model", walkthroughModel: "fixture-model" },
       }),
       codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
@@ -148,18 +154,34 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       }),
       opencode: expect.objectContaining({
         id: "opencode",
-        capabilities: expect.arrayContaining([
-          expect.objectContaining({ capability: "walkthrough", status: "ready" }),
-          expect.objectContaining({ capability: "review-thread", status: "ready" }),
-        ]),
+        capabilities: {
+          walkthrough: expect.objectContaining({ _tag: "Ready" }),
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        },
       }),
       repository: expect.objectContaining({
-        provider: "fixture",
-        owner: "platform/backend",
-        name: "service",
+        source: {
+          _tag: "hosted",
+          locator: {
+            providerId: "fixture",
+            namespace: "platform/backend",
+            name: "service",
+          },
+        },
         isFavorite: true,
       }),
-      routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
+      selections: {
+        walkthrough: {
+          _tag: "Pinned",
+          providerId: "fixture-agent",
+          modelId: "fixture-model",
+        },
+        "review-thread": {
+          _tag: "Pinned",
+          providerId: "fixture-agent",
+          modelId: "fixture-model",
+        },
+      },
       themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
       updater: expect.not.objectContaining({ reason: "development" }),
     })
@@ -204,6 +226,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     app = await electron.launch(launchOptions)
     expect(await app.evaluate(({ app: runtimeApp }) => runtimeApp.isPackaged)).toBe(true)
     const restartedWindow = await app.firstWindow()
+    await restartedWindow.evaluate(installDiffDashE2eApi)
     const persistedSettings = JSON.parse(
       await readFile(join(xdgConfigHome, "diffdash", "settings.json"), "utf8"),
     ) as unknown
@@ -213,29 +236,43 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         layout: {
           review: { contextWidth: 304, threadDetailWidth: 432 },
         },
-        version: 7,
+        version: 8,
         themes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
         codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
-        routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
-        models: expect.objectContaining({ "fixture-agent": "fixture-model" }),
+        selections: {
+          walkthrough: {
+            _tag: "Pinned",
+            providerId: "fixture-agent",
+            modelId: "fixture-model",
+          },
+          "review-thread": {
+            _tag: "Pinned",
+            providerId: "fixture-agent",
+            modelId: "fixture-model",
+          },
+        },
       }),
     )
     expect(await readFile(gitLog, "utf8")).toContain("clone --bare --")
 
     expect(
       await restartedWindow.evaluate(async () => {
-        const appState = await globalThis.window.diffDash.appState.get()
-        const settings = await globalThis.window.diffDash.settings.get()
-        const repositories = await globalThis.window.diffDash.repositories.list()
+        const appState = await globalThis.window.diffDashForE2e.appState.get()
+        const settings = await globalThis.window.diffDashForE2e.settings.get()
+        const repositories = await globalThis.window.diffDashForE2e.repositories.list()
         return {
           onboardingCompleted: appState.onboardingCompleted,
           codeThemes: settings.codeThemes,
           diffViewMode: settings.diffViewMode,
-          routes: settings.routes,
+          selections: settings.selections,
           repositories: repositories.map((repository) => ({
-            provider: repository.provider,
-            owner: repository.owner,
-            name: repository.name,
+            provider:
+              repository.source._tag === "hosted"
+                ? repository.source.locator.providerId
+                : undefined,
+            owner:
+              repository.source._tag === "hosted" ? repository.source.locator.namespace : undefined,
+            name: repository.source._tag === "hosted" ? repository.source.locator.name : undefined,
             isFavorite: repository.isFavorite,
           })),
         }
@@ -244,7 +281,18 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       onboardingCompleted: true,
       codeThemes: { light: "catppuccin-latte", dark: "catppuccin-mocha" },
       diffViewMode: "auto",
-      routes: { walkthrough: "fixture-agent", reviewThread: "fixture-agent" },
+      selections: {
+        walkthrough: {
+          _tag: "Pinned",
+          providerId: "fixture-agent",
+          modelId: "fixture-model",
+        },
+        "review-thread": {
+          _tag: "Pinned",
+          providerId: "fixture-agent",
+          modelId: "fixture-model",
+        },
+      },
       repositories: [
         {
           provider: "fixture",
@@ -347,14 +395,6 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
   expect(updateConfig).toMatch(/^provider:\s*generic\s*$/m)
   expect(updateConfig).toMatch(/^url:\s*https:\/\/download\.usediffdash\.com\/updates\/stable\s*$/m)
   expect(updateConfig).toMatch(/^updaterCacheDirName:\s*\S+\s*$/m)
-
-  const unpacked = join(packaged.resources, "app.asar.unpacked")
-  const entries = await readdir(unpacked, { recursive: true })
-  const nativeModule = entries.find((entry) => entry.endsWith("better_sqlite3.node"))
-  if (nativeModule === undefined) {
-    throw new Error(`Packaged better_sqlite3.node was not found under ${unpacked}`)
-  }
-  await assertFile(join(unpacked, nativeModule))
 }
 
 const assertFile = async (path: string) => {
@@ -372,9 +412,26 @@ const execGit = (cwd: string, ...args: readonly string[]) =>
     stdio: ["ignore", "pipe", "pipe"],
   }).trim()
 
-const realGitPath = execFileSync("/usr/bin/env", ["sh", "-c", "command -v git"], {
-  encoding: "utf8",
-}).trim()
+const realGitPath = resolveExecutable("git")
+
+function resolveExecutable(command: string) {
+  const extensions =
+    process.platform === "win32"
+      ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";")]
+      : [""]
+  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
+    for (const extension of extensions) {
+      const candidate = resolvePath(directory, `${command}${extension}`)
+      try {
+        execFileSync(candidate, ["--version"], { stdio: "ignore" })
+        return candidate
+      } catch {
+        // Try the next executable search candidate.
+      }
+    }
+  }
+  throw new Error(`Could not resolve ${command} from PATH.`)
+}
 
 const installFixtureRepository = async (source: string, remote: string) => {
   await mkdir(join(source, "src"), { recursive: true })
@@ -409,55 +466,43 @@ const commit = (cwd: string, message: string) =>
 
 const installPackagedFakeCli = async (directory: string, openCodeDirectory: string) => {
   await Promise.all([
-    writeExecutable(join(directory, "git"), fakeGitScript),
-    writeExecutable(join(directory, "gh"), fakeGhScript),
-    writeExecutable(join(directory, "codex"), fakeVersionScript("codex")),
-    writeExecutable(join(directory, "claude"), fakeVersionScript("claude")),
-    writeExecutable(join(openCodeDirectory, "opencode"), fakeVersionScript("opencode")),
+    installExecutableFixture(directory, "git", fakeGitScript),
+    installExecutableFixture(directory, "gh", fakeGhScript),
+    installExecutableFixture(directory, "codex", fakeVersionScript("codex")),
+    installExecutableFixture(directory, "claude", fakeVersionScript("claude")),
+    installExecutableFixture(openCodeDirectory, "opencode", fakeVersionScript("opencode")),
   ])
 }
 
-const writeExecutable = async (path: string, content: string) => {
-  await writeFile(path, content, "utf8")
-  await chmod(path, 0o755)
+const fakeVersionScript = (name: string) => `const args = process.argv.slice(2)
+if (args[0] === "--version") {
+  console.log("${name} 1.0.0")
+  process.exit(0)
 }
-
-const fakeVersionScript = (name: string) => `#!/bin/sh
-if [ "\${1:-}" = "--version" ]; then
-  printf '%s\\n' '${name} 1.0.0'
-  exit 0
-fi
-printf '%s\\n' 'Unhandled fake ${name} call' >&2
-exit 1
+console.error("Unhandled fake ${name} call")
+process.exit(1)
 `
 
-const fakeGitScript = `#!/bin/sh
-set -eu
-printf '%s\\n' "$*" >> "\${FAKE_GIT_LOG:?}"
-exec "\${REAL_GIT_PATH:?}" "$@"
+const fakeGitScript = `import { appendFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+const args = process.argv.slice(2)
+if (!process.env.FAKE_GIT_LOG || !process.env.REAL_GIT_PATH) process.exit(1)
+appendFileSync(process.env.FAKE_GIT_LOG, args.join(" ") + "\\n")
+const result = spawnSync(process.env.REAL_GIT_PATH, args, {
+  env: process.env,
+  stdio: "inherit"
+})
+process.exit(result.status ?? 1)
 `
 
-const fakeGhScript = `#!/bin/sh
-if [ "\${1:-}" = "--version" ]; then
-  printf '%s\\n' 'gh version 2.76.1'
-  exit 0
-fi
-if [ "\${1:-}" = "auth" ] && [ "\${2:-}" = "status" ]; then
-  printf '%s\\n' 'Logged in to github.com'
-  exit 0
-fi
-if [ "\${1:-}" = "search" ] && [ "\${2:-}" = "repos" ] && [ "\${3:-}" = "--help" ]; then
-  printf '%s\\n' 'Search for repositories on GitHub.'
-  exit 0
-fi
-if [ "\${1:-}" = "api" ] && [ "\${2:-}" = "graphql" ]; then
-  printf '%s\\n' '{"data":{"search":{"nodes":[]}}}'
-  exit 0
-fi
-if [ "\${1:-}" = "search" ] || [ "\${1:-}" = "pr" ]; then
-  printf '%s\\n' '[]'
-  exit 0
-fi
-printf '%s\\n' 'Unhandled fake gh call' >&2
-exit 1
+const fakeGhScript = `const args = process.argv.slice(2)
+if (args[0] === "--version") console.log("gh version 2.76.1")
+else if (args[0] === "auth" && args[1] === "status") console.log("Logged in to github.com")
+else if (args[0] === "search" && args[1] === "repos" && args[2] === "--help") console.log("Search for repositories on GitHub.")
+else if (args[0] === "api" && args[1] === "graphql") console.log(JSON.stringify({ data: { search: { nodes: [] } } }))
+else if (args[0] === "search" || args[0] === "pr") console.log("[]")
+else {
+  console.error("Unhandled fake gh call")
+  process.exit(1)
+}
 `

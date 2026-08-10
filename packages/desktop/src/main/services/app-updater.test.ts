@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { AppUpdateFeedUrl } from "@diffdash/protocol/app-update"
 
 import {
   type AppUpdaterOptions,
@@ -12,7 +13,7 @@ const baseOptions = (adapter: NativeUpdaterAdapter): AppUpdaterOptions => ({
   adapter,
   arch: "arm64",
   currentVersion: "0.1.4",
-  feedBaseUrl: "https://updates.example.test/stable",
+  feedBaseUrl: AppUpdateFeedUrl.make("https://updates.example.test/stable"),
   packaged: true,
   platform: "darwin",
 })
@@ -244,6 +245,7 @@ const makeFakeUpdater = (options: { readonly checkError?: Error } = {}) => {
       checkCount += 1
       for (const listener of checking) listener()
       if (options.checkError !== undefined) throw options.checkError
+      return null
     },
     download: async () => {
       downloadCount += 1

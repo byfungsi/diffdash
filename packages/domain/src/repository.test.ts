@@ -1,14 +1,26 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 
-import { Repo, RepositoryCheckoutPath } from "./repository"
+import {
+  HostedRepositorySource,
+  LocalRepositorySource,
+  makeHostedRepositoryLocator,
+} from "./git-provider"
+import {
+  LinkedCheckout,
+  RemoteOnly,
+  Repo,
+  RepositoryCheckoutPath,
+  UpsertRepositoryInput,
+} from "./repository"
+import { ReviewProjectId } from "./review-identity"
 
 const repositoryRecord = {
   id: "github:fungsi/diffdash",
-  provider: "github",
-  owner: "fungsi",
-  name: "diffdash",
-  remoteUrl: "https://github.com/fungsi/diffdash",
+  source: {
+    _tag: "hosted",
+    locator: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+  },
   isFavorite: false,
   lastOpenedAt: null,
   lastSyncedAt: null,
@@ -17,30 +29,108 @@ const repositoryRecord = {
 } as const
 
 describe("Repo", () => {
-  it("preserves transport-safe nullable checkout paths", () => {
+  it("preserves transport-safe checkout variants", () => {
     const present = Schema.decodeUnknownSync(Repo)({
       ...repositoryRecord,
-      localPath: "/workspace/diffdash",
+      checkout: {
+        _tag: "LinkedCheckout",
+        remoteUrl: "https://github.com/fungsi/diffdash",
+        path: "/workspace/diffdash",
+      },
     })
-    const absent = Schema.decodeUnknownSync(Repo)({ ...repositoryRecord, localPath: null })
+    const absent = Schema.decodeUnknownSync(Repo)({
+      ...repositoryRecord,
+      checkout: {
+        _tag: "RemoteOnly",
+        remoteUrl: "https://github.com/fungsi/diffdash",
+      },
+    })
 
     expect(present.localPath).toBe("/workspace/diffdash")
     expect(absent.localPath).toBeNull()
-    expect(Schema.encodeSync(Repo)(present)).toMatchObject({ localPath: "/workspace/diffdash" })
-    expect(Schema.encodeSync(Repo)(absent)).toMatchObject({ localPath: null })
+    expect(Schema.encodeSync(Repo)(present)).toMatchObject({
+      checkout: { _tag: "LinkedCheckout", path: "/workspace/diffdash" },
+    })
+    expect(Schema.encodeSync(Repo)(absent)).toMatchObject({
+      checkout: { _tag: "RemoteOnly" },
+    })
   })
 
-  it("requires the persisted localPath field and an absolute present path", () => {
-    expect(() => Schema.decodeUnknownSync(Repo)(repositoryRecord)).toThrow(/localPath/)
+  it("requires checkout and an absolute linked path", () => {
+    expect(() => Schema.decodeUnknownSync(Repo)(repositoryRecord)).toThrow(/checkout/)
     expect(() =>
-      Schema.decodeUnknownSync(Repo)({ ...repositoryRecord, localPath: "relative/repository" }),
+      Schema.decodeUnknownSync(Repo)({
+        ...repositoryRecord,
+        checkout: {
+          _tag: "LinkedCheckout",
+          remoteUrl: "https://github.com/fungsi/diffdash",
+          path: "relative/repository",
+        },
+      }),
     ).toThrow(/absolute repository checkout path/)
     expect(
       Repo.make({
         ...repositoryRecord,
-        localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
+        id: ReviewProjectId.make(repositoryRecord.id),
+        source: HostedRepositorySource.make({
+          locator: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+        }),
+        checkout: LinkedCheckout.make({
+          remoteUrl: "https://github.com/fungsi/diffdash",
+          path: RepositoryCheckoutPath.make("/workspace/diffdash"),
+        }),
       }).localPath,
     ).toBe(RepositoryCheckoutPath.make("/workspace/diffdash"))
+  })
+
+  it("rejects a local source without a linked checkout", () => {
+    const input = {
+      source: { _tag: "local" },
+      checkout: { _tag: "RemoteOnly", remoteUrl: "file:///workspace/diffdash" },
+    }
+
+    expect(() => Schema.decodeUnknownSync(UpsertRepositoryInput)(input)).toThrow(
+      /local repository source requires a linked checkout/i,
+    )
+    expect(() =>
+      Repo.make({
+        ...repositoryRecord,
+        id: ReviewProjectId.make(repositoryRecord.id),
+        source: LocalRepositorySource.make(),
+        checkout: RemoteOnly.make({ remoteUrl: "file:///workspace/diffdash" }),
+      }),
+    ).toThrow("Schema validation failed")
+  })
+
+  it("rejects malformed hosted repository sources", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(UpsertRepositoryInput)({
+        source: {
+          _tag: "hosted",
+          locator: { providerId: "local", namespace: "bad:owner", name: "bad/name" },
+        },
+        checkout: {
+          _tag: "RemoteOnly",
+          remoteUrl: "https://example.test/bad/repository",
+        },
+      }),
+    ).toThrow(/Expected a string matching.*at \["source"\]\["locator"\]\["providerId"\]/s)
+  })
+
+  it("centralizes hosted equality and display identity", () => {
+    const repo = Schema.decodeUnknownSync(Repo)({
+      ...repositoryRecord,
+      checkout: {
+        _tag: "RemoteOnly",
+        remoteUrl: "https://github.com/fungsi/diffdash",
+      },
+    })
+
+    expect(repo.matchesHosted(makeHostedRepositoryLocator("github", "FUNGSI", "DiffDash"))).toBe(
+      true,
+    )
+    expect(repo.displayIdentity).toBe("fungsi/diffdash")
+    expect(repo.remoteUrl).toBe("https://github.com/fungsi/diffdash")
   })
 
   it("accepts POSIX, Windows drive, and UNC checkout paths", () => {

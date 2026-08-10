@@ -1,9 +1,9 @@
 import { Context, Layer } from "effect"
 
-import type { DiffDashApi } from "@diffdash/protocol/api"
+import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 
 /** Internal renderer capability that owns access to the context-bridged preload contract. */
-export class PreloadClient extends Context.Service<PreloadClient, DiffDashApi>()(
+export class PreloadClient extends Context.Service<PreloadClient, DiffDashBridgeApi>()(
   "@diffdash/app/PreloadClient",
 ) {}
 

@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 
-import { ReviewKey, ReviewRevision } from "./review-identity"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "./review-identity"
 
 /** Stable identity for one durable walkthrough operation. */
 export const WalkthroughOperationId = Schema.String.pipe(
@@ -64,7 +64,7 @@ export type WalkthroughOperationTimestamp = typeof WalkthroughOperationTimestamp
 export class WalkthroughOperationIdentity extends Schema.Class<WalkthroughOperationIdentity>(
   "WalkthroughOperationIdentity",
 )({
-  repoId: Schema.NonEmptyString,
+  repoId: ReviewProjectId,
   reviewKey: ReviewKey,
   baseRevision: ReviewRevision,
   headRevision: ReviewRevision,
@@ -75,7 +75,7 @@ export class WalkthroughOperationIdentity extends Schema.Class<WalkthroughOperat
 export class WalkthroughArtifactReference extends Schema.Class<WalkthroughArtifactReference>(
   "WalkthroughArtifactReference",
 )({
-  repoId: Schema.NonEmptyString,
+  repoId: ReviewProjectId,
   reviewKey: ReviewKey,
   baseRevision: ReviewRevision,
   headRevision: ReviewRevision,

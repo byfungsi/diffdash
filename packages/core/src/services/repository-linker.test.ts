@@ -2,13 +2,20 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Result, Layer, Option } from "effect"
 
 import type { HostedRepositoryLocator as HostedRepositoryLocatorType } from "@diffdash/domain/git-provider"
-import { Repo, repositoryLocalPath } from "@diffdash/domain/repository"
+import {
+  LinkedCheckout,
+  Repo,
+  RepositoryCheckoutPath,
+  type UpsertRepositoryInput,
+} from "@diffdash/domain/repository"
 import {
   GitProviderId,
+  HostedRepositorySource,
   HostedRepositoryLocator,
   HostedRepositoryName,
   RepositoryNamespace,
   ResolvedHostedRepository,
+  LocalRepositorySource,
 } from "@diffdash/domain/git-provider"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { RepositoryStore, RepositoryStoreError } from "@diffdash/persistence/repository-store"
@@ -16,21 +23,28 @@ import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-lin
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
 import { RepositoryLinkError, RepositoryLinker } from "./repository-linker"
+import { CoreWebUrl } from "../core-configuration"
 
 const linkedRepo = Repo.make({
-  id: "github:fungsi/diffdash",
-  provider: "github",
-  owner: "fungsi",
-  name: "diffdash",
-  remoteUrl: "git@github.com:fungsi/diffdash.git",
-  localPath: repositoryLocalPath("/workspace/diffdash"),
+  id: ReviewProjectId.make("github:fungsi/diffdash"),
+  source: HostedRepositorySource.make({
+    locator: HostedRepositoryLocator.make({
+      providerId: GitProviderId.make("github"),
+      namespace: RepositoryNamespace.make("fungsi"),
+      name: HostedRepositoryName.make("diffdash"),
+    }),
+  }),
+  checkout: LinkedCheckout.make({
+    remoteUrl: "git@github.com:fungsi/diffdash.git",
+    path: RepositoryCheckoutPath.make("/workspace/diffdash"),
+  }),
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
   createdAt: "2026-07-14T00:00:00.000Z",
   updatedAt: "2026-07-14T00:00:00.000Z",
 })
-const linkedRepoLocalPath = "/workspace/diffdash"
+const linkedRepoLocalPath = RepositoryCheckoutPath.make("/workspace/diffdash")
 
 const unavailable = <A>() => Effect.die(new Error("Unused test method")) as Effect.Effect<A>
 
@@ -57,8 +71,6 @@ const makeLayer = (
             detectRoot: () => Effect.succeed(linkedRepoLocalPath),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
-            getLocalReviewDetail: () => unavailable(),
-            getLocalReviewDiff: () => unavailable(),
             getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
@@ -80,21 +92,21 @@ const makeLayer = (
                 ResolvedHostedRepository.make({
                   locator,
                   providerRepositoryId: null,
-                  url: `https://github.com/${locator.namespace}/${locator.name}`,
+                  url: CoreWebUrl.make(`https://github.com/${locator.namespace}/${locator.name}`),
                 }),
               ),
             repositoryUrl: (locator) =>
               Effect.succeed(
-                `https://${locator.providerId}.example/${locator.namespace}/${locator.name}`,
+                CoreWebUrl.make(
+                  `https://${locator.providerId}.example/${locator.namespace}/${locator.name}`,
+                ),
               ),
-            fileUrl: () => Effect.succeed(""),
+            fileUrl: () => Effect.succeed(CoreWebUrl.make("https://example.com/file")),
             searchRepositories: () => unavailable(),
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            getHostedReview: () => unavailable(),
-            refreshHostedReview: () => unavailable(),
-            getHostedReviewDiff: () => unavailable(),
+            acquireHostedReviewSnapshot: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -126,17 +138,18 @@ const makeLayer = (
             setIdentityRepairStatus: () => Effect.void,
             upsertRepository: (input) =>
               Effect.sync(() => {
+                const capture = upsertCapture(input)
                 persisted.push({
                   favorite: input.isFavorite,
-                  owner: input.owner,
-                  name: input.name,
-                  path: input.localPath,
-                  remoteUrl: input.remoteUrl,
+                  owner: capture.owner,
+                  name: capture.name,
+                  path: capture.localPath,
+                  remoteUrl: capture.remoteUrl,
                 })
                 return Repo.make({
                   ...linkedRepo,
-                  ...input,
-                  localPath: input.localPath !== null ? input.localPath : linkedRepo.localPath,
+                  source: input.source,
+                  checkout: input.checkout,
                   isFavorite: input.isFavorite === true || linkedRepo.isFavorite,
                 })
               }),
@@ -169,7 +182,7 @@ describe("RepositoryLinker", () => {
       const repo = yield* linker.link(
         LinkRepositoryCheckoutRequest.make({
           repository: repository("FUNGSI", "DiffDash"),
-          localPath: "/workspace/diffdash/src",
+          localPath: RepositoryCheckoutPath.make("/workspace/diffdash/src"),
         }),
       )
 
@@ -194,7 +207,7 @@ describe("RepositoryLinker", () => {
         linker.link(
           LinkRepositoryCheckoutRequest.make({
             repository: repository("other", "repository"),
-            localPath: "/workspace/diffdash",
+            localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
           }),
         ),
       )
@@ -215,7 +228,7 @@ describe("RepositoryLinker", () => {
       yield* linker.link(
         LinkRepositoryCheckoutRequest.make({
           repository: repository("fungsi", "diffdash"),
-          localPath: "/workspace/diffdash",
+          localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
         }),
       )
       expect(persisted).toHaveLength(1)
@@ -226,7 +239,9 @@ describe("RepositoryLinker", () => {
     const { layer } = makeLayer("https://gitlab.com/fungsi/diffdash.git")
     return Effect.gen(function* () {
       const linker = yield* RepositoryLinker
-      const result = yield* Effect.result(linker.install("/workspace/diffdash"))
+      const result = yield* Effect.result(
+        linker.install(RepositoryCheckoutPath.make("/workspace/diffdash")),
+      )
 
       expect(Result.isFailure(result)).toBe(true)
       if (Result.isFailure(result)) {
@@ -262,7 +277,7 @@ describe("RepositoryLinker", () => {
     const { layer, persisted } = makeLayer()
     return Effect.gen(function* () {
       const linker = yield* RepositoryLinker
-      const repo = yield* linker.ensureLocal("/workspace/diffdash/src")
+      const repo = yield* linker.ensureLocal(RepositoryCheckoutPath.make("/workspace/diffdash/src"))
 
       expect(repo.localPath).toBe(linkedRepo.localPath)
       expect(persisted[0]).toMatchObject({
@@ -281,10 +296,12 @@ describe("RepositoryLinker", () => {
       Option.some(linkedRepo),
     )
     return Effect.gen(function* () {
-      const repo = yield* (yield* RepositoryLinker).ensureLocal("/workspace/diffdash/src")
+      const repo = yield* (yield* RepositoryLinker).ensureLocal(
+        RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+      )
 
       expect(repo.id).toBe(linkedRepo.id)
-      expect(repo.provider).toBe("github")
+      expect(repo.hostedLocator?.providerId).toBe("github")
       expect(persisted).toEqual([])
     }).pipe(Effect.provide(layer))
   })
@@ -294,11 +311,13 @@ describe("RepositoryLinker", () => {
       remotes: [{ name: "origin", fetchUrls: ["https://gitlab.example/fungsi/diffdash.git"] }],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash/src")
+      const result = yield* (yield* RepositoryLinker).openProject(
+        RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+      )
 
       expect(result["_tag"]).toBe("opened")
       if (result["_tag"] !== "opened") return
-      expect(result.repo.provider).toBe("local")
+      expect(result.repo.source).toBeInstanceOf(LocalRepositorySource)
       expect(result.repo.localPath).toBe("/workspace/diffdash")
       expect(persisted).toEqual([
         expect.objectContaining({ provider: "local", localPath: "/workspace/diffdash" }),
@@ -315,7 +334,7 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash")
+      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
 
       expect(result["_tag"]).toBe("opened")
       if (result["_tag"] !== "opened") return
@@ -339,7 +358,7 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash")
+      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
 
       expect(result["_tag"]).toBe("opened")
       expect(persisted).toEqual([
@@ -353,7 +372,9 @@ describe("RepositoryLinker", () => {
       remotes: [{ name: "origin", fetchUrls: [linkedRepo.remoteUrl] }],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash/src")
+      const result = yield* (yield* RepositoryLinker).openProject(
+        RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+      )
 
       expect(result["_tag"]).toBe("opened")
       expect(reconciled).toEqual([
@@ -373,7 +394,9 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash/src")
+      const result = yield* (yield* RepositoryLinker).openProject(
+        RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+      )
 
       expect(result["_tag"]).toBe("remoteSelectionRequired")
       if (result["_tag"] !== "remoteSelectionRequired") return
@@ -397,7 +420,7 @@ describe("RepositoryLinker", () => {
     return Effect.gen(function* () {
       const rejected = yield* Effect.result(
         (yield* RepositoryLinker).openProject(
-          "/workspace/diffdash/src",
+          RepositoryCheckoutPath.make("/workspace/diffdash/src"),
           repository("missing", "repository"),
         ),
       )
@@ -405,7 +428,7 @@ describe("RepositoryLinker", () => {
       expect(persisted).toEqual([])
 
       const result = yield* (yield* RepositoryLinker).openProject(
-        "/workspace/diffdash/src",
+        RepositoryCheckoutPath.make("/workspace/diffdash/src"),
         repository("OTHER", "REPOSITORY"),
       )
 
@@ -429,7 +452,7 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject("/workspace/diffdash")
+      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
 
       expect(result["_tag"]).toBe("opened")
       expect(persisted).toHaveLength(1)
@@ -440,11 +463,12 @@ describe("RepositoryLinker", () => {
   it.effect("repairs a legacy local project through its resolved origin", () => {
     const local = Repo.make({
       ...linkedRepo,
-      id: "local:local/xenith-operator-dashboard-fe",
-      provider: "local",
-      owner: "local",
-      name: "xenith-operator-dashboard-fe",
-      remoteUrl: "file:///workspace/diffdash",
+      id: ReviewProjectId.make("local:local/xenith-operator-dashboard-fe"),
+      source: LocalRepositorySource.make(),
+      checkout: LinkedCheckout.make({
+        remoteUrl: "file:///workspace/diffdash",
+        path: linkedRepoLocalPath,
+      }),
       isFavorite: false,
     })
     const { layer, persisted } = makeOpenProjectLayer({
@@ -501,9 +525,20 @@ interface UpsertCapture {
   readonly isFavorite?: boolean
 }
 
+const upsertCapture = (input: UpsertRepositoryInput): Omit<UpsertCapture, "isFavorite"> => {
+  const locator = input.source instanceof HostedRepositorySource ? input.source.locator : null
+  return {
+    provider: locator?.providerId ?? "local",
+    owner: locator?.namespace ?? "local",
+    name: locator?.name ?? "diffdash",
+    remoteUrl: input.checkout.remoteUrl,
+    localPath: input.checkout instanceof LinkedCheckout ? input.checkout.path : null,
+  }
+}
+
 interface ReconciliationCapture {
   readonly canonicalProjectId: ReviewProjectId
-  readonly localPath: string
+  readonly localPath: RepositoryCheckoutPath
 }
 
 const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
@@ -525,11 +560,9 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
                 })),
               ),
             detectRepository: () => unavailable(),
-            detectRoot: () => Effect.succeed("/workspace/diffdash"),
+            detectRoot: () => Effect.succeed(RepositoryCheckoutPath.make("/workspace/diffdash")),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
-            getLocalReviewDetail: () => unavailable(),
-            getLocalReviewDiff: () => unavailable(),
             getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
@@ -549,7 +582,7 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
                 ResolvedHostedRepository.make({
                   locator,
                   providerRepositoryId: null,
-                  url: `https://github.com/${locator.namespace}/${locator.name}`,
+                  url: CoreWebUrl.make(`https://github.com/${locator.namespace}/${locator.name}`),
                 }),
               ),
             repositoryUrl: () => unavailable(),
@@ -558,9 +591,7 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            getHostedReview: () => unavailable(),
-            refreshHostedReview: () => unavailable(),
-            getHostedReviewDiff: () => unavailable(),
+            acquireHostedReviewSnapshot: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -575,14 +606,12 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             findByLocalPath: () => Effect.succeed(Option.fromNullishOr(options.existing)),
             findHosted: () => Effect.succeed(Option.fromNullishOr(options.existing)),
             findByProviderRepositoryId: () => Effect.succeed(Option.none()),
-            attachResolvedIdentity: (_repoId, resolved, localPath) =>
+            attachResolvedIdentity: (_repoId, resolved, checkout) =>
               Effect.succeed(
                 Repo.make({
                   ...linkedRepo,
-                  provider: resolved.locator.providerId,
-                  owner: resolved.locator.namespace,
-                  name: resolved.locator.name,
-                  localPath,
+                  source: HostedRepositorySource.make({ locator: resolved.locator }),
+                  checkout,
                 }),
               ),
             reconcileLocalAliases: (canonicalProjectId, localPath) =>
@@ -603,14 +632,15 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             setIdentityRepairStatus: () => Effect.void,
             upsertRepository: (input) =>
               Effect.sync(() => {
-                persisted.push(input)
+                const capture = {
+                  ...upsertCapture(input),
+                  ...(input.isFavorite === undefined ? {} : { isFavorite: input.isFavorite }),
+                }
+                persisted.push(capture)
                 return Repo.make({
-                  id: `${input.provider}:${input.owner}/${input.name}`,
-                  provider: input.provider,
-                  owner: input.owner,
-                  name: input.name,
-                  remoteUrl: input.remoteUrl,
-                  localPath: input.localPath,
+                  id: ReviewProjectId.make(`${capture.provider}:${capture.owner}/${capture.name}`),
+                  source: input.source,
+                  checkout: input.checkout,
                   isFavorite: input.isFavorite ?? false,
                   lastOpenedAt: "2026-08-02T00:00:00.000Z",
                   lastSyncedAt: "2026-08-02T00:00:00.000Z",
@@ -622,7 +652,7 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             touch: (id) =>
               Effect.sync(() => {
                 touched.push(id)
-                return Repo.make({ ...linkedRepo, id })
+                return Repo.make({ ...linkedRepo, id: ReviewProjectId.make(id) })
               }),
             forget: (id) =>
               Effect.suspend(() => {

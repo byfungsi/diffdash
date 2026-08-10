@@ -1,16 +1,18 @@
 import {
   makeRepositoryComparisonReviewKey,
+  type RepositoryComparisonRef,
   type RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { LocalViewedFileScope } from "@diffdash/persistence/viewed-file-store"
 import { Match, Option } from "effect"
 
 /** Builds the exact persisted viewed-file identity for one local review. */
 export const localViewedFileScope = (
-  repoId: string,
+  repoId: ReviewProjectId,
   target: Extract<ReviewThreadTarget, { readonly kind: "local" }>,
-  sourceBranch: string | null,
+  sourceBranch: RepositoryComparisonRef | null,
 ): LocalViewedFileScope => {
   const sourceIdentity = Option.match(Option.fromNullishOr(sourceBranch), {
     onNone: () => "detached",
@@ -32,7 +34,7 @@ export const localViewedFileScope = (
 
 /** Builds the exact persisted viewed-file identity for one immutable repository comparison. */
 export const comparisonViewedFileScope = (
-  repoId: string,
+  repoId: ReviewProjectId,
   target: RepositoryComparisonTarget,
 ): LocalViewedFileScope =>
   LocalViewedFileScope.make({

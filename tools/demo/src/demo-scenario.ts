@@ -6,11 +6,16 @@ import {
   HostedReviewDetail,
   HostedReviewDiff,
   HostedReviewSummary,
+  HostedRepositorySource,
   ProviderActor,
   ReviewCommit,
   makeHostedReviewLocator,
+  makeHostedRepositoryLocator,
 } from "@diffdash/domain/git-provider"
-import { noRepositoryLocalPath, Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import { RemoteOnly, Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { WebUrl } from "@diffdash/domain/web-url"
 import type { ParsedDiff } from "@diffdash/domain/diff"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
@@ -19,6 +24,7 @@ import {
   makeReviewDiffIdentity,
   makeReviewKey,
   makeReviewSnapshotId,
+  ReviewProjectId,
   ReviewRevision,
   type ReviewKey,
 } from "@diffdash/domain/review-identity"
@@ -28,15 +34,14 @@ import {
   ReviewThreadAgentResponse,
 } from "@diffdash/domain/review-agent"
 import {
+  CurrentReviewAnchor,
   isReviewAnchorInParsedDiff,
   LineReviewAnchor,
-  MarkdownBody,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
-  ReviewThreadMessage,
-  ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
+import { makeDemoReviewTurn, validateDemoReviewMessage } from "./review-thread-fixtures"
 import {
   buildWalkthroughHunkDigest,
   StoredWalkthrough,
@@ -45,20 +50,23 @@ import {
   Walkthrough,
   walkthroughHostedReviewScope,
   WalkthroughChapter,
+  WalkthroughChapterId,
   WalkthroughStop,
+  WalkthroughStopId,
   WalkthroughSupportItem,
+  WalkthroughSupportItemId,
   type WalkthroughHunkDigest,
 } from "@diffdash/domain/walkthrough"
 
 /** Stable locator for an authored walkthrough hunk before parser IDs are derived. */
 export class DemoHunkLocator extends Schema.Class<DemoHunkLocator>("DemoHunkLocator")({
-  path: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  path: RepositoryRelativePath,
   ordinal: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
 }) {}
 
 /** Stable locator for an authored line thread before its exact anchor is derived. */
 export class DemoLineLocator extends Schema.Class<DemoLineLocator>("DemoLineLocator")({
-  path: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  path: RepositoryRelativePath,
   side: Schema.Literals(["old", "new"]),
   lineNumber: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
   lineContent: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
@@ -68,7 +76,7 @@ export class DemoLineLocator extends Schema.Class<DemoLineLocator>("DemoLineLoca
 export class DemoWalkthroughStopSource extends Schema.Class<DemoWalkthroughStopSource>(
   "DemoWalkthroughStopSource",
 )({
-  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  id: WalkthroughStopId,
   title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   summary: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   risk: Schema.Literals(["critical", "review", "support"]),
@@ -79,7 +87,7 @@ export class DemoWalkthroughStopSource extends Schema.Class<DemoWalkthroughStopS
 export class DemoWalkthroughChapterSource extends Schema.Class<DemoWalkthroughChapterSource>(
   "DemoWalkthroughChapterSource",
 )({
-  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  id: WalkthroughChapterId,
   title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   summary: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   stops: Schema.Array(DemoWalkthroughStopSource),
@@ -89,7 +97,7 @@ export class DemoWalkthroughChapterSource extends Schema.Class<DemoWalkthroughCh
 export class DemoWalkthroughSupportSource extends Schema.Class<DemoWalkthroughSupportSource>(
   "DemoWalkthroughSupportSource",
 )({
-  id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  id: WalkthroughSupportItemId,
   title: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   reason: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   hunks: Schema.Array(DemoHunkLocator),
@@ -105,9 +113,11 @@ export class DemoWalkthroughSource extends Schema.Class<DemoWalkthroughSource>(
   support: Schema.Array(DemoWalkthroughSupportSource),
 }) {}
 
+const DemoReviewRevision = ReviewRevision.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/)))
+
 /** Authored commit metadata for a demo revision. */
 export class DemoCommitSource extends Schema.Class<DemoCommitSource>("DemoCommitSource")({
-  oid: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  oid: DemoReviewRevision,
   messageHeadline: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   authoredDate: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
@@ -117,8 +127,8 @@ export class DemoRevisionManifest extends Schema.Class<DemoRevisionManifest>(
   "DemoRevisionManifest",
 )({
   id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
-  baseSha: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
-  headSha: Schema.String.pipe(Schema.check(Schema.isPattern(/^[0-9a-f]{40}$/))),
+  baseSha: DemoReviewRevision,
+  headSha: DemoReviewRevision,
   fetchedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   updatedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   diffAsset: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
@@ -134,7 +144,7 @@ export class DemoRepositorySource extends Schema.Class<DemoRepositorySource>(
   owner: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   name: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   description: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
-  remoteUrl: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  remoteUrl: WebUrl,
   createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
 }) {}
 
@@ -172,7 +182,7 @@ export class DemoThreadSource extends Schema.Class<DemoThreadSource>("DemoThread
   id: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   originalRevisionId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   currentRevisionId: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
-  anchorStatus: Schema.Literals(["active", "outdated", "unresolved_anchor"]),
+  anchorState: Schema.Literals(["Active", "Outdated", "Unresolved"]),
   locator: DemoLineLocator,
   createdAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   updatedAt: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
@@ -220,13 +230,15 @@ export class DemoScenarioManifest extends Schema.Class<DemoScenarioManifest>(
   revisions: Schema.Array(DemoRevisionManifest),
   threads: Schema.Array(DemoThreadSource),
   agentTurns: Schema.Array(DemoAgentTurnSource),
-  initiallyViewedFilePaths: Schema.Array(Schema.String),
+  initiallyViewedFilePaths: Schema.Array(RepositoryRelativePath),
 }) {}
 
 /** Resolved text assets used to materialize a scenario without network or filesystem access. */
 export interface DemoScenarioAssets {
   readonly diffs: Readonly<Record<string, string>>
-  readonly walkthroughs: Readonly<Record<string, unknown>>
+  readonly walkthroughs: {
+    readonly [assetName: string]: DemoWalkthroughSource
+  }
 }
 
 /** One coherent, fully materialized pull-request revision. */
@@ -304,12 +316,15 @@ export const materializeDemoScenario = (
       ),
     )
     const repository = Repo.make({
-      id: manifest.repository.id,
-      provider: "github",
-      owner: manifest.repository.owner,
-      name: manifest.repository.name,
-      remoteUrl: manifest.repository.remoteUrl,
-      localPath: noRepositoryLocalPath,
+      id: ReviewProjectId.make(manifest.repository.id),
+      source: HostedRepositorySource.make({
+        locator: makeHostedRepositoryLocator(
+          "github",
+          manifest.repository.owner,
+          manifest.repository.name,
+        ),
+      }),
+      checkout: RemoteOnly.make({ remoteUrl: manifest.repository.remoteUrl }),
       isFavorite: true,
       lastOpenedAt: manifest.pullRequest.createdAt,
       lastSyncedAt: manifest.pullRequest.createdAt,
@@ -348,10 +363,13 @@ export const materializeDemoScenario = (
         ])
       }
       const thread = threads.find((candidate) => candidate.thread.id === threadId)
-      const persistedResponse = thread?.messages.find(
-        (message) => message.agentRunId === turn.agentRunId,
+      const persistedResponse = thread?.conversation.find(
+        (entry) => entry._tag === "Completed" && entry.run.id === turn.agentRunId,
       )
-      if (persistedResponse?.bodyMarkdown !== turn.responseBodyMarkdown) {
+      if (
+        persistedResponse?._tag !== "Completed" ||
+        persistedResponse.message.bodyMarkdown !== turn.responseBodyMarkdown
+      ) {
         return scenarioFailure(manifest.id, [
           `Agent turn ${turn.id} does not match persisted run ${turn.agentRunId}.`,
         ])
@@ -417,9 +435,9 @@ const materializeRevision = (
       }),
     )
     const locator = makeHostedReviewLocator(
-      repository.provider,
-      repository.owner,
-      repository.name,
+      "github",
+      manifest.repository.owner,
+      manifest.repository.name,
       manifest.pullRequest.number,
     )
     const summary = HostedReviewSummary.make({
@@ -434,14 +452,14 @@ const materializeRevision = (
       }),
       state: manifest.pullRequest.state,
       decision: "none",
-      url: `${repository.remoteUrl}/pull/${manifest.pullRequest.number}`,
+      url: WebUrl.make(`${repository.remoteUrl}/pull/${manifest.pullRequest.number}`),
       draft: manifest.pullRequest.isDraft,
       base: BranchRevision.make({
-        name: manifest.pullRequest.baseRefName,
+        name: RepositoryComparisonRef.make(manifest.pullRequest.baseRefName),
         revision: revision.baseSha,
       }),
       head: BranchRevision.make({
-        name: manifest.pullRequest.headRefName,
+        name: RepositoryComparisonRef.make(manifest.pullRequest.headRefName),
         revision: revision.headSha,
       }),
       createdAt: manifest.pullRequest.createdAt,
@@ -479,8 +497,8 @@ const materializeRevision = (
       repoId: repository.id,
       prNumber: manifest.pullRequest.number,
       reviewKey,
-      baseSha: revision.baseSha,
-      headSha: revision.headSha,
+      baseSha: ReviewRevision.make(revision.baseSha),
+      headSha: ReviewRevision.make(revision.headSha),
       promptVersion: WALKTHROUGH_PROMPT_VERSION,
       walkthrough,
       createdAt: revision.fetchedAt,
@@ -573,8 +591,8 @@ const materializeThread = (
       originalRevision.parsedDiff,
       source.locator,
     )
-    const currentAnchor =
-      source.anchorStatus === "active"
+    const activeAnchor =
+      source.anchorState === "Active"
         ? yield* resolveLineAnchor(manifest.id, currentRevision.parsedDiff, source.locator)
         : null
     if (!isReviewAnchorInParsedDiff(originalAnchor, originalRevision.parsedDiff)) {
@@ -583,46 +601,48 @@ const materializeThread = (
       ])
     }
     if (
-      currentAnchor !== null &&
-      !isReviewAnchorInParsedDiff(currentAnchor, currentRevision.parsedDiff)
+      activeAnchor !== null &&
+      !isReviewAnchorInParsedDiff(activeAnchor, currentRevision.parsedDiff)
     ) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} current anchor does not match revision ${source.currentRevisionId}.`,
       ])
     }
     const threadId = ReviewThreadId.make(source.id)
-    const messages = source.messages.map((message) =>
-      ReviewThreadMessage.make({
-        ...message,
-        id: ReviewThreadMessageId.make(message.id),
-        threadId,
-        bodyMarkdown: MarkdownBody.make(message.bodyMarkdown),
-      }),
-    )
-    const expectedSequences = messages.map((_, index) => index)
-    if (messages.some((message, index) => message.sequence !== expectedSequences[index])) {
+    const expectedSequences = source.messages.map((_, index) => index)
+    if (source.messages.some((message, index) => message.sequence !== expectedSequences[index])) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} message sequences must start at zero and remain contiguous.`,
       ])
     }
 
+    const thread = ReviewThread.make({
+      id: threadId,
+      repoId: ReviewProjectId.make(manifest.repository.id),
+      reviewKey,
+      prNumber: manifest.pullRequest.number,
+      baseRevision: originalRevision.snapshot.baseRevision,
+      headRevision: originalRevision.snapshot.headRevision,
+      currentBaseRevision: currentRevision.snapshot.baseRevision,
+      currentHeadRevision: currentRevision.snapshot.headRevision,
+      originalAnchor,
+      currentAnchor:
+        activeAnchor !== null
+          ? CurrentReviewAnchor.cases.Active.make({ anchor: activeAnchor })
+          : source.anchorState === "Outdated"
+            ? CurrentReviewAnchor.cases.Outdated.make({})
+            : CurrentReviewAnchor.cases.Unresolved.make({}),
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+    })
+    const lifecycleErrors = source.messages.flatMap((message) => {
+      const error = validateDemoReviewMessage(message)
+      return error === null ? [] : [error]
+    })
+    if (lifecycleErrors.length > 0) return yield* scenarioFailure(manifest.id, lifecycleErrors)
     return ReviewThreadDetails.make({
-      thread: ReviewThread.make({
-        id: threadId,
-        repoId: manifest.repository.id,
-        reviewKey,
-        prNumber: manifest.pullRequest.number,
-        baseRevision: originalRevision.snapshot.baseRevision,
-        headRevision: originalRevision.snapshot.headRevision,
-        currentBaseRevision: currentRevision.snapshot.baseRevision,
-        currentHeadRevision: currentRevision.snapshot.headRevision,
-        originalAnchor,
-        currentAnchor,
-        anchorStatus: source.anchorStatus,
-        createdAt: source.createdAt,
-        updatedAt: source.updatedAt,
-      }),
-      messages,
+      thread,
+      conversation: source.messages.map((message) => makeDemoReviewTurn(thread, message)),
     })
   })
 

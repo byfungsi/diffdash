@@ -1,9 +1,10 @@
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import type { DesktopUpdater } from "../../../../src/main/services/app-updater"
 import type { ApplicationRuntime } from "../../application-runtime"
+import type { DesktopHostConfiguration } from "../../desktop-host-configuration"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { createShutdown } from "../../shutdown"
-import { startUpdaterLifecycle } from "../../updater-lifecycle"
+import { electronUpdaterLifecycleHost, startUpdaterLifecycle } from "../../updater-lifecycle"
 import { defineAnalyticsHandlers } from "./analytics"
 import { IpcControllerRegistry } from "./controller-registry"
 import { defineNavigationHandlers } from "./navigation"
@@ -26,16 +27,23 @@ export const defineIpcHandlers = (
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
   shutdown: ReturnType<typeof createShutdown>,
+  configuration: DesktopHostConfiguration,
 ) => {
   defineRepositoryHandlers(runtime, handlers)
   defineProjectWorkspaceHandlers(runtime, handlers)
   defineReviewHandlers(runtime, handlers)
   defineThreadHandlers(runtime, handlers)
   defineWalkthroughHandlers(runtime, handlers)
-  defineSettingsHandlers(runtime, handlers)
+  defineSettingsHandlers(runtime, handlers, configuration)
   defineAnalyticsHandlers(runtime, handlers)
   defineUpdateHandlers(updater, handlers, shutdown)
-  defineNavigationHandlers(runtime, handlers, navigationCommands, rendererSecurityPolicy)
+  defineNavigationHandlers(
+    runtime,
+    handlers,
+    navigationCommands,
+    rendererSecurityPolicy,
+    configuration,
+  )
 }
 
 /** Defines and installs all domain IPC controllers at the application boundary. */
@@ -48,6 +56,7 @@ export const installIpcControllers = (
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
   shutdown: ReturnType<typeof createShutdown>,
+  configuration: DesktopHostConfiguration,
 ) => {
   const handlers = new IpcControllerRegistry(rendererSecurityPolicy)
   defineIpcHandlers(
@@ -57,7 +66,12 @@ export const installIpcControllers = (
     navigationCommands,
     rendererSecurityPolicy,
     shutdown,
+    configuration,
   )
   handlers.install()
-  startUpdaterLifecycle(updater)
+  startUpdaterLifecycle(
+    updater,
+    electronUpdaterLifecycleHost,
+    configuration.policies.updatesDisabled,
+  )
 }

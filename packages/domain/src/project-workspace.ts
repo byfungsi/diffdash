@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 
 import { HostedRepositoryLocator } from "./git-provider"
-import { Repo } from "./repository"
+import { Repo, RepositoryCheckoutPath } from "./repository"
 import { ReviewProjectId } from "./review-identity"
 import { ReviewThreadTarget } from "./review-thread"
 
@@ -28,7 +28,7 @@ export class ProjectOpened extends Schema.TaggedClass<ProjectOpened>()("opened",
 export class ProjectRemoteSelectionRequired extends Schema.TaggedClass<ProjectRemoteSelectionRequired>()(
   "remoteSelectionRequired",
   {
-    rootPath: Schema.String,
+    rootPath: RepositoryCheckoutPath,
     candidates: Schema.Array(ProjectRemoteCandidate).pipe(Schema.check(Schema.isMinLength(2))),
   },
 ) {}

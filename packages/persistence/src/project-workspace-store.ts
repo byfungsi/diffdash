@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 
 import {
   ProjectWorkspaceRibbon,
@@ -7,7 +8,7 @@ import {
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { DatabaseService } from "./database"
+import { type DatabaseRow, makeDatabase } from "./database"
 
 const ReviewTargetJson = Schema.fromJsonString(ProjectWorkspaceReviewTarget)
 
@@ -18,12 +19,21 @@ const ProjectWorkspaceStateRow = Schema.Struct({
   updated_at: Schema.String,
 })
 
+const ProjectWorkspaceStoreOperation = Schema.Literals([
+  "get.query",
+  "get.decode",
+  "save.encodeTarget",
+  "save.query",
+  "save.get",
+])
+type ProjectWorkspaceStoreOperation = typeof ProjectWorkspaceStoreOperation.Type
+
 /** A typed failure from project workspace persistence operations. */
 export class ProjectWorkspaceStoreError extends Schema.TaggedError<ProjectWorkspaceStoreError>()(
   "ProjectWorkspaceStoreError",
   {
-    operation: Schema.String,
-    cause: Schema.Defect(),
+    operation: ProjectWorkspaceStoreOperation,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
@@ -42,7 +52,8 @@ export class ProjectWorkspaceStore extends Context.Service<
   static readonly layer = Layer.effect(
     ProjectWorkspaceStore,
     Effect.gen(function* () {
-      const database = yield* DatabaseService
+      const client = yield* SqlClient.SqlClient
+      const database = makeDatabase(client)
 
       const get = Effect.fn("ProjectWorkspaceStore.get")(function (projectId: ReviewProjectId) {
         return database
@@ -52,7 +63,10 @@ export class ProjectWorkspaceStore extends Context.Service<
               ProjectWorkspaceStoreError.make({ operation: "get.query", cause }),
             ),
             Effect.flatMap((row) =>
-              row === undefined ? Effect.succeed(null) : decodeStateRow("get.decode", row),
+              Option.map(row, (value) => decodeStateRow("get.decode", value)).pipe(
+                Effect.transposeOption,
+                Effect.map(Option.getOrNull),
+              ),
             ),
           )
       })
@@ -102,7 +116,7 @@ export class ProjectWorkspaceStore extends Context.Service<
   )
 }
 
-const decodeStateRow = (operation: string, input: unknown) =>
+const decodeStateRow = (operation: ProjectWorkspaceStoreOperation, input: DatabaseRow) =>
   Schema.decodeUnknownEffect(ProjectWorkspaceStateRow)(input).pipe(
     Effect.mapError((cause) => ProjectWorkspaceStoreError.make({ operation, cause })),
     Effect.map((row) =>

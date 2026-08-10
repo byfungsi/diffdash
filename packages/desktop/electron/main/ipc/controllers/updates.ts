@@ -1,6 +1,6 @@
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { Effect } from "effect"
+import { Effect, Match } from "effect"
 import type { DesktopUpdater } from "../../../../src/main/services/app-updater"
 import { createShutdown } from "../../shutdown"
 import { IpcControllerRegistry } from "./controller-registry"
@@ -25,7 +25,17 @@ export const defineUpdateHandlers = (
 
   handlers.define(InvokeChannel.updatesRestartAndInstall, async (): Promise<void> => {
     const state = await Effect.runPromise(updater.getState())
-    if (state["_tag"] !== "downloaded") {
+    if (
+      Match.valueTags(state, {
+        unsupported: () => true,
+        idle: () => true,
+        checking: () => true,
+        available: () => true,
+        downloading: () => true,
+        downloaded: () => false,
+        error: () => true,
+      })
+    ) {
       await Effect.runPromise(updater.quitAndInstall())
       return
     }

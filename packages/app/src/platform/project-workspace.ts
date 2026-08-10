@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Option } from "effect"
 
 import type { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import type { ResolvedRepositoryComparison } from "@diffdash/protocol/review-snapshot"
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import { InvokeChannel } from "@diffdash/protocol/channels"
@@ -29,7 +31,13 @@ export const projectWorkspaceLayer = Layer.effect(
     return ProjectWorkspace.of({
       resolveLocalReview: (localPath, branchName) =>
         invokePreload(InvokeChannel.resolveLocalBranch, () =>
-          api.localReviews.resolveBranch(localPath, Option.getOrNull(branchName)),
+          api.localReviews.resolveBranch(
+            RepositoryCheckoutPath.make(localPath),
+            Option.match(branchName, {
+              onNone: () => null,
+              onSome: RepositoryComparisonRef.make,
+            }),
+          ),
         ),
       resolveRepositoryComparison: (command) =>
         invokePreload(InvokeChannel.resolveRepositoryComparison, () =>

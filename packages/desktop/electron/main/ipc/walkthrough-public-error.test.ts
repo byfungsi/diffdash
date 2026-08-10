@@ -1,21 +1,22 @@
 import {
   AgentCapabilityUnavailableError,
   AgentPolicyEnforcementError,
-  AgentProviderId,
-  AgentProviderOperationError,
-} from "@diffdash/agent-provider"
-import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
-import {
   AgentProviderFailure,
   type AgentProviderFailureCategory,
+  AgentProviderId,
+  AgentProviderOperationError,
   type AgentProviderProcessFailureKind,
-} from "@diffdash/domain/provider-failure"
+} from "@diffdash/agent-provider"
+import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import { WalkthroughPromptPreparationError } from "@diffdash/domain/walkthrough"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import { ProcessExitError } from "@diffdash/process"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { UNKNOWN_TRANSPORT_ERROR_MESSAGE } from "@diffdash/protocol/transport-error"
-import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
+import {
+  WalkthroughGenerationError,
+  WalkthroughModelUnavailableError,
+} from "@diffdash/agents/walkthrough"
 import { describe, expect, it } from "vitest"
 import {
   ReviewContextError,
@@ -36,7 +37,7 @@ const failure = (
 ) =>
   AgentProviderFailure.make({
     version: 1,
-    providerId,
+    providerId: AgentProviderId.make(providerId),
     capability: "walkthrough",
     category,
     processKind,

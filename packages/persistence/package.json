@@ -5,13 +5,12 @@
   "type": "module",
   "exports": {
     "./agent-run-artifact-store": "./src/agent-run-artifact-store.ts",
-    "./agent-run-store": "./src/agent-run-store.ts",
     "./database": "./src/database.ts",
+    "./database-node": "./src/database-node.ts",
     "./project-workspace-store": "./src/project-workspace-store.ts",
     "./repository-store": "./src/repository-store.ts",
     "./review-thread-store": "./src/review-thread-store.ts",
     "./review-turn-store": "./src/review-turn-store.ts",
-    "./thread-memory-store": "./src/thread-memory-store.ts",
     "./viewed-file-store": "./src/viewed-file-store.ts",
     "./walkthrough-operation-store": "./src/walkthrough-operation-store.ts",
     "./walkthrough-store": "./src/walkthrough-store.ts"
@@ -19,18 +18,19 @@
   "scripts": {
     "build": "tsc --noEmit",
     "fixtures:database-v8": "node scripts/generate-database-v8-fixture.mjs",
+    "test:bun": "bun scripts/database-bun-conformance.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
     "@diffdash/domain": "workspace:*",
-    "better-sqlite3": "^12.11.1",
+    "@effect/sql-sqlite-bun": "4.0.0-beta.105",
+    "@effect/sql-sqlite-node": "4.0.0-beta.105",
     "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "oxlint": "catalog:",
     "typescript": "catalog:",

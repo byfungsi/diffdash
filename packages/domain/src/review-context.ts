@@ -1,10 +1,11 @@
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 
 import { ParsedDiff } from "./diff"
-import { ParsedDiffFile } from "./diff"
+import { DiffFileStatus, DiffFileVisibility, type ParsedDiffFile } from "./diff"
 import { HostedReviewDetail, HostedReviewDiff } from "./git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "./local-review"
 import { RepositoryComparisonDetail, RepositoryComparisonDiff } from "./repository-comparison"
+import { RepositoryRelativePath } from "./repository-path"
 import {
   ReviewFileId,
   ReviewFilePatchHash,
@@ -66,10 +67,11 @@ export class ReviewSnapshotFileInventory extends Schema.Class<ReviewSnapshotFile
 )({
   fileId: ReviewFileId,
   patchHash: ReviewFilePatchHash,
-  reviewKey: Schema.String,
-  path: Schema.String,
-  oldPath: Schema.NullOr(Schema.String),
-  status: ParsedDiffFile.fields.status,
+  reviewKey: ReviewKey,
+  path: RepositoryRelativePath,
+  oldPath: Schema.NullOr(RepositoryRelativePath),
+  status: DiffFileStatus,
+  visibility: DiffFileVisibility,
   additions: Schema.Number,
   deletions: Schema.Number,
   hunkCount: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
@@ -164,13 +166,18 @@ export function makeReviewSnapshotManifest(
     headRevision: snapshot.headRevision,
     files: snapshot.parsedDiff.files.map(makeReviewSnapshotFileInventory),
   }
-  if (snapshot instanceof HostedReviewSnapshot) {
-    return HostedReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
-  }
-  if (snapshot instanceof LocalReviewSnapshot) {
-    return LocalReviewSnapshotManifest.make({ ...identity, detail: snapshot.detail })
-  }
-  return RepositoryComparisonSnapshotManifest.make({ ...identity, detail: snapshot.detail })
+  return Match.value(snapshot).pipe(
+    Match.tag("hosted", (hosted) =>
+      HostedReviewSnapshotManifest.make({ ...identity, detail: hosted.detail }),
+    ),
+    Match.tag("local", (local) =>
+      LocalReviewSnapshotManifest.make({ ...identity, detail: local.detail }),
+    ),
+    Match.tag("repositoryComparison", (comparison) =>
+      RepositoryComparisonSnapshotManifest.make({ ...identity, detail: comparison.detail }),
+    ),
+    Match.exhaustive,
+  )
 }
 
 /** Projects one parsed file into renderer-safe inventory metadata. */
@@ -182,6 +189,7 @@ export const makeReviewSnapshotFileInventory = (file: ParsedDiffFile) =>
     path: file.path,
     oldPath: file.oldPath,
     status: file.status,
+    visibility: file.visibility,
     additions: file.additions,
     deletions: file.deletions,
     hunkCount: file.hunks.length,

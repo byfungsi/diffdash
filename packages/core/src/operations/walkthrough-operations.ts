@@ -1,5 +1,5 @@
-/* oxlint-disable eslint/no-underscore-dangle -- Effect errors use _tag discriminants. */
 import type { Repo } from "@diffdash/domain/repository"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import type {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
@@ -7,6 +7,7 @@ import type {
   ReviewSnapshot,
 } from "@diffdash/domain/review-context"
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import type { ReviewProjectId as ReviewProjectIdType } from "@diffdash/domain/review-identity"
 import {
   prepareWalkthroughPromptInput,
   type StoredWalkthrough,
@@ -34,7 +35,11 @@ import {
   WalkthroughStore,
   type WalkthroughStoreError,
 } from "@diffdash/persistence/walkthrough-store"
-import { WalkthroughService } from "@diffdash/walkthrough"
+import {
+  WalkthroughGenerationInput,
+  WalkthroughReviewContext,
+  WalkthroughService,
+} from "@diffdash/agents/walkthrough"
 import {
   Cause,
   Effect,
@@ -70,6 +75,7 @@ import {
   WalkthroughOperationSuperseded,
   WalkthroughOperationTerminalFailure,
 } from "../core-contract"
+import { captureCoreDefect } from "../core-defect-boundary"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
 import type { ReviewResolution } from "./review-resolution"
 
@@ -108,10 +114,7 @@ type ResolvedWalkthrough =
   | ResolvedLocalWalkthrough
   | ResolvedRepositoryComparisonWalkthrough
 
-type WalkthroughWorkerObservation =
-  | { readonly _tag: "none" }
-  | { readonly _tag: "expected"; readonly failure: CoreWalkthroughFailure }
-  | { readonly _tag: "defect"; readonly defect: unknown }
+type WalkthroughWorkerObservation = Option.Option<Cause.Cause<CoreWalkthroughFailure>>
 
 /** Scoped admission, observation, and cancellation for durable walkthrough operations. */
 export interface WalkthroughLifecycle {
@@ -132,7 +135,7 @@ export interface WalkthroughOperations extends WalkthroughLifecycle {
     request: GetStoredWalkthrough,
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
   readonly getCached: (
-    repoId: string,
+    repoId: ReviewProjectIdType,
     snapshot: ReviewSnapshot,
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, WalkthroughStoreError>
 }
@@ -244,14 +247,20 @@ export const makeWalkthroughOperations = (
                 current.snapshot.parsedDiff.files,
                 walkthroughHostedReviewScope(current.target.review),
               )
-              const walkthrough = yield* walkthroughService.generate({
-                review: { kind: "hosted", hostedReview: current.snapshot.detail },
-                diff: promptInput.diff,
-                hunkDigest: promptInput.hunkDigest,
-                changedFileTree: promptInput.changedFileTree,
-                generation: promptInput.generation,
-                promptStats: promptInput.stats,
-              })
+              const walkthrough = yield* walkthroughService.generate(
+                WalkthroughGenerationInput.make({
+                  review: WalkthroughReviewContext.make({
+                    kind: "hosted",
+                    hostedReview: current.snapshot.detail,
+                  }),
+                  diff: promptInput.diff,
+                  hunkDigest: promptInput.hunkDigest,
+                  changedFileTree: promptInput.changedFileTree,
+                  generation: promptInput.generation,
+                  promptStats: Option.some(promptInput.stats),
+                  workingDirectory: Option.none(),
+                }),
+              )
               return yield* walkthroughStore.save({
                 ...cacheKey,
                 prNumber: current.prNumber,
@@ -272,18 +281,20 @@ export const makeWalkthroughOperations = (
               const walkthrough = yield* comparisons.useWorkspace(
                 current.target,
                 (workingDirectory) =>
-                  walkthroughService.generate({
-                    review: {
-                      kind: "repositoryComparison",
-                      comparison: current.snapshot.detail,
-                    },
-                    diff: promptInput.diff,
-                    hunkDigest: promptInput.hunkDigest,
-                    changedFileTree: promptInput.changedFileTree,
-                    generation: promptInput.generation,
-                    promptStats: promptInput.stats,
-                    workingDirectory,
-                  }),
+                  walkthroughService.generate(
+                    WalkthroughGenerationInput.make({
+                      review: WalkthroughReviewContext.make({
+                        kind: "repositoryComparison",
+                        comparison: current.snapshot.detail,
+                      }),
+                      diff: promptInput.diff,
+                      hunkDigest: promptInput.hunkDigest,
+                      changedFileTree: promptInput.changedFileTree,
+                      generation: promptInput.generation,
+                      promptStats: Option.some(promptInput.stats),
+                      workingDirectory: Option.some(workingDirectory),
+                    }),
+                  ),
               )
               return yield* walkthroughStore.save({
                 ...cacheKey,
@@ -302,14 +313,20 @@ export const makeWalkthroughOperations = (
                 current.snapshot.parsedDiff.files,
                 walkthroughLocalDiffScope(current.snapshot.headRevision),
               )
-              const walkthrough = yield* walkthroughService.generate({
-                review: { kind: "localDiff", localReview: current.snapshot.detail },
-                diff: promptInput.diff,
-                hunkDigest: promptInput.hunkDigest,
-                changedFileTree: promptInput.changedFileTree,
-                generation: promptInput.generation,
-                promptStats: promptInput.stats,
-              })
+              const walkthrough = yield* walkthroughService.generate(
+                WalkthroughGenerationInput.make({
+                  review: WalkthroughReviewContext.make({
+                    kind: "localDiff",
+                    localReview: current.snapshot.detail,
+                  }),
+                  diff: promptInput.diff,
+                  hunkDigest: promptInput.hunkDigest,
+                  changedFileTree: promptInput.changedFileTree,
+                  generation: promptInput.generation,
+                  promptStats: Option.some(promptInput.stats),
+                  workingDirectory: Option.none(),
+                }),
+              )
               return yield* walkthroughStore.save({
                 ...cacheKey,
                 prNumber: null,
@@ -329,19 +346,22 @@ export const makeWalkthroughOperations = (
           expectedStateVersion: operation.stateVersion,
         })
         if (!running.won || running.operation.state !== "running") {
-          return { _tag: "none" } as const
+          return Option.none()
         }
 
         const exit = yield* Effect.exit(generateResolved(resolved))
         yield* persistTerminalExit(operationStore, running.operation, exit)
-        return walkthroughObservationFromExit(exit)
+        return Exit.match(exit, {
+          onSuccess: () => Option.none(),
+          onFailure: Option.some,
+        })
       },
       (effect) =>
         effect.pipe(
           Effect.catchTag("WalkthroughOperationNotFoundError", (cause) =>
             Effect.fail(
               WalkthroughOperationStoreError.make({
-                operation: "worker.transition",
+                operation: DiagnosticOperation.make("worker.transition"),
                 message: "Walkthrough operation disappeared during a lifecycle transition.",
                 cause,
               }),
@@ -449,11 +469,19 @@ export const makeWalkthroughOperations = (
         authoritative.state === "failed" &&
         Option.isSome(workerExit) &&
         Exit.isSuccess(workerExit.value) &&
-        workerExit.value.value._tag !== "none"
+        Option.isSome(workerExit.value.value)
       ) {
-        return workerExit.value.value._tag === "expected"
-          ? WalkthroughOperationFailed.make({ error: workerExit.value.value.failure })
-          : WalkthroughOperationDefect.make({ defect: workerExit.value.value.defect })
+        const cause = workerExit.value.value.value
+        const defect = Cause.findDefect(cause)
+        if (Result.isSuccess(defect)) {
+          return WalkthroughOperationDefect.make({
+            defect: captureCoreDefect(defect.success).summary,
+          })
+        }
+        const failure = Cause.findErrorOption(cause)
+        if (Option.isSome(failure)) {
+          return WalkthroughOperationFailed.make({ error: failure.value })
+        }
       }
       return yield* materializeOperation(authoritative)
     })
@@ -530,54 +558,45 @@ const persistTerminalExit = (
     },
   })
 
-const walkthroughObservationFromExit = (
-  exit: Exit.Exit<StoredWalkthrough, CoreWalkthroughFailure>,
-): WalkthroughWorkerObservation =>
-  Exit.match(exit, {
-    onSuccess: () => ({ _tag: "none" }),
-    onFailure: (cause) => {
-      const defect = Cause.findDefect(cause)
-      if (Result.isSuccess(defect)) return { _tag: "defect", defect: defect.success }
-      const failure = Cause.findErrorOption(cause)
-      return Option.isSome(failure)
-        ? { _tag: "expected", failure: failure.value }
-        : { _tag: "none" }
-    },
-  })
+export { summarizeCoreDefect } from "../core-defect-boundary"
 
-const classifyExpectedFailure = (failure: CoreWalkthroughFailure) =>
+const expectedFailure = (category: WalkthroughExpectedFailureCategory, code: string) =>
   WalkthroughExpectedFailure.make({
     kind: "expected",
-    category: expectedFailureCategory(failure),
-    code: WalkthroughOperationFailureCode.make(expectedFailureCode(failure)),
+    category,
+    code: WalkthroughOperationFailureCode.make(code),
   })
 
-const expectedFailureCategory = (
-  failure: CoreWalkthroughFailure,
-): WalkthroughExpectedFailureCategory => {
-  switch (failure._tag) {
-    case "ReviewContextError":
-    case "RepositoryLinkError":
-    case "RepositoryComparisonSourceError":
-      return "review-resolution"
-    case "WalkthroughPromptPreparationError":
-      return "prompt-preparation"
-    case "WalkthroughStoreError":
-      return "artifact-persistence"
-    case "WalkthroughGenerationError":
-    case "WalkthroughValidationError":
-    case "InvalidAgentProviderResponseError":
-      return "validation"
-    default:
-      return "provider"
-  }
-}
-
-const expectedFailureCode = (failure: CoreWalkthroughFailure) =>
-  failure._tag
-    .replace(/([a-z0-9])([A-Z])/gu, "$1-$2")
-    .replace(/([A-Z])([A-Z][a-z])/gu, "$1-$2")
-    .toLowerCase()
+const classifyExpectedFailure = Match.typeTags<
+  CoreWalkthroughFailure,
+  WalkthroughExpectedFailure
+>()({
+  ReviewContextError: () => expectedFailure("review-resolution", "review-context-error"),
+  RepositoryLinkError: () => expectedFailure("review-resolution", "repository-link-error"),
+  RepositoryComparisonSourceError: () =>
+    expectedFailure("review-resolution", "repository-comparison-source-error"),
+  WalkthroughPromptPreparationError: () =>
+    expectedFailure("prompt-preparation", "walkthrough-prompt-preparation-error"),
+  WalkthroughStoreError: () => expectedFailure("artifact-persistence", "walkthrough-store-error"),
+  WalkthroughGenerationError: () => expectedFailure("validation", "walkthrough-generation-error"),
+  WalkthroughValidationError: () => expectedFailure("validation", "walkthrough-validation-error"),
+  InvalidAgentProviderResponseError: () =>
+    expectedFailure("validation", "invalid-agent-provider-response-error"),
+  WalkthroughModelUnavailableError: () =>
+    expectedFailure("provider", "walkthrough-model-unavailable-error"),
+  MissingAgentProviderError: () => expectedFailure("provider", "missing-agent-provider-error"),
+  UnsupportedAgentCapabilityError: () =>
+    expectedFailure("provider", "unsupported-agent-capability-error"),
+  AgentCapabilityUnavailableError: () =>
+    expectedFailure("provider", "agent-capability-unavailable-error"),
+  AgentPolicyEnforcementError: () => expectedFailure("provider", "agent-policy-enforcement-error"),
+  AgentProviderProbeError: () => expectedFailure("provider", "agent-provider-probe-error"),
+  InvalidAgentProviderRegistrationError: () =>
+    expectedFailure("provider", "invalid-agent-provider-registration-error"),
+  NoAgentProviderAvailableError: () =>
+    expectedFailure("provider", "no-agent-provider-available-error"),
+  AgentProviderOperationError: () => expectedFailure("provider", "agent-provider-operation-error"),
+})
 
 const requireOperation: (
   store: WalkthroughOperationStore["Service"],
@@ -625,7 +644,7 @@ const isActiveOperation = (
   operation.state === "accepted" || operation.state === "running"
 
 const operationIdentity = (
-  repoId: string,
+  repoId: ReviewProjectIdType,
   snapshot: ReviewSnapshot,
 ): WalkthroughOperationIdentityType =>
   WalkthroughOperationIdentity.make({
@@ -644,7 +663,10 @@ const artifactCacheKey = (artifact: WalkthroughArtifactReference): WalkthroughCa
   promptVersion: artifact.promptVersion,
 })
 
-const walkthroughCacheKey = (repoId: string, snapshot: ReviewSnapshot): WalkthroughCacheKey => ({
+const walkthroughCacheKey = (
+  repoId: ReviewProjectIdType,
+  snapshot: ReviewSnapshot,
+): WalkthroughCacheKey => ({
   repoId,
   reviewKey: snapshot.reviewKey,
   baseSha: snapshot.baseRevision,

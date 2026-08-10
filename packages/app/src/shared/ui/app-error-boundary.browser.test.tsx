@@ -1,6 +1,8 @@
 import { createRoot, type Root } from "react-dom/client"
-import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
+import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
+import { transportError } from "@diffdash/protocol/transport-error"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { page } from "vitest/browser"
 
 import { AppErrorBoundary } from "./app-error-boundary"
 
@@ -26,7 +28,7 @@ describe("AppErrorBoundary", () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[role="alert"]')?.textContent).toContain("Renderer exploded")
     })
-    buttonNamed("Reload DiffDash").click()
+    await page.getByRole("button", { name: "Reload DiffDash", exact: true }).click()
     expect(onReload).toHaveBeenCalledOnce()
   })
 
@@ -61,7 +63,7 @@ describe("AppErrorBoundary", () => {
       </AppErrorBoundary>,
     )
     await vi.waitFor(() => expect(document.body.textContent).toContain("Application ready"))
-    const bridged = bridgeTransportError(
+    const bridged = legacyBridgeTransportError(
       transportError("AgentProviderExitError", "Provider claude stopped safely."),
     )
 
@@ -89,12 +91,4 @@ const render = (node: React.ReactNode) => {
   document.body.append(element)
   root = createRoot(element)
   root.render(node)
-}
-
-const buttonNamed = (name: string) => {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (candidate) => candidate.textContent === name,
-  )
-  if (button === undefined) throw new Error(`Button not found: ${name}`)
-  return button
 }

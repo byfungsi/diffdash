@@ -1,10 +1,11 @@
-import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
+import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
+import { transportError } from "@diffdash/protocol/transport-error"
 import { describe, expect, it } from "vitest"
 import { formatError } from "./errors"
 
 describe("formatError", () => {
   it("decodes protocol errors after a contextBridge-style clone", () => {
-    const encoded = bridgeTransportError(
+    const encoded = legacyBridgeTransportError(
       transportError("EXPECTED", "Safe renderer message", "walkthroughs:generate"),
     )
 
@@ -12,7 +13,7 @@ describe("formatError", () => {
   })
 
   it("adds caller context to safe domain reasons and removes preload channel metadata", () => {
-    const encoded = bridgeTransportError(
+    const encoded = legacyBridgeTransportError(
       transportError(
         "RepositoryLinkError",
         "repositories:openProject failed: Select a Git repository with a GitHub origin.",
@@ -26,7 +27,7 @@ describe("formatError", () => {
   })
 
   it("removes preload channel metadata from other public transport messages", () => {
-    const encoded = bridgeTransportError(
+    const encoded = legacyBridgeTransportError(
       transportError(
         "APP_STATE_UNAVAILABLE",
         "appState:get failed: Application runtime unavailable",

@@ -1,10 +1,13 @@
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LocalReviewDetail, workingTreeReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   LocalReviewSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
+  ReviewDiffIdentity,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
@@ -19,7 +22,8 @@ import {
   ReviewSnapshotPageCursor,
   type ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { bridgeTransportError, transportError } from "@diffdash/protocol/transport-error"
+import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
+import { transportError } from "@diffdash/protocol/transport-error"
 import { RegistryProvider } from "@effect/atom-react"
 import { StrictMode } from "react"
 import { flushSync } from "react-dom"
@@ -28,7 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { type ReviewSnapshotPages, useReviewSnapshotPages } from "./use-review-snapshot-pages"
 
 const originalDiffDash = Object.getOwnPropertyDescriptor(window, "diffDash")
-const target = workingTreeReviewTarget("/workspace/diffdash")
+const target = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
 const noop = (): void => undefined
 
 let root: Root | null = null
@@ -67,7 +71,7 @@ describe("useReviewSnapshotPages", () => {
     renderHook(fixture.manifest)
     const fileIds = fixture.files.map((file) => file.fileId)
 
-    await pages().loadFiles(fileIds)
+    await pages().pageReader.loadFiles(fileIds)
 
     expect(getPage).toHaveBeenCalledTimes(2)
     expect(getPage.mock.calls[0]?.[0].fileIds).toEqual(fileIds)
@@ -93,18 +97,18 @@ describe("useReviewSnapshotPages", () => {
     if (firstFile === undefined || secondFile === undefined)
       throw new Error("Missing fixture files")
 
-    const owner = pages().loadFiles([firstFile.fileId])
+    const owner = pages().pageReader.loadFiles([firstFile.fileId])
     await vi.waitFor(() => expect(getPage).toHaveBeenCalledTimes(1))
     let duplicateSettled = false
     let mixedSettled = false
     const duplicate = pages()
-      .loadFiles([firstFile.fileId])
+      .pageReader.loadFiles([firstFile.fileId])
       .then(() => {
         duplicateSettled = true
         return undefined
       })
     const mixed = pages()
-      .loadFiles([firstFile.fileId, secondFile.fileId])
+      .pageReader.loadFiles([firstFile.fileId, secondFile.fileId])
       .then(() => {
         mixedSettled = true
         return undefined
@@ -178,7 +182,7 @@ describe("useReviewSnapshotPages", () => {
     renderHook(fixture.manifest)
     const fileIds = [firstFile.fileId, secondFile.fileId, thirdFile.fileId]
 
-    await pages().loadFiles(fileIds)
+    await pages().pageReader.loadFiles(fileIds)
 
     expect(getPage).toHaveBeenCalledTimes(3)
     expect(getPage.mock.calls[1]?.[0]).toMatchObject({ cursor, fileIds })
@@ -207,7 +211,7 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest)
 
-    await Promise.all(fixture.files.map((file) => pages().loadFiles([file.fileId])))
+    await Promise.all(fixture.files.map((file) => pages().pageReader.loadFiles([file.fileId])))
 
     expect(getPage).toHaveBeenCalledTimes(2)
     expect(getPage.mock.calls.map(([request]) => request.fileIds.length)).toEqual([8, 2])
@@ -232,11 +236,11 @@ describe("useReviewSnapshotPages", () => {
     renderHook(fixture.manifest)
     pages().setPinnedFileIds(new Set([activeFile.fileId]))
 
-    await Promise.all(fixture.files.map((file) => pages().loadFiles([file.fileId])))
+    await Promise.all(fixture.files.map((file) => pages().pageReader.loadFiles([file.fileId])))
 
     await vi.waitFor(() => {
       expect(pages().files.length).toBeLessThanOrEqual(32)
-      expect(pages().getFile(activeFile.fileId)?.fileId).toBe(activeFile.fileId)
+      expect(pages().pageReader.getFile(activeFile.fileId)?.fileId).toBe(activeFile.fileId)
     })
   })
 
@@ -267,19 +271,21 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest)
 
-    const initialResult = await pages().loadFiles([file.fileId])
+    const initialResult = await pages().pageReader.loadFiles([file.fileId])
     expect(initialResult.statuses.get(file.fileId)).toBe("loaded")
-    expect(pages().getFile(file.fileId)).not.toBeNull()
+    expect(pages().pageReader.getFile(file.fileId)).not.toBeNull()
 
     rerenderHook(replacement.manifest)
 
     await vi.waitFor(() => {
       expect(pages().files).toEqual([])
-      expect(pages().getFile(file.fileId)).toBeNull()
+      expect(pages().pageReader.getFile(file.fileId)).toBeNull()
     })
-    const replacementResult = await pages().loadFiles([replacementFile.fileId])
+    const replacementResult = await pages().pageReader.loadFiles([replacementFile.fileId])
     expect(replacementResult.statuses.get(replacementFile.fileId)).toBe("loaded")
-    expect(pages().getFile(replacementFile.fileId)?.patchHash).toBe(replacementFile.patchHash)
+    expect(pages().pageReader.getFile(replacementFile.fileId)?.patchHash).toBe(
+      replacementFile.patchHash,
+    )
     expect(getPage).toHaveBeenCalledTimes(2)
   })
 
@@ -299,11 +305,11 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest)
 
-    const staleLoad = pages().loadFiles([staleFile.fileId])
+    const staleLoad = pages().pageReader.loadFiles([staleFile.fileId])
     await vi.waitFor(() => expect(getPage).toHaveBeenCalledOnce())
 
     rerenderHook(replacement.manifest)
-    const replacementLoad = pages().loadFiles([replacementFile.fileId])
+    const replacementLoad = pages().pageReader.loadFiles([replacementFile.fileId])
     const staleResult = await staleLoad
     expect(staleResult.statuses.get(staleFile.fileId)).toBe("cancelled")
 
@@ -317,7 +323,9 @@ describe("useReviewSnapshotPages", () => {
     )
     const replacementResult = await replacementLoad
     expect(replacementResult.statuses.get(replacementFile.fileId)).toBe("loaded")
-    expect(pages().getFile(replacementFile.fileId)?.patchHash).toBe(replacementFile.patchHash)
+    expect(pages().pageReader.getFile(replacementFile.fileId)?.patchHash).toBe(
+      replacementFile.patchHash,
+    )
 
     staleResponse.resolve(
       ReviewSnapshotPageAvailable.make({
@@ -327,7 +335,9 @@ describe("useReviewSnapshotPages", () => {
       }),
     )
     await Promise.resolve()
-    expect(pages().getFile(replacementFile.fileId)?.patchHash).toBe(replacementFile.patchHash)
+    expect(pages().pageReader.getFile(replacementFile.fileId)?.patchHash).toBe(
+      replacementFile.patchHash,
+    )
   })
 
   it("keeps a request error visible until a later retry clears it", async () => {
@@ -337,7 +347,7 @@ describe("useReviewSnapshotPages", () => {
     const retryResponse = deferred<ReviewSnapshotPageResponse>()
     const getPage = vi.fn<DiffDashApi["reviewSnapshots"]["getPage"]>()
     getPage.mockRejectedValueOnce(
-      bridgeTransportError(
+      legacyBridgeTransportError(
         transportError(
           "SNAPSHOT_TRANSPORT_UNAVAILABLE",
           `${InvokeChannel.getReviewSnapshotPage} failed: Snapshot transport unavailable`,
@@ -349,12 +359,12 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest)
 
-    await pages().loadFiles([file.fileId])
+    await pages().pageReader.loadFiles([file.fileId])
     await vi.waitFor(() =>
       expect(pages().fileErrors.get(file.fileId)).toBe("Snapshot transport unavailable"),
     )
 
-    const retry = pages().loadFiles([file.fileId])
+    const retry = pages().pageReader.loadFiles([file.fileId])
     await vi.waitFor(() => expect(pages().fileErrors.has(file.fileId)).toBe(false))
     retryResponse.resolve(
       ReviewSnapshotPageAvailable.make({
@@ -364,7 +374,9 @@ describe("useReviewSnapshotPages", () => {
       }),
     )
     await retry
-    await vi.waitFor(() => expect(pages().getFile(file.fileId)?.fileId).toBe(file.fileId))
+    await vi.waitFor(() =>
+      expect(pages().pageReader.getFile(file.fileId)?.fileId).toBe(file.fileId),
+    )
   })
 
   it("shows an expired snapshot as refreshing without retrying the stale snapshot", async () => {
@@ -383,8 +395,8 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest, onExpired)
 
-    await pages().loadFiles([firstFile.fileId])
-    await pages().loadFiles([secondFile.fileId])
+    await pages().pageReader.loadFiles([firstFile.fileId])
+    await pages().pageReader.loadFiles([secondFile.fileId])
 
     expect(getPage).toHaveBeenCalledOnce()
     expect(onExpired).toHaveBeenCalledOnce()
@@ -408,11 +420,13 @@ describe("useReviewSnapshotPages", () => {
     installPageApi(getPage)
     renderHook(fixture.manifest, noop, true)
 
-    const result = await pages().loadFiles([file.fileId])
+    const result = await pages().pageReader.loadFiles([file.fileId])
 
     expect(result.statuses.get(file.fileId)).toBe("loaded")
     expect(getPage).toHaveBeenCalledOnce()
-    await vi.waitFor(() => expect(pages().getFile(file.fileId)?.fileId).toBe(file.fileId))
+    await vi.waitFor(() =>
+      expect(pages().pageReader.getFile(file.fileId)?.fileId).toBe(file.fileId),
+    )
   })
 })
 
@@ -437,11 +451,11 @@ const snapshotFixture = (fileCount: number, contentMarker = "") => {
     detail: LocalReviewDetail.make({
       rootPath: target.rootPath,
       repoName: "diffdash",
-      branchName: "snapshot-loader",
+      branchName: RepositoryComparisonRef.make("snapshot-loader"),
       comparison: target.comparison,
-      baseSha: "base",
-      headSha: "head",
-      diffHash: "diff",
+      baseSha: ReviewRevision.make("base"),
+      headSha: ReviewRevision.make("head"),
+      diffHash: ReviewDiffIdentity.make("diff"),
       title: "Snapshot loader",
       files: [],
       fetchedAt: "2026-08-01T00:00:00Z",
@@ -454,6 +468,7 @@ const snapshotFixture = (fileCount: number, contentMarker = "") => {
         path: file.path,
         oldPath: file.oldPath,
         status: file.status,
+        visibility: file.visibility,
         additions: file.additions,
         deletions: file.deletions,
         hunkCount: file.hunks.length,

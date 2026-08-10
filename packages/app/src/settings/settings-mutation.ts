@@ -1,5 +1,7 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
-import { Schema } from "effect"
+import { Predicate, Schema } from "effect"
+import type { TransportError } from "@diffdash/protocol/transport-error"
+import { rendererTransportError } from "@/shared/errors"
 
 /** Restores domain classes after Electron structured-clones settings across IPC. */
 export const parseRendererSettings = Schema.decodeUnknownSync(AISettings)
@@ -9,7 +11,7 @@ type SettingsMutationDependencies = {
   readonly write: (settings: AISettings) => Promise<AISettings>
   readonly onOptimistic: (settings: AISettings) => void
   readonly onConfirmed: (settings: AISettings) => void
-  readonly onRollback: (settings: AISettings, error: unknown) => void
+  readonly onRollback: (settings: AISettings, error: TransportError) => void
 }
 
 /** Serialized last-write-wins settings mutation API. */
@@ -37,8 +39,9 @@ export const createSettingsMutationCoordinator = (
   const update = (
     updateValue: AISettings | ((current: AISettings) => AISettings),
   ): Promise<AISettings> => {
-    const settings =
-      typeof updateValue === "function" ? updateValue(optimisticSettings) : updateValue
+    const settings = Predicate.isFunction(updateValue)
+      ? updateValue(optimisticSettings)
+      : updateValue
     optimisticSettings = settings
     const version = latestVersion + 1
     latestVersion = version
@@ -56,12 +59,13 @@ export const createSettingsMutationCoordinator = (
           }
           return savedSettings
         },
-        (error: unknown) => {
+        (error) => {
+          const transport = rendererTransportError(error, "settings:update")
           if (version === latestVersion) {
             optimisticSettings = confirmedSettings
-            dependencies.onRollback(confirmedSettings, error)
+            dependencies.onRollback(confirmedSettings, transport)
           }
-          throw error
+          throw transport
         },
       )
     tail = request.then(

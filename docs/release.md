@@ -81,7 +81,7 @@ Only commit, tag, or push this recovery output after reviewing it and receiving 
 
 To recover promotion after the GitHub Release is published, manually dispatch the `Release` workflow with the matching tag and enable its `promote` input. Local promotion is intentionally disabled so it cannot race the serialized GitHub promotion job.
 
-Promotion verifies the published GitHub Release, both macOS architectures, Linux AppImage metadata, checksums, and the R2 mirror. It updates `stable.json` and root `latest.json`, verifies the public pointers, updater feeds, versioned files, and download redirects, then prunes R2 to the promoted release plus two retained releases. Manual downloads and automatic update clients only follow this promoted pointer.
+Promotion verifies the published GitHub Release, both macOS architectures, Linux AppImage metadata, checksums, and the R2 mirror. It updates `stable.json` and root `latest.json`, verifies the public pointers, updater feeds, versioned files, and download redirects, then keeps the promoted release plus the two newest other published stable releases. Older numeric candidates and numeric candidates left by draft, abandoned, or deleted GitHub releases are pruned; prerelease and non-version prefixes are ignored. Manual downloads and automatic update clients only follow this promoted pointer.
 
 Partial commands are available when debugging a single stage.
 
@@ -344,7 +344,9 @@ layout, or updater-feed changes.
 
 ## Packaging Commands
 
-Build packages on the target operating system. Native modules such as `better-sqlite3` should not be cross-compiled.
+Build packages on the target operating system so installer behavior and platform metadata are
+verified where they will ship. SQLite uses runtime-provided Node or Bun drivers and requires no
+native dependency rebuild.
 
 ```bash
 pnpm dist:mac
@@ -436,4 +438,4 @@ The `electron-builder` config can still publish directly to GitHub when invoked 
 GH_TOKEN=... pnpm release:local:publish
 ```
 
-Prefer OS-specific packaging because native modules such as `better-sqlite3` should not be cross-built.
+Prefer OS-specific packaging so each installer and updater path is verified on its target platform.

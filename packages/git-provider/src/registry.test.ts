@@ -3,6 +3,7 @@ import { Effect, Result } from "effect"
 
 import {
   BranchRevision,
+  GitFileRevision,
   GitProviderCapabilities,
   GitProviderId,
   GitProviderKind,
@@ -16,11 +17,16 @@ import {
   HostedReviewSummary,
   ProviderActor,
   RepositoryNamespace,
+  RepositoryRelativePath,
   makeHostedRepositoryKey,
 } from "@diffdash/domain/git-provider"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { WebUrl } from "@diffdash/domain/web-url"
 import {
   AmbiguousGitRemoteError,
   DuplicateGitProviderError,
+  DiagnosticOperation,
   GitProviderOperationError,
   GitProviderDescriptor,
   GitProviderDiagnostic,
@@ -55,10 +61,16 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
     }),
     state: "open",
     decision: "none",
-    url: `https://${host}/platform/backend/service/reviews/42`,
+    url: WebUrl.make(`https://${host}/platform/backend/service/reviews/42`),
     draft: false,
-    base: BranchRevision.make({ name: "main", revision: "base" }),
-    head: BranchRevision.make({ name: "feature", revision: "head" }),
+    base: BranchRevision.make({
+      name: RepositoryComparisonRef.make("main"),
+      revision: ReviewRevision.make("base"),
+    }),
+    head: BranchRevision.make({
+      name: RepositoryComparisonRef.make("feature"),
+      revision: ReviewRevision.make("head"),
+    }),
     createdAt: null,
     updatedAt: null,
   })
@@ -97,7 +109,7 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       Effect.succeed([
         HostedRepository.make({
           locator: repository,
-          url: `https://${host}/platform/backend/service`,
+          url: WebUrl.make(`https://${host}/platform/backend/service`),
           description: null,
           isPrivate: false,
           updatedAt: null,
@@ -109,25 +121,27 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       Effect.succeed(
         HostedReviewDiff.make({
           locator: review,
-          headRevision: "head",
+          headRevision: ReviewRevision.make("head"),
           diff: "",
           fetchedAt: "2026-07-16T00:00:00.000Z",
         }),
       ),
     getReviewDecision: () => Effect.succeed("none" as const),
     submitReviewDecision: () => Effect.void,
-    repositoryUrl: () => Effect.succeed(`https://${host}/platform/backend/service`),
+    repositoryUrl: () => Effect.succeed(WebUrl.make(`https://${host}/platform/backend/service`)),
     fileUrl: (_repository, path, revision) =>
-      Effect.succeed(`https://${host}/platform/backend/service/blob/${revision}/${path}`),
+      Effect.succeed(
+        WebUrl.make(`https://${host}/platform/backend/service/blob/${revision}/${path}`),
+      ),
     bootstrapBareRepository: () => Effect.void,
-    checkoutSpec: () =>
+    checkoutSpec: (_review, revision) =>
       Effect.succeed(
         HostedReviewCheckoutSpec.make({
           repository,
           review,
           remoteUrl: `https://${host}/platform/backend/service.git`,
-          fetchRef: "refs/reviews/42/head",
-          revision: "head",
+          fetchRef: RepositoryComparisonRef.make("refs/reviews/42/head"),
+          revision,
         }),
       ),
   }
@@ -245,6 +259,51 @@ describe("GitProviderRegistry", () => {
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
 
+  it.effect("rejects malformed provider URL outputs with typed operation errors", () => {
+    const registration = makeProvider("fake")
+    Object.defineProperty(registration, "repositoryUrl", {
+      value: () => Effect.succeed("not-a-url"),
+    })
+    Object.defineProperty(registration, "fileUrl", {
+      value: () => Effect.succeed("file:///private/path"),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      const repository = HostedRepositoryLocator.make({
+        providerId: GitProviderId.make("fake"),
+        namespace: RepositoryNamespace.make("platform/backend"),
+        name: HostedRepositoryName.make("service"),
+      })
+      const repositoryResult = yield* Effect.result(provider.repositoryUrl(repository))
+      const fileResult = yield* Effect.result(
+        provider.fileUrl(
+          repository,
+          RepositoryRelativePath.make("src/app.ts"),
+          GitFileRevision.make("main"),
+        ),
+      )
+
+      expect(Result.isFailure(repositoryResult)).toBe(true)
+      expect(Result.isFailure(fileResult)).toBe(true)
+      if (Result.isFailure(repositoryResult)) {
+        expect(repositoryResult.failure).toMatchObject({
+          _tag: "GitProviderOperationError",
+          operation: "repositoryUrl",
+          message: "Provider returned malformed data",
+        })
+      }
+      if (Result.isFailure(fileResult)) {
+        expect(fileResult.failure).toMatchObject({
+          _tag: "GitProviderOperationError",
+          operation: "fileUrl",
+          message: "Provider returned malformed data",
+        })
+      }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
   it.effect("rejects a malformed registration descriptor before exposing the provider", () => {
     const registration = makeProvider("fake")
     Object.defineProperty(registration, "descriptor", {
@@ -287,7 +346,7 @@ describe("GitProviderRegistry", () => {
         Effect.succeed(
           HostedReviewDiff.make({
             locator: other,
-            headRevision: "head",
+            headRevision: ReviewRevision.make("head"),
             diff: "",
             fetchedAt: "2026-07-16T00:00:00.000Z",
           }),
@@ -300,8 +359,8 @@ describe("GitProviderRegistry", () => {
             repository: other.repository,
             review: other,
             remoteUrl: "https://git.example.com/platform/backend/service.git",
-            fetchRef: "refs/reviews/43/head",
-            revision: "head",
+            fetchRef: RepositoryComparisonRef.make("refs/reviews/43/head"),
+            revision: ReviewRevision.make("head"),
           }),
         ),
     })
@@ -310,7 +369,9 @@ describe("GitProviderRegistry", () => {
       const registry = yield* GitProviderRegistry
       const provider = yield* registry.get(GitProviderId.make("fake"))
       const diff = yield* Effect.result(provider.getReviewDiff(requested))
-      const checkout = yield* Effect.result(provider.checkoutSpec(requested))
+      const checkout = yield* Effect.result(
+        provider.checkoutSpec(requested, ReviewRevision.make("head")),
+      )
 
       expect(Result.isFailure(diff)).toBe(true)
       expect(Result.isFailure(checkout)).toBe(true)
@@ -353,10 +414,16 @@ describe("GitProviderRegistry", () => {
       }),
       state: "open",
       decision: "none",
-      url: "https://git.example.com/platform/backend/service/reviews/43",
+      url: WebUrl.make("https://git.example.com/platform/backend/service/reviews/43"),
       draft: false,
-      base: BranchRevision.make({ name: "main", revision: "base" }),
-      head: BranchRevision.make({ name: "feature", revision: "head" }),
+      base: BranchRevision.make({
+        name: RepositoryComparisonRef.make("main"),
+        revision: ReviewRevision.make("base"),
+      }),
+      head: BranchRevision.make({
+        name: RepositoryComparisonRef.make("feature"),
+        revision: ReviewRevision.make("head"),
+      }),
       createdAt: null,
       updatedAt: null,
     })
@@ -374,15 +441,15 @@ describe("GitProviderRegistry", () => {
       value: () =>
         Effect.succeed(HostedReviewDetail.make({ summary: otherSummary, files: [], commits: [] })),
     })
-    Object.defineProperty(registration, "checkoutSpecAtRevision", {
+    Object.defineProperty(registration, "checkoutSpec", {
       value: () =>
         Effect.succeed(
           HostedReviewCheckoutSpec.make({
             repository: otherRepository,
             review: otherReview,
             remoteUrl: "https://git.example.com/platform/backend/other-service.git",
-            fetchRef: "refs/reviews/43/head",
-            revision: "other-head",
+            fetchRef: RepositoryComparisonRef.make("refs/reviews/43/head"),
+            revision: ReviewRevision.make("other-head"),
           }),
         ),
     })
@@ -392,10 +459,9 @@ describe("GitProviderRegistry", () => {
       const provider = yield* registry.get(GitProviderId.make("fake"))
       const listed = yield* Effect.result(provider.listReviews(requestedRepository))
       const detail = yield* Effect.result(provider.getReview(requestedReview))
-      const checkoutSpecAtRevision = provider.checkoutSpecAtRevision
-      expect(checkoutSpecAtRevision).toBeDefined()
-      if (checkoutSpecAtRevision === undefined) return
-      const checkout = yield* Effect.result(checkoutSpecAtRevision(requestedReview, "head"))
+      const checkout = yield* Effect.result(
+        provider.checkoutSpec(requestedReview, ReviewRevision.make("head")),
+      )
 
       expect(Result.isFailure(listed)).toBe(true)
       expect(Result.isFailure(detail)).toBe(true)
@@ -407,7 +473,7 @@ describe("GitProviderRegistry", () => {
     const registration = makeProvider("fake")
     const expected = GitProviderOperationError.make({
       providerId: GitProviderId.make("fake"),
-      operation: "listReviews",
+      operation: DiagnosticOperation.make("listReviews"),
       message: "Provider is temporarily unavailable",
     })
     Object.defineProperty(registration, "listReviews", {

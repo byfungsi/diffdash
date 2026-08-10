@@ -1,7 +1,4 @@
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import {
-  createEmbeddedCore,
-  type CoreConfiguration,
   type CoreMethod,
   type CoreMethodInput,
   type CoreOperationOptions,
@@ -14,6 +11,11 @@ import {
   type WalkthroughOperationId,
   type WalkthroughOperationResult,
 } from "@diffdash/core"
+
+type StoredWalkthrough = Extract<
+  WalkthroughOperationResult,
+  { readonly _tag: "completed" }
+>["walkthrough"]
 
 /** Electron adapter that projects typed Core failures into the existing IPC error boundary. */
 export interface ApplicationRuntime {
@@ -35,9 +37,8 @@ export interface ApplicationRuntime {
   readonly dispose: EmbeddedCore["dispose"]
 }
 
-/** Creates the one embedded Core runtime owned by the desktop application. */
-export const createApplicationRuntime = (configuration: CoreConfiguration): ApplicationRuntime => {
-  const core = createEmbeddedCore(configuration)
+/** Adapts the build-selected embedded Core runtime to Electron's IPC boundary. */
+export const createApplicationRuntime = (core: EmbeddedCore): ApplicationRuntime => {
   const execute: ApplicationRuntime["execute"] = async (method, input, options) =>
     unwrapCoreResult(await core.execute(method, input, options))
   return {

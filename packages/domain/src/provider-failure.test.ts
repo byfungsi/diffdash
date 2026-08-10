@@ -1,12 +1,13 @@
 import { describe, expect, it } from "@effect/vitest"
 import { AgentProviderFailure } from "./provider-failure"
+import { ReviewAgentProviderId } from "./review-agent"
 
 describe("AgentProviderFailure", () => {
   it("accepts real UTC reset timestamps and rejects impossible values", () => {
     expect(
       AgentProviderFailure.make({
         version: 1,
-        providerId: "claude",
+        providerId: ReviewAgentProviderId.make("claude"),
         capability: "review-thread",
         category: "usage-limited",
         processKind: null,
@@ -20,7 +21,7 @@ describe("AgentProviderFailure", () => {
     expect(() =>
       AgentProviderFailure.make({
         version: 1,
-        providerId: "claude",
+        providerId: ReviewAgentProviderId.make("claude"),
         capability: "review-thread",
         category: "usage-limited",
         processKind: null,

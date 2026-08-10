@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 import { createHash } from "node:crypto"
 import { basename } from "node:path"
 
@@ -6,7 +6,11 @@ import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { VERY_LARGE_DIFF_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { ChangedFile } from "@diffdash/domain/git-provider"
-import type { DetectedRepositoryCheckout } from "@diffdash/domain/repository"
+import {
+  type DetectedRepositoryCheckout,
+  RepositoryCheckoutPath,
+} from "@diffdash/domain/repository"
+import { GitCommitSha, RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   BranchComparison,
   type LocalReviewComparison,
@@ -22,6 +26,8 @@ import {
 } from "@diffdash/domain/review-identity"
 import {
   ProcessService,
+  ProcessOutputError,
+  type ProcessResult,
   type ProcessExecutionError,
   type ProcessOutputPolicyInput,
 } from "@diffdash/process"
@@ -37,7 +43,7 @@ const COMPLETE_DIFF_STDOUT = {
 export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChangedError>()(
   "LocalReviewChangedError",
   {
-    rootPath: Schema.String,
+    rootPath: RepositoryCheckoutPath,
   },
 ) {}
 
@@ -47,11 +53,11 @@ export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTarget
   {
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.NullOr(Schema.Defect()),
+    cause: Schema.NullOr(Schema.ErrorInstance()),
   },
 ) {}
 
-type LocalReviewInput = string | LocalReviewTarget
+type LocalReviewInput = RepositoryCheckoutPath | LocalReviewTarget
 
 /** Test seam for observing local unified-diff parsing without module mocking. */
 export interface GitServiceLayerOptions {
@@ -69,23 +75,21 @@ export class GitService extends Context.Service<
   GitService,
   {
     readonly detectRepository: (
-      localPath: string,
+      localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<DetectedRepositoryCheckout, ProcessExecutionError>
-    readonly detectRoot: (localPath: string) => Effect.Effect<string, ProcessExecutionError>
-    readonly currentBranch: (localPath: string) => Effect.Effect<string, ProcessExecutionError>
+    readonly detectRoot: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<RepositoryCheckoutPath, ProcessExecutionError>
+    readonly currentBranch: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<RepositoryComparisonRef | null, ProcessExecutionError>
     readonly listRemotes: (
-      localPath: string,
+      localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<readonly LocalGitRemote[], ProcessExecutionError>
     readonly resolveBranchComparison: (
-      localPath: string,
-      branchName: string | null,
+      localPath: RepositoryCheckoutPath,
+      branchName: RepositoryComparisonRef | null,
     ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
-    readonly getLocalReviewDetail: (
-      target: LocalReviewInput,
-    ) => Effect.Effect<LocalReviewDetail, ProcessExecutionError>
-    readonly getLocalReviewDiff: (
-      target: LocalReviewInput,
-    ) => Effect.Effect<LocalReviewDiff, ProcessExecutionError>
     readonly getLocalReviewSnapshot: (
       target: LocalReviewInput,
     ) => Effect.Effect<LocalReviewSnapshot, ProcessExecutionError | LocalReviewChangedError>
@@ -98,21 +102,28 @@ export class GitService extends Context.Service<
       Effect.gen(function* () {
         const processes = yield* ProcessService
         const parseDiff = options.parseDiff ?? parseUnifiedDiff
-        const detectRoot = Effect.fn("GitService.detectRoot")(function* (localPath: string) {
+        const detectRoot = Effect.fn("GitService.detectRoot")(function* (
+          localPath: RepositoryCheckoutPath,
+        ) {
           const root = yield* processes.run(
             gitProcessRequest(["-C", localPath, "rev-parse", "--show-toplevel"]),
           )
-          return root.stdout.trim()
+          return yield* parseCheckoutPath(root)
         })
 
-        const currentBranch = Effect.fn("GitService.currentBranch")(function* (localPath: string) {
-          const branch = yield* processes.run(
+        const currentBranch = Effect.fn("GitService.currentBranch")(function* (
+          localPath: RepositoryCheckoutPath,
+        ) {
+          const result = yield* processes.run(
             gitProcessRequest(["-C", localPath, "branch", "--show-current"]),
           )
-          return branch.stdout.trim()
+          const branch = result.stdout.trim()
+          return branch.length === 0 ? null : yield* parseComparisonRef(result, branch)
         })
 
-        const listRemotes = Effect.fn("GitService.listRemotes")(function* (localPath: string) {
+        const listRemotes = Effect.fn("GitService.listRemotes")(function* (
+          localPath: RepositoryCheckoutPath,
+        ) {
           const rootPath = yield* detectRoot(localPath)
           const names = yield* processes.run(gitProcessRequest(["-C", rootPath, "remote"]))
           return yield* Effect.forEach(
@@ -141,14 +152,16 @@ export class GitService extends Context.Service<
         const canonicalTarget = Effect.fn("GitService.canonicalTarget")(function* (
           input: LocalReviewInput,
         ) {
-          const target = typeof input === "string" ? workingTreeReviewTarget(input) : input
+          const target = Schema.is(RepositoryCheckoutPath)(input)
+            ? workingTreeReviewTarget(input)
+            : input
           const rootPath = yield* detectRoot(target.rootPath)
           return LocalReviewTarget.make({ ...target, rootPath })
         })
 
         const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
-          localPath: string,
-          requestedBranchName: string | null,
+          localPath: RepositoryCheckoutPath,
+          requestedBranchName: RepositoryComparisonRef | null,
         ) {
           const rootPath = yield* detectRoot(localPath)
           const checkedOutBranch = yield* currentBranch(rootPath)
@@ -157,10 +170,11 @@ export class GitService extends Context.Service<
             : validateBranchName(rootPath, requestedBranchName).pipe(
                 Effect.provideService(ProcessService, processes),
               )
-          const baseRef =
+          const baseRef = RepositoryComparisonRef.make(
             checkedOutBranch === branchName
               ? `refs/heads/${branchName}`
-              : `refs/remotes/origin/${branchName}`
+              : `refs/remotes/origin/${branchName}`,
+          )
 
           if (checkedOutBranch !== branchName) {
             yield* processes.run(
@@ -187,7 +201,11 @@ export class GitService extends Context.Service<
           return LocalReviewTarget.make({
             kind: "local",
             rootPath,
-            comparison: BranchComparison.make({ branchName, baseRef, baseSha }),
+            comparison: BranchComparison.make({
+              branchName,
+              baseRef,
+              baseSha: ReviewRevision.make(baseSha),
+            }),
           })
         })
 
@@ -207,13 +225,14 @@ export class GitService extends Context.Service<
           )
           const diff = joinDiffSections([trackedDiff, untrackedDiff])
           const diffHash = localDiffHash(target.comparison, baseSha ?? EMPTY_TREE_SHA, diff)
+          const diffIdentity = ReviewDiffIdentity.make(diffHash)
 
           return LocalReviewDiff.make({
             rootPath,
             comparison: target.comparison,
-            baseSha: baseSha ?? EMPTY_TREE_SHA,
-            headSha: diffHash,
-            diffHash,
+            baseSha: ReviewRevision.make(baseSha ?? EMPTY_TREE_SHA),
+            headSha: ReviewRevision.make(diffIdentity),
+            diffHash: diffIdentity,
             diff,
             fetchedAt: new Date().toISOString(),
           })
@@ -240,8 +259,7 @@ export class GitService extends Context.Service<
             return yield* LocalReviewChangedError.make({ rootPath: target.rootPath })
           }
           const branchName = yield* currentBranch(diff.rootPath).pipe(
-            Effect.map((branch) => (branch.length === 0 ? null : branch)),
-            Effect.catch(() => Effect.succeed(null)),
+            Effect.catch(() => Effect.succeed<RepositoryComparisonRef | null>(null)),
           )
           const parsedDiff = parseDiff(diff.diff)
           const detail = localReviewDetail(diff, branchName, parsedDiff)
@@ -266,7 +284,9 @@ export class GitService extends Context.Service<
         })
 
         return GitService.of({
-          detectRepository: Effect.fn("GitService.detectRepository")(function* (localPath: string) {
+          detectRepository: Effect.fn("GitService.detectRepository")(function* (
+            localPath: RepositoryCheckoutPath,
+          ) {
             const rootPath = yield* detectRoot(localPath)
             const remote = yield* processes.run(
               gitProcessRequest(["-C", rootPath, "remote", "get-url", "origin"]),
@@ -280,16 +300,6 @@ export class GitService extends Context.Service<
           currentBranch,
           listRemotes,
           resolveBranchComparison,
-          getLocalReviewDetail: (input) =>
-            Effect.gen(function* () {
-              const diff = yield* getLocalReviewDiff(input)
-              const branchName = yield* currentBranch(diff.rootPath).pipe(
-                Effect.map((branch) => (branch.length === 0 ? null : branch)),
-                Effect.catch(() => Effect.succeed(null)),
-              )
-              return localReviewDetail(diff, branchName, parseDiff(diff.diff))
-            }),
-          getLocalReviewDiff,
           getLocalReviewSnapshot,
         })
       }),
@@ -298,18 +308,18 @@ export class GitService extends Context.Service<
   static readonly layer = GitService.layerWith()
 }
 
-const currentHeadSha = (rootPath: string) =>
+const currentHeadSha = (rootPath: RepositoryCheckoutPath) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     return yield* processes
       .run(gitProcessRequest(["-C", rootPath, "rev-parse", "--verify", "HEAD"]))
       .pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.catch(() => Effect.succeed(null)),
+        Effect.flatMap((result) => parseCommitSha(result)),
+        Effect.catchTag("ProcessExitError", () => Effect.succeed(null)),
       )
   })
 
-const resolveCommitSha = (rootPath: string, ref: string) =>
+const resolveCommitSha = (rootPath: RepositoryCheckoutPath, ref: RepositoryComparisonRef) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const result = yield* processes.run(
@@ -322,10 +332,14 @@ const resolveCommitSha = (rootPath: string, ref: string) =>
         `${ref}^{commit}`,
       ]),
     )
-    return result.stdout.trim()
+    return yield* parseCommitSha(result)
   })
 
-const resolveMergeBaseSha = (rootPath: string, branchName: string, targetSha: string) =>
+const resolveMergeBaseSha = (
+  rootPath: RepositoryCheckoutPath,
+  branchName: RepositoryComparisonRef,
+  targetSha: GitCommitSha,
+) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const result = yield* processes
@@ -343,23 +357,30 @@ const resolveMergeBaseSha = (rootPath: string, branchName: string, targetSha: st
           ),
         ),
       )
-    const mergeBaseSha = result.stdout.trim()
-    if (mergeBaseSha.length === 0) {
-      return yield* LocalReviewTargetError.make({
-        operation: "branch.mergeBase",
-        reason: `Branch ${branchName} does not share a common ancestor with the current HEAD`,
-        cause: null,
-      })
-    }
-    return mergeBaseSha
+    return yield* parseCommitSha(result).pipe(
+      Effect.mapError((cause) =>
+        LocalReviewTargetError.make({
+          operation: "branch.mergeBase",
+          reason: `Branch ${branchName} does not share a common ancestor with the current HEAD`,
+          cause,
+        }),
+      ),
+    )
   })
 
-const localReviewBaseSha = (target: LocalReviewTarget) =>
-  target.comparison["_tag"] === "workingTree"
-    ? currentHeadSha(target.rootPath)
-    : Effect.succeed(target.comparison.baseSha)
+const localReviewBaseSha = (
+  target: LocalReviewTarget,
+): Effect.Effect<string | null, ProcessExecutionError, ProcessService> =>
+  Match.value(target.comparison).pipe(
+    Match.tag("workingTree", () => currentHeadSha(target.rootPath)),
+    Match.tag("branch", (comparison) => Effect.succeed<string | null>(comparison.baseSha)),
+    Match.exhaustive,
+  )
 
-const validateBranchName = (rootPath: string, requestedBranchName: string) =>
+const validateBranchName = (
+  rootPath: RepositoryCheckoutPath,
+  requestedBranchName: RepositoryComparisonRef,
+) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const branchName = requestedBranchName.startsWith("origin/")
@@ -375,10 +396,18 @@ const validateBranchName = (rootPath: string, requestedBranchName: string) =>
     yield* processes.run(
       gitProcessRequest(["-C", rootPath, "check-ref-format", "--branch", branchName]),
     )
-    return branchName
+    return yield* Schema.decodeUnknownEffect(RepositoryComparisonRef)(branchName).pipe(
+      Effect.mapError((cause) =>
+        LocalReviewTargetError.make({
+          operation: "branch.validate",
+          reason: "Branch name cannot be empty",
+          cause,
+        }),
+      ),
+    )
   })
 
-const defaultOriginBranch = (rootPath: string) =>
+const defaultOriginBranch = (rootPath: RepositoryCheckoutPath) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const local = yield* processes
@@ -393,9 +422,12 @@ const defaultOriginBranch = (rootPath: string) =>
         ]),
       )
       .pipe(Effect.option)
-    if (local["_tag"] === "Some") {
+    if (Option.isSome(local)) {
       const branchName = local.value.stdout.trim().replace(/^origin\//, "")
-      if (branchName.length > 0) return yield* validateBranchName(rootPath, branchName)
+      if (branchName.length > 0) {
+        const parsed = yield* parseComparisonRef(local.value, branchName)
+        return yield* validateBranchName(rootPath, parsed)
+      }
     }
 
     const remote = yield* processes.run(
@@ -411,10 +443,11 @@ const defaultOriginBranch = (rootPath: string) =>
         cause: null,
       })
     }
-    return yield* validateBranchName(rootPath, match[1])
+    const parsed = yield* parseComparisonRef(remote, match[1])
+    return yield* validateBranchName(rootPath, parsed)
   })
 
-const localTrackedDiff = (rootPath: string, baseSha: string | null) =>
+const localTrackedDiff = (rootPath: RepositoryCheckoutPath, baseSha: string | null) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const args =
@@ -430,7 +463,7 @@ const localTrackedDiff = (rootPath: string, baseSha: string | null) =>
     return result.stdout
   })
 
-const localUntrackedDiff = (rootPath: string) =>
+const localUntrackedDiff = (rootPath: RepositoryCheckoutPath) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const untracked = yield* processes.run(
@@ -443,7 +476,7 @@ const localUntrackedDiff = (rootPath: string) =>
     return joinDiffSections(diffs)
   })
 
-const untrackedFileDiff = (rootPath: string, path: string) =>
+const untrackedFileDiff = (rootPath: RepositoryCheckoutPath, path: string) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     return yield* processes
@@ -472,7 +505,7 @@ const joinDiffSections = (sections: readonly string[]) =>
 
 const localReviewDetail = (
   diff: LocalReviewDiff,
-  branchName: string | null,
+  branchName: RepositoryComparisonRef | null,
   parsedDiff: ReturnType<typeof parseUnifiedDiff>,
 ) => {
   const repoName = basename(diff.rootPath) || diff.rootPath
@@ -484,10 +517,11 @@ const localReviewDetail = (
     baseSha: diff.baseSha,
     headSha: diff.headSha,
     diffHash: diff.diffHash,
-    title:
-      diff.comparison["_tag"] === "workingTree"
-        ? "Local changes"
-        : `Changes vs ${diff.comparison.branchName}`,
+    title: Match.value(diff.comparison).pipe(
+      Match.tag("workingTree", () => "Local changes"),
+      Match.tag("branch", (comparison) => `Changes vs ${comparison.branchName}`),
+      Match.exhaustive,
+    ),
     files: parsedDiff.files.map((file) =>
       ChangedFile.make({
         path: file.path,
@@ -502,15 +536,54 @@ const localReviewDetail = (
 
 const localDiffHash = (comparison: LocalReviewComparison, baseSha: string, diff: string) => {
   const hash = createHash("sha256")
-  if (comparison["_tag"] === "branch") {
-    hash.update("branch\0").update(comparison.baseRef).update("\0").update(baseSha).update("\0")
-  }
-  return hash.update(diff).digest("hex")
+  return Match.value(comparison)
+    .pipe(
+      Match.tag("branch", (branch) =>
+        hash.update("branch\0").update(branch.baseRef).update("\0").update(baseSha).update("\0"),
+      ),
+      Match.tag("workingTree", () => hash),
+      Match.exhaustive,
+    )
+    .update(diff)
+    .digest("hex")
 }
 
-const localReviewKey = (rootPath: string, comparison: LocalReviewComparison) => {
+const localReviewKey = (rootPath: RepositoryCheckoutPath, comparison: LocalReviewComparison) => {
   const rootHash = createHash("sha256").update(rootPath).digest("hex")
-  if (comparison["_tag"] === "workingTree") return `local:${rootHash}`
-  const refHash = createHash("sha256").update(comparison.baseRef).digest("hex")
-  return `local:${rootHash}:base:${refHash}`
+  return Match.value(comparison).pipe(
+    Match.tag("workingTree", () => `local:${rootHash}`),
+    Match.tag("branch", (branch) => {
+      const refHash = createHash("sha256").update(branch.baseRef).digest("hex")
+      return `local:${rootHash}:base:${refHash}`
+    }),
+    Match.exhaustive,
+  )
 }
+
+const parseCheckoutPath = (result: ProcessResult) =>
+  Schema.decodeUnknownEffect(RepositoryCheckoutPath)(result.stdout.trim()).pipe(
+    Effect.mapError((cause) =>
+      invalidStdout(result, "Git returned an invalid checkout path.", cause),
+    ),
+  )
+
+const parseComparisonRef = (result: ProcessResult, value = result.stdout.trim()) =>
+  Schema.decodeUnknownEffect(RepositoryComparisonRef)(value).pipe(
+    Effect.mapError((cause) =>
+      invalidStdout(result, "Git returned an invalid branch name.", cause),
+    ),
+  )
+
+const parseCommitSha = (result: ProcessResult) =>
+  Schema.decodeUnknownEffect(GitCommitSha)(result.stdout.trim()).pipe(
+    Effect.mapError((cause) => invalidStdout(result, "Git returned an invalid commit SHA.", cause)),
+  )
+
+const invalidStdout = <A>(result: ProcessResult, message: string, cause: A) =>
+  ProcessOutputError.make({
+    ...result,
+    source: "stdout",
+    limit: "io",
+    message,
+    cause: Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause)),
+  })

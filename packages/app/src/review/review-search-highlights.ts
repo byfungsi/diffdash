@@ -1,6 +1,13 @@
-import { type PostRenderPhase, type SelectionSide, VirtualizedFileDiff } from "./pierre"
+import {
+  isVirtualizedFileDiff,
+  type PostRenderPhase,
+  type SelectionSide,
+  VirtualizedFileDiff,
+} from "./pierre"
 import { findRenderedDiffLine } from "./review-rendered-line"
-import type { ReviewSearchOccurrence } from "./review-search"
+import { isTextNode } from "@/shared/dom"
+import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
+import type { TransportError } from "@diffdash/protocol/transport-error"
 
 /** CSS Custom Highlight registry key for non-active review search matches. */
 export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
@@ -17,7 +24,7 @@ type ReviewSearchScrollTarget = {
 
 type SearchDiffRegistration = {
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<unknown>
+  readonly instance: VirtualizedFileDiff<TransportError>
 }
 
 /** Bridges parsed review occurrences to Pierre's virtualized shadow-DOM lines. */
@@ -26,13 +33,13 @@ export class ReviewSearchHighlightManager {
   private activeRange: StaticRange | null = null
   private activeOccurrenceId: string | null = null
   private readonly registrations = new Map<string, SearchDiffRegistration>()
-  private occurrencesByFile = new Map<string, readonly ReviewSearchOccurrence[]>()
+  private occurrencesByFile = new Map<string, readonly ReviewSnapshotSearchMatch[]>()
   private rebuildFrame: number | null = null
   private highlightsRegistered = false
 
   /** Updates the ranges painted in every currently mounted diff. */
-  setSearch(occurrences: readonly ReviewSearchOccurrence[], activeOccurrenceId: string | null) {
-    const occurrencesByFile = new Map<string, ReviewSearchOccurrence[]>()
+  setSearch(occurrences: readonly ReviewSnapshotSearchMatch[], activeOccurrenceId: string | null) {
+    const occurrencesByFile = new Map<string, ReviewSnapshotSearchMatch[]>()
     occurrences.forEach((occurrence) => {
       const fileOccurrences = occurrencesByFile.get(occurrence.reviewKey)
       if (fileOccurrences === undefined) {
@@ -69,13 +76,13 @@ export class ReviewSearchHighlightManager {
       return
     }
 
-    if (!(instance instanceof VirtualizedFileDiff)) return
+    if (!isVirtualizedFileDiff<TransportError>(instance)) return
     this.registrations.set(reviewKey, { host, instance })
     this.scheduleRebuild()
   }
 
   /** Returns Pierre's estimated virtual position for an occurrence. */
-  getScrollTarget(occurrence: ReviewSearchOccurrence): ReviewSearchScrollTarget | null {
+  getScrollTarget(occurrence: ReviewSnapshotSearchMatch): ReviewSearchScrollTarget | null {
     const registration = this.registrations.get(occurrence.reviewKey)
     if (registration === undefined) return null
 
@@ -193,7 +200,7 @@ export class ReviewSearchHighlightManager {
 }
 
 const renderedSearchCoordinates = (
-  occurrence: ReviewSearchOccurrence,
+  occurrence: ReviewSnapshotSearchMatch,
 ): readonly (readonly [SelectionSide, number | null])[] =>
   occurrence.side === "context"
     ? [
@@ -223,7 +230,7 @@ const createStaticTextRange = (
   let start: { readonly node: Text; readonly offset: number } | null = null
 
   while (node !== null) {
-    if (node instanceof Text) {
+    if (isTextNode(node)) {
       const nextOffset = offset + node.data.length
       if (start === null && startOffset <= nextOffset) {
         start = { node, offset: startOffset - offset }
@@ -244,11 +251,14 @@ const createStaticTextRange = (
   return null
 }
 
-const supportsCustomHighlights = () =>
-  typeof CSS !== "undefined" &&
-  "highlights" in CSS &&
-  typeof Highlight !== "undefined" &&
-  typeof StaticRange !== "undefined"
+const supportsCustomHighlights = () => {
+  const css = globalThis.CSS
+  const highlight = globalThis.Highlight
+  const staticRange = globalThis.StaticRange
+  return (
+    css !== undefined && "highlights" in css && highlight !== undefined && staticRange !== undefined
+  )
+}
 
 const clearRegisteredHighlights = () => {
   if (!supportsCustomHighlights()) return

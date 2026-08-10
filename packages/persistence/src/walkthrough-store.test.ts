@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Result, Layer, Option } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,13 +8,20 @@ import { join } from "node:path"
 import {
   Walkthrough,
   WalkthroughChapter,
+  WalkthroughChapterId,
+  WalkthroughHunkId,
   WalkthroughStop,
+  WalkthroughStopId,
   WalkthroughSupportItem,
+  WalkthroughSupportItemId,
   WALKTHROUGH_PROMPT_VERSION,
+  type WalkthroughCacheKey,
 } from "@diffdash/domain/walkthrough"
-import { noRepositoryLocalPath } from "@diffdash/domain/repository"
-import { DatabaseService } from "./database"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { RepositoryStore } from "./repository-store"
+import { hostedTestRepositoryInput } from "./test-support/repository"
 import { WalkthroughStore, WalkthroughStoreError } from "./walkthrough-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
@@ -23,7 +31,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
 
 const makeLayer = (databasePath: string) =>
   Layer.mergeAll(RepositoryStore.layer, WalkthroughStore.layer).pipe(
-    Layer.provideMerge(DatabaseService.layer(databasePath)),
+    Layer.provideMerge(DatabaseNode.layer(databasePath)),
   )
 
 const makeWalkthrough = (summary: string) =>
@@ -32,36 +40,40 @@ const makeWalkthrough = (summary: string) =>
     summary,
     chapters: [
       WalkthroughChapter.make({
-        id: "c1",
+        id: WalkthroughChapterId.make("c1"),
         title: "Runtime",
         summary: "Runtime changes.",
         stops: [
           WalkthroughStop.make({
-            id: "s1",
+            id: WalkthroughStopId.make("s1"),
             title: "Entry point",
             summary: "Review the entry point first.",
             risk: "critical",
-            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
+            hunkIds: [
+              WalkthroughHunkId.make("src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"),
+            ],
           }),
         ],
       }),
     ],
     support: [
       WalkthroughSupportItem.make({
-        id: "support-docs",
+        id: WalkthroughSupportItemId.make("support-docs"),
         title: "Docs",
         reason: "Documentation support.",
-        hunkIds: ["docs/readme.md:hosted-review:github:fungsi/diffdash#51:h1"],
+        hunkIds: [
+          WalkthroughHunkId.make("docs/readme.md:hosted-review:github:fungsi/diffdash#51:h1"),
+        ],
       }),
     ],
   })
 
 const cacheKey = {
-  baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+  headSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   promptVersion: WALKTHROUGH_PROMPT_VERSION,
-  reviewKey: "github:fungsi/diffdash#51",
-}
+  reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
+} satisfies Omit<WalkthroughCacheKey, "repoId">
 
 describe("WalkthroughStore", () => {
   it.effect("returns a cache miss for an empty database", () =>
@@ -71,13 +83,7 @@ describe("WalkthroughStore", () => {
       return yield* Effect.gen(function* () {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
+        const repo = yield* repositoryStore.upsertRepository(hostedTestRepositoryInput())
 
         const cached = yield* walkthroughStore.get({ ...cacheKey, repoId: repo.id })
 
@@ -93,13 +99,7 @@ describe("WalkthroughStore", () => {
       return yield* Effect.gen(function* () {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
+        const repo = yield* repositoryStore.upsertRepository(hostedTestRepositoryInput())
         const walkthrough = makeWalkthrough("Review the entry point first.")
 
         const saved = yield* walkthroughStore.save({
@@ -128,13 +128,7 @@ describe("WalkthroughStore", () => {
       return yield* Effect.gen(function* () {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
+        const repo = yield* repositoryStore.upsertRepository(hostedTestRepositoryInput())
 
         yield* walkthroughStore.save({
           ...cacheKey,
@@ -165,13 +159,7 @@ describe("WalkthroughStore", () => {
       return yield* Effect.gen(function* () {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "diffdash",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-        })
+        const repo = yield* repositoryStore.upsertRepository(hostedTestRepositoryInput())
 
         yield* walkthroughStore.save({
           ...cacheKey,
@@ -198,20 +186,10 @@ describe("WalkthroughStore", () => {
         return yield* Effect.gen(function* () {
           const repositoryStore = yield* RepositoryStore
           const walkthroughStore = yield* WalkthroughStore
-          const repo = yield* repositoryStore.upsertRepository({
-            localPath: noRepositoryLocalPath,
-            name: "diffdash",
-            owner: "fungsi",
-            provider: "github",
-            remoteUrl: "https://github.com/fungsi/diffdash",
-          })
-          const otherRepo = yield* repositoryStore.upsertRepository({
-            localPath: noRepositoryLocalPath,
-            name: "other",
-            owner: "fungsi",
-            provider: "github",
-            remoteUrl: "https://github.com/fungsi/other",
-          })
+          const repo = yield* repositoryStore.upsertRepository(hostedTestRepositoryInput())
+          const otherRepo = yield* repositoryStore.upsertRepository(
+            hostedTestRepositoryInput({ name: "other" }),
+          )
 
           yield* walkthroughStore.save({
             ...cacheKey,
@@ -224,12 +202,12 @@ describe("WalkthroughStore", () => {
           const differentHead = yield* walkthroughStore.get({
             ...cacheKey,
             repoId: repo.id,
-            headSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            headSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
           })
           const differentBase = yield* walkthroughStore.get({
             ...cacheKey,
             repoId: repo.id,
-            baseSha: "cccccccccccccccccccccccccccccccccccccccc",
+            baseSha: ReviewRevision.make("cccccccccccccccccccccccccccccccccccccccc"),
           })
           const differentPrompt = yield* walkthroughStore.get({
             ...cacheKey,
@@ -239,7 +217,7 @@ describe("WalkthroughStore", () => {
           const differentReview = yield* walkthroughStore.get({
             ...cacheKey,
             repoId: repo.id,
-            reviewKey: "github:fungsi/diffdash#52",
+            reviewKey: ReviewKey.make("github:fungsi/diffdash#52"),
           })
           const differentRepository = yield* walkthroughStore.get({
             ...cacheKey,
@@ -265,14 +243,10 @@ describe("WalkthroughStore", () => {
       yield* Effect.gen(function* () {
         const repositoryStore = yield* RepositoryStore
         const walkthroughStore = yield* WalkthroughStore
-        const database = yield* DatabaseService
-        const repo = yield* repositoryStore.upsertRepository({
-          localPath: noRepositoryLocalPath,
-          name: "corrupt-walkthrough",
-          owner: "fungsi",
-          provider: "github",
-          remoteUrl: "https://github.com/fungsi/corrupt-walkthrough",
-        })
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const repo = yield* repositoryStore.upsertRepository(
+          hostedTestRepositoryInput({ name: "corrupt-walkthrough" }),
+        )
         const key = { ...cacheKey, repoId: repo.id }
         yield* walkthroughStore.save({
           ...key,

@@ -1,5 +1,5 @@
 import { useAtomSuspense } from "@effect/atom-react"
-import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Schedule, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Schedule, Stream } from "effect"
 import { Atom } from "effect/unstable/reactivity"
 import { useEffect, useEffectEvent } from "react"
 
@@ -10,6 +10,8 @@ import { RendererPreferences, rendererPreferencesLayer } from "./preferences"
 import { Repositories, repositoriesLayer } from "./repositories"
 import { ReviewAutomation, reviewAutomationLayer } from "./review-automation"
 import { ReviewContent, reviewContentLayer } from "./review-content"
+import { ReviewSourceOperations, reviewSourceOperationsLayer } from "./review-source-operations"
+export { runRendererPromise } from "./renderer-effect"
 
 /** All renderer capabilities built once for one atom registry. */
 export type RendererServices =
@@ -19,6 +21,7 @@ export type RendererServices =
   | Repositories
   | ReviewAutomation
   | ReviewContent
+  | ReviewSourceOperations
 
 const capabilityLayers = Layer.mergeAll(
   desktopRuntimeLayer,
@@ -27,6 +30,7 @@ const capabilityLayers = Layer.mergeAll(
   repositoriesLayer,
   reviewAutomationLayer,
   reviewContentLayer,
+  reviewSourceOperationsLayer,
 )
 
 /** Production renderer service graph with the raw preload client hidden after composition. */
@@ -57,14 +61,9 @@ export const useReviewAutomation = () => Context.get(useRendererContext(), Revie
 /** Returns review content capabilities from the shared renderer runtime. */
 export const useReviewContent = () => Context.get(useRendererContext(), ReviewContent)
 
-/** Runs one closed renderer service Effect while rejecting with its original expected failure. */
-export const runRendererPromise = async <A, E>(effect: Effect.Effect<A, E>): Promise<A> => {
-  const exit = await Effect.runPromiseExit(effect)
-  if (Exit.isSuccess(exit)) return exit.value
-  const failure = Cause.findErrorOption(exit.cause)
-  if (Option.isSome(failure)) throw failure.value
-  throw Cause.squash(exit.cause)
-}
+/** Returns the factory for source-specific operations of an authoritative ready review. */
+export const useReviewSourceOperationsFactory = () =>
+  Context.get(useRendererContext(), ReviewSourceOperations)
 
 /** Consumes a renderer stream, reports typed failures, and reconnects after a bounded delay. */
 export const consumeRendererStream = <A, E, R, R2, R3>(

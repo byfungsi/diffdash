@@ -29,8 +29,6 @@ const makeTempDirectory = Effect.acquireRelease(
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
 
-const collectEvents = (events: Iterable<ProcessEvent>) => Array.from(events)
-
 const streamCli = (command: string, args: readonly string[], options?: ProcessRequestOptions) =>
   Stream.unwrap(
     ProcessService.pipe(
@@ -67,9 +65,7 @@ describe("ProcessService line streaming", () => {
           setTimeout(() => process.stderr.end('warning\\r\\n'), 20)
         }, 20)
       `
-      const events = collectEvents(
-        yield* streamCli(process.execPath, ["-e", script]).pipe(Stream.runCollect),
-      )
+      const events = yield* streamCli(process.execPath, ["-e", script]).pipe(Stream.runCollect)
 
       expect(events.slice(0, 3)).toEqual([
         { _tag: "ProcessLine", source: "stdout", line: "😀" },
@@ -106,13 +102,11 @@ describe("ProcessService line streaming", () => {
         chmodSync(commandPath, 0o755)
       })
 
-      const events = collectEvents(
-        yield* streamCli("diffdash-stream-command", [], {
-          cwd,
-          env: { DIFFDASH_VALUE: "from-env", HOME: home, PATH: "" },
-          stdin: "from-stdin\n",
-        }).pipe(Stream.runCollect),
-      )
+      const events = yield* streamCli("diffdash-stream-command", [], {
+        cwd,
+        env: { DIFFDASH_VALUE: "from-env", HOME: home, PATH: "" },
+        stdin: "from-stdin\n",
+      }).pipe(Stream.runCollect)
 
       expect(events[0]).toEqual({
         _tag: "ProcessLine",
@@ -124,11 +118,9 @@ describe("ProcessService line streaming", () => {
 
   it.live("accepts exact newline-free line bytes and fails one byte over", () =>
     Effect.gen(function* () {
-      const exact = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('abcde')"], {
-          maxLineBytes: 5,
-        }).pipe(Stream.runCollect),
-      )
+      const exact = yield* streamCli(process.execPath, ["-e", "process.stdout.write('abcde')"], {
+        maxLineBytes: 5,
+      }).pipe(Stream.runCollect)
       expect(exact[0]).toEqual({ _tag: "ProcessLine", source: "stdout", line: "abcde" })
       expect(exact.at(-1)).toMatchObject({ _tag: "ProcessExit" })
 
@@ -149,11 +141,13 @@ describe("ProcessService line streaming", () => {
 
   it.live("enforces exact total stream bytes and event counts", () =>
     Effect.gen(function* () {
-      const exactBytes = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('abc\\n')"], {
+      const exactBytes = yield* streamCli(
+        process.execPath,
+        ["-e", "process.stdout.write('abc\\n')"],
+        {
           maxStreamBytes: 4,
-        }).pipe(Stream.runCollect),
-      )
+        },
+      ).pipe(Stream.runCollect)
       expect(exactBytes[0]).toEqual({ _tag: "ProcessLine", source: "stdout", line: "abc" })
 
       const overBytes = yield* Effect.result(
@@ -168,11 +162,13 @@ describe("ProcessService line streaming", () => {
         expect(overBytes.failure.message).toBe("Subprocess stream exceeded 3 total bytes")
       }
 
-      const exactEvents = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('a\\nb\\n')"], {
+      const exactEvents = yield* streamCli(
+        process.execPath,
+        ["-e", "process.stdout.write('a\\nb\\n')"],
+        {
           maxStreamEvents: 2,
-        }).pipe(Stream.runCollect),
-      )
+        },
+      ).pipe(Stream.runCollect)
       expect(
         exactEvents.filter((event) => {
           const { _tag: tag } = event

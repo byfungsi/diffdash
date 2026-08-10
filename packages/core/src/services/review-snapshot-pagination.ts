@@ -22,6 +22,7 @@ import {
   ReviewSnapshotSearchCursor,
   type ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchMatch,
+  ReviewSnapshotSearchMatchId,
   type ReviewSnapshotSearchRequest,
   type ReviewSnapshotSearchResponse,
   ReviewSnapshotSearchResponse as ReviewSnapshotSearchResponseSchema,
@@ -171,7 +172,9 @@ const allSearchMatches = (snapshot: ReviewSnapshot, query: string) => {
         ) {
           matches.push(
             ReviewSnapshotSearchMatch.make({
-              id: `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
+              id: ReviewSnapshotSearchMatchId.make(
+                `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
+              ),
               fileId: file.fileId,
               filePath: file.path,
               reviewKey: file.reviewKey,
@@ -249,13 +252,19 @@ const stableCursorHash = (parts: readonly string[]) => {
   return (hash >>> 0).toString(16).padStart(8, "0")
 }
 
-const encodedByteLength = (schema: Schema.ConstraintEncoder<unknown>, value: unknown) =>
-  jsonSafeUtf8ByteLength(Schema.encodeUnknownSync(schema)(value))
+const encodedByteLength = <Encoded>(schema: Schema.ConstraintEncoder<Encoded>, value: Encoded) =>
+  jsonSafeUtf8ByteLength(
+    Schema.decodeUnknownSync(Schema.Json)(Schema.encodeUnknownSync(schema)(value)),
+  )
 
-const assertEncodedBudget = (
-  schema: Schema.ConstraintEncoder<unknown>,
-  value: unknown,
+const assertEncodedBudget = <Encoded>(
+  schema: Schema.ConstraintEncoder<Encoded>,
+  value: Encoded,
   maxBytes: number,
-) => assertJsonPayloadWithinBudget(Schema.encodeUnknownSync(schema)(value), maxBytes)
+) =>
+  assertJsonPayloadWithinBudget(
+    Schema.decodeUnknownSync(Schema.Json)(Schema.encodeUnknownSync(schema)(value)),
+    maxBytes,
+  )
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

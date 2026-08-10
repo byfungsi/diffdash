@@ -1,4 +1,7 @@
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
+import { ViewedFileRecord } from "@diffdash/protocol/viewed-files"
 import { Effect } from "effect"
 
 import { CoreMethod } from "../core-contract"
@@ -29,11 +32,13 @@ export const makeViewedFileOperationHandlers: Effect.Effect<
     [CoreMethod.listViewedFiles]: (request) =>
       repositories.ensureHosted(request.review.repository).pipe(
         Effect.flatMap((repo) =>
-          viewedFiles.listHosted({
-            repoId: repo.id,
-            prNumber: request.review.number,
-            baseRefName: request.baseRefName,
-          }),
+          viewedFiles
+            .listHosted({
+              repoId: repo.id,
+              prNumber: request.review.number,
+              baseRefName: request.baseRefName,
+            })
+            .pipe(Effect.map((records) => records.map((record) => ViewedFileRecord.make(record)))),
         ),
       ),
     [CoreMethod.setViewedFile]: (request) =>
@@ -51,19 +56,35 @@ export const makeViewedFileOperationHandlers: Effect.Effect<
       ),
     [CoreMethod.listLocalViewedFiles]: (request) =>
       repositories
-        .ensureLocal(request.target.rootPath)
+        .ensureLocal(RepositoryCheckoutPath.make(request.target.rootPath))
         .pipe(
           Effect.flatMap((repo) =>
-            viewedFiles.listLocal(
-              localViewedFileScope(repo.id, request.target, request.sourceBranch),
-            ),
+            viewedFiles
+              .listLocal(
+                localViewedFileScope(
+                  repo.id,
+                  request.target,
+                  request.sourceBranch === null
+                    ? null
+                    : RepositoryComparisonRef.make(request.sourceBranch),
+                ),
+              )
+              .pipe(
+                Effect.map((records) => records.map((record) => ViewedFileRecord.make(record))),
+              ),
           ),
         ),
     [CoreMethod.setLocalViewedFile]: (request) =>
-      repositories.ensureLocal(request.target.rootPath).pipe(
+      repositories.ensureLocal(RepositoryCheckoutPath.make(request.target.rootPath)).pipe(
         Effect.flatMap((repo) =>
           viewedFiles.setLocal(
-            localViewedFileScope(repo.id, request.target, request.sourceBranch),
+            localViewedFileScope(
+              repo.id,
+              request.target,
+              request.sourceBranch === null
+                ? null
+                : RepositoryComparisonRef.make(request.sourceBranch),
+            ),
             {
               reviewKey: request.reviewKey,
               patchHash: request.patchHash,
@@ -77,7 +98,11 @@ export const makeViewedFileOperationHandlers: Effect.Effect<
         .repository(target)
         .pipe(
           Effect.flatMap((repo) =>
-            viewedFiles.listLocal(comparisonViewedFileScope(repo.id, target)),
+            viewedFiles
+              .listLocal(comparisonViewedFileScope(repo.id, target))
+              .pipe(
+                Effect.map((records) => records.map((record) => ViewedFileRecord.make(record))),
+              ),
           ),
         ),
     [CoreMethod.setRepositoryComparisonViewedFile]: (request) =>

@@ -11,8 +11,9 @@ import {
   ReviewSnapshotId,
   type ReviewSnapshotId as ReviewSnapshotIdType,
 } from "@diffdash/domain/review-identity"
-import { Clock, Context, Effect, Layer, Schema } from "effect"
-import { ReviewContextService, type ReviewContextError } from "./review-context"
+import { Clock, Context, Effect, Layer, Predicate, Schema } from "effect"
+import { GitService } from "@diffdash/local-git/local-git"
+import { GitProvider, ReviewContextError } from "./git-provider"
 import {
   RepositoryComparisonSource,
   type RepositoryComparisonSourceError,
@@ -85,7 +86,8 @@ export class ReviewSnapshotService extends Context.Service<
       ReviewSnapshotService,
       Effect.gen(function* () {
         validateConfig(config)
-        const contexts = yield* ReviewContextService
+        const gitProvider = yield* GitProvider
+        const git = yield* GitService
         const comparisons = yield* RepositoryComparisonSource
         const entries = new Map<ReviewSnapshotIdType, SnapshotEntry>()
         const tombstones = new Map<ReviewSnapshotIdType, SnapshotTombstone>()
@@ -120,13 +122,6 @@ export class ReviewSnapshotService extends Context.Service<
         ): Snapshot => {
           removeExpired(now)
           deepFreeze(snapshot)
-          const current = entries.get(snapshot.snapshotId)
-          if (current !== undefined) {
-            accessSequence += 1
-            current.lastAccessedAt = accessSequence
-            return snapshot
-          }
-
           accessSequence += 1
           entries.set(snapshot.snapshotId, {
             snapshot,
@@ -154,7 +149,7 @@ export class ReviewSnapshotService extends Context.Service<
         const acquireHosted = Effect.fn("ReviewSnapshotService.acquireHosted")(function* (
           review: HostedReviewLocator,
         ) {
-          const snapshot = yield* contexts.getHostedReviewSnapshot(review)
+          const snapshot = yield* gitProvider.acquireHostedReviewSnapshot(review)
           const now = yield* Clock.currentTimeMillis
           return put(snapshot, now)
         })
@@ -162,7 +157,9 @@ export class ReviewSnapshotService extends Context.Service<
         const acquireLocal = Effect.fn("ReviewSnapshotService.acquireLocal")(function* (
           target: LocalReviewTarget,
         ) {
-          const snapshot = yield* contexts.getLocalReviewSnapshot(target)
+          const snapshot = yield* git
+            .getLocalReviewSnapshot(target)
+            .pipe(Effect.mapError(snapshotOperationError("local.snapshot")))
           const now = yield* Clock.currentTimeMillis
           return put(snapshot, now)
         })
@@ -222,8 +219,17 @@ const validateConfig = (config: ReviewSnapshotCacheConfig) => {
   }
 }
 
-const deepFreeze = (value: unknown): void => {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return
-  for (const child of Object.values(value)) deepFreeze(child)
+const deepFreeze = (value: object): void => {
+  if (!Predicate.isObject(value) || Object.isFrozen(value)) return
+  for (const child of Object.values(value)) {
+    if (Predicate.isObject(child)) deepFreeze(child)
+  }
   Object.freeze(value)
 }
+
+const snapshotOperationError = (operation: "local.snapshot") => (cause: Error) =>
+  ReviewContextError.make({
+    operation,
+    reason: "Unable to load review context",
+    cause,
+  })

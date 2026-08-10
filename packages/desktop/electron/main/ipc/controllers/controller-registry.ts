@@ -1,3 +1,9 @@
+import {
+  CoreMethodChannel,
+  type CoreMethod,
+  type CoreMethodInput,
+  type CoreMethodOutput,
+} from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import {
@@ -14,7 +20,7 @@ import type { RendererSecurityPolicy } from "../../electron-policy"
 import { toPublicIpcError } from "../public-error"
 
 type InvokeHandler = Parameters<typeof ipcMain.handle>[1]
-type ControllerErrorAdapter = (error: unknown, operation: string) => TransportError
+type ControllerErrorAdapter = <A>(error: A, operation: string) => TransportError
 type ControllerHandler<Channel extends InvokeChannel> = (
   event: IpcMainInvokeEvent,
   request: InvokeRequest<Channel>,
@@ -59,6 +65,16 @@ export class IpcControllerRegistry {
     )
   }
 
+  /** Defines a protocol handler that directly forwards its decoded request to one Core method. */
+  readonly defineCore = <Method extends CoreMethod>(
+    method: Method,
+    execute: (method: Method, input: CoreMethodInput<Method>) => Promise<CoreMethodOutput<Method>>,
+    errorAdapter: ControllerErrorAdapter = toPublicIpcError,
+  ) => {
+    const channel = CoreMethodChannel[method]
+    this.define(channel, async (_event, request) => execute(method, request), errorAdapter)
+  }
+
   /** Defines a handler whose state mutation occurs only after its response passes encoding. */
   readonly defineTransactional = <Channel extends InvokeChannel>(
     channel: Channel,
@@ -100,7 +116,7 @@ export class IpcControllerRegistry {
         assertJsonPayloadWithinBudget(rawRequest, InvokeContract[channel].maxRequestBytes, channel)
       } catch (error) {
         return encodeFailure(
-          error instanceof TransportError
+          Schema.is(TransportError)(error)
             ? error
             : transportError("INVALID_REQUEST", `Invalid request for ${channel}`, channel),
         )
@@ -136,7 +152,7 @@ export class IpcControllerRegistry {
         prepared.commit?.()
         return encoded
       } catch (error) {
-        if (error instanceof TransportError) return encodeFailure(error)
+        if (Schema.is(TransportError)(error)) return encodeFailure(error)
         return encodeFailure(
           transportError("INVALID_RESPONSE", `Invalid response for ${channel}`, channel),
         )

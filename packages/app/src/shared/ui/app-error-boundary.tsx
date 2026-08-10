@@ -3,7 +3,9 @@ import {
   hasBridgeTransportErrorEncoding,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
+import { Match, Predicate } from "effect"
 import { Component, type ErrorInfo, type ReactNode } from "react"
+import { rendererFailureInput } from "@/shared/errors"
 
 interface AppErrorBoundaryProps {
   readonly children: ReactNode
@@ -99,13 +101,23 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
   }
 }
 
-const errorMessage = (error: unknown) => {
-  const transport = decodeTransportError(error)
+const errorMessage = <Value,>(error: Value): string => {
+  const input = rendererFailureInput(error)
+  const transport = decodeTransportError(input)
   if (transport !== null) return transport.message
-  if (hasBridgeTransportErrorEncoding(error)) return UNKNOWN_TRANSPORT_ERROR_MESSAGE
-  if (error instanceof Error && error.message.length > 0) return error.message
-  if (typeof error === "string" && error.length > 0) return error
-  return "An unknown error prevented DiffDash from continuing."
+  if (hasBridgeTransportErrorEncoding(input)) return UNKNOWN_TRANSPORT_ERROR_MESSAGE
+  const unknownInput: unknown = error
+  return Match.value(unknownInput).pipe(
+    Match.when(Match.instanceOf(Error), (value) =>
+      value.message.length > 0
+        ? value.message
+        : "An unknown error prevented DiffDash from continuing.",
+    ),
+    Match.when(Predicate.isString, (value) =>
+      value.length > 0 ? value : "An unknown error prevented DiffDash from continuing.",
+    ),
+    Match.orElse(() => "An unknown error prevented DiffDash from continuing."),
+  )
 }
 
 const reloadWindow = () => window.location.reload()

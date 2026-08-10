@@ -1,47 +1,6 @@
-import type { AISettings } from "@diffdash/domain/ai-settings"
-
-import type { AppState } from "@diffdash/domain/app-state"
-import type { HostedRepository, HostedRepositoryLocator } from "@diffdash/domain/git-provider"
-import type { LocalReviewTarget } from "@diffdash/domain/local-review"
-import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
-import type { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import type { ReviewAgentProgress } from "@diffdash/domain/review-agent"
-import type { ReviewProjectId } from "@diffdash/domain/review-identity"
-import type { ReviewThreadId, ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import type { AnalyticsEvent } from "@diffdash/protocol/analytics"
-import type { DiffDashApi } from "@diffdash/protocol/api"
-import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
-import type { AppUpdateState } from "@diffdash/protocol/app-update"
+import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
-import type {
-  GenerateHostedWalkthroughRequest,
-  HostedProviderRequest,
-  HostedRepositoryRequest,
-  HostedRepositorySearchRequest,
-  HostedReviewRequest,
-  HostedWalkthroughRequest,
-  OpenHostedReviewFileRequest,
-  SubmitHostedReviewDecisionRequest,
-} from "@diffdash/protocol/hosted-git"
-import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
-import type {
-  AddReviewThreadUserMessageRequest,
-  CreateReviewThreadRequest,
-  RunReviewThreadAgentRequest,
-} from "@diffdash/protocol/review-threads"
-import type {
-  OpenRepositoryComparisonFileRequest,
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotSearchRequest,
-} from "@diffdash/protocol/review-snapshot"
-import type {
-  HostedViewedFilesRequest,
-  LocalViewedFilesRequest,
-  RepositoryComparisonViewedFilesRequest,
-  SetHostedViewedFileRequest,
-  SetLocalViewedFileRequest,
-  SetRepositoryComparisonViewedFileRequest,
-} from "@diffdash/protocol/viewed-files"
+import { Match } from "effect"
 import { contextBridge, ipcRenderer } from "electron"
 import { createRendererTransport } from "./transport"
 
@@ -51,165 +10,159 @@ const transport = createRendererTransport({
   removeListener: (channel, listener) => ipcRenderer.removeListener(channel, listener),
 })
 
-const api: DiffDashApi = {
+const api: DiffDashBridgeApi = {
   analytics: {
     start: () => transport.invoke(InvokeChannel.analyticsStart, {}),
-    capture: (event: AnalyticsEvent) => transport.invoke(InvokeChannel.analyticsCapture, { event }),
+    capture: (event) => transport.invoke(InvokeChannel.analyticsCapture, { event }),
   },
   updates: {
     getState: () => transport.invoke(InvokeChannel.updatesGetState, {}),
     check: () => transport.invoke(InvokeChannel.updatesCheck, {}),
     download: () => transport.invoke(InvokeChannel.updatesDownload, {}),
     restartAndInstall: () => transport.invoke(InvokeChannel.updatesRestartAndInstall, {}),
-    onStateChanged: (listener: (state: AppUpdateState) => void) =>
-      transport.subscribe(EventChannel.updateStateChanged, listener),
+    onStateChanged: (listener) => transport.subscribe(EventChannel.updateStateChanged, listener),
   },
   navigation: {
     activateWindow: () => transport.invoke(InvokeChannel.appActivateWindow, {}),
     drainCommands: () => transport.invoke(InvokeChannel.drainNavigationCommands, {}),
-    onCommandsAvailable: (listener: () => void) =>
-      transport.subscribe(EventChannel.navigationCommandsAvailable, listener),
+    onCommandsAvailable: (listener) =>
+      transport.subscribe(EventChannel.navigationCommandsAvailable, (result) =>
+        listener(
+          Match.valueTags(result, {
+            Failure: (failure) => failure,
+            Success: () => ({ _tag: "Success" as const, value: undefined }),
+          }),
+        ),
+      ),
   },
   diagnostics: () => transport.invoke(InvokeChannel.appDiagnostics, {}),
   agentProviders: {
     getCatalog: () => transport.invoke(InvokeChannel.agentProvidersGetCatalog, {}),
   },
   installDiffDashCli: () => transport.invoke(InvokeChannel.appInstallDiffDashCli, {}),
-  openExternalUrl: (url: string) => transport.invoke(InvokeChannel.appOpenExternalUrl, { url }),
-  openRepositoryFile: (request: OpenHostedReviewFileRequest) =>
-    transport.invoke(InvokeChannel.appOpenRepositoryFile, request),
-  openLocalRepositoryFile: (rootPath: string, filePath: string) =>
-    transport.invoke(InvokeChannel.appOpenLocalRepositoryFile, { rootPath, filePath }),
+  openExternalUrl: (url) => transport.invoke(InvokeChannel.appOpenExternalUrl, { url }),
+  openRepositoryFile: (request) => transport.invoke(InvokeChannel.appOpenRepositoryFile, request),
+  openLocalRepositoryFile: (rootPath, filePath) =>
+    transport.invoke(InvokeChannel.appOpenLocalRepositoryFile, {
+      rootPath,
+      filePath,
+    }),
   repositories: {
-    list: (query?: string) =>
-      transport.invoke(InvokeChannel.listRepositories, { query: query ?? null }),
-    setFavorite: (id: string, isFavorite: boolean) =>
-      transport.invoke(InvokeChannel.setRepositoryFavorite, { id, isFavorite }),
-    favoriteRemote: (repo: HostedRepository) =>
+    list: (query) => transport.invoke(InvokeChannel.listRepositories, { query: query ?? null }),
+    setFavorite: (id, isFavorite) =>
+      transport.invoke(InvokeChannel.setRepositoryFavorite, {
+        id,
+        isFavorite,
+      }),
+    favoriteRemote: (repo) =>
       transport.invoke(InvokeChannel.favoriteRemoteRepository, { repository: repo }),
-    install: (localPath: string) =>
-      transport.invoke(InvokeChannel.installRepository, { localPath }),
-    link: (input: LinkRepositoryCheckoutRequest) =>
-      transport.invoke(InvokeChannel.linkRepository, input),
-    openProject: (localPath: string, selectedRepository?: HostedRepositoryLocator) =>
+    install: (localPath) =>
+      transport.invoke(InvokeChannel.installRepository, {
+        localPath,
+      }),
+    link: (input) => transport.invoke(InvokeChannel.linkRepository, input),
+    openProject: (localPath, selectedRepository) =>
       transport.invoke(InvokeChannel.openProject, {
         localPath,
         selectedRepository: selectedRepository ?? null,
       }),
     repairIdentities: () => transport.invoke(InvokeChannel.repairRepositoryIdentities, {}),
-    forget: (projectId: ReviewProjectId) =>
-      transport.invoke(InvokeChannel.forgetRepository, { projectId }),
+    forget: (projectId) => transport.invoke(InvokeChannel.forgetRepository, { projectId }),
     selectLocalFolder: () => transport.invoke(InvokeChannel.selectLocalFolder, {}),
   },
   projectWorkspace: {
-    get: (projectId: ReviewProjectId) =>
-      transport.invoke(InvokeChannel.projectWorkspaceGet, { projectId }),
-    save: (input: ProjectWorkspaceStateInput) =>
-      transport.invoke(InvokeChannel.projectWorkspaceSave, { input }),
+    get: (projectId) => transport.invoke(InvokeChannel.projectWorkspaceGet, { projectId }),
+    save: (input) => transport.invoke(InvokeChannel.projectWorkspaceSave, { input }),
   },
   reviewThreads: {
-    list: (target: ReviewThreadTarget) =>
-      transport.invoke(InvokeChannel.listReviewThreads, { target }),
-    create: (input: CreateReviewThreadRequest) =>
-      transport.invoke(InvokeChannel.createReviewThread, input),
-    addUserMessage: (input: AddReviewThreadUserMessageRequest) =>
-      transport.invoke(InvokeChannel.addReviewThreadUserMessage, input),
-    get: (threadId: ReviewThreadId) =>
-      transport.invoke(InvokeChannel.getReviewThread, { threadId }),
-    runAgent: (input: RunReviewThreadAgentRequest) =>
-      transport.invoke(InvokeChannel.runReviewThreadAgent, input),
-    onAgentProgress: (listener: (progress: ReviewAgentProgress) => void) =>
+    list: (target) => transport.invoke(InvokeChannel.listReviewThreads, { target }),
+    create: (input) => transport.invoke(InvokeChannel.createReviewThread, input),
+    addUserMessage: (input) => transport.invoke(InvokeChannel.addReviewThreadUserMessage, input),
+    get: (threadId) => transport.invoke(InvokeChannel.getReviewThread, { threadId }),
+    runAgent: (input) => transport.invoke(InvokeChannel.runReviewThreadAgent, input),
+    onAgentProgress: (listener) =>
       transport.subscribe(EventChannel.reviewThreadAgentProgress, listener),
   },
   settings: {
     get: () => transport.invoke(InvokeChannel.settingsGet, {}),
-    update: (settings: AISettings) => transport.invoke(InvokeChannel.settingsUpdate, { settings }),
+    update: (settings) => transport.invoke(InvokeChannel.settingsUpdate, { settings }),
   },
   appState: {
     get: () => transport.invoke(InvokeChannel.appStateGet, {}),
-    update: (state: AppState) => transport.invoke(InvokeChannel.appStateUpdate, { state }),
+    update: (state) => transport.invoke(InvokeChannel.appStateUpdate, { state }),
   },
   providers: {
     list: () => transport.invoke(InvokeChannel.listProviders, {}),
   },
   hostedRepositories: {
-    searchRepositories: (request: HostedRepositorySearchRequest) =>
+    searchRepositories: (request) =>
       transport.invoke(InvokeChannel.searchHostedRepositories, request),
-    listSearchScopes: (request: HostedProviderRequest) =>
+    listSearchScopes: (request) =>
       transport.invoke(InvokeChannel.listHostedRepositorySearchScopes, request),
   },
   hostedReviews: {
-    list: (request: HostedRepositoryRequest) =>
-      transport.invoke(InvokeChannel.listHostedReviews, request),
-    listAssigned: (request: HostedProviderRequest) =>
-      transport.invoke(InvokeChannel.listAssignedHostedReviews, request),
-    getDecision: (request: HostedReviewRequest) =>
-      transport.invoke(InvokeChannel.getHostedReviewDecision, request),
-    submitDecision: (request: SubmitHostedReviewDecisionRequest) =>
+    list: (request) => transport.invoke(InvokeChannel.listHostedReviews, request),
+    listAssigned: (request) => transport.invoke(InvokeChannel.listAssignedHostedReviews, request),
+    getDecision: (request) => transport.invoke(InvokeChannel.getHostedReviewDecision, request),
+    submitDecision: (request) =>
       transport.invoke(InvokeChannel.submitHostedReviewDecision, request),
   },
   localReviews: {
-    resolveBranch: (localPath: string, branchName: string | null) =>
+    resolveBranch: (localPath, branchName) =>
       transport.invoke(InvokeChannel.resolveLocalBranch, { localPath, branchName }),
   },
   repositoryComparisons: {
-    resolve: (command: OpenRepositoryComparisonCommand) =>
-      transport.invoke(InvokeChannel.resolveRepositoryComparison, { command }),
-    openFile: (request: OpenRepositoryComparisonFileRequest) =>
-      transport.invoke(InvokeChannel.appOpenRepositoryComparisonFile, request),
+    resolve: (command) => transport.invoke(InvokeChannel.resolveRepositoryComparison, { command }),
+    openFile: (request) => transport.invoke(InvokeChannel.appOpenRepositoryComparisonFile, request),
   },
   reviewSnapshots: {
-    acquireHosted: (request: HostedReviewRequest) =>
+    acquireHosted: (request) =>
       transport.invoke(InvokeChannel.acquireHostedReviewSnapshot, request),
-    acquireLocal: (target: LocalReviewTarget) =>
+    acquireLocal: (target) =>
       transport.invoke(InvokeChannel.acquireLocalReviewSnapshot, { target }),
-    acquireRepositoryComparison: (target: RepositoryComparisonTarget) =>
+    acquireRepositoryComparison: (target) =>
       transport.invoke(InvokeChannel.acquireRepositoryComparisonSnapshot, { target }),
-    getPage: (request: ReviewSnapshotPageRequest) =>
-      transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
-    search: (request: ReviewSnapshotSearchRequest) =>
-      transport.invoke(InvokeChannel.searchReviewSnapshot, request),
+    getPage: (request) => transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
+    search: (request) => transport.invoke(InvokeChannel.searchReviewSnapshot, request),
   },
   viewedFiles: {
-    list: (request: HostedViewedFilesRequest) =>
-      transport.invoke(InvokeChannel.listViewedFiles, request),
-    set: (request: SetHostedViewedFileRequest) =>
-      transport.invoke(InvokeChannel.setViewedFile, request),
-    listLocal: (request: LocalViewedFilesRequest) =>
-      transport.invoke(InvokeChannel.listLocalViewedFiles, request),
-    setLocal: (request: SetLocalViewedFileRequest) =>
-      transport.invoke(InvokeChannel.setLocalViewedFile, request),
-    listRepositoryComparison: (request: RepositoryComparisonViewedFilesRequest) =>
+    list: (request) => transport.invoke(InvokeChannel.listViewedFiles, request),
+    set: (request) => transport.invoke(InvokeChannel.setViewedFile, request),
+    listLocal: (request) => transport.invoke(InvokeChannel.listLocalViewedFiles, request),
+    setLocal: (request) => transport.invoke(InvokeChannel.setLocalViewedFile, request),
+    listRepositoryComparison: (request) =>
       transport.invoke(InvokeChannel.listRepositoryComparisonViewedFiles, request),
-    setRepositoryComparison: (request: SetRepositoryComparisonViewedFileRequest) =>
+    setRepositoryComparison: (request) =>
       transport.invoke(InvokeChannel.setRepositoryComparisonViewedFile, request),
   },
   walkthroughs: {
-    get: (request: HostedWalkthroughRequest) =>
-      transport.invoke(InvokeChannel.getWalkthrough, request),
-    generate: (request: GenerateHostedWalkthroughRequest) =>
-      transport.invoke(InvokeChannel.generateWalkthrough, request),
+    get: (request) => transport.invoke(InvokeChannel.getWalkthrough, request),
+    generate: (request) => transport.invoke(InvokeChannel.generateWalkthrough, request),
   },
   localWalkthroughs: {
-    get: (target: LocalReviewTarget, baseSha: string, headSha: string) =>
-      transport.invoke(InvokeChannel.getLocalWalkthrough, { target, baseSha, headSha }),
-    generate: (target: LocalReviewTarget) =>
+    get: (target, baseSha, headSha) =>
+      transport.invoke(InvokeChannel.getLocalWalkthrough, {
+        target,
+        baseSha,
+        headSha,
+      }),
+    generate: (target) =>
       transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: false }),
-    regenerate: (target: LocalReviewTarget) =>
+    regenerate: (target) =>
       transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: true }),
   },
   repositoryComparisonWalkthroughs: {
-    get: (target: RepositoryComparisonTarget) =>
+    get: (target) =>
       transport.invoke(InvokeChannel.getRepositoryComparisonWalkthrough, {
         target,
         regenerate: false,
       }),
-    generate: (target: RepositoryComparisonTarget) =>
+    generate: (target) =>
       transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
         target,
         regenerate: false,
       }),
-    regenerate: (target: RepositoryComparisonTarget) =>
+    regenerate: (target) =>
       transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
         target,
         regenerate: true,

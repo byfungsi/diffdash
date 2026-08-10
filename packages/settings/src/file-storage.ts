@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Path, Ref } from "effect"
+import { Context, Effect, FileSystem, Layer, Match, Path, Ref, Schema } from "effect"
 import type { PlatformError } from "effect"
 
 const textEncoder = new TextEncoder()
@@ -10,7 +10,7 @@ export interface FileStorageOperations {
   ) => Effect.Effect<string | null, PlatformError.PlatformError>
   readonly writePrettyJsonFile: (
     path: string,
-    value: unknown,
+    value: Schema.Json,
   ) => Effect.Effect<void, PlatformError.PlatformError>
 }
 
@@ -29,7 +29,11 @@ export class FileStorage extends Context.Service<FileStorage, FileStorageOperati
       ) {
         return yield* fileSystem.readFileString(path).pipe(
           Effect.catchIf(
-            (error) => error.reason._tag === "NotFound",
+            (error) =>
+              Match.value(error.reason).pipe(
+                Match.when({ _tag: "NotFound" }, () => true),
+                Match.orElse(() => false),
+              ),
             () => Effect.succeed(null),
           ),
         )
@@ -37,7 +41,7 @@ export class FileStorage extends Context.Service<FileStorage, FileStorageOperati
 
       const writePrettyJsonFile = Effect.fn("FileStorage.writePrettyJsonFile")(function* (
         path: string,
-        value: unknown,
+        value: Schema.Json,
       ) {
         const content = textEncoder.encode(`${JSON.stringify(value, null, 2)}\n`)
         const directory = pathService.dirname(path)

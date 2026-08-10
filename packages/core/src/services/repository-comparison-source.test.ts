@@ -1,9 +1,20 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option } from "effect"
 
-import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import {
+  GitProviderId,
+  HostedRepositorySource,
+  LocalRepositorySource,
+  makeHostedRepositoryLocator,
+} from "@diffdash/domain/git-provider"
 import { GitCommitSha, RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
-import { noRepositoryLocalPath, Repo, repositoryLocalPath } from "@diffdash/domain/repository"
+import {
+  LinkedCheckout,
+  RemoteOnly,
+  Repo,
+  RepositoryCheckoutPath,
+} from "@diffdash/domain/repository"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import {
   ProjectOpened,
   type ProjectOpenResult,
@@ -34,7 +45,7 @@ const mergeBaseSha = GitCommitSha.make("c".repeat(40))
 describe("RepositoryComparisonSource", () => {
   it.effect("resolves an omitted repository from the invocation checkout", () =>
     Effect.gen(function* () {
-      const linked = repository({ localPath: repositoryLocalPath("/repos/linux") })
+      const linked = repository({ localPath: "/repos/linux" })
       const openedPaths: string[] = []
       const pinnedInputs: HostedRepositoryComparisonInput[] = []
       const target = yield* resolve(command(), {
@@ -64,7 +75,7 @@ describe("RepositoryComparisonSource", () => {
         repositories: [],
         findHosted: Option.none(),
         openProject: ProjectRemoteSelectionRequired.make({
-          rootPath: "/repos/linux",
+          rootPath: RepositoryCheckoutPath.make("/repos/linux"),
           candidates: [
             ProjectRemoteCandidate.make({
               remoteName: "origin",
@@ -96,7 +107,7 @@ describe("RepositoryComparisonSource", () => {
 
   it.effect("resolves a provider-qualified linked repository and pins its exact target", () =>
     Effect.gen(function* () {
-      const linked = repository({ localPath: repositoryLocalPath("/repos/linux") })
+      const linked = repository({ localPath: "/repos/linux" })
       const pinnedInputs: HostedRepositoryComparisonInput[] = []
       let availabilityChecks = 0
       const target = yield* resolve(command("github"), {
@@ -129,8 +140,8 @@ describe("RepositoryComparisonSource", () => {
   it.effect("uses an unqualified selector only when exactly one provider matches", () =>
     Effect.gen(function* () {
       const github = repository({
-        provider: "github",
-        localPath: repositoryLocalPath("/repos/linux"),
+        provider: GitProviderId.make("github"),
+        localPath: "/repos/linux",
       })
       const target = yield* resolve(command(null), {
         repositories: [repository({ provider: "local" }), github],
@@ -140,7 +151,7 @@ describe("RepositoryComparisonSource", () => {
       expect(target.repository.providerId).toBe("github")
 
       const error = yield* resolve(command(null), {
-        repositories: [github, repository({ provider: "github-enterprise" })],
+        repositories: [github, repository({ provider: GitProviderId.make("github-enterprise") })],
         findHosted: Option.none(),
       }).pipe(Effect.flip)
       expect(error).toMatchObject({
@@ -155,7 +166,7 @@ describe("RepositoryComparisonSource", () => {
       let pinned = false
       const error = yield* resolve(command("github"), {
         repositories: [],
-        findHosted: Option.some(repository({ localPath: noRepositoryLocalPath })),
+        findHosted: Option.some(repository({ localPath: null })),
         providerAvailable: false,
         onPin: () => {
           pinned = true
@@ -174,7 +185,7 @@ describe("RepositoryComparisonSource", () => {
     Effect.gen(function* () {
       const error = yield* resolve(command("github"), {
         repositories: [],
-        findHosted: Option.some(repository({ localPath: repositoryLocalPath("/repos/linux") })),
+        findHosted: Option.some(repository({ localPath: "/repos/linux" })),
         pinError: HostedReviewWorkspacePoolError.make({
           code: "revision-ambiguous",
           operation: "comparison.resolve.base",
@@ -196,7 +207,7 @@ describe("RepositoryComparisonSource", () => {
     const readInputs: PinnedRepositoryComparisonInput[] = []
     const options: TestOptions = {
       repositories: [],
-      findHosted: Option.some(repository({ localPath: repositoryLocalPath("/repos/linux") })),
+      findHosted: Option.some(repository({ localPath: "/repos/linux" })),
       diff: `diff --git a/kernel.c b/kernel.c
 --- a/kernel.c
 +++ b/kernel.c
@@ -280,9 +291,7 @@ const testLayer = (options: TestOptions) =>
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            getHostedReview: () => unavailable(),
-            refreshHostedReview: () => unavailable(),
-            getHostedReviewDiff: () => unavailable(),
+            acquireHostedReviewSnapshot: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -305,7 +314,7 @@ const testLayer = (options: TestOptions) =>
               }),
             useComparison: (input, run) =>
               Effect.sync(() => options.onRead?.(input)).pipe(
-                Effect.andThen(run("/comparison-workspace")),
+                Effect.andThen(run(RepositoryCheckoutPath.make("/comparison-workspace"))),
               ),
             pinComparison: (comparison) =>
               Effect.sync(() => options.onPin?.(comparison)).pipe(
@@ -323,7 +332,7 @@ const testLayer = (options: TestOptions) =>
 
 const command = (providerId?: string | null) =>
   OpenRepositoryComparisonCommand.make({
-    localPath: "/repos/linux",
+    localPath: RepositoryCheckoutPath.make("/repos/linux"),
     repository:
       providerId === undefined
         ? null
@@ -340,15 +349,36 @@ const command = (providerId?: string | null) =>
   })
 
 const repository = (
-  overrides: Partial<Pick<Repo, "provider" | "owner" | "name" | "localPath">> = {},
+  overrides: {
+    readonly provider?: "local" | GitProviderId
+    readonly owner?: string
+    readonly name?: string
+    readonly localPath?: string | null
+  } = {},
 ) =>
   Repo.make({
-    id: `${overrides.provider ?? "github"}:torvalds/linux`,
-    provider: overrides.provider ?? "github",
-    owner: overrides.owner ?? "torvalds",
-    name: overrides.name ?? "linux",
-    remoteUrl: "https://github.com/torvalds/linux.git",
-    localPath: overrides.localPath ?? noRepositoryLocalPath,
+    id: ReviewProjectId.make(`${overrides.provider ?? "github"}:torvalds/linux`),
+    source:
+      overrides.provider === "local"
+        ? LocalRepositorySource.make()
+        : HostedRepositorySource.make({
+            locator: makeHostedRepositoryLocator(
+              overrides.provider ?? "github",
+              overrides.owner ?? "torvalds",
+              overrides.name ?? "linux",
+            ),
+          }),
+    checkout:
+      overrides.provider === "local" ||
+      (overrides.localPath !== undefined && overrides.localPath !== null)
+        ? LinkedCheckout.make({
+            remoteUrl:
+              overrides.provider === "local"
+                ? "file:///repos/linux"
+                : "https://github.com/torvalds/linux.git",
+            path: RepositoryCheckoutPath.make(overrides.localPath ?? "/repos/linux"),
+          })
+        : RemoteOnly.make({ remoteUrl: "https://github.com/torvalds/linux.git" }),
     isFavorite: false,
     lastOpenedAt: null,
     lastSyncedAt: null,

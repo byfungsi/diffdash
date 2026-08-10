@@ -1,3 +1,8 @@
+import {
+  ReleaseArtifactMatrix,
+  ReleaseCatalog,
+} from "../../packages/download-worker/src/release-catalog.js"
+
 const releaseVersionSource = String.raw`\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?`
 const releaseVersionPattern = new RegExp(`^${releaseVersionSource}$`, "u")
 const releaseTagPattern = new RegExp(`^v${releaseVersionSource}$`, "u")
@@ -172,62 +177,22 @@ export const validateReleaseProvenance = (provenance, { tag, commit, assets }) =
   }
 }
 
-const artifactRequirements = (version) => ({
-  macArm64Dmg: ["macOS ARM64 DMG", (name) => name === `DiffDash-${version}-mac-arm64.dmg`],
-  macArm64Zip: ["macOS ARM64 ZIP", (name) => name === `DiffDash-${version}-mac-arm64.zip`],
-  macArm64Blockmap: [
-    "macOS ARM64 blockmap",
-    (name) => name === `DiffDash-${version}-mac-arm64.zip.blockmap`,
-  ],
-  macX64Dmg: ["macOS Intel DMG", (name) => name === `DiffDash-${version}-mac-x64.dmg`],
-  macX64Zip: ["macOS Intel ZIP", (name) => name === `DiffDash-${version}-mac-x64.zip`],
-  macX64Blockmap: [
-    "macOS Intel blockmap",
-    (name) => name === `DiffDash-${version}-mac-x64.zip.blockmap`,
-  ],
-  macArm64Metadata: ["macOS ARM64 metadata", (name) => name === "latest-mac-arm64.yml"],
-  macX64Metadata: ["macOS Intel metadata", (name) => name === "latest-mac-x64.yml"],
-  linuxAppImage: [
-    "Linux x64 AppImage",
-    (name) =>
-      name === `DiffDash-${version}-linux-x64.AppImage` ||
-      name === `DiffDash-${version}-linux-x86_64.AppImage`,
-  ],
-  linuxMetadata: ["Linux updater metadata", (name) => name === "latest-linux.yml"],
-  linuxDeb: [
-    "Linux deb",
-    (name) =>
-      name === `DiffDash-${version}-linux-x64.deb` ||
-      name === `DiffDash-${version}-linux-amd64.deb` ||
-      name === `DiffDash-${version}-linux-x86_64.deb`,
-  ],
-})
-
 /** Selects the deterministic platform artifact matrix used by publishing and promotion. */
 export const selectReleaseArtifacts = (names, tag) => {
-  const version = releaseVersionFromTag(tag)
-  const sortedNames = names.toSorted((left, right) => left.localeCompare(right))
-  const selected = {}
-  const missing = []
-  const ambiguous = []
-  for (const [key, [label, matches]] of Object.entries(artifactRequirements(version))) {
-    const matching = sortedNames.filter(matches)
-    if (matching.length === 0) missing.push(label)
-    else if (matching.length > 1) ambiguous.push(label)
-    else selected[key] = matching[0]
-  }
-  if (missing.length > 0) throw new Error(`Release ${tag} is missing: ${missing.join(", ")}`)
-  if (ambiguous.length > 0) {
-    throw new Error(`Release ${tag} has multiple candidates for: ${ambiguous.join(", ")}`)
-  }
-  return selected
+  const matrix = ReleaseArtifactMatrix.create({
+    tag,
+    assets: names.map((name) => ({ name })),
+  })
+  return matrix.roles
 }
 
 /** Normalizes a configured public download origin to one URL without a trailing slash. */
 export const normalizePublicBaseUrl = (value) => {
-  const trimmed = value.trim().replace(/\/+$/u, "")
-  if (/^https?:\/\//u.test(trimmed)) return trimmed
-  return `https://${trimmed}`
+  try {
+    return ReleaseCatalog.normalizePublicOrigin(value)
+  } catch (cause) {
+    throw new Error("Public release base URL must be a valid HTTP(S) origin.", { cause })
+  }
 }
 
 /** Parses and validates Electron Builder updater YAML fields used by update clients. */
@@ -266,19 +231,13 @@ export const validateUpdaterMetadata = (metadata, { version, artifact, size, sha
 }
 
 /** Builds deterministic public metadata from already-hashed release assets. */
-export const createLatestMetadata = ({ tag, baseUrl, generatedAt, assets }) => ({
-  version: releaseVersionFromTag(tag),
-  tag,
-  generatedAt,
-  assets: assets
-    .toSorted((left, right) => left.name.localeCompare(right.name))
-    .map((asset) => ({
-      name: asset.name,
-      url: `${baseUrl}/releases/${tag}/${encodeURIComponent(asset.name)}`,
-      size: asset.size,
-      sha256: asset.sha256,
-    })),
-})
+export const createLatestMetadata = ({ tag, baseUrl, generatedAt, assets }) =>
+  ReleaseCatalog.createVersionedLatestManifest({
+    tag,
+    publicOrigin: baseUrl,
+    generatedAt,
+    assets,
+  })
 
 /** Builds the stable pointer consumed by the download worker. */
 export const createStableMetadata = ({ tag, promotedAt }) => ({
@@ -320,4 +279,14 @@ export const retainedReleasePrefixes = (prefixes, promotedTag) => {
       .slice(0, 2)
       .map(({ prefix }) => prefix),
   ])
+}
+
+/** Selects unprotected numeric R2 candidates for cleanup, including absent or draft GitHub releases. */
+export const releasePrefixesToPrune = (prefixes, publishedTags, promotedTag) => {
+  const publishedPrefixes = prefixes.filter((prefix) => {
+    const tag = prefix.slice("releases/".length, -1)
+    return isStableReleasePrefix(prefix) && publishedTags.has(tag)
+  })
+  const retained = retainedReleasePrefixes(publishedPrefixes, promotedTag)
+  return prefixes.filter((prefix) => isStableReleasePrefix(prefix) && !retained.has(prefix))
 }

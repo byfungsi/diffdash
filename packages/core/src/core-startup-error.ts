@@ -1,27 +1,38 @@
 import { Schema } from "effect"
+import {
+  CoreExpectedCause,
+  type CoreExpectedCause as CoreExpectedCauseType,
+} from "./core-error-cause"
+
+const CoreStartupOperation = Schema.Literals([
+  "acquireRuntime",
+  "createTemporaryDirectory",
+  "recoverInterruptedReviewTurns",
+  "recoverInterruptedWalkthroughOperations",
+])
 
 /** A recoverable failure while decoding host-owned Core configuration. */
 export class CoreConfigurationError extends Schema.TaggedError<CoreConfigurationError>()(
   "CoreConfigurationError",
   {
     message: Schema.String,
-    cause: Schema.Defect(),
+    cause: CoreExpectedCause,
   },
 ) {}
 
 /** A recoverable failure while acquiring Core-owned runtime resources. */
 export class CoreStartupError extends Schema.TaggedError<CoreStartupError>()("CoreStartupError", {
-  operation: Schema.String,
+  operation: CoreStartupOperation,
   message: Schema.String,
-  cause: Schema.Defect(),
+  cause: CoreExpectedCause,
 }) {}
 
 /** Complete expected failure union while acquiring the embedded Core runtime. */
 export type CoreStartupFailure = CoreConfigurationError | CoreStartupError
 
 /** Normalizes dependency-owned acquisition failures at the Core boundary. */
-export const toCoreStartupError = (cause: unknown): CoreStartupError =>
-  cause instanceof CoreStartupError
+export const toCoreStartupError = (cause: CoreExpectedCauseType): CoreStartupError =>
+  Schema.is(CoreStartupError)(cause)
     ? cause
     : CoreStartupError.make({
         operation: "acquireRuntime",

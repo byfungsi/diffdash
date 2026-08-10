@@ -10,12 +10,13 @@ import { join } from "node:path"
 import {
   AgentExecutionPolicy,
   AgentModelId,
+  AgentProviderId,
   AgentProviderOperationError,
   McpToolName,
-  ReviewRevision,
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
@@ -35,17 +36,15 @@ import {
 } from "@diffdash/process"
 import { TempResources } from "@diffdash/process/temp-resource"
 import {
-  CODEX_AUTO_MODELS,
   CODEX_DEFAULT_MODEL,
   CODEX_MODELS,
-  CODEX_PROVIDER_ID,
   CODEX_REVIEW_POLICY,
   CODEX_WALKTHROUGH_POLICY,
   makeCodexProvider,
 } from "./codex"
 
 const operationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: CODEX_PROVIDER_ID,
+  providerId: AgentProviderId.make("codex"),
   fallbackReason: "Codex test execution failed",
 })
 
@@ -113,7 +112,8 @@ const makeHarness = (
           }
           return result(request, "")
         },
-        catch: (cause) => processSpawnError(request, cause),
+        catch: (cause) =>
+          processSpawnError(request, cause instanceof Error ? cause : new Error(String(cause))),
       }),
     streamLines: (request) => {
       calls.push({
@@ -161,7 +161,7 @@ const processSpawnError = (request: ProcessRequest, cause: unknown) =>
     stderrTruncated: false,
     outputTruncated: false,
     message: cause instanceof Error ? cause.message : String(cause),
-    cause,
+    cause: cause instanceof Error ? cause : new Error(String(cause)),
   })
 
 const walkthroughRequest = () =>
@@ -491,18 +491,13 @@ describe("Codex provider", () => {
     }),
   )
 
-  it("owns defaults and all automatic quality candidates", () => {
+  it("owns models, defaults, and execution policies", () => {
     expect(CODEX_DEFAULT_MODEL).toBe(AgentModelId.make("gpt-5.6-terra"))
     expect(CODEX_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
       { id: "gpt-5.6-sol", displayName: "GPT 5.6 Sol" },
       { id: "gpt-5.6-terra", displayName: "GPT 5.6 Terra" },
       { id: "gpt-5.6-luna", displayName: "GPT 5.6 Luna" },
     ])
-    expect(CODEX_AUTO_MODELS).toEqual({
-      best: "gpt-5.6-sol",
-      balanced: "gpt-5.6-terra",
-      fast: "gpt-5.6-luna",
-    })
     expect(CODEX_WALKTHROUGH_POLICY).toMatchObject({
       repository: "local-working-copy",
       shell: "read-only",

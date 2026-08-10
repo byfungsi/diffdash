@@ -13,6 +13,11 @@ import { rendererRuntime } from "@/platform/renderer-runtime"
 import { Repositories } from "@/platform/repositories"
 import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
 
+const EMPTY_REPOS: readonly Repo[] = []
+const EMPTY_PROVIDERS: readonly GitProviderDescriptor[] = []
+const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
+const EMPTY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
+
 const remoteSearchAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositorySearchRequest)
 
 /** All repositories known to the renderer. */
@@ -23,7 +28,7 @@ export const repositoriesAtom = rendererRuntime
       return yield* repositories.list(Option.none())
     }),
     {
-      initialValue: [] as readonly Repo[],
+      initialValue: EMPTY_REPOS,
     },
   )
   .pipe(Atom.keepAlive)
@@ -36,7 +41,7 @@ export const providersAtom = rendererRuntime
       return yield* repositories.listProviders()
     }),
     {
-      initialValue: [] as readonly GitProviderDescriptor[],
+      initialValue: EMPTY_PROVIDERS,
     },
   )
   .pipe(Atom.keepAlive)
@@ -45,12 +50,12 @@ export const providersAtom = rendererRuntime
 export const repositorySearchAtom = Atom.family((query: string) =>
   rendererRuntime.atom(
     query.length === 0
-      ? Effect.succeed([] as readonly Repo[])
+      ? Effect.succeed(EMPTY_REPOS)
       : Effect.gen(function* () {
           const repositories = yield* Repositories
           return yield* repositories.list(Option.some(query))
         }),
-    { initialValue: [] as readonly Repo[] },
+    { initialValue: EMPTY_REPOS },
   ),
 )
 
@@ -58,14 +63,14 @@ export const repositorySearchAtom = Atom.family((query: string) =>
 export const remoteRepositorySearchAtom = Atom.family((key: string) =>
   rendererRuntime.atom(
     Effect.gen(function* () {
-      const request = parseRemoteSearchAtomKey(key)
+      const request = key.length === 0 ? null : remoteSearchAtomKeyCodec.decode(key)
       if (request === null || request.query.length === 0) {
-        return [] as readonly HostedRepository[]
+        return EMPTY_HOSTED_REPOSITORIES
       }
       const repositories = yield* Repositories
       return yield* repositories.searchHosted(request)
     }),
-    { initialValue: [] as readonly HostedRepository[] },
+    { initialValue: EMPTY_HOSTED_REPOSITORIES },
   ),
 )
 
@@ -73,20 +78,16 @@ export const remoteRepositorySearchAtom = Atom.family((key: string) =>
 export const searchScopesAtom = Atom.family((providerId: string) =>
   rendererRuntime.atom(
     providerId.length === 0
-      ? Effect.succeed([] as readonly RepositorySearchScope[])
+      ? Effect.succeed(EMPTY_SEARCH_SCOPES)
       : Effect.gen(function* () {
           const repositories = yield* Repositories
           return yield* repositories.listSearchScopes(
             HostedProviderRequest.make({ providerId: GitProviderId.make(providerId) }),
           )
         }),
-    { initialValue: [] as readonly RepositorySearchScope[] },
+    { initialValue: EMPTY_SEARCH_SCOPES },
   ),
 )
-
-/** Applies the selected owner scope to local bookmark search. */
-export const scopedLocalSearchQuery = (query: string, scope: string | null) =>
-  scope === null ? query : `${scope}/${query}`
 
 /** Stable key for provider repository search atoms. */
 export const remoteSearchAtomKey = (
@@ -94,5 +95,3 @@ export const remoteSearchAtomKey = (
   query: string,
   owners: readonly string[],
 ) => remoteSearchAtomKeyCodec.encode({ providerId, query, namespaces: owners })
-
-const parseRemoteSearchAtomKey = remoteSearchAtomKeyCodec.decode

@@ -5,11 +5,12 @@ import { transportError } from "@diffdash/protocol/transport-error"
 import { app, BrowserWindow, shell } from "electron"
 import { isAbsolute } from "node:path"
 import type { ApplicationRuntime } from "../../application-runtime"
+import type { DesktopHostConfiguration } from "../../desktop-host-configuration"
 import { normalizeReviewFilePath } from "../../electron-policy"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { openLocalPath } from "../../file-opening"
 import { openCoreFileIntent } from "../core-file-open-intent"
-import { isHiddenE2EWindow, revealAppWindow } from "../../window-activation"
+import { revealAppWindow } from "../../window-activation"
 import { IpcControllerRegistry } from "./controller-registry"
 
 /** Defines navigation IPC handler implementations. */
@@ -21,6 +22,7 @@ export const defineNavigationHandlers = (
     readonly acknowledge: (count: number) => void
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
+  configuration: DesktopHostConfiguration,
 ) => {
   const openIntent = (intent: Parameters<typeof openCoreFileIntent>[0]): Promise<void> =>
     openCoreFileIntent(intent, {
@@ -33,8 +35,8 @@ export const defineNavigationHandlers = (
     if (targetWindow === null)
       throw transportError("WINDOW_UNAVAILABLE", "DiffDash window is unavailable.")
     revealAppWindow(targetWindow, {
-      hidden: isHiddenE2EWindow(),
-      platform: process.platform,
+      hidden: configuration.policies.hiddenWindow,
+      platform: configuration.application.platform,
       focusApplication: () => app.focus({ steal: true }),
     })
   })

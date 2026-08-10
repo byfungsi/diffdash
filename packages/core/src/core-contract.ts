@@ -3,17 +3,21 @@ import {
   AgentPolicyEnforcementError,
   AgentProviderOperationError,
   AgentProviderProbeError,
+  InvalidAgentProviderRegistrationError,
   InvalidAgentProviderResponseError,
   MissingAgentProviderError,
   UnsupportedAgentCapabilityError,
 } from "@diffdash/agent-provider"
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
+import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import {
   WalkthroughOperationFailure,
   WalkthroughOperationId as DomainWalkthroughOperationId,
@@ -43,17 +47,21 @@ import type {
   ReviewAgentFinalizeError,
   ReviewAgentProviderFailureError,
   ReviewAgentServiceError,
-} from "@diffdash/review-agent"
+} from "./services/review-agent"
 import type { AppSettingsError } from "@diffdash/settings/app-settings"
 import type { AppStateError } from "@diffdash/settings/app-state"
-import { WalkthroughGenerationError, WalkthroughModelUnavailableError } from "@diffdash/walkthrough"
+import {
+  WalkthroughGenerationError,
+  WalkthroughModelUnavailableError,
+} from "@diffdash/agents/walkthrough"
 import { Schema } from "effect"
 import { CoreAbsolutePath, CoreWebUrl } from "./core-configuration"
+import * as CoreDefectBoundary from "./core-defect-boundary"
 import type { CoreStartupFailure } from "./core-startup-error"
 import type { PrerequisiteInstallError } from "./services/prerequisites"
 import { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 import { RepositoryLinkError } from "./services/repository-linker"
-import { ReviewContextError } from "./services/review-context"
+import { ReviewContextError } from "./services/git-provider"
 import type { ReviewSnapshotSearchResultTooLargeError } from "./services/review-snapshot-pagination"
 
 /** Closed business-operation catalog implemented by DiffDash Core. */
@@ -183,7 +191,7 @@ export class CoreLocalFileOpenIntent extends Schema.TaggedClass<CoreLocalFileOpe
   "local",
   {
     rootPath: CoreAbsolutePath,
-    filePath: Schema.String,
+    filePath: RepositoryRelativePath,
   },
 ) {}
 
@@ -267,6 +275,7 @@ export const CoreWalkthroughFailure = Schema.Union([
   AgentCapabilityUnavailableError,
   AgentPolicyEnforcementError,
   AgentProviderProbeError,
+  InvalidAgentProviderRegistrationError,
   NoAgentProviderAvailableError,
   AgentProviderOperationError,
   InvalidAgentProviderResponseError,
@@ -390,6 +399,9 @@ export interface StartWalkthroughOperation {
   readonly regenerate: boolean
 }
 
+/** Hosted review target constructor accepted by the Core walkthrough boundary. */
+export const CoreHostedReviewTarget = HostedReviewTarget
+
 /** Promptly returned identity for accepted walkthrough work. */
 export interface WalkthroughOperationAccepted {
   readonly operationId: WalkthroughOperationId
@@ -425,10 +437,14 @@ export class WalkthroughOperationInterrupted extends Schema.TaggedClass<Walkthro
   {},
 ) {}
 
+/** Bounded, serializable details retained when a walkthrough reaches a defect terminal state. */
+export const CoreDefectSummary = CoreDefectBoundary.CoreDefectSummary
+export type CoreDefectSummary = CoreDefectBoundary.CoreDefectSummary
+
 /** Walkthrough operation that ended because of an unexpected defect. */
 export class WalkthroughOperationDefect extends Schema.TaggedClass<WalkthroughOperationDefect>()(
   "defect",
-  { defect: Schema.Unknown },
+  { defect: CoreDefectSummary },
 ) {}
 
 /** Terminal state observed through the embedded operation boundary. */
@@ -447,8 +463,8 @@ export type WalkthroughOperationResult = typeof WalkthroughOperationResult.Type
 /** Request for a stored artifact belonging to one exact review generation. */
 export interface GetStoredWalkthrough {
   readonly target: ReviewThreadTarget
-  readonly expectedBaseRevision: string | null
-  readonly expectedHeadRevision: string | null
+  readonly expectedBaseRevision: ReviewRevision | null
+  readonly expectedHeadRevision: ReviewRevision | null
 }
 
 /** Durable walkthrough operation seam implemented in-process during the embedded migration. */

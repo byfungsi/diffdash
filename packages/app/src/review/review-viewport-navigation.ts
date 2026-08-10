@@ -5,7 +5,7 @@ import type {
   ReviewSnapshotFileInventory,
   ReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
-import type { ReviewFileId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import { ReviewFileId, type ReviewSnapshotId } from "@diffdash/domain/review-identity"
 import type {
   RangeReviewNavigationTarget,
   ReviewLinePoint,
@@ -14,7 +14,9 @@ import type {
 } from "@diffdash/domain/review-navigation"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
+import type { TransportError } from "@diffdash/protocol/transport-error"
 import type { RefObject } from "react"
+import { Match, Result, Schema } from "effect"
 
 import { findRenderedDiffLine } from "./review-rendered-line"
 import {
@@ -33,7 +35,7 @@ import type { ReviewSnapshotPageReader } from "./review-snapshot-page-session"
 export interface ReviewDiffRegistration {
   readonly generation: number
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<unknown>
+  readonly instance: VirtualizedFileDiff<TransportError>
   readonly rendered: boolean
 }
 
@@ -67,6 +69,10 @@ const STABLE_FRAME_COUNT = 3
 export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   readonly #anchors: ReviewNavigationAnchorRegistry
   readonly #resolvedAnchors = new WeakMap<object, LocalResolvedReviewNavigationTarget>()
+  readonly #localTargets = new WeakMap<
+    ResolvedReviewNavigationTarget,
+    LocalResolvedReviewNavigationTarget
+  >()
   readonly #reconciliations = new Map<
     string,
     { readonly generation: number; readonly passes: number }
@@ -89,20 +95,38 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   ): Promise<LocalResolvedReviewNavigationTarget> => {
     this.#throwIfAborted(signal)
     const bindings = this.#current()
-    if (target._tag === "extension") {
+    if (
+      Match.valueTags(target, {
+        extension: () => true,
+        thread: () => false,
+        file: () => false,
+        hunk: () => false,
+        line: () => false,
+        range: () => false,
+      })
+    ) {
       throw new ReviewNavigationUnavailableError("extensionUnavailable")
     }
 
-    if (target._tag === "thread") {
-      const details = bindings.threads.find((candidate) => candidate.thread.id === target.threadId)
-      const anchor = details?.thread.currentAnchor ?? null
+    const threadTarget = Match.valueTags(target, {
+      thread: (value) => value,
+      extension: () => null,
+      file: () => null,
+      hunk: () => null,
+      line: () => null,
+      range: () => null,
+    })
+    if (threadTarget !== null) {
+      const details = bindings.threads.find(
+        (candidate) => candidate.thread.id === threadTarget.threadId,
+      )
+      const anchor = details?.thread.activeAnchor ?? null
       if (
         details === undefined ||
         details.thread.repoId !== bindings.manifest.projectId ||
         details.thread.reviewKey !== bindings.manifest.reviewKey ||
         details.thread.currentBaseRevision !== bindings.manifest.baseRevision ||
         details.thread.currentHeadRevision !== bindings.manifest.headRevision ||
-        details.thread.anchorStatus !== "active" ||
         anchor === null
       ) {
         throw new ReviewNavigationUnavailableError("targetOutdated")
@@ -111,11 +135,11 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         (candidate) => candidate.fileId === anchor.fileId && candidate.path === anchor.filePath,
       )
       if (file === undefined) throw new ReviewNavigationUnavailableError("targetOutdated")
-      return {
+      const resolved = {
         target,
         file,
         fileId: file.fileId,
-        anchorKey: `thread:${target.threadId}`,
+        anchorKey: `thread:${threadTarget.threadId}`,
         linePoint: {
           hunkId: anchor.hunkId,
           hunkFingerprint: anchor.hunkFingerprint,
@@ -123,27 +147,44 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
           lineNumber: anchor.lineNumber,
         },
         threadAnchor: anchor,
-        threadId: target.threadId,
+        threadId: threadTarget.threadId,
       }
+      this.#localTargets.set(resolved, resolved)
+      return resolved
     }
 
-    const file = bindings.manifest.files.find((candidate) => candidate.fileId === target.fileId)
+    const fileTarget = Match.valueTags(target, {
+      file: (value) => value,
+      hunk: (value) => value,
+      line: (value) => value,
+      range: (value) => value,
+      extension: () => null,
+      thread: () => null,
+    })
+    if (fileTarget === null) throw new ReviewNavigationUnavailableError("targetNotFound")
+    const file = bindings.manifest.files.find((candidate) => candidate.fileId === fileTarget.fileId)
     if (file === undefined) throw new ReviewNavigationUnavailableError("targetNotFound")
-    return {
+    const resolved = {
       target,
       file,
       fileId: file.fileId,
-      anchorKey: targetAnchorKey(target),
-      linePoint:
-        target._tag === "line" ? target.point : target._tag === "range" ? target.start : null,
+      anchorKey: targetAnchorKey(fileTarget),
+      linePoint: Match.valueTags(fileTarget, {
+        line: ({ point }) => point,
+        range: ({ start }) => start,
+        file: () => null,
+        hunk: () => null,
+      }),
       threadAnchor: null,
       threadId: null,
     }
+    this.#localTargets.set(resolved, resolved)
+    return resolved
   }
 
   /** Loads and validates the exact parsed resource required by a resolved target. */
   readonly loadTarget = async (target: ResolvedReviewNavigationTarget, signal: AbortSignal) => {
-    const resolved = target as LocalResolvedReviewNavigationTarget
+    const resolved = this.#localTarget(target)
     const bindings = this.#current()
     const result = await bindings.pages.loadFiles([resolved.file.fileId])
     this.#throwIfAborted(signal)
@@ -151,7 +192,17 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const file = bindings.pages.getFile(resolved.file.fileId)
     if (status === "expired") throw new ReviewNavigationSnapshotExpiredError()
     if (status === "tooLarge") {
-      if (resolved.target._tag === "file") return
+      if (
+        Match.valueTags(resolved.target, {
+          file: () => true,
+          thread: () => false,
+          extension: () => false,
+          hunk: () => false,
+          line: () => false,
+          range: () => false,
+        })
+      )
+        return
       throw new ReviewNavigationUnavailableError("fileContentUnavailable")
     }
     if (status === "failed") {
@@ -177,15 +228,24 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     signal: AbortSignal,
   ) => {
     this.#throwIfAborted(signal)
-    const resolved = target as LocalResolvedReviewNavigationTarget
+    const resolved = this.#localTarget(target)
     this.#current().prepareFile(resolved.file, input)
     await nextFrame(signal)
   }
 
   /** Waits for a registered file, line, range, hunk, or thread target. */
   readonly waitForAnchor = async (target: ResolvedReviewNavigationTarget, signal: AbortSignal) => {
-    const resolved = target as LocalResolvedReviewNavigationTarget
-    if (resolved.target._tag === "file") {
+    const resolved = this.#localTarget(target)
+    if (
+      Match.valueTags(resolved.target, {
+        file: () => true,
+        thread: () => false,
+        extension: () => false,
+        hunk: () => false,
+        line: () => false,
+        range: () => false,
+      })
+    ) {
       const anchor = await this.#anchors.waitForAnchor(
         reviewFileAnchorKey(resolved.file.fileId),
         signal,
@@ -216,6 +276,15 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       this.#primeContentAnchor(resolved)
       await nextFrame(signal)
     }
+  }
+
+  readonly #localTarget = (
+    target: ResolvedReviewNavigationTarget,
+  ): LocalResolvedReviewNavigationTarget => {
+    const resolved = this.#localTargets.get(target)
+    if (resolved !== undefined) return resolved
+    if (isLocalResolvedReviewNavigationTarget(target)) return target
+    throw new ReviewNavigationUnavailableError("targetNotFound")
   }
 
   /** Positions the mounted target and waits for relevant preceding/eager resources. */
@@ -307,28 +376,35 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     resolved: LocalResolvedReviewNavigationTarget,
   ) => {
     const target = resolved.target
-    if (target._tag === "file") return
-    if (target._tag === "thread") {
-      const anchor = resolved.threadAnchor
-      if (anchor === null || !parsedFileContainsThreadAnchor(file, anchor)) {
-        throw new ReviewNavigationUnavailableError("targetOutdated")
-      }
-      return
-    }
-    if (target._tag === "extension") {
-      throw new ReviewNavigationUnavailableError("extensionUnavailable")
-    }
-    if (target._tag === "hunk") {
-      const expectedHunk = file.hunks.find(
-        (hunk) => hunk.id === target.hunkId && hunk.fingerprint === target.hunkFingerprint,
-      )
-      if (expectedHunk === undefined) throw new ReviewNavigationUnavailableError("targetOutdated")
-      return
-    }
-    const points = target._tag === "line" ? [target.point] : [target.start, target.end]
-    if (points.some((point) => !parsedFileContainsPoint(file, point))) {
-      throw new ReviewNavigationUnavailableError("targetOutdated")
-    }
+    Match.valueTags(target, {
+      file: () => undefined,
+      thread: () => {
+        const anchor = resolved.threadAnchor
+        if (anchor === null || !parsedFileContainsThreadAnchor(file, anchor)) {
+          throw new ReviewNavigationUnavailableError("targetOutdated")
+        }
+      },
+      extension: () => {
+        throw new ReviewNavigationUnavailableError("extensionUnavailable")
+      },
+      hunk: (hunkTarget) => {
+        const expectedHunk = file.hunks.find(
+          (hunk) =>
+            hunk.id === hunkTarget.hunkId && hunk.fingerprint === hunkTarget.hunkFingerprint,
+        )
+        if (expectedHunk === undefined) throw new ReviewNavigationUnavailableError("targetOutdated")
+      },
+      line: ({ point }) => {
+        if (!parsedFileContainsPoint(file, point)) {
+          throw new ReviewNavigationUnavailableError("targetOutdated")
+        }
+      },
+      range: ({ start, end }) => {
+        if ([start, end].some((point) => !parsedFileContainsPoint(file, point))) {
+          throw new ReviewNavigationUnavailableError("targetOutdated")
+        }
+      },
+    })
   }
 
   readonly #mountContentAnchor = (
@@ -341,7 +417,16 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     }
     const point = resolvedPoint(bindings.pages.getFile(resolved.file.fileId), resolved)
     if (point === null) return null
-    if (resolved.target._tag === "range") {
+    if (
+      Match.valueTags(resolved.target, {
+        range: () => true,
+        file: () => false,
+        thread: () => false,
+        extension: () => false,
+        hunk: () => false,
+        line: () => false,
+      })
+    ) {
       const activeElement = bindings.searchHighlights.getActiveMatchElement()
       const activeRect = bindings.searchHighlights.getActiveMatchRect()
       if (activeElement !== null && activeRect !== null) {
@@ -356,7 +441,16 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     )
     if (line === null) return null
 
-    if (resolved.target._tag === "thread") {
+    if (
+      Match.valueTags(resolved.target, {
+        thread: () => true,
+        file: () => false,
+        extension: () => false,
+        hunk: () => false,
+        line: () => false,
+        range: () => false,
+      })
+    ) {
       const card = registration.host.closest<HTMLElement>("[data-review-file-id]")
       const panel =
         card === null
@@ -382,7 +476,14 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (registration === undefined || !registration.host.isConnected) return
     const point = resolvedPoint(bindings.pages.getFile(resolved.file.fileId), resolved)
     if (point === null) return
-    const rangeTarget = resolved.target._tag === "range" ? resolved.target : null
+    const rangeTarget = Match.valueTags(resolved.target, {
+      range: (value) => value,
+      file: () => null,
+      thread: () => null,
+      extension: () => null,
+      hunk: () => null,
+      line: () => null,
+    })
     const searchOccurrence =
       rangeTarget !== null
         ? (bindings.searchOccurrences.find((occurrence) =>
@@ -560,7 +661,17 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
 
   readonly #targetStickyHeight = (resolved: LocalResolvedReviewNavigationTarget) => {
     const globalHeight = this.#globalStickyHeight()
-    if (resolved.target._tag === "file") return globalHeight
+    if (
+      Match.valueTags(resolved.target, {
+        file: () => true,
+        thread: () => false,
+        extension: () => false,
+        hunk: () => false,
+        line: () => false,
+        range: () => false,
+      })
+    )
+      return globalHeight
 
     const registration = this.#current().diffRegistrations.get(resolved.file.reviewKey)
     const card = registration?.host.closest<HTMLElement>("[data-review-file-id]") ?? null
@@ -573,13 +684,21 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   }
 }
 
+const isLocalResolvedReviewNavigationTarget = (
+  target: ResolvedReviewNavigationTarget,
+): target is LocalResolvedReviewNavigationTarget =>
+  "file" in target && "linePoint" in target && "threadAnchor" in target && "threadId" in target
+
 const targetAnchorKey = (
   target: Exclude<ReviewNavigationTarget, { readonly _tag: "thread" | "extension" }>,
 ) => {
-  if (target._tag === "file") return reviewFileAnchorKey(target.fileId)
-  if (target._tag === "hunk") return `hunk:${target.fileId}:${target.hunkId}`
-  if (target._tag === "line") return pointAnchorKey(target.fileId, target.point)
-  return `range:${pointAnchorKey(target.fileId, target.start)}:${pointAnchorKey(target.fileId, target.end)}`
+  return Match.valueTags(target, {
+    file: ({ fileId }) => reviewFileAnchorKey(fileId),
+    hunk: ({ fileId, hunkId }) => `hunk:${fileId}:${hunkId}`,
+    line: ({ fileId, point }) => pointAnchorKey(fileId, point),
+    range: ({ fileId, start, end }) =>
+      `range:${pointAnchorKey(fileId, start)}:${pointAnchorKey(fileId, end)}`,
+  })
 }
 
 const pointAnchorKey = (fileId: ReviewFileId, point: ReviewLinePoint) =>
@@ -633,8 +752,15 @@ const resolvedPoint = (
   resolved: LocalResolvedReviewNavigationTarget,
 ): ReviewLinePoint | null => {
   if (resolved.linePoint !== null) return resolved.linePoint
-  if (resolved.target._tag !== "hunk" || file === null) return null
-  const target = resolved.target
+  const target = Match.valueTags(resolved.target, {
+    hunk: (value) => value,
+    file: () => null,
+    thread: () => null,
+    extension: () => null,
+    line: () => null,
+    range: () => null,
+  })
+  if (target === null || file === null) return null
   const hunk = file.hunks.find(
     (candidate) =>
       candidate.id === target.hunkId && candidate.fingerprint === target.hunkFingerprint,
@@ -718,7 +844,11 @@ const eagerPlaceholderFileIds = (
   return [
     ...container.querySelectorAll<HTMLElement>("[data-review-page-placeholder-file-id]"),
   ].flatMap((placeholder) => {
-    const fileId = placeholder.dataset.reviewPagePlaceholderFileId as ReviewFileId | undefined
+    const decodedFileId = Schema.decodeUnknownResult(ReviewFileId)(
+      placeholder.dataset.reviewPagePlaceholderFileId,
+    )
+    if (Result.isFailure(decodedFileId)) return []
+    const fileId = decodedFileId.success
     const rect = placeholder.getBoundingClientRect()
     return fileId !== undefined &&
       byId.has(fileId) &&

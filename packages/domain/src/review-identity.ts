@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 
-import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
+import type { HostedReviewLocator } from "./git-provider"
+import type { RepositoryRelativePath } from "./repository-path"
 
 /** Workspace-local identity for one managed review project. */
 export const ReviewProjectId = Schema.String.pipe(
@@ -85,7 +86,9 @@ export type ReviewHunkFingerprint = typeof ReviewHunkFingerprint.Type
 
 /** Creates the canonical persisted review key for one hosted review locator. */
 export const makeReviewKey = (review: HostedReviewLocator) =>
-  ReviewKey.make(makeHostedReviewKey(review))
+  ReviewKey.make(
+    `${review.repository.providerId}:${review.repository.namespace}/${review.repository.name}#${review.number}`,
+  )
 
 /** Hashes exact unified-diff text for deterministic snapshot identity. */
 export const makeReviewDiffIdentity = (diff: string) =>
@@ -108,15 +111,17 @@ export const makeReviewSnapshotId = (input: {
   )
 
 /** Creates a deterministic identity for a changed file, including rename metadata. */
-export const makeReviewFileId = (path: string, oldPath: string | null) =>
-  ReviewFileId.make(`file:${stableReviewHash([oldPath ?? "", path])}`)
+export const makeReviewFileId = (
+  path: RepositoryRelativePath,
+  oldPath: RepositoryRelativePath | null,
+) => ReviewFileId.make(`file:${stableReviewHash([oldPath ?? "", path])}`)
 
 /** Hashes the provider-neutral file patch represented by parsed diff metadata. */
 export const makeReviewFilePatchHash = (file: {
   readonly hunks: readonly { readonly header: string; readonly lines: readonly string[] }[]
   readonly metadata?: readonly string[]
-  readonly oldPath: string | null
-  readonly path: string
+  readonly oldPath: RepositoryRelativePath | null
+  readonly path: RepositoryRelativePath
   readonly status: string
 }) =>
   ReviewFilePatchHash.make(

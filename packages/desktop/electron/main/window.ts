@@ -1,5 +1,5 @@
-import { join } from "node:path"
 import { EventChannel } from "@diffdash/protocol/channels"
+import { Predicate } from "effect"
 import { app, BrowserWindow, dialog } from "electron"
 import { electronErrorPageDataUrl } from "../error-page"
 import {
@@ -9,23 +9,25 @@ import {
 import type { RendererSecurityPolicy } from "./electron-policy"
 import { sendProtocolEvent } from "./ipc/transport"
 import type { createNavigationCommandQueue } from "./navigation-command-queue"
-import { applicationPaths } from "./paths"
+import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 
 type NavigationCommands = ReturnType<typeof createNavigationCommandQueue>
 
-const serializeError = (error: unknown) =>
-  error instanceof Error
+const serializeError = <A>(error: A) =>
+  Predicate.isError(error)
     ? { message: error.message, name: error.name }
     : { message: String(error), name: "UnknownError" }
 
 /** Creates and secures the main renderer window while preserving fallback behavior. */
 export const createMainWindow = ({
+  configuration,
   logStartupStage,
   navigationCommands,
   onClosed,
   rendererSecurityPolicy,
   revealWindow,
 }: {
+  readonly configuration: DesktopHostConfiguration
   readonly logStartupStage: (stage: string) => void
   readonly navigationCommands: NavigationCommands
   readonly onClosed: () => void
@@ -34,8 +36,8 @@ export const createMainWindow = ({
 }) => {
   const window = new BrowserWindow(
     createDiffDashBrowserWindowOptions({
-      iconPath: applicationPaths().developmentIconPath,
-      preloadPath: join(__dirname, "../preload/index.mjs"),
+      iconPath: configuration.paths.developmentIconPath,
+      preloadPath: configuration.paths.preloadPath,
     }),
   )
   logStartupStage("window created")
@@ -47,9 +49,7 @@ export const createMainWindow = ({
     isWindowShown = true
     if (showFallbackTimer !== null) clearTimeout(showFallbackTimer)
     revealWindow(window)
-    logStartupStage(
-      process.env.DIFFDASH_E2E_HIDDEN === "1" ? "window ready (hidden)" : "window shown",
-    )
+    logStartupStage(configuration.policies.hiddenWindow ? "window ready (hidden)" : "window shown")
   }
 
   window.once("ready-to-show", showMainWindow)
@@ -64,7 +64,7 @@ export const createMainWindow = ({
     void window
       .loadURL(electronErrorPageDataUrl(message, rendererUrl))
       .then(() => showMainWindow())
-      .catch((fallbackError: unknown) => {
+      .catch((fallbackError) => {
         showMainWindow()
         dialog.showErrorBox(
           "DiffDash encountered an error",
@@ -105,7 +105,7 @@ export const createMainWindow = ({
   window.webContents.setWindowOpenHandler(({ url }) => rendererNavigation.handleWindowOpen(url))
   window.webContents.on("will-navigate", rendererNavigation.handleNavigation)
   window.webContents.on("will-redirect", rendererNavigation.handleNavigation)
-  if (app.isPackaged) {
+  if (configuration.application.packaged) {
     window.webContents.on("devtools-opened", () => window.webContents.closeDevTools())
   }
 
@@ -119,7 +119,7 @@ export const createMainWindow = ({
       }
       return undefined
     })
-    .catch((error: unknown) => {
+    .catch((error) => {
       const message = serializeError(error).message
       console.error(`[renderer:load-error] ${message}`)
       showElectronError(message)

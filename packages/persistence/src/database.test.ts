@@ -9,19 +9,28 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { AgentRunId, ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
-import { repositoryLocalPath } from "@diffdash/domain/repository"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { DatabaseSync } from "node:sqlite"
+import { ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
+import {
+  AgentRunId,
+  ReviewAgentArtifactId,
+  ReviewAgentProviderId,
+  ReviewAgentProviderRunId,
+  ReviewAgentUsage,
+} from "@diffdash/domain/review-agent"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import BetterSqlite3 from "better-sqlite3"
 import { Effect, Result, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
+import * as SqlError from "effect/unstable/sql/SqlError"
 import { AgentRunArtifactStore, AgentRunArtifactStoreError } from "./agent-run-artifact-store"
-import { AgentRunStore, AgentRunStoreError } from "./agent-run-store"
-import { DatabaseError, DatabaseService } from "./database"
+import { DatabaseError, makeDatabase } from "./database"
+import { layer as databaseNodeLayer } from "./database-node"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore, ReviewThreadStoreError } from "./review-thread-store"
-import { ThreadMemoryStore, ThreadMemoryStoreError } from "./thread-memory-store"
+import { ReviewConversationAgentRunReuseError } from "./review-turn-row"
 import { ViewedFileStore } from "./viewed-file-store"
 import { WalkthroughStore, WalkthroughStoreError } from "./walkthrough-store"
 
@@ -30,7 +39,7 @@ const makeTempDatabasePath = Effect.acquireRelease(
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
-const makeLayer = (databasePath: string) => DatabaseService.layer(databasePath)
+const makeLayer = (databasePath: string) => databaseNodeLayer(databasePath)
 
 const makeCompatibilityLayer = (databasePath: string) =>
   Layer.mergeAll(
@@ -38,9 +47,7 @@ const makeCompatibilityLayer = (databasePath: string) =>
     ViewedFileStore.layer,
     WalkthroughStore.layer,
     ReviewThreadStore.layer,
-    AgentRunStore.layer,
     AgentRunArtifactStore.layer,
-    ThreadMemoryStore.layer,
   ).pipe(Layer.provideMerge(makeLayer(databasePath)))
 
 const ColumnNameRows = Schema.Array(Schema.Struct({ name: Schema.String }))
@@ -83,25 +90,67 @@ const CompatibilityCountsRow = Schema.Struct({
   walkthroughs: Schema.Number,
 })
 const TableSqlRow = Schema.Struct({ sql: Schema.String })
+const UserVersionRow = Schema.Struct({ user_version: Schema.Number })
+const IntegrityCheckRow = Schema.Struct({ integrity_check: Schema.String })
+const AgentRunFixtureRow = Schema.Struct({
+  id: AgentRunId,
+  thread_id: ReviewThreadId,
+  provider: ReviewAgentProviderId,
+  model: Schema.NonEmptyString,
+  prompt_version: Schema.NonEmptyString,
+  review_key: ReviewKey,
+  base_sha: ReviewRevision,
+  head_sha: ReviewRevision,
+  status: Schema.Literals(["running", "completed", "failed"]),
+  provider_run_id: Schema.NullOr(ReviewAgentProviderRunId),
+  usage_json: Schema.NullOr(Schema.fromJsonString(ReviewAgentUsage)),
+})
+const ThreadMemoryFixtureRow = Schema.Struct({
+  thread_id: ReviewThreadId,
+  summary: Schema.String,
+  summarized_through_sequence: Schema.Int,
+  summary_algorithm: ThreadMemorySummaryAlgorithm,
+  summary_version: Schema.Int,
+  important_artifact_ids_json: Schema.fromJsonString(Schema.Array(ReviewAgentArtifactId)),
+})
 
 const decodeColumnNameRows = Schema.decodeUnknownSync(ColumnNameRows)
-const decodeCountRow = Schema.decodeUnknownSync(CountRow)
-const decodeWalkthroughMigrationRow = Schema.decodeUnknownSync(WalkthroughMigrationRow)
-const decodeJournalModeRow = Schema.decodeUnknownSync(JournalModeRow)
-const decodeForeignKeysRow = Schema.decodeUnknownSync(ForeignKeysRow)
+const decodeCountRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(CountRow)(Option.getOrThrow(row))
+const decodeWalkthroughMigrationRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(WalkthroughMigrationRow)(Option.getOrThrow(row))
+const decodeJournalModeRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(JournalModeRow)(Option.getOrThrow(row))
+const decodeForeignKeysRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(ForeignKeysRow)(Option.getOrThrow(row))
 const decodeThreadIdRows = Schema.decodeUnknownSync(ThreadIdRows)
-const decodeThreadLifecycleMigrationRow = Schema.decodeUnknownSync(ThreadLifecycleMigrationRow)
-const decodePullRequestFixtureRow = Schema.decodeUnknownSync(PullRequestFixtureRow)
-const decodeCompatibilityCountsRow = Schema.decodeUnknownSync(CompatibilityCountsRow)
-const decodeTableSqlRow = Schema.decodeUnknownSync(TableSqlRow)
+const decodeThreadLifecycleMigrationRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(ThreadLifecycleMigrationRow)(Option.getOrThrow(row))
+const decodePullRequestFixtureRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(PullRequestFixtureRow)(Option.getOrThrow(row))
+const decodeCompatibilityCountsRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(CompatibilityCountsRow)(Option.getOrThrow(row))
+const decodeTableSqlRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(TableSqlRow)(Option.getOrThrow(row))
+const decodeUserVersionRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(UserVersionRow)(Option.getOrThrow(row))
+const decodeIntegrityCheckRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(IntegrityCheckRow)(Option.getOrThrow(row))
+const decodeAgentRunFixtureRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(AgentRunFixtureRow)(Option.getOrThrow(row))
+const decodeThreadMemoryFixtureRow = (row: Option.Option<unknown>) =>
+  Schema.decodeUnknownSync(ThreadMemoryFixtureRow)(Option.getOrThrow(row))
 
-describe("DatabaseService", () => {
+describe("database-node", () => {
   it.effect("FUN-82 AC: creates and versions a fresh database", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const client: SqlClient.SqlClient = yield* SqlClient.SqlClient
+        const database = makeDatabase(client)
+        expect(client).toBeDefined()
+        expect(client.withTransaction).toEqual(expect.any(Function))
         const tables = decodeColumnNameRows(
           yield* database.all("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"),
         )
@@ -146,9 +195,11 @@ describe("DatabaseService", () => {
         )
         expect(messageColumns.map(({ name }) => name)).toContain("failure_json")
         expect(
-          yield* database.get("SELECT name, version FROM diffdash_capabilities WHERE name = ?", [
-            "review-provider-failure",
-          ]),
+          Option.getOrThrow(
+            yield* database.get("SELECT name, version FROM diffdash_capabilities WHERE name = ?", [
+              "review-provider-failure",
+            ]),
+          ),
         ).toEqual({ name: "review-provider-failure", version: 1 })
         const turnIndexes = decodeColumnNameRows(
           yield* database.all(
@@ -160,6 +211,22 @@ describe("DatabaseService", () => {
           "agent_runs_one_running_per_thread_idx",
           "review_thread_messages_one_pending_agent_per_thread_idx",
         ])
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              `SELECT name FROM sqlite_master
+               WHERE type = 'index' AND name = 'review_thread_messages_agent_run_idx'`,
+            ),
+          ),
+        ).toEqual({ name: "review_thread_messages_agent_run_idx" })
+        const reviewThreadsTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_threads'",
+          ),
+        )
+        expect(reviewThreadsTable.sql).toContain(
+          "anchor_status IN ('active', 'carried_forward') AND current_anchor_json IS NOT NULL",
+        )
         const workspaceTable = decodeTableSqlRow(
           yield* database.get(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'project_workspace_state'",
@@ -175,11 +242,86 @@ describe("DatabaseService", () => {
           ),
         )
         expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
 
-      const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
+  it.effect("keeps duplicate legacy run links readable while surfacing typed corruption", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      const sqlite = new DatabaseSync(databasePath)
+      sqlite.exec(`
+        DROP INDEX review_thread_messages_agent_run_idx;
+        DELETE FROM diffdash_capabilities WHERE name = 'review-message-run-ownership';
+        INSERT INTO repos (
+          id, provider, owner, name, remote_url, local_path, is_favorite,
+          last_opened_at, last_synced_at, created_at, updated_at
+        ) VALUES (
+          'repo-duplicate-run', 'local', 'local', 'duplicate-run', 'file:///duplicate-run',
+          '/duplicate-run', 0, NULL, NULL,
+          '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:00.000Z'
+        );
+        INSERT INTO review_threads (
+          id, repo_id, review_key, pr_number, base_sha, head_sha, current_base_sha,
+          current_head_sha, original_anchor_json, current_anchor_json, anchor_status,
+          status, closed_at, created_at, updated_at
+        ) VALUES (
+          'thread-duplicate-run', 'repo-duplicate-run', 'local:duplicate-run', NULL,
+          'base', 'head', 'base', 'head',
+          '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
+          '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
+          'active', 'open', NULL,
+          '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:00.000Z'
+        );
+        INSERT INTO agent_runs (
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          status, provider_run_id, error, started_at, completed_at, usage_json
+        ) VALUES (
+          'run-duplicate', 'thread-duplicate-run', 'local:duplicate-run', 'base', 'head',
+          'fixture', 'fixture-model', 'fixture-v1', 'completed', NULL, NULL,
+          '2026-08-10T00:00:00.000Z', '2026-08-10T00:00:01.000Z', NULL
+        );
+        INSERT INTO review_thread_messages (
+          id, thread_id, sequence, author, body_markdown, status, agent_run_id,
+          created_at, updated_at, failure_json
+        ) VALUES
+          ('message-duplicate-1', 'thread-duplicate-run', 1, 'agent', 'First', 'complete',
+           'run-duplicate', '2026-08-10T00:00:01.000Z', '2026-08-10T00:00:01.000Z', NULL),
+          ('message-duplicate-2', 'thread-duplicate-run', 2, 'agent', 'Second', 'complete',
+           'run-duplicate', '2026-08-10T00:00:02.000Z', '2026-08-10T00:00:02.000Z', NULL);
+      `)
       sqlite.close()
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const result = yield* Effect.result(
+          (yield* ReviewThreadStore).get(ReviewThreadId.make("thread-duplicate-run")),
+        )
+
+        expect(
+          yield* database.get(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'index' AND name = 'review_thread_messages_agent_run_idx'`,
+          ),
+        ).toEqual(Option.none())
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT version FROM diffdash_capabilities WHERE name = 'review-message-run-ownership'",
+            ),
+          ),
+        ).toEqual({ version: 1 })
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(ReviewThreadStoreError)
+          expect(result.failure.cause).toBeInstanceOf(ReviewConversationAgentRunReuseError)
+        }
+      }).pipe(Effect.provide(makeCompatibilityLayer(databasePath)))
     }),
   )
 
@@ -188,13 +330,14 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const downgraded = new BetterSqlite3(databasePath)
-      downgraded.exec("DROP TABLE walkthrough_operations")
-      downgraded.pragma("user_version = 12")
-      downgraded.close()
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run("DROP TABLE walkthrough_operations")
+        yield* database.run("PRAGMA user_version = 12")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const operationTable = decodeTableSqlRow(
           yield* database.get(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'walkthrough_operations'",
@@ -218,11 +361,10 @@ describe("DatabaseService", () => {
             "walkthrough_operations_regeneration_idx",
           ]),
         )
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
-
-      const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
-      reopened.close()
     }),
   )
 
@@ -231,9 +373,10 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const journalMode = decodeJournalModeRow(yield* database.get("PRAGMA journal_mode"))
         const foreignKeys = decodeForeignKeysRow(yield* database.get("PRAGMA foreign_keys"))
+        const busyTimeout = Option.getOrThrow(yield* database.get("PRAGMA busy_timeout"))
         const orphan = yield* Effect.result(
           database.run(
             `INSERT INTO hosted_viewed_files (
@@ -244,8 +387,9 @@ describe("DatabaseService", () => {
 
         expect(journalMode.journal_mode).toBe("wal")
         expect(foreignKeys.foreign_keys).toBe(1)
+        expect(busyTimeout.timeout).toBe(5_000)
         expect(Result.isFailure(orphan)).toBe(true)
-        if (Result.isFailure(orphan)) expect(orphan.failure.operation).toBe("run")
+        if (Result.isFailure(orphan)) expect(SqlError.isSqlError(orphan.failure)).toBe(true)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -255,16 +399,16 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const sqlite = new BetterSqlite3(databasePath)
-      sqlite.exec(`
-        INSERT INTO repos (
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run(`INSERT INTO repos (
           id, provider, owner, name, remote_url, local_path, is_favorite,
           last_opened_at, last_synced_at, created_at, updated_at
         ) VALUES (
           'repo-failure', 'local', 'local', 'failure', 'file:///failure', '/failure', 0,
           NULL, NULL, '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z'
-        );
-        INSERT INTO review_threads (
+        )`)
+        yield* database.run(`INSERT INTO review_threads (
           id, repo_id, review_key, pr_number, base_sha, head_sha, current_base_sha,
           current_head_sha, original_anchor_json, current_anchor_json, anchor_status,
           status, closed_at, created_at, updated_at
@@ -273,16 +417,16 @@ describe("DatabaseService", () => {
           '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
           '{"_tag":"line","fileId":"file","filePath":"src/app.ts","oldPath":null,"hunkId":"hunk","hunkFingerprint":"fingerprint","hunkHeader":"@@ -1 +1 @@","side":"new","lineNumber":1,"lineContent":"line"}',
           'active', 'open', NULL, '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z'
-        );
-        INSERT INTO agent_runs (
+        )`)
+        yield* database.run(`INSERT INTO agent_runs (
           id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
           status, provider_run_id, error, started_at, completed_at, usage_json
         ) VALUES (
           'run-failure', 'thread-failure', 'local:failure', 'base', 'head', 'claude', 'model',
           'review-thread-v3', 'failed', NULL, 'private legacy provider output',
           '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:01.000Z', NULL
-        );
-        INSERT INTO review_thread_messages (
+        )`)
+        yield* database.run(`INSERT INTO review_thread_messages (
           id, thread_id, sequence, author, body_markdown, status, agent_run_id,
           created_at, updated_at, failure_json
         ) VALUES
@@ -290,60 +434,69 @@ describe("DatabaseService", () => {
            '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z', NULL),
           ('message-failure', 'thread-failure', 2, 'agent', 'private legacy provider output',
            'failed', 'run-failure', '2026-08-06T00:00:01.000Z',
-           '2026-08-06T00:00:01.000Z', NULL);
-        DELETE FROM diffdash_capabilities WHERE name = 'review-provider-failure';
-      `)
-      sqlite.close()
+           '2026-08-06T00:00:01.000Z', NULL)`)
+        yield* database.run(
+          "DELETE FROM diffdash_capabilities WHERE name = 'review-provider-failure'",
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
 
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const downgraded = new BetterSqlite3(databasePath)
-      downgraded
-        .prepare(
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run(
           "UPDATE review_thread_messages SET body_markdown = ?, failure_json = ? WHERE id = ?",
+          [
+            "private downgraded provider output",
+            '{"version":1,"providerId":"claude","capability":"review-thread","category":"authentication","processKind":null,"exitCode":null,"signal":null,"httpStatus":null,"retryAfterSeconds":null,"resetsAt":null}',
+            "message-failure",
+          ],
         )
-        .run(
+        yield* database.run("UPDATE agent_runs SET error = ? WHERE id = ?", [
           "private downgraded provider output",
-          '{"version":1,"providerId":"claude","capability":"review-thread","category":"authentication","processKind":null,"exitCode":null,"signal":null,"httpStatus":null,"retryAfterSeconds":null,"resetsAt":null}',
-          "message-failure",
-        )
-      downgraded
-        .prepare("UPDATE agent_runs SET error = ? WHERE id = ?")
-        .run("private downgraded provider output", "run-failure")
-      downgraded.close()
+          "run-failure",
+        ])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
 
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const reopened = new BetterSqlite3(databasePath)
       const generic = "The local review agent could not complete this response. Retry to try again."
-      expect(
-        reopened
-          .prepare("SELECT body_markdown FROM review_thread_messages WHERE id = ?")
-          .pluck()
-          .get("message-failure"),
-      ).toBe(generic)
-      expect(
-        reopened
-          .prepare("SELECT failure_json FROM review_thread_messages WHERE id = ?")
-          .pluck()
-          .get("message-failure"),
-      ).toContain('"category":"authentication"')
-      expect(
-        reopened
-          .prepare("SELECT body_markdown FROM review_thread_messages WHERE id = ?")
-          .pluck()
-          .get("message-user"),
-      ).toBe("keep this message")
-      expect(
-        reopened.prepare("SELECT error FROM agent_runs WHERE id = ?").pluck().get("run-failure"),
-      ).toBe(generic)
-      expect(
-        reopened
-          .prepare("SELECT version FROM diffdash_capabilities WHERE name = ?")
-          .pluck()
-          .get("review-provider-failure"),
-      ).toBe(1)
-      reopened.close()
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT body_markdown FROM review_thread_messages WHERE id = ?", [
+              "message-failure",
+            ]),
+          ).body_markdown,
+        ).toBe(generic)
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT failure_json FROM review_thread_messages WHERE id = ?", [
+              "message-failure",
+            ]),
+          ).failure_json,
+        ).toContain('"category":"authentication"')
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT body_markdown FROM review_thread_messages WHERE id = ?", [
+              "message-user",
+            ]),
+          ).body_markdown,
+        ).toBe("keep this message")
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT error FROM agent_runs WHERE id = ?", ["run-failure"]),
+          ).error,
+        ).toBe(generic)
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT version FROM diffdash_capabilities WHERE name = ?", [
+              "review-provider-failure",
+            ]),
+          ).version,
+        ).toBe(1)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
@@ -353,7 +506,7 @@ describe("DatabaseService", () => {
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* database.run(
           `INSERT INTO hosted_viewed_files
            VALUES ('github:byfungsi/diffdash', 147, 'main', 'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
@@ -388,7 +541,7 @@ describe("DatabaseService", () => {
         for (const statement of duplicateStatements) {
           const result = yield* Effect.result(database.run(statement))
           expect(Result.isFailure(result)).toBe(true)
-          if (Result.isFailure(result)) expect(result.failure.operation).toBe("run")
+          if (Result.isFailure(result)) expect(SqlError.isSqlError(result.failure)).toBe(true)
         }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -400,7 +553,7 @@ describe("DatabaseService", () => {
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* database.run(
           `INSERT INTO hosted_viewed_files
            VALUES ('github:byfungsi/diffdash', 147, 'main', 'src/main.ts', 'patch-a', '2026-07-15T00:00:00.000Z')`,
@@ -435,11 +588,11 @@ describe("DatabaseService", () => {
   it.effect("FUN-148 AC: rejects newer database versions without mutating them", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
-      const sqlite = new BetterSqlite3(databasePath)
+      const sqlite = new DatabaseSync(databasePath)
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.pragma("user_version = 14")
+      sqlite.exec("PRAGMA user_version = 14")
       sqlite.close()
 
       const result = yield* Effect.result(
@@ -448,7 +601,7 @@ describe("DatabaseService", () => {
       expect(Result.isFailure(result) && result.failure).toEqual(
         expect.objectContaining<Partial<DatabaseError>>({
           _tag: "DatabaseError",
-          operation: "open",
+          operation: DiagnosticOperation.make("open"),
         }),
       )
       if (Result.isFailure(result)) {
@@ -457,8 +610,8 @@ describe("DatabaseService", () => {
         )
       }
 
-      const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(14)
+      const reopened = new DatabaseSync(databasePath, { readOnly: true })
+      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 })
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -482,56 +635,56 @@ describe("DatabaseService", () => {
       const backups = readdirSync(directory).filter((name) => name.includes(".pre-migration-v8-"))
       expect(backups).toHaveLength(1)
       expect(existsSync(join(directory, backups[0] ?? ""))).toBe(true)
-      const backupSqlite = new BetterSqlite3(join(directory, backups[0] ?? ""), {
-        readonly: true,
-        fileMustExist: true,
-      })
-      expect(backupSqlite.pragma("user_version", { simple: true })).toBe(8)
+      const backupSqlite = new DatabaseSync(join(directory, backups[0] ?? ""), { readOnly: true })
+      expect(backupSqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 })
       expect(
         backupSqlite
           .prepare("SELECT is_favorite FROM repos WHERE id = ?")
-          .pluck()
           .get("github:byfungsi/diffdash"),
-      ).toBe(1)
+      ).toEqual({ is_favorite: 1 })
       backupSqlite.close()
 
-      const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
-      const agentRunsSql = sqlite
-        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'")
-        .pluck()
-        .get()
-      expect(agentRunsSql).not.toContain("provider IN")
-      expect(agentRunsSql).toContain("review_key TEXT NOT NULL")
-      const messagesSql = sqlite
-        .prepare(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_thread_messages'",
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
         )
-        .pluck()
-        .get()
-      expect(messagesSql).toContain("FOREIGN KEY(agent_run_id, thread_id)")
-      sqlite
-        .prepare(
+        const agentRunsSql = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'",
+          ),
+        ).sql
+        expect(agentRunsSql).not.toContain("provider IN")
+        expect(agentRunsSql).toContain("review_key TEXT NOT NULL")
+        const messagesSql = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_thread_messages'",
+          ),
+        ).sql
+        expect(messagesSql).toContain("FOREIGN KEY(agent_run_id, thread_id)")
+        yield* database.run(
           `INSERT INTO agent_runs (
             id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
             status, provider_run_id, error,
             started_at, completed_at, usage_json
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, ?, NULL, NULL)`,
+          [
+            "run-future-provider",
+            "thread-v8",
+            "github:byfungsi/diffdash#147",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "future-provider",
+            "future-model",
+            "thread-v1",
+            "2026-07-16T00:00:00.000Z",
+          ],
         )
-        .run(
-          "run-future-provider",
-          "thread-v8",
-          "github:byfungsi/diffdash#147",
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "future-provider",
-          "future-model",
-          "thread-v1",
-          "2026-07-16T00:00:00.000Z",
-        )
-      expect(sqlite.pragma("integrity_check", { simple: true })).toBe("ok")
-      expect(sqlite.pragma("foreign_key_check")).toEqual([])
-      sqlite.close()
+        expect(
+          decodeIntegrityCheckRow(yield* database.get("PRAGMA integrity_check")).integrity_check,
+        ).toBe("ok")
+        expect(yield* database.all("PRAGMA foreign_key_check")).toEqual([])
+      }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
@@ -547,7 +700,7 @@ describe("DatabaseService", () => {
       expect(Result.isFailure(result) && result.failure).toEqual(
         expect.objectContaining<Partial<DatabaseError>>({
           _tag: "DatabaseError",
-          operation: "open",
+          operation: DiagnosticOperation.make("open"),
         }),
       )
     }),
@@ -557,31 +710,27 @@ describe("DatabaseService", () => {
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       copyFileSync(resolve("src/fixtures/database-v8-populated.sqlite"), databasePath)
-      const sqlite = new BetterSqlite3(databasePath)
+      const sqlite = new DatabaseSync(databasePath)
       sqlite.exec(readFileSync(resolve("src/fixtures/database-v8-malformed-json.sql"), "utf8"))
       sqlite.close()
 
       const results = yield* Effect.gen(function* () {
         const walkthroughs = yield* WalkthroughStore
         const threads = yield* ReviewThreadStore
-        const runs = yield* AgentRunStore
         const artifacts = yield* AgentRunArtifactStore
-        const memory = yield* ThreadMemoryStore
 
         return {
           walkthrough: yield* Effect.result(
             walkthroughs.get({
-              repoId: "github:byfungsi/diffdash",
-              reviewKey: "github:byfungsi/diffdash#147",
-              baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
+              reviewKey: ReviewKey.make("github:byfungsi/diffdash#147"),
+              baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+              headSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
               promptVersion: "walkthrough-v4",
             }),
           ),
           thread: yield* Effect.result(threads.get(ReviewThreadId.make("thread-v8"))),
-          run: yield* Effect.result(runs.get(AgentRunId.make("run-v8"))),
           artifact: yield* Effect.result(artifacts.get(ReviewAgentArtifactId.make("artifact-v8"))),
-          memory: yield* Effect.result(memory.get(ReviewThreadId.make("thread-v8"))),
         }
       }).pipe(Effect.provide(makeCompatibilityLayer(databasePath)))
 
@@ -597,21 +746,9 @@ describe("DatabaseService", () => {
           operation: "get",
         }),
       )
-      expect(Result.isFailure(results.run) && results.run.failure).toEqual(
-        expect.objectContaining<Partial<AgentRunStoreError>>({
-          _tag: "AgentRunStoreError",
-          operation: "get.decode",
-        }),
-      )
       expect(Result.isFailure(results.artifact) && results.artifact.failure).toEqual(
         expect.objectContaining<Partial<AgentRunArtifactStoreError>>({
           _tag: "AgentRunArtifactStoreError",
-          operation: "get.decode",
-        }),
-      )
-      expect(Result.isFailure(results.memory) && results.memory.failure).toEqual(
-        expect.objectContaining<Partial<ThreadMemoryStoreError>>({
-          _tag: "ThreadMemoryStoreError",
           operation: "get.decode",
         }),
       )
@@ -624,7 +761,7 @@ describe("DatabaseService", () => {
       createLegacyDatabase(databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const row = decodeWalkthroughMigrationRow(
           yield* database.get("SELECT base_sha, head_sha, content_json FROM walkthroughs"),
         )
@@ -643,56 +780,56 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
-      const sqlite = new BetterSqlite3(databasePath)
-      sqlite
-        .prepare(
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run(
           `INSERT INTO repos (
             id, provider, owner, name, remote_url, local_path, is_favorite,
             last_opened_at, last_synced_at, created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            "github:byfungsi/diffdash",
+            "github",
+            "byfungsi",
+            "diffdash",
+            "https://github.com/byfungsi/diffdash",
+            null,
+            1,
+            "2026-07-16T00:00:00.000Z",
+            "2026-07-16T00:00:00.000Z",
+            "2026-07-16T00:00:00.000Z",
+            "2026-07-16T00:00:00.000Z",
+          ],
         )
-        .run(
-          "github:byfungsi/diffdash",
-          "github",
-          "byfungsi",
-          "diffdash",
-          "https://github.com/byfungsi/diffdash",
-          null,
-          1,
-          "2026-07-16T00:00:00.000Z",
-          "2026-07-16T00:00:00.000Z",
-          "2026-07-16T00:00:00.000Z",
-          "2026-07-16T00:00:00.000Z",
-        )
-      sqlite.pragma("user_version = 0")
-      sqlite.close()
+        yield* database.run("PRAGMA user_version = 0")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
       const directory = resolve(databasePath, "..")
       const backups = readdirSync(directory).filter((name) => name.includes(".pre-migration-v0-"))
       expect(backups).toHaveLength(1)
-      const backupSqlite = new BetterSqlite3(join(directory, backups[0] ?? ""), {
-        readonly: true,
-        fileMustExist: true,
-      })
-      expect(backupSqlite.pragma("user_version", { simple: true })).toBe(0)
+      const backupSqlite = new DatabaseSync(join(directory, backups[0] ?? ""), { readOnly: true })
+      expect(backupSqlite.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 })
       expect(
         backupSqlite
           .prepare("SELECT is_favorite FROM repos WHERE id = ?")
-          .pluck()
           .get("github:byfungsi/diffdash"),
-      ).toBe(1)
+      ).toEqual({ is_favorite: 1 })
       backupSqlite.close()
 
-      const reopened = new BetterSqlite3(databasePath)
-      expect(reopened.pragma("user_version", { simple: true })).toBe(13)
-      expect(
-        reopened
-          .prepare("SELECT is_favorite FROM repos WHERE id = ?")
-          .pluck()
-          .get("github:byfungsi/diffdash"),
-      ).toBe(1)
-      reopened.close()
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
+        expect(
+          Option.getOrThrow(
+            yield* database.get("SELECT is_favorite FROM repos WHERE id = ?", [
+              "github:byfungsi/diffdash",
+            ]),
+          ).is_favorite,
+        ).toBe(1)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
@@ -702,19 +839,18 @@ describe("DatabaseService", () => {
       createVersion3ThreadMemoryDatabase(databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const memory = yield* database.get(
           `SELECT summary, summarized_through_sequence, summary_algorithm, summary_version
            FROM thread_memory WHERE thread_id = ?`,
           ["thread-76"],
         )
 
-        expect(memory).toBeUndefined()
+        expect(Option.isNone(memory)).toBe(true)
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
-
-      const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
-      sqlite.close()
     }),
   )
 
@@ -724,17 +860,16 @@ describe("DatabaseService", () => {
       createVersion4AgentRunsDatabase(databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const row = yield* database.get("SELECT id, usage_json FROM agent_runs WHERE id = ?", [
           "run-72",
         ])
 
-        expect(row).toBeUndefined()
+        expect(Option.isNone(row)).toBe(true)
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
-
-      const sqlite = new BetterSqlite3(databasePath)
-      expect(sqlite.pragma("user_version", { simple: true })).toBe(13)
-      sqlite.close()
     }),
   )
 
@@ -743,8 +878,8 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const sqlite = new BetterSqlite3(databasePath)
-      sqlite.pragma("foreign_keys = ON")
+      const sqlite = new DatabaseSync(databasePath)
+      sqlite.exec("PRAGMA foreign_keys = ON")
       sqlite
         .prepare(
           `INSERT INTO repos (
@@ -846,11 +981,11 @@ describe("DatabaseService", () => {
         ) VALUES (?, 'Legacy', '[]', ?, 1, 'legacy', 1)`,
         )
         .run("thread-review", "2026-07-12T00:00:01.000Z")
-      sqlite.pragma("user_version = 5")
+      sqlite.exec("PRAGMA user_version = 5")
       sqlite.close()
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const threads = decodeThreadIdRows(
           yield* database.all("SELECT id FROM review_threads ORDER BY id"),
         )
@@ -879,7 +1014,7 @@ describe("DatabaseService", () => {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
 
-      const sqlite = new BetterSqlite3(databasePath)
+      const sqlite = new DatabaseSync(databasePath)
       sqlite
         .prepare(
           `INSERT INTO repos (
@@ -923,11 +1058,11 @@ describe("DatabaseService", () => {
           "2026-07-13T00:00:00.000Z",
           "2026-07-13T00:00:01.000Z",
         )
-      sqlite.pragma("user_version = 7")
+      sqlite.exec("PRAGMA user_version = 7")
       sqlite.close()
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const thread = decodeThreadLifecycleMigrationRow(
           yield* database.get("SELECT status, closed_at FROM review_threads WHERE id = ?", [
             "thread-closed",
@@ -945,7 +1080,7 @@ describe("DatabaseService", () => {
       createInterruptedLegacyDatabase(databasePath)
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const row = decodeWalkthroughMigrationRow(
           yield* database.get("SELECT base_sha, head_sha, content_json FROM walkthroughs"),
         )
@@ -959,14 +1094,14 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.effect("FUN-82 AC: commits successful transaction callbacks", () =>
+  it.effect("FUN-82 AC: commits successful effectful transactions", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
-        yield* database.transaction("test.commit", (transaction) => {
-          transaction.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.transaction(
+          database.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
             "github:fungsi/diffdash",
             "github",
             "fungsi",
@@ -978,8 +1113,8 @@ describe("DatabaseService", () => {
             null,
             "2026-07-12T00:00:00.000Z",
             "2026-07-12T00:00:00.000Z",
-          ])
-        })
+          ]),
+        )
 
         const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
         expect(row.count).toBe(1)
@@ -987,29 +1122,34 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.effect("FUN-82 AC: rolls back failed transaction callbacks", () =>
+  it.effect("FUN-82 AC: rolls back failed effectful transactions", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* database
-          .transaction("test.rollback", (transaction) => {
-            transaction.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
-              "github:fungsi/diffdash",
-              "github",
-              "fungsi",
-              "diffdash",
-              "https://github.com/fungsi/diffdash",
-              null,
-              0,
-              null,
-              null,
-              "2026-07-12T00:00:00.000Z",
-              "2026-07-12T00:00:00.000Z",
-            ])
-            throw new Error("rollback")
-          })
+          .transaction(
+            Effect.gen(function* () {
+              yield* database.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+                "github:fungsi/diffdash",
+                "github",
+                "fungsi",
+                "diffdash",
+                "https://github.com/fungsi/diffdash",
+                null,
+                0,
+                null,
+                null,
+                "2026-07-12T00:00:00.000Z",
+                "2026-07-12T00:00:00.000Z",
+              ])
+              return yield* new DatabaseError({
+                operation: DiagnosticOperation.make("test.rollback"),
+                cause: new Error("rollback"),
+              })
+            }),
+          )
           .pipe(Effect.catch(() => Effect.void))
 
         const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
@@ -1018,29 +1158,35 @@ describe("DatabaseService", () => {
     }),
   )
 
-  it.effect("FUN-82 AC: rejects suspended transaction callbacks and rolls them back", () =>
+  it.effect("FUN-82 AC: rolls back failed suspended effectful transactions", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const result = yield* Effect.result(
-          database.transaction("test.async", (transaction) => {
-            transaction.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
-              "github:fungsi/diffdash",
-              "github",
-              "fungsi",
-              "diffdash",
-              "https://github.com/fungsi/diffdash",
-              null,
-              0,
-              null,
-              null,
-              "2026-07-12T00:00:00.000Z",
-              "2026-07-12T00:00:00.000Z",
-            ])
-            return Promise.resolve()
-          }),
+          database.transaction(
+            Effect.gen(function* () {
+              yield* database.run("INSERT INTO repos VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+                "github:fungsi/diffdash",
+                "github",
+                "fungsi",
+                "diffdash",
+                "https://github.com/fungsi/diffdash",
+                null,
+                0,
+                null,
+                null,
+                "2026-07-12T00:00:00.000Z",
+                "2026-07-12T00:00:00.000Z",
+              ])
+              yield* Effect.yieldNow
+              return yield* new DatabaseError({
+                operation: DiagnosticOperation.make("test.suspendedRollback"),
+                cause: new Error("rollback after suspension"),
+              })
+            }),
+          ),
         )
         const row = decodeCountRow(yield* database.get("SELECT COUNT(*) AS count FROM repos"))
 
@@ -1052,13 +1198,11 @@ describe("DatabaseService", () => {
 })
 
 const assertPopulatedVersion8Fixture = Effect.gen(function* () {
-  const database = yield* DatabaseService
+  const database = makeDatabase(yield* SqlClient.SqlClient)
   const repositories = yield* RepositoryStore
   const walkthroughs = yield* WalkthroughStore
   const threads = yield* ReviewThreadStore
-  const runs = yield* AgentRunStore
   const artifacts = yield* AgentRunArtifactStore
-  const memory = yield* ThreadMemoryStore
 
   const counts = decodeCompatibilityCountsRow(
     yield* database.get(`SELECT
@@ -1092,11 +1236,17 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
   expect(repositoryRows).toEqual([
     expect.objectContaining({
       id: "github:byfungsi/diffdash",
-      provider: "github",
-      owner: "byfungsi",
-      name: "diffdash",
-      remoteUrl: "https://github.com/byfungsi/diffdash",
-      localPath: repositoryLocalPath("/fixtures/diffdash"),
+      source: expect.objectContaining({
+        locator: expect.objectContaining({
+          providerId: "github",
+          namespace: "byfungsi",
+          name: "diffdash",
+        }),
+      }),
+      checkout: expect.objectContaining({
+        remoteUrl: "https://github.com/byfungsi/diffdash",
+        path: "/fixtures/diffdash",
+      }),
       isFavorite: true,
     }),
   ])
@@ -1118,17 +1268,17 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
   })
 
   const walkthrough = yield* walkthroughs.get({
-    repoId: "github:byfungsi/diffdash",
-    reviewKey: "github:byfungsi/diffdash#147",
-    baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
+    reviewKey: ReviewKey.make("github:byfungsi/diffdash#147"),
+    baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    headSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     promptVersion: "walkthrough-v4",
   })
   expect(Option.isSome(walkthrough)).toBe(true)
   if (Option.isNone(walkthrough)) throw new Error("Expected the version 8 walkthrough fixture")
   expect(walkthrough.value).toEqual(
     expect.objectContaining({
-      repoId: "github:byfungsi/diffdash",
+      repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
       prNumber: 147,
       reviewKey: "github:byfungsi/diffdash#147",
       baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1141,10 +1291,10 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
     }),
   )
   const missingWalkthrough = yield* walkthroughs.get({
-    repoId: "github:byfungsi/diffdash",
-    reviewKey: "github:byfungsi/diffdash#147",
-    baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    headSha: "cccccccccccccccccccccccccccccccccccccccc",
+    repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
+    reviewKey: ReviewKey.make("github:byfungsi/diffdash#147"),
+    baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    headSha: ReviewRevision.make("cccccccccccccccccccccccccccccccccccccccc"),
     promptVersion: "walkthrough-v4",
   })
   expect(Option.isNone(missingWalkthrough)).toBe(true)
@@ -1156,75 +1306,82 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
   expect(thread.thread).toEqual(
     expect.objectContaining({
       id: threadId,
-      repoId: "github:byfungsi/diffdash",
+      repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
       reviewKey: "github:byfungsi/diffdash#147",
-      anchorStatus: "active",
       currentAnchor: expect.objectContaining({
-        _tag: "line",
-        filePath: "src/main/services/database.ts",
-        lineNumber: 1,
+        _tag: "Active",
+        anchor: expect.objectContaining({
+          _tag: "line",
+          filePath: "src/main/services/database.ts",
+          lineNumber: 1,
+        }),
       }),
     }),
   )
   expect(
-    thread.messages.map(({ author, bodyMarkdown, sequence, status, agentRunId }) => ({
-      author,
-      bodyMarkdown,
-      sequence,
-      status,
-      agentRunId,
+    thread.conversation.map((turn) => ({
+      tag: turn._tag,
+      bodyMarkdown: "bodyMarkdown" in turn.message ? turn.message.bodyMarkdown : undefined,
+      sequence: turn.message.sequence,
+      agentRunId: "agentRunId" in turn.message ? turn.message.agentRunId : undefined,
     })),
   ).toEqual([
     {
-      author: "user",
+      tag: "User",
       bodyMarkdown: "Why must this survive restart?",
       sequence: 1,
-      status: "complete",
-      agentRunId: null,
+      agentRunId: undefined,
     },
     {
-      author: "agent",
+      tag: "Completed",
       bodyMarkdown: "SQLite retains the thread and its related records.",
       sequence: 2,
-      status: "complete",
       agentRunId: "run-v8",
     },
     {
-      author: "user",
+      tag: "User",
       bodyMarkdown: "Confirm it still exists after reopening.",
       sequence: 3,
-      status: "complete",
-      agentRunId: null,
+      agentRunId: undefined,
     },
   ])
   expect(
     (yield* threads.listForReview({
-      repoId: "github:byfungsi/diffdash",
+      repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
       reviewKey,
     })).map(({ id }) => id),
   ).toEqual([threadId])
   expect(
     (yield* threads.listForRevision({
-      repoId: "github:byfungsi/diffdash",
+      repoId: ReviewProjectId.make("github:byfungsi/diffdash"),
       reviewKey,
       headRevision,
     })).map(({ id }) => id),
   ).toEqual([threadId])
 
   const runId = AgentRunId.make("run-v8")
-  expect(yield* runs.get(runId)).toEqual(
+  expect(
+    decodeAgentRunFixtureRow(
+      yield* database.get(
+        `SELECT id, thread_id, provider, model, prompt_version, review_key, base_sha, head_sha,
+                status, provider_run_id, usage_json
+         FROM agent_runs WHERE id = ?`,
+        [runId],
+      ),
+    ),
+  ).toEqual(
     expect.objectContaining({
       id: runId,
-      threadId,
+      thread_id: threadId,
       provider: "claude",
       model: "claude-sonnet-4",
-      promptVersion: "thread-v1",
-      reviewKey,
-      baseRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      headRevision,
+      prompt_version: "thread-v1",
+      review_key: reviewKey,
+      base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      head_sha: headRevision,
       status: "completed",
-      providerRunId: "claude-session-v8",
-      usage: {
+      provider_run_id: "claude-session-v8",
+      usage_json: {
         inputTokens: 120,
         outputTokens: 40,
         cacheReadTokens: 20,
@@ -1233,7 +1390,6 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
       },
     }),
   )
-  expect((yield* runs.listForThread(threadId)).map(({ id }) => id)).toEqual([runId])
 
   const artifactId = ReviewAgentArtifactId.make("artifact-v8")
   expect(yield* artifacts.get(artifactId)).toEqual(
@@ -1259,20 +1415,29 @@ const assertPopulatedVersion8Fixture = Effect.gen(function* () {
   expect((yield* artifacts.listForRun(runId)).map(({ id }) => id)).toEqual([artifactId])
   expect((yield* artifacts.listForThread(threadId)).map(({ id }) => id)).toEqual([artifactId])
 
-  expect(yield* memory.get(threadId)).toEqual(
+  expect(
+    decodeThreadMemoryFixtureRow(
+      yield* database.get(
+        `SELECT thread_id, summary, summarized_through_sequence, summary_algorithm,
+                summary_version, important_artifact_ids_json
+         FROM thread_memory WHERE thread_id = ?`,
+        [threadId],
+      ),
+    ),
+  ).toEqual(
     expect.objectContaining({
-      threadId,
+      thread_id: threadId,
       summary: "The discussion verifies version-8 persistence across reopen.",
-      summarizedThroughSequence: 3,
-      summaryAlgorithm: "deterministic-transcript",
-      summaryVersion: 1,
-      importantArtifactIds: [artifactId],
+      summarized_through_sequence: 3,
+      summary_algorithm: "deterministic-transcript",
+      summary_version: 1,
+      important_artifact_ids_json: [artifactId],
     }),
   )
 })
 
 const createLegacyDatabase = (databasePath: string) => {
-  const sqlite = new BetterSqlite3(databasePath)
+  const sqlite = new DatabaseSync(databasePath)
   sqlite.exec(`
     CREATE TABLE repos (
       id TEXT PRIMARY KEY,
@@ -1316,7 +1481,7 @@ const createLegacyDatabase = (databasePath: string) => {
 
 const createInterruptedLegacyDatabase = (databasePath: string) => {
   createLegacyDatabase(databasePath)
-  const sqlite = new BetterSqlite3(databasePath)
+  const sqlite = new DatabaseSync(databasePath)
   sqlite.exec(`
     ALTER TABLE walkthroughs RENAME TO walkthroughs_without_base_sha;
     UPDATE walkthroughs_without_base_sha
@@ -1326,7 +1491,7 @@ const createInterruptedLegacyDatabase = (databasePath: string) => {
 }
 
 const createVersion3ThreadMemoryDatabase = (databasePath: string) => {
-  const sqlite = new BetterSqlite3(databasePath)
+  const sqlite = new DatabaseSync(databasePath)
   sqlite.exec(`
     CREATE TABLE review_threads (id TEXT PRIMARY KEY);
     CREATE TABLE agent_runs (
@@ -1357,7 +1522,7 @@ const createVersion3ThreadMemoryDatabase = (databasePath: string) => {
 }
 
 const createVersion4AgentRunsDatabase = (databasePath: string) => {
-  const sqlite = new BetterSqlite3(databasePath)
+  const sqlite = new DatabaseSync(databasePath)
   sqlite.exec(`
     CREATE TABLE agent_runs (
       id TEXT PRIMARY KEY,

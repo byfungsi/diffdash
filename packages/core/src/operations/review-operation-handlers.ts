@@ -1,5 +1,5 @@
 import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
   REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
@@ -47,19 +47,21 @@ export const makeReviewOperationHandlers: Effect.Effect<
       Effect.gen(function* () {
         const project = yield* repositories.ensureHosted(review.repository)
         const snapshot = yield* snapshots.acquireHosted(review)
-        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(project.id))
+        return makeReviewSnapshotManifest(snapshot, project.id)
       }),
     [CoreMethod.acquireLocalReviewSnapshot]: ({ target }) =>
       Effect.gen(function* () {
         const snapshot = yield* snapshots.acquireLocal(target)
-        const project = yield* repositories.ensureLocal(snapshot.detail.rootPath)
-        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(project.id))
+        const project = yield* repositories.ensureLocal(
+          RepositoryCheckoutPath.make(snapshot.detail.rootPath),
+        )
+        return makeReviewSnapshotManifest(snapshot, project.id)
       }),
     [CoreMethod.acquireRepositoryComparisonSnapshot]: ({ target }) =>
       Effect.gen(function* () {
         const repo = yield* comparisons.repository(target)
         const snapshot = yield* snapshots.acquireComparison(target)
-        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(repo.id))
+        return makeReviewSnapshotManifest(snapshot, repo.id)
       }),
     [CoreMethod.getHostedReviewDecision]: ({ review }) => gitProvider.getReviewDecision(review),
     [CoreMethod.getReviewSnapshotPage]: (request) =>

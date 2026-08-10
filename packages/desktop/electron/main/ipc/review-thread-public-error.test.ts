@@ -1,11 +1,12 @@
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
 } from "@diffdash/domain/review-thread"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { ReviewAgentProviderFailureError } from "@diffdash/review-agent"
+import { ReviewAgentProviderFailureError } from "@diffdash/core"
 import { describe, expect, it } from "vitest"
 import { toPublicReviewThreadError } from "./review-thread-public-error"
 
@@ -42,7 +43,7 @@ describe("toPublicReviewThreadError", () => {
   it("exposes typed authentication guidance without provider output", () => {
     const failure = AgentProviderFailure.make({
       version: 1,
-      providerId: "claude",
+      providerId: ReviewAgentProviderId.make("claude"),
       capability: "review-thread",
       category: "authentication",
       processKind: "exit",
@@ -72,7 +73,7 @@ describe("toPublicReviewThreadError", () => {
   it("uses dedicated guidance when no automatic provider is available", () => {
     const failure = AgentProviderFailure.make({
       version: 1,
-      providerId: "unavailable",
+      providerId: ReviewAgentProviderId.make("unavailable"),
       capability: "review-thread",
       category: "configuration",
       processKind: null,

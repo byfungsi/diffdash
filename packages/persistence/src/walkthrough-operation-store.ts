@@ -17,16 +17,19 @@ import {
   type WalkthroughExpectedFailure as WalkthroughExpectedFailureType,
   type WalkthroughArtifactReference as WalkthroughArtifactReferenceType,
 } from "@diffdash/domain/walkthrough-operation"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 
-import { DatabaseService, type DatabaseTransaction } from "./database"
+import { type Database, type DatabaseRow, makeDatabase, toError, type SqlParams } from "./database"
 
 const WalkthroughOperationRow = Schema.Struct({
   id: WalkthroughOperationId,
-  repo_id: Schema.NonEmptyString,
-  review_key: Schema.NonEmptyString,
-  base_sha: Schema.NonEmptyString,
-  head_sha: Schema.NonEmptyString,
+  repo_id: ReviewProjectId,
+  review_key: ReviewKey,
+  base_sha: ReviewRevision,
+  head_sha: ReviewRevision,
   prompt_version: Schema.NonEmptyString,
   state: WalkthroughOperationState,
   state_version: WalkthroughOperationStateVersion,
@@ -40,10 +43,10 @@ const WalkthroughOperationRow = Schema.Struct({
   failure_kind: Schema.NullOr(Schema.Literals(["expected", "internal"])),
   failure_category: Schema.NullOr(Schema.String),
   failure_code: Schema.NullOr(Schema.String),
-  artifact_repo_id: Schema.NullOr(Schema.String),
-  artifact_review_key: Schema.NullOr(Schema.String),
-  artifact_base_sha: Schema.NullOr(Schema.String),
-  artifact_head_sha: Schema.NullOr(Schema.String),
+  artifact_repo_id: Schema.NullOr(ReviewProjectId),
+  artifact_review_key: Schema.NullOr(ReviewKey),
+  artifact_base_sha: Schema.NullOr(ReviewRevision),
+  artifact_head_sha: Schema.NullOr(ReviewRevision),
   artifact_prompt_version: Schema.NullOr(Schema.String),
 })
 
@@ -85,10 +88,15 @@ export class WalkthroughOperationNotFoundError extends Schema.TaggedError<Walkth
 export class WalkthroughOperationStoreError extends Schema.TaggedError<WalkthroughOperationStoreError>()(
   "WalkthroughOperationStoreError",
   {
-    operation: Schema.NonEmptyString,
+    operation: DiagnosticOperation,
     message: Schema.String,
-    cause: Schema.Defect(),
+    cause: Schema.ErrorInstance(),
   },
+) {}
+
+class WalkthroughOperationInvariantError extends Schema.TaggedError<WalkthroughOperationInvariantError>()(
+  "WalkthroughOperationInvariantError",
+  { message: Schema.String },
 ) {}
 
 type WalkthroughOperationTransitionError =
@@ -132,7 +140,7 @@ export class WalkthroughOperationStore extends Context.Service<
   static readonly layer = Layer.effect(
     WalkthroughOperationStore,
     Effect.gen(function* () {
-      const database = yield* DatabaseService
+      const database = makeDatabase(yield* SqlClient.SqlClient)
 
       const get = Effect.fn("WalkthroughOperationStore.get")(function (
         operationId: WalkthroughOperationIdType,
@@ -142,9 +150,11 @@ export class WalkthroughOperationStore extends Context.Service<
           .pipe(
             Effect.mapError((cause) => storeError("get.query", cause)),
             Effect.flatMap((row) =>
-              row === undefined
-                ? Effect.succeed(Option.none<WalkthroughOperationType>())
-                : decodeOperationEffect("get.decode", row).pipe(Effect.map(Option.some)),
+              Option.map(row, (value) =>
+                decodeOperationRow(value).pipe(
+                  Effect.mapError((cause) => storeError("get.decode", cause)),
+                ),
+              ).pipe(Effect.transposeOption),
             ),
           )
       })
@@ -153,60 +163,74 @@ export class WalkthroughOperationStore extends Context.Service<
         acceptOrGet: Effect.fn("WalkthroughOperationStore.acceptOrGet")(function* (input) {
           const now = timestamp(yield* DateTime.now)
           return yield* database
-            .transaction("walkthroughOperations.acceptOrGet", (transaction) => {
-              const identity = Schema.decodeUnknownSync(WalkthroughOperationIdentity)(
-                input.identity,
-              )
-              const operationId = Schema.decodeUnknownSync(WalkthroughOperationId)(
-                input.operationId,
-              )
-              const existing = findLatestExactOperation(transaction, identity)
-              if (!input.regenerate && existing !== null) {
-                return WalkthroughOperationAcceptance.make({ created: false, operation: existing })
-              }
-              if (existing?.id === operationId) {
-                throw new Error("Regeneration requires a new walkthrough operation ID.")
-              }
-
-              if (existing !== null) {
-                transaction.run("PRAGMA defer_foreign_keys = ON")
-                transaction.run(
-                  `UPDATE walkthrough_operations
-                   SET state = 'superseded', state_version = state_version + 1,
-                       superseded_by_operation_id = ?, cancellation_requested_at = NULL,
-                       terminal_at = ?, updated_at = ?,
-                       failure_kind = NULL, failure_category = NULL, failure_code = NULL,
-                       artifact_repo_id = NULL, artifact_review_key = NULL,
-                       artifact_base_sha = NULL, artifact_head_sha = NULL,
-                       artifact_prompt_version = NULL
-                   WHERE id = ? AND state_version = ? AND state = ?`,
-                  [operationId, now, now, existing.id, existing.stateVersion, existing.state],
+            .transaction(
+              Effect.gen(function* () {
+                const identity = yield* Schema.decodeUnknownEffect(WalkthroughOperationIdentity)(
+                  input.identity,
                 )
-              }
+                const operationId = yield* Schema.decodeUnknownEffect(WalkthroughOperationId)(
+                  input.operationId,
+                )
+                const existing = yield* findLatestExactOperation(database, identity)
+                if (!input.regenerate && Option.isSome(existing)) {
+                  return WalkthroughOperationAcceptance.make({
+                    created: false,
+                    operation: existing.value,
+                  })
+                }
+                if (Option.isSome(existing) && existing.value.id === operationId) {
+                  return yield* WalkthroughOperationInvariantError.make({
+                    message: "Regeneration requires a new walkthrough operation ID.",
+                  })
+                }
 
-              transaction.run(
-                `INSERT INTO walkthrough_operations (
-                   id, repo_id, review_key, base_sha, head_sha, prompt_version,
-                   state, state_version, regeneration_of_operation_id,
-                   accepted_at, updated_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 1, ?, ?, ?)`,
-                [
-                  operationId,
-                  identity.repoId,
-                  identity.reviewKey,
-                  identity.baseRevision,
-                  identity.headRevision,
-                  identity.promptVersion,
-                  existing?.id ?? null,
-                  now,
-                  now,
-                ],
-              )
-              return WalkthroughOperationAcceptance.make({
-                created: true,
-                operation: requireOperation(transaction, operationId),
-              })
-            })
+                if (Option.isSome(existing)) {
+                  yield* database.run("PRAGMA defer_foreign_keys = ON")
+                  yield* database.run(
+                    `UPDATE walkthrough_operations
+                     SET state = 'superseded', state_version = state_version + 1,
+                         superseded_by_operation_id = ?, cancellation_requested_at = NULL,
+                         terminal_at = ?, updated_at = ?,
+                         failure_kind = NULL, failure_category = NULL, failure_code = NULL,
+                         artifact_repo_id = NULL, artifact_review_key = NULL,
+                         artifact_base_sha = NULL, artifact_head_sha = NULL,
+                         artifact_prompt_version = NULL
+                     WHERE id = ? AND state_version = ? AND state = ?`,
+                    [
+                      operationId,
+                      now,
+                      now,
+                      existing.value.id,
+                      existing.value.stateVersion,
+                      existing.value.state,
+                    ],
+                  )
+                }
+
+                yield* database.run(
+                  `INSERT INTO walkthrough_operations (
+                     id, repo_id, review_key, base_sha, head_sha, prompt_version,
+                     state, state_version, regeneration_of_operation_id,
+                     accepted_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, 'accepted', 1, ?, ?, ?)`,
+                  [
+                    operationId,
+                    identity.repoId,
+                    identity.reviewKey,
+                    identity.baseRevision,
+                    identity.headRevision,
+                    identity.promptVersion,
+                    Option.getOrNull(Option.map(existing, ({ id }) => id)),
+                    now,
+                    now,
+                  ],
+                )
+                return WalkthroughOperationAcceptance.make({
+                  created: true,
+                  operation: yield* requireOperation(database, operationId),
+                })
+              }),
+            )
             .pipe(Effect.mapError((cause) => storeError("acceptOrGet", cause)))
         }),
         get,
@@ -227,43 +251,46 @@ export class WalkthroughOperationStore extends Context.Service<
         completeSuccess: Effect.fn("WalkthroughOperationStore.completeSuccess")(function* (input) {
           const now = timestamp(yield* DateTime.now)
           return yield* database
-            .transaction("walkthroughOperations.completeSuccess", (transaction) => {
-              const before = requireOperation(transaction, input.operationId)
-              const artifact = Schema.decodeUnknownSync(WalkthroughArtifactReference)(
-                input.artifact,
-              )
-              if (!sameIdentity(before.identity, artifact)) {
-                throw new Error(
-                  "Walkthrough artifact reference does not match the operation identity.",
+            .transaction(
+              Effect.gen(function* () {
+                const before = yield* requireOperation(database, input.operationId)
+                const artifact = yield* Schema.decodeUnknownEffect(WalkthroughArtifactReference)(
+                  input.artifact,
                 )
-              }
-              if (
-                before.stateVersion !== input.expectedStateVersion ||
-                before.state !== "running"
-              ) {
-                return WalkthroughOperationTransition.make({ won: false, operation: before })
-              }
-              transaction.run(
-                `UPDATE walkthrough_operations
-                 SET state = 'completed', state_version = state_version + 1,
-                     terminal_at = ?, updated_at = ?,
-                     artifact_repo_id = ?, artifact_review_key = ?, artifact_base_sha = ?,
-                     artifact_head_sha = ?, artifact_prompt_version = ?
-                 WHERE id = ? AND state_version = ? AND state = 'running'`,
-                [
-                  now,
-                  now,
-                  artifact.repoId,
-                  artifact.reviewKey,
-                  artifact.baseRevision,
-                  artifact.headRevision,
-                  artifact.promptVersion,
-                  input.operationId,
-                  input.expectedStateVersion,
-                ],
-              )
-              return transitionWon(transaction, input.operationId)
-            })
+                if (!sameIdentity(before.identity, artifact)) {
+                  return yield* WalkthroughOperationInvariantError.make({
+                    message:
+                      "Walkthrough artifact reference does not match the operation identity.",
+                  })
+                }
+                if (
+                  before.stateVersion !== input.expectedStateVersion ||
+                  before.state !== "running"
+                ) {
+                  return WalkthroughOperationTransition.make({ won: false, operation: before })
+                }
+                yield* database.run(
+                  `UPDATE walkthrough_operations
+                   SET state = 'completed', state_version = state_version + 1,
+                       terminal_at = ?, updated_at = ?,
+                       artifact_repo_id = ?, artifact_review_key = ?, artifact_base_sha = ?,
+                       artifact_head_sha = ?, artifact_prompt_version = ?
+                   WHERE id = ? AND state_version = ? AND state = 'running'`,
+                  [
+                    now,
+                    now,
+                    artifact.repoId,
+                    artifact.reviewKey,
+                    artifact.baseRevision,
+                    artifact.headRevision,
+                    artifact.promptVersion,
+                    input.operationId,
+                    input.expectedStateVersion,
+                  ],
+                )
+                return yield* transitionWon(database, input.operationId)
+              }),
+            )
             .pipe(mapTransitionError("completeSuccess"))
         }),
         persistExpectedFailure: Effect.fn("WalkthroughOperationStore.persistExpectedFailure")(
@@ -293,8 +320,8 @@ export class WalkthroughOperationStore extends Context.Service<
             )
           },
           Effect.mapError((cause) =>
-            cause instanceof WalkthroughOperationNotFoundError ||
-            cause instanceof WalkthroughOperationStoreError
+            Schema.is(WalkthroughOperationNotFoundError)(cause) ||
+            Schema.is(WalkthroughOperationStoreError)(cause)
               ? cause
               : storeError("persistExpectedFailure.decode", cause),
           ),
@@ -348,48 +375,55 @@ export class WalkthroughOperationStore extends Context.Service<
         supersede: Effect.fn("WalkthroughOperationStore.supersede")(function* (input) {
           const now = timestamp(yield* DateTime.now)
           return yield* database
-            .transaction("walkthroughOperations.supersede", (transaction) => {
-              const before = requireOperation(transaction, input.operationId)
-              const replacement = requireOperation(transaction, input.supersededByOperationId)
-              if (
-                before.id === replacement.id ||
-                !sameIdentity(before.identity, replacement.identity)
-              ) {
-                throw new Error("Superseding operations must have the same exact identity.")
-              }
-              if (before.stateVersion !== input.expectedStateVersion || !isActive(before)) {
-                return WalkthroughOperationTransition.make({ won: false, operation: before })
-              }
-              transaction.run(
-                `UPDATE walkthrough_operations
-                 SET state = 'superseded', state_version = state_version + 1,
-                     superseded_by_operation_id = ?, terminal_at = ?, updated_at = ?
-                 WHERE id = ? AND state_version = ? AND state IN ('accepted', 'running')`,
-                [replacement.id, now, now, input.operationId, input.expectedStateVersion],
-              )
-              return transitionWon(transaction, input.operationId)
-            })
+            .transaction(
+              Effect.gen(function* () {
+                const before = yield* requireOperation(database, input.operationId)
+                const replacement = yield* requireOperation(database, input.supersededByOperationId)
+                if (
+                  before.id === replacement.id ||
+                  !sameIdentity(before.identity, replacement.identity)
+                ) {
+                  return yield* WalkthroughOperationInvariantError.make({
+                    message: "Superseding operations must have the same exact identity.",
+                  })
+                }
+                if (before.stateVersion !== input.expectedStateVersion || !isActive(before)) {
+                  return WalkthroughOperationTransition.make({ won: false, operation: before })
+                }
+                yield* database.run(
+                  `UPDATE walkthrough_operations
+                   SET state = 'superseded', state_version = state_version + 1,
+                       superseded_by_operation_id = ?, terminal_at = ?, updated_at = ?
+                   WHERE id = ? AND state_version = ? AND state IN ('accepted', 'running')`,
+                  [replacement.id, now, now, input.operationId, input.expectedStateVersion],
+                )
+                return yield* transitionWon(database, input.operationId)
+              }),
+            )
             .pipe(mapTransitionError("supersede"))
         }),
         recoverActiveAsInterrupted: Effect.gen(function* () {
           const now = timestamp(yield* DateTime.now)
           return yield* database
-            .transaction("walkthroughOperations.recoverActiveAsInterrupted", (transaction) => {
-              const active = transaction
-                .all(
+            .transaction(
+              Effect.gen(function* () {
+                const activeRows = yield* database.all(
                   `SELECT * FROM walkthrough_operations
                    WHERE state IN ('accepted', 'running') ORDER BY accepted_at, id`,
                 )
-                .map(decodeOperationRow)
-              transaction.run(
-                `UPDATE walkthrough_operations
-                 SET state = 'interrupted', state_version = state_version + 1,
-                     terminal_at = ?, updated_at = ?
-                 WHERE state IN ('accepted', 'running')`,
-                [now, now],
-              )
-              return active.map((operation) => requireOperation(transaction, operation.id))
-            })
+                const active = yield* decodeOperationRows(activeRows)
+                yield* database.run(
+                  `UPDATE walkthrough_operations
+                   SET state = 'interrupted', state_version = state_version + 1,
+                       terminal_at = ?, updated_at = ?
+                   WHERE state IN ('accepted', 'running')`,
+                  [now, now],
+                )
+                return yield* Effect.forEach(active, (operation) =>
+                  requireOperation(database, operation.id),
+                )
+              }),
+            )
             .pipe(Effect.mapError((cause) => storeError("recoverActiveAsInterrupted", cause)))
         }),
       })
@@ -398,75 +432,87 @@ export class WalkthroughOperationStore extends Context.Service<
 }
 
 const guardedTransition = (
-  database: DatabaseService["Service"],
+  database: Database,
   operation: string,
   input: WalkthroughOperationVersionGuard,
   allowedStates: readonly WalkthroughOperationType["state"][],
   sql: string,
-  params: readonly unknown[],
+  params: SqlParams,
 ) =>
   database
-    .transaction(`walkthroughOperations.${operation}`, (transaction) => {
-      const before = requireOperation(transaction, input.operationId)
-      if (
-        before.stateVersion !== input.expectedStateVersion ||
-        !allowedStates.includes(before.state)
-      ) {
-        return WalkthroughOperationTransition.make({ won: false, operation: before })
-      }
-      transaction.run(sql, params)
-      return transitionWon(transaction, input.operationId)
-    })
+    .transaction(
+      Effect.gen(function* () {
+        const before = yield* requireOperation(database, input.operationId)
+        if (
+          before.stateVersion !== input.expectedStateVersion ||
+          !allowedStates.includes(before.state)
+        ) {
+          return WalkthroughOperationTransition.make({ won: false, operation: before })
+        }
+        yield* database.run(sql, params)
+        return yield* transitionWon(database, input.operationId)
+      }),
+    )
     .pipe(mapTransitionError(operation))
 
-const transitionWon = (transaction: DatabaseTransaction, operationId: WalkthroughOperationIdType) =>
-  WalkthroughOperationTransition.make({
-    won: true,
-    operation: requireOperation(transaction, operationId),
-  })
-
-const findLatestExactOperation = (
-  transaction: DatabaseTransaction,
-  identity: WalkthroughOperationIdentityType,
-) => {
-  const row = transaction.get(
-    `SELECT * FROM walkthrough_operations
-     WHERE repo_id = ? AND review_key = ? AND base_sha = ?
-       AND head_sha = ? AND prompt_version = ?
-     ORDER BY accepted_at DESC, rowid DESC LIMIT 1`,
-    [
-      identity.repoId,
-      identity.reviewKey,
-      identity.baseRevision,
-      identity.headRevision,
-      identity.promptVersion,
-    ],
-  )
-  return row === undefined ? null : decodeOperationRow(row)
-}
-
-const requireOperation = (
-  transaction: DatabaseTransaction,
+const transitionWon = Effect.fn("WalkthroughOperationStore.transitionWon")(function* (
+  database: Database,
   operationId: WalkthroughOperationIdType,
-) => {
-  const row = transaction.get("SELECT * FROM walkthrough_operations WHERE id = ?", [operationId])
-  if (row === undefined) {
-    throw WalkthroughOperationNotFoundError.make({
+) {
+  return WalkthroughOperationTransition.make({
+    won: true,
+    operation: yield* requireOperation(database, operationId),
+  })
+})
+
+const findLatestExactOperation = Effect.fn("WalkthroughOperationStore.findLatestExactOperation")(
+  function* (database: Database, identity: WalkthroughOperationIdentityType) {
+    const row = yield* database.get(
+      `SELECT * FROM walkthrough_operations
+       WHERE repo_id = ? AND review_key = ? AND base_sha = ?
+         AND head_sha = ? AND prompt_version = ?
+       ORDER BY accepted_at DESC, rowid DESC LIMIT 1`,
+      [
+        identity.repoId,
+        identity.reviewKey,
+        identity.baseRevision,
+        identity.headRevision,
+        identity.promptVersion,
+      ],
+    )
+    return yield* Option.map(row, decodeOperationRow).pipe(Effect.transposeOption)
+  },
+)
+
+const requireOperation = Effect.fn("WalkthroughOperationStore.requireOperation")(function* (
+  database: Database,
+  operationId: WalkthroughOperationIdType,
+) {
+  const row = yield* database.get("SELECT * FROM walkthrough_operations WHERE id = ?", [
+    operationId,
+  ])
+  const value = yield* Effect.fromOption(row, () =>
+    WalkthroughOperationNotFoundError.make({
       operationId,
       message: "Walkthrough operation was not found.",
-    })
-  }
-  return decodeOperationRow(row)
-}
+    }),
+  )
+  return yield* decodeOperationRow(value)
+})
 
-const decodeOperationEffect = (operation: string, input: unknown) =>
-  Effect.try({
-    try: () => decodeOperationRow(input),
-    catch: (cause) => storeError(operation, cause),
-  })
+const decodeOperationRow = Effect.fn("WalkthroughOperationStore.decodeOperationRow")(function* (
+  input: DatabaseRow,
+) {
+  const row = yield* Schema.decodeUnknownEffect(WalkthroughOperationRow)(input)
+  return yield* makeOperation(row)
+})
 
-const decodeOperationRow = (input: unknown): WalkthroughOperationType => {
-  const row = Schema.decodeUnknownSync(WalkthroughOperationRow)(input)
+const decodeOperationRows = (input: readonly DatabaseRow[]) =>
+  Schema.decodeUnknownEffect(Schema.Array(WalkthroughOperationRow))(input).pipe(
+    Effect.flatMap((rows) => Effect.forEach(rows, makeOperation)),
+  )
+
+const makeOperation = (row: typeof WalkthroughOperationRow.Type) => {
   const failure =
     row.failure_kind === null
       ? null
@@ -485,7 +531,7 @@ const decodeOperationRow = (input: unknown): WalkthroughOperationType => {
           headRevision: row.artifact_head_sha,
           promptVersion: row.artifact_prompt_version,
         }
-  return Schema.decodeUnknownSync(WalkthroughOperation)({
+  return Schema.decodeUnknownEffect(WalkthroughOperation)({
     id: row.id,
     identity: {
       repoId: row.repo_id,
@@ -524,20 +570,24 @@ const isActive = (operation: WalkthroughOperationType) =>
 const timestamp = (dateTime: DateTime.Utc) =>
   WalkthroughOperationTimestamp.make(DateTime.formatIso(dateTime))
 
-const nestedCause = (cause: unknown) =>
-  typeof cause === "object" && cause !== null && "cause" in cause ? cause.cause : cause
+const nestedCause = <A>(cause: A) => {
+  const nested = Option.getOrNull(
+    Schema.decodeUnknownOption(Schema.Struct({ cause: Schema.ErrorInstance() }))(cause),
+  )
+  return nested?.cause ?? cause
+}
 
 const mapTransitionError = (operation: string) =>
-  Effect.mapError((cause: unknown) => {
+  Effect.mapError((cause) => {
     const nested = nestedCause(cause)
-    return nested instanceof WalkthroughOperationNotFoundError
+    return Schema.is(WalkthroughOperationNotFoundError)(nested)
       ? nested
       : storeError(operation, cause)
   })
 
-const storeError = (operation: string, cause: unknown) =>
+const storeError = <A>(operation: string, cause: A) =>
   WalkthroughOperationStoreError.make({
-    operation,
+    operation: DiagnosticOperation.make(operation),
     message: `Walkthrough operation persistence failed during ${operation}.`,
-    cause,
+    cause: toError(cause),
   })

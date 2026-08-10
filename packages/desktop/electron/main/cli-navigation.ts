@@ -1,14 +1,10 @@
 import { isAbsolute, resolve } from "node:path"
-import { NodeServices } from "@effect/platform-node"
-import { Console, Effect, Option } from "effect"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import { Console, Effect, Match, Option, Schema } from "effect"
 import { Argument, CliError, CliOutput, Command, Flag } from "effect/unstable/cli"
 
 import {
-  GitProviderId,
-  HostedRepositoryName,
-  RepositoryNamespace,
-} from "@diffdash/domain/git-provider"
-import {
+  CliRepositoryPath,
   CliGitRevision,
   CliNavigationErrorCommand,
   CliRepositorySelector,
@@ -102,9 +98,11 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   const install = Command.make("install", { path: optionalPath }, ({ path }) =>
     select(
       LinkRepositoryCommand.make({
-        localPath: resolve(
-          cwd,
-          Option.getOrElse(path, () => "."),
+        localPath: CliRepositoryPath.make(
+          resolve(
+            cwd,
+            Option.getOrElse(path, () => "."),
+          ),
         ),
       }),
     ),
@@ -123,16 +121,16 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   const pullRequest = Command.make("pr", { number: pullRequestNumber }, ({ number }) =>
     select(
       OpenPullRequestCommand.make({
-        localPath: resolve(cwd),
+        localPath: CliRepositoryPath.make(resolve(cwd)),
         number: Option.getOrNull(number),
       }),
     ),
   ).pipe(Command.withDescription("Open a repository's pull requests"))
-  const branch = Argument.string("branch-name").pipe(Argument.optional)
+  const branch = gitRevisionArgument("branch").pipe(Argument.optional)
   const diff = Command.make("diff", { branch }, ({ branch: branchName }) =>
     select(
       OpenBranchDiffCommand.make({
-        localPath: resolve(cwd),
+        localPath: CliRepositoryPath.make(resolve(cwd)),
         branchName: Option.getOrNull(branchName),
       }),
     ),
@@ -157,7 +155,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
     ({ baseRef: parsedBaseRef, headRef: parsedHeadRef, repository: parsedRepository }) =>
       select(
         OpenRepositoryComparisonCommand.make({
-          localPath: resolve(cwd),
+          localPath: CliRepositoryPath.make(resolve(cwd)),
           repository: Option.getOrNull(parsedRepository),
           baseRef: parsedBaseRef,
           headRef: parsedHeadRef,
@@ -170,9 +168,11 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   const root = Command.make("diffdash", { path: optionalPath }, ({ path }) =>
     select(
       OpenProjectCommand.make({
-        localPath: resolve(
-          cwd,
-          Option.getOrElse(path, () => "."),
+        localPath: CliRepositoryPath.make(
+          resolve(
+            cwd,
+            Option.getOrElse(path, () => "."),
+          ),
         ),
       }),
     ),
@@ -185,21 +185,29 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   const formatter = CliOutput.defaultFormatter({ colors: false })
   const program = Command.runWith(root, { version: "0.0.0" })(normalizedArgs).pipe(
     Effect.catch((error) => {
-      if (error instanceof CliError.ShowHelp) {
-        if (error.errors.length === 0) return Effect.void
-        return select(
-          cliError(
-            error.errors
-              .map((reportedError) =>
-                reportedError instanceof CliError.MissingArgument
-                  ? `Missing argument <${reportedError.argument}>`
-                  : formatter.formatCliError(reportedError),
-              )
-              .join("\n") || "Invalid command.",
-          ),
-        )
-      }
-      return select(cliError(formatter.formatCliError(error) || "Invalid command."))
+      return Match.type<CliError.CliError>().pipe(
+        Match.when(Schema.is(CliError.ShowHelp), (help) => {
+          if (help.errors.length === 0) return Effect.void
+          return select(
+            cliError(
+              help.errors
+                .map((reportedError) =>
+                  Match.value(reportedError).pipe(
+                    Match.when(
+                      Schema.is(CliError.MissingArgument),
+                      (missing) => `Missing argument <${missing.argument}>`,
+                    ),
+                    Match.orElse((value) => formatter.formatCliError(value)),
+                  ),
+                )
+                .join("\n") || "Invalid command.",
+            ),
+          )
+        }),
+        Match.orElse((value) =>
+          select(cliError(formatter.formatCliError(value) || "Invalid command.")),
+        ),
+      )(error)
     }),
     silenceConsole,
     Effect.provide(NodeServices.layer),
@@ -208,7 +216,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   return result
 }
 
-const gitRevisionArgument = (name: "base" | "head") =>
+const gitRevisionArgument = (name: "base" | "branch" | "head") =>
   Argument.string(name).pipe(
     Argument.mapTryCatch(
       (input) => CliGitRevision.make(input),
@@ -315,26 +323,33 @@ const parseRepositorySelector = (input: string): CliRepositorySelector | null =>
     return null
   }
 
-  return CliRepositorySelector.make({
-    providerId: providerInput === null ? null : GitProviderId.make(providerInput),
-    namespace: RepositoryNamespace.make(namespace),
-    name: HostedRepositoryName.make(name),
+  return Schema.decodeUnknownSync(CliRepositorySelector)({
+    providerId: providerInput,
+    namespace,
+    name,
   })
 }
 
 /** Reports whether a queued command explicitly requests repository identity repair. */
 export const hasRepositoryIdentityRepairCommand = (commands: readonly CliNavigationCommand[]) =>
-  commands.some((command) => command["_tag"] === "repairRepositoryIdentities")
+  commands.some((command) =>
+    Match.value(command).pipe(
+      Match.when({ _tag: "repairRepositoryIdentities" }, () => true),
+      Match.orElse(() => false),
+    ),
+  )
 
 const parseLegacyPathArg = (argv: readonly string[], cwd: string, argumentName: string) => {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === argumentName) {
       const value = argv[index + 1]
-      return value === undefined ? null : resolve(cwd, value)
+      return value === undefined ? null : CliRepositoryPath.make(resolve(cwd, value))
     }
     const prefix = `${argumentName}=`
-    if (argument?.startsWith(prefix) === true) return resolve(cwd, argument.slice(prefix.length))
+    if (argument?.startsWith(prefix) === true) {
+      return CliRepositoryPath.make(resolve(cwd, argument.slice(prefix.length)))
+    }
   }
   return null
 }

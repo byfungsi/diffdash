@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
-import { noRepositoryLocalPath } from "@diffdash/domain/repository"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { ReviewKey, ReviewRevision, type ReviewProjectId } from "@diffdash/domain/review-identity"
 import { Walkthrough } from "@diffdash/domain/walkthrough"
 import {
   WalkthroughArtifactReference,
@@ -9,17 +9,20 @@ import {
   WalkthroughOperationIdentity,
 } from "@diffdash/domain/walkthrough-operation"
 import { Effect, Layer, Option, Result, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { DatabaseService } from "./database"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { RepositoryStore } from "./repository-store"
 import {
   WalkthroughOperationStore,
   WalkthroughOperationStoreError,
 } from "./walkthrough-operation-store"
 import { WalkthroughStore } from "./walkthrough-store"
+import { hostedTestRepositoryInput } from "./test-support/repository"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-walkthrough-operation-test-"))),
@@ -31,20 +34,16 @@ const makeLayer = (databasePath: string) =>
     RepositoryStore.layer,
     WalkthroughStore.layer,
     WalkthroughOperationStore.layer,
-  ).pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
+  ).pipe(Layer.provideMerge(DatabaseNode.layer(databasePath)))
 
 const createRepository = Effect.fn("test.createWalkthroughOperationRepository")(function* () {
   const repositories = yield* RepositoryStore
-  return yield* repositories.upsertRepository({
-    localPath: noRepositoryLocalPath,
-    name: "walkthrough-operations",
-    owner: "fungsi",
-    provider: "github",
-    remoteUrl: "https://github.com/fungsi/walkthrough-operations",
-  })
+  return yield* repositories.upsertRepository(
+    hostedTestRepositoryInput({ name: "walkthrough-operations" }),
+  )
 })
 
-const makeIdentity = (repoId: string, headRevision = "head-1") =>
+const makeIdentity = (repoId: ReviewProjectId, headRevision = "head-1") =>
   WalkthroughOperationIdentity.make({
     repoId,
     reviewKey: ReviewKey.make("github:fungsi/walkthrough-operations#1"),
@@ -284,7 +283,7 @@ describe("WalkthroughOperationStore", () => {
       const databasePath = yield* makeTempDatabasePath
 
       return yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const store = yield* WalkthroughOperationStore
         const repo = yield* createRepository()
         const accepted = yield* store.acceptOrGet({
@@ -312,7 +311,7 @@ describe("WalkthroughOperationStore", () => {
         )(yield* database.all("PRAGMA table_info(walkthrough_operations)"))
 
         expect(failed.operation).toMatchObject({ state: "failed", failure })
-        expect(row).toEqual({
+        expect(Option.getOrThrow(row)).toEqual({
           failure_kind: "expected",
           failure_category: "provider",
           failure_code: "rate-limited",
@@ -340,7 +339,7 @@ describe("WalkthroughOperationStore", () => {
         const databasePath = yield* makeTempDatabasePath
 
         return yield* Effect.gen(function* () {
-          const database = yield* DatabaseService
+          const database = makeDatabase(yield* SqlClient.SqlClient)
           const operations = yield* WalkthroughOperationStore
           const walkthroughs = yield* WalkthroughStore
           const repo = yield* createRepository()
@@ -389,7 +388,7 @@ describe("WalkthroughOperationStore", () => {
             stateVersion: 3,
             artifact: identity,
           })
-          expect(row).toEqual({
+          expect(Option.getOrThrow(row)).toEqual({
             artifact_repo_id: identity.repoId,
             artifact_review_key: identity.reviewKey,
             artifact_base_sha: identity.baseRevision,
@@ -406,7 +405,7 @@ describe("WalkthroughOperationStore", () => {
       const databasePath = yield* makeTempDatabasePath
 
       return yield* Effect.gen(function* () {
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         const store = yield* WalkthroughOperationStore
         const repo = yield* createRepository()
         const accepted = yield* store.acceptOrGet({
@@ -424,7 +423,7 @@ describe("WalkthroughOperationStore", () => {
         expect(Result.isFailure(result) && result.failure).toEqual(
           expect.objectContaining<Partial<WalkthroughOperationStoreError>>({
             _tag: "WalkthroughOperationStoreError",
-            operation: "get.decode",
+            operation: DiagnosticOperation.make("get.decode"),
           }),
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))

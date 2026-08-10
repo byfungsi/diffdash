@@ -2,6 +2,7 @@ import { Effect, Match, Schema } from "effect"
 import electronUpdater, {
   type AppUpdater as ElectronNativeUpdater,
   type ProgressInfo,
+  type UpdateCheckResult,
   type UpdateInfo,
 } from "electron-updater"
 
@@ -15,23 +16,30 @@ import {
   type AppUpdateState,
   AppUpdateUnsupported,
   type AppUpdateUnsupportedReason,
+  AppUpdateFeedUrl,
+  type AppUpdateFeedUrl as AppUpdateFeedUrlType,
 } from "@diffdash/protocol/app-update"
 
-const DEFAULT_UPDATE_BASE_URL = "https://download.usediffdash.com/updates/stable"
+const DEFAULT_UPDATE_BASE_URL = AppUpdateFeedUrl.make(
+  "https://download.usediffdash.com/updates/stable",
+)
 const INITIAL_CHECK_DELAY_MS = 10_000
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1_000
 
+const AppUpdaterOperation = Schema.Literals(["check", "download", "quitAndInstall"])
+type AppUpdaterOperation = typeof AppUpdaterOperation.Type
+
 /** A recoverable automatic-update operation failure. */
 export class AppUpdaterError extends Schema.TaggedError<AppUpdaterError>()("AppUpdaterError", {
-  operation: Schema.String,
+  operation: AppUpdaterOperation,
   message: Schema.String,
-  cause: Schema.NullOr(Schema.Defect()),
+  cause: Schema.NullOr(Schema.ErrorInstance()),
 }) {}
 
 /** Native updater seam used by the production service and deterministic tests. */
 export interface NativeUpdaterAdapter {
-  readonly configure: (feedUrl: string) => void
-  readonly check: () => Promise<unknown>
+  readonly configure: (feedUrl: AppUpdateFeedUrlType) => void
+  readonly check: () => Promise<UpdateCheckResult | null>
   readonly download: () => Promise<readonly string[]>
   readonly quitAndInstall: () => void
   readonly onChecking: (listener: () => void) => () => void
@@ -48,7 +56,7 @@ export interface AppUpdaterOptions {
   readonly appImagePath?: string
   readonly arch: string
   readonly currentVersion: string
-  readonly feedBaseUrl?: string
+  readonly feedBaseUrl?: AppUpdateFeedUrlType
   readonly packaged: boolean
   readonly platform: NodeJS.Platform
 }
@@ -155,11 +163,17 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
     state = nextState
     for (const listener of listeners) listener(state)
   }
-  const fail = (operation: string, cause: unknown) => {
+  const fail = <A>(operation: AppUpdaterOperation, cause: A) => {
     const message =
-      cause instanceof Error && cause.message.length > 0 ? cause.message : String(cause)
+      Schema.is(Schema.ErrorInstance())(cause) && cause.message.length > 0
+        ? cause.message
+        : String(cause)
     publish(AppUpdateFailed.make({ currentVersion: options.currentVersion, message }))
-    return AppUpdaterError.make({ operation, message, cause })
+    return AppUpdaterError.make({
+      operation,
+      message,
+      cause: Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause)),
+    })
   }
   const publishProgress = (version: string, percent: number) => {
     publish(
@@ -265,14 +279,7 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
   const runCommand = (command: AppUpdaterCommand) =>
     Effect.tryPromise({
       try: () => executeCommand(command),
-      catch: (cause) =>
-        fail(
-          Match.valueTags(command, {
-            download: () => "download",
-            quitAndInstall: () => "quitAndInstall",
-          }),
-          cause,
-        ),
+      catch: (cause) => fail(command._tag, cause),
     })
   const download = runCommand({ _tag: "download" })
   const quitAndInstall = runCommand({ _tag: "quitAndInstall" })
@@ -308,15 +315,21 @@ export const createDesktopUpdater = (options: AppUpdaterOptions): DesktopUpdater
 
 const updateEligibility = (
   options: AppUpdaterOptions,
-): { readonly feedUrl: string } | { readonly reason: AppUpdateUnsupportedReason } => {
+): { readonly feedUrl: AppUpdateFeedUrlType } | { readonly reason: AppUpdateUnsupportedReason } => {
   if (!options.packaged) return { reason: "development" }
   if (options.platform === "darwin") {
     if (options.arch !== "arm64" && options.arch !== "x64") return { reason: "architecture" }
-    return { feedUrl: `${options.feedBaseUrl ?? DEFAULT_UPDATE_BASE_URL}/macos/${options.arch}` }
+    return {
+      feedUrl: AppUpdateFeedUrl.make(
+        `${options.feedBaseUrl ?? DEFAULT_UPDATE_BASE_URL}/macos/${options.arch}`,
+      ),
+    }
   }
   if (options.platform !== "linux") return { reason: "platform" }
   if (options.arch !== "x64") return { reason: "architecture" }
   if (options.appImagePath === undefined || options.appImagePath.trim().length === 0)
     return { reason: "installation" }
-  return { feedUrl: `${options.feedBaseUrl ?? DEFAULT_UPDATE_BASE_URL}/linux/x64` }
+  return {
+    feedUrl: AppUpdateFeedUrl.make(`${options.feedBaseUrl ?? DEFAULT_UPDATE_BASE_URL}/linux/x64`),
+  }
 }

@@ -1,14 +1,11 @@
-import { AISettings } from "@diffdash/domain/ai-settings"
-import { DEFAULT_APP_STATE, AppState as SharedAppState } from "@diffdash/domain/app-state"
 import { CoreMethod } from "@diffdash/core"
-import type { AgentProviderCatalog } from "@diffdash/protocol/agent-providers"
 import { InvokeChannel } from "@diffdash/protocol/channels"
-import { AppPrerequisites, type DiffDashCliInstallResult } from "@diffdash/protocol/prerequisites"
-import { app } from "electron"
+import { InvokeContract } from "@diffdash/protocol/ipc"
+import { AppPrerequisites } from "@diffdash/protocol/prerequisites"
+import { Schema } from "effect"
 import type { ApplicationRuntime } from "../../application-runtime"
+import type { DesktopHostConfiguration } from "../../desktop-host-configuration"
 import { IpcControllerRegistry } from "./controller-registry"
-
-const isDebugOnboardingEnabled = () => !app.isPackaged && process.env.DEBUG_ONBOARD === "1"
 
 const debugMissingPrerequisites = () =>
   AppPrerequisites.make({
@@ -28,54 +25,38 @@ const debugMissingPrerequisites = () =>
     setupRequirements: [],
   })
 
+const debugAppState = () =>
+  Schema.decodeUnknownSync(InvokeContract[InvokeChannel.appStateGet].response)({
+    onboardingCompleted: false,
+  })
+
 /** Defines settings IPC handler implementations. */
 export const defineSettingsHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
+  configuration: DesktopHostConfiguration,
 ) => {
-  handlers.define(
-    InvokeChannel.agentProvidersGetCatalog,
-    async (): Promise<AgentProviderCatalog> => {
-      return runtime.execute(CoreMethod.agentProvidersGetCatalog, {})
-    },
-  )
+  handlers.defineCore(CoreMethod.agentProvidersGetCatalog, runtime.execute)
+  handlers.defineCore(CoreMethod.settingsGet, runtime.execute)
+  handlers.defineCore(CoreMethod.settingsUpdate, runtime.execute)
 
-  handlers.define(InvokeChannel.settingsGet, async (): Promise<AISettings> => {
-    return runtime.execute(CoreMethod.settingsGet, {})
-  })
-
-  handlers.define(
-    InvokeChannel.settingsUpdate,
-    async (_event, { settings: parsed }): Promise<AISettings> => {
-      return runtime.execute(CoreMethod.settingsUpdate, { settings: parsed })
-    },
-  )
-
-  handlers.define(InvokeChannel.appStateGet, async (): Promise<SharedAppState> => {
-    if (isDebugOnboardingEnabled()) return DEFAULT_APP_STATE
+  handlers.define(InvokeChannel.appStateGet, async () => {
+    if (configuration.policies.debugOnboarding) return debugAppState()
 
     return runtime.execute(CoreMethod.appStateGet, {})
   })
 
-  handlers.define(
-    InvokeChannel.appStateUpdate,
-    async (_event, { state: parsed }): Promise<SharedAppState> => {
-      if (isDebugOnboardingEnabled()) return parsed
+  handlers.define(InvokeChannel.appStateUpdate, async (_event, { state: parsed }) => {
+    if (configuration.policies.debugOnboarding) return parsed
 
-      return runtime.execute(CoreMethod.appStateUpdate, { state: parsed })
-    },
-  )
+    return runtime.execute(CoreMethod.appStateUpdate, { state: parsed })
+  })
 
   handlers.define(InvokeChannel.appDiagnostics, async (): Promise<AppPrerequisites> => {
-    if (isDebugOnboardingEnabled()) return debugMissingPrerequisites()
+    if (configuration.policies.debugOnboarding) return debugMissingPrerequisites()
 
     return runtime.execute(CoreMethod.appDiagnostics, {})
   })
 
-  handlers.define(
-    InvokeChannel.appInstallDiffDashCli,
-    async (): Promise<DiffDashCliInstallResult> => {
-      return runtime.execute(CoreMethod.appInstallDiffDashCli, {})
-    },
-  )
+  handlers.defineCore(CoreMethod.appInstallDiffDashCli, runtime.execute)
 }

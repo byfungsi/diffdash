@@ -1,4 +1,4 @@
-import { Effect, Predicate } from "effect"
+import { Effect, Match, Predicate } from "effect"
 
 import {
   AgentCapabilityPolicyUnsupported,
@@ -7,14 +7,18 @@ import {
   type AgentCapability,
   type AgentCapabilityProbe,
   AgentProviderFailure,
+  type AgentProviderCause,
+  type AgentProviderDiagnosticCause,
   type AgentProviderFailureCategory,
-  type AgentProviderId,
+  AgentProviderId,
   AgentProviderOperationError,
   type AgentProviderProcessFailureKind,
 } from "./agent-provider"
 import { type ProviderDiagnosticExtraRedaction, sanitizeProviderDiagnostic } from "./security"
 
 export type { AgentProviderFailureCategory } from "./agent-provider"
+
+type ProviderFailureInput = Parameters<typeof JSON.stringify>[0]
 
 /** Default maximum persisted or displayed length of a provider failure reason. */
 export const DEFAULT_PROVIDER_REASON_MAX_LENGTH = 600
@@ -46,7 +50,10 @@ export interface AgentProviderOperationErrorFactoryOptions {
   readonly providerId: AgentProviderId
   readonly fallbackReason: string
   readonly extraRedaction?: ProviderDiagnosticExtraRedaction
-  readonly classify?: (cause: unknown, reason: string) => AgentProviderFailureCategory | null
+  readonly classify?: (
+    cause: AgentProviderCause,
+    reason: string,
+  ) => AgentProviderFailureCategory | null
 }
 
 /** Cohesive constructors for cause-backed and reason-only provider operation errors. */
@@ -54,7 +61,7 @@ export interface AgentProviderOperationErrorFactory {
   readonly fromCause: (
     capability: AgentCapability,
     category?: AgentProviderFailureCategory,
-  ) => (cause: unknown) => AgentProviderOperationError
+  ) => (cause: ProviderFailureInput) => AgentProviderOperationError
   readonly fromReason: (
     capability: AgentCapability,
     reason: string,
@@ -72,39 +79,39 @@ export const parseAgentRuntimeVersion = (output: string) => {
 
 /** Extracts a provider failure reason and applies the provider's diagnostic redaction policy. */
 export const boundedProviderReason = (
-  cause: unknown,
+  value: ProviderFailureInput,
   fallback: string,
   extraRedaction?: ProviderDiagnosticExtraRedaction,
   maximumLength = DEFAULT_PROVIDER_REASON_MAX_LENGTH,
 ) => {
+  const cause = parseAgentProviderCause(value)
   let reason = fallback
   if (
-    Predicate.isReadonlyObject(cause) &&
-    typeof cause.stderr === "string" &&
+    isDiagnosticCause(cause) &&
+    Predicate.isString(cause.stderr) &&
     cause.stderr.trim().length > 0
   ) {
     reason = cause.stderr
   } else if (
-    Predicate.isReadonlyObject(cause) &&
-    typeof cause.reason === "string" &&
+    isDiagnosticCause(cause) &&
+    Predicate.isString(cause.reason) &&
     cause.reason.trim().length > 0
   ) {
     reason = cause.reason
   } else if (isGenericProcessSpawnFailure(cause)) {
     reason = fallback
-  } else if (cause instanceof Error && cause.message.trim().length > 0) {
+  } else if (Predicate.isError(cause) && cause.message.trim().length > 0) {
     reason = cause.message
   }
   return boundedProviderDiagnostic(reason, extraRedaction, maximumLength)
 }
 
-const isGenericProcessSpawnFailure = (cause: unknown) => {
-  const message =
-    Predicate.isReadonlyObject(cause) && typeof cause.message === "string"
-      ? cause.message
-      : cause instanceof Error
-        ? cause.message
-        : null
+const isGenericProcessSpawnFailure = (cause: AgentProviderCause) => {
+  const message = Predicate.isError(cause)
+    ? cause.message
+    : isDiagnosticCause(cause)
+      ? (cause.message ?? null)
+      : null
   return message !== null && message.trim().toLowerCase() === "failed to spawn command"
 }
 
@@ -178,50 +185,52 @@ export const classifyProviderFailureText = (value: string): AgentProviderFailure
   return null
 }
 
-const processKind = (cause: unknown): AgentProviderProcessFailureKind | null => {
+const processKind = (cause: AgentProviderCause): AgentProviderProcessFailureKind | null => {
   const tag = taggedString(cause, "_tag")
-  switch (tag) {
-    case "InvalidProcessOptionsError":
-      return "options"
-    case "ProcessSpawnError":
-      return "spawn"
-    case "ProcessStdinError":
-      return "stdin"
-    case "ProcessOutputError":
-      return "output"
-    case "ProcessTimeoutError":
-      return "timeout"
-    case "ProcessCleanupError":
-      return "cleanup"
-    case "ProcessExitError":
-      return "exit"
-    default:
-      return null
-  }
+  return Match.value(tag).pipe(
+    Match.when("InvalidProcessOptionsError", () => "options" as const),
+    Match.when("ProcessSpawnError", () => "spawn" as const),
+    Match.when("ProcessStdinError", () => "stdin" as const),
+    Match.when("ProcessOutputError", () => "output" as const),
+    Match.when("ProcessTimeoutError", () => "timeout" as const),
+    Match.when("ProcessCleanupError", () => "cleanup" as const),
+    Match.when("ProcessExitError", () => "exit" as const),
+    Match.orElse(() => null),
+  )
 }
 
-const classificationText = (cause: unknown, reason: string) => {
-  if (!Predicate.isReadonlyObject(cause)) return reason
+const classificationText = (cause: AgentProviderCause, reason: string) => {
+  if (Predicate.isNull(cause)) return reason
+  if (!isDiagnosticCause(cause)) return reason
   return [cause.stdout, cause.stderr, cause.reason, cause.message, reason]
-    .filter((value): value is string => typeof value === "string")
+    .filter(Predicate.isString)
     .join("\n")
 }
 
-const taggedString = (value: unknown, key: string): string | null =>
-  Predicate.isReadonlyObject(value) && typeof value[key] === "string" ? value[key] : null
+const taggedString = (value: AgentProviderCause, key: "_tag" | "signal"): string | null => {
+  if (Predicate.isNull(value) || !isDiagnosticCause(value)) return null
+  return value[key] ?? null
+}
 
-const taggedInteger = (value: unknown, key: string): number | null =>
-  Predicate.isReadonlyObject(value) && Number.isSafeInteger(value[key])
-    ? (value[key] as number)
-    : null
+const taggedInteger = (
+  value: AgentProviderCause,
+  key: "status" | "statusCode" | "exitCode",
+): number | null => {
+  if (Predicate.isNull(value) || !isDiagnosticCause(value)) return null
+  const selected =
+    key === "status" ? value.status : key === "statusCode" ? value.statusCode : value.exitCode
+  return Predicate.isNumber(selected) && Number.isSafeInteger(selected) ? selected : null
+}
 
 const safeProviderId = (providerId: AgentProviderId) =>
-  /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(providerId) ? providerId : "custom"
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/u.test(providerId)
+    ? providerId
+    : AgentProviderId.make("custom")
 
 const makeFailure = (
   options: AgentProviderOperationErrorFactoryOptions,
   capability: AgentCapability,
-  cause: unknown,
+  cause: AgentProviderCause,
   reason: string,
   category?: AgentProviderFailureCategory,
 ) => {
@@ -309,12 +318,13 @@ export const makeAgentProviderOperationErrorFactory = (
 ): AgentProviderOperationErrorFactory => ({
   fromCause: (capability, category) => (cause) => {
     const reason = boundedProviderReason(cause, options.fallbackReason, options.extraRedaction)
+    const parsedCause = parseAgentProviderCause(cause)
     return AgentProviderOperationError.make({
       providerId: options.providerId,
       capability,
-      failure: makeFailure(options, capability, cause, reason, category),
+      failure: makeFailure(options, capability, parsedCause, reason, category),
       reason,
-      cause,
+      cause: parsedCause,
     })
   },
   fromReason: (capability, reason, category) => {
@@ -322,8 +332,17 @@ export const makeAgentProviderOperationErrorFactory = (
     return AgentProviderOperationError.make({
       providerId: options.providerId,
       capability,
-      failure: makeFailure(options, capability, undefined, boundedReason, category),
+      failure: makeFailure(options, capability, null, boundedReason, category),
       reason: boundedReason,
     })
   },
 })
+
+const parseAgentProviderCause = (value: ProviderFailureInput): AgentProviderCause => {
+  if (Predicate.isError(value) || Predicate.isNull(value)) return value
+  if (isDiagnosticCause(value)) return value
+  return { reason: "Unknown provider failure" }
+}
+
+const isDiagnosticCause = (value: ProviderFailureInput): value is AgentProviderDiagnosticCause =>
+  Predicate.isReadonlyObject(value)

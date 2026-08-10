@@ -1,4 +1,4 @@
-import type { CoreFileOpenIntent } from "@diffdash/core"
+import { CoreAbsolutePath, type CoreFileOpenIntent, type CoreWebUrl } from "@diffdash/core"
 import { Match } from "effect"
 
 import { resolveContainedRepositoryPath } from "../electron-policy"
@@ -7,8 +7,8 @@ import { resolveContainedRepositoryPath } from "../electron-policy"
 export const openCoreFileIntent = (
   intent: CoreFileOpenIntent,
   capabilities: {
-    readonly openExternal: (url: string) => Promise<unknown>
-    readonly openLocal: (path: string) => Promise<void>
+    readonly openExternal: (url: CoreWebUrl) => Promise<boolean>
+    readonly openLocal: (path: CoreAbsolutePath) => Promise<void>
   },
 ): Promise<void> =>
   Match.valueTags(intent, {
@@ -16,5 +16,7 @@ export const openCoreFileIntent = (
       await capabilities.openExternal(url)
     },
     local: ({ rootPath, filePath }) =>
-      capabilities.openLocal(resolveContainedRepositoryPath(rootPath, filePath)),
+      capabilities.openLocal(
+        CoreAbsolutePath.make(resolveContainedRepositoryPath(rootPath, filePath)),
+      ),
   })

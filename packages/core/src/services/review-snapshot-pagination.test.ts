@@ -2,6 +2,8 @@ import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { ChangedFile } from "@diffdash/domain/git-provider"
 import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
 import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   makeReviewSnapshotId,
   ReviewDiffIdentity,
@@ -24,19 +26,16 @@ import {
   searchReviewSnapshot,
 } from "./review-snapshot-pagination"
 
-const runSearchReviewSnapshot = (...args: Parameters<typeof searchReviewSnapshot>) =>
-  Effect.runSync(searchReviewSnapshot(...args))
-
 const makeSnapshot = (rawDiff: string) => {
   const parsedDiff = parseUnifiedDiff(rawDiff)
   const reviewKey = ReviewKey.make("local:pagination")
   const baseRevision = ReviewRevision.make("base")
   const headRevision = ReviewRevision.make("head")
   const diff = LocalReviewDiff.make({
-    rootPath: "/repo",
+    rootPath: RepositoryCheckoutPath.make("/repo"),
     baseSha: baseRevision,
     headSha: headRevision,
-    diffHash: "pagination-diff",
+    diffHash: ReviewDiffIdentity.make("pagination-diff"),
     diff: rawDiff,
     fetchedAt: "2026-07-19T00:00:00.000Z",
   })
@@ -53,7 +52,7 @@ const makeSnapshot = (rawDiff: string) => {
     detail: LocalReviewDetail.make({
       rootPath: diff.rootPath,
       repoName: "repo",
-      branchName: "feature/pages",
+      branchName: RepositoryComparisonRef.make("feature/pages"),
       baseSha: diff.baseSha,
       headSha: diff.headSha,
       diffHash: diff.diffHash,
@@ -196,54 +195,56 @@ describe("review snapshot pagination", () => {
     )
   })
 
-  it("searches unloaded files and paginates revision-keyed matches", () => {
-    const snapshot = makeSnapshot(threeFileDiff)
-    const firstFileId = snapshot.parsedDiff.files[0]?.fileId
-    expect(firstFileId).toBeDefined()
-    if (firstFileId === undefined) return
-    const loadedPage = paginateReviewSnapshot(
-      snapshot,
-      ReviewSnapshotPageRequest.make({
-        snapshotId: snapshot.snapshotId,
-        cursor: null,
-        fileIds: [firstFileId],
-      }),
-      1_000_000,
-    )
-    expect(loadedPage["_tag"]).toBe("available")
+  it.effect("searches unloaded files and paginates revision-keyed matches", () =>
+    Effect.gen(function* () {
+      const snapshot = makeSnapshot(threeFileDiff)
+      const firstFileId = snapshot.parsedDiff.files[0]?.fileId
+      expect(firstFileId).toBeDefined()
+      if (firstFileId === undefined) return
+      const loadedPage = paginateReviewSnapshot(
+        snapshot,
+        ReviewSnapshotPageRequest.make({
+          snapshotId: snapshot.snapshotId,
+          cursor: null,
+          fileIds: [firstFileId],
+        }),
+        1_000_000,
+      )
+      expect(loadedPage["_tag"]).toBe("available")
 
-    const firstSearch = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "unloaded sentinel",
-        cursor: null,
-        limit: 1,
-      }),
-      256_000,
-    )
-    expect(firstSearch["_tag"]).toBe("available")
-    if (firstSearch["_tag"] !== "available") return
-    expect(firstSearch.totalMatches).toBe(2)
-    expect(firstSearch.matches[0]?.filePath).toBe("src/unloaded.ts")
-    expect(firstSearch.nextCursor).not.toBeNull()
-    if (firstSearch.nextCursor === null) return
+      const firstSearch = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "unloaded sentinel",
+          cursor: null,
+          limit: 1,
+        }),
+        256_000,
+      )
+      expect(firstSearch["_tag"]).toBe("available")
+      if (firstSearch["_tag"] !== "available") return
+      expect(firstSearch.totalMatches).toBe(2)
+      expect(firstSearch.matches[0]?.filePath).toBe("src/unloaded.ts")
+      expect(firstSearch.nextCursor).not.toBeNull()
+      if (firstSearch.nextCursor === null) return
 
-    const secondSearch = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "unloaded sentinel",
-        cursor: firstSearch.nextCursor,
-        limit: 1,
-      }),
-      256_000,
-    )
-    expect(secondSearch["_tag"]).toBe("available")
-    if (secondSearch["_tag"] !== "available") throw new Error("Expected an available search page")
-    expect(secondSearch.matches[0]?.filePath).toBe("src/unloaded.ts")
-    expect(secondSearch.nextCursor).toBeNull()
-  })
+      const secondSearch = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "unloaded sentinel",
+          cursor: firstSearch.nextCursor,
+          limit: 1,
+        }),
+        256_000,
+      )
+      expect(secondSearch["_tag"]).toBe("available")
+      if (secondSearch["_tag"] !== "available") throw new Error("Expected an available search page")
+      expect(secondSearch.matches[0]?.filePath).toBe("src/unloaded.ts")
+      expect(secondSearch.nextCursor).toBeNull()
+    }),
+  )
 
   it.effect("returns a typed domain failure when one search result exceeds the budget", () =>
     Effect.gen(function* () {
@@ -264,100 +265,106 @@ describe("review snapshot pagination", () => {
     }),
   )
 
-  it("rotates search results forward from a file viewport anchor", () => {
-    const snapshot = makeSnapshot(threeFileDiff)
-    const secondFile = snapshot.parsedDiff.files[1]
-    expect(secondFile).toBeDefined()
-    if (secondFile === undefined) return
+  it.effect("rotates search results forward from a file viewport anchor", () =>
+    Effect.gen(function* () {
+      const snapshot = makeSnapshot(threeFileDiff)
+      const secondFile = snapshot.parsedDiff.files[1]
+      expect(secondFile).toBeDefined()
+      if (secondFile === undefined) return
 
-    const fromSecondFile = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "needle",
-        cursor: null,
-        limit: 10,
-        anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId }),
-      }),
-      256_000,
-    )
-    expect(fromSecondFile["_tag"]).toBe("available")
-    if (fromSecondFile["_tag"] !== "available") return
-    expect(fromSecondFile.matches.map((match) => match.filePath)).toEqual([
-      "src/second.ts",
-      "src/first.ts",
-    ])
-  })
-
-  it("rejects an invalid file anchor even when the query has no matches", () => {
-    const snapshot = makeSnapshot(threeFileDiff)
-    const response = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "absent search value",
-        cursor: null,
-        limit: 10,
-        anchor: ReviewSnapshotSearchFileAnchor.make({
-          fileId: ReviewFileId.make("missing-file"),
+      const fromSecondFile = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "needle",
+          cursor: null,
+          limit: 10,
+          anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId }),
         }),
-      }),
-      256_000,
-    )
+        256_000,
+      )
+      expect(fromSecondFile["_tag"]).toBe("available")
+      if (fromSecondFile["_tag"] !== "available") return
+      expect(fromSecondFile.matches.map((match) => match.filePath)).toEqual([
+        "src/second.ts",
+        "src/first.ts",
+      ])
+    }),
+  )
 
-    expect(response["_tag"]).toBe("expired")
-  })
+  it.effect("rejects an invalid file anchor even when the query has no matches", () =>
+    Effect.gen(function* () {
+      const snapshot = makeSnapshot(threeFileDiff)
+      const response = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "absent search value",
+          cursor: null,
+          limit: 10,
+          anchor: ReviewSnapshotSearchFileAnchor.make({
+            fileId: ReviewFileId.make("missing-file"),
+          }),
+        }),
+        256_000,
+      )
 
-  it("binds continuation cursors to the original file anchor", () => {
-    const snapshot = makeSnapshot(threeFileDiff)
-    const firstFile = snapshot.parsedDiff.files[0]
-    const secondFile = snapshot.parsedDiff.files[1]
-    expect(firstFile).toBeDefined()
-    expect(secondFile).toBeDefined()
-    if (firstFile === undefined || secondFile === undefined) return
-    const anchor = ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId })
-    const firstPage = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "needle",
-        cursor: null,
-        limit: 1,
-        anchor,
-      }),
-      256_000,
-    )
-    expect(firstPage["_tag"]).toBe("available")
-    if (firstPage["_tag"] !== "available" || firstPage.nextCursor === null) {
-      throw new Error("Expected an anchored continuation cursor")
-    }
+      expect(response["_tag"]).toBe("expired")
+    }),
+  )
 
-    const continuation = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "needle",
-        cursor: firstPage.nextCursor,
-        limit: 1,
-        anchor,
-      }),
-      256_000,
-    )
-    expect(continuation["_tag"]).toBe("available")
-    if (continuation["_tag"] !== "available") return
-    expect(continuation.matches[0]?.filePath).toBe("src/first.ts")
+  it.effect("binds continuation cursors to the original file anchor", () =>
+    Effect.gen(function* () {
+      const snapshot = makeSnapshot(threeFileDiff)
+      const firstFile = snapshot.parsedDiff.files[0]
+      const secondFile = snapshot.parsedDiff.files[1]
+      expect(firstFile).toBeDefined()
+      expect(secondFile).toBeDefined()
+      if (firstFile === undefined || secondFile === undefined) return
+      const anchor = ReviewSnapshotSearchFileAnchor.make({ fileId: secondFile.fileId })
+      const firstPage = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "needle",
+          cursor: null,
+          limit: 1,
+          anchor,
+        }),
+        256_000,
+      )
+      expect(firstPage["_tag"]).toBe("available")
+      if (firstPage["_tag"] !== "available" || firstPage.nextCursor === null) {
+        throw new Error("Expected an anchored continuation cursor")
+      }
 
-    const changedAnchor = runSearchReviewSnapshot(
-      snapshot,
-      ReviewSnapshotSearchRequest.make({
-        snapshotId: snapshot.snapshotId,
-        query: "needle",
-        cursor: firstPage.nextCursor,
-        limit: 1,
-        anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: firstFile.fileId }),
-      }),
-      256_000,
-    )
-    expect(changedAnchor["_tag"]).toBe("expired")
-  })
+      const continuation = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "needle",
+          cursor: firstPage.nextCursor,
+          limit: 1,
+          anchor,
+        }),
+        256_000,
+      )
+      expect(continuation["_tag"]).toBe("available")
+      if (continuation["_tag"] !== "available") return
+      expect(continuation.matches[0]?.filePath).toBe("src/first.ts")
+
+      const changedAnchor = yield* searchReviewSnapshot(
+        snapshot,
+        ReviewSnapshotSearchRequest.make({
+          snapshotId: snapshot.snapshotId,
+          query: "needle",
+          cursor: firstPage.nextCursor,
+          limit: 1,
+          anchor: ReviewSnapshotSearchFileAnchor.make({ fileId: firstFile.fileId }),
+        }),
+        256_000,
+      )
+      expect(changedAnchor["_tag"]).toBe("expired")
+    }),
+  )
 })

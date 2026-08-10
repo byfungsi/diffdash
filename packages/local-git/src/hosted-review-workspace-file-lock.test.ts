@@ -11,7 +11,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber } from "effect"
+import { Cause, Deferred, Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
@@ -209,6 +209,38 @@ describe("withFileLock", () => {
       expect(error).toMatchObject({ code: "lock", operation: "lock.claim.write" })
       expect(existsSync(lockPath)).toBe(false)
       expect(claimFiles(lockPath)).toEqual([])
+    }),
+  )
+
+  it.effect("preserves operation and lock-release causes when both fail", () =>
+    Effect.gen(function* () {
+      const { filesystem, lockPath } = yield* lockFixture
+      const operationFailure = new Error("operation failed")
+      const lock = makeFileLock({
+        ...nodeFileLockOperations,
+        remove: (path) =>
+          path === lockPath
+            ? Effect.fail(FileLockOperationError.make({ cause: new Error("lock release failed") }))
+            : nodeFileLockOperations.remove(path),
+      })
+
+      const cause = yield* lock(filesystem, lockPath, () => Effect.fail(operationFailure)).pipe(
+        Effect.sandbox,
+        Effect.flip,
+      )
+
+      expect(cause.reasons).toHaveLength(2)
+      expect(Cause.pretty(cause)).toContain("operation failed")
+      expect(
+        cause.reasons.some(
+          (reason) =>
+            Cause.isFailReason(reason) &&
+            typeof reason.error === "object" &&
+            reason.error !== null &&
+            "operation" in reason.error &&
+            reason.error.operation === "lock.release",
+        ),
+      ).toBe(true)
     }),
   )
 

@@ -1,5 +1,6 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Sidebar states use the project-standard tagged-union discriminant. */
 import type { ReviewThreadDetails, ReviewThreadId } from "@diffdash/domain/review-thread"
+import { Match } from "effect"
 import { Loader2, X } from "lucide-react"
 import { type ReactNode, type RefObject, useEffect, useEffectEvent, useRef } from "react"
 import { Badge } from "@/shared/ui/badge"
@@ -46,7 +47,8 @@ export function ReviewThreadListPane({
   const count = controller.details.length
 
   useEffect(() => {
-    if (state._tag !== "list") return undefined
+    if (!Match.valueTags(state, { list: () => true, collapsed: () => false, detail: () => false }))
+      return undefined
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return
       event.preventDefault()
@@ -54,7 +56,7 @@ export function ReviewThreadListPane({
     }
     window.addEventListener("keydown", closeOnEscape)
     return () => window.removeEventListener("keydown", closeOnEscape)
-  }, [onCollapse, state._tag])
+  }, [onCollapse, state])
 
   return (
     <aside
@@ -99,10 +101,14 @@ export function ReviewThreadListPane({
         <div data-review-thread-items>
           {controller.details.map((details) => {
             const { thread } = details
-            const anchor = thread.currentAnchor ?? thread.originalAnchor
+            const anchor = thread.displayAnchor
             const navigable = navigableThreadIds.has(thread.id)
             const previousRevision = reviewThreadIsPreviousRevision(thread)
-            const selected = state._tag === "detail" && state.threadId === thread.id
+            const selected = Match.valueTags(state, {
+              detail: ({ threadId }) => threadId === thread.id,
+              collapsed: () => false,
+              list: () => false,
+            })
             const initialMessage = details.messages[0]
             return (
               <div
@@ -128,19 +134,31 @@ export function ReviewThreadListPane({
                 >
                   <span className="flex min-w-0 items-center gap-2 text-xs">
                     <MiddleTruncatedText value={anchor.filePath} className="font-mono" />
-                    {thread.anchorStatus !== "active" || previousRevision || !navigable ? (
+                    {!Match.valueTags(thread.currentAnchor, {
+                      Active: () => true,
+                      Outdated: () => false,
+                      Unresolved: () => false,
+                    }) ||
+                    previousRevision ||
+                    !navigable ? (
                       <span className="text-review-sidebar-muted shrink-0">
-                        {thread.anchorStatus !== "active"
-                          ? fallbackThreadLabel(details)
-                          : previousRevision
-                            ? "Previous revision"
-                            : fallbackThreadLabel(details)}
+                        {Match.valueTags(thread.currentAnchor, {
+                          Active: () =>
+                            previousRevision ? "Previous revision" : fallbackThreadLabel(details),
+                          Outdated: () => fallbackThreadLabel(details),
+                          Unresolved: () => fallbackThreadLabel(details),
+                        })}
                       </span>
                     ) : null}
                   </span>
                   {initialMessage === undefined ? null : (
                     <span className="text-review-sidebar-muted mt-1 block truncate text-caption">
-                      {initialMessage.bodyMarkdown}
+                      {Match.valueTags(initialMessage, {
+                        User: ({ bodyMarkdown }) => bodyMarkdown,
+                        Completed: ({ bodyMarkdown }) => bodyMarkdown,
+                        Pending: () => "Agent response",
+                        Failed: () => "Agent response",
+                      })}
                     </span>
                   )}
                 </button>
@@ -176,15 +194,16 @@ export function ReviewThreadDetailPane({
   readonly onGoToDiff: (details: ReviewThreadDetails) => void
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const selectedThreadId = state._tag === "detail" ? state.threadId : null
+  const selectedThreadId = Match.valueTags(state, {
+    detail: ({ threadId }) => threadId,
+    collapsed: () => null,
+    list: () => null,
+  })
   const selectedDetails =
-    state._tag === "detail"
-      ? (controller.details.find((details) => details.thread.id === state.threadId) ?? null)
-      : null
-  const selectedAnchor =
-    selectedDetails === null
+    selectedThreadId === null
       ? null
-      : (selectedDetails.thread.currentAnchor ?? selectedDetails.thread.originalAnchor)
+      : (controller.details.find((details) => details.thread.id === selectedThreadId) ?? null)
+  const selectedAnchor = selectedDetails === null ? null : selectedDetails.thread.displayAnchor
   const closeDetail = (threadId: ReviewThreadId) => {
     onClose(threadId)
     window.requestAnimationFrame(() => buttonRefs.current.get(threadId)?.focus())
@@ -207,7 +226,7 @@ export function ReviewThreadDetailPane({
     }
   }, [selectedDetailAvailable, selectedThreadId])
 
-  if (state._tag !== "detail" || selectedDetails === null || selectedAnchor === null) return null
+  if (selectedThreadId === null || selectedDetails === null || selectedAnchor === null) return null
 
   return (
     <aside
@@ -227,7 +246,7 @@ export function ReviewThreadDetailPane({
             size="icon-sm"
             variant="ghost"
             aria-label="Close thread details"
-            onClick={() => closeDetail(state.threadId)}
+            onClick={() => closeDetail(selectedThreadId)}
           >
             <X />
           </Button>
@@ -251,11 +270,19 @@ export function ReviewThreadDetailPane({
               Previous revision
             </Badge>
           ) : null}
-          {selectedDetails.thread.anchorStatus === "active" ? null : (
-            <Badge variant="outline" className="h-5 px-1.5 text-caption">
-              {fallbackThreadLabel(selectedDetails)}
-            </Badge>
-          )}
+          {Match.valueTags(selectedDetails.thread.currentAnchor, {
+            Active: () => null,
+            Outdated: () => (
+              <Badge variant="outline" className="h-5 px-1.5 text-caption">
+                {fallbackThreadLabel(selectedDetails)}
+              </Badge>
+            ),
+            Unresolved: () => (
+              <Badge variant="outline" className="h-5 px-1.5 text-caption">
+                {fallbackThreadLabel(selectedDetails)}
+              </Badge>
+            ),
+          })}
         </div>
       </header>
       <ReviewThreadPanel
@@ -274,30 +301,5 @@ export function ReviewThreadDetailPane({
         onRefresh={controller.refreshThread}
       />
     </aside>
-  )
-}
-
-/** Standalone thread-list composition retained for isolated list rendering and tests. */
-export function ReviewThreadSidebar({
-  controller,
-  navigableThreadIds,
-  state,
-  onStateChange,
-}: {
-  readonly controller: ReviewThreadsController
-  readonly navigableThreadIds: ReadonlySet<ReviewThreadId>
-  readonly state: ReviewThreadSidebarState
-  readonly onStateChange: (state: ReviewThreadSidebarState) => void
-}) {
-  const buttonRefs = useRef(new Map<ReviewThreadId, HTMLButtonElement>())
-  return (
-    <ReviewThreadListPane
-      buttonRefs={buttonRefs}
-      controller={controller}
-      navigableThreadIds={navigableThreadIds}
-      state={state}
-      onCollapse={() => onStateChange({ _tag: "collapsed" })}
-      onOpenDetail={(threadId) => onStateChange({ _tag: "detail", threadId })}
-    />
   )
 }

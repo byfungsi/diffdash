@@ -18,6 +18,10 @@
       "dependsOn": ["^build"],
       "outputs": ["out/**"]
     },
+    "@diffdash/desktop#build:e2e": {
+      "dependsOn": ["^build"],
+      "outputs": ["out/**"]
+    },
     "@diffdash/web#build": {
       "outputs": ["dist/**"]
     },
@@ -71,7 +75,7 @@
       "persistent": true
     },
     "e2e": {
-      "dependsOn": ["@diffdash/desktop#build"],
+      "dependsOn": ["@diffdash/desktop#build:e2e"],
       "cache": false,
       "passThroughEnv": ["DEBUG"]
     },
@@ -104,12 +108,6 @@
       "cache": false
     },
     "dist:win": {
-      "cache": false
-    },
-    "native:electron": {
-      "cache": false
-    },
-    "native:node": {
       "cache": false
     }
   }

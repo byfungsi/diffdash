@@ -9,7 +9,7 @@ providers behind provider-neutral Git and agent contracts.
 - Electron via `electron-vite`
 - React + TypeScript + Vite
 - Effect for main-process service boundaries
-- SQLite via `better-sqlite3`
+- Effect SQL with `node:sqlite` and `bun:sqlite` runtime adapters
 - Tailwind CSS + shadcn/ui for the renderer
 - oxlint recommended categories with React, React performance, accessibility, import, promise, node, and React Doctor rules
 - Biome for formatting

@@ -116,6 +116,7 @@ const fixtureFile = (() => {
     path: file.path,
     oldPath: file.oldPath,
     status: file.status,
+    visibility: file.visibility,
     additions: file.additions,
     deletions: file.deletions,
     hunkCount: file.hunks.length,
