@@ -4,7 +4,7 @@ import { Schema } from "effect"
 export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedReviewWorkspacePoolError>()(
   "HostedReviewWorkspacePoolError",
   {
-    code: Schema.Literal(
+    code: Schema.Literals([
       "link-required",
       "capacity",
       "filesystem",
@@ -16,10 +16,10 @@ export class HostedReviewWorkspacePoolError extends Schema.TaggedError<HostedRev
       "no-common-ancestor",
       "revision-changed",
       "cleanup",
-    ),
+    ]),
     operation: Schema.String,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
@@ -28,9 +28,16 @@ export const poolError = (
   code: HostedReviewWorkspacePoolError["code"],
   operation: string,
   reason: string,
-  cause: unknown,
+  cause: Schema.ErrorInstance["Type"],
 ) => HostedReviewWorkspacePoolError.make({ code, operation, reason, cause })
 
+/** Keeps infrastructure failures as Error instances at the typed error boundary. */
+export const toError = <A>(cause: A): Error =>
+  Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))
+
 /** Narrows Node failures by their platform error code. */
-export const isNodeError = (cause: unknown, code: string): cause is NodeJS.ErrnoException =>
-  cause instanceof Error && "code" in cause && cause.code === code
+export const isNodeError = (
+  cause: Schema.ErrorInstance["Type"],
+  code: string,
+): cause is NodeJS.ErrnoException =>
+  Schema.is(Schema.Struct({ code: Schema.String }))(cause) && cause.code === code

@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import type { DemoTimeline } from "@diffdash/demo/demo-api"
-import type { DiffDashApi } from "@diffdash/protocol/api"
+import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 
 declare global {
   interface ImportMetaEnv {
@@ -9,7 +9,7 @@ declare global {
   }
 
   interface Window {
-    readonly diffDash: DiffDashApi
+    readonly diffDash: DiffDashBridgeApi
     readonly __diffDashDemo: DemoTimeline
   }
 }

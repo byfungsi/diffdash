@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 
 import { HostedRepositoryLocator } from "./git-provider"
-import { Repo } from "./repository"
+import { Repo, RepositoryCheckoutPath } from "./repository"
 import { ReviewProjectId } from "./review-identity"
 import { ReviewThreadTarget } from "./review-thread"
 
@@ -28,19 +28,24 @@ export class ProjectOpened extends Schema.TaggedClass<ProjectOpened>()("opened",
 export class ProjectRemoteSelectionRequired extends Schema.TaggedClass<ProjectRemoteSelectionRequired>()(
   "remoteSelectionRequired",
   {
-    rootPath: Schema.String,
-    candidates: Schema.Array(ProjectRemoteCandidate).pipe(Schema.minItems(2)),
+    rootPath: RepositoryCheckoutPath,
+    candidates: Schema.Array(ProjectRemoteCandidate).pipe(Schema.check(Schema.isMinLength(2))),
   },
 ) {}
 
 /** Canonical result of opening a local project in the main process. */
-export const ProjectOpenResult = Schema.Union(ProjectOpened, ProjectRemoteSelectionRequired)
+export const ProjectOpenResult = Schema.Union([ProjectOpened, ProjectRemoteSelectionRequired])
 
 /** Canonical result of opening a local project in the main process. */
 export type ProjectOpenResult = typeof ProjectOpenResult.Type
 
 /** Top-level project workspace section selected by the user. */
-export const ProjectWorkspaceRibbon = Schema.Literal("reviews", "files", "walkthrough", "threads")
+export const ProjectWorkspaceRibbon = Schema.Literals([
+  "reviews",
+  "files",
+  "walkthrough",
+  "threads",
+])
 
 /** Top-level project workspace section selected by the user. */
 export type ProjectWorkspaceRibbon = typeof ProjectWorkspaceRibbon.Type

@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest"
 
-import { OpenBranchDiffCommand, OpenWorkingTreeCommand } from "@diffdash/protocol/cli-navigation"
+import {
+  CliGitRevision,
+  CliRepositoryPath,
+  OpenBranchDiffCommand,
+  OpenWorkingTreeCommand,
+} from "@diffdash/protocol/cli-navigation"
 import { createNavigationCommandQueue } from "./navigation-command-queue"
 
 describe("createNavigationCommandQueue", () => {
   it("retains pre-renderer commands until a peeked batch is acknowledged", () => {
     const queue = createNavigationCommandQueue()
-    const initialCommand = OpenWorkingTreeCommand.make({ localPath: "/repo" })
+    const initialCommand = OpenWorkingTreeCommand.make({
+      localPath: CliRepositoryPath.make("/repo"),
+    })
     const preReadySecondInstanceCommand = OpenBranchDiffCommand.make({
-      localPath: "/repo",
-      branchName: "main",
+      localPath: CliRepositoryPath.make("/repo"),
+      branchName: CliGitRevision.make("main"),
     })
 
     queue.enqueue(initialCommand)
@@ -25,7 +32,9 @@ describe("createNavigationCommandQueue", () => {
 
   it("retains commands arriving after an earlier drain", () => {
     const queue = createNavigationCommandQueue()
-    const command = OpenWorkingTreeCommand.make({ localPath: "/later" })
+    const command = OpenWorkingTreeCommand.make({
+      localPath: CliRepositoryPath.make("/later"),
+    })
 
     expect(queue.peek()).toEqual([])
     queue.enqueue(command)
@@ -35,14 +44,22 @@ describe("createNavigationCommandQueue", () => {
 
   it("bounds pending commands and each transactional drain", () => {
     const queue = createNavigationCommandQueue({ maxPending: 3, maxDrain: 2 })
-    const first = OpenWorkingTreeCommand.make({ localPath: "/one" })
-    const second = OpenWorkingTreeCommand.make({ localPath: "/two" })
-    const third = OpenWorkingTreeCommand.make({ localPath: "/three" })
+    const first = OpenWorkingTreeCommand.make({
+      localPath: CliRepositoryPath.make("/one"),
+    })
+    const second = OpenWorkingTreeCommand.make({
+      localPath: CliRepositoryPath.make("/two"),
+    })
+    const third = OpenWorkingTreeCommand.make({
+      localPath: CliRepositoryPath.make("/three"),
+    })
 
     expect(queue.enqueue(first)).toBe(true)
     expect(queue.enqueue(second)).toBe(true)
     expect(queue.enqueue(third)).toBe(true)
-    expect(queue.enqueue(OpenWorkingTreeCommand.make({ localPath: "/four" }))).toBe(false)
+    expect(
+      queue.enqueue(OpenWorkingTreeCommand.make({ localPath: CliRepositoryPath.make("/four") })),
+    ).toBe(false)
     expect(queue.peek()).toEqual([first, second])
     queue.acknowledge(2)
     expect(queue.peek()).toEqual([third])

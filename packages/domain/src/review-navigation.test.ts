@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Either, Schema } from "effect"
+import { Result, Schema } from "effect"
 
 import {
   ReviewFileId,
@@ -70,31 +70,31 @@ describe("review navigation schema", () => {
   })
 
   it("rejects unknown location versions", () => {
-    const result = Schema.decodeUnknownEither(ReviewLocationV1)({
+    const result = Schema.decodeUnknownResult(ReviewLocationV1)({
       version: 2,
       snapshot,
       target: FileReviewNavigationTarget.make({ fileId }),
     })
 
-    expect(Either.isLeft(result)).toBe(true)
+    expect(Result.isFailure(result)).toBe(true)
   })
 
   it("rejects invalid coordinates and reversed same-hunk ranges", () => {
-    const invalidPoint = Schema.decodeUnknownEither(ReviewLinePoint)({
+    const invalidPoint = Schema.decodeUnknownResult(ReviewLinePoint)({
       hunkId,
       hunkFingerprint,
       side: "new",
       lineNumber: -1,
     })
-    const reversedRange = Schema.decodeUnknownEither(RangeReviewNavigationTarget)({
+    const reversedRange = Schema.decodeUnknownResult(RangeReviewNavigationTarget)({
       _tag: "range",
       fileId,
       start: { ...point, lineNumber: 20 },
       end: { ...point, lineNumber: 10 },
     })
 
-    expect(Either.isLeft(invalidPoint)).toBe(true)
-    expect(Either.isLeft(reversedRange)).toBe(true)
+    expect(Result.isFailure(invalidPoint)).toBe(true)
+    expect(Result.isFailure(reversedRange)).toBe(true)
   })
 
   it("rejects non-JSON and oversized extension payloads", () => {
@@ -105,16 +105,16 @@ describe("review navigation schema", () => {
       targetId: "finding-1",
       payloadVersion: 1,
     } as const
-    const malformed = Schema.decodeUnknownEither(ExtensionReviewNavigationTarget)({
+    const malformed = Schema.decodeUnknownResult(ExtensionReviewNavigationTarget)({
       ...base,
       payload: { callback: () => undefined },
     })
-    const oversized = Schema.decodeUnknownEither(ReviewNavigationTarget)({
+    const oversized = Schema.decodeUnknownResult(ReviewNavigationTarget)({
       ...base,
       payload: "x".repeat(REVIEW_EXTENSION_TARGET_MAX_BYTES + 1),
     })
 
-    expect(Either.isLeft(malformed)).toBe(true)
-    expect(Either.isLeft(oversized)).toBe(true)
+    expect(Result.isFailure(malformed)).toBe(true)
+    expect(Result.isFailure(oversized)).toBe(true)
   })
 })

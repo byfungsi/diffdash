@@ -1,0 +1,30 @@
+{
+  "name": "@diffdash/mcp",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/mcp-server.ts",
+    "./port": "./src/port.ts",
+    "./utf8-budget": "./src/utf8-budget.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "oxlint src --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "effect": "catalog:",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,7 +1,10 @@
 import {
+  ReleaseArtifactMatrix,
+  ReleaseCatalog,
+} from "../../packages/download-worker/src/release-catalog.js"
+import {
   normalizePublicBaseUrl,
   releaseVersionFromTag,
-  selectReleaseArtifacts,
   validateReleaseAssetNames,
   validateUpdaterMetadata,
 } from "./release-policy.mjs"
@@ -42,6 +45,7 @@ export const verifyPublicReleaseOnce = async ({ tag, baseUrl, fetchImpl = fetch 
   const origin = normalizePublicBaseUrl(baseUrl)
   const version = releaseVersionFromTag(tag)
   const stable = await fetchJson(fetchImpl, `${origin}/stable.json`)
+  ReleaseCatalog.decodeStableManifest(stable)
   assertReleaseIdentity(stable, tag, version, "stable.json")
 
   const latest = await fetchJson(fetchImpl, `${origin}/latest.json`)
@@ -55,10 +59,7 @@ export const verifyPublicReleaseOnce = async ({ tag, baseUrl, fetchImpl = fetch 
     throw new Error("Root and versioned latest.json asset manifests differ.")
   }
 
-  const selected = selectReleaseArtifacts(
-    [...assets.map((asset) => asset.name), "latest.json"],
-    tag,
-  )
+  const selected = ReleaseArtifactMatrix.create({ tag, assets }).roles
   const provenanceAsset = assets.find((asset) => asset.name === "release-provenance.json")
   const provenance =
     provenanceAsset === undefined ? null : await fetchJson(fetchImpl, provenanceAsset.url)
@@ -114,23 +115,13 @@ export const verifyPublicReleaseOnce = async ({ tag, baseUrl, fetchImpl = fetch 
 }
 
 const validateLatestAssets = (latest, tag, origin) => {
-  if (!Array.isArray(latest.assets)) throw new Error("latest.json is missing its asset manifest.")
-  const assets = latest.assets.toSorted((left, right) => left.name.localeCompare(right.name))
+  const manifest = ReleaseCatalog.decodeVersionedLatestManifest(latest, {
+    expectedTag: tag,
+    publicOrigin: origin,
+  })
+  const assets = manifest.assets
   validateReleaseAssetNames([...assets.map((asset) => asset.name), "latest.json"], tag)
-  for (const asset of assets) {
-    if (
-      typeof asset.name !== "string" ||
-      typeof asset.url !== "string" ||
-      typeof asset.size !== "number" ||
-      typeof asset.sha256 !== "string"
-    ) {
-      throw new Error("latest.json contains an invalid asset entry.")
-    }
-    const expectedUrl = `${origin}/releases/${tag}/${encodeURIComponent(asset.name)}`
-    if (asset.url !== expectedUrl) {
-      throw new Error(`latest.json has an unexpected URL for ${asset.name}.`)
-    }
-  }
+  ReleaseArtifactMatrix.create(manifest)
   return assets
 }
 

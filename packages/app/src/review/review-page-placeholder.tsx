@@ -4,6 +4,7 @@ import { type RefObject, useEffect, useEffectEvent, useLayoutEffect, useRef } fr
 import { Button } from "@/shared/ui/button"
 import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
+import { Match } from "effect"
 import type { ReviewSnapshotRefreshStatus } from "./review-snapshot-page-session"
 import { diffCardDomId } from "./viewed-file-viewport"
 
@@ -40,13 +41,24 @@ export const ReviewPagePlaceholder = ({
 
   useEffect(() => {
     const target = ref.current
-    if (target === null || loading || tooLarge || error !== null || snapshotRefresh._tag !== "idle")
+    if (
+      target === null ||
+      loading ||
+      tooLarge ||
+      error !== null ||
+      Match.valueTags(snapshotRefresh, {
+        idle: () => false,
+        refreshing: () => true,
+        failed: () => true,
+      })
+    )
       return undefined
-    if (typeof IntersectionObserver === "undefined") {
+    const IntersectionObserverConstructor = globalThis.IntersectionObserver
+    if (IntersectionObserverConstructor === undefined) {
       handleVisible()
       return undefined
     }
-    const observer = new IntersectionObserver(
+    const observer = new IntersectionObserverConstructor(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) handleVisible()
       },
@@ -58,15 +70,32 @@ export const ReviewPagePlaceholder = ({
 
   useLayoutEffect(() => {
     const element = ref.current
-    if (element === null || (!tooLarge && error === null && snapshotRefresh._tag !== "failed"))
+    if (
+      element === null ||
+      (!tooLarge &&
+        error === null &&
+        Match.valueTags(snapshotRefresh, {
+          failed: () => false,
+          idle: () => true,
+          refreshing: () => true,
+        }))
+    )
       return undefined
     element.tabIndex = -1
     return onFileAnchorChange(element, retryRef.current ?? element)
   }, [error, onFileAnchorChange, snapshotRefresh, tooLarge])
 
-  const refreshFailure = snapshotRefresh._tag === "failed" ? snapshotRefresh.message : null
+  const refreshFailure = Match.valueTags(snapshotRefresh, {
+    failed: ({ message }) => message,
+    idle: () => null,
+    refreshing: () => null,
+  })
   const displayedError = refreshFailure ?? error
-  const refreshing = snapshotRefresh._tag === "refreshing"
+  const refreshing = Match.valueTags(snapshotRefresh, {
+    refreshing: () => true,
+    idle: () => false,
+    failed: () => false,
+  })
 
   return (
     <section

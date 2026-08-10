@@ -1,14 +1,16 @@
-import { CoreMethod, type CoreFileOpenIntent } from "@diffdash/core"
+import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { transportError } from "@diffdash/protocol/transport-error"
 import { app, BrowserWindow, shell } from "electron"
 import { isAbsolute } from "node:path"
 import type { ApplicationRuntime } from "../../application-runtime"
-import { normalizeReviewFilePath, resolveContainedRepositoryPath } from "../../electron-policy"
+import type { DesktopHostConfiguration } from "../../desktop-host-configuration"
+import { normalizeReviewFilePath } from "../../electron-policy"
 import type { RendererSecurityPolicy } from "../../electron-policy"
 import { openLocalPath } from "../../file-opening"
-import { isHiddenE2EWindow, revealAppWindow } from "../../window-activation"
+import { openCoreFileIntent } from "../core-file-open-intent"
+import { revealAppWindow } from "../../window-activation"
 import { IpcControllerRegistry } from "./controller-registry"
 
 /** Defines navigation IPC handler implementations. */
@@ -20,23 +22,21 @@ export const defineNavigationHandlers = (
     readonly acknowledge: (count: number) => void
   },
   rendererSecurityPolicy: RendererSecurityPolicy,
+  configuration: DesktopHostConfiguration,
 ) => {
-  const openIntent = async (intent: CoreFileOpenIntent): Promise<void> => {
-    if ("url" in intent) {
-      await rendererSecurityPolicy.openExternalUrl(intent.url)
-      return
-    }
-    const targetPath = resolveContainedRepositoryPath(intent.rootPath, intent.filePath)
-    await openLocalPath((path) => shell.openPath(path), targetPath)
-  }
+  const openIntent = (intent: Parameters<typeof openCoreFileIntent>[0]): Promise<void> =>
+    openCoreFileIntent(intent, {
+      openExternal: (url) => rendererSecurityPolicy.openExternalUrl(url),
+      openLocal: (targetPath) => openLocalPath((path) => shell.openPath(path), targetPath),
+    })
 
   handlers.define(InvokeChannel.appActivateWindow, async (event): Promise<void> => {
     const targetWindow = BrowserWindow.fromWebContents(event.sender)
     if (targetWindow === null)
       throw transportError("WINDOW_UNAVAILABLE", "DiffDash window is unavailable.")
     revealAppWindow(targetWindow, {
-      hidden: isHiddenE2EWindow(),
-      platform: process.platform,
+      hidden: configuration.policies.hiddenWindow,
+      platform: configuration.application.platform,
       focusApplication: () => app.focus({ steal: true }),
     })
   })

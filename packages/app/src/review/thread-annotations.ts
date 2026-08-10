@@ -23,12 +23,8 @@ export const reviewThreadAnnotations = (
 ): DiffLineAnnotation<ReviewThreadAnnotation>[] => {
   const annotations: DiffLineAnnotation<ReviewThreadAnnotation>[] = []
   for (const item of details) {
-    const anchor = item.thread.currentAnchor
-    if (
-      anchor === null ||
-      item.thread.anchorStatus !== "active" ||
-      !lineAnchorIsInFile(anchor, file)
-    ) {
+    const anchor = item.thread.activeAnchor
+    if (anchor === null || !lineAnchorIsInFile(anchor, file)) {
       continue
     }
     const existingIndex = annotations.findIndex((annotation) =>

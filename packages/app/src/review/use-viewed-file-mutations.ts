@@ -1,9 +1,12 @@
+/* oxlint-disable eslint/no-underscore-dangle -- Renderer review variants use Effect-compatible _tag discriminants. */
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
+import { ReviewKey } from "@diffdash/domain/review-identity"
+import { Match } from "effect"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
 import type { ReviewSelectionProjection } from "./review-selection"
-import type { ReviewSourceOperations } from "./review-source-operations"
+import type { ReviewSourceOperations } from "./use-review-source-operations"
 import {
   type ViewedFileMutationCoordinator,
   type ViewedFileMutationSnapshot,
@@ -33,7 +36,9 @@ export const useViewedFileMutations = (
   selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>,
   operations: ReviewSourceOperations,
 ): ViewedFileMutationController => {
-  const initialExpanded = new Set(selection.inventory.map((file) => file.reviewKey))
+  const captureAnalytics = useCaptureAnalytics()
+  const inventory = selection.review.manifest.files
+  const initialExpanded = new Set(inventory.map((file) => file.reviewKey))
   const viewedRef = useRef<ReadonlySet<string>>(new Set())
   const expandedRef = useRef<ReadonlySet<string>>(initialExpanded)
   const [viewedFileKeys, setViewedFileKeys] = useState<ReadonlySet<string>>(new Set())
@@ -70,8 +75,7 @@ export const useViewedFileMutations = (
         setExpandedFileKeys(nextExpanded)
       },
       onError: (write, cause) => {
-        const path =
-          matchingInventoryFile(selection.inventory, write.reviewKey)?.path ?? write.reviewKey
+        const path = matchingInventoryFile(inventory, write.reviewKey)?.path ?? write.reviewKey
         setError(
           `${formatError(cause, `Could not save viewed state for ${path}`)} The viewed and expansion state was reverted; retry the action.`,
         )
@@ -82,13 +86,13 @@ export const useViewedFileMutations = (
 
   useEffect(() => {
     let cancelled = false
-    const expanded = new Set(selection.inventory.map((file) => file.reviewKey))
+    const expanded = new Set(inventory.map((file) => file.reviewKey))
     viewedRef.current = new Set()
     expandedRef.current = expanded
     setViewedFileKeys(new Set())
     setExpandedFileKeys(expanded)
     setError(null)
-    selection.inventory.forEach((file) => {
+    inventory.forEach((file) => {
       coordinator.replaceConfirmed(file.reviewKey, { viewed: false, expanded: true })
     })
 
@@ -97,13 +101,13 @@ export const useViewedFileMutations = (
         if (cancelled) return undefined
         const viewed = new Set(
           records.flatMap((record) => {
-            const file = matchingInventoryFile(selection.inventory, record.reviewKey)
+            const file = matchingInventoryFile(inventory, record.reviewKey)
             return file?.patchHash === record.patchHash ? [record.reviewKey] : []
           }),
         )
         viewedRef.current = viewed
         setViewedFileKeys(viewed)
-        selection.inventory.forEach((file) => {
+        inventory.forEach((file) => {
           coordinator.replaceConfirmed(file.reviewKey, {
             viewed: viewed.has(file.reviewKey),
             expanded: true,
@@ -121,28 +125,27 @@ export const useViewedFileMutations = (
     return () => {
       cancelled = true
     }
-  }, [coordinator, selection.inventory, selection.sourceKey])
+  }, [coordinator, inventory, selection.sourceKey])
 
   const setFileViewed = (reviewKey: string, viewed: boolean) => {
-    const file = matchingInventoryFile(selection.inventory, reviewKey)
+    const file = matchingInventoryFile(inventory, reviewKey)
     if (file === undefined) return
     const previous: ViewedFileMutationSnapshot = {
       viewed: viewedRef.current.has(reviewKey),
       expanded: expandedRef.current.has(reviewKey),
     }
     coordinator.submit({
-      write: { reviewKey, patchHash: file.patchHash, viewed },
+      write: { reviewKey: ReviewKey.make(reviewKey), patchHash: file.patchHash, viewed },
       previous,
       next: { viewed, expanded: !viewed },
     })
     captureAnalytics({
       event: "review_file_viewed",
-      reviewType:
-        selection.subject.kind === "hosted"
-          ? "pull_request"
-          : selection.subject.kind === "localDiff"
-            ? "local_diff"
-            : "repository_comparison",
+      reviewType: Match.valueTags(selection.review, {
+        hosted: () => "pull_request" as const,
+        local: () => "local_diff" as const,
+        repositoryComparison: () => "repository_comparison" as const,
+      }),
       viewed,
     })
   }

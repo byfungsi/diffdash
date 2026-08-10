@@ -1,14 +1,16 @@
 /* eslint-disable no-await-in-loop -- Card rendering and FFmpeg segments preserve authored order. */
 import { execFileSync } from "node:child_process"
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { copyFile, readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { chromium } from "playwright"
 
 import { decodeDemoManifest } from "./artifacts"
+import { DemoArtifactTransaction } from "./artifact-transaction"
 import { demoOutputRoot, demoVideoPackageRoot, demoWorkspaceRoot } from "./environment"
 import { DEMO_VIEWPORT, type CardCopy, type DemoRelease } from "./framework"
+import { escapeHtml } from "./html"
 import { probeMedia } from "./media"
-import { replaceGeneratedFiles, resolveContainedPath } from "./paths"
+import { resolveContainedPath } from "./paths"
 import { getStory } from "./stories"
 
 const width = DEMO_VIEWPORT.width
@@ -29,13 +31,15 @@ export const combineDemo = async (storyId: string) => {
   if (manifest.story !== story.id) throw new Error(`Manifest story mismatch: ${manifest.story}`)
   const expectedClips = story.clips.map(({ name }) => name)
   const manifestClips = manifest.clips.map(({ name }) => name)
-  if (!sameStrings(manifestClips, expectedClips)) {
+  if (
+    manifestClips.length !== expectedClips.length ||
+    !manifestClips.every((value, index) => value === expectedClips[index])
+  ) {
     throw new Error("Manifest clip order does not match the registered story")
   }
 
-  await mkdir(demoOutputRoot, { recursive: true })
-  const stagingDirectory = await mkdtemp(resolve(demoOutputRoot, `.${story.id}-combine-`))
-  try {
+  return DemoArtifactTransaction.run(demoOutputRoot, story.id, "combine", async (transaction) => {
+    const { stagingDirectory } = transaction
     const iconSource = `data:image/png;base64,${(
       await readFile(resolve(demoWorkspaceRoot, "packages/desktop/logo.png"))
     ).toString("base64")}`
@@ -172,29 +176,11 @@ export const combineDemo = async (storyId: string) => {
     }
     const stagedRelease = resolveContainedPath(stagingDirectory, "release.json")
     await writeFile(stagedRelease, `${JSON.stringify(release, null, 2)}\n`)
-    await replaceGeneratedFiles(
-      [
-        {
-          source: stagedPoster,
-          destination: resolveContainedPath(outputDirectory, release.poster),
-        },
-        {
-          source: stagedVideo,
-          destination: resolveContainedPath(outputDirectory, release.video),
-        },
-        {
-          source: stagedRelease,
-          destination: resolveContainedPath(outputDirectory, "release.json"),
-        },
-      ],
-      stagingDirectory,
-    )
+    await transaction.commit([release.poster, release.video, "release.json"])
     process.stdout.write(
       `[demo] combined ${resolveContainedPath(outputDirectory, videoName)} (${actualDuration.toFixed(1)}s)\n`,
     )
-  } finally {
-    await rm(stagingDirectory, { recursive: true, force: true })
-  }
+  })
 }
 
 /** Generates one self-contained chapter-card document using the bundled Inter font. */
@@ -234,18 +220,3 @@ const renderCards = async (
   }
   return paths
 }
-
-const escapeHtml = (value: string) =>
-  value.replace(/[&<>"']/gu, (character) => {
-    const entities: Readonly<Record<string, string>> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    }
-    return entities[character] ?? character
-  })
-
-const sameStrings = (left: readonly string[], right: readonly string[]) =>
-  left.length === right.length && left.every((value, index) => value === right[index])

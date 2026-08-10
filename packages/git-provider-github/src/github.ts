@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Predicate, Schema } from "effect"
 
 import {
   BranchRevision,
@@ -20,10 +20,16 @@ import {
   HostedReviewSummary,
   ProviderActor,
   ProviderRepositoryId,
+  RepositoryComparisonRef,
   RepositoryNamespace,
+  RepositoryRelativePath,
   ResolvedHostedRepository,
   ChangedFile,
+  DiagnosticOperation,
   ReviewCommit,
+  ReviewRevision,
+  WebUrl,
+  type DiffFileStatus,
   type GitProviderRegistration,
   type ReviewDecision,
 } from "@diffdash/git-provider"
@@ -38,6 +44,26 @@ const COMPLETE_DIFF_STDOUT = {
   maxBytes: 8_000_000,
   overflow: "error",
 } satisfies ProcessOutputPolicyInput
+
+const GitHubOperation = Schema.Literals([
+  "listAccessibleRepositories",
+  "getReview",
+  "getReviewDecision",
+  "resolveRepository",
+  "searchRepositories",
+  "listReviews",
+  "getReviewDiff.metadata",
+  "getReviewDiff",
+  "submitReviewDecision",
+  "repositoryUrl",
+  "fileUrl",
+  "bootstrapBareRepository",
+  "checkoutSpec",
+  "listSearchScopes.user",
+  "listSearchScopes.orgs",
+  "listAssignedReviews",
+])
+type GitHubOperation = typeof GitHubOperation.Type
 
 /** Configuration for one GitHub.com or GitHub Enterprise provider instance. */
 export interface GitHubProviderConfig {
@@ -76,33 +102,29 @@ export interface GitHubProviderRegistration extends GitProviderRegistration {
     readonly HostedReviewSummary[],
     GitProviderOperationError
   >
-  readonly checkoutSpecAtRevision: (
-    review: HostedReviewLocator,
-    revision: string,
-  ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>
 }
 
 /** A typed failure for malformed GitHub CLI JSON output. */
 export class GitHubCliParseError extends Schema.TaggedError<GitHubCliParseError>()(
   "GitHubCliParseError",
   {
-    operation: Schema.String,
+    operation: GitHubOperation,
     output: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
-const GhRepoOwnerJson = Schema.Union(
+const GhRepoOwnerJson = Schema.Union([
   Schema.String,
   Schema.Struct({ login: Schema.optional(Schema.String) }),
-)
+])
 const GhRepoJson = Schema.Struct({
   id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   nameWithOwner: Schema.optional(Schema.String),
   fullName: Schema.optional(Schema.String),
   owner: Schema.optional(GhRepoOwnerJson),
-  url: Schema.optional(Schema.String),
+  url: Schema.optional(WebUrl),
   description: Schema.optional(Schema.NullOr(Schema.String)),
   isPrivate: Schema.optional(Schema.Boolean),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
@@ -111,7 +133,7 @@ type GhRepoJson = typeof GhRepoJson.Type
 const GhResolvedRepositoryJson = Schema.Struct({
   id: Schema.String,
   nameWithOwner: Schema.String,
-  url: Schema.String,
+  url: WebUrl,
 })
 
 const GhActorJson = Schema.Struct({ login: Schema.String })
@@ -121,23 +143,22 @@ const GhPullRequestJson = Schema.Struct({
   body: Schema.optional(Schema.NullOr(Schema.String)),
   author: Schema.NullOr(GhActorJson),
   state: Schema.String,
-  url: Schema.String,
+  url: WebUrl,
   isDraft: Schema.Boolean,
-  baseRefName: Schema.String,
-  baseRefOid: Schema.optional(Schema.NullOr(Schema.String)),
-  headRefName: Schema.String,
-  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
+  baseRefName: BranchRevision.fields.name,
+  baseRefOid: Schema.optional(Schema.NullOr(ReviewRevision)),
+  headRefName: BranchRevision.fields.name,
+  headRefOid: Schema.optional(Schema.NullOr(ReviewRevision)),
   createdAt: Schema.optional(Schema.NullOr(Schema.String)),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 })
 type GhPullRequestJson = typeof GhPullRequestJson.Type
 
-const GhPullRequestDetailJson = Schema.extend(
-  GhPullRequestJson,
-  Schema.Struct({
+const GhPullRequestDetailJson = GhPullRequestJson.pipe(
+  Schema.fieldsAssign({
     files: Schema.Array(
       Schema.Struct({
-        path: Schema.String,
+        path: RepositoryRelativePath,
         additions: Schema.Number,
         deletions: Schema.Number,
         changeType: Schema.optional(Schema.String),
@@ -145,7 +166,7 @@ const GhPullRequestDetailJson = Schema.extend(
     ),
     commits: Schema.Array(
       Schema.Struct({
-        oid: Schema.String,
+        oid: ReviewRevision,
         messageHeadline: Schema.String,
         authoredDate: Schema.optional(Schema.NullOr(Schema.String)),
       }),
@@ -163,7 +184,7 @@ const GhViewerRepositoriesJson = Schema.Struct({
 })
 const GhSearchScopeJson = Schema.Struct({ login: Schema.String })
 const GhDiffMetadataJson = Schema.Struct({
-  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
+  headRefOid: Schema.optional(Schema.NullOr(ReviewRevision)),
 })
 const GhViewerApprovalJson = Schema.Struct({
   data: Schema.Struct({
@@ -185,9 +206,8 @@ const GhViewerApprovalJson = Schema.Struct({
     ),
   }),
 })
-const GhReviewRequestJson = Schema.extend(
-  GhPullRequestJson,
-  Schema.Struct({
+const GhReviewRequestJson = GhPullRequestJson.pipe(
+  Schema.fieldsAssign({
     repository: Schema.Struct({ name: Schema.String, owner: GhActorJson }),
   }),
 )
@@ -197,8 +217,8 @@ const GhReviewRequestSearchJson = Schema.Struct({
   }),
 })
 
-const decodeJson = <A, I>(operation: string, output: string, schema: Schema.Schema<A, I>) =>
-  Schema.decodeUnknown(Schema.parseJson(schema))(output).pipe(
+const decodeJson = <A, I>(operation: GitHubOperation, output: string, schema: Schema.Codec<A, I>) =>
+  Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(output).pipe(
     Effect.mapError((cause) => GitHubCliParseError.make({ operation, output, cause })),
   )
 
@@ -266,22 +286,23 @@ const repositoryArgument = (host: string, namespace: string, name: string) =>
   host === "github.com" ? `${namespace}/${name}` : `${host}/${namespace}/${name}`
 
 const operationError =
-  (providerId: ReturnType<typeof GitProviderId.make>, operation: string) => (cause: unknown) =>
-    GitProviderOperationError.make({
+  (providerId: ReturnType<typeof GitProviderId.make>, operation: GitHubOperation) =>
+  <A>(cause: A) => {
+    const stderr = Option.getOrNull(
+      Schema.decodeUnknownOption(Schema.Struct({ stderr: Schema.String }))(cause),
+    )?.stderr
+    return GitProviderOperationError.make({
       providerId,
-      operation,
+      operation: DiagnosticOperation.make(operation),
       message:
-        typeof cause === "object" &&
-        cause !== null &&
-        "stderr" in cause &&
-        typeof cause.stderr === "string" &&
-        cause.stderr.trim().length > 0
-          ? cause.stderr.trim()
-          : cause instanceof Error && cause.message.length > 0
+        stderr !== undefined && stderr.trim().length > 0
+          ? stderr.trim()
+          : Predicate.isError(cause) && cause.message.length > 0
             ? cause.message
             : `GitHub operation ${operation} failed`,
-      cause,
+      cause: Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause)),
     })
+  }
 
 const locator = (
   providerId: ReturnType<typeof GitProviderId.make>,
@@ -294,11 +315,22 @@ const locator = (
     name: HostedRepositoryName.make(name),
   })
 
-const reviewLocator = (repository: HostedRepositoryLocator, number: number) =>
-  HostedReviewLocator.make({ repository, number: HostedReviewNumber.make(number) })
-
 const actor = (login: string | undefined) =>
   ProviderActor.make({ id: null, username: login ?? "unknown", displayName: null, avatarUrl: null })
+
+const normalizeChangeType = (changeType: string | undefined): DiffFileStatus => {
+  switch (changeType?.toUpperCase()) {
+    case "ADDED":
+      return "added"
+    case "DELETED":
+    case "REMOVED":
+      return "deleted"
+    case "RENAMED":
+      return "renamed"
+    default:
+      return "modified"
+  }
+}
 
 const summary = (
   providerId: ReturnType<typeof GitProviderId.make>,
@@ -307,7 +339,10 @@ const summary = (
   pullRequest: GhPullRequestJson,
 ) =>
   HostedReviewSummary.make({
-    locator: reviewLocator(locator(providerId, namespace, name), pullRequest.number),
+    locator: HostedReviewLocator.make({
+      repository: locator(providerId, namespace, name),
+      number: HostedReviewNumber.make(pullRequest.number),
+    }),
     title: pullRequest.title,
     body: pullRequest.body ?? null,
     author: actor(pullRequest.author?.login),
@@ -340,7 +375,7 @@ const detail = (
         path: file.path,
         additions: file.additions,
         deletions: file.deletions,
-        changeType: file.changeType ?? "modified",
+        changeType: normalizeChangeType(file.changeType),
       }),
     ),
     commits: pullRequest.commits.map((commit) =>
@@ -355,7 +390,7 @@ const detail = (
 const repository = (
   providerId: ReturnType<typeof GitProviderId.make>,
   host: string,
-  operation: string,
+  operation: GitHubOperation,
   output: string,
   row: GhRepoJson,
 ) =>
@@ -364,8 +399,9 @@ const repository = (
     const segments = fullName.split("/").filter(Boolean)
     const fallbackName = segments.at(-1) ?? ""
     const fallbackNamespace = segments.slice(0, -1).join("/")
-    const namespace =
-      typeof row.owner === "string" ? row.owner : (row.owner?.login ?? fallbackNamespace)
+    const namespace = Schema.is(Schema.String)(row.owner)
+      ? row.owner
+      : (row.owner?.login ?? fallbackNamespace)
     const name = row.name ?? fallbackName
     if (namespace.length === 0 || name.length === 0) {
       return yield* GitHubCliParseError.make({
@@ -376,7 +412,7 @@ const repository = (
     }
     return HostedRepository.make({
       locator: locator(providerId, namespace, name),
-      url: row.url ?? `https://${host}/${namespace}/${name}`,
+      url: row.url ?? WebUrl.make(`https://${host}/${namespace}/${name}`),
       description: row.description ?? null,
       isPrivate: row.isPrivate ?? false,
       updatedAt: row.updatedAt ?? null,
@@ -442,7 +478,7 @@ export const inspectGitHubCli = (
             )
             .pipe(
               Effect.as(true),
-              Effect.catchAll(() => Effect.succeed(false)),
+              Effect.catch(() => Effect.succeed(false)),
             ),
           processes
             .run(
@@ -452,7 +488,7 @@ export const inspectGitHubCli = (
             )
             .pipe(
               Effect.as(true),
-              Effect.catchAll(() => Effect.succeed(false)),
+              Effect.catch(() => Effect.succeed(false)),
             ),
         ],
         { concurrency: "unbounded" },
@@ -467,7 +503,7 @@ export const inspectGitHubCli = (
         })),
       )
     }),
-    Effect.catchAll(() =>
+    Effect.catch(() =>
       Effect.succeed({
         installed: false,
         authenticated: false,
@@ -507,7 +543,7 @@ export const createGitHubProvider = (
     }),
   })
   const run = (
-    operation: string,
+    operation: GitHubOperation,
     args: readonly string[],
     timeoutMs = 20_000,
     stdout?: ProcessOutputPolicyInput,
@@ -515,21 +551,24 @@ export const createGitHubProvider = (
     processes
       .run(processRequest("gh", args, stdout === undefined ? { timeoutMs } : { timeoutMs, stdout }))
       .pipe(Effect.mapError(operationError(providerId, operation)))
-  const decode = <A, I>(operation: string, output: string, schema: Schema.Schema<A, I>) =>
+  const decode = <A, I>(operation: GitHubOperation, output: string, schema: Schema.Codec<A, I>) =>
     decodeJson(operation, output, schema).pipe(
       Effect.mapError(operationError(providerId, operation)),
     )
-  const requireProvider = (repositoryLocator: HostedRepositoryLocator, operation: string) =>
+  const requireProvider = (
+    repositoryLocator: HostedRepositoryLocator,
+    operation: GitHubOperation,
+  ) =>
     repositoryLocator.providerId === providerId
       ? Effect.succeed(repositoryLocator)
       : GitProviderOperationError.make({
           providerId,
-          operation,
+          operation: DiagnosticOperation.make(operation),
           message: `Repository belongs to ${repositoryLocator.providerId}, not ${providerId}`,
         })
   const repositoryWebUrl = (repositoryLocator: HostedRepositoryLocator) => {
     const namespace = repositoryLocator.namespace.split("/").map(encodeURIComponent).join("/")
-    return `https://${host}/${namespace}/${encodeURIComponent(repositoryLocator.name)}`
+    return WebUrl.make(`https://${host}/${namespace}/${encodeURIComponent(repositoryLocator.name)}`)
   }
 
   const listAccessibleRepositories = Effect.fn("GitHub.listAccessibleRepositories")(function* () {
@@ -547,10 +586,12 @@ export const createGitHubProvider = (
       result.stdout,
       GhViewerRepositoriesJson,
     )
-    return yield* Effect.forEach(response.data.viewer.repositories.nodes.filter(isDefined), (row) =>
-      repository(providerId, host, "listAccessibleRepositories", result.stdout, row).pipe(
-        Effect.mapError(operationError(providerId, "listAccessibleRepositories")),
-      ),
+    return yield* Effect.forEach(
+      response.data.viewer.repositories.nodes.filter(Predicate.isNotNullish),
+      (row) =>
+        repository(providerId, host, "listAccessibleRepositories", result.stdout, row).pipe(
+          Effect.mapError(operationError(providerId, "listAccessibleRepositories")),
+        ),
     )
   })
 
@@ -590,22 +631,22 @@ export const createGitHubProvider = (
     const viewer = response.data.viewer.login.toLowerCase()
     const reviews = response.data.repository?.pullRequest?.latestReviews.nodes ?? []
     return reviews
-      .filter(isDefined)
+      .filter(Predicate.isNotNullish)
       .some((item) => item.author?.login.toLowerCase() === viewer && item.state === "APPROVED")
       ? ("approved" as const)
       : ("none" as const)
   })
 
-  const checkoutSpecAtRevision = Effect.fn("GitHub.checkoutSpecAtRevision")(function* (
+  const checkoutSpec = Effect.fn("GitHub.checkoutSpec")(function* (
     review: HostedReviewLocator,
-    revision: string,
+    revision: ReviewRevision,
   ) {
-    yield* requireProvider(review.repository, "checkoutSpecAtRevision")
+    yield* requireProvider(review.repository, "checkoutSpec")
     return HostedReviewCheckoutSpec.make({
       repository: review.repository,
       review,
       remoteUrl: `https://${host}/${review.repository.namespace}/${review.repository.name}.git`,
-      fetchRef: `refs/pull/${review.number}/head`,
+      fetchRef: RepositoryComparisonRef.make(`refs/pull/${review.number}/head`),
       revision,
     })
   })
@@ -643,7 +684,7 @@ export const createGitHubProvider = (
       if (separator <= 0 || separator === resolved.nameWithOwner.length - 1) {
         return yield* GitProviderOperationError.make({
           providerId,
-          operation: "resolveRepository",
+          operation: DiagnosticOperation.make("resolveRepository"),
           message: "GitHub returned an invalid repository nameWithOwner",
         })
       }
@@ -737,7 +778,7 @@ export const createGitHubProvider = (
       if (decision !== "approved") {
         return yield* GitProviderOperationError.make({
           providerId,
-          operation: "submitReviewDecision",
+          operation: DiagnosticOperation.make("submitReviewDecision"),
           message: `GitHub decision ${decision satisfies ReviewDecision} is not supported without a review body`,
         })
       }
@@ -758,7 +799,9 @@ export const createGitHubProvider = (
       const encodedPath = path.split("/").map(encodeURIComponent).join("/")
       return requireProvider(repositoryLocator, "fileUrl").pipe(
         Effect.as(
-          `${repositoryWebUrl(repositoryLocator)}/blob/${encodeURIComponent(revision)}/${encodedPath}`,
+          WebUrl.make(
+            `${repositoryWebUrl(repositoryLocator)}/blob/${encodeURIComponent(revision)}/${encodedPath}`,
+          ),
         ),
       )
     },
@@ -779,18 +822,7 @@ export const createGitHubProvider = (
         )
       },
     ),
-    checkoutSpec: Effect.fn("GitHub.checkoutSpec")(function* (review) {
-      const reviewDetail = yield* getReview(review)
-      const revision = reviewDetail.summary.head.revision
-      if (revision === null) {
-        return yield* GitProviderOperationError.make({
-          providerId,
-          operation: "checkoutSpec",
-          message: "GitHub pull request is missing its head revision",
-        })
-      }
-      return yield* checkoutSpecAtRevision(review, revision)
-    }),
+    checkoutSpec,
     listSearchScopes: Effect.fn("GitHub.listSearchScopes")(function* () {
       const userResult = yield* run("listSearchScopes.user", ["api", "user", ...hostArgs(host)])
       const user = yield* decode("listSearchScopes.user", userResult.stdout, GhSearchScopeJson)
@@ -834,13 +866,9 @@ export const createGitHubProvider = (
         GhReviewRequestSearchJson,
       )
       return response.data.search.nodes
-        .filter(isDefined)
+        .filter(Predicate.isNotNullish)
         .map((row) => summary(providerId, row.repository.owner.login, row.repository.name, row))
     }),
-    checkoutSpecAtRevision,
   }
   return registration
 }
-
-const isDefined = <A>(value: A | null | undefined): value is A =>
-  value !== null && value !== undefined

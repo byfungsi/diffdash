@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { Schema } from "effect"
 
 /** Validated ffprobe information used by combination and verification. */
 export interface MediaProbe {
@@ -12,6 +13,22 @@ export interface MediaProbe {
   }[]
   readonly durationSeconds: number | null
 }
+
+const MediaProbeJson = Schema.fromJsonString(
+  Schema.Struct({
+    streams: Schema.Array(
+      Schema.Struct({
+        codec_type: Schema.String,
+        codec_name: Schema.optionalKey(Schema.String),
+        width: Schema.optionalKey(Schema.Finite),
+        height: Schema.optionalKey(Schema.Finite),
+        r_frame_rate: Schema.optionalKey(Schema.String),
+        pix_fmt: Schema.optionalKey(Schema.String),
+      }),
+    ),
+    format: Schema.Struct({ duration: Schema.optionalKey(Schema.String) }),
+  }),
+)
 
 /** Runs ffprobe and validates the JSON response before returning media metadata. */
 export const probeMedia = (path: string, ffprobePath = process.env.FFPROBE_PATH ?? "ffprobe") =>
@@ -35,67 +52,28 @@ export const probeMedia = (path: string, ffprobePath = process.env.FFPROBE_PATH 
 
 /** Decodes the subset of ffprobe JSON trusted by demo tooling. */
 export const decodeMediaProbe = (source: string): MediaProbe => {
-  let value: unknown
+  let probe: Schema.Schema.Type<typeof MediaProbeJson>
   try {
-    value = JSON.parse(source)
-  } catch {
-    throw new Error("ffprobe returned invalid JSON")
+    probe = Schema.decodeUnknownSync(MediaProbeJson)(source)
+  } catch (cause) {
+    throw new Error("ffprobe returned invalid JSON or an invalid response", { cause })
   }
-  const root = requireRecord(value, "ffprobe response")
-  if (!Array.isArray(root.streams)) throw new Error("ffprobe streams must be an array")
-  const format = requireRecord(root.format, "ffprobe format")
-  const durationValue = format.duration
   const durationSeconds =
-    typeof durationValue === "string" && durationValue.length > 0
-      ? Number.parseFloat(durationValue)
-      : null
+    probe.format.duration === undefined || probe.format.duration.length === 0
+      ? null
+      : Number.parseFloat(probe.format.duration)
   if (durationSeconds !== null && (!Number.isFinite(durationSeconds) || durationSeconds < 0)) {
     throw new Error("ffprobe duration must be a non-negative finite number")
   }
   return {
-    streams: root.streams.map((streamValue) => {
-      const stream = requireRecord(streamValue, "ffprobe stream")
-      return {
-        codecType: readRequiredString(stream, "codec_type"),
-        codecName: readOptionalString(stream, "codec_name"),
-        width: readOptionalNumber(stream, "width"),
-        height: readOptionalNumber(stream, "height"),
-        frameRate: readOptionalString(stream, "r_frame_rate"),
-        pixelFormat: readOptionalString(stream, "pix_fmt"),
-      }
-    }),
+    streams: probe.streams.map((stream) => ({
+      codecType: stream.codec_type,
+      codecName: stream.codec_name ?? null,
+      width: stream.width ?? null,
+      height: stream.height ?? null,
+      frameRate: stream.r_frame_rate ?? null,
+      pixelFormat: stream.pix_fmt ?? null,
+    })),
     durationSeconds,
   }
-}
-
-type JsonRecord = Readonly<Record<string, unknown>>
-
-const requireRecord = (value: unknown, label: string): JsonRecord => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`)
-  }
-  // SAFETY: the runtime checks above narrow this value to an object with string keys.
-  return value as JsonRecord
-}
-
-const readRequiredString = (value: JsonRecord, key: string) => {
-  const result = value[key]
-  if (typeof result !== "string") throw new Error(`ffprobe ${key} must be a string`)
-  return result
-}
-
-const readOptionalString = (value: JsonRecord, key: string) => {
-  const result = value[key]
-  if (result === undefined) return null
-  if (typeof result !== "string") throw new Error(`ffprobe ${key} must be a string`)
-  return result
-}
-
-const readOptionalNumber = (value: JsonRecord, key: string) => {
-  const result = value[key]
-  if (result === undefined) return null
-  if (typeof result !== "number" || !Number.isFinite(result)) {
-    throw new Error(`ffprobe ${key} must be a finite number`)
-  }
-  return result
 }

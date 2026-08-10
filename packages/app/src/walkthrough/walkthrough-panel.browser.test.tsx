@@ -1,4 +1,5 @@
 import { StoredWalkthrough, Walkthrough, type WalkthroughRisk } from "@diffdash/domain/walkthrough"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -10,11 +11,11 @@ import {
 } from "./walkthrough-panel"
 
 const stored = StoredWalkthrough.make({
-  repoId: "repo-1",
+  repoId: ReviewProjectId.make("repo-1"),
   prNumber: 42,
-  reviewKey: "github:fungsi/diffdash#42",
-  baseSha: "base",
-  headSha: "head",
+  reviewKey: ReviewKey.make("github:fungsi/diffdash#42"),
+  baseSha: ReviewRevision.make("base"),
+  headSha: ReviewRevision.make("head"),
   promptVersion: "test",
   walkthrough: Walkthrough.make({
     title: "Review focus",

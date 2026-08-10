@@ -6,33 +6,40 @@ import {
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+
+/** Absolute checkout path accepted from a native CLI invocation. */
+export const CliRepositoryPath = RepositoryCheckoutPath
+
+/** Absolute checkout path accepted from a native CLI invocation. */
+export type CliRepositoryPath = typeof CliRepositoryPath.Type
 
 /** Maximum commands returned by one transactional renderer drain. */
 export const NAVIGATION_COMMAND_DRAIN_LIMIT = 32
 
 /** Open one local checkout as a project workspace. */
 export class OpenProjectCommand extends Schema.TaggedClass<OpenProjectCommand>()("openProject", {
-  localPath: Schema.NonEmptyString,
+  localPath: CliRepositoryPath,
 }) {}
 
 /** Open working-tree changes for a legacy private integration. */
 export class OpenWorkingTreeCommand extends Schema.TaggedClass<OpenWorkingTreeCommand>()(
   "openWorkingTree",
-  { localPath: Schema.NonEmptyString },
+  { localPath: CliRepositoryPath },
 ) {}
 
 /** Save a local checkout as a favorite repository. */
 export class LinkRepositoryCommand extends Schema.TaggedClass<LinkRepositoryCommand>()(
   "linkRepository",
-  { localPath: Schema.NonEmptyString },
+  { localPath: CliRepositoryPath },
 ) {}
 
 /** Open a repository's PR list or one numbered pull request. */
 export class OpenPullRequestCommand extends Schema.TaggedClass<OpenPullRequestCommand>()(
   "openPullRequest",
   {
-    localPath: Schema.NonEmptyString,
-    number: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+    localPath: CliRepositoryPath,
+    number: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
   },
 ) {}
 
@@ -40,8 +47,8 @@ export class OpenPullRequestCommand extends Schema.TaggedClass<OpenPullRequestCo
 export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffCommand>()(
   "openBranchDiff",
   {
-    localPath: Schema.NonEmptyString,
-    branchName: Schema.NullOr(Schema.NonEmptyString),
+    localPath: CliRepositoryPath,
+    branchName: Schema.NullOr(RepositoryComparisonRef),
   },
 ) {}
 
@@ -64,7 +71,7 @@ export type CliGitRevision = RepositoryComparisonRef
 export class OpenRepositoryComparisonCommand extends Schema.TaggedClass<OpenRepositoryComparisonCommand>()(
   "openRepositoryComparison",
   {
-    localPath: Schema.NonEmptyString,
+    localPath: CliRepositoryPath,
     repository: Schema.NullOr(CliRepositorySelector),
     baseRef: CliGitRevision,
     headRef: CliGitRevision,
@@ -84,7 +91,7 @@ export class CliNavigationErrorCommand extends Schema.TaggedClass<CliNavigationE
 ) {}
 
 /** One command forwarded by a DiffDash launcher to the running desktop app. */
-export const CliNavigationCommand = Schema.Union(
+export const CliNavigationCommand = Schema.Union([
   OpenProjectCommand,
   OpenWorkingTreeCommand,
   LinkRepositoryCommand,
@@ -93,7 +100,7 @@ export const CliNavigationCommand = Schema.Union(
   OpenRepositoryComparisonCommand,
   RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,
-)
+])
 
 /** One command forwarded by a DiffDash launcher to the running desktop app. */
 export type CliNavigationCommand = typeof CliNavigationCommand.Type

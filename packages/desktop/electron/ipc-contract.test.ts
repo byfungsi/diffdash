@@ -1,6 +1,13 @@
 import { AgentProviderId } from "@diffdash/agent-provider"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
-import { Repo } from "@diffdash/domain/repository"
+import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { LocalRepositorySource } from "@diffdash/domain/git-provider"
+import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
+import { WebUrl } from "@diffdash/domain/web-url"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { ProcessExitError } from "@diffdash/process"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
@@ -14,20 +21,25 @@ import {
   invokeResponseSchema,
   successEnvelope,
 } from "@diffdash/protocol/ipc"
+import type { BridgeResult } from "@diffdash/protocol/ipc"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import {
-  decodeTransportError,
   TransportError,
+  TransportErrorDiagnosticTrace,
   transportError,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
 import { Effect, Schema } from "effect"
 import type { IpcMain, IpcMainInvokeEvent } from "electron"
 import { describe, expect, it, vi } from "vitest"
-import { RepositoryLinkError } from "@diffdash/core"
+import { CoreMethod, CoreMethodChannel, RepositoryLinkError } from "@diffdash/core"
 import type { DesktopUpdater } from "../src/main/services/app-updater"
 import type { ApplicationRuntime } from "./main/application-runtime"
 import { createRendererSecurityPolicy } from "./main/electron-policy"
+import {
+  makeDesktopHostConfiguration,
+  productionDesktopStartupConfiguration,
+} from "./main/desktop-host-configuration"
 import { defineIpcHandlers } from "./main/ipc/controllers"
 import { IpcControllerRegistry } from "./main/ipc/controllers/controller-registry"
 import { toPublicWalkthroughError } from "./main/ipc/walkthrough-public-error"
@@ -45,20 +57,29 @@ const codexOperationErrors = makeAgentProviderOperationErrorFactory({
   fallbackReason: "Codex execution failed",
 })
 
-const electronHostMocks = vi.hoisted(() => ({
-  focusApplication: vi.fn<() => void>(),
-  fromWebContents: vi.fn<(sender: unknown) => unknown>(),
-}))
-
-vi.mock("electron", () => ({
-  app: { focus: electronHostMocks.focusApplication },
-  BrowserWindow: { fromWebContents: electronHostMocks.fromWebContents },
-  ipcMain: { handle: vi.fn<IpcMain["handle"]>() },
-}))
-
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
     expect(Object.keys(InvokeContract)).toEqual(Object.values(InvokeChannel))
+  })
+
+  it("maps every Core method to one unique protocol invoke channel", () => {
+    expect(Object.keys(CoreMethodChannel)).toEqual(Object.values(CoreMethod))
+    expect(new Set(Object.values(CoreMethodChannel)).size).toBe(Object.values(CoreMethod).length)
+    expect(Object.values(CoreMethodChannel).every((channel) => channel in InvokeContract)).toBe(
+      true,
+    )
+  })
+
+  it("preserves nullable stored-walkthrough misses at the IPC boundary", () => {
+    const walkthroughChannels = [
+      InvokeChannel.getWalkthrough,
+      InvokeChannel.getLocalWalkthrough,
+      InvokeChannel.getRepositoryComparisonWalkthrough,
+    ] as const
+
+    for (const channel of walkthroughChannels) {
+      expect(Schema.decodeUnknownSync(invokeResponseSchema(channel))(null)).toBeNull()
+    }
   })
 
   it("defines and installs every application handler exactly once", () => {
@@ -75,6 +96,7 @@ describe("IPC contract", () => {
       { peek: () => [], acknowledge: () => undefined },
       rendererSecurityPolicy,
       shutdown,
+      testHostConfiguration(),
     )
     registry.install()
 
@@ -82,19 +104,12 @@ describe("IPC contract", () => {
     expect(host.handle).toHaveBeenCalledTimes(Object.values(InvokeChannel).length)
   })
 
-  it("FUN-212 AC: activates the requesting Electron window through the navigation IPC", async () => {
+  it("exposes no unknown or prototype-named channels through the installed Electron router", () => {
     const host = hostIpc()
     const rendererSecurityPolicy = testRendererSecurityPolicy()
     const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
-    const runtime = testRuntime("Window activation must not access application services")
+    const runtime = testRuntime("Unknown channel test must not invoke handlers")
     const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
-    const targetWindow = {
-      isMinimized: vi.fn<() => boolean>(() => true),
-      restore: vi.fn<() => void>(),
-      show: vi.fn<() => void>(),
-      focus: vi.fn<() => void>(),
-    }
-    electronHostMocks.fromWebContents.mockReturnValue(targetWindow)
 
     defineIpcHandlers(
       runtime,
@@ -103,22 +118,19 @@ describe("IPC contract", () => {
       { peek: () => [], acknowledge: () => undefined },
       rendererSecurityPolicy,
       shutdown,
+      testHostConfiguration(),
     )
     registry.install()
-    const event = trustedEvent()
-    const response = await host.installed.get(InvokeChannel.appActivateWindow)?.(event, {})
-    const envelope = Schema.decodeUnknownSync(
-      successEnvelope(invokeResponseSchema(InvokeChannel.appActivateWindow)),
-    )(response)
 
-    expect(envelope.value).toBeUndefined()
-    expect(electronHostMocks.fromWebContents).toHaveBeenCalledWith(event.sender)
-    expect(targetWindow.restore).toHaveBeenCalledOnce()
-    expect(targetWindow.show).toHaveBeenCalledOnce()
-    expect(electronHostMocks.focusApplication.mock.calls).toEqual(
-      process.platform === "darwin" ? [[{ steal: true }]] : [],
-    )
-    expect(targetWindow.focus).toHaveBeenCalledTimes(process.platform === "darwin" ? 0 : 1)
+    for (const channel of [
+      "repositories:deleteEverything",
+      "updates:rawUpdater",
+      "toString",
+      "constructor",
+      "__proto__",
+    ]) {
+      expect(host.installed.has(channel)).toBe(false)
+    }
   })
 
   it("rejects malformed renderer requests before invoking Electron", async () => {
@@ -135,12 +147,29 @@ describe("IPC contract", () => {
     expect(ipc.invoke).not.toHaveBeenCalled()
   })
 
+  it("normalizes class values cloned by contextBridge before encoding requests", async () => {
+    const encodedSettings = Schema.encodeSync(AISettings)(DEFAULT_AI_SETTINGS)
+    const ipc = rendererIpc({ _tag: "Success", value: encodedSettings })
+    const transport = createRendererTransport(ipc.api)
+
+    const result = await transport.invoke(InvokeChannel.settingsUpdate, {
+      settings: structuredClone(DEFAULT_AI_SETTINGS),
+    })
+
+    expect(result._tag).toBe("Success")
+    expect(ipc.invoke).toHaveBeenCalledWith(InvokeChannel.settingsUpdate, {
+      settings: encodedSettings,
+    })
+  })
+
   it("rejects oversized encoded renderer requests before invoking Electron", async () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
 
     await expectTransportError(
-      transport.invoke(InvokeChannel.appOpenExternalUrl, { url: "x".repeat(300_000) }),
+      transport.invoke(InvokeChannel.appOpenExternalUrl, {
+        url: WebUrl.make(`https://example.com/${"x".repeat(300_000)}`),
+      }),
       { code: "PAYLOAD_TOO_LARGE" },
     )
     expect(ipc.invoke).not.toHaveBeenCalled()
@@ -182,22 +211,53 @@ describe("IPC contract", () => {
     })
   })
 
-  it("reconstructs structured recoverable errors from failure envelopes", async () => {
+  it("preserves schema-decoded failure envelopes without reconstruction", async () => {
+    const providerFailure = AgentProviderFailure.make({
+      version: 1,
+      providerId: ReviewAgentProviderId.make("claude"),
+      capability: "walkthrough",
+      category: "authentication",
+      processKind: "exit",
+      exitCode: 9,
+      signal: null,
+      httpStatus: null,
+      retryAfterSeconds: null,
+      resetsAt: null,
+    })
+    const diagnostic = TransportErrorDiagnosticTrace.make({
+      provider: AgentProviderId.make("claude"),
+      errorTag: "AgentProviderAuthenticationError",
+      causeTag: "ProcessExitError",
+      exitCode: 9,
+      signal: null,
+      reason: "Authentication or authorization failure reported.",
+      stderr: "Provider diagnostics were redacted.",
+      stackFrames: ["at runWalkthrough"],
+    })
     const failure = Schema.encodeSync(FailureEnvelope)({
       _tag: "Failure",
-      error: transportError("RepositoryLinkError", "Checkout does not match", "repositories:link"),
+      error: transportError(
+        "AgentProviderAuthenticationError",
+        "Authentication is required.",
+        "walkthroughs:generate",
+        diagnostic,
+        providerFailure,
+      ),
     })
     const transport = createRendererTransport(rendererIpc(failure).api)
 
-    const error = await transport
-      .invoke(InvokeChannel.selectLocalFolder, {})
-      .catch((cause) => cause)
+    const result = await transport.invoke(InvokeChannel.selectLocalFolder, {})
 
-    expect(error).toBeInstanceOf(Error)
-    expect(decodeTransportError(error)).toMatchObject({
-      code: "RepositoryLinkError",
-      message: "repositories:selectLocalFolder failed: Checkout does not match",
-      operation: "repositories:link",
+    expect(result._tag === "Failure" ? result.error : null).not.toBeInstanceOf(Error)
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      error: {
+        code: "AgentProviderAuthenticationError",
+        message: "Authentication is required.",
+        operation: "walkthroughs:generate",
+        diagnostic,
+        providerFailure,
+      },
     })
   })
 
@@ -286,14 +346,18 @@ describe("IPC contract", () => {
     const budget = InvokeContract[InvokeChannel.analyticsStart].maxResponseBytes
     const baseError = TransportError.make({
       code: "EXPECTED_FAILURE",
-      message: "Safe failure",
-      operation: "",
+      message: "",
+      operation: DiagnosticOperation.make("boundary"),
     })
     const base = Schema.encodeSync(FailureEnvelope)({ _tag: "Failure", error: baseError })
-    const operation = "x".repeat(budget - jsonSafeUtf8ByteLength(base))
+    const message = "x".repeat(budget - jsonSafeUtf8ByteLength(base))
     const exact = Schema.encodeSync(FailureEnvelope)({
       _tag: "Failure",
-      error: TransportError.make({ code: "EXPECTED_FAILURE", message: "Safe failure", operation }),
+      error: TransportError.make({
+        code: "EXPECTED_FAILURE",
+        message,
+        operation: DiagnosticOperation.make("boundary"),
+      }),
     })
     expect(jsonSafeUtf8ByteLength(exact)).toBe(budget)
 
@@ -303,7 +367,7 @@ describe("IPC contract", () => {
     )
     const oneByteOver = {
       ...exact,
-      error: { ...exact.error, operation: `${operation}x` },
+      error: { ...exact.error, message: `${message}x` },
     }
     await expectTransportError(
       createRendererTransport(rendererIpc(oneByteOver).api).invoke(
@@ -314,10 +378,10 @@ describe("IPC contract", () => {
     )
   })
 
-  it("decodes events, ignores malformed payloads, and removes the exact listener", () => {
+  it("decodes events, reports malformed and oversized payloads, and removes the exact listener", () => {
     const ipc = rendererIpc()
     const transport = createRendererTransport(ipc.api)
-    const listener = vi.fn<(state: AppUpdateState) => void>()
+    const listener = vi.fn<(result: BridgeResult<AppUpdateState>) => void>()
     const cleanup = transport.subscribe(EventChannel.updateStateChanged, listener)
     const wrapped = ipc.listeners.get(EventChannel.updateStateChanged)
 
@@ -327,8 +391,19 @@ describe("IPC contract", () => {
     wrapped?.({}, { _tag: "idle", currentVersion: "0.3.1" })
     cleanup()
 
-    expect(listener).toHaveBeenCalledOnce()
-    expect(listener).toHaveBeenCalledWith(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
+    expect(listener).toHaveBeenCalledTimes(3)
+    expect(listener.mock.calls[0]?.[0]).toMatchObject({
+      _tag: "Failure",
+      error: { code: "INVALID_EVENT" },
+    })
+    expect(listener.mock.calls[1]?.[0]).toMatchObject({
+      _tag: "Failure",
+      error: { code: "PAYLOAD_TOO_LARGE" },
+    })
+    expect(listener.mock.calls[2]?.[0]).toEqual({
+      _tag: "Success",
+      value: AppUpdateIdle.make({ currentVersion: "0.3.1" }),
+    })
     expect(ipc.removeListener).toHaveBeenCalledWith(EventChannel.updateStateChanged, wrapped)
   })
 
@@ -418,7 +493,9 @@ describe("IPC contract", () => {
       InvokeChannel.drainNavigationCommands,
     ])
     const commands = Array.from({ length: 33 }, (_, index) =>
-      OpenWorkingTreeCommand.make({ localPath: `/repo-${index}` }),
+      OpenWorkingTreeCommand.make({
+        localPath: RepositoryCheckoutPath.make(`/repo-${index}`),
+      }),
     )
     const commit = vi.fn<() => void>()
     registry.defineTransactional(InvokeChannel.drainNavigationCommands, async () => ({
@@ -545,12 +622,12 @@ describe("IPC contract", () => {
     ])
     const repositories = Array.from({ length: 20 }, (_, index) =>
       Repo.make({
-        id: `repo-${index}`,
-        provider: "local",
-        owner: "local",
-        name: `repo-${index}`,
-        remoteUrl: `file:///${"x".repeat(150_000)}`,
-        localPath: `/repo-${index}`,
+        id: ReviewProjectId.make(`repo-${index}`),
+        source: LocalRepositorySource.make(),
+        checkout: LinkedCheckout.make({
+          remoteUrl: `file:///${"x".repeat(150_000)}`,
+          path: RepositoryCheckoutPath.make(`/repo-${index}`),
+        }),
         isFavorite: false,
         lastOpenedAt: null,
         lastSyncedAt: null,
@@ -572,7 +649,7 @@ describe("IPC contract", () => {
 
     expect(() =>
       sendProtocolEvent(
-        { send },
+        { isDestroyed: () => false, send },
         EventChannel.updateStateChanged,
         AppUpdateFailed.make({ currentVersion: "0.3.1", message: "x".repeat(300_000) }),
       ),
@@ -587,7 +664,7 @@ describe("IPC contract", () => {
     ])
     registry.define(InvokeChannel.analyticsStart, async () => {
       throw RepositoryLinkError.make({
-        operation: "link",
+        operation: "persist",
         reason: `Checkout mismatch\n${"x".repeat(600)}`,
         cause: new Error(`private cause ${"secret".repeat(500_000)}`),
       })
@@ -609,11 +686,12 @@ describe("IPC contract", () => {
       InvokeChannel.analyticsStart,
     ])
     registry.define(InvokeChannel.analyticsStart, async () => {
-      throw TransportError.make({
+      throw {
+        _tag: "TransportError",
         code: "EXPECTED_FAILURE",
         message: "Safe failure detail",
         operation: "diagnostic".repeat(300_000),
-      })
+      }
     })
     registry.install()
 
@@ -633,8 +711,8 @@ describe("IPC contract", () => {
   it("preserves an exact-boundary failure and falls back one byte below it", () => {
     const error = TransportError.make({
       code: "EXPECTED_FAILURE",
-      message: "Safe failure detail",
-      operation: "x".repeat(1_000),
+      message: "x".repeat(1_000),
+      operation: DiagnosticOperation.make("boundary"),
     })
     const encoded = Schema.encodeSync(FailureEnvelope)({ _tag: "Failure", error })
     const exactBytes = jsonSafeUtf8ByteLength(encoded)
@@ -700,15 +778,47 @@ describe("IPC contract", () => {
     expect(response).toEqual({ _tag: "Success", value: null })
     expect(envelope.value).toBeUndefined()
   })
+
+  it("derives the invoke channel and forwards decoded input through defineCore", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.analyticsCapture,
+    ])
+    const execute = vi.fn<
+      (
+        method: typeof CoreMethod.analyticsCapture,
+        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
+      ) => Promise<void>
+    >(
+      async (
+        method: typeof CoreMethod.analyticsCapture,
+        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
+      ): Promise<void> => {
+        expect(method).toBe(CoreMethod.analyticsCapture)
+        expect(input).toEqual({
+          event: { event: "review_opened", reviewType: "pull_request" },
+        })
+      },
+    )
+    registry.defineCore(CoreMethod.analyticsCapture, execute)
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {
+      event: { event: "review_opened", reviewType: "pull_request" },
+    })
+
+    expect(host.installed.has(InvokeChannel.analyticsCapture)).toBe(true)
+    expect(execute).toHaveBeenCalledOnce()
+    expect(response).toEqual({ _tag: "Success", value: null })
+  })
 })
 
-const expectTransportError = async (promise: Promise<unknown>, expected: object) => {
-  const error = await promise.then(
-    () => null,
-    (cause: unknown) => cause,
-  )
-  expect(error).toBeInstanceOf(Error)
-  expect(decodeTransportError(error)).toMatchObject(expected)
+const expectTransportError = async <Value>(
+  promise: Promise<BridgeResult<Value>>,
+  expected: object,
+) => {
+  const result = await promise
+  expect(result).toMatchObject({ _tag: "Failure", error: expected })
 }
 
 const rendererIpc = (response: unknown = undefined) => {
@@ -773,6 +883,31 @@ const testRendererSecurityPolicy = () =>
     openExternal: async () => undefined,
     packagedRendererUrl: "file:///app/renderer/index.html",
   })
+
+const testHostConfiguration = () =>
+  Effect.runSync(
+    makeDesktopHostConfiguration(
+      {
+        identity: {
+          appName: "DiffDash Development",
+          appUserModelId: "dev.diffdash.app.development",
+          storageNamespace: "diffdash-development",
+          userDataPath: "/tmp/diffdash-user-data",
+        },
+        version: "0.0.0",
+        architecture: process.arch,
+        platform: process.platform,
+        packaged: false,
+        resourcesPath: "/app/resources",
+        temporaryDirectory: "/tmp",
+        userDataDirectory: "/tmp/diffdash-user-data",
+        environment: {},
+        homeDirectory: "/home/test",
+        moduleDirectory: "/app/out/main",
+      },
+      productionDesktopStartupConfiguration,
+    ),
+  )
 
 const testUpdater = (): DesktopUpdater => ({
   getState: () => Effect.succeed(AppUpdateIdle.make({ currentVersion: "0.0.0" })),

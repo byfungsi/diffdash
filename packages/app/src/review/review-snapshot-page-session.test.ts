@@ -1,10 +1,13 @@
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import { LocalReviewDetail, workingTreeReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
   LocalReviewSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
+  ReviewDiffIdentity,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
@@ -17,7 +20,7 @@ import {
   type ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
 import { transportError } from "@diffdash/protocol/transport-error"
-import { Atom, Registry } from "@effect-atom/atom-react"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -25,8 +28,8 @@ import {
   ReviewSnapshotPageSession,
 } from "./review-snapshot-page-session"
 
-const target = workingTreeReviewTarget("/workspace/diffdash")
-const registries: Registry.Registry[] = []
+const target = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
+const registries: AtomRegistry.AtomRegistry[] = []
 const sessions: ReviewSnapshotPageSession[] = []
 const ignoreDeferredValue = <Value>(_value: Value): void => undefined
 const ignoreDeferredCause = (_cause: unknown): void => undefined
@@ -363,7 +366,7 @@ describe("ReviewSnapshotPageSession", () => {
 })
 
 const makeRegistry = () => {
-  const registry = Registry.make()
+  const registry = AtomRegistry.make()
   registries.push(registry)
   return registry
 }
@@ -381,7 +384,7 @@ const makeSession = (
 }
 
 const makeSessionInRegistry = (
-  registry: Registry.Registry,
+  registry: AtomRegistry.AtomRegistry,
   fixture: ReturnType<typeof snapshotFixture>,
 ) => {
   const getPage = vi.fn<ReviewSnapshotPageRuntime["getPage"]>(async (request) =>
@@ -438,11 +441,11 @@ const snapshotFixture = (fileCount: number, contentMarker = "", identityMarker =
     detail: LocalReviewDetail.make({
       rootPath: target.rootPath,
       repoName: "diffdash",
-      branchName: "snapshot-loader",
+      branchName: RepositoryComparisonRef.make("snapshot-loader"),
       comparison: target.comparison,
-      baseSha: "base",
-      headSha: "head",
-      diffHash: "diff",
+      baseSha: ReviewRevision.make("base"),
+      headSha: ReviewRevision.make("head"),
+      diffHash: ReviewDiffIdentity.make("diff"),
       title: "Snapshot loader",
       files: [],
       fetchedAt: "2026-08-01T00:00:00Z",
@@ -455,6 +458,7 @@ const snapshotFixture = (fileCount: number, contentMarker = "", identityMarker =
         path: file.path,
         oldPath: file.oldPath,
         status: file.status,
+        visibility: file.visibility,
         additions: file.additions,
         deletions: file.deletions,
         hunkCount: file.hunks.length,

@@ -1,5 +1,13 @@
 import { join } from "node:path"
 
+/** Stable Electron identity and storage namespace selected for one host process. */
+export interface ApplicationIdentity {
+  readonly appName: string
+  readonly appUserModelId: string
+  readonly storageNamespace: string
+  readonly userDataPath: string | null
+}
+
 /** Resolves the process identity and storage namespace for packaged and development builds. */
 export const resolveApplicationIdentity = ({
   appDataPath,
@@ -9,7 +17,7 @@ export const resolveApplicationIdentity = ({
   readonly appDataPath: string
   readonly explicitUserDataDirectory?: boolean
   readonly packaged: boolean
-}) =>
+}): ApplicationIdentity =>
   packaged
     ? {
         appName: "DiffDash",

@@ -6,6 +6,7 @@ import {
   HostedRepositoryName,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 
 import {
   CliGitRevision,
@@ -17,7 +18,7 @@ import {
 describe("CliNavigationCommand", () => {
   it("round-trips a qualified immutable repository comparison", () => {
     const command = OpenRepositoryComparisonCommand.make({
-      localPath: "/workspace/linux",
+      localPath: RepositoryCheckoutPath.make("/workspace/linux"),
       repository: CliRepositorySelector.make({
         providerId: GitProviderId.make("github"),
         namespace: RepositoryNamespace.make("torvalds"),
@@ -34,7 +35,7 @@ describe("CliNavigationCommand", () => {
 
   it("round-trips a current-checkout repository comparison", () => {
     const command = OpenRepositoryComparisonCommand.make({
-      localPath: "/workspace/linux",
+      localPath: RepositoryCheckoutPath.make("/workspace/linux"),
       repository: null,
       baseRef: CliGitRevision.make("v6.0"),
       headRef: CliGitRevision.make("v6.1"),
@@ -64,6 +65,6 @@ describe("CliNavigationCommand", () => {
     "refs/.hidden/head",
     "refs/heads/topic.lock",
   ])("rejects unsafe revision input %s", (revision) => {
-    expect(() => CliGitRevision.make(revision)).toThrow("Invalid Git revision")
+    expect(() => CliGitRevision.make(revision)).toThrow("Schema validation failed")
   })
 })

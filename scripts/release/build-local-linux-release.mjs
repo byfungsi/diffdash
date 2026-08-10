@@ -54,7 +54,6 @@ try {
     `corepack prepare pnpm@${pnpmVersion} --activate`,
     "pnpm install --frozen-lockfile",
     "pnpm assets:icons",
-    "pnpm native:electron",
     "pnpm build",
     "pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never",
   ].join(" && ")

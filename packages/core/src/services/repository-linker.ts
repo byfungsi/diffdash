@@ -1,11 +1,11 @@
-import { Context, Effect, Layer, Schema } from "effect"
-import { createHash } from "node:crypto"
-import { basename, resolve } from "node:path"
+import { Context, Effect, Layer, Match, Option, Schema } from "effect"
+import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 import {
+  HostedRepositorySource,
   type HostedRepositoryLocator,
-  makeHostedRepositoryLocator,
+  LocalRepositorySource,
   ResolvedHostedRepository,
   sameHostedRepository,
 } from "@diffdash/domain/git-provider"
@@ -16,50 +16,86 @@ import {
   ProjectRemoteSelectionRequired,
 } from "@diffdash/domain/project-workspace"
 import {
+  LinkedCheckout,
+  RemoteOnly,
   type Repo,
+  RepositoryCheckoutPath,
   RepositoryIdentityRepairSummary,
-  type UpsertRepositoryInput,
+  UpsertRepositoryInput,
 } from "@diffdash/domain/repository"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { GitService } from "@diffdash/local-git/local-git"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import type { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitProvider } from "./git-provider"
+import { CoreExpectedCause } from "../core-error-cause"
+
+const RepositoryLinkOperation = Schema.Literals([
+  "listRemotes",
+  "detectRepository",
+  "resolveRemote",
+  "persist",
+  "reconcileLocalAliases",
+  "findStableIdentity",
+  "findResolvedRepository",
+  "attachResolvedIdentity",
+  "findByLocalPath",
+  "touch",
+  "list",
+  "setFavorite",
+  "findHosted",
+  "resolveHostedUrl",
+  "findHostedIdentity",
+  "favoriteHosted",
+  "attachHostedIdentity",
+  "validateSelection",
+  "forget",
+  "validateIdentity",
+  "startIdentityRepair",
+  "repairLocalAliases",
+  "listForIdentityRepair",
+  "repairLocalIdentity",
+  "completeIdentityRepair",
+])
 
 /** A local checkout could not be safely linked to a hosted repository. */
 export class RepositoryLinkError extends Schema.TaggedError<RepositoryLinkError>()(
   "RepositoryLinkError",
   {
-    operation: Schema.String,
+    operation: RepositoryLinkOperation,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: CoreExpectedCause,
   },
 ) {}
 
 /** Main-process service for resolving and persisting local and hosted repositories. */
 /** Main-process service for resolving and persisting local and hosted repositories. */
-export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
+export class RepositoryLinker extends Context.Service<
   RepositoryLinker,
   {
     readonly list: (query?: string) => Effect.Effect<readonly Repo[], RepositoryLinkError>
     readonly setFavorite: (
-      id: string,
+      id: ReviewProjectId,
       isFavorite: boolean,
     ) => Effect.Effect<Repo, RepositoryLinkError>
     readonly findHosted: (
       repository: HostedRepositoryLocator,
-    ) => Effect.Effect<Repo | null, RepositoryLinkError>
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryLinkError>
     readonly ensureHosted: (
       repository: HostedRepositoryLocator,
       isFavorite?: boolean,
     ) => Effect.Effect<Repo, RepositoryLinkError>
-    readonly ensureLocal: (localPath: string) => Effect.Effect<Repo, RepositoryLinkError>
+    readonly ensureLocal: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<Repo, RepositoryLinkError>
     readonly openProject: (
-      localPath: string,
+      localPath: RepositoryCheckoutPath,
       selectedRepository?: HostedRepositoryLocator,
     ) => Effect.Effect<ProjectOpenResult, RepositoryLinkError>
     readonly forget: (projectId: ReviewProjectId) => Effect.Effect<Repo, RepositoryLinkError>
-    readonly install: (localPath: string) => Effect.Effect<Repo, RepositoryLinkError>
+    readonly install: (
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<Repo, RepositoryLinkError>
     readonly link: (
       request: LinkRepositoryCheckoutRequest,
     ) => Effect.Effect<Repo, RepositoryLinkError>
@@ -68,7 +104,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       RepositoryLinkError
     >
   }
->() {
+>()("@diffdash/RepositoryLinker") {
   static readonly layer = Layer.effect(
     RepositoryLinker,
     Effect.gen(function* () {
@@ -76,7 +112,9 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       const gitProvider = yield* GitProvider
       const repositories = yield* RepositoryStore
 
-      const listRemotes = Effect.fn("RepositoryLinker.listRemotes")(function* (rootPath: string) {
+      const listRemotes = Effect.fn("RepositoryLinker.listRemotes")(function* (
+        rootPath: RepositoryCheckoutPath,
+      ) {
         return yield* git.listRemotes(rootPath).pipe(
           Effect.mapError((cause) =>
             RepositoryLinkError.make({
@@ -88,7 +126,9 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
         )
       })
 
-      const detectRoot = Effect.fn("RepositoryLinker.detectRoot")(function* (localPath: string) {
+      const detectRoot = Effect.fn("RepositoryLinker.detectRoot")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
         return yield* git.detectRoot(localPath).pipe(
           Effect.mapError((cause) =>
             RepositoryLinkError.make({
@@ -101,18 +141,21 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       })
 
       const detectHosted = Effect.fn("RepositoryLinker.detectHosted")(function* (
-        rootPath: string,
+        rootPath: RepositoryCheckoutPath,
         expected?: HostedRepositoryLocator,
       ) {
         const remotes = yield* listRemotes(rootPath)
         const candidates = remotes.flatMap((remote) => remote.fetchUrls)
         let firstRecognized: {
-          readonly checkout: { readonly rootPath: string; readonly remoteUrl: string }
+          readonly checkout: {
+            readonly rootPath: RepositoryCheckoutPath
+            readonly remoteUrl: string
+          }
           readonly identity: HostedRepositoryLocator
         } | null = null
         for (const remoteUrl of candidates) {
           const identity = yield* Effect.option(gitProvider.parseRemoteUrl(remoteUrl))
-          if (identity["_tag"] === "Some") {
+          if (Option.isSome(identity)) {
             const recognized = { checkout: { rootPath, remoteUrl }, identity: identity.value }
             if (expected === undefined || sameHostedRepository(identity.value, expected)) {
               return recognized
@@ -129,14 +172,14 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       })
 
       const inspectHosted = Effect.fn("RepositoryLinker.inspectHosted")(function* (
-        rootPath: string,
+        rootPath: RepositoryCheckoutPath,
       ) {
         const remotes = yield* listRemotes(rootPath)
         const candidates: RecognizedRemote[] = []
         for (const remote of remotes) {
           for (const remoteUrl of remote.fetchUrls) {
             const parsed = yield* Effect.option(gitProvider.parseRemoteUrl(remoteUrl))
-            if (parsed["_tag"] === "None") continue
+            if (Option.isNone(parsed)) continue
 
             const candidate = {
               remoteName: remote.name,
@@ -144,7 +187,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
               remoteUrl,
             }
             const duplicateIndex = candidates.findIndex((existing) =>
-              sameRepositoryIdentity(existing.repository, candidate.repository),
+              sameHostedRepository(existing.repository, candidate.repository),
             )
             if (duplicateIndex < 0) {
               candidates.push(candidate)
@@ -175,27 +218,27 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       })
 
       const persistDetected = Effect.fn("RepositoryLinker.persistDetected")(function* (
-        detected: Effect.Effect.Success<ReturnType<typeof detectHosted>>,
+        detected: Effect.Success<ReturnType<typeof detectHosted>>,
         isFavorite: boolean,
       ) {
         return yield* persist(
-          {
-            provider: detected.identity.providerId,
-            owner: detected.identity.namespace,
-            name: detected.identity.name,
-            remoteUrl: detected.checkout.remoteUrl,
-            localPath: detected.checkout.rootPath,
+          UpsertRepositoryInput.make({
+            source: HostedRepositorySource.make({ locator: detected.identity }),
+            checkout: LinkedCheckout.make({
+              remoteUrl: detected.checkout.remoteUrl,
+              path: detected.checkout.rootPath,
+            }),
             ...(isFavorite ? { isFavorite: true } : {}),
-          },
+          }),
           "DiffDash could not save the local repository link.",
         )
       })
 
       const reconcileLocalAliases = Effect.fn("RepositoryLinker.reconcileLocalAliases")(function* (
         repo: Repo,
-        rootPath: string,
+        rootPath: RepositoryCheckoutPath,
       ) {
-        yield* repositories.reconcileLocalAliases(ReviewProjectId.make(repo.id), rootPath).pipe(
+        yield* repositories.reconcileLocalAliases(repo.id, rootPath).pipe(
           Effect.mapError((cause) =>
             RepositoryLinkError.make({
               operation: "reconcileLocalAliases",
@@ -209,23 +252,32 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
 
       const persistRecognized = Effect.fn("RepositoryLinker.persistRecognized")(function* (
         candidate: RecognizedRemote,
-        rootPath: string,
+        rootPath: RepositoryCheckoutPath,
         isFavorite = false,
       ) {
         const resolved = yield* gitProvider.resolveRepository(candidate.repository).pipe(
-          Effect.catchAll(() =>
-            Effect.succeed(
-              ResolvedHostedRepository.make({
-                locator: candidate.repository,
-                providerRepositoryId: null,
-                url: candidate.remoteUrl,
-              }),
+          Effect.catch(() =>
+            gitProvider.repositoryUrl(candidate.repository).pipe(
+              Effect.map((url) =>
+                ResolvedHostedRepository.make({
+                  locator: candidate.repository,
+                  providerRepositoryId: null,
+                  url,
+                }),
+              ),
+              Effect.mapError((cause) =>
+                RepositoryLinkError.make({
+                  operation: "findResolvedRepository",
+                  reason: "DiffDash could not resolve the repository's provider URL.",
+                  cause,
+                }),
+              ),
             ),
           ),
         )
         const stable =
           resolved.providerRepositoryId === null
-            ? null
+            ? Option.none<Repo>()
             : yield* repositories
                 .findByProviderRepositoryId(
                   resolved.locator.providerId,
@@ -240,36 +292,32 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
                     }),
                   ),
                 )
-        const located =
-          stable ??
-          (yield* repositories.findHosted(resolved.locator).pipe(
-            Effect.mapError((cause) =>
-              RepositoryLinkError.make({
-                operation: "findResolvedRepository",
-                reason: "DiffDash could not load the resolved repository.",
-                cause,
+        const located = Option.isSome(stable)
+          ? stable
+          : yield* repositories.findHosted(resolved.locator).pipe(
+              Effect.mapError((cause) =>
+                RepositoryLinkError.make({
+                  operation: "findResolvedRepository",
+                  reason: "DiffDash could not load the resolved repository.",
+                  cause,
+                }),
+              ),
+            )
+        const repo = Option.isSome(located)
+          ? located.value
+          : yield* persist(
+              UpsertRepositoryInput.make({
+                source: HostedRepositorySource.make({ locator: resolved.locator }),
+                checkout: LinkedCheckout.make({ remoteUrl: resolved.url, path: rootPath }),
+                isFavorite,
               }),
-            ),
-          ))
-        const repo =
-          located ??
-          (yield* persist(
-            {
-              provider: resolved.locator.providerId,
-              owner: resolved.locator.namespace,
-              name: resolved.locator.name,
-              remoteUrl: resolved.url,
-              localPath: rootPath,
-              isFavorite,
-            },
-            "DiffDash could not save the opened project.",
-          ))
+              "DiffDash could not save the opened project.",
+            )
         const attached = yield* repositories
           .attachResolvedIdentity(
-            ReviewProjectId.make(repo.id),
+            repo.id,
             resolved,
-            rootPath,
-            candidate.remoteUrl,
+            LinkedCheckout.make({ remoteUrl: candidate.remoteUrl, path: rootPath }),
           )
           .pipe(
             Effect.mapError((cause) =>
@@ -284,7 +332,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
       })
 
       const findByLocalPath = Effect.fn("RepositoryLinker.findByLocalPath")(function* (
-        rootPath: string,
+        rootPath: RepositoryCheckoutPath,
       ) {
         return yield* repositories.findByLocalPath(rootPath).pipe(
           Effect.mapError((cause) =>
@@ -348,7 +396,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
           isFavorite = false,
         ) {
           const resolved = yield* gitProvider.resolveRepository(repository).pipe(
-            Effect.catchAll(() =>
+            Effect.catch(() =>
               gitProvider.repositoryUrl(repository).pipe(
                 Effect.map((url) =>
                   ResolvedHostedRepository.make({
@@ -369,7 +417,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
           )
           const stable =
             resolved.providerRepositoryId === null
-              ? null
+              ? Option.none<Repo>()
               : yield* repositories
                   .findByProviderRepositoryId(
                     resolved.locator.providerId,
@@ -384,30 +432,27 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
                       }),
                     ),
                   )
-          const located =
-            stable ??
-            (yield* repositories.findHosted(resolved.locator).pipe(
-              Effect.mapError((cause) =>
-                RepositoryLinkError.make({
-                  operation: "findHosted",
-                  reason: "DiffDash could not load the hosted repository.",
-                  cause,
+          const located = Option.isSome(stable)
+            ? stable
+            : yield* repositories.findHosted(resolved.locator).pipe(
+                Effect.mapError((cause) =>
+                  RepositoryLinkError.make({
+                    operation: "findHosted",
+                    reason: "DiffDash could not load the hosted repository.",
+                    cause,
+                  }),
+                ),
+              )
+          const repo = Option.isSome(located)
+            ? located.value
+            : yield* persist(
+                UpsertRepositoryInput.make({
+                  source: HostedRepositorySource.make({ locator: resolved.locator }),
+                  checkout: RemoteOnly.make({ remoteUrl: resolved.url }),
+                  ...(isFavorite ? { isFavorite: true } : {}),
                 }),
-              ),
-            ))
-          const repo =
-            located ??
-            (yield* persist(
-              {
-                provider: resolved.locator.providerId,
-                owner: resolved.locator.namespace,
-                name: resolved.locator.name,
-                remoteUrl: resolved.url,
-                localPath: null,
-                ...(isFavorite ? { isFavorite: true } : {}),
-              },
-              "DiffDash could not save the hosted repository.",
-            ))
+                "DiffDash could not save the hosted repository.",
+              )
           if (isFavorite && !repo.isFavorite) {
             yield* repositories.setFavorite(repo.id, true).pipe(
               Effect.mapError((cause) =>
@@ -420,7 +465,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
             )
           }
           return yield* repositories
-            .attachResolvedIdentity(ReviewProjectId.make(repo.id), resolved, null, resolved.url)
+            .attachResolvedIdentity(repo.id, resolved, RemoteOnly.make({ remoteUrl: resolved.url }))
             .pipe(
               Effect.mapError((cause) =>
                 RepositoryLinkError.make({
@@ -434,7 +479,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
         ensureLocal: Effect.fn("RepositoryLinker.ensureLocal")(function* (localPath) {
           const rootPath = yield* detectRoot(localPath)
           const existing = yield* findByLocalPath(rootPath)
-          if (existing !== null) return yield* touch(existing)
+          if (Option.isSome(existing)) return yield* touch(existing.value)
           const candidates = yield* inspectHosted(rootPath)
           const originCandidates = candidates.filter((candidate) =>
             isOriginRemote(candidate.remoteName),
@@ -461,7 +506,7 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
 
             if (selectedRepository !== undefined) {
               const selected = candidates.find((candidate) =>
-                sameRepositoryIdentity(candidate.repository, selectedRepository),
+                sameHostedRepository(candidate.repository, selectedRepository),
               )
               if (selected === undefined) {
                 return yield* RepositoryLinkError.make({
@@ -473,13 +518,16 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
               return ProjectOpened.make({ repo: yield* persistRecognized(selected, rootPath) })
             }
 
-            if (existing !== null && existing.provider !== "local") {
+            if (
+              Option.isSome(existing) &&
+              Schema.is(HostedRepositorySource)(existing.value.source)
+            ) {
               const remembered = candidates.find((candidate) =>
-                samePersistedRepository(existing, candidate.repository),
+                existing.value.matchesHosted(candidate.repository),
               )
               if (remembered !== undefined) {
                 return ProjectOpened.make({
-                  repo: yield* persistRecognized(remembered, rootPath, existing.isFavorite),
+                  repo: yield* persistRecognized(remembered, rootPath, existing.value.isFavorite),
                 })
               }
             }
@@ -520,8 +568,11 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
               })
             }
 
-            if (existing !== null && existing.provider !== "local") {
-              const repo = yield* touch(existing)
+            if (
+              Option.isSome(existing) &&
+              Schema.is(HostedRepositorySource)(existing.value.source)
+            ) {
+              const repo = yield* touch(existing.value)
               return ProjectOpened.make({ repo: yield* reconcileLocalAliases(repo, rootPath) })
             }
             return ProjectOpened.make({
@@ -603,17 +654,16 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
               }),
             ),
           )
+          const localRepositories = repos.flatMap((repo) =>
+            Schema.is(LocalRepositorySource)(repo.source) && repo.localPath !== null
+              ? [{ repo, localPath: repo.localPath }]
+              : [],
+          )
           const localResults = yield* Effect.forEach(
-            repos.filter((repo) => repo.provider === "local" && repo.localPath !== null),
-            (repo) =>
+            localRepositories,
+            ({ repo, localPath }) =>
               Effect.gen(function* () {
-                if (repo.localPath === null)
-                  return yield* RepositoryLinkError.make({
-                    operation: "repairLocalIdentity",
-                    reason: "DiffDash could not repair a local project without a checkout.",
-                    cause: new Error("Missing checkout"),
-                  })
-                const candidates = yield* inspectHosted(repo.localPath)
+                const candidates = yield* inspectHosted(localPath)
                 const origin = candidates.filter((candidate) =>
                   isOriginRemote(candidate.remoteName),
                 )
@@ -630,28 +680,24 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
                     cause: new Error("No unambiguous hosted origin"),
                   })
                 }
-                return yield* persistRecognized(candidate, repo.localPath, repo.isFavorite)
-              }).pipe(Effect.either),
+                return yield* persistRecognized(candidate, localPath, repo.isFavorite)
+              }).pipe(Effect.result),
             { concurrency: 2 },
           )
+          const hostedRepositories = repos.flatMap((repo) =>
+            Schema.is(HostedRepositorySource)(repo.source)
+              ? [{ repo, locator: repo.source.locator }]
+              : [],
+          )
           const hostedResults = yield* Effect.forEach(
-            repos.filter((repo) => repo.provider !== "local"),
-            (repo) =>
-              gitProvider
-                .resolveRepository(
-                  makeHostedRepositoryLocator(repo.provider, repo.owner, repo.name),
-                )
-                .pipe(
-                  Effect.flatMap((resolved) =>
-                    repositories.attachResolvedIdentity(
-                      ReviewProjectId.make(repo.id),
-                      resolved,
-                      repo.localPath,
-                      repo.remoteUrl,
-                    ),
-                  ),
-                  Effect.either,
+            hostedRepositories,
+            ({ repo, locator }) =>
+              gitProvider.resolveRepository(locator).pipe(
+                Effect.flatMap((resolved) =>
+                  repositories.attachResolvedIdentity(repo.id, resolved, repo.checkout),
                 ),
+                Effect.result,
+              ),
             { concurrency: 2 },
           )
           yield* repositories.setIdentityRepairStatus("completed").pipe(
@@ -664,11 +710,11 @@ export class RepositoryLinker extends Context.Tag("@diffdash/RepositoryLinker")<
             ),
           )
           return RepositoryIdentityRepairSummary.make({
-            resolvedCount: [...localResults, ...hostedResults].filter(
-              (result) => result._tag === "Right",
+            resolvedCount: [...localResults, ...hostedResults].filter((result) =>
+              Match.valueTags(result, { Success: () => true, Failure: () => false }),
             ).length,
-            unresolvedCount: [...localResults, ...hostedResults].filter(
-              (result) => result._tag === "Left",
+            unresolvedCount: [...localResults, ...hostedResults].filter((result) =>
+              Match.valueTags(result, { Success: () => false, Failure: () => true }),
             ).length,
             localAliasCount: local.matchedAliasCount,
           })
@@ -686,28 +732,16 @@ interface RecognizedRemote {
 
 const normalizedIdentityPart = (value: string) => value.toLocaleLowerCase("en-US")
 
-const sameRepositoryIdentity = (left: HostedRepositoryLocator, right: HostedRepositoryLocator) =>
-  normalizedIdentityPart(left.providerId) === normalizedIdentityPart(right.providerId) &&
-  normalizedIdentityPart(left.namespace) === normalizedIdentityPart(right.namespace) &&
-  normalizedIdentityPart(left.name) === normalizedIdentityPart(right.name)
-
-const samePersistedRepository = (repo: Repo, repository: HostedRepositoryLocator) =>
-  normalizedIdentityPart(repo.provider) === normalizedIdentityPart(repository.providerId) &&
-  normalizedIdentityPart(repo.owner) === normalizedIdentityPart(repository.namespace) &&
-  normalizedIdentityPart(repo.name) === normalizedIdentityPart(repository.name)
-
 const isOriginRemote = (remoteName: string) => normalizedIdentityPart(remoteName) === "origin"
 
-const localRepositoryInput = (rootPath: string) => {
-  const resolvedRootPath = resolve(rootPath)
-  const hash = createHash("sha256").update(resolvedRootPath).digest("hex").slice(0, 12)
-  const repoName = basename(resolvedRootPath) || "repository"
-  return {
-    provider: "local",
-    owner: "local",
-    name: `${repoName}-${hash}`,
-    remoteUrl: pathToFileURL(resolvedRootPath).toString(),
-    localPath: resolvedRootPath,
+const localRepositoryInput = (rootPath: RepositoryCheckoutPath): UpsertRepositoryInput => {
+  const resolvedRootPath = RepositoryCheckoutPath.make(resolve(rootPath))
+  return UpsertRepositoryInput.make({
+    source: LocalRepositorySource.make(),
+    checkout: LinkedCheckout.make({
+      remoteUrl: pathToFileURL(resolvedRootPath).toString(),
+      path: resolvedRootPath,
+    }),
     isFavorite: false,
-  } as const
+  })
 }

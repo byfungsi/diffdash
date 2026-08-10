@@ -5,15 +5,13 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { loadEnv } from "vite"
+import { Schema } from "effect"
+import { desktopMainEntryForMode } from "./electron-build-configuration"
 
-const packageJson: unknown = JSON.parse(readFileSync(resolve("package.json"), "utf8"))
-const packageVersion =
-  typeof packageJson === "object" &&
-  packageJson !== null &&
-  "version" in packageJson &&
-  typeof packageJson.version === "string"
-    ? packageJson.version
-    : "0.0.0"
+const packageJson = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+)(readFileSync(resolve("package.json"), "utf8"))
+const packageVersion = packageJson._tag === "Some" ? packageJson.value.version : "0.0.0"
 
 const internalPackages = [
   "@diffdash/agent-provider",
@@ -21,6 +19,7 @@ const internalPackages = [
   "@diffdash/agent-provider-codex",
   "@diffdash/agent-provider-fixture",
   "@diffdash/agent-provider-opencode",
+  "@diffdash/agents",
   "@diffdash/app",
   "@diffdash/core",
   "@diffdash/domain",
@@ -31,9 +30,7 @@ const internalPackages = [
   "@diffdash/persistence",
   "@diffdash/process",
   "@diffdash/protocol",
-  "@diffdash/review-agent",
   "@diffdash/settings",
-  "@diffdash/walkthrough",
 ]
 
 const appVersion = (() => {
@@ -68,7 +65,7 @@ export default defineConfig(({ mode }) => {
       plugins: [externalizeDepsPlugin({ exclude: internalPackages })],
       build: {
         rollupOptions: {
-          input: resolve("electron/main/index.ts"),
+          input: { index: resolve(desktopMainEntryForMode(mode)) },
         },
       },
     },

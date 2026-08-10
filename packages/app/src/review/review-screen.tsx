@@ -2,6 +2,7 @@
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
+import { Match } from "effect"
 
 import { ProjectWorkspaceFrame } from "@/project-workspace/project-workspace-frame"
 import { Button } from "@/shared/ui/button"
@@ -37,15 +38,25 @@ export const ReviewScreen = ({
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
   readonly onRetrySelection: () => void
 }) => {
-  if (selection._tag === "ready" && sourceOperations._tag === "ready") {
+  const readySelection = Match.valueTags(selection, {
+    ready: (ready) => ready,
+    loading: () => null,
+    failure: () => null,
+    none: () => null,
+  })
+  const readyOperations = Match.valueTags(sourceOperations, {
+    ready: (ready) => ready,
+    unavailable: () => null,
+  })
+  if (readySelection !== null && readyOperations !== null) {
     return (
       <ReadyReviewScreen
-        key={selection.sourceKey}
+        key={readySelection.sourceKey}
         activeRibbon={activeRibbon}
         detailEnvironment={detailEnvironment}
         reviewsContext={reviewsContext}
-        selection={selection}
-        operations={sourceOperations.operations}
+        selection={readySelection}
+        operations={readyOperations.operations}
         onActiveRibbonChange={onActiveRibbonChange}
       />
     )
@@ -102,23 +113,22 @@ const ReadyReviewScreen = ({
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
 }) => {
   const viewedFiles = useViewedFileMutations(selection, operations)
-  const [selectedPath, setSelectedPath] = useState<string | null>(
-    selection.inventory[0]?.path ?? null,
-  )
+  const inventory = selection.review.manifest.files
+  const [selectedPath, setSelectedPath] = useState<string | null>(inventory[0]?.path ?? null)
   const [isReloading, setIsReloading] = useState(false)
 
   useEffect(() => {
     setSelectedPath((path) => {
-      if (path !== null && selection.inventory.some((file) => file.path === path)) return path
-      return selection.inventory[0]?.path ?? null
+      if (path !== null && inventory.some((file) => file.path === path)) return path
+      return inventory[0]?.path ?? null
     })
-  }, [selection.inventory])
+  }, [inventory])
 
   useEffect(() => {
     if (!isReloading || selection.refreshing) return
     const timer = window.setTimeout(() => setIsReloading(false), 0)
     return () => window.clearTimeout(timer)
-  }, [isReloading, selection.refreshing, selection.manifest.snapshotId])
+  }, [isReloading, selection.refreshing, selection.review.manifest.snapshotId])
 
   const ready: ReadyReviewDetailState = {
     selection,
@@ -174,21 +184,19 @@ const WorkspaceMainState = ({
       />
     )
 
-  if (selection._tag === "loading") {
-    return (
+  return Match.valueTags(selection, {
+    loading: (loading) => (
       <WorkspaceMainLayout notice={noticePanel}>
         <ProjectWorkspaceStatePanel
           announcement="loading"
-          description={selection.status}
+          description={loading.status}
           progress={{ label: "Loading selected review" }}
           title="Opening review"
           tone="neutral"
         />
       </WorkspaceMainLayout>
-    )
-  }
-  if (selection._tag === "failure") {
-    return (
+    ),
+    failure: (failure) => (
       <WorkspaceMainLayout notice={noticePanel}>
         <ProjectWorkspaceStatePanel
           announcement="alert"
@@ -202,15 +210,13 @@ const WorkspaceMainState = ({
               </Button>
             </>
           }
-          description={selection.status}
+          description={failure.status}
           title="Review could not be opened"
           tone="danger"
         />
       </WorkspaceMainLayout>
-    )
-  }
-  if (selection._tag === "ready") {
-    return (
+    ),
+    ready: () => (
       <WorkspaceMainLayout notice={noticePanel}>
         <ProjectWorkspaceStatePanel
           announcement="loading"
@@ -219,26 +225,25 @@ const WorkspaceMainState = ({
           tone="neutral"
         />
       </WorkspaceMainLayout>
-    )
-  }
-  if (activeRibbon === "reviews") {
-    return <>{reviewsMain}</>
-  }
-
-  return (
-    <WorkspaceMainLayout notice={noticePanel}>
-      <ProjectWorkspaceStatePanel
-        actions={
-          <Button size="sm" onClick={onReviews}>
-            Go to Reviews
-          </Button>
-        }
-        description={`${ribbonLabel(activeRibbon)} becomes available after selecting a review.`}
-        title={`${ribbonLabel(activeRibbon)} unavailable`}
-        tone="neutral"
-      />
-    </WorkspaceMainLayout>
-  )
+    ),
+    none: () =>
+      activeRibbon === "reviews" ? (
+        <>{reviewsMain}</>
+      ) : (
+        <WorkspaceMainLayout notice={noticePanel}>
+          <ProjectWorkspaceStatePanel
+            actions={
+              <Button size="sm" onClick={onReviews}>
+                Go to Reviews
+              </Button>
+            }
+            description={`${ribbonLabel(activeRibbon)} becomes available after selecting a review.`}
+            title={`${ribbonLabel(activeRibbon)} unavailable`}
+            tone="neutral"
+          />
+        </WorkspaceMainLayout>
+      ),
+  })
 }
 
 const WorkspaceMainLayout = ({

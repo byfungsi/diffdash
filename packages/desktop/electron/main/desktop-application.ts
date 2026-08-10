@@ -1,7 +1,5 @@
-import { join } from "node:path"
-import { pathToFileURL } from "node:url"
-import { CoreMethod } from "@diffdash/core"
-import { Effect } from "effect"
+import { CoreMethod, type CoreConfiguration, type CoreConfigurationError } from "@diffdash/core"
+import { Effect, Predicate } from "effect"
 import {
   app,
   BrowserWindow,
@@ -9,33 +7,35 @@ import {
   dialog,
   shell,
 } from "electron"
-import { resolveApplicationIdentity } from "./application-identity"
-import { createApplicationRuntime } from "./application-runtime"
+import { resolveApplicationIdentity, type ApplicationIdentity } from "./application-identity"
+import type { ApplicationRuntime } from "./application-runtime"
+import { disposeApplicationResources } from "./application-resources"
 import { createApplicationUpdater } from "./application-updater"
-import { resolveCoreConfiguration } from "./core-configuration"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
+import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 import { createRendererSecurityPolicy } from "./electron-policy"
 import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
 import { createNavigation } from "./navigation"
-import { applicationPaths } from "./paths"
+import { createShutdown } from "./shutdown"
 import { installSingleInstanceHandling } from "./single-instance"
 import { logStartupStage } from "./startup-logging"
 import { createMainWindow } from "./window"
-import { isHiddenE2EWindow, revealAppWindow } from "./window-activation"
+import { revealAppWindow } from "./window-activation"
 
 logStartupStage("main module loaded")
 
-const revealWindow = (targetWindow: BrowserWindowType) => {
+const revealWindow = (targetWindow: BrowserWindowType, configuration: DesktopHostConfiguration) => {
   revealAppWindow(targetWindow, {
-    hidden: isHiddenE2EWindow(),
-    platform: process.platform,
+    hidden: configuration.policies.hiddenWindow,
+    platform: configuration.application.platform,
     focusApplication: () => app.focus({ steal: true }),
   })
 }
 
 let mainWindow: BrowserWindowType | null = null
 let activeRendererSecurityPolicy: RendererSecurityPolicy | null = null
+let activeHostConfiguration: DesktopHostConfiguration | null = null
 const getWindow = () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
 
 const configureApplicationIdentity = () => {
@@ -47,17 +47,22 @@ const configureApplicationIdentity = () => {
   app.setAppUserModelId(identity.appUserModelId)
   app.setName(identity.appName)
   if (identity.userDataPath !== null) app.setPath("userData", identity.userDataPath)
+  return identity
 }
 
-const createWindow = (rendererSecurityPolicy: RendererSecurityPolicy) => {
+const createWindow = (
+  configuration: DesktopHostConfiguration,
+  rendererSecurityPolicy: RendererSecurityPolicy,
+) => {
   mainWindow = createMainWindow({
+    configuration,
     logStartupStage,
     navigationCommands: navigation.commands,
     onClosed: () => {
       mainWindow = null
     },
     rendererSecurityPolicy,
-    revealWindow,
+    revealWindow: (window) => revealWindow(window, configuration),
   })
   return mainWindow
 }
@@ -65,47 +70,57 @@ const createWindow = (rendererSecurityPolicy: RendererSecurityPolicy) => {
 const activateMainWindow = () => {
   const targetWindow = getWindow()
   if (targetWindow !== null && !targetWindow.isDestroyed()) {
-    revealWindow(targetWindow)
+    const configuration = activeHostConfiguration
+    if (configuration === null) return null
+    revealWindow(targetWindow, configuration)
     return targetWindow
   }
-  if (activeRendererSecurityPolicy === null) return null
-  return createWindow(activeRendererSecurityPolicy)
+  if (activeRendererSecurityPolicy === null || activeHostConfiguration === null) return null
+  return createWindow(activeHostConfiguration, activeRendererSecurityPolicy)
 }
 
 const navigation = createNavigation({ activateWindow: activateMainWindow })
 
-const start = async () => {
-  if (process.platform === "darwin") {
-    app.setActivationPolicy(isHiddenE2EWindow() ? "accessory" : "regular")
+const start = async (
+  configuration: DesktopHostConfiguration,
+  composition: DesktopApplicationComposition,
+) => {
+  activeHostConfiguration = configuration
+  if (configuration.application.platform === "darwin") {
+    app.setActivationPolicy(configuration.policies.hiddenWindow ? "accessory" : "regular")
   }
 
   await app.whenReady()
   logStartupStage("electron ready")
-  if (process.platform === "darwin" && !isHiddenE2EWindow()) {
-    const developmentIconPath = applicationPaths().developmentIconPath
+  if (configuration.application.platform === "darwin" && !configuration.policies.hiddenWindow) {
+    const developmentIconPath = configuration.paths.developmentIconPath
     if (developmentIconPath !== null) app.dock?.setIcon(developmentIconPath)
     app.dock?.show()
   }
 
   const rendererSecurityPolicy = createRendererSecurityPolicy({
-    developmentRendererUrl: app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL,
-    isPackaged: app.isPackaged,
+    developmentRendererUrl: configuration.renderer.developmentUrl,
+    isPackaged: configuration.application.packaged,
     isTrustedWebContents: (webContents) => webContents === mainWindow?.webContents,
     openExternal: (url) => shell.openExternal(url),
-    packagedRendererUrl: pathToFileURL(join(__dirname, "../renderer/index.html")).href,
+    packagedRendererUrl: configuration.renderer.packagedUrl,
   })
-  const applicationRuntime = createApplicationRuntime(
-    await Effect.runPromise(resolveCoreConfiguration()),
+  const applicationRuntime = composition.createApplicationRuntime(configuration.core)
+  const updater = createApplicationUpdater(configuration)
+  const shutdown = createShutdown({
+    dispose: () => disposeApplicationResources(updater, applicationRuntime),
+    quit: () => app.quit(),
+  })
+  app.on("before-quit", shutdown.beforeQuit)
+  await applicationRuntime.start()
+  installIpcControllers(
+    applicationRuntime,
+    updater,
+    navigation.commands,
+    rendererSecurityPolicy,
+    shutdown,
+    configuration,
   )
-  let updater: ReturnType<typeof createApplicationUpdater>
-  try {
-    await applicationRuntime.start()
-    updater = createApplicationUpdater()
-  } catch (cause) {
-    await applicationRuntime.dispose()
-    throw cause
-  }
-  installIpcControllers(applicationRuntime, updater, navigation.commands, rendererSecurityPolicy)
   activeRendererSecurityPolicy = rendererSecurityPolicy
   const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()
@@ -118,8 +133,8 @@ const start = async () => {
         )
         return undefined
       })
-      .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
+      .catch((error) => {
+        const message = Predicate.isError(error) ? error.message : String(error)
         console.warn(`[repositories:repair] ${message}`)
       })
   }
@@ -128,10 +143,29 @@ const start = async () => {
   })
 }
 
+/** Required runtime wiring selected by the concrete production or E2E entrypoint. */
+export interface DesktopApplicationComposition {
+  readonly createApplicationRuntime: (configuration: CoreConfiguration) => ApplicationRuntime
+  readonly resolveHostConfiguration: (
+    identity: ApplicationIdentity,
+  ) => Effect.Effect<DesktopHostConfiguration, CoreConfigurationError>
+}
+
 /** Starts Electron startup and top-level lifecycle handling. */
-export const startDesktopApplication = () => {
-  configureApplicationIdentity()
+export const startDesktopApplication = (composition: DesktopApplicationComposition) => {
+  const identity = configureApplicationIdentity()
+  let configuration: DesktopHostConfiguration
+  try {
+    configuration = Effect.runSync(composition.resolveHostConfiguration(identity))
+  } catch (error) {
+    const message = Predicate.isError(error) ? error.message : String(error)
+    console.error(`[startup:failed] ${message}`)
+    app.quit()
+    return
+  }
+  activeHostConfiguration = configuration
   const acquired = installSingleInstanceHandling({
+    allowMultipleInstances: configuration.policies.allowMultipleInstances,
     enqueue: navigation.enqueue,
     revealExistingWindow: activateMainWindow,
   })
@@ -140,15 +174,15 @@ export const startDesktopApplication = () => {
     return
   }
 
-  void start().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error)
+  void start(configuration, composition).catch((error) => {
+    const message = Predicate.isError(error) ? error.message : String(error)
     console.error(`[startup:failed] ${message}`)
-    if (app.isReady() && !isHiddenE2EWindow()) {
+    if (app.isReady() && !activeHostConfiguration?.policies.hiddenWindow) {
       dialog.showErrorBox("DiffDash could not start", message)
     }
     app.quit()
   })
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit()
+    if (activeHostConfiguration?.application.platform !== "darwin") app.quit()
   })
 }

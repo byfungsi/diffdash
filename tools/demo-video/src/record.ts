@@ -1,26 +1,24 @@
 /* eslint-disable no-await-in-loop -- Isolated clips must record sequentially to avoid Chromium video contention. */
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { readFile, rename, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { chromium } from "playwright"
+import { Schema } from "effect"
 import { createServer } from "vite"
 
+import { DemoArtifactTransaction } from "./artifact-transaction"
 import { demoOutputRoot, demoVideoPackageRoot, demoWorkspaceRoot } from "./environment"
 import { DEMO_VIEWPORT, type DemoManifest } from "./framework"
 import { ensureCursor, setHumanSeed } from "./human"
 import { runSteps } from "./interpret"
-import { replaceGeneratedFiles, resolveContainedPath } from "./paths"
 import { getStory } from "./stories"
 
 /** Records every clip for one registered story and promotes the complete take transactionally. */
 export const recordDemo = async (storyId: string) => {
   const story = getStory(storyId)
   await assertStoryVersion(story.id)
-  await mkdir(demoOutputRoot, { recursive: true })
-  const outputDirectory = resolveContainedPath(demoOutputRoot, story.id)
-  const stagingDirectory = await mkdtemp(resolve(demoOutputRoot, `.${story.id}-record-`))
-  const manifestClips: DemoManifest["clips"][number][] = []
-
-  try {
+  return DemoArtifactTransaction.run(demoOutputRoot, story.id, "record", async (transaction) => {
+    const { outputDirectory, stagingDirectory } = transaction
+    const manifestClips: DemoManifest["clips"][number][] = []
     const server = await createServer({
       configFile: resolve(demoVideoPackageRoot, "vite.config.ts"),
       server: { host: "127.0.0.1", port: 0, hmr: false, watch: null },
@@ -66,6 +64,9 @@ export const recordDemo = async (storyId: string) => {
             if (startupError !== null) throw new Error(startupError)
             await page.evaluate(() => document.fonts.ready)
             await ensureCursor(page)
+            // Playwright starts video with the context and exposes no recording timestamp for
+            // demoReady. Keep the bounded wall-clock trim until a non-visible frame marker can
+            // be detected without changing the delivered recording.
             trimStartSeconds = Math.max(0, (performance.now() - recordingStartedAt) / 1_000 - 0.3)
             await page.waitForTimeout(500)
             await runSteps(page, clip.steps)
@@ -73,7 +74,7 @@ export const recordDemo = async (storyId: string) => {
           } catch (cause) {
             await page
               .screenshot({
-                path: resolveContainedPath(stagingDirectory, `FAILED-${clip.name}.png`),
+                path: transaction.stagePath(`FAILED-${clip.name}.png`),
                 fullPage: true,
               })
               .catch(() => undefined)
@@ -84,7 +85,7 @@ export const recordDemo = async (storyId: string) => {
           if (video === null) throw new Error(`Playwright did not create video for ${clip.name}`)
           const source = await video.path()
           const file = `${clip.name}.webm`
-          await rename(source, resolveContainedPath(stagingDirectory, file))
+          await rename(source, transaction.stagePath(file))
           manifestClips.push({ name: clip.name, file, trimStartSeconds, card: clip.card })
         }
       } finally {
@@ -103,45 +104,29 @@ export const recordDemo = async (storyId: string) => {
       outro: story.outro,
       clips: manifestClips,
     }
-    const stagedManifest = resolveContainedPath(stagingDirectory, "manifest.json")
+    const stagedManifest = transaction.stagePath("manifest.json")
     await writeFile(stagedManifest, `${JSON.stringify(manifest, null, 2)}\n`)
-    await mkdir(outputDirectory, { recursive: true })
     const generatedFiles = [...manifest.clips.map(({ file }) => file), "manifest.json"] as const
-    await replaceGeneratedFiles(
-      generatedFiles.map((file) => ({
-        source: resolveContainedPath(stagingDirectory, file),
-        destination: resolveContainedPath(outputDirectory, file),
-      })),
-      stagingDirectory,
-    )
-    const generatedSet = new Set(generatedFiles)
-    const obsoleteClips = (await readdir(outputDirectory)).filter(
-      (file) => file.endsWith(".webm") && !generatedSet.has(file),
-    )
-    await Promise.all(
-      obsoleteClips.map((file) => rm(resolveContainedPath(outputDirectory, file), { force: true })),
-    )
+    await transaction.commit(generatedFiles, { obsolete: (file) => file.endsWith(".webm") })
     process.stdout.write(`[demo] recorded ${manifestClips.length} clips in ${outputDirectory}\n`)
-  } finally {
-    await rm(stagingDirectory, { recursive: true, force: true })
-  }
+  })
 }
 
 const assertStoryVersion = async (storyId: string) => {
   const expectedVersion = storyId.startsWith("diffdash-") ? storyId.slice("diffdash-".length) : null
   if (expectedVersion === null) return
   const source = await readFile(resolve(demoWorkspaceRoot, "packages/desktop/package.json"), "utf8")
-  let value: unknown
+  let packageMetadata: { readonly version: string }
   try {
-    value = JSON.parse(source)
-  } catch {
-    throw new Error("Desktop package metadata is not valid JSON")
+    packageMetadata = Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+    )(source)
+  } catch (cause) {
+    throw new Error("Desktop package metadata is not valid JSON or has no string version", {
+      cause,
+    })
   }
-  if (typeof value !== "object" || value === null || !("version" in value)) {
-    throw new Error("Desktop package metadata does not declare a version")
-  }
-  const version = value.version
-  if (typeof version !== "string") throw new Error("Desktop package version must be a string")
+  const version = packageMetadata.version
   if (version !== expectedVersion) {
     throw new Error(`Story ${storyId} does not match desktop version ${version}`)
   }

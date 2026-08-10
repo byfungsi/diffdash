@@ -1,50 +1,14 @@
 import { Schema } from "effect"
 
 import { ChangedFile, HostedRepositoryLocator, makeHostedRepositoryKey } from "./git-provider"
+import { RepositoryComparisonRef } from "./repository-comparison-ref"
 import { ReviewKey, ReviewRevision } from "./review-identity"
 
-const forbiddenGitRevisionCharacters = new Set(["~", "^", ":", "?", "*", "[", "\\"])
-
-const isSafeGitRevisionInput = (input: string): boolean => {
-  if (
-    input.length === 0 ||
-    input.length > 255 ||
-    input === "@" ||
-    input.startsWith("-") ||
-    input.startsWith(".") ||
-    input.endsWith(".") ||
-    input.endsWith("/") ||
-    input.includes("..") ||
-    input.includes("//") ||
-    input.includes("@{") ||
-    input.split("/").some((component) => component.startsWith(".") || component.endsWith(".lock"))
-  ) {
-    return false
-  }
-
-  return [...input].every((character) => {
-    const codePoint = character.codePointAt(0)
-    return (
-      codePoint !== undefined &&
-      codePoint > 0x20 &&
-      codePoint !== 0x7f &&
-      !forbiddenGitRevisionCharacters.has(character)
-    )
-  })
-}
-
-/** Safe branch, tag, or full commit input for one repository comparison. */
-export const RepositoryComparisonRef = Schema.String.pipe(
-  Schema.filter(isSafeGitRevisionInput, { message: () => "Invalid Git revision" }),
-  Schema.brand("RepositoryComparisonRef"),
-)
-
-/** Safe branch, tag, or full commit input for one repository comparison. */
-export type RepositoryComparisonRef = typeof RepositoryComparisonRef.Type
+export { RepositoryComparisonRef } from "./repository-comparison-ref"
 
 /** Full normalized SHA-1 or SHA-256 Git commit object identity. */
 export const GitCommitSha = Schema.String.pipe(
-  Schema.pattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+  Schema.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)),
   Schema.brand("GitCommitSha"),
 )
 

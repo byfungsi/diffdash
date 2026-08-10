@@ -8,7 +8,8 @@ import {
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it, vi } from "vitest"
 import {
   createDiffDashBrowserWindowOptions,
@@ -160,7 +161,11 @@ describe("Electron policy", () => {
   })
 
   it("keeps renderer connections same-origin without localhost CSP grants", () => {
-    const rendererHtml = readFileSync(resolve(__dirname, "../../src/renderer/index.html"), "utf8")
+    const moduleDirectory = dirname(fileURLToPath(import.meta.url))
+    const rendererHtml = readFileSync(
+      resolve(moduleDirectory, "../../src/renderer/index.html"),
+      "utf8",
+    )
 
     expect(rendererHtml).toContain("connect-src 'self'")
     expect(rendererHtml).not.toMatch(/(?:localhost|127\.0\.0\.1|ws:\/\/)/)
@@ -186,7 +191,9 @@ describe("Electron policy", () => {
       expect(resolveContainedRepositoryPath(rootPath, "src/app.ts")).toBe(
         realpathSync(resolve(rootPath, "src/app.ts")),
       )
-      expect(resolveContainedRepositoryPath(rootPath, "")).toBe(realpathSync(rootPath))
+      expect(() => resolveContainedRepositoryPath(rootPath, "")).toThrow(
+        "Cannot open a file outside the repository checkout",
+      )
       expect(() =>
         resolveContainedRepositoryPath(rootPath, resolve(rootPath, "src/app.ts")),
       ).toThrow("Cannot open an absolute file path from a review")

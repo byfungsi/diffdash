@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs"
 import { isAbsolute, relative, resolve } from "node:path"
 import type { BrowserWindowConstructorOptions } from "electron"
+import { OpenRepositoryFilePath } from "@diffdash/protocol/hosted-git"
 
 type OpenExternal = (url: string) => Promise<void>
 
@@ -156,12 +157,12 @@ export const createRendererNavigationHandlers = (policy: RendererSecurityPolicy)
 }
 
 /** Normalizes a review path while rejecting explicit parent traversal. */
-export const normalizeReviewFilePath = (filePath: string) => {
+export const normalizeReviewFilePath = (filePath: string): OpenRepositoryFilePath => {
   const normalized = filePath.replaceAll("\\", "/")
-  if (normalized.split("/").some((segment) => segment === "..")) {
+  if (normalized.length === 0 || normalized.split("/").some((segment) => segment === "..")) {
     throw new Error("Cannot open a file outside the repository checkout")
   }
-  return normalized
+  return OpenRepositoryFilePath.make(normalized)
 }
 
 /** Resolves a review path and rejects paths outside the selected repository root. */

@@ -1,78 +1,89 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
-import { randomUUID } from "node:crypto"
-import {
-  accessSync,
-  closeSync,
-  constants,
-  existsSync,
-  fchmodSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs"
 import { delimiter, dirname, join, resolve } from "node:path"
 
 import {
   AppPrerequisites,
+  CodingAgentName,
   DiffDashCliInstallResult,
   ProviderDiagnostic,
   SetupRequirement,
+  SetupRequirementKey,
 } from "@diffdash/protocol/prerequisites"
-import type { AgentProviderStatus } from "@diffdash/protocol/agent-providers"
+import {
+  AgentProviderCapabilityStatus,
+  type AgentProviderStatus,
+} from "@diffdash/protocol/agent-providers"
 import { type ProcessRunner, ProcessService, processRequest } from "@diffdash/process"
-import { findExecutableInPath } from "@diffdash/process/executable"
+import { ExecutablePath, findExecutableInPath } from "@diffdash/process/executable"
+import { ProcessFileSystem, type ProcessFileSystemOperations } from "@diffdash/process/file-system"
+import { WebUrl } from "@diffdash/domain/web-url"
+import type {
+  CoreAbsolutePath,
+  ExecutablePathExtensions,
+  ExecutableSearchPath,
+} from "../core-configuration"
 import { AgentProviders } from "./agent-providers"
 import { GitProvider } from "./git-provider"
+import { CoreExpectedCause } from "../core-error-cause"
 
 export { findExecutableInPath } from "@diffdash/process/executable"
+export { replaceExecutableAtomically } from "@diffdash/process/file-system"
+
+const PrerequisiteInstallOperation = Schema.Literals([
+  "installDiffDashCli.source",
+  "installDiffDashCli.targetDirectory",
+  "installDiffDashCli.appImage",
+  "installDiffDashCli",
+  "installDiffDashCli.linkExists",
+])
+
 /** A typed failure from installing the DiffDash CLI into PATH. */
 export class PrerequisiteInstallError extends Schema.TaggedError<PrerequisiteInstallError>()(
   "PrerequisiteInstallError",
   {
-    operation: Schema.String,
+    operation: PrerequisiteInstallOperation,
     message: Schema.String,
-    cause: Schema.NullOr(Schema.Defect),
+    cause: Schema.NullOr(CoreExpectedCause),
   },
 ) {}
 
 /** Main-process service for setup prerequisite checks and install actions. */
-export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
+export class Prerequisites extends Context.Service<
   Prerequisites,
   {
     readonly get: Effect.Effect<AppPrerequisites>
     readonly installDiffDashCli: Effect.Effect<DiffDashCliInstallResult, PrerequisiteInstallError>
   }
->() {
+>()("@diffdash/Prerequisites") {
   /** Creates prerequisite checks from host-decoded executable and home paths. */
   static layer(options: {
-    readonly appImagePath: string | null
-    readonly diffDashCliPath: string
-    readonly executableSearchPath: string
-    readonly executablePathExtensions: string | null
-    readonly homeDirectory: string | null
+    readonly appImagePath: CoreAbsolutePath | null
+    readonly diffDashCliPath: CoreAbsolutePath
+    readonly executableSearchPath: ExecutableSearchPath
+    readonly executablePathExtensions: ExecutablePathExtensions | null
+    readonly homeDirectory: CoreAbsolutePath | null
     readonly platform: NodeJS.Platform
-  }): Layer.Layer<Prerequisites, never, AgentProviders | GitProvider | ProcessService> {
+  }): Layer.Layer<
+    Prerequisites,
+    never,
+    AgentProviders | GitProvider | ProcessService | ProcessFileSystem
+  > {
     return Layer.effect(
       Prerequisites,
       Effect.gen(function* () {
         const processes = yield* ProcessService
+        const fileSystem = yield* ProcessFileSystem
         const gitProvider = yield* GitProvider
         const agentProviders = yield* AgentProviders
         const get = Effect.fn("Prerequisites.get")(function* () {
-          yield* refreshAppImageCliLaunchers({
+          yield* refreshAppImageCliLaunchersWithFileSystem(fileSystem, {
             sourcePath: options.diffDashCliPath,
             appImagePath: options.appImagePath,
             executableSearchPath: options.executableSearchPath,
             executablePathExtensions: options.executablePathExtensions,
             homeDirectory: options.homeDirectory,
             platform: options.platform,
-          })
+          }).pipe(Effect.catch(() => Effect.void))
           const [gitInstalled, providerDescriptors, providerDiagnostics, agentCatalog] =
             yield* Effect.all(
               [
@@ -84,8 +95,10 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
               { concurrency: "unbounded" },
             )
           const installedCodingAgents = agentCatalog.providers
-            .filter((provider) => provider.capabilities.some(({ status }) => status === "ready"))
-            .map(({ id }) => id)
+            .filter((provider) =>
+              Object.values(provider.capabilities).some(AgentProviderCapabilityStatus.guards.Ready),
+            )
+            .map(({ id }) => CodingAgentName.make(id))
           const diffDashCliInPath = yield* findExecutableInPath("diffdash", {
             envPath: options.executableSearchPath,
             ...(options.executablePathExtensions === null
@@ -139,7 +152,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
                 )
                 const ready = diagnostic?.available === true && diagnostic.authenticated
                 return SetupRequirement.make({
-                  key: `provider:${descriptor.id}`,
+                  key: SetupRequirementKey.make(`provider:${descriptor.id}`),
                   providerId: descriptor.id,
                   title: `${descriptor.displayName} ready`,
                   description: `Connect ${descriptor.displayName} to search ${descriptor.terminology.repositoryPlural} and review ${descriptor.terminology.reviewPlural}.`,
@@ -157,7 +170,7 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
           })
         })
         const install = Effect.fn("Prerequisites.installDiffDashCli")(function () {
-          return installDiffDashCli({
+          return installDiffDashCli(fileSystem, {
             sourcePath: options.diffDashCliPath,
             appImagePath: options.appImagePath,
             executableSearchPath: options.executableSearchPath,
@@ -177,148 +190,130 @@ export class Prerequisites extends Context.Tag("@diffdash/Prerequisites")<
 const commandAvailable = (processes: ProcessRunner, command: string) =>
   processes.run(processRequest(command, ["--version"], { timeoutMs: 5_000 })).pipe(
     Effect.as(true),
-    Effect.catchAll(() => Effect.succeed(false)),
+    Effect.catch(() => Effect.succeed(false)),
   )
 
 const agentSetupRequirement = (provider: AgentProviderStatus) => {
-  const supported = provider.capabilities.filter(({ status }) => status !== "unsupported")
-  const ready = supported.length > 0 && supported.every(({ status }) => status === "ready")
-  const unavailable = supported.find(({ status }) => status !== "ready")
+  const supported = Object.values(provider.capabilities).filter(
+    (status) => !AgentProviderCapabilityStatus.guards.Unsupported(status),
+  )
+  const ready = supported.length > 0 && supported.every(AgentProviderCapabilityStatus.guards.Ready)
+  const unavailable = supported.find(
+    (status) => !AgentProviderCapabilityStatus.guards.Ready(status),
+  )
   const setupHint = provider.setup.find(
     (requirement) => requirement.installHint !== null,
   )?.installHint
   return SetupRequirement.make({
-    key: `agent-provider:${provider.id}`,
+    key: SetupRequirementKey.make(`agent-provider:${provider.id}`),
     providerId: provider.id,
     title: `${provider.displayName} ready`,
     description: provider.description,
     detail: ready
       ? `${provider.displayName} is available.`
-      : (unavailable?.reason ?? setupHint ?? `${provider.displayName} needs setup.`),
+      : unavailable !== undefined && !AgentProviderCapabilityStatus.guards.Ready(unavailable)
+        ? unavailable.reason
+        : (setupHint ?? `${provider.displayName} needs setup.`),
     ready,
     requiredForLocalUse: false,
-    helpUrl: provider.homepage,
+    helpUrl: provider.homepage === null ? null : WebUrl.make(provider.homepage),
   })
 }
 
 const APPIMAGE_LAUNCHER_MARKER = "# Generated by the DiffDash AppImage CLI installer."
 
-/** Replaces an executable through a private, exclusive, same-directory temporary file. */
-export const replaceExecutableAtomically = (targetPath: string, content: string) => {
-  const temporaryPath = join(dirname(targetPath), `.${randomUUID()}.${process.pid}.tmp`)
-  let descriptor: number | null = null
-  try {
-    descriptor = openSync(
-      temporaryPath,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
-      0o600,
-    )
-    writeFileSync(descriptor, content, { encoding: "utf8" })
-    fchmodSync(descriptor, 0o755)
-    closeSync(descriptor)
-    descriptor = null
-    renameSync(temporaryPath, targetPath)
-  } finally {
-    if (descriptor !== null) {
-      try {
-        closeSync(descriptor)
-      } catch {
-        // Continue cleanup after a failed close.
-      }
-    }
-    try {
-      unlinkSync(temporaryPath)
-    } catch {
-      // The rename removed the temporary path, or cleanup is already best effort.
-    }
-  }
-}
-
-const installDiffDashCli = ({
-  sourcePath,
-  appImagePath,
-  executableSearchPath,
-  homeDirectory,
-}: {
-  readonly sourcePath: string
-  readonly appImagePath: string | null
-  readonly executableSearchPath: string
-  readonly homeDirectory: string | null
-}) =>
-  Effect.try({
-    try: () => {
-      if (sourcePath.length === 0 || !existsSync(sourcePath)) {
-        throw PrerequisiteInstallError.make({
-          cause: null,
-          message: "Could not find the bundled DiffDash CLI.",
-          operation: "installDiffDashCli.source",
-        })
-      }
-
-      const targetDirectory = firstWritablePathDirectory(executableSearchPath, homeDirectory)
-      if (targetDirectory === null) {
-        throw PrerequisiteInstallError.make({
-          cause: null,
-          message: "Could not find or create a writable directory for the DiffDash CLI.",
-          operation: "installDiffDashCli.targetDirectory",
-        })
-      }
-
-      mkdirSync(targetDirectory, { recursive: true })
-
-      const linkPath = resolve(targetDirectory, "diffdash")
-      const existing = lstatOrNull(linkPath)
-      if (existing !== null) {
-        if (existing.isSymbolicLink()) {
-          const linkedPath = resolve(dirname(linkPath), readlinkSync(linkPath))
-          if (appImagePath === null && linkedPath === sourcePath) {
-            return installResult(linkPath, targetDirectory, executableSearchPath)
-          }
-          if (isTransientAppImageCliPath(linkedPath)) {
-            if (appImagePath === null) unlinkSync(linkPath)
-          } else throw linkExistsError(linkPath)
-        } else if (
-          appImagePath !== null &&
-          existing.isFile() &&
-          readFileSync(linkPath, "utf8").includes(APPIMAGE_LAUNCHER_MARKER)
-        ) {
-          // Marker-owned launchers are replaced atomically below.
-        } else {
-          throw linkExistsError(linkPath)
-        }
-      }
-
-      if (appImagePath !== null) {
-        if (!existsSync(appImagePath)) {
-          throw PrerequisiteInstallError.make({
-            cause: null,
-            message: "Could not find the persistent DiffDash AppImage.",
-            operation: "installDiffDashCli.appImage",
-          })
-        }
-        replaceExecutableAtomically(
-          linkPath,
-          makeAppImageCliLauncher(readFileSync(sourcePath, "utf8"), appImagePath),
-        )
-      } else {
-        accessSync(sourcePath, constants.X_OK)
-        symlinkSync(sourcePath, linkPath)
-      }
-      return installResult(linkPath, targetDirectory, executableSearchPath)
-    },
-    catch: (cause) => {
-      if (cause instanceof PrerequisiteInstallError) return cause
-      return PrerequisiteInstallError.make({
-        cause,
-        message: "Could not install the DiffDash CLI.",
-        operation: "installDiffDashCli",
+const installDiffDashCli = (
+  fileSystem: ProcessFileSystemOperations,
+  {
+    sourcePath,
+    appImagePath,
+    executableSearchPath,
+    homeDirectory,
+  }: {
+    readonly sourcePath: CoreAbsolutePath
+    readonly appImagePath: CoreAbsolutePath | null
+    readonly executableSearchPath: ExecutableSearchPath
+    readonly homeDirectory: CoreAbsolutePath | null
+  },
+) =>
+  Effect.gen(function* () {
+    if (sourcePath.length === 0 || !(yield* fileSystem.exists(sourcePath))) {
+      return yield* PrerequisiteInstallError.make({
+        cause: null,
+        message: "Could not find the bundled DiffDash CLI.",
+        operation: "installDiffDashCli.source",
       })
-    },
-  })
+    }
+
+    const targetDirectory = yield* firstWritablePathDirectory(
+      fileSystem,
+      executableSearchPath,
+      homeDirectory,
+    )
+    if (targetDirectory === null) {
+      return yield* PrerequisiteInstallError.make({
+        cause: null,
+        message: "Could not find or create a writable directory for the DiffDash CLI.",
+        operation: "installDiffDashCli.targetDirectory",
+      })
+    }
+
+    yield* fileSystem.ensureDirectory(targetDirectory, { recursive: true })
+
+    const linkPath = resolve(targetDirectory, "diffdash")
+    const existing = yield* fileSystem.inspect(linkPath)
+    if (existing !== null) {
+      if (existing.type === "symbolic-link") {
+        const linkedPath = resolve(dirname(linkPath), yield* fileSystem.readLink(linkPath))
+        if (appImagePath === null && linkedPath === sourcePath) {
+          return installResult(linkPath, targetDirectory, executableSearchPath)
+        }
+        if (isTransientAppImageCliPath(linkedPath)) {
+          if (appImagePath === null) yield* fileSystem.remove(linkPath)
+        } else return yield* linkExistsError(linkPath)
+      } else if (
+        appImagePath !== null &&
+        existing.type === "file" &&
+        (yield* fileSystem.readText(linkPath)).includes(APPIMAGE_LAUNCHER_MARKER)
+      ) {
+        // Marker-owned launchers are replaced atomically below.
+      } else {
+        return yield* linkExistsError(linkPath)
+      }
+    }
+
+    if (appImagePath !== null) {
+      if (!(yield* fileSystem.exists(appImagePath))) {
+        return yield* PrerequisiteInstallError.make({
+          cause: null,
+          message: "Could not find the persistent DiffDash AppImage.",
+          operation: "installDiffDashCli.appImage",
+        })
+      }
+      yield* fileSystem.replaceExecutableAtomically(
+        ExecutablePath.make(linkPath),
+        makeAppImageCliLauncher(yield* fileSystem.readText(sourcePath), appImagePath),
+      )
+    } else {
+      yield* fileSystem.access(sourcePath, "executable")
+      yield* fileSystem.symlink(sourcePath, linkPath)
+    }
+    return installResult(linkPath, targetDirectory, executableSearchPath)
+  }).pipe(
+    Effect.catch((cause) =>
+      Schema.is(PrerequisiteInstallError)(cause)
+        ? Effect.fail(cause)
+        : PrerequisiteInstallError.make({
+            cause,
+            message: "Could not install the DiffDash CLI.",
+            operation: "installDiffDashCli",
+          }),
+    ),
+  )
 
 const installResult = (path: string, targetDirectory: string, executableSearchPath: string) =>
   DiffDashCliInstallResult.make({
-    path,
+    path: ExecutablePath.make(path),
     pathSetupCommand: pathContainsDirectory(executableSearchPath, targetDirectory)
       ? null
       : `export PATH=${shellQuote(targetDirectory)}:$PATH`,
@@ -330,15 +325,6 @@ const linkExistsError = (linkPath: string) =>
     message: `${linkPath} already exists. Remove it or choose another installation directory.`,
     operation: "installDiffDashCli.linkExists",
   })
-
-const lstatOrNull = (path: string) => {
-  try {
-    return lstatSync(path)
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
-    throw error
-  }
-}
 
 const isTransientAppImageCliPath = (path: string) =>
   path.includes("/.mount_") && path.endsWith("/resources/bin/diffdash")
@@ -366,44 +352,94 @@ export const refreshAppImageCliLaunchers = Effect.fn("refreshAppImageCliLauncher
   homeDirectory,
   platform,
 }: {
-  readonly sourcePath: string
-  readonly appImagePath: string | null
-  readonly executableSearchPath: string
-  readonly executablePathExtensions: string | null
-  readonly homeDirectory: string | null
+  readonly sourcePath: CoreAbsolutePath
+  readonly appImagePath: CoreAbsolutePath | null
+  readonly executableSearchPath: ExecutableSearchPath
+  readonly executablePathExtensions: ExecutablePathExtensions | null
+  readonly homeDirectory: CoreAbsolutePath | null
   readonly platform: NodeJS.Platform
 }) {
-  if (appImagePath === null || !existsSync(sourcePath) || !existsSync(appImagePath)) return
+  const fileSystem = yield* ProcessFileSystem
+  return yield* refreshAppImageCliLaunchersWithFileSystem(fileSystem, {
+    sourcePath,
+    appImagePath,
+    executableSearchPath,
+    executablePathExtensions,
+    homeDirectory,
+    platform,
+  }).pipe(Effect.catch(() => Effect.void))
+})
+
+const refreshAppImageCliLaunchersWithFileSystem = Effect.fn(
+  "refreshAppImageCliLaunchersWithFileSystem",
+)(function* (
+  fileSystem: ProcessFileSystemOperations,
+  {
+    sourcePath,
+    appImagePath,
+    executableSearchPath,
+    executablePathExtensions,
+    homeDirectory,
+    platform,
+  }: {
+    readonly sourcePath: CoreAbsolutePath
+    readonly appImagePath: CoreAbsolutePath | null
+    readonly executableSearchPath: ExecutableSearchPath
+    readonly executablePathExtensions: ExecutablePathExtensions | null
+    readonly homeDirectory: CoreAbsolutePath | null
+    readonly platform: NodeJS.Platform
+  },
+) {
+  if (
+    appImagePath === null ||
+    !(yield* fileSystem.exists(sourcePath)) ||
+    !(yield* fileSystem.exists(appImagePath))
+  )
+    return
 
   const diffDashInPath = yield* findExecutableInPath("diffdash", {
     envPath: executableSearchPath,
     ...(executablePathExtensions === null ? {} : { pathExt: executablePathExtensions }),
     platform,
   })
-  yield* Effect.sync(() => {
-    const candidates = new Set([
-      Option.getOrNull(diffDashInPath),
-      homeDirectory === null ? null : join(homeDirectory, ".local", "bin", "diffdash"),
-      homeDirectory === null ? null : join(homeDirectory, "bin", "diffdash"),
-    ])
-    const source = readFileSync(sourcePath, "utf8")
-    const launcher = makeAppImageCliLauncher(source, appImagePath)
-    for (const candidate of candidates) {
-      if (candidate === null || !existsSync(candidate)) continue
-      try {
-        const existing = lstatSync(candidate)
-        if (!existing.isFile()) continue
-        const current = readFileSync(candidate, "utf8")
-        if (!current.includes(APPIMAGE_LAUNCHER_MARKER) || current === launcher) continue
-        replaceExecutableAtomically(candidate, launcher)
-      } catch {
-        // Diagnostics must remain available when a marker-owned launcher is not writable.
-      }
-    }
-  })
+  const candidates = new Set([
+    Option.getOrNull(diffDashInPath),
+    homeDirectory === null ? null : join(homeDirectory, ".local", "bin", "diffdash"),
+    homeDirectory === null ? null : join(homeDirectory, "bin", "diffdash"),
+  ])
+  const source = yield* fileSystem.readText(sourcePath)
+  const launcher = makeAppImageCliLauncher(source, appImagePath)
+  yield* Effect.forEach(
+    candidates,
+    (candidate) =>
+      candidate === null
+        ? Effect.void
+        : refreshLauncherCandidate(fileSystem, candidate, launcher).pipe(
+            Effect.catch(() => Effect.void),
+          ),
+    { discard: true },
+  )
 })
 
-const firstWritablePathDirectory = (executableSearchPath: string, homeDirectory: string | null) => {
+const refreshLauncherCandidate = (
+  fileSystem: ProcessFileSystemOperations,
+  candidate: string,
+  launcher: string,
+) =>
+  Effect.gen(function* () {
+    if (!(yield* fileSystem.exists(candidate))) return
+    const existing = yield* fileSystem.inspect(candidate)
+    if (existing?.type !== "file") return
+    const current = yield* fileSystem.readText(candidate)
+    if (!current.includes(APPIMAGE_LAUNCHER_MARKER) || current === launcher) return
+    yield* fileSystem.replaceExecutableAtomically(ExecutablePath.make(candidate), launcher)
+  })
+
+const firstWritablePathDirectory = Effect.fn("firstWritablePathDirectory")(function* (
+  fileSystem: ProcessFileSystemOperations,
+  executableSearchPath: string,
+  homeDirectory: string | null,
+) {
   const pathDirectories = executableSearchPath.split(delimiter).filter((entry) => entry.length > 0)
   const preferredDirectories = [
     homeDirectory === null ? "" : join(homeDirectory, ".local", "bin"),
@@ -415,11 +451,11 @@ const firstWritablePathDirectory = (executableSearchPath: string, homeDirectory:
 
   for (const candidate of candidates) {
     const resolvedCandidate = resolve(candidate)
-    if (canWriteDirectory(resolvedCandidate)) return resolvedCandidate
+    if (yield* canWriteDirectory(fileSystem, resolvedCandidate)) return resolvedCandidate
   }
 
   return null
-}
+})
 
 const uniqueDirectories = (directories: readonly string[]) => {
   const seen = new Set<string>()
@@ -432,14 +468,11 @@ const uniqueDirectories = (directories: readonly string[]) => {
   })
 }
 
-const canWriteDirectory = (directory: string) => {
-  try {
-    if (!existsSync(directory)) {
-      mkdirSync(directory, { recursive: true })
+const canWriteDirectory = (fileSystem: ProcessFileSystemOperations, directory: string) =>
+  Effect.gen(function* () {
+    if (!(yield* fileSystem.exists(directory))) {
+      yield* fileSystem.ensureDirectory(directory, { recursive: true })
     }
-    accessSync(directory, constants.W_OK)
+    yield* fileSystem.access(directory, "writable")
     return true
-  } catch {
-    return false
-  }
-}
+  }).pipe(Effect.catch(() => Effect.succeed(false)))

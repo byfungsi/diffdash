@@ -1,5 +1,4 @@
-import { filterVisibleDiffFiles } from "@diffdash/domain/diff-file-filters"
-import type { DiffFileSummary } from "@diffdash/domain/diff-file-filters"
+import { type DiffFileStatus, DiffFileVisibility } from "@diffdash/domain/diff"
 
 /** Git-style status values supported by @pierre/trees. */
 type FileTreeGitStatus = "added" | "deleted" | "modified" | "renamed" | "untracked"
@@ -19,8 +18,10 @@ interface ReviewFileTreeInput {
 }
 
 /** File metadata consumed by the review tree before parsed pages are loaded. */
-type ReviewFileTreeFile = DiffFileSummary & {
+type ReviewFileTreeFile = {
   readonly path: string
+  readonly status: DiffFileStatus
+  readonly visibility: typeof DiffFileVisibility.Type
 }
 
 /** Builds path-first tree input from parsed diff files and hidden-file preference. */
@@ -28,17 +29,14 @@ export const buildReviewFileTreeInput = (
   files: readonly ReviewFileTreeFile[],
   showHidden: boolean,
 ): ReviewFileTreeInput => {
-  const visibleFiles = filterVisibleDiffFiles(files, showHidden)
-  const visiblePaths = visibleFiles.map((file) => file.path)
-  const fileByPath = new Map(visibleFiles.map((file) => [file.path, file]))
+  const visibleFiles = showHidden
+    ? files
+    : files.filter((file) => DiffFileVisibility.guards.Visible(file.visibility))
 
   return {
-    gitStatus: visiblePaths.flatMap((path) => {
-      const file = fileByPath.get(path)
-      return file === undefined ? [] : [{ path: file.path, status: toTreeGitStatus(file) }]
-    }),
+    gitStatus: visibleFiles.map((file) => ({ path: file.path, status: toTreeGitStatus(file) })),
     hiddenCount: files.length - visibleFiles.length,
-    paths: visiblePaths,
+    paths: visibleFiles.map((file) => file.path),
     visibleFiles,
   }
 }

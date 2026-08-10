@@ -7,38 +7,46 @@ import {
   type HostedRepository,
   type HostedReviewSummary,
   type HostedRepositoryLocator,
-  makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
-import { LocalReviewTarget, workingTreeReviewTarget } from "@diffdash/domain/local-review"
-import {
-  type ProjectRemoteSelectionRequired,
-  type ProjectWorkspaceRibbon,
-  ProjectWorkspaceStateInput,
-} from "@diffdash/domain/project-workspace"
+import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
+import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
 import {
   RendererLayoutSettings,
   ReviewContextPaneWidth,
   ReviewPaneSettings,
   ReviewThreadDetailPaneWidth,
 } from "@diffdash/domain/renderer-layout-settings"
-import type { Repo, RepositorySearchScope } from "@diffdash/domain/repository"
+import {
+  RepositoryCheckoutPath,
+  type Repo,
+  type RepositorySearchScope,
+} from "@diffdash/domain/repository"
+import { WebUrl } from "@diffdash/domain/web-url"
 import { EMPTY_AGENT_PROVIDER_CATALOG } from "@diffdash/protocol/agent-providers"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
-import { type AppPrerequisites, EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
-import { Result, useAtomRefresh, useAtomSet, useAtomValue } from "@effect-atom/atom-react"
-import { Schema } from "effect"
-import { useDeferredValue, useEffect, useEffectEvent, useRef, useState } from "react"
-import { HomeScreen } from "@/home/home-screen"
+import { EMPTY_APP_PREREQUISITES } from "@diffdash/protocol/prerequisites"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
+import { Match, Option } from "effect"
+import { AsyncResult } from "effect/unstable/reactivity"
+import { useDeferredValue, useEffect, useRef, useState } from "react"
+import { HomeScreen, hostedRepositoryLabel } from "@/home/home-screen"
 import { diagnosticsAtom } from "@/onboarding/atoms"
 import { OnboardingScreen } from "@/onboarding/onboarding-screen"
+import {
+  useDesktopRuntime,
+  useProjectWorkspace,
+  useRendererPreferences,
+  useRendererStream,
+  useRepositories,
+  runRendererPromise,
+} from "@/platform/renderer-runtime"
 import {
   providersAtom,
   remoteRepositorySearchAtom,
   remoteSearchAtomKey,
   repositoriesAtom,
   repositorySearchAtom,
-  scopedLocalSearchQuery,
   searchScopesAtom,
 } from "@/repositories/atoms"
 import { useRepositoryMutations } from "@/repositories/use-repository-mutations"
@@ -50,12 +58,6 @@ import {
   projectLocalReviewsLifecycle,
 } from "@/project-workspace/reviews-lifecycle"
 import {
-  enqueueProjectWorkspaceSave,
-  projectIdForRepo,
-  resolveProjectWorkspaceState,
-  selectedReviewTargetForPersistence,
-} from "@/project-workspace/workspace-state"
-import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
   repositoryComparisonManifestAtom,
@@ -66,7 +68,7 @@ import {
 } from "@/review/atoms"
 import type { RepositoryLinkState } from "@/review/review-detail-view"
 import { ReviewScreen } from "@/review/review-screen"
-import { type HostedReviewTarget, type SelectedReviewTarget } from "@/review/review-subject"
+import type { SelectedReviewTarget } from "@/review/review-subject"
 import { reviewSelectionSourceKeys } from "@/review/review-selection"
 import { useReviewSelection } from "@/review/use-review-selection"
 import { useReviewSourceOperations } from "@/review/use-review-source-operations"
@@ -78,7 +80,7 @@ import {
   THEME_DEFINITIONS,
 } from "@/settings/theme"
 import { useSettingsMutation } from "@/settings/use-settings-mutation"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -89,39 +91,52 @@ import { isMacPlatform } from "./keyboard-shortcut-platform"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
+import {
+  type PendingProjectRemoteSelection,
+  type ProjectOpenIntent,
+  type ProjectSessionProjection,
+  ProjectSession,
+} from "./project-session"
 
 type Screen = "home" | "project"
 
-type AppDiagnostics = AppPrerequisites
-
-type ProjectOpenIntent =
-  | { readonly kind: "reviews" }
-  | { readonly kind: "workingTree" }
-  | { readonly kind: "pullRequest"; readonly number: number }
-  | { readonly kind: "branchDiff"; readonly branchName: string | null }
-
-type PendingRemoteSelection = {
-  readonly intent: ProjectOpenIntent
-  readonly selection: ProjectRemoteSelectionRequired
-}
-
 const MOUSE_BUTTON_BACK = 3
+const EMPTY_PROVIDER_DESCRIPTORS: readonly GitProviderDescriptor[] = []
+const EMPTY_REPOSITORY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
+const EMPTY_REPOS: readonly Repo[] = []
+const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
+const EMPTY_HOSTED_REVIEWS: readonly HostedReviewSummary[] = []
 
 /** Application shell coordinating navigation and feature composition. */
 export function AppShell() {
+  const captureAnalytics = useCaptureAnalytics()
+  const desktop = useDesktopRuntime()
+  const preferences = useRendererPreferences()
+  const projectWorkspace = useProjectWorkspace()
+  const repositories = useRepositories()
   const [screen, setScreen] = useState<Screen>("home")
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
   const [activeRibbon, setActiveRibbon] = useState<ProjectWorkspaceRibbon>("reviews")
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
-    useState<PendingRemoteSelection | null>(null)
+    useState<PendingProjectRemoteSelection | null>(null)
   const [reviewSidebarExpanded, setReviewSidebarExpanded] = useState(true)
   const [reviewQuickNavigationRequest, setReviewQuickNavigationRequest] = useState(0)
   const [contextActionsHost, setContextActionsHost] = useState<HTMLDivElement | null>(null)
-  const commandDrainRef = useRef<Promise<void>>(Promise.resolve())
-  const workspaceSaveRef = useRef<Promise<void>>(Promise.resolve())
-  const projectRestoreRequestRef = useRef(0)
+  const [projectSession] = useState(
+    () =>
+      new ProjectSession({
+        loadWorkspace: (projectId) => runRendererPromise(preferences.loadWorkspace(projectId)),
+        openProject: (localPath, selectedRepository) =>
+          runRendererPromise(repositories.openProject(localPath, selectedRepository)),
+        resolveLocalReview: (localPath, branchName) =>
+          runRendererPromise(projectWorkspace.resolveLocalReview(localPath, branchName)),
+        resolveRepositoryComparison: (command) =>
+          runRendererPromise(projectWorkspace.resolveRepositoryComparison(command)),
+        saveWorkspace: (input) => runRendererPromise(preferences.saveWorkspace(input)),
+      }),
+  )
   const handledMouseNavigationButtonRef = useRef<number | null>(null)
   const [query, setQuery] = useState("")
   const [selectedSearchScope, setSelectedSearchScope] = useState<string | null>(null)
@@ -143,26 +158,14 @@ export function AppShell() {
   const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
   const [debouncedRemoteSearchQuery, setDebouncedRemoteSearchQuery] = useState("")
   const deferredSearchQuery = useDeferredValue(query.trim())
-  const localSearchQuery = scopedLocalSearchQuery(deferredSearchQuery, selectedSearchScope)
+  const localSearchQuery =
+    selectedSearchScope === null
+      ? deferredSearchQuery
+      : `${selectedSearchScope}/${deferredSearchQuery}`
 
-  useEffect(() => {
-    let cancelled = false
-    const unsubscribe = window.diffDash.updates.onStateChanged((state) => {
-      if (!cancelled) setUpdateState(state)
-    })
-    void window.diffDash.updates
-      .getState()
-      .then((state) => {
-        if (!cancelled) setUpdateState(state)
-        return undefined
-      })
-      .catch(() => undefined)
-
-    return () => {
-      cancelled = true
-      unsubscribe()
-    }
-  }, [])
+  useRendererStream(desktop.updates.states, setUpdateState, (error) =>
+    setActionStatus(formatError(error, "Could not monitor application updates")),
+  )
 
   useEffect(() => {
     const trimmedQuery = query.trim()
@@ -176,12 +179,19 @@ export function AppShell() {
   }, [query])
 
   const selectedRepoKey =
-    selectedRepo === null || selectedRepo.provider === "local"
+    selectedRepo?.hostedLocator === null || selectedRepo?.hostedLocator === undefined
       ? ""
-      : repoKey(selectedRepo.provider, selectedRepo.owner, selectedRepo.name)
+      : repoKey(
+          selectedRepo.hostedLocator.providerId,
+          selectedRepo.hostedLocator.namespace,
+          selectedRepo.hostedLocator.name,
+        )
   const repositoriesResult = useAtomValue(repositoriesAtom)
   const providersResult = useAtomValue(providersAtom)
-  const availableProviders = resultValue(providersResult, [] as readonly GitProviderDescriptor[])
+  const availableProviders = AsyncResult.getOrElse(
+    providersResult,
+    () => EMPTY_PROVIDER_DESCRIPTORS,
+  )
   const activeProviderId = selectedProviderId ?? availableProviders[0]?.id ?? null
   const selectedProvider =
     availableProviders.find((provider) => provider.id === activeProviderId) ??
@@ -193,7 +203,10 @@ export function AppShell() {
     selectedProvider?.capabilities.searchScopes === true ? (activeProviderId ?? "") : "",
   )
   const searchScopesResult = useAtomValue(selectedProviderSearchScopesAtom)
-  const searchScopes = resultValue(searchScopesResult, [] as readonly RepositorySearchScope[])
+  const searchScopes = AsyncResult.getOrElse(
+    searchScopesResult,
+    () => EMPTY_REPOSITORY_SEARCH_SCOPES,
+  )
   const remoteSearchOwners =
     selectedProvider?.capabilities.repositorySearch !== true
       ? []
@@ -237,19 +250,22 @@ export function AppShell() {
     selectedReviews: refreshSelectedPullRequests,
   })
 
-  const repos = resultValue(repositoriesResult, [] as readonly Repo[])
-  const projectsStatus = Result.isFailure(repositoriesResult)
+  const repos = AsyncResult.getOrElse(repositoriesResult, () => EMPTY_REPOS)
+  const projectsStatus = AsyncResult.isFailure(repositoriesResult)
     ? resultErrorMessage(repositoriesResult, "Could not load projects")
     : null
   const providers = availableProviders
   const hasQuery = query.trim().length > 0
-  const localResults = hasQuery ? resultValue(localResultsResult, [] as readonly Repo[]) : []
+  const localResults = hasQuery ? AsyncResult.getOrElse(localResultsResult, () => EMPTY_REPOS) : []
   const remoteResults =
     hasQuery && query.trim() === debouncedRemoteSearchQuery
-      ? resultValue(remoteResultsResult, [] as readonly HostedRepository[])
+      ? AsyncResult.getOrElse(remoteResultsResult, () => EMPTY_HOSTED_REPOSITORIES)
       : []
-  const diagnostics = resultValue(diagnosticsResult, EMPTY_APP_PREREQUISITES as AppDiagnostics)
-  const agentProviderCatalog = resultValue(agentProviderCatalogResult, EMPTY_AGENT_PROVIDER_CATALOG)
+  const diagnostics = AsyncResult.getOrElse(diagnosticsResult, () => EMPTY_APP_PREREQUISITES)
+  const agentProviderCatalog = AsyncResult.getOrElse(
+    agentProviderCatalogResult,
+    () => EMPTY_AGENT_PROVIDER_CATALOG,
+  )
   const reviewSelection = useReviewSelection(selectedReview, providers)
   const reviewSourceOperations = useReviewSourceOperations(reviewSelection)
   const selectedReviewSourceKeys = reviewSelectionSourceKeys(selectedReview)
@@ -262,30 +278,32 @@ export function AppShell() {
   const refreshSelectedRepositoryComparison = useAtomRefresh(
     repositoryComparisonManifestAtom(selectedReviewSourceKeys.comparison),
   )
-  const isLoadingDiagnostics = Result.isWaiting(diagnosticsResult)
-  const pullRequests = resultValue(pullRequestsResult, [] as readonly HostedReviewSummary[])
+  const isLoadingDiagnostics = AsyncResult.isWaiting(diagnosticsResult)
+  const pullRequests = AsyncResult.getOrElse(pullRequestsResult, () => EMPTY_HOSTED_REVIEWS)
   const reviewRepositoryLinkState: RepositoryLinkState =
     selectedReview?.kind !== "hosted"
       ? "not-applicable"
-      : Result.isWaiting(repositoriesResult) || Result.isFailure(repositoriesResult)
+      : AsyncResult.isWaiting(repositoriesResult) || AsyncResult.isFailure(repositoriesResult)
         ? "checking"
         : repos.some(
               (candidate) =>
-                candidate.provider === selectedReview.review.repository.providerId &&
                 candidate.localPath !== null &&
-                repoKey(candidate.provider, candidate.owner, candidate.name) ===
-                  repoKey(
-                    selectedReview.review.repository.providerId,
-                    selectedReview.review.repository.namespace,
-                    selectedReview.review.repository.name,
-                  ),
+                candidate.matchesHosted(selectedReview.review.repository),
             )
           ? "linked"
           : "unlinked"
   const knownHostedRepoKeys = new Set(
-    repos
-      .filter((repo) => repo.provider !== "local")
-      .map((repo) => repoKey(repo.provider, repo.owner, repo.name)),
+    repos.flatMap((repo) =>
+      repo.hostedLocator === null
+        ? []
+        : [
+            repoKey(
+              repo.hostedLocator.providerId,
+              repo.hostedLocator.namespace,
+              repo.hostedLocator.name,
+            ),
+          ],
+    ),
   )
   const uniqueRemoteResults = remoteResults.filter(
     (repo) =>
@@ -297,12 +315,12 @@ export function AppShell() {
     hasQuery &&
     (query.trim() !== debouncedRemoteSearchQuery ||
       query.trim() !== deferredSearchQuery ||
-      Result.isWaiting(searchScopesResult) ||
-      Result.isWaiting(localResultsResult) ||
-      Result.isWaiting(remoteResultsResult))
-  const searchError = Result.isFailure(searchScopesResult)
+      AsyncResult.isWaiting(searchScopesResult) ||
+      AsyncResult.isWaiting(localResultsResult) ||
+      AsyncResult.isWaiting(remoteResultsResult))
+  const searchError = AsyncResult.isFailure(searchScopesResult)
     ? resultErrorMessage(searchScopesResult, "Could not load repository owners")
-    : Result.isFailure(remoteResultsResult)
+    : AsyncResult.isFailure(remoteResultsResult)
       ? resultErrorMessage(
           remoteResultsResult,
           `Could not search ${selectedProvider?.displayName ?? "hosted"} repositories`,
@@ -310,7 +328,7 @@ export function AppShell() {
       : null
   const navigateBack = () => {
     if (screen === "home") return
-    projectRestoreRequestRef.current += 1
+    projectSession.cancelRestore()
     setScreen("home")
     setSelectedRepo(null)
     setSelectedReview(null)
@@ -348,13 +366,12 @@ export function AppShell() {
 
   useEffect(() => {
     let cancelled = false
-    window.diffDash.appState
-      .get()
+    runRendererPromise(preferences.loadAppState())
       .then((state) => {
         if (!cancelled) setAppState(state)
         return undefined
       })
-      .catch((error: unknown) => {
+      .catch((error) => {
         if (!cancelled) {
           setAppStateLoadError(formatError(error, "Could not load application state"))
         }
@@ -363,12 +380,12 @@ export function AppShell() {
     return () => {
       cancelled = true
     }
-  }, [appStateLoadAttempt])
+  }, [appStateLoadAttempt, preferences])
 
   useEffect(() => {
     if (appState?.onboardingCompleted !== true) return
-    void window.diffDash.analytics.start().catch(() => undefined)
-  }, [appState?.onboardingCompleted])
+    void runRendererPromise(desktop.analytics.start()).catch(() => undefined)
+  }, [appState?.onboardingCompleted, desktop])
 
   useEffect(() => {
     const applyTheme = () => {
@@ -493,85 +510,77 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", openGoToPalette)
   }, [screen])
 
-  const persistWorkspace = (
-    repo: Repo,
-    ribbon: ProjectWorkspaceRibbon,
-    selection: SelectedReviewTarget | null,
-  ) => {
-    const input = ProjectWorkspaceStateInput.make({
-      projectId: projectIdForRepo(repo),
-      activeRibbon: ribbon,
-      selectedReviewTarget: selectedReviewTargetForPersistence(selection),
-    })
-    workspaceSaveRef.current = enqueueProjectWorkspaceSave(
-      workspaceSaveRef.current,
-      input,
-      window.diffDash.projectWorkspace.save,
-      (error) => {
-        setWorkspaceNotice(formatError(error, "Could not save project workspace"))
-      },
-    )
-  }
-
-  const showProject = (
-    repo: Repo,
-    ribbon: ProjectWorkspaceRibbon,
-    selection: SelectedReviewTarget | null,
-    notice: string | null,
-    persist: boolean,
-  ) => {
-    setSelectedRepo(repo)
-    setSelectedReview(selection)
-    setActiveRibbon(ribbon)
-    setWorkspaceNotice(notice)
+  const applyProjectProjection = (projection: ProjectSessionProjection) => {
+    setSelectedRepo(projection.repo)
+    setSelectedReview(projection.selectedReview)
+    setActiveRibbon(projection.activeRibbon)
+    setWorkspaceNotice(projection.notice)
     setReviewSidebarExpanded(true)
     setScreen("project")
-    setActionStatus(`Opened project ${repo.owner}/${repo.name}.`)
-    if (repo.provider !== "local") {
-      refreshPullRequestsForRepo(repoKey(repo.provider, repo.owner, repo.name))
+    setActionStatus(`Opened project ${projection.repo.displayIdentity}.`)
+    if (projection.repo.hostedLocator !== null) {
+      refreshPullRequestsForRepo(
+        repoKey(
+          projection.repo.hostedLocator.providerId,
+          projection.repo.hostedLocator.namespace,
+          projection.repo.hostedLocator.name,
+        ),
+      )
     }
-    if (persist) persistWorkspace(repo, ribbon, selection)
+  }
+
+  const observeWorkspacePersistence = (persistence: Promise<void>) => {
+    void persistence.catch((error) => {
+      setWorkspaceNotice(formatError(error, "Could not save project workspace"))
+    })
   }
 
   const restoreProject = async (repo: Repo) => {
-    const request = projectRestoreRequestRef.current + 1
-    projectRestoreRequestRef.current = request
-    showProject(repo, "reviews", null, null, false)
-    setActionStatus(`Restoring ${repo.owner}/${repo.name}...`)
+    applyProjectProjection(projectSession.initial(repo))
+    setActionStatus(`Restoring ${repo.displayIdentity}...`)
     try {
-      const persisted = await window.diffDash.projectWorkspace.get(projectIdForRepo(repo))
-      if (projectRestoreRequestRef.current !== request) return
-      const restored = resolveProjectWorkspaceState(repo, persisted)
-      showProject(
-        repo,
-        restored.activeRibbon,
-        restored.selectedReview,
-        restored.notice,
-        restored.notice !== null,
-      )
+      const restored = await projectSession.restore(repo)
+      const restoredProjection = Match.valueTags(restored, {
+        stale: () => null,
+        restored: (value) => value,
+      })
+      if (restoredProjection === null) return
+      applyProjectProjection(restoredProjection.projection)
+      if (restoredProjection.persistence !== null)
+        observeWorkspacePersistence(restoredProjection.persistence)
     } catch (error) {
-      if (projectRestoreRequestRef.current !== request) return
-      showProject(
-        repo,
-        "reviews",
-        null,
-        formatError(error, "Saved workspace state could not be restored"),
-        false,
+      applyProjectProjection(
+        projectSession.project(
+          repo,
+          "reviews",
+          null,
+          formatError(error, "Saved workspace state could not be restored"),
+        ),
       )
     }
   }
 
   const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
+    projectSession.cancelRestore()
     setActiveRibbon(ribbon)
-    if (selectedRepo !== null) persistWorkspace(selectedRepo, ribbon, selectedReview)
+    if (selectedRepo !== null) {
+      observeWorkspacePersistence(
+        projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
+      )
+    }
   }
 
   const selectProjectReview = (selection: SelectedReviewTarget) => {
+    projectSession.cancelRestore()
     setSelectedReview(selection)
     setActiveRibbon("files")
     setReviewSidebarExpanded(true)
     setWorkspaceNotice(null)
-    if (selectedRepo !== null) persistWorkspace(selectedRepo, "files", selection)
+    if (selectedRepo !== null) {
+      observeWorkspacePersistence(
+        projectSession.persist(projectSession.project(selectedRepo, "files", selection)),
+      )
+    }
     captureAnalytics({
       event: "review_opened",
       reviewType:
@@ -583,38 +592,6 @@ export function AppShell() {
     })
   }
 
-  const completeOpenedProject = async (repo: Repo, intent: ProjectOpenIntent) => {
-    if (intent.kind === "workingTree") {
-      if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
-      const target = workingTreeReviewTarget(repo.localPath)
-      showProject(repo, "files", { kind: "localDiff", target }, null, true)
-      captureAnalytics({ event: "review_opened", reviewType: "local_diff" })
-      return
-    }
-    if (intent.kind === "branchDiff") {
-      if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
-      const target = Schema.decodeUnknownSync(LocalReviewTarget)(
-        await window.diffDash.localReviews.resolveBranch(repo.localPath, intent.branchName),
-      )
-      showProject(repo, "files", { kind: "localDiff", target }, null, true)
-      captureAnalytics({ event: "review_opened", reviewType: "local_diff" })
-      return
-    }
-    if (intent.kind === "pullRequest") {
-      if (repo.provider === "local") {
-        throw new Error("The opened project has no recognized hosted repository.")
-      }
-      const review: HostedReviewTarget = {
-        kind: "hosted",
-        review: makeHostedReviewLocator(repo.provider, repo.owner, repo.name, intent.number),
-      }
-      showProject(repo, "files", review, null, true)
-      captureAnalytics({ event: "review_opened", reviewType: "pull_request" })
-      return
-    }
-    showProject(repo, "reviews", null, null, true)
-  }
-
   const openProjectPath = async (
     localPath: string,
     intent: ProjectOpenIntent,
@@ -622,14 +599,27 @@ export function AppShell() {
   ) => {
     setActionStatus("Opening project...")
     try {
-      const result = await window.diffDash.repositories.openProject(localPath, selectedRepository)
-      if (result._tag === "remoteSelectionRequired") {
-        setPendingRemoteSelection({ intent, selection: result })
+      const result = await projectSession.open(localPath, intent, selectedRepository)
+      const pendingRemoteSelection = Match.valueTags(result, {
+        remoteSelectionRequired: (value) => value.pending,
+        opened: () => null,
+      })
+      if (pendingRemoteSelection !== null) {
+        setPendingRemoteSelection(pendingRemoteSelection)
         return
       }
+      const opened = Match.valueTags(result, {
+        remoteSelectionRequired: () => null,
+        opened: (value) => value,
+      })
+      if (opened === null) return
       setPendingRemoteSelection(null)
       refreshRepositories()
-      await completeOpenedProject(result.repo, intent)
+      applyProjectProjection(opened.projection)
+      observeWorkspacePersistence(opened.persistence)
+      if (opened.reviewType !== null) {
+        captureAnalytics({ event: "review_opened", reviewType: opened.reviewType })
+      }
     } catch (error) {
       const fallback =
         intent.kind === "branchDiff"
@@ -645,8 +635,8 @@ export function AppShell() {
 
   const chooseProjectFolder = async () => {
     setCliNavigationError(null)
-    const localPath = await window.diffDash.repositories.selectLocalFolder()
-    if (localPath !== null) await openProjectPath(localPath, { kind: "reviews" })
+    const localPath = await runRendererPromise(repositories.selectLocalFolder())
+    if (Option.isSome(localPath)) await openProjectPath(localPath.value, { kind: "reviews" })
   }
 
   const pinRemote = async (repo: HostedRepository) => {
@@ -672,7 +662,7 @@ export function AppShell() {
   const setRepositoryFavorite = async (repo: Repo, isFavorite: boolean) => {
     try {
       await repositoryMutations.setFavorite(repo, isFavorite)
-      setActionStatus(`${isFavorite ? "Pinned" : "Unpinned"} ${repo.owner}/${repo.name}.`)
+      setActionStatus(`${isFavorite ? "Pinned" : "Unpinned"} ${repo.displayIdentity}.`)
     } catch (error) {
       setActionStatus(formatError(error, "Could not update project pin"))
     }
@@ -680,8 +670,8 @@ export function AppShell() {
 
   const forgetRepository = async (repo: Repo) => {
     try {
-      await repositoryMutations.forget(projectIdForRepo(repo))
-      setActionStatus(`Forgot ${repo.owner}/${repo.name} from Home. Review artifacts were kept.`)
+      await repositoryMutations.forget(repo.id)
+      setActionStatus(`Forgot ${repo.displayIdentity} from Home. Review artifacts were kept.`)
     } catch (error) {
       setActionStatus(formatError(error, "Could not forget project"))
     }
@@ -692,7 +682,7 @@ export function AppShell() {
     setIsRepairingIdentities(true)
     setActionStatus("Repairing project identities...")
     try {
-      const result = await window.diffDash.repositories.repairIdentities()
+      const result = await runRendererPromise(repositories.repairIdentities())
       refreshRepositories()
       setActionStatus(
         `Repaired ${result.resolvedCount + result.localAliasCount} project identities; ${result.unresolvedCount} will retry when providers are available.`,
@@ -707,13 +697,16 @@ export function AppShell() {
   }
 
   const installRepositoryLink = async (localPath: string) => {
+    projectSession.cancelRestore()
     setCliNavigationError(null)
     setActionStatus("Linking local repository...")
     try {
       const linked = await repositoryMutations.install(localPath)
-      setActionStatus(`Linked ${linked.owner}/${linked.name} to ${linked.localPath ?? localPath}.`)
+      setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
       captureAnalytics({ event: "repository_linked" })
-      showProject(linked, "reviews", null, null, true)
+      const projection = projectSession.project(linked, "reviews", null)
+      applyProjectProjection(projection)
+      observeWorkspacePersistence(projectSession.persist(projection))
     } catch (error) {
       const message = formatError(error, "Could not link local repository")
       setActionStatus(message)
@@ -721,109 +714,84 @@ export function AppShell() {
     }
   }
   const handleCliNavigationCommand = async (command: CliNavigationCommand) => {
-    if (command["_tag"] === "error") {
-      setActionStatus(command.message)
-      setCliNavigationError(command.message)
-      return
-    }
-    setCliNavigationError(null)
-    if (command["_tag"] === "openProject") {
-      await openProjectPath(command.localPath, { kind: "reviews" })
-      return
-    }
-    if (command["_tag"] === "openWorkingTree") {
-      await openProjectPath(command.localPath, { kind: "workingTree" })
-      return
-    }
-    if (command["_tag"] === "linkRepository") {
-      await installRepositoryLink(command.localPath)
-      return
-    }
-    if (command["_tag"] === "repairRepositoryIdentities") {
-      await repairRepositoryIdentities()
-      return
-    }
-    if (command["_tag"] === "openBranchDiff") {
-      await openProjectPath(command.localPath, {
-        kind: "branchDiff",
-        branchName: command.branchName,
-      })
-      return
-    }
-    if (command["_tag"] === "openRepositoryComparison") {
-      setActionStatus("Resolving repository comparison...")
-      try {
-        const comparison = await window.diffDash.repositoryComparisons.resolve(command)
-        const selection = { kind: "repositoryComparison", target: comparison.target } as const
-        showProject(comparison.repo, "files", selection, null, false)
-        await window.diffDash.projectWorkspace.save(
-          ProjectWorkspaceStateInput.make({
-            projectId: projectIdForRepo(comparison.repo),
-            activeRibbon: "files",
-            selectedReviewTarget: selectedReviewTargetForPersistence(selection),
-          }),
+    await Match.valueTags(command, {
+      error: (error) => {
+        setActionStatus(error.message)
+        setCliNavigationError(error.message)
+      },
+      openProject: async (openProject) => {
+        setCliNavigationError(null)
+        await openProjectPath(openProject.localPath, { kind: "reviews" })
+      },
+      openWorkingTree: async (openWorkingTree) => {
+        setCliNavigationError(null)
+        await openProjectPath(openWorkingTree.localPath, { kind: "workingTree" })
+      },
+      linkRepository: async (linkRepository) => {
+        setCliNavigationError(null)
+        await installRepositoryLink(linkRepository.localPath)
+      },
+      repairRepositoryIdentities: async () => {
+        setCliNavigationError(null)
+        await repairRepositoryIdentities()
+      },
+      openBranchDiff: async (openBranchDiff) => {
+        setCliNavigationError(null)
+        await openProjectPath(openBranchDiff.localPath, {
+          kind: "branchDiff",
+          branchName: openBranchDiff.branchName,
+        })
+      },
+      openRepositoryComparison: async (openRepositoryComparison) => {
+        setCliNavigationError(null)
+        setActionStatus("Resolving repository comparison...")
+        try {
+          const comparison = await projectSession.openRepositoryComparison(openRepositoryComparison)
+          applyProjectProjection(comparison.projection)
+          await comparison.persistence
+          captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
+        } catch (error) {
+          const message = formatError(error, "Could not open repository comparison")
+          setActionStatus(message)
+          setCliNavigationError(message)
+        }
+      },
+      openPullRequest: async (openPullRequest) => {
+        setCliNavigationError(null)
+        await openProjectPath(
+          openPullRequest.localPath,
+          openPullRequest.number === null
+            ? { kind: "reviews" }
+            : { kind: "pullRequest", number: openPullRequest.number },
         )
-        captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
-      } catch (error) {
-        const message = formatError(error, "Could not open repository comparison")
-        setActionStatus(message)
-        setCliNavigationError(message)
-      }
-      return
-    }
-    await openProjectPath(
-      command.localPath,
-      command.number === null
-        ? { kind: "reviews" }
-        : { kind: "pullRequest", number: command.number },
-    )
+      },
+    })
   }
-  const handleCliNavigationCommandEvent = useEffectEvent(handleCliNavigationCommand)
-
   const linkSelectedReviewRepository = async () => {
     if (selectedReview?.kind !== "hosted") return false
-    const localPath = await window.diffDash.repositories.selectLocalFolder()
-    if (localPath === null) return false
+    const localPathOption = await runRendererPromise(repositories.selectLocalFolder())
+    if (Option.isNone(localPathOption)) return false
+    const localPath = localPathOption.value
 
     const linked = await repositoryMutations.link({
       repository: selectedReview.review.repository,
-      localPath,
+      localPath: RepositoryCheckoutPath.make(localPath),
     })
     if (
       selectedRepo !== null &&
-      repoKey(selectedRepo.provider, selectedRepo.owner, selectedRepo.name) ===
-        repoKey(linked.provider, linked.owner, linked.name)
+      linked.hostedLocator !== null &&
+      selectedRepo.matchesHosted(linked.hostedLocator)
     ) {
       setSelectedRepo(linked)
     }
-    setActionStatus(`Linked ${linked.owner}/${linked.name} to ${linked.localPath ?? localPath}.`)
+    setActionStatus(`Linked ${linked.displayIdentity} to ${linked.localPath ?? localPath}.`)
     captureAnalytics({ event: "repository_linked" })
     return true
   }
 
-  useEffect(() => {
-    const drainCommands = () => {
-      commandDrainRef.current = commandDrainRef.current
-        .catch(() => undefined)
-        .then(async () => {
-          const commands = await window.diffDash.navigation.drainCommands()
-          await commands.reduce<Promise<void>>(
-            (previous, command) => previous.then(() => handleCliNavigationCommandEvent(command)),
-            Promise.resolve(),
-          )
-          return undefined
-        })
-      return commandDrainRef.current
-    }
-    const unsubscribe = window.diffDash.navigation.onCommandsAvailable(() => {
-      void drainCommands().catch(() => undefined)
-    })
-    void drainCommands().catch(() => undefined)
-
-    return () => {
-      unsubscribe()
-    }
-  }, [])
+  useRendererStream(desktop.navigation.commands, handleCliNavigationCommand, (error) =>
+    setCliNavigationError(formatError(error, "Could not receive CLI navigation commands")),
+  )
 
   const updateAISettings = (settings: AISettings) => {
     void settingsMutation.update(settings).catch(() => undefined)
@@ -865,7 +833,7 @@ export function AppShell() {
   }
 
   const openSetupDocs = (url: string) => {
-    void window.diffDash.openExternalUrl(url).catch((error) => {
+    void runRendererPromise(desktop.openExternalUrl(WebUrl.make(url))).catch((error) => {
       setSetupActionStatus(formatError(error, "Could not open setup documentation"))
     })
   }
@@ -873,7 +841,7 @@ export function AppShell() {
   const installDiffDashCli = async () => {
     setSetupActionStatus("Installing the DiffDash CLI...")
     try {
-      const result = await window.diffDash.installDiffDashCli()
+      const result = await runRendererPromise(desktop.installCli())
       setSetupActionStatus(
         result.pathSetupCommand === null
           ? `Installed the DiffDash CLI at ${result.path}`
@@ -894,11 +862,11 @@ export function AppShell() {
           telemetryEnabled,
         }),
       )
-      const savedState = await window.diffDash.appState.update(nextState)
+      const savedState = await runRendererPromise(preferences.saveAppState(nextState))
       setAppState(savedState)
       if (telemetryEnabled) {
-        await window.diffDash.analytics.start()
-        await window.diffDash.analytics.capture({ event: "onboarding_completed" })
+        await runRendererPromise(desktop.analytics.start())
+        await runRendererPromise(desktop.analytics.capture({ event: "onboarding_completed" }))
       }
     } catch (error) {
       setSetupActionStatus(formatError(error, "Could not save onboarding state"))
@@ -907,7 +875,14 @@ export function AppShell() {
 
   const showProjectShell = appState?.onboardingCompleted === true && screen === "project"
   const reviewWorkbenchReady =
-    showProjectShell && reviewSelection._tag === "ready" && reviewSourceOperations._tag === "ready"
+    showProjectShell &&
+    Match.valueTags(reviewSelection, {
+      ready: () =>
+        Match.valueTags(reviewSourceOperations, { ready: () => true, unavailable: () => false }),
+      loading: () => false,
+      failure: () => false,
+      none: () => false,
+    })
   const commandLabel = workbenchCommandLabel(selectedRepo, selectedReview, reviewSelection)
   const canNavigateBack = appState?.onboardingCompleted === true && screen !== "home"
   const openQuickNavigation = () => {
@@ -942,14 +917,14 @@ export function AppShell() {
         {updateState === null ? null : (
           <UpdateBanner
             state={updateState}
-            onCheck={() => void window.diffDash.updates.check().catch(() => undefined)}
+            onCheck={() => void runRendererPromise(desktop.updates.check()).catch(() => undefined)}
             onDownload={() => {
               captureAnalytics({ event: "update_download_started" })
-              void window.diffDash.updates.download().catch(() => undefined)
+              void runRendererPromise(desktop.updates.download()).catch(() => undefined)
             }}
             onRestart={() => {
               captureAnalytics({ event: "update_install_started" })
-              void window.diffDash.updates.restartAndInstall().catch(() => undefined)
+              void runRendererPromise(desktop.updates.restartAndInstall()).catch(() => undefined)
             }}
           />
         )}
@@ -1028,9 +1003,9 @@ export function AppShell() {
                     aiAgentAvailable:
                       agentRouteAvailable(
                         agentProviderCatalog,
-                        aiSettings.routes.walkthrough,
+                        aiSettings.selections.walkthrough,
                         "walkthrough",
-                      ) || Result.isWaiting(agentProviderCatalogResult),
+                      ) || AsyncResult.isWaiting(agentProviderCatalogResult),
                     aiSettings,
                     quickNavigationRequest: reviewQuickNavigationRequest,
                     repositoryLinkState: reviewRepositoryLinkState,
@@ -1156,8 +1131,14 @@ const workbenchCommandLabel = (
   selectedReview: SelectedReviewTarget | null,
   selection: ReturnType<typeof useReviewSelection>,
 ) => {
-  if (selection._tag === "ready") return selection.repositoryLabel
-  if (selectedRepo !== null) return `${selectedRepo.owner}/${selectedRepo.name}`
+  const reviewLabel = Match.valueTags(selection, {
+    ready: ({ review }) => review.repositoryLabel,
+    loading: () => null,
+    failure: () => null,
+    none: () => null,
+  })
+  if (reviewLabel !== null) return reviewLabel
+  if (selectedRepo !== null) return selectedRepo.displayIdentity
   if (selectedReview?.kind === "hosted") {
     return `${selectedReview.review.repository.namespace}/${selectedReview.review.repository.name}`
   }
@@ -1183,14 +1164,13 @@ const goToPaletteItems = ({
 }): readonly CommandPaletteItem[] => [
   ...projects.map((repo) => ({
     id: `repo:${repo.id}`,
-    keywords: `${repo.owner} ${repo.name} project repository`,
-    subtitle:
-      repo.provider === "local"
-        ? "Local-only project"
-        : repo.localPath === null
-          ? "Hosted project"
-          : "Hosted project with local checkout",
-    title: `${repo.owner}/${repo.name}`,
+    keywords: `${repo.displayIdentity} project repository`,
+    subtitle: Match.valueTags(repo.source, {
+      local: () => "Local-only project",
+      hosted: () =>
+        repo.localPath === null ? "Hosted project" : "Hosted project with local checkout",
+    }),
+    title: repo.displayIdentity,
     onSelect: () => onOpenRepo(repo),
   })),
   ...pullRequests.map((pullRequest) => ({
@@ -1202,14 +1182,11 @@ const goToPaletteItems = ({
   })),
 ]
 
-const hostedRepositoryLabel = (repository: HostedRepository) =>
-  `${repository.locator.namespace}/${repository.locator.name}`
-
-const resultValue = <A,>(result: Result.Result<A, unknown>, fallback: A) =>
-  Result.getOrElse(result, () => fallback)
-
-const resultErrorMessage = (result: Result.Result<unknown, unknown>, fallback: string) =>
-  Result.matchWithError(result, {
+const resultErrorMessage = <Value, Failure>(
+  result: AsyncResult.AsyncResult<Value, Failure>,
+  fallback: string,
+) =>
+  AsyncResult.matchWithError(result, {
     onInitial: () => fallback,
     onError: (error) => formatError(error, fallback),
     onDefect: (defect) => formatError(defect, fallback),

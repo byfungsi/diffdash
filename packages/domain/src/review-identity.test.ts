@@ -8,6 +8,8 @@ import {
   localReviewTargetKey,
   workingTreeReviewTarget,
 } from "./local-review"
+import { RepositoryCheckoutPath } from "./repository"
+import { RepositoryComparisonRef } from "./repository-comparison"
 import {
   makeReviewDiffIdentity,
   makeReviewKey,
@@ -60,32 +62,39 @@ describe("review identity", () => {
   })
 
   it("keeps hosted, working-tree, branch, and frozen branch revisions distinct", () => {
-    const workingTree = workingTreeReviewTarget("/repo")
+    const rootPath = RepositoryCheckoutPath.make("/repo")
+    const main = RepositoryComparisonRef.make("main")
+    const mainRef = RepositoryComparisonRef.make("refs/heads/main")
+    const developBranch = RepositoryComparisonRef.make("develop")
+    const developRef = RepositoryComparisonRef.make("refs/heads/develop")
+    const revisionA = ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    const revisionB = ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    const workingTree = workingTreeReviewTarget(rootPath)
     const mainAtA = LocalReviewTarget.make({
       kind: "local",
-      rootPath: "/repo",
+      rootPath,
       comparison: BranchComparison.make({
-        branchName: "main",
-        baseRef: "refs/heads/main",
-        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        branchName: main,
+        baseRef: mainRef,
+        baseSha: revisionA,
       }),
     })
     const mainAtB = LocalReviewTarget.make({
       kind: "local",
-      rootPath: "/repo",
+      rootPath,
       comparison: BranchComparison.make({
-        branchName: "main",
-        baseRef: "refs/heads/main",
-        baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        branchName: main,
+        baseRef: mainRef,
+        baseSha: revisionB,
       }),
     })
     const develop = LocalReviewTarget.make({
       kind: "local",
-      rootPath: "/repo",
+      rootPath,
       comparison: BranchComparison.make({
-        branchName: "develop",
-        baseRef: "refs/heads/develop",
-        baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        branchName: developBranch,
+        baseRef: developRef,
+        baseSha: revisionA,
       }),
     })
     const keys = [

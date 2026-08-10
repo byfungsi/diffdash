@@ -1,39 +1,103 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
+import { createHash } from "node:crypto"
+import { basename } from "node:path"
 
-import type {
-  HostedRepositoryLocator,
-  ResolvedHostedRepository,
+import {
+  GitProviderId,
+  type HostedRepositoryLocator,
+  HostedRepositoryName,
+  HostedRepositorySource,
+  LocalRepositorySource,
+  makeHostedRepositoryLocator,
+  ProviderRepositoryId,
+  RepositoryNamespace,
+  type ResolvedHostedRepository,
 } from "@diffdash/domain/git-provider"
-import { Repo, RepoProvider, type UpsertRepositoryInput } from "@diffdash/domain/repository"
+import {
+  LinkedCheckout,
+  RemoteOnly,
+  Repo,
+  type RepositoryCheckout,
+  RepositoryCheckoutPath,
+  UpsertRepositoryInput,
+} from "@diffdash/domain/repository"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { DatabaseService, type DatabaseTransaction } from "./database"
+import { ReviewThreadId } from "@diffdash/domain/review-thread"
+import { type Database, type DatabaseRow, makeDatabase } from "./database"
 
 export type { ReviewProjectId } from "@diffdash/domain/review-identity"
 
-const RepoRow = Schema.Struct({
-  id: Schema.String,
-  provider: RepoProvider,
-  owner: Schema.String,
-  name: Schema.String,
+const RepositoryRowProvider = Schema.Union([Schema.Literal("local"), GitProviderId])
+type RepositoryRowProvider = typeof RepositoryRowProvider.Type
+
+const RepoRowFields = {
+  id: ReviewProjectId,
   remote_url: Schema.String,
-  local_path: Schema.NullOr(Schema.String),
-  is_favorite: Schema.Literal(0, 1),
+  is_favorite: Schema.Literals([0, 1]),
   last_opened_at: Schema.NullOr(Schema.String),
   last_synced_at: Schema.NullOr(Schema.String),
   created_at: Schema.String,
   updated_at: Schema.String,
-})
+} as const
+
+const RepoRow = Schema.Union([
+  Schema.Struct({
+    ...RepoRowFields,
+    provider: Schema.Literal("local"),
+    owner: Schema.String,
+    name: Schema.String,
+    local_path: RepositoryCheckoutPath,
+  }),
+  Schema.Struct({
+    ...RepoRowFields,
+    provider: GitProviderId,
+    owner: RepositoryNamespace,
+    name: HostedRepositoryName,
+    local_path: Schema.NullOr(RepositoryCheckoutPath),
+  }),
+])
 
 const RepoRows = Schema.Array(RepoRow)
 
-const LocalAliasRow = Schema.Struct({ id: Schema.String })
+const LocalAliasRow = Schema.Struct({ id: ReviewProjectId })
 const LocalAliasRows = Schema.Array(LocalAliasRow)
-const RepositoryIdRow = Schema.Struct({ id: Schema.String })
+const RepositoryIdRow = Schema.Struct({ id: ReviewProjectId })
 const RepositoryIdRows = Schema.Array(RepositoryIdRow)
 const ThreadMergeRows = Schema.Array(
-  Schema.Struct({ alias_thread_id: Schema.String, canonical_thread_id: Schema.String }),
+  Schema.Struct({ alias_thread_id: ReviewThreadId, canonical_thread_id: ReviewThreadId }),
 )
 const MaxSequenceRow = Schema.Struct({ max_sequence: Schema.Number })
+
+const RepositoryStoreOperation = Schema.Literals([
+  "getById.query",
+  "getById.notFound",
+  "getById.decode",
+  "findByLocalPath.legacyQuery",
+  "findByLocalPath.legacyDecode",
+  "list.query",
+  "list.decode",
+  "findByLocalPath.query",
+  "findByLocalPath.decode",
+  "findHosted.query",
+  "findHosted.decode",
+  "findByProviderRepositoryId.query",
+  "findByProviderRepositoryId.decode",
+  "attachResolvedIdentity.stableDecode",
+  "attachResolvedIdentity.checkoutDecode",
+  "attachResolvedIdentity",
+  "reconcileLocalAliases",
+  "repairLocalAliases",
+  "setIdentityRepairStatus",
+  "upsertRepository",
+  "upsertRepository.identity",
+  "setFavorite",
+  "touch",
+  "forget",
+  "reconcileLocalAliases.canonicalNotFound",
+  "mergeThreadConversation.maxSequenceNotFound",
+])
+type RepositoryStoreOperation = typeof RepositoryStoreOperation.Type
 
 /** Counts local repository aliases matched, removed, or retained during reconciliation. */
 export interface ReconcileLocalAliasesResult {
@@ -46,40 +110,39 @@ export interface ReconcileLocalAliasesResult {
 export class RepositoryStoreError extends Schema.TaggedError<RepositoryStoreError>()(
   "RepositoryStoreError",
   {
-    operation: Schema.String,
-    cause: Schema.Defect,
+    operation: RepositoryStoreOperation,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
 /** Domain-oriented persistence service for local and remote-only repositories. */
-export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
+export class RepositoryStore extends Context.Service<
   RepositoryStore,
   {
     readonly list: (query?: string) => Effect.Effect<readonly Repo[], RepositoryStoreError>
     /** Finds the preferred persisted repository for a local checkout path. */
     readonly findByLocalPath: (
-      localPath: string,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+      localPath: RepositoryCheckoutPath,
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Finds a canonical repository by its current case-insensitive hosted locator. */
     readonly findHosted: (
       repository: HostedRepositoryLocator,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Finds a canonical repository by a provider-owned stable identifier. */
     readonly findByProviderRepositoryId: (
-      providerId: string,
-      providerRepositoryId: string,
-    ) => Effect.Effect<Repo | null, RepositoryStoreError>
+      providerId: GitProviderId,
+      providerRepositoryId: ProviderRepositoryId,
+    ) => Effect.Effect<Option.Option<Repo>, RepositoryStoreError>
     /** Records authoritative provider identity and binds an optional checkout. */
     readonly attachResolvedIdentity: (
       repoId: ReviewProjectId,
       resolved: ResolvedHostedRepository,
-      localPath: string | null,
-      remoteUrl: string,
+      checkout: RepositoryCheckout,
     ) => Effect.Effect<Repo, RepositoryStoreError>
     /** Moves legacy local-project data to a canonical hosted project when collisions permit. */
     readonly reconcileLocalAliases: (
       canonicalProjectId: ReviewProjectId,
-      localPath: string,
+      localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<ReconcileLocalAliasesResult, RepositoryStoreError>
     /** Reconciles every deterministic local/hosted checkout alias without network access. */
     readonly repairLocalAliases: () => Effect.Effect<
@@ -95,35 +158,37 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
       input: UpsertRepositoryInput,
     ) => Effect.Effect<Repo, RepositoryStoreError>
     readonly setFavorite: (
-      id: string,
+      id: ReviewProjectId,
       isFavorite: boolean,
     ) => Effect.Effect<Repo, RepositoryStoreError>
-    readonly touch: (id: string) => Effect.Effect<Repo, RepositoryStoreError>
+    readonly touch: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
     /** Hides a project from Home without deleting its repository or related records. */
     readonly forget: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
   }
->() {
+>()("@diffdash/RepositoryStore") {
   static readonly layer = Layer.effect(
     RepositoryStore,
     Effect.gen(function* () {
-      const database = yield* DatabaseService
+      const database = makeDatabase(yield* SqlClient.SqlClient)
 
-      const getById = (id: string) =>
+      const getById = (id: ReviewProjectId) =>
         database.get(`${repoSelectSql} WHERE r.id = ${canonicalRepositoryIdSql}`, [id, id]).pipe(
           Effect.mapError((cause) =>
             RepositoryStoreError.make({ operation: "getById.query", cause }),
           ),
-          Effect.flatMap((row) =>
-            row === undefined
-              ? RepositoryStoreError.make({
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                RepositoryStoreError.make({
                   operation: "getById.notFound",
                   cause: new Error(`Repo not found: ${id}`),
-                })
-              : decodeRepo("getById.decode", row),
+                }),
+              onSome: (row) => decodeRepo("getById.decode", row),
+            }),
           ),
         )
 
-      const findLegacyByLocalPath = (localPath: string) =>
+      const findLegacyByLocalPath = (localPath: RepositoryCheckoutPath) =>
         database
           .get(
             `SELECT r.id
@@ -143,13 +208,22 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
             Effect.flatMap((row) =>
               decodeOptionalRepositoryId("findByLocalPath.legacyDecode", row),
             ),
-            Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed(Option.none<Repo>()),
+                onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+              }),
+            ),
           )
 
-      const recordCompatibilityIdentity = (id: string, input: UpsertRepositoryInput, now: string) =>
-        database.transaction("repositories.recordCompatibilityIdentity", (transaction) => {
-          if (input.provider !== "local") {
-            transaction.run(
+      const recordCompatibilityIdentity = (
+        id: ReviewProjectId,
+        row: RepositoryCompatibilityInput,
+        now: string,
+      ) =>
+        Effect.gen(function* () {
+          if (row.provider !== "local") {
+            yield* database.run(
               `INSERT INTO repository_identities (
                  repo_id, provider_id, provider_repository_id, canonical_owner, canonical_name,
                  canonical_url, resolution_state, resolved_at, updated_at
@@ -171,11 +245,11 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                    ELSE excluded.canonical_url
                  END,
                  updated_at = excluded.updated_at`,
-              [id, input.provider, input.owner, input.name, input.remoteUrl, now],
+              [id, row.provider, row.owner, row.name, row.remoteUrl, now],
             )
           }
-          if (input.localPath !== null) {
-            transaction.run(
+          if (row.localPath !== null) {
+            yield* database.run(
               `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
                VALUES (?, ?, ?, ?)
                ON CONFLICT(local_path) DO UPDATE SET
@@ -184,7 +258,7 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                  last_seen_at = excluded.last_seen_at
                WHERE (SELECT provider FROM repos WHERE id = repository_checkouts.repo_id) = 'local'
                   OR ? <> 'local'`,
-              [input.localPath, id, input.remoteUrl, now, input.provider],
+              [row.localPath, id, row.remoteUrl, now, row.provider],
             )
           }
         })
@@ -230,8 +304,11 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 RepositoryStoreError.make({ operation: "findByLocalPath.query", cause }),
               ),
               Effect.flatMap((row) => decodeOptionalRepositoryId("findByLocalPath.decode", row)),
-              Effect.flatMap((id) =>
-                id === null ? findLegacyByLocalPath(localPath) : getById(id),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => findLegacyByLocalPath(localPath),
+                  onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                }),
               ),
             )
         }),
@@ -254,7 +331,12 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 RepositoryStoreError.make({ operation: "findHosted.query", cause }),
               ),
               Effect.flatMap((row) => decodeOptionalRepositoryId("findHosted.decode", row)),
-              Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.succeed(Option.none<Repo>()),
+                  onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                }),
+              ),
             )
         }),
         findByProviderRepositoryId: Effect.fn("RepositoryStore.findByProviderRepositoryId")(
@@ -280,54 +362,64 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                 Effect.flatMap((row) =>
                   decodeOptionalRepositoryId("findByProviderRepositoryId.decode", row),
                 ),
-                Effect.flatMap((id) => (id === null ? Effect.succeed(null) : getById(id))),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.succeed(Option.none<Repo>()),
+                    onSome: (id) => getById(id).pipe(Effect.map(Option.some)),
+                  }),
+                ),
               )
           },
         ),
         attachResolvedIdentity: Effect.fn("RepositoryStore.attachResolvedIdentity")(
-          function (repoId, resolved, localPath, remoteUrl) {
+          function (repoId, resolved, checkout) {
+            const localPath = Schema.is(LinkedCheckout)(checkout) ? checkout.path : null
             return database
-              .transaction("repositories.attachResolvedIdentity", (transaction) => {
-                const stable =
-                  resolved.providerRepositoryId === null
-                    ? undefined
-                    : transaction.get(
-                        `SELECT repo_id AS id FROM repository_identities
+              .transaction(
+                Effect.gen(function* () {
+                  const stable =
+                    resolved.providerRepositoryId === null
+                      ? Option.none()
+                      : yield* database.get(
+                          `SELECT repo_id AS id FROM repository_identities
                          WHERE provider_id = ? AND provider_repository_id = ?`,
-                        [resolved.locator.providerId, resolved.providerRepositoryId],
-                      )
-                const stableId = decodeOptionalRepositoryIdSync(stable)
-                let canonicalId = stableId ?? repoId
+                          [resolved.locator.providerId, resolved.providerRepositoryId],
+                        )
+                  const stableId = yield* decodeOptionalRepositoryId(
+                    "attachResolvedIdentity.stableDecode",
+                    stable,
+                  )
+                  const canonicalId = Option.getOrElse(stableId, () => repoId)
 
-                const locatorRows = Schema.decodeUnknownSync(RepositoryIdRows)(
-                  transaction.all(
-                    `SELECT r.id
+                  const locatorRows = yield* database
+                    .all(
+                      `SELECT r.id
                      FROM repos AS r
                      LEFT JOIN repository_identities AS identity ON identity.repo_id = r.id
                      WHERE r.provider = ?
                        AND COALESCE(identity.canonical_owner, r.owner) = ? COLLATE NOCASE
                        AND COALESCE(identity.canonical_name, r.name) = ? COLLATE NOCASE
                        AND r.id <> ?`,
-                    [
-                      resolved.locator.providerId,
-                      resolved.locator.namespace,
-                      resolved.locator.name,
-                      canonicalId,
-                    ],
-                  ),
-                )
-                if (canonicalId !== repoId) {
-                  mergeRepositoryAlias(transaction, canonicalId, repoId, "provider")
-                }
-                for (const row of locatorRows) {
-                  if (row.id !== canonicalId) {
-                    mergeRepositoryAlias(transaction, canonicalId, row.id, "locator")
+                      [
+                        resolved.locator.providerId,
+                        resolved.locator.namespace,
+                        resolved.locator.name,
+                        canonicalId,
+                      ],
+                    )
+                    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(RepositoryIdRows)))
+                  if (canonicalId !== repoId) {
+                    yield* mergeRepositoryAlias(database, canonicalId, repoId, "provider")
                   }
-                }
+                  for (const row of locatorRows) {
+                    if (row.id !== canonicalId) {
+                      yield* mergeRepositoryAlias(database, canonicalId, row.id, "locator")
+                    }
+                  }
 
-                const now = new Date().toISOString()
-                transaction.run(
-                  `INSERT INTO repository_identities (
+                  const now = new Date().toISOString()
+                  yield* database.run(
+                    `INSERT INTO repository_identities (
                      repo_id, provider_id, provider_repository_id, canonical_owner,
                      canonical_name, canonical_url, resolution_state, resolved_at, updated_at
                    ) VALUES (?, ?, ?, ?, ?, ?, 'resolved', ?, ?)
@@ -343,43 +435,52 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
                      resolution_state = 'resolved',
                      resolved_at = excluded.resolved_at,
                      updated_at = excluded.updated_at`,
-                  [
-                    canonicalId,
-                    resolved.locator.providerId,
-                    resolved.providerRepositoryId,
-                    resolved.locator.namespace,
-                    resolved.locator.name,
-                    resolved.url,
-                    now,
-                    now,
-                  ],
-                )
-                transaction.run(
-                  `UPDATE repos SET remote_url = ?, local_path = COALESCE(?, local_path),
-                     updated_at = ? WHERE id = ?`,
-                  [resolved.url, localPath, now, canonicalId],
-                )
-                if (localPath !== null) {
-                  const previous = transaction.get(
-                    "SELECT repo_id AS id FROM repository_checkouts WHERE local_path = ?",
-                    [localPath],
+                    [
+                      canonicalId,
+                      resolved.locator.providerId,
+                      resolved.providerRepositoryId,
+                      resolved.locator.namespace,
+                      resolved.locator.name,
+                      resolved.url,
+                      now,
+                      now,
+                    ],
                   )
-                  const previousId = decodeOptionalRepositoryIdSync(previous)
-                  if (previousId !== null && previousId !== canonicalId) {
-                    mergeRepositoryAlias(transaction, canonicalId, previousId, "checkout")
-                  }
-                  transaction.run(
-                    `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
+                  yield* database.run(
+                    `UPDATE repos SET remote_url = ?, local_path = COALESCE(?, local_path),
+                     updated_at = ? WHERE id = ?`,
+                    [resolved.url, localPath, now, canonicalId],
+                  )
+                  if (localPath !== null) {
+                    const previous = yield* database.get(
+                      "SELECT repo_id AS id FROM repository_checkouts WHERE local_path = ?",
+                      [localPath],
+                    )
+                    const previousId = yield* decodeOptionalRepositoryId(
+                      "attachResolvedIdentity.checkoutDecode",
+                      previous,
+                    )
+                    if (Option.isSome(previousId) && previousId.value !== canonicalId) {
+                      yield* mergeRepositoryAlias(
+                        database,
+                        canonicalId,
+                        previousId.value,
+                        "checkout",
+                      )
+                    }
+                    yield* database.run(
+                      `INSERT INTO repository_checkouts (local_path, repo_id, remote_url, last_seen_at)
                      VALUES (?, ?, ?, ?)
                      ON CONFLICT(local_path) DO UPDATE SET
                        repo_id = excluded.repo_id,
                        remote_url = excluded.remote_url,
                        last_seen_at = excluded.last_seen_at`,
-                    [localPath, canonicalId, remoteUrl, now],
-                  )
-                }
-                return canonicalId
-              })
+                      [localPath, canonicalId, checkout.remoteUrl, now],
+                    )
+                  }
+                  return canonicalId
+                }),
+              )
               .pipe(
                 Effect.mapError((cause) =>
                   RepositoryStoreError.make({ operation: "attachResolvedIdentity", cause }),
@@ -391,9 +492,7 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
         reconcileLocalAliases: Effect.fn("RepositoryStore.reconcileLocalAliases")(
           function (canonicalProjectId, localPath) {
             return database
-              .transaction("repositories.reconcileLocalAliases", (transaction) =>
-                reconcileLocalAliases(transaction, canonicalProjectId, localPath),
-              )
+              .transaction(reconcileLocalAliases(database, canonicalProjectId, localPath))
               .pipe(
                 Effect.mapError((cause) =>
                   RepositoryStoreError.make({ operation: "reconcileLocalAliases", cause }),
@@ -403,38 +502,47 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
         ),
         repairLocalAliases: Effect.fn("RepositoryStore.repairLocalAliases")(function () {
           return database
-            .transaction("repositories.repairLocalAliases", (transaction) => {
-              const pairs = Schema.decodeUnknownSync(
-                Schema.Array(
-                  Schema.Struct({ alias_id: Schema.String, canonical_id: Schema.String }),
-                ),
-              )(
-                transaction.all(
-                  `SELECT local.id AS alias_id, hosted.id AS canonical_id
+            .transaction(
+              Effect.gen(function* () {
+                const pairs = yield* database
+                  .all(
+                    `SELECT local.id AS alias_id, hosted.id AS canonical_id
                    FROM repos AS local
                    INNER JOIN repos AS hosted ON hosted.local_path = local.local_path
                    WHERE local.provider = 'local'
                      AND hosted.provider <> 'local'
-                     AND local.local_path IS NOT NULL
-                   ORDER BY local.id, hosted.updated_at DESC`,
-                ),
-              )
-              let removedAliasCount = 0
-              for (const pair of pairs) {
-                const removed = mergeRepositoryAlias(
-                  transaction,
-                  pair.canonical_id,
-                  pair.alias_id,
-                  "checkout",
-                )
-                if (removed) removedAliasCount += 1
-              }
-              return {
-                matchedAliasCount: pairs.length,
-                removedAliasCount,
-                preservedAliasCount: pairs.length - removedAliasCount,
-              }
-            })
+                      AND local.local_path IS NOT NULL
+                    ORDER BY local.id, hosted.updated_at DESC`,
+                  )
+                  .pipe(
+                    Effect.flatMap(
+                      Schema.decodeUnknownEffect(
+                        Schema.Array(
+                          Schema.Struct({
+                            alias_id: ReviewProjectId,
+                            canonical_id: ReviewProjectId,
+                          }),
+                        ),
+                      ),
+                    ),
+                  )
+                let removedAliasCount = 0
+                for (const pair of pairs) {
+                  const removed = yield* mergeRepositoryAlias(
+                    database,
+                    pair.canonical_id,
+                    pair.alias_id,
+                    "checkout",
+                  )
+                  if (removed) removedAliasCount += 1
+                }
+                return {
+                  matchedAliasCount: pairs.length,
+                  removedAliasCount,
+                  preservedAliasCount: pairs.length - removedAliasCount,
+                }
+              }),
+            )
             .pipe(
               Effect.mapError((cause) =>
                 RepositoryStoreError.make({ operation: "repairLocalAliases", cause }),
@@ -462,44 +570,58 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
           },
         ),
         upsertRepository: Effect.fn("RepositoryStore.upsertRepository")(function (input) {
-          const id = repoId(input.provider, input.owner, input.name)
+          const row = encodeRepositoryCompatibilityInput(input)
+          const id = repoId(row.provider, row.owner, row.name)
           const now = new Date().toISOString()
           return database
-            .run(
-              `INSERT INTO repos (
-              id, provider, owner, name, remote_url, local_path, is_favorite,
-              last_opened_at, last_synced_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(provider, owner, name) DO UPDATE SET
-              remote_url = excluded.remote_url,
-              local_path = COALESCE(excluded.local_path, repos.local_path),
-              is_favorite = CASE WHEN excluded.is_favorite = 1 THEN 1 ELSE repos.is_favorite END,
-              last_opened_at = excluded.last_opened_at,
-              last_synced_at = excluded.last_synced_at,
-              updated_at = excluded.updated_at`,
-              [
-                id,
-                input.provider,
-                input.owner,
-                input.name,
-                input.remoteUrl,
-                input.localPath,
-                input.isFavorite === true ? 1 : 0,
-                now,
-                now,
-                now,
-                now,
-              ],
+            .transaction(
+              Effect.gen(function* () {
+                yield* database
+                  .run(
+                    `INSERT INTO repos (
+                    id, provider, owner, name, remote_url, local_path, is_favorite,
+                    last_opened_at, last_synced_at, created_at, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(provider, owner, name) DO UPDATE SET
+                    remote_url = excluded.remote_url,
+                    local_path = COALESCE(excluded.local_path, repos.local_path),
+                    is_favorite = CASE WHEN excluded.is_favorite = 1 THEN 1 ELSE repos.is_favorite END,
+                    last_opened_at = excluded.last_opened_at,
+                    last_synced_at = excluded.last_synced_at,
+                    updated_at = excluded.updated_at`,
+                    [
+                      id,
+                      row.provider,
+                      row.owner,
+                      row.name,
+                      row.remoteUrl,
+                      row.localPath,
+                      input.isFavorite === true ? 1 : 0,
+                      now,
+                      now,
+                      now,
+                      now,
+                    ],
+                  )
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      RepositoryStoreError.make({ operation: "upsertRepository", cause }),
+                    ),
+                  )
+                yield* recordCompatibilityIdentity(id, row, now).pipe(
+                  Effect.mapError((cause) =>
+                    RepositoryStoreError.make({ operation: "upsertRepository.identity", cause }),
+                  ),
+                )
+                return yield* getById(id)
+              }),
             )
             .pipe(
               Effect.mapError((cause) =>
-                RepositoryStoreError.make({ operation: "upsertRepository", cause }),
+                Schema.is(RepositoryStoreError)(cause)
+                  ? cause
+                  : RepositoryStoreError.make({ operation: "upsertRepository", cause }),
               ),
-              Effect.flatMap(() => recordCompatibilityIdentity(id, input, now)),
-              Effect.mapError((cause) =>
-                RepositoryStoreError.make({ operation: "upsertRepository.identity", cause }),
-              ),
-              Effect.flatMap(() => getById(id)),
             )
         }),
         setFavorite: Effect.fn("RepositoryStore.setFavorite")(function (id, isFavorite) {
@@ -545,54 +667,60 @@ export class RepositoryStore extends Context.Tag("@diffdash/RepositoryStore")<
 }
 
 const reconcileLocalAliases = (
-  transaction: DatabaseTransaction,
+  database: Database,
   canonicalProjectId: ReviewProjectId,
-  localPath: string,
-): ReconcileLocalAliasesResult => {
-  const canonical = transaction.get("SELECT id FROM repos WHERE id = ? AND provider <> 'local'", [
-    canonicalProjectId,
-  ])
-  if (canonical === undefined) {
-    throw new Error(`Canonical hosted repository not found: ${canonicalProjectId}`)
-  }
+  localPath: RepositoryCheckoutPath,
+) =>
+  Effect.gen(function* () {
+    const canonical = yield* database.get(
+      "SELECT id FROM repos WHERE id = ? AND provider <> 'local'",
+      [canonicalProjectId],
+    )
+    if (Option.isNone(canonical)) {
+      return yield* RepositoryStoreError.make({
+        operation: "reconcileLocalAliases.canonicalNotFound",
+        cause: new Error(`Canonical hosted repository not found: ${canonicalProjectId}`),
+      })
+    }
 
-  const aliases = Schema.decodeUnknownSync(LocalAliasRows)(
-    transaction.all(
-      `SELECT id FROM repos
+    const aliases = yield* database
+      .all(
+        `SELECT id FROM repos
        WHERE provider = 'local' AND local_path = ? AND id <> ?
        ORDER BY id ASC`,
-      [localPath, canonicalProjectId],
-    ),
-  )
-  let removedAliasCount = 0
+        [localPath, canonicalProjectId],
+      )
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(LocalAliasRows)))
+    let removedAliasCount = 0
 
-  for (const alias of aliases) {
-    if (mergeRepositoryAlias(transaction, canonicalProjectId, alias.id, "checkout")) {
-      removedAliasCount += 1
+    for (const alias of aliases) {
+      if (yield* mergeRepositoryAlias(database, canonicalProjectId, alias.id, "checkout")) {
+        removedAliasCount += 1
+      }
     }
-  }
 
-  return {
-    matchedAliasCount: aliases.length,
-    removedAliasCount,
-    preservedAliasCount: aliases.length - removedAliasCount,
-  }
-}
+    return {
+      matchedAliasCount: aliases.length,
+      removedAliasCount,
+      preservedAliasCount: aliases.length - removedAliasCount,
+    }
+  })
 
 const mergeRepositoryAlias = (
-  transaction: DatabaseTransaction,
-  canonicalProjectId: string,
-  aliasProjectId: string,
+  database: Database,
+  canonicalProjectId: ReviewProjectId,
+  aliasProjectId: ReviewProjectId,
   reason: "checkout" | "locator" | "provider",
-) => {
-  if (canonicalProjectId === aliasProjectId) return false
-  const canonical = transaction.get("SELECT id FROM repos WHERE id = ?", [canonicalProjectId])
-  const alias = transaction.get("SELECT id FROM repos WHERE id = ?", [aliasProjectId])
-  if (canonical === undefined || alias === undefined) return alias === undefined
+) =>
+  Effect.gen(function* () {
+    if (canonicalProjectId === aliasProjectId) return false
+    const canonical = yield* database.get("SELECT id FROM repos WHERE id = ?", [canonicalProjectId])
+    const alias = yield* database.get("SELECT id FROM repos WHERE id = ?", [aliasProjectId])
+    if (Option.isNone(canonical) || Option.isNone(alias)) return Option.isNone(alias)
 
-  transaction.run("DELETE FROM repository_identities WHERE repo_id = ?", [aliasProjectId])
-  transaction.run(
-    `UPDATE repos AS canonical
+    yield* database.run("DELETE FROM repository_identities WHERE repo_id = ?", [aliasProjectId])
+    yield* database.run(
+      `UPDATE repos AS canonical
      SET is_favorite = MAX(
            canonical.is_favorite,
            COALESCE((SELECT is_favorite FROM repos WHERE id = ?), 0)
@@ -609,64 +737,69 @@ const mergeRepositoryAlias = (
          END,
          updated_at = MAX(canonical.updated_at, (SELECT updated_at FROM repos WHERE id = ?))
      WHERE canonical.id = ?`,
-    [
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
+      [
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        canonicalProjectId,
+      ],
+    )
+    yield* moveAliasRows(database, canonicalProjectId, aliasProjectId)
+    yield* database.run("UPDATE repository_checkouts SET repo_id = ? WHERE repo_id = ?", [
       canonicalProjectId,
-    ],
-  )
-  moveAliasRows(transaction, ReviewProjectId.make(canonicalProjectId), aliasProjectId)
-  transaction.run("UPDATE repository_checkouts SET repo_id = ? WHERE repo_id = ?", [
-    canonicalProjectId,
-    aliasProjectId,
-  ])
-  transaction.run(
-    `DELETE FROM repos
+      aliasProjectId,
+    ])
+    yield* database.run(
+      `DELETE FROM repos
      WHERE id = ?
-       AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE repo_id = ?)
-       AND NOT EXISTS (SELECT 1 FROM walkthroughs WHERE repo_id = ?)
-       AND NOT EXISTS (SELECT 1 FROM review_threads WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM pull_requests WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM walkthroughs WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM walkthrough_operations WHERE repo_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM review_threads WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM hosted_viewed_files WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM local_viewed_files WHERE repo_id = ?)
        AND NOT EXISTS (SELECT 1 FROM project_workspace_state WHERE repo_id = ?)`,
-    [
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-      aliasProjectId,
-    ],
-  )
-  const removed =
-    transaction.get("SELECT 1 FROM repos WHERE id = ?", [aliasProjectId]) === undefined
-  if (!removed) {
-    transaction.run(
-      `INSERT INTO repository_aliases (alias_repo_id, canonical_repo_id, reason, created_at)
+      [
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+        aliasProjectId,
+      ],
+    )
+    const removed = Option.isNone(
+      yield* database.get("SELECT 1 FROM repos WHERE id = ?", [aliasProjectId]),
+    )
+    if (!removed) {
+      yield* database.run(
+        `INSERT INTO repository_aliases (alias_repo_id, canonical_repo_id, reason, created_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(alias_repo_id) DO UPDATE SET
          canonical_repo_id = excluded.canonical_repo_id,
          reason = excluded.reason`,
-      [aliasProjectId, canonicalProjectId, reason, new Date().toISOString()],
-    )
-  }
-  return removed
-}
+        [aliasProjectId, canonicalProjectId, reason, new Date().toISOString()],
+      )
+    }
+    return removed
+  })
 
+/** Merges collisions by newest durable timestamp, retaining canonical data on exact ties. */
 const moveAliasRows = (
-  transaction: DatabaseTransaction,
+  database: Database,
   canonicalProjectId: ReviewProjectId,
-  aliasProjectId: string,
-) => {
-  transaction.run(
-    `UPDATE pull_requests AS alias_pull_request
+  aliasProjectId: ReviewProjectId,
+) =>
+  Effect.gen(function* () {
+    yield* database.run(
+      `UPDATE pull_requests AS alias_pull_request
      SET repo_id = ?
      WHERE alias_pull_request.repo_id = ?
        AND NOT EXISTS (
@@ -674,23 +807,68 @@ const moveAliasRows = (
          WHERE canonical_pull_request.repo_id = ?
            AND canonical_pull_request.number = alias_pull_request.number
        )`,
-    [canonicalProjectId, aliasProjectId, canonicalProjectId],
-  )
-  transaction.run("DELETE FROM pull_requests WHERE repo_id = ?", [aliasProjectId])
+      [canonicalProjectId, aliasProjectId, canonicalProjectId],
+    )
+    yield* database.run("DELETE FROM pull_requests WHERE repo_id = ?", [aliasProjectId])
 
-  transaction.run(
-    `INSERT OR IGNORE INTO walkthroughs (
-       repo_id, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
-     )
-     SELECT ?, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
-     FROM walkthroughs WHERE repo_id = ?`,
-    [canonicalProjectId, aliasProjectId],
-  )
-  transaction.run("DELETE FROM walkthroughs WHERE repo_id = ?", [aliasProjectId])
+    yield* database.run(
+      `INSERT INTO walkthroughs (
+        repo_id, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
+      )
+      SELECT ?, pr_number, review_key, base_sha, head_sha, prompt_version, content_json, created_at
+      FROM walkthroughs WHERE repo_id = ?
+      ON CONFLICT(repo_id, review_key, base_sha, head_sha, prompt_version) DO UPDATE SET
+        pr_number = excluded.pr_number,
+        content_json = excluded.content_json,
+        created_at = excluded.created_at
+      WHERE excluded.created_at > walkthroughs.created_at`,
+      [canonicalProjectId, aliasProjectId],
+    )
+    const now = new Date().toISOString()
+    yield* database.run(
+      `UPDATE walkthrough_operations AS alias_operation
+     SET state = 'superseded',
+         state_version = state_version + 1,
+         superseded_by_operation_id = (
+           SELECT canonical_operation.id
+           FROM walkthrough_operations AS canonical_operation
+           WHERE canonical_operation.repo_id = ?
+             AND canonical_operation.review_key = alias_operation.review_key
+             AND canonical_operation.base_sha = alias_operation.base_sha
+             AND canonical_operation.head_sha = alias_operation.head_sha
+             AND canonical_operation.prompt_version = alias_operation.prompt_version
+             AND canonical_operation.state IN ('accepted', 'running')
+           ORDER BY canonical_operation.accepted_at DESC, canonical_operation.id
+           LIMIT 1
+         ),
+         terminal_at = ?,
+         updated_at = ?
+     WHERE alias_operation.repo_id = ?
+       AND alias_operation.state IN ('accepted', 'running')
+       AND EXISTS (
+         SELECT 1
+         FROM walkthrough_operations AS canonical_operation
+         WHERE canonical_operation.repo_id = ?
+           AND canonical_operation.review_key = alias_operation.review_key
+           AND canonical_operation.base_sha = alias_operation.base_sha
+           AND canonical_operation.head_sha = alias_operation.head_sha
+           AND canonical_operation.prompt_version = alias_operation.prompt_version
+           AND canonical_operation.state IN ('accepted', 'running')
+       )`,
+      [canonicalProjectId, now, now, aliasProjectId, canonicalProjectId],
+    )
+    yield* database.run(
+      `UPDATE walkthrough_operations
+     SET repo_id = ?,
+         artifact_repo_id = CASE WHEN artifact_repo_id IS NULL THEN NULL ELSE ? END
+     WHERE repo_id = ?`,
+      [canonicalProjectId, canonicalProjectId, aliasProjectId],
+    )
+    yield* database.run("DELETE FROM walkthroughs WHERE repo_id = ?", [aliasProjectId])
 
-  const threadMerges = Schema.decodeUnknownSync(ThreadMergeRows)(
-    transaction.all(
-      `SELECT alias_thread.id AS alias_thread_id,
+    const threadMerges = yield* database
+      .all(
+        `SELECT alias_thread.id AS alias_thread_id,
               canonical_thread.id AS canonical_thread_id
        FROM review_threads AS alias_thread
        INNER JOIN review_threads AS canonical_thread
@@ -698,40 +876,47 @@ const moveAliasRows = (
         AND canonical_thread.review_key = alias_thread.review_key
         AND canonical_thread.original_anchor_json = alias_thread.original_anchor_json
        WHERE alias_thread.repo_id = ?`,
+        [canonicalProjectId, aliasProjectId],
+      )
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ThreadMergeRows)))
+    if (threadMerges.length > 0) yield* database.run("PRAGMA defer_foreign_keys = ON")
+    for (const merge of threadMerges) yield* mergeThreadConversation(database, merge)
+    yield* database.run("UPDATE review_threads SET repo_id = ? WHERE repo_id = ?", [
+      canonicalProjectId,
+      aliasProjectId,
+    ])
+
+    yield* database.run(
+      `INSERT INTO hosted_viewed_files (
+        repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
+      )
+      SELECT ?, pr_number, base_ref_name, review_key, patch_hash, viewed_at
+      FROM hosted_viewed_files WHERE repo_id = ?
+      ON CONFLICT(repo_id, pr_number, base_ref_name, review_key, patch_hash) DO UPDATE SET
+        viewed_at = excluded.viewed_at
+      WHERE excluded.viewed_at > hosted_viewed_files.viewed_at`,
       [canonicalProjectId, aliasProjectId],
-    ),
-  )
-  if (threadMerges.length > 0) transaction.run("PRAGMA defer_foreign_keys = ON")
-  for (const merge of threadMerges) mergeThreadConversation(transaction, merge)
-  transaction.run("UPDATE review_threads SET repo_id = ? WHERE repo_id = ?", [
-    canonicalProjectId,
-    aliasProjectId,
-  ])
+    )
+    yield* database.run("DELETE FROM hosted_viewed_files WHERE repo_id = ?", [aliasProjectId])
 
-  transaction.run(
-    `INSERT OR IGNORE INTO hosted_viewed_files (
-       repo_id, pr_number, base_ref_name, review_key, patch_hash, viewed_at
-     )
-     SELECT ?, pr_number, base_ref_name, review_key, patch_hash, viewed_at
-     FROM hosted_viewed_files WHERE repo_id = ?`,
-    [canonicalProjectId, aliasProjectId],
-  )
-  transaction.run("DELETE FROM hosted_viewed_files WHERE repo_id = ?", [aliasProjectId])
+    yield* database.run(
+      `INSERT INTO local_viewed_files (
+        repo_id, source_identity, comparison_kind, comparison_target,
+        review_key, patch_hash, viewed_at
+      )
+      SELECT ?, source_identity, comparison_kind, comparison_target,
+             review_key, patch_hash, viewed_at
+      FROM local_viewed_files WHERE repo_id = ?
+      ON CONFLICT(
+        repo_id, source_identity, comparison_kind, comparison_target, review_key, patch_hash
+      ) DO UPDATE SET viewed_at = excluded.viewed_at
+      WHERE excluded.viewed_at > local_viewed_files.viewed_at`,
+      [canonicalProjectId, aliasProjectId],
+    )
+    yield* database.run("DELETE FROM local_viewed_files WHERE repo_id = ?", [aliasProjectId])
 
-  transaction.run(
-    `INSERT OR IGNORE INTO local_viewed_files (
-       repo_id, source_identity, comparison_kind, comparison_target,
-       review_key, patch_hash, viewed_at
-     )
-     SELECT ?, source_identity, comparison_kind, comparison_target,
-            review_key, patch_hash, viewed_at
-     FROM local_viewed_files WHERE repo_id = ?`,
-    [canonicalProjectId, aliasProjectId],
-  )
-  transaction.run("DELETE FROM local_viewed_files WHERE repo_id = ?", [aliasProjectId])
-
-  transaction.run(
-    `INSERT INTO project_workspace_state (
+    yield* database.run(
+      `INSERT INTO project_workspace_state (
        repo_id, active_ribbon, selected_review_target_json, updated_at
      )
      SELECT ?, active_ribbon, selected_review_target_json, updated_at
@@ -741,54 +926,66 @@ const moveAliasRows = (
        selected_review_target_json = excluded.selected_review_target_json,
        updated_at = excluded.updated_at
      WHERE excluded.updated_at > project_workspace_state.updated_at`,
-    [canonicalProjectId, aliasProjectId],
-  )
-  transaction.run("DELETE FROM project_workspace_state WHERE repo_id = ?", [aliasProjectId])
-}
+      [canonicalProjectId, aliasProjectId],
+    )
+    yield* database.run("DELETE FROM project_workspace_state WHERE repo_id = ?", [aliasProjectId])
+  })
 
 const mergeThreadConversation = (
-  transaction: DatabaseTransaction,
-  merge: { readonly alias_thread_id: string; readonly canonical_thread_id: string },
-) => {
-  const maxSequence = Schema.decodeUnknownSync(MaxSequenceRow)(
-    transaction.get(
+  database: Database,
+  merge: {
+    readonly alias_thread_id: ReviewThreadId
+    readonly canonical_thread_id: ReviewThreadId
+  },
+) =>
+  Effect.gen(function* () {
+    const maxSequenceRow = yield* database.get(
       `SELECT COALESCE(MAX(sequence), 0) AS max_sequence
        FROM review_thread_messages WHERE thread_id = ?`,
       [merge.canonical_thread_id],
-    ),
-  ).max_sequence
-  transaction.run(
-    `UPDATE review_thread_messages
+    )
+    const maxSequence = yield* Option.match(maxSequenceRow, {
+      onNone: () =>
+        RepositoryStoreError.make({
+          operation: "mergeThreadConversation.maxSequenceNotFound",
+          cause: new Error(`Thread not found: ${merge.canonical_thread_id}`),
+        }),
+      onSome: Schema.decodeUnknownEffect(MaxSequenceRow),
+    })
+    yield* database.run(
+      `UPDATE review_thread_messages
      SET sequence = sequence + ?, thread_id = ?
      WHERE thread_id = ?`,
-    [maxSequence, merge.canonical_thread_id, merge.alias_thread_id],
-  )
-  transaction.run("UPDATE agent_run_artifacts SET thread_id = ? WHERE thread_id = ?", [
-    merge.canonical_thread_id,
-    merge.alias_thread_id,
-  ])
-  transaction.run("UPDATE agent_runs SET thread_id = ? WHERE thread_id = ?", [
-    merge.canonical_thread_id,
-    merge.alias_thread_id,
-  ])
-  const canonicalMemory = transaction.get("SELECT 1 FROM thread_memory WHERE thread_id = ?", [
-    merge.canonical_thread_id,
-  ])
-  if (canonicalMemory === undefined) {
-    transaction.run("UPDATE thread_memory SET thread_id = ? WHERE thread_id = ?", [
+      [maxSequence.max_sequence, merge.canonical_thread_id, merge.alias_thread_id],
+    )
+    yield* database.run("UPDATE agent_run_artifacts SET thread_id = ? WHERE thread_id = ?", [
       merge.canonical_thread_id,
       merge.alias_thread_id,
     ])
-  } else {
-    transaction.run("DELETE FROM thread_memory WHERE thread_id = ?", [merge.alias_thread_id])
-  }
-  transaction.run("DELETE FROM review_threads WHERE id = ?", [merge.alias_thread_id])
-}
+    yield* database.run("UPDATE agent_runs SET thread_id = ? WHERE thread_id = ?", [
+      merge.canonical_thread_id,
+      merge.alias_thread_id,
+    ])
+    const canonicalMemory = yield* database.get("SELECT 1 FROM thread_memory WHERE thread_id = ?", [
+      merge.canonical_thread_id,
+    ])
+    if (Option.isNone(canonicalMemory)) {
+      yield* database.run("UPDATE thread_memory SET thread_id = ? WHERE thread_id = ?", [
+        merge.canonical_thread_id,
+        merge.alias_thread_id,
+      ])
+    } else {
+      yield* database.run("DELETE FROM thread_memory WHERE thread_id = ?", [merge.alias_thread_id])
+    }
+    yield* database.run("DELETE FROM review_threads WHERE id = ?", [merge.alias_thread_id])
+  })
 
-const repoId = (provider: RepoProvider, owner: string, name: string) =>
-  provider === "local"
-    ? `${provider}:${owner}/${name}`
-    : `${provider}:${normalizeIdentityPart(owner)}/${normalizeIdentityPart(name)}`
+const repoId = (provider: RepositoryRowProvider, owner: string, name: string): ReviewProjectId =>
+  ReviewProjectId.make(
+    provider === "local"
+      ? `${provider}:${owner}/${name}`
+      : `${provider}:${normalizeIdentityPart(owner)}/${normalizeIdentityPart(name)}`,
+  )
 
 const normalizeIdentityPart = (value: string) => value.toLocaleLowerCase("en-US")
 
@@ -825,11 +1022,16 @@ const canonicalRepositoryIdSql = `COALESCE(
 const toRepo = (row: typeof RepoRow.Type) =>
   Repo.make({
     id: row.id,
-    provider: row.provider,
-    owner: row.owner,
-    name: row.name,
-    remoteUrl: row.remote_url,
-    localPath: row.local_path,
+    source:
+      row.provider === "local"
+        ? LocalRepositorySource.make()
+        : HostedRepositorySource.make({
+            locator: makeHostedRepositoryLocator(row.provider, row.owner, row.name),
+          }),
+    checkout:
+      row.local_path === null
+        ? RemoteOnly.make({ remoteUrl: row.remote_url })
+        : LinkedCheckout.make({ remoteUrl: row.remote_url, path: row.local_path }),
     isFavorite: row.is_favorite === 1,
     lastOpenedAt: row.last_opened_at,
     lastSyncedAt: row.last_synced_at,
@@ -837,25 +1039,61 @@ const toRepo = (row: typeof RepoRow.Type) =>
     updatedAt: row.updated_at,
   })
 
-const decodeRepo = (operation: string, input: unknown) =>
-  Schema.decodeUnknown(RepoRow)(input).pipe(
+interface RepositoryCompatibilityInput {
+  readonly provider: RepositoryRowProvider
+  readonly owner: string
+  readonly name: string
+  readonly remoteUrl: string
+  readonly localPath: RepositoryCheckoutPath | null
+}
+
+const encodeRepositoryCompatibilityInput = (
+  input: UpsertRepositoryInput,
+): RepositoryCompatibilityInput => {
+  const localPath = Schema.is(LinkedCheckout)(input.checkout) ? input.checkout.path : null
+  if (Schema.is(HostedRepositorySource)(input.source)) {
+    return {
+      provider: input.source.locator.providerId,
+      owner: input.source.locator.namespace,
+      name: input.source.locator.name,
+      remoteUrl: input.checkout.remoteUrl,
+      localPath,
+    }
+  }
+
+  if (localPath === null) {
+    throw new Error("Validated local repository input did not include a linked checkout")
+  }
+  const path = localPath
+  const hash = createHash("sha256").update(path).digest("hex").slice(0, 12)
+  return {
+    provider: "local",
+    owner: "local",
+    name: `${basename(path) || "repository"}-${hash}`,
+    remoteUrl: input.checkout.remoteUrl,
+    localPath: path,
+  }
+}
+
+const decodeRepo = (operation: RepositoryStoreOperation, input: DatabaseRow) =>
+  Schema.decodeUnknownEffect(RepoRow)(input).pipe(
     Effect.map(toRepo),
     Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
   )
 
-const decodeRepos = (operation: string, input: readonly unknown[]) =>
-  Schema.decodeUnknown(RepoRows)(input).pipe(
+const decodeRepos = (operation: RepositoryStoreOperation, input: readonly DatabaseRow[]) =>
+  Schema.decodeUnknownEffect(RepoRows)(input).pipe(
     Effect.map((rows) => rows.map(toRepo)),
     Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
   )
 
-const decodeOptionalRepositoryId = (operation: string, input: unknown) =>
-  input === undefined
-    ? Effect.succeed(null)
-    : Schema.decodeUnknown(RepositoryIdRow)(input).pipe(
-        Effect.map(({ id }) => id),
-        Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
-      )
-
-const decodeOptionalRepositoryIdSync = (input: unknown) =>
-  input === undefined ? null : Schema.decodeUnknownSync(RepositoryIdRow)(input).id
+const decodeOptionalRepositoryId = (
+  operation: RepositoryStoreOperation,
+  input: Option.Option<DatabaseRow>,
+): Effect.Effect<Option.Option<ReviewProjectId>, RepositoryStoreError> =>
+  Option.map(input, (row) =>
+    Schema.decodeUnknownEffect(RepositoryIdRow)(row).pipe(Effect.map(({ id }) => id)),
+  ).pipe(
+    Effect.transposeOption,
+    Effect.mapError((cause) => RepositoryStoreError.make({ operation, cause })),
+  )

@@ -2,68 +2,120 @@ import {
   GitProviderCapabilities,
   GitProviderDescriptor,
   GitProviderDiagnostic,
+  GitFileRevision,
   GitProviderId,
   GitProviderKind,
   GitProviderTerminology,
+  makeHostedRepositoryLocator,
 } from "@diffdash/domain/git-provider"
-import { type GitProviderRegistration, GitProviderRegistry } from "@diffdash/git-provider"
+import {
+  DiagnosticOperation,
+  GitProviderOperationError,
+  type GitProviderRegistration,
+  GitProviderRegistry,
+} from "@diffdash/git-provider"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Result } from "effect"
 
 import { GitProvider } from "./git-provider"
 
-const unexpectedProviderOperation = () => Effect.dieMessage("Unexpected provider operation")
+const unexpectedProviderOperation = () => Effect.die(new Error("Unexpected provider operation"))
+const providerId = GitProviderId.make("test")
+
+const makeProvider = (
+  overrides: Partial<Pick<GitProviderRegistration, "fileUrl" | "repositoryUrl">> = {},
+): GitProviderRegistration => ({
+  descriptor: GitProviderDescriptor.make({
+    id: providerId,
+    kind: GitProviderKind.make("test"),
+    displayName: "Test",
+    host: "git.example.com",
+    capabilities: GitProviderCapabilities.make({
+      repositorySearch: false,
+      searchScopes: false,
+      assignedReviews: false,
+      reviewDecisions: false,
+      fileUrls: false,
+      remoteWorkspaceBootstrap: true,
+    }),
+    terminology: GitProviderTerminology.make({
+      repositorySingular: "repository",
+      repositoryPlural: "repositories",
+      reviewSingular: "review",
+      reviewPlural: "reviews",
+    }),
+  }),
+  publishingTools: [],
+  diagnose: Effect.succeed(
+    GitProviderDiagnostic.make({
+      providerId,
+      available: true,
+      authenticated: false,
+      message: "Authenticate the test provider.",
+    }),
+  ),
+  parseRemote: unexpectedProviderOperation,
+  searchRepositories: unexpectedProviderOperation,
+  listReviews: unexpectedProviderOperation,
+  getReview: unexpectedProviderOperation,
+  getReviewDiff: unexpectedProviderOperation,
+  getReviewDecision: unexpectedProviderOperation,
+  submitReviewDecision: unexpectedProviderOperation,
+  repositoryUrl: overrides.repositoryUrl ?? unexpectedProviderOperation,
+  fileUrl: overrides.fileUrl ?? unexpectedProviderOperation,
+  bootstrapBareRepository: unexpectedProviderOperation,
+  checkoutSpec: unexpectedProviderOperation,
+})
 
 describe("GitProvider", () => {
   it.effect("requires provider support and authentication for remote acquisition", () => {
-    const providerId = GitProviderId.make("test")
-    const provider = {
-      descriptor: GitProviderDescriptor.make({
-        id: providerId,
-        kind: GitProviderKind.make("test"),
-        displayName: "Test",
-        host: "git.example.com",
-        capabilities: GitProviderCapabilities.make({
-          repositorySearch: false,
-          searchScopes: false,
-          assignedReviews: false,
-          reviewDecisions: false,
-          fileUrls: false,
-          remoteWorkspaceBootstrap: true,
-        }),
-        terminology: GitProviderTerminology.make({
-          repositorySingular: "repository",
-          repositoryPlural: "repositories",
-          reviewSingular: "review",
-          reviewPlural: "reviews",
-        }),
-      }),
-      publishingTools: [],
-      diagnose: Effect.succeed(
-        GitProviderDiagnostic.make({
-          providerId,
-          available: true,
-          authenticated: false,
-          message: "Authenticate the test provider.",
-        }),
-      ),
-      parseRemote: unexpectedProviderOperation,
-      searchRepositories: unexpectedProviderOperation,
-      listReviews: unexpectedProviderOperation,
-      getReview: unexpectedProviderOperation,
-      getReviewDiff: unexpectedProviderOperation,
-      getReviewDecision: unexpectedProviderOperation,
-      submitReviewDecision: unexpectedProviderOperation,
-      repositoryUrl: unexpectedProviderOperation,
-      fileUrl: unexpectedProviderOperation,
-      bootstrapBareRepository: unexpectedProviderOperation,
-      checkoutSpec: unexpectedProviderOperation,
-    } satisfies GitProviderRegistration
+    const provider = makeProvider()
     const layer = GitProvider.layer.pipe(Layer.provide(GitProviderRegistry.layer([provider])))
 
     return Effect.gen(function* () {
       const providers = yield* GitProvider
       expect(yield* providers.isAvailable(providerId)).toBe(false)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("preserves typed provider URL failures", () => {
+    const repository = makeHostedRepositoryLocator("test", "team", "repository")
+    const expected = GitProviderOperationError.make({
+      providerId,
+      operation: DiagnosticOperation.make("repositoryUrl"),
+      message: "Provider URL unavailable",
+    })
+    const layer = GitProvider.layer.pipe(
+      Layer.provide(
+        GitProviderRegistry.layer([
+          makeProvider({
+            repositoryUrl: () => expected,
+            fileUrl: () => expected,
+          }),
+        ]),
+      ),
+    )
+
+    return Effect.gen(function* () {
+      const providers = yield* GitProvider
+      const repositoryResult = yield* Effect.result(providers.repositoryUrl(repository))
+      const fileResult = yield* Effect.result(
+        providers.fileUrl(
+          repository,
+          RepositoryRelativePath.make("src/app.ts"),
+          GitFileRevision.make("main"),
+        ),
+      )
+
+      expect(Result.isFailure(repositoryResult)).toBe(true)
+      expect(Result.isFailure(fileResult)).toBe(true)
+      if (Result.isFailure(repositoryResult)) {
+        expect(repositoryResult.failure).toBe(expected)
+      }
+      if (Result.isFailure(fileResult)) {
+        expect(fileResult.failure).toBe(expected)
+      }
     }).pipe(Effect.provide(layer))
   })
 })

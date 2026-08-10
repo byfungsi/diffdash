@@ -12,7 +12,7 @@ const makeTempDirectory = Effect.acquireRelease(
 )
 
 describe("findExecutableInPath", () => {
-  it.scopedLive("finds an executable in an explicit PATH", () =>
+  it.live("finds an executable in an explicit PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const executable = join(directory, "diffdash-test")

@@ -1,7 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "types": ["node"]
   },
   "include": ["playwright.config.ts", "tests", "../app/src/vite-env.d.ts"]

@@ -1,4 +1,4 @@
-import { RegistryProvider } from "@effect-atom/atom-react"
+import { RegistryProvider } from "@effect/atom-react"
 
 import { AppShell } from "@/shell/app-shell"
 

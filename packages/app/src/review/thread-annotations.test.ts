@@ -1,6 +1,7 @@
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
+  CurrentReviewAnchor,
   LineReviewAnchor,
   ReviewThread,
   ReviewThreadDetails,
@@ -31,7 +32,7 @@ const details = (id: string, anchor: LineReviewAnchor, status: "active" | "outda
   ReviewThreadDetails.make({
     thread: ReviewThread.make({
       id: ReviewThreadId.make(id),
-      repoId: "repo-1",
+      repoId: ReviewProjectId.make("repo-1"),
       reviewKey: ReviewKey.make("review-1"),
       prNumber: 1,
       baseRevision: ReviewRevision.make("base"),
@@ -39,12 +40,14 @@ const details = (id: string, anchor: LineReviewAnchor, status: "active" | "outda
       currentBaseRevision: ReviewRevision.make("base"),
       currentHeadRevision: ReviewRevision.make("head"),
       originalAnchor: anchor,
-      currentAnchor: anchor,
-      anchorStatus: status,
+      currentAnchor:
+        status === "active"
+          ? CurrentReviewAnchor.cases.Active.make({ anchor })
+          : CurrentReviewAnchor.cases.Outdated.make({}),
       createdAt: "2026-07-18T00:00:00.000Z",
       updatedAt: "2026-07-18T00:00:00.000Z",
     }),
-    messages: [],
+    conversation: [],
   })
 
 describe("review thread annotations", () => {

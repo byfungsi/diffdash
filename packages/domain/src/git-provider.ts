@@ -1,8 +1,18 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
+
+import { DiffFileStatus } from "./diff"
+import { NonNegativeInteger, UtcIsoTimestamp } from "./domain-scalar"
+import { RepositoryRelativePath } from "./repository-path"
+import { RepositoryComparisonRef } from "./repository-comparison-ref"
+import { ReviewRevision } from "./review-identity"
+import { WebUrl } from "./web-url"
+
+export { RepositoryRelativePath } from "./repository-path"
+export { ReviewRevision } from "./review-identity"
 
 /** Stable identifier for one configured hosted Git provider instance. */
 export const GitProviderId = Schema.String.pipe(
-  Schema.pattern(/^(?!local$)[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  Schema.check(Schema.isPattern(/^(?!local$)[A-Za-z0-9][A-Za-z0-9._-]*$/)),
   Schema.brand("GitProviderId"),
 )
 
@@ -11,7 +21,7 @@ export type GitProviderId = typeof GitProviderId.Type
 
 /** Implementation family shared by compatible provider instances. */
 export const GitProviderKind = Schema.String.pipe(
-  Schema.pattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)),
   Schema.brand("GitProviderKind"),
 )
 
@@ -20,7 +30,7 @@ export type GitProviderKind = typeof GitProviderKind.Type
 
 /** A provider-owned namespace, including nested namespace segments. */
 export const RepositoryNamespace = Schema.String.pipe(
-  Schema.pattern(/^[^/:#%]+(?:\/[^/:#%]+)*$/),
+  Schema.check(Schema.isPattern(/^[^/:#%]+(?:\/[^/:#%]+)*$/)),
   Schema.brand("RepositoryNamespace"),
 )
 
@@ -29,7 +39,7 @@ export type RepositoryNamespace = typeof RepositoryNamespace.Type
 
 /** Repository name within a hosted namespace. */
 export const HostedRepositoryName = Schema.String.pipe(
-  Schema.pattern(/^[^/:#%]+$/),
+  Schema.check(Schema.isPattern(/^[^/:#%]+$/)),
   Schema.brand("HostedRepositoryName"),
 )
 
@@ -38,16 +48,25 @@ export type HostedRepositoryName = typeof HostedRepositoryName.Type
 
 /** Stable provider-owned repository identifier that survives owner and repository renames. */
 export const ProviderRepositoryId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ProviderRepositoryId"),
 )
 
 /** Stable provider-owned repository identifier that survives owner and repository renames. */
 export type ProviderRepositoryId = typeof ProviderRepositoryId.Type
 
+/** Branch, tag, or immutable revision accepted by a provider file URL. */
+export const GitFileRevision = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("GitFileRevision"),
+)
+
+/** Branch, tag, or immutable revision accepted by a provider file URL. */
+export type GitFileRevision = typeof GitFileRevision.Type
+
 /** Positive provider-owned review number. */
 export const HostedReviewNumber = Schema.Int.pipe(
-  Schema.positive(),
+  Schema.check(Schema.isGreaterThan(0)),
   Schema.brand("HostedReviewNumber"),
 )
 
@@ -94,7 +113,7 @@ export const sameHostedRepository = (
   left: HostedRepositoryLocator,
   right: HostedRepositoryLocator,
 ): boolean =>
-  left.providerId === right.providerId &&
+  left.providerId.toLocaleLowerCase("en-US") === right.providerId.toLocaleLowerCase("en-US") &&
   left.namespace.toLocaleLowerCase("en-US") === right.namespace.toLocaleLowerCase("en-US") &&
   left.name.toLocaleLowerCase("en-US") === right.name.toLocaleLowerCase("en-US")
 
@@ -114,7 +133,7 @@ export class HostedRepositorySource extends Schema.TaggedClass<HostedRepositoryS
 }) {}
 
 /** Repository source mode independent from checkout availability. */
-export const RepositorySource = Schema.Union(LocalRepositorySource, HostedRepositorySource)
+export const RepositorySource = Schema.Union([LocalRepositorySource, HostedRepositorySource])
 
 /** Repository source mode independent from checkout availability. */
 export type RepositorySource = typeof RepositorySource.Type
@@ -139,7 +158,10 @@ export class GitProviderTerminology extends Schema.Class<GitProviderTerminology>
   repositoryPlural: Schema.String,
   reviewSingular: Schema.String,
   reviewPlural: Schema.String,
-  reviewAbbreviation: Schema.optionalWith(Schema.String, { default: () => "PR" }),
+  reviewAbbreviation: Schema.String.pipe(
+    Schema.withConstructorDefault(Effect.succeed("PR")),
+    Schema.withDecodingDefault(Effect.succeed("PR")),
+  ),
 }) {}
 
 /** Serializable description of one configured provider instance. */
@@ -165,47 +187,56 @@ export class GitProviderDiagnostic extends Schema.Class<GitProviderDiagnostic>(
 }) {}
 
 /** Provider-neutral review decision. */
-export const ReviewDecision = Schema.Literal("none", "approved", "changesRequested", "commented")
+export const ReviewDecision = Schema.Literals(["none", "approved", "changesRequested", "commented"])
 
 /** Provider-neutral review decision. */
 export type ReviewDecision = typeof ReviewDecision.Type
 
+/** Stable provider-owned actor identity when one is available. */
+export const ProviderActorId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ProviderActorId"),
+)
+
+/** Stable provider-owned actor identity when one is available. */
+export type ProviderActorId = typeof ProviderActorId.Type
+
 /** Provider-neutral actor identity attached to hosted review metadata. */
 export class ProviderActor extends Schema.Class<ProviderActor>("ProviderActor")({
-  id: Schema.NullOr(Schema.String),
+  id: Schema.NullOr(ProviderActorId),
   username: Schema.String,
   displayName: Schema.NullOr(Schema.String),
-  avatarUrl: Schema.NullOr(Schema.String),
+  avatarUrl: Schema.NullOr(WebUrl),
 }) {}
 
 /** Named branch and immutable revision at one side of a review. */
 export class BranchRevision extends Schema.Class<BranchRevision>("BranchRevision")({
-  name: Schema.String,
-  revision: Schema.NullOr(Schema.String),
+  name: RepositoryComparisonRef,
+  revision: Schema.NullOr(ReviewRevision),
 }) {}
 
 /** Provider-neutral changed-file metadata shared by hosted and local reviews. */
 export class ChangedFile extends Schema.Class<ChangedFile>("ChangedFile")({
-  path: Schema.String,
-  additions: Schema.Number,
-  deletions: Schema.Number,
-  changeType: Schema.String,
+  path: RepositoryRelativePath,
+  additions: NonNegativeInteger,
+  deletions: NonNegativeInteger,
+  changeType: DiffFileStatus,
 }) {}
 
 /** Provider-neutral commit metadata. */
 export class ReviewCommit extends Schema.Class<ReviewCommit>("ReviewCommit")({
-  revision: Schema.String,
+  revision: ReviewRevision,
   title: Schema.String,
-  authoredAt: Schema.NullOr(Schema.String),
+  authoredAt: Schema.NullOr(UtcIsoTimestamp),
 }) {}
 
 /** Repository metadata normalized by a hosted Git provider. */
 export class HostedRepository extends Schema.Class<HostedRepository>("HostedRepository")({
   locator: HostedRepositoryLocator,
-  url: Schema.String,
+  url: WebUrl,
   description: Schema.NullOr(Schema.String),
   isPrivate: Schema.Boolean,
-  updatedAt: Schema.NullOr(Schema.String),
+  updatedAt: Schema.NullOr(UtcIsoTimestamp),
 }) {}
 
 /** Authoritative hosted repository identity resolved by its provider. */
@@ -214,7 +245,7 @@ export class ResolvedHostedRepository extends Schema.Class<ResolvedHostedReposit
 )({
   locator: HostedRepositoryLocator,
   providerRepositoryId: Schema.NullOr(ProviderRepositoryId),
-  url: Schema.String,
+  url: WebUrl,
 }) {}
 
 /** Provider-neutral hosted review summary. */
@@ -225,12 +256,12 @@ export class HostedReviewSummary extends Schema.Class<HostedReviewSummary>("Host
   author: ProviderActor,
   state: Schema.String,
   decision: ReviewDecision,
-  url: Schema.String,
+  url: WebUrl,
   draft: Schema.Boolean,
   base: BranchRevision,
   head: BranchRevision,
-  createdAt: Schema.NullOr(Schema.String),
-  updatedAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.NullOr(UtcIsoTimestamp),
+  updatedAt: Schema.NullOr(UtcIsoTimestamp),
 }) {}
 
 /** Detailed provider-neutral hosted review metadata. */
@@ -243,9 +274,9 @@ export class HostedReviewDetail extends Schema.Class<HostedReviewDetail>("Hosted
 /** Raw unified diff output and cache metadata for a hosted review. */
 export class HostedReviewDiff extends Schema.Class<HostedReviewDiff>("HostedReviewDiff")({
   locator: HostedReviewLocator,
-  headRevision: Schema.NullOr(Schema.String),
+  headRevision: Schema.NullOr(ReviewRevision),
   diff: Schema.String,
-  fetchedAt: Schema.String,
+  fetchedAt: UtcIsoTimestamp,
 }) {}
 
 /** Canonical persisted key for one hosted repository. */

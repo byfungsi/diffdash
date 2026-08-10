@@ -1,4 +1,4 @@
-import type { AgentProviderFailureCategory } from "@diffdash/domain/provider-failure"
+import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
   decodeTransportError,
@@ -6,6 +6,7 @@ import {
   sanitizeTransportErrorMessage,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
+import { rendererFailureInput } from "@/shared/errors"
 
 /** Review source used to derive the expected walkthrough generation operation. */
 export type WalkthroughErrorReviewSource = "hosted" | "local" | "repositoryComparison"
@@ -28,16 +29,17 @@ export interface WalkthroughErrorPresentation {
 }
 
 /** Builds actionable walkthrough guidance plus bounded details safe for a user report. */
-export const walkthroughErrorPresentation = (
-  error: unknown,
+export const walkthroughErrorPresentation = <Value>(
+  error: Value,
   context: WalkthroughErrorReportContext,
 ): WalkthroughErrorPresentation => {
-  const transport = decodeTransportError(error)
+  const input = rendererFailureInput(error)
+  const transport = decodeTransportError(input)
   const code =
     transport?.code === "INTERNAL_ERROR"
       ? "WALKTHROUGH_INTERNAL_ERROR"
       : (transport?.code ??
-        (hasBridgeTransportErrorEncoding(error)
+        (hasBridgeTransportErrorEncoding(input)
           ? "WALKTHROUGH_TRANSPORT_ERROR"
           : "WALKTHROUGH_RENDERER_ERROR"))
   const details = sanitizeTransportErrorMessage(
@@ -46,9 +48,10 @@ export const walkthroughErrorPresentation = (
   const operation = transport?.operation ?? walkthroughGenerationOperation(context.reviewSource)
   const diagnostic = transport?.diagnostic
   const providerFailure = transport?.providerFailure
+  const errorSource = transport === null ? "Renderer" : "Main process"
 
   return {
-    message: walkthroughUserMessage(code, details, providerFailure?.category),
+    message: walkthroughUserMessage(code, details, providerFailure),
     report: [
       "DiffDash walkthrough error",
       "",
@@ -60,6 +63,7 @@ export const walkthroughErrorPresentation = (
       `Configured model or quality: ${safeReportLine(context.model)}`,
       `Platform: ${safeReportLine(context.platform)}`,
       `Operation: ${safeReportLine(operation)}`,
+      `Error source: ${errorSource}`,
       `Error code: ${safeReportLine(code)}`,
       ...(providerFailure === undefined
         ? []
@@ -104,9 +108,9 @@ const walkthroughReviewType = (source: WalkthroughErrorReviewSource): string => 
 const walkthroughUserMessage = (
   code: string,
   details: string,
-  category?: AgentProviderFailureCategory,
+  providerFailure?: AgentProviderFailure,
 ): string => {
-  const categoryMessage = walkthroughProviderFailureMessage(category)
+  const categoryMessage = walkthroughProviderFailureMessage(providerFailure)
   if (categoryMessage !== null) return categoryMessage
   if (code === "AgentProviderTimeoutError") {
     return "The AI provider timed out while generating this walkthrough. Retry or select a faster model."
@@ -160,11 +164,11 @@ const walkthroughUserMessage = (
 }
 
 const walkthroughProviderFailureMessage = (
-  category: AgentProviderFailureCategory | undefined,
+  failure: AgentProviderFailure | undefined,
 ): string | null => {
-  switch (category) {
+  switch (failure?.category) {
     case "authentication":
-      return "AI provider authentication failed or expired. Sign in again, then retry."
+      return `Provider ${failure.providerId} authentication failed or expired. Sign in again, then retry.`
     case "authorization":
       return "The AI provider denied access to this operation or model. Check the provider account, then retry."
     case "rate-limited":

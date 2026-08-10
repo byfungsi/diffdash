@@ -56,6 +56,7 @@ describe("parseUnifiedDiff", () => {
       path: "src/app.tsx",
       reviewKey: "src/app.tsx",
       status: "modified",
+      visibility: { _tag: "Visible" },
     })
     expect(file?.hunks[0]).toMatchObject({
       header: "@@ -1,3 +1,4 @@",
@@ -115,7 +116,32 @@ describe("parseUnifiedDiff", () => {
       hunks: [],
       path: "assets/logo.png",
       status: "binary",
+      visibility: { _tag: "Hidden", reason: "binary" },
     })
+  })
+
+  it("derives default visibility while parsing each file", () => {
+    const parsed =
+      parseUnifiedDiff(`diff --git a/vendor/generated/pnpm-lock.yaml b/vendor/generated/pnpm-lock.yaml
+--- a/vendor/generated/pnpm-lock.yaml
++++ b/vendor/generated/pnpm-lock.yaml
+@@ -1 +1 @@
+-old
++new
+diff --git a/src/client.gen.ts b/src/client.gen.ts
+--- a/src/client.gen.ts
++++ b/src/client.gen.ts
+@@ -1 +1 @@
+-old
++new`)
+
+    expect(parsed.files.map(({ path, visibility }) => ({ path, visibility }))).toEqual([
+      {
+        path: "vendor/generated/pnpm-lock.yaml",
+        visibility: { _tag: "Hidden", reason: "lockfile" },
+      },
+      { path: "src/client.gen.ts", visibility: { _tag: "Hidden", reason: "generated" } },
+    ])
   })
 
   it("preserves multiple hunks and no-newline markers without counting markers as changes", () => {
@@ -152,6 +178,35 @@ new mode 100755`)
       hunks: [],
       path: "scripts/run.sh",
       status: "modified",
+    })
+  })
+
+  it("rejects files whose diff paths can escape the repository", () => {
+    const parsed = parseUnifiedDiff(`diff --git a/../secret.ts b/../secret.ts
+--- a/../secret.ts
++++ b/../secret.ts
+@@ -1 +1 @@
+-old
++new`)
+
+    expect(parsed.files).toEqual([])
+  })
+
+  it("preserves /dev/null semantics while validating the repository path", () => {
+    const addition = parseUnifiedDiff(`diff --git a/src/new.ts b/src/new.ts
+new file mode 100644
+--- /dev/null
++++ b/src/new.ts`)
+    const deletion = parseUnifiedDiff(`diff --git a/src/old.ts b/src/old.ts
+deleted file mode 100644
+--- a/src/old.ts
++++ /dev/null`)
+
+    expect(addition.files[0]).toMatchObject({ path: "src/new.ts", oldPath: null, status: "added" })
+    expect(deletion.files[0]).toMatchObject({
+      path: "src/old.ts",
+      oldPath: "src/old.ts",
+      status: "deleted",
     })
   })
 })

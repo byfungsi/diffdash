@@ -1,4 +1,8 @@
+import { Option, Schema } from "effect"
+
 import { type DiffFileStatus, ParsedDiff, ParsedDiffFile, ParsedDiffHunk } from "./diff"
+import { ReviewKey } from "./review-identity"
+import { RepositoryRelativePath } from "./repository-path"
 import {
   makeReviewFileId,
   makeReviewFilePatchHash,
@@ -37,7 +41,8 @@ export const parseUnifiedDiff = (diff: string): ParsedDiff => {
 
   const finishFile = () => {
     if (current === null) return
-    files.push(toParsedFile(current))
+    const parsedFile = toParsedFile(current)
+    if (parsedFile !== null) files.push(parsedFile)
     current = null
     currentHunk = null
   }
@@ -122,8 +127,17 @@ export const parseUnifiedDiff = (diff: string): ParsedDiff => {
 }
 
 const toParsedFile = (file: DraftFile) => {
-  const path = file.renameTo ?? file.newPath ?? file.gitNewPath
-  const oldPath = file.renameFrom ?? deletedOldPath(file)
+  const path = Option.getOrNull(
+    Schema.decodeUnknownOption(RepositoryRelativePath)(
+      file.renameTo ?? file.newPath ?? file.gitNewPath,
+    ),
+  )
+  const oldPathCandidate = file.renameFrom ?? deletedOldPath(file)
+  const oldPath =
+    oldPathCandidate === null
+      ? null
+      : Option.getOrNull(Schema.decodeUnknownOption(RepositoryRelativePath)(oldPathCandidate))
+  if (path === null || (oldPathCandidate !== null && oldPath === null)) return null
   const status = inferStatus(file)
   const fileId = makeReviewFileId(path, oldPath)
   const hunks = file.hunks.map((hunk) =>
@@ -134,7 +148,7 @@ const toParsedFile = (file: DraftFile) => {
     }),
   )
 
-  return ParsedDiffFile.make({
+  return Schema.decodeSync(ParsedDiffFile)({
     fileId,
     patchHash: makeReviewFilePatchHash({
       hunks,
@@ -143,7 +157,7 @@ const toParsedFile = (file: DraftFile) => {
       path,
       status,
     }),
-    reviewKey: oldPath === null ? path : `${oldPath}->${path}`,
+    reviewKey: ReviewKey.make(oldPath === null ? path : `${oldPath}->${path}`),
     path,
     oldPath,
     status,

@@ -2,6 +2,7 @@ import { Command, X } from "lucide-react"
 import { useEffect, useEffectEvent, useRef, useState } from "react"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
+import { isHTMLElement } from "@/shared/dom"
 
 /** One searchable command-palette action. */
 export type CommandPaletteItem = {
@@ -52,7 +53,7 @@ export const CommandPaletteDialog = ({
       }
       return
     }
-    if (document.activeElement instanceof HTMLElement) {
+    if (isHTMLElement(document.activeElement)) {
       previousFocusRef.current = document.activeElement
     }
     window.requestAnimationFrame(() => inputRef.current?.focus())

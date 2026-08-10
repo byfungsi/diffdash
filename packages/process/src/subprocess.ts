@@ -1,7 +1,19 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { delimiter, join, resolve } from "node:path"
 import { StringDecoder } from "node:string_decoder"
-import { Context, Data, Deferred, Effect, Layer, Runtime, Stream, type Scope } from "effect"
+import {
+  Context,
+  Cause,
+  Data,
+  Deferred,
+  Effect,
+  Layer,
+  Match,
+  Queue,
+  Schema,
+  Stream,
+  type Scope,
+} from "effect"
 
 import type { ProcessOutputPolicy, ProcessOutputSource } from "./process"
 
@@ -38,7 +50,7 @@ export interface NodeProcessChunk {
 
 /** Asynchronous Node process creation failed. */
 export class NodeProcessSpawnFailed extends Data.TaggedClass("NodeProcessSpawnFailed")<{
-  readonly cause: unknown
+  readonly cause: Schema.ErrorInstance["Type"]
 }> {}
 
 /** The child closed its inherited stdio and produced terminal process metadata. */
@@ -53,12 +65,12 @@ export type NodeProcessTerminal = NodeProcessSpawnFailed | NodeProcessClosed
 /** Reading one of the child process output pipes failed. */
 export class NodeProcessIoFailure extends Data.TaggedClass("NodeProcessIoFailure")<{
   readonly source: ProcessOutputSource
-  readonly cause: unknown
+  readonly cause: Schema.ErrorInstance["Type"]
 }> {}
 
 /** Writing or closing child process stdin failed. */
 export class NodeProcessStdinFailure extends Data.TaggedClass("NodeProcessStdinFailure")<{
-  readonly cause: unknown
+  readonly cause: Schema.ErrorInstance["Type"]
 }> {}
 
 /** Scoped handle returned by the private Node process adapter. */
@@ -73,14 +85,14 @@ export interface NodeProcessHandle {
 }
 
 /** Private leaf service containing the unavoidable Node callback and process-signal boundary. */
-export class NodeProcessSpawner extends Context.Tag("@diffdash/process/NodeProcessSpawner")<
+export class NodeProcessSpawner extends Context.Service<
   NodeProcessSpawner,
   {
     readonly spawn: (
       input: SpawnProcessInput,
     ) => Effect.Effect<NodeProcessHandle, NodeProcessSpawnFailed, Scope.Scope>
   }
->() {
+>()("@diffdash/process/NodeProcessSpawner") {
   static readonly layer = Layer.succeed(
     NodeProcessSpawner,
     NodeProcessSpawner.of({ spawn: spawnNode }),
@@ -100,15 +112,19 @@ export interface ProcessOutput {
 }
 
 /** Internal output-limit violation raised by synchronous byte and line codecs. */
-export class ProcessLimitFailure extends Error {
-  constructor(
-    readonly limit: "capture-bytes" | "events" | "line-bytes" | "stream-bytes",
-    readonly source: ProcessOutputSource | null,
-    message: string,
-  ) {
-    super(message)
-  }
-}
+const ProcessOutputSourceSchema = Schema.Literals(["stdout", "stderr"])
+
+export class ProcessLimitFailure extends Schema.TaggedError<ProcessLimitFailure>()(
+  "ProcessLimitFailure",
+  {
+    limit: Schema.Literals(["capture-bytes", "events", "line-bytes", "stream-bytes"]),
+    source: Schema.NullOr(ProcessOutputSourceSchema),
+    message: Schema.String,
+  },
+) {}
+
+const toError = <A>(cause: A): Error =>
+  Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))
 
 class BoundedByteOutput {
   readonly #chunks: Buffer[] = []
@@ -132,11 +148,11 @@ class BoundedByteOutput {
     if (capturedLength === chunk.length) return
     this.#truncated = true
     if (this.policy.overflow === "error") {
-      throw new ProcessLimitFailure(
-        "capture-bytes",
-        this.source,
-        `Command ${this.source} exceeded its configured capture budget`,
-      )
+      throw ProcessLimitFailure.make({
+        limit: "capture-bytes",
+        source: this.source,
+        message: `Command ${this.source} exceeded its configured capture budget`,
+      })
     }
   }
 
@@ -200,11 +216,11 @@ class BoundedLineDecoder {
   #append(segment: Buffer): void {
     if (segment.length === 0) return
     if (segment.length > this.maxLineBytes - this.#bytes) {
-      throw new ProcessLimitFailure(
-        "line-bytes",
-        this.source,
-        `${this.source} line exceeded ${this.maxLineBytes} bytes`,
-      )
+      throw ProcessLimitFailure.make({
+        limit: "line-bytes",
+        source: this.source,
+        message: `${this.source} line exceeded ${this.maxLineBytes} bytes`,
+      })
     }
     this.#chunks.push(Buffer.from(segment))
     this.#bytes += segment.length
@@ -238,11 +254,11 @@ export class StreamOutputDecoder {
 
   write(source: ProcessOutputSource, chunk: Buffer) {
     if (chunk.length > this.options.maxStreamBytes - this.#streamBytes) {
-      throw new ProcessLimitFailure(
-        "stream-bytes",
+      throw ProcessLimitFailure.make({
+        limit: "stream-bytes",
         source,
-        `Subprocess stream exceeded ${this.options.maxStreamBytes} total bytes`,
-      )
+        message: `Subprocess stream exceeded ${this.options.maxStreamBytes} total bytes`,
+      })
     }
     this.#streamBytes += chunk.length
     return this.#bounded(
@@ -260,11 +276,11 @@ export class StreamOutputDecoder {
 
   #bounded(source: ProcessOutputSource, lines: readonly string[]) {
     if (lines.length > this.options.maxStreamEvents - this.#events) {
-      throw new ProcessLimitFailure(
-        "events",
+      throw ProcessLimitFailure.make({
+        limit: "events",
         source,
-        `Subprocess stream exceeded ${this.options.maxStreamEvents} line events`,
-      )
+        message: `Subprocess stream exceeded ${this.options.maxStreamEvents} line events`,
+      })
     }
     this.#events += lines.length
     return lines.map((line) => ({ _tag: "ProcessLine" as const, source, line }))
@@ -280,11 +296,11 @@ function spawnNode(
       const exited = yield* Deferred.make<void>()
       const stdinFailed = yield* Deferred.make<never, NodeProcessStdinFailure>()
       const outputFailed = yield* Deferred.make<ProcessLimitFailure>()
-      const runtime = yield* Effect.runtime<never>()
-      const runFork = Runtime.runFork(runtime)
+      const context = yield* Effect.context<never>()
+      const runFork = Effect.runForkWith(context)
       const child = yield* Effect.try({
         try: () => spawnChild(input),
-        catch: (cause) => new NodeProcessSpawnFailed({ cause }),
+        catch: (cause) => new NodeProcessSpawnFailed({ cause: toError(cause) }),
       })
 
       const onError = (cause: Error) => {
@@ -304,7 +320,7 @@ function spawnNode(
       child.once("close", onClose)
       child.stdin.on("error", onStdinError)
 
-      const output = outputChunks(
+      const output = yield* outputChunks(
         child,
         input.options.maxBufferedEvents,
         input.capture,
@@ -324,16 +340,19 @@ function spawnNode(
         ),
         Deferred.await(terminal).pipe(Effect.as({ _tag: "Terminal" as const })),
       ).pipe(
-        Effect.flatMap((state) => {
-          const { _tag: stateTag } = state
-          return stateTag === "Terminal"
-            ? Effect.succeed(null)
-            : terminate.pipe(Effect.zipRight(Deferred.await(terminal)), Effect.as(state.failure))
-        }),
+        Effect.flatMap((state) =>
+          Match.value(state).pipe(
+            Match.tag("Terminal", () => Effect.succeed(null)),
+            Match.tag("Failed", ({ failure }) =>
+              terminate.pipe(Effect.andThen(Deferred.await(terminal)), Effect.as(failure)),
+            ),
+            Match.exhaustive,
+          ),
+        ),
       )
 
       return {
-        handle: NodeProcessHandleValue({
+        handle: {
           output,
           writeStdin,
           monitorStdin,
@@ -341,7 +360,7 @@ function spawnNode(
           awaitExit: Deferred.await(exited),
           awaitTerminal: Deferred.await(terminal),
           terminate,
-        }),
+        } satisfies NodeProcessHandle,
         release: terminate.pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -358,87 +377,95 @@ function spawnNode(
   ).pipe(Effect.map(({ handle }) => handle))
 }
 
-const NodeProcessHandleValue = (handle: NodeProcessHandle): NodeProcessHandle => handle
-
 const outputChunks = (
   child: ChildProcessWithoutNullStreams,
   bufferSize: number,
   capture: BoundedOutput,
   onLimit: (failure: ProcessLimitFailure) => void,
-): Stream.Stream<NodeProcessChunk, NodeProcessIoFailure> =>
-  Stream.asyncScoped<NodeProcessChunk, NodeProcessIoFailure>(
-    (emit) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          let active = true
-          let pending = Promise.resolve()
-          const ended = new Set<ProcessOutputSource>()
-          const pause = () => {
-            child.stdout.pause()
-            child.stderr.pause()
-          }
-          const resume = () => {
-            if (!active) return
-            child.stdout.resume()
-            child.stderr.resume()
-          }
-          const enqueue = (effect: () => Promise<void>) => {
-            pause()
-            pending = pending
-              .then(effect, effect)
-              .catch(() => undefined)
-              .finally(resume)
-          }
-          const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
-            const copied = Buffer.from(bytes)
-            try {
-              capture.append(source, copied)
-            } catch (cause) {
-              if (cause instanceof ProcessLimitFailure) onLimit(cause)
-            }
-            enqueue(() => emit.single({ source, bytes: copied }))
-          }
-          const onError = (source: ProcessOutputSource) => (cause: Error) =>
-            enqueue(() => emit.fail(new NodeProcessIoFailure({ source, cause })))
-          const onEnd = (source: ProcessOutputSource) => () => {
-            ended.add(source)
-            if (ended.size === 2) enqueue(() => emit.end())
-          }
-          const onStdoutData = onData("stdout")
-          const onStderrData = onData("stderr")
-          const onStdoutError = onError("stdout")
-          const onStderrError = onError("stderr")
-          const onStdoutEnd = onEnd("stdout")
-          const onStderrEnd = onEnd("stderr")
-          child.stdout.on("data", onStdoutData)
-          child.stderr.on("data", onStderrData)
-          child.stdout.once("error", onStdoutError)
-          child.stderr.once("error", onStderrError)
-          child.stdout.once("end", onStdoutEnd)
-          child.stderr.once("end", onStderrEnd)
-          if (child.stdout.readableEnded) onStdoutEnd()
-          if (child.stderr.readableEnded) onStderrEnd()
+): Effect.Effect<Stream.Stream<NodeProcessChunk, NodeProcessIoFailure>, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const queue = yield* Queue.bounded<NodeProcessChunk, Cause.Done<void> | NodeProcessIoFailure>(
+        bufferSize,
+      )
+      let active = true
+      let pending = Promise.resolve()
+      const ended = new Set<ProcessOutputSource>()
+      const pause = () => {
+        child.stdout.pause()
+        child.stderr.pause()
+      }
+      const resume = () => {
+        if (!active) return
+        child.stdout.resume()
+        child.stderr.resume()
+      }
+      const enqueue = (effect: () => Promise<void>) => {
+        pause()
+        pending = pending
+          .then(effect, effect)
+          .catch(() => undefined)
+          .finally(resume)
+      }
+      const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
+        const copied = Buffer.from(bytes)
+        try {
+          capture.append(source, copied)
+        } catch (cause) {
+          if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
+        }
+        enqueue(() =>
+          Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
+        )
+      }
+      const onError = (source: ProcessOutputSource) => (cause: Error) =>
+        enqueue(() =>
+          Effect.runPromise(
+            Queue.fail(queue, new NodeProcessIoFailure({ source, cause })).pipe(Effect.asVoid),
+          ),
+        )
+      const onEnd = (source: ProcessOutputSource) => () => {
+        ended.add(source)
+        if (ended.size === 2) {
+          enqueue(() => Effect.runPromise(Queue.end(queue).pipe(Effect.asVoid)))
+        }
+      }
+      const onStdoutData = onData("stdout")
+      const onStderrData = onData("stderr")
+      const onStdoutError = onError("stdout")
+      const onStderrError = onError("stderr")
+      const onStdoutEnd = onEnd("stdout")
+      const onStderrEnd = onEnd("stderr")
+      child.stdout.on("data", onStdoutData)
+      child.stderr.on("data", onStderrData)
+      child.stdout.once("error", onStdoutError)
+      child.stderr.once("error", onStderrError)
+      child.stdout.once("end", onStdoutEnd)
+      child.stderr.once("end", onStderrEnd)
+      if (child.stdout.readableEnded) onStdoutEnd()
+      if (child.stderr.readableEnded) onStderrEnd()
 
-          return () => {
-            active = false
-            child.stdout.off("data", onStdoutData)
-            child.stderr.off("data", onStderrData)
-            child.stdout.off("error", onStdoutError)
-            child.stderr.off("error", onStderrError)
-            child.stdout.off("end", onStdoutEnd)
-            child.stderr.off("end", onStderrEnd)
-          }
-        }),
-        (removeListeners) => Effect.sync(removeListeners),
-      ),
-    { bufferSize, strategy: "suspend" },
-  )
+      return {
+        stream: Stream.fromQueue(queue),
+        cleanup: () => {
+          active = false
+          child.stdout.off("data", onStdoutData)
+          child.stderr.off("data", onStderrData)
+          child.stdout.off("error", onStdoutError)
+          child.stderr.off("error", onStderrError)
+          child.stdout.off("end", onStdoutEnd)
+          child.stderr.off("end", onStderrEnd)
+        },
+      }
+    }),
+    ({ cleanup }) => Effect.sync(cleanup),
+  ).pipe(Effect.map(({ stream }) => stream))
 
 const writeChildStdin = (
   child: ChildProcessWithoutNullStreams,
   stdin: string | null,
 ): Effect.Effect<void, NodeProcessStdinFailure> =>
-  Effect.async<void, NodeProcessStdinFailure>((resume) => {
+  Effect.callback<void, NodeProcessStdinFailure>((resume) => {
     let settled = false
     const finish = (effect: Effect.Effect<void, NodeProcessStdinFailure>) => {
       if (settled) return
@@ -448,7 +475,7 @@ const writeChildStdin = (
     try {
       child.stdin.end(stdin ?? undefined, () => finish(Effect.void))
     } catch (cause) {
-      finish(Effect.fail(new NodeProcessStdinFailure({ cause })))
+      finish(Effect.fail(new NodeProcessStdinFailure({ cause: toError(cause) })))
     }
   })
 

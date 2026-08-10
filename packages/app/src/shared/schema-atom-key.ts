@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 
 /** Creates a renderer-local JSON atom-key codec backed by boundary schema decoding. */
-export const makeSchemaAtomKeyCodec = <A, I>(schema: Schema.Schema<A, I>) => {
+export const makeSchemaAtomKeyCodec = <A, I>(schema: Schema.Codec<A, I>) => {
   const decode = Schema.decodeUnknownSync(schema)
   return {
     encode: (value: I) => JSON.stringify(value),

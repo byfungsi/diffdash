@@ -1,11 +1,20 @@
 import { Schema } from "effect"
 
 import {
+  GitFileRevision,
   GitProviderId,
   HostedRepositoryLocator,
   HostedReviewLocator,
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
+
+/** Repository-relative path accepted by native file-opening requests. */
+export const OpenRepositoryFilePath = RepositoryRelativePath
+
+/** Repository-relative path accepted by native file-opening requests. */
+export type OpenRepositoryFilePath = typeof OpenRepositoryFilePath.Type
 
 /** Request selecting one configured hosted provider. */
 export class HostedProviderRequest extends Schema.Class<HostedProviderRequest>(
@@ -44,9 +53,9 @@ export class OpenHostedReviewFileRequest extends Schema.Class<OpenHostedReviewFi
   "OpenHostedReviewFileRequest",
 )({
   review: HostedReviewLocator,
-  filePath: Schema.String,
-  headRefName: Schema.String,
-  headRevision: Schema.NullOr(Schema.String),
+  filePath: OpenRepositoryFilePath,
+  headRefName: GitFileRevision,
+  headRevision: Schema.NullOr(ReviewRevision),
 }) {}
 
 /** Revision-scoped walkthrough lookup for one hosted review. */
@@ -54,8 +63,8 @@ export class HostedWalkthroughRequest extends Schema.Class<HostedWalkthroughRequ
   "HostedWalkthroughRequest",
 )({
   review: HostedReviewLocator,
-  baseRevision: Schema.String,
-  headRevision: Schema.String,
+  baseRevision: ReviewRevision,
+  headRevision: ReviewRevision,
 }) {}
 
 /** Walkthrough generation request for one hosted review. */

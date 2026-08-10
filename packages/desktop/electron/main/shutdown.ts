@@ -1,3 +1,5 @@
+type ElectronBoundaryValue = Parameters<typeof JSON.stringify>[0]
+
 /** Coordinates one graceful runtime disposal before quitting or installing an update. */
 export const createShutdown = ({
   dispose,
@@ -8,13 +10,13 @@ export const createShutdown = ({
   readonly dispose: () => Promise<void>
   readonly quit: () => void
   readonly disposalTimeoutMs?: number
-  readonly onDisposalError?: (cause: unknown) => void
+  readonly onDisposalError?: (cause: ElectronBoundaryValue) => void
 }) => {
   let quitAllowed = false
   let quitRequested = false
   let disposal: Promise<void> | null = null
   const disposeOnce = () => {
-    disposal ??= disposeWithin(dispose, disposalTimeoutMs).catch((cause: unknown) => {
+    disposal ??= disposeWithin(dispose, disposalTimeoutMs).catch((cause: ElectronBoundaryValue) => {
       try {
         onDisposalError(cause)
       } catch {

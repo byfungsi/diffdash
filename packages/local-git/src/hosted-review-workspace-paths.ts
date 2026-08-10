@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
 
 import { Effect, Schema } from "effect"
 
-import { isNodeError, poolError } from "./hosted-review-workspace-pool-error"
+import { isNodeError, poolError, toError } from "./hosted-review-workspace-pool-error"
 
 const ManagedPoolRootSchema = Schema.String.pipe(Schema.brand("ManagedPoolRoot"))
 const ManagedWorkspacePathSchema = Schema.String.pipe(Schema.brand("ManagedWorkspacePath"))
@@ -110,7 +110,7 @@ export const makeManagedWorkspaceFilesystem = (
             // oxlint-disable-next-line eslint/no-await-in-loop -- Components must be inspected before their descendants.
             nodeDetails = await lstat(current)
           } catch (cause) {
-            if (isNodeError(cause, "ENOENT")) return false
+            if (isNodeError(toError(cause), "ENOENT")) return false
             throw cause
           }
           if (nodeDetails.isSymbolicLink()) {
@@ -142,12 +142,12 @@ export const makeManagedWorkspaceFilesystem = (
             // oxlint-disable-next-line eslint/no-await-in-loop -- Components must be created and verified in order.
             nodeDetails = await lstat(current)
           } catch (cause) {
-            if (!isNodeError(cause, "ENOENT")) throw cause
+            if (!isNodeError(toError(cause), "ENOENT")) throw cause
             try {
               // oxlint-disable-next-line eslint/no-await-in-loop -- A parent must exist before creating its child.
               await mkdir(current, { mode: 0o700 })
             } catch (mkdirCause) {
-              if (!isNodeError(mkdirCause, "EEXIST")) throw mkdirCause
+              if (!isNodeError(toError(mkdirCause), "EEXIST")) throw mkdirCause
             }
             // oxlint-disable-next-line eslint/no-await-in-loop -- Verify the component created in this iteration.
             nodeDetails = await lstat(current)
@@ -192,7 +192,7 @@ export const makeManagedWorkspaceFilesystem = (
         "filesystem",
         "filesystem.root",
         "DiffDash could not create and canonicalize its managed workspace root.",
-        cause,
+        toError(cause),
       ),
   })
 
@@ -264,6 +264,6 @@ const wrapFilesystemOperation = <A>(operation: string, run: () => Promise<A>) =>
         "filesystem",
         operation,
         "DiffDash rejected or could not access a managed workspace path.",
-        cause,
+        toError(cause),
       ),
   })

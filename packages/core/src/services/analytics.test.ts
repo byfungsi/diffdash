@@ -1,15 +1,23 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import {
+  AIAgentSelection,
+  AIModelId,
+  AIProviderId,
+  AISettings,
+  DEFAULT_AI_SETTINGS,
+} from "@diffdash/domain/ai-settings"
 import { Analytics } from "./analytics"
+import { CoreAnalyticsState } from "../analytics-state"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { FileStorage } from "@diffdash/settings/file-storage"
+import { ApplicationVersion, CoreAbsolutePath } from "../core-configuration"
 
 const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-analytics-test-"))),
@@ -30,24 +38,26 @@ const makeLayer = (directory: string, events: CapturedEvent[]) => {
   )
   const settingsLayer = AppSettings.layer(settingsPath).pipe(Layer.provide(fileStorageLayer))
   return Analytics.makeLayer({
-    appVersion: "1.2.3",
+    appVersion: ApplicationVersion.make("1.2.3"),
     architecture: "arm64",
     packaged: true,
     platform: "darwin",
-    posthogHost: "https://us.i.posthog.com",
-    posthogKey: "phc_test",
-    settingsPath,
+    analytics: Schema.decodeUnknownSync(CoreAnalyticsState)({
+      host: "https://us.i.posthog.com",
+      projectKey: "phc_test",
+    }),
+    settingsPath: CoreAbsolutePath.make(settingsPath),
     clientFactory: () => ({
       capture: (event) => events.push(event),
       disable: async () => undefined,
       enable: async () => undefined,
       flush: async () => undefined,
     }),
-  }).pipe(Layer.provideMerge(settingsLayer))
+  }).pipe(Layer.provide(fileStorageLayer), Layer.provideMerge(settingsLayer))
 }
 
 describe("Analytics", () => {
-  it.scoped("reports install once and uses a stable anonymous ID", () =>
+  it.effect("reports install once and uses a stable anonymous ID", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []
@@ -82,7 +92,7 @@ describe("Analytics", () => {
     }),
   )
 
-  it.scoped("sends nothing after a persisted opt-out", () =>
+  it.effect("sends nothing after a persisted opt-out", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []
@@ -99,7 +109,7 @@ describe("Analytics", () => {
     }),
   )
 
-  it.scoped("stops immediately after opt-out without changing unrelated settings", () =>
+  it.effect("stops immediately after opt-out without changing unrelated settings", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const events: CapturedEvent[] = []
@@ -110,7 +120,13 @@ describe("Analytics", () => {
           AISettings.make({
             ...DEFAULT_AI_SETTINGS,
             appearance: "dark",
-            routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+            selections: {
+              ...DEFAULT_AI_SETTINGS.selections,
+              walkthrough: AIAgentSelection.cases.Pinned.make({
+                providerId: AIProviderId.make("claude"),
+                modelId: AIModelId.make("claude-sonnet-5"),
+              }),
+            },
           }),
         )
         const analytics = yield* Analytics
@@ -119,7 +135,13 @@ describe("Analytics", () => {
           AISettings.make({
             ...DEFAULT_AI_SETTINGS,
             appearance: "dark",
-            routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+            selections: {
+              ...DEFAULT_AI_SETTINGS.selections,
+              walkthrough: AIAgentSelection.cases.Pinned.make({
+                providerId: AIProviderId.make("claude"),
+                modelId: AIModelId.make("claude-sonnet-5"),
+              }),
+            },
             telemetryEnabled: false,
           }),
         )
@@ -127,7 +149,7 @@ describe("Analytics", () => {
 
         const persisted = yield* settings.get
         expect(persisted.appearance).toBe("dark")
-        expect(persisted.routes.walkthrough).toBe("claude")
+        expect(persisted.selections.walkthrough).toMatchObject({ providerId: "claude" })
         expect(persisted.telemetryEnabled).toBe(false)
       }).pipe(Effect.provide(makeLayer(directory, events)))
 

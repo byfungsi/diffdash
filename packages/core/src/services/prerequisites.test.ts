@@ -24,12 +24,19 @@ import {
   ProcessResult,
   ProcessService,
 } from "@diffdash/process"
+import { ProcessFileSystem } from "@diffdash/process/file-system"
 import {
   findExecutableInPath,
   Prerequisites,
   refreshAppImageCliLaunchers,
   replaceExecutableAtomically,
 } from "./prerequisites"
+import { ExecutablePath } from "@diffdash/process/executable"
+import {
+  CoreAbsolutePath,
+  ExecutablePathExtensions,
+  ExecutableSearchPath,
+} from "../core-configuration"
 import { GitProvider } from "./git-provider"
 import { AgentProviders } from "./agent-providers"
 import {
@@ -115,20 +122,25 @@ const makeLayer = (
   },
 ) =>
   Prerequisites.layer({
-    appImagePath: options.appImagePath ?? null,
-    diffDashCliPath: options.diffDashCliPath ?? "",
-    executableSearchPath: process.env.PATH ?? "",
-    executablePathExtensions: process.env.PATHEXT ?? null,
-    homeDirectory: process.env.HOME ?? null,
+    appImagePath:
+      options.appImagePath === undefined ? null : CoreAbsolutePath.make(options.appImagePath),
+    diffDashCliPath: CoreAbsolutePath.make(
+      options.diffDashCliPath ?? join(directory, "missing-diffdash-cli"),
+    ),
+    executableSearchPath: ExecutableSearchPath.make(process.env.PATH ?? ""),
+    executablePathExtensions:
+      process.env.PATHEXT === undefined ? null : ExecutablePathExtensions.make(process.env.PATHEXT),
+    homeDirectory: process.env.HOME === undefined ? null : CoreAbsolutePath.make(process.env.HOME),
     platform: process.platform,
   }).pipe(
     Layer.provideMerge(fakeProcessLayer(options)),
     Layer.provideMerge(fakeGitProviderLayer(options)),
     Layer.provideMerge(fakeAgentProvidersLayer(options)),
+    Layer.provideMerge(ProcessFileSystem.layer),
   )
 
 describe("Prerequisites", () => {
-  it.scoped("detects Git, GitHub auth, coding agents, and diffdash in PATH", () =>
+  it.effect("detects Git, GitHub auth, coding agents, and diffdash in PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -167,7 +179,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("detects a user-local diffdash CLI outside inherited PATH", () =>
+  it.effect("detects a user-local diffdash CLI outside inherited PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -199,7 +211,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
+  it.effect("marks GitHub CLI versions below 2.7.0 as unsupported", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const status = yield* Effect.gen(function* () {
@@ -221,7 +233,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("requires the gh search repos capability even when auth succeeds", () =>
+  it.effect("requires the gh search repos capability even when auth succeeds", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const status = yield* Effect.gen(function* () {
@@ -243,7 +255,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("installs the bundled diffdash CLI into the first writable PATH directory", () =>
+  it.effect("installs the bundled diffdash CLI into the first writable PATH directory", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -272,7 +284,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("falls back to a user-local bin directory when PATH has no writable directory", () =>
+  it.effect("falls back to a user-local bin directory when PATH has no writable directory", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -309,7 +321,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("installs a durable AppImage launcher outside the temporary mount", () =>
+  it.effect("installs a durable AppImage launcher outside the temporary mount", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const home = join(directory, "home")
@@ -372,7 +384,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("replaces a stale CLI symlink into an old AppImage mount", () =>
+  it.effect("replaces a stale CLI symlink into an old AppImage mount", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -408,7 +420,7 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("refreshes a marker-owned AppImage launcher after an app update", () =>
+  it.effect("refreshes a marker-owned AppImage launcher after an app update", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const fakeBin = join(directory, "bin")
@@ -429,13 +441,13 @@ describe("Prerequisites", () => {
       yield* withPath(fakeBin)
 
       yield* refreshAppImageCliLaunchers({
-        sourcePath,
-        appImagePath,
-        executableSearchPath: fakeBin,
+        sourcePath: CoreAbsolutePath.make(sourcePath),
+        appImagePath: CoreAbsolutePath.make(appImagePath),
+        executableSearchPath: ExecutableSearchPath.make(fakeBin),
         executablePathExtensions: null,
-        homeDirectory: directory,
+        homeDirectory: CoreAbsolutePath.make(directory),
         platform: process.platform,
-      })
+      }).pipe(Effect.provide(ProcessFileSystem.layer))
 
       const launcher = readFileSync(launcherPath, "utf8")
       expect(launcher).toContain("--diffdash-cli-v1")
@@ -443,27 +455,27 @@ describe("Prerequisites", () => {
     }),
   )
 
-  it.scoped("atomically replaces executables with mode 0755 and cleans failed temporaries", () =>
+  it.effect("atomically replaces executables with mode 0755 and cleans failed temporaries", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const executablePath = join(directory, "diffdash")
       const blockedTarget = join(directory, "blocked")
       yield* Effect.sync(() => {
         writeFileSync(executablePath, "old", "utf8")
-        replaceExecutableAtomically(executablePath, "new")
+        replaceExecutableAtomically(ExecutablePath.make(executablePath), "new")
         mkdirSync(blockedTarget)
       })
 
       expect(readFileSync(executablePath, "utf8")).toBe("new")
       expect(statSync(executablePath).mode & 0o777).toBe(0o755)
-      expect(() => replaceExecutableAtomically(blockedTarget, "cannot replace directory")).toThrow(
-        /EISDIR|ENOTDIR|EPERM/,
-      )
+      expect(() =>
+        replaceExecutableAtomically(ExecutablePath.make(blockedTarget), "cannot replace directory"),
+      ).toThrow(/EISDIR|ENOTDIR|EPERM/)
       expect(readdirSync(directory).filter((name) => name.endsWith(".tmp"))).toEqual([])
     }),
   )
 
-  it.scoped("resolves an executable in a supplied PATH", () =>
+  it.effect("resolves an executable in a supplied PATH", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const executablePath = join(directory, "diffdash")
@@ -528,9 +540,7 @@ const fakeGitProviderLayer = (options: {
       listSearchScopes: () => unavailableProviderMethod(),
       listHostedReviews: () => unavailableProviderMethod(),
       listAssignedReviews: () => unavailableProviderMethod(),
-      getHostedReview: () => unavailableProviderMethod(),
-      refreshHostedReview: () => unavailableProviderMethod(),
-      getHostedReviewDiff: () => unavailableProviderMethod(),
+      acquireHostedReviewSnapshot: () => unavailableProviderMethod(),
       getReviewDecision: () => unavailableProviderMethod(),
       submitReviewDecision: () => unavailableProviderMethod(),
       hostedReviewCheckoutSpec: () => unavailableProviderMethod(),
@@ -553,14 +563,18 @@ const fakeAgentProvidersLayer = (options: { readonly availableCommands: Readonly
               displayName: id,
               description: `${id} fixture`,
               homepage: null,
-              capabilities: [
-                AgentProviderCapabilityStatus.make({
-                  capability: "walkthrough",
-                  status: ready ? "ready" : "unavailable",
-                  runtimeVersion: ready ? "1.0.0" : null,
-                  reason: ready ? null : `${id} is unavailable`,
+              capabilities: {
+                walkthrough: ready
+                  ? AgentProviderCapabilityStatus.cases.Ready.make({
+                      runtimeVersion: "1.0.0",
+                    })
+                  : AgentProviderCapabilityStatus.cases.Unavailable.make({
+                      reason: `${id} is unavailable`,
+                    }),
+                "review-thread": AgentProviderCapabilityStatus.cases.Unsupported.make({
+                  reason: "This provider does not implement this capability.",
                 }),
-              ],
+              },
               models: [],
               defaults: AgentProviderDefaults.make({
                 walkthroughModel: null,

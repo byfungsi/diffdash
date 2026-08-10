@@ -1,67 +1,75 @@
-import { mkdirSync } from "node:fs"
-import { AgentProviderId } from "@diffdash/agent-provider"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
-import { DatabaseService } from "@diffdash/persistence/database"
+import type { DatabaseError } from "@diffdash/persistence/database"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
+import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
 import { ProcessService } from "@diffdash/process"
+import { defaultExecutablePath } from "@diffdash/process/executable"
+import { ProcessFileSystem } from "@diffdash/process/file-system"
 import { TempResources } from "@diffdash/process/temp-resource"
-import { ReviewAgentRouting, ReviewAgentService } from "@diffdash/review-agent"
-import { ReviewThreadAnchorMapper } from "@diffdash/review-agent/anchor-mapper"
-import { AgentArtifactNormalizer } from "@diffdash/review-agent/artifact-normalizer"
-import { ReviewContextBuilder } from "@diffdash/review-agent/context-builder"
-import { DiffDashMcpServer } from "@diffdash/review-agent/mcp-server"
+import { DiffDashMcpServer } from "@diffdash/mcp"
 import { AppSettings } from "@diffdash/settings/app-settings"
 import { AppState } from "@diffdash/settings/app-state"
 import { FileStorage } from "@diffdash/settings/file-storage"
-import { WalkthroughRouting, WalkthroughService } from "@diffdash/walkthrough"
+import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Layer } from "effect"
-import type { CoreConfiguration } from "./core-configuration"
+import { Cause, Effect, Layer, Option } from "effect"
+import type * as SqlClient from "effect/unstable/sql/SqlClient"
+import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
-import { CoreStartupError, type CoreStartupFailure } from "./core-startup-error"
-import {
-  createAgentProviderComposition,
-  createGitProviderComposition,
-} from "./provider-composition"
+import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
+import type { CoreProviderComposition } from "./provider-composition"
 import { AgentProviders } from "./services/agent-providers"
 import { Analytics } from "./services/analytics"
 import { GitProvider } from "./services/git-provider"
 import { Prerequisites } from "./services/prerequisites"
 import { RepositoryComparisonSource } from "./services/repository-comparison-source"
 import { RepositoryLinker } from "./services/repository-linker"
-import { ReviewContextService } from "./services/review-context"
 import { ReviewSnapshotService } from "./services/review-snapshot"
+import { AgentArtifactNormalizer } from "./services/agent-artifact-normalizer"
+import { ReviewAgentRouting, ReviewAgentService } from "./services/review-agent"
+import { ReviewMcpHandlers } from "./services/review-mcp-handlers"
+import { ReviewThreadAnchorMapper } from "./services/review-thread-anchor-mapper"
 
 /** Builds the runtime-neutral business service graph owned by DiffDash Core. */
 export const createCoreLayer = (
   configuration: CoreConfiguration,
+  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
 ): Layer.Layer<CoreOperationService, CoreStartupFailure> => {
+  const executableSearchPath = ExecutableSearchPath.make(
+    defaultExecutablePath(configuration.environment.executableSearchPath),
+  )
   const agentWorkingDirectory = configuration.paths.temporaryDirectory
-  const databasePath = configuration.paths.database
   const remoteWorktreePoolPath = configuration.paths.remoteWorktreePool
   const settingsPath = configuration.paths.settings
   const statePath = configuration.paths.state
   const worktreePoolPath = configuration.paths.worktreePool
   const temporaryDirectoryLayer = Layer.effectDiscard(
-    Effect.try({
-      try: () => mkdirSync(agentWorkingDirectory, { recursive: true, mode: 0o700 }),
-      catch: (cause) =>
-        CoreStartupError.make({
-          operation: "createTemporaryDirectory",
-          message: "DiffDash Core could not create its temporary directory.",
-          cause,
-        }),
+    Effect.gen(function* () {
+      const fileSystem = yield* ProcessFileSystem
+      yield* fileSystem
+        .ensureDirectory(agentWorkingDirectory, { recursive: true, mode: 0o700 })
+        .pipe(
+          Effect.mapError((cause) =>
+            CoreStartupError.make({
+              operation: "createTemporaryDirectory",
+              message: "DiffDash Core could not create its temporary directory.",
+              cause,
+            }),
+          ),
+        )
     }),
   )
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
@@ -73,10 +81,7 @@ export const createCoreLayer = (
     GitProviderRegistry,
     Effect.gen(function* () {
       const processes = yield* ProcessService
-      const registrations = createGitProviderComposition(
-        processes,
-        configuration.fixtures.gitProvider,
-      )
+      const registrations = providerComposition.createGitProviders(processes, configuration)
       const registry = yield* Effect.provide(
         GitProviderRegistry,
         GitProviderRegistry.layer(registrations),
@@ -91,22 +96,22 @@ export const createCoreLayer = (
     architecture: configuration.application.architecture,
     packaged: configuration.application.packaged,
     platform: configuration.application.platform,
-    posthogHost: configuration.analytics.host,
-    posthogKey: configuration.analytics.projectKey,
+    analytics: configuration.analytics,
     settingsPath,
-  }).pipe(Layer.provideMerge(settingsLayer))
+  }).pipe(Layer.provideMerge(settingsLayer), Layer.provide(fileStorageLayer))
   const agentProviderRegistryLayer = Layer.effect(
     AgentProviderRegistry,
     Effect.gen(function* () {
       const processes = yield* ProcessService
       const tempResources = yield* TempResources
-      const { registrations, policies } = createAgentProviderComposition({
-        processes,
-        tempResources,
-        tempDirectory: agentWorkingDirectory,
-        includeFixture: configuration.fixtures.agentProviderEnabled,
-        fixtureWalkthroughNeverCompletes: configuration.fixtures.agentProviderNeverCompletes,
-      })
+      const { registrations, policies } = providerComposition.createAgentProviders(
+        {
+          processes,
+          tempResources,
+          tempDirectory: agentWorkingDirectory,
+        },
+        configuration,
+      )
       return yield* AgentProviderRegistry.pipe(
         Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
       )
@@ -118,17 +123,9 @@ export const createCoreLayer = (
       const settings = yield* AppSettings
       return WalkthroughRouting.of({
         get: settings.get.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.catch(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
           Effect.map((current) => ({
-            route:
-              current.routes.walkthrough === "auto"
-                ? ({ mode: "auto" } as const)
-                : ({
-                    mode: "provider" as const,
-                    providerId: AgentProviderId.make(current.routes.walkthrough),
-                  } as const),
-            models: current.models,
-            autoQuality: current.autoQuality,
+            selection: current.selections.walkthrough,
           })),
         ),
       })
@@ -138,10 +135,6 @@ export const createCoreLayer = (
     remoteWorkingDirectory: agentWorkingDirectory,
   }).pipe(Layer.provide(agentProviderRegistryLayer), Layer.provide(walkthroughRoutingLayer))
   const agentProvidersLayer = AgentProviders.layer.pipe(Layer.provide(agentProviderRegistryLayer))
-  const reviewContextLayer = ReviewContextService.layer.pipe(
-    Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(gitProviderLayer),
-  )
   const threadStoreLayer = ReviewThreadStore.layer
   const reviewTurnStoreLayer = ReviewTurnStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
@@ -151,36 +144,30 @@ export const createCoreLayer = (
       const settings = yield* AppSettings
       return ReviewAgentRouting.of({
         get: settings.get.pipe(
-          Effect.catchAll(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
+          Effect.catch(() => Effect.succeed(DEFAULT_AI_SETTINGS)),
           Effect.map((current) => ({
-            route:
-              current.routes.reviewThread === "auto"
-                ? ({ mode: "auto" } as const)
-                : ({
-                    mode: "provider" as const,
-                    providerId: AgentProviderId.make(current.routes.reviewThread),
-                  } as const),
-            models: current.models,
-            autoQuality: current.autoQuality,
+            selection: current.selections["review-thread"],
           })),
         ),
       })
     }),
   ).pipe(Layer.provide(settingsLayer))
-  const mcpLayer = DiffDashMcpServer.layer.pipe(
+  const mcpHandlersLayer = ReviewMcpHandlers.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
     Layer.provideMerge(artifactStoreLayer),
+    Layer.provideMerge(processLayer),
   )
+  const mcpLayer = DiffDashMcpServer.layer
   const hostedReviewWorkspacePoolLayer = HostedReviewWorkspacePool.layer({
-    remoteWorktreePoolPath,
-    worktreePoolPath,
+    remoteWorktreePoolPath: RepositoryCheckoutPath.make(remoteWorktreePoolPath),
+    worktreePoolPath: RepositoryCheckoutPath.make(worktreePoolPath),
   })
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
     Layer.provideMerge(reviewAgentRoutingLayer),
     Layer.provideMerge(agentProviderRegistryLayer),
     Layer.provideMerge(gitProviderRegistryLayer),
     Layer.provideMerge(mcpLayer),
-    Layer.provideMerge(ReviewContextBuilder.layer),
+    Layer.provideMerge(mcpHandlersLayer),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
     Layer.provideMerge(reviewTurnStoreLayer),
     Layer.provideMerge(hostedReviewWorkspacePoolLayer),
@@ -199,15 +186,18 @@ export const createCoreLayer = (
     ),
   )
   const reviewSnapshotLayer = ReviewSnapshotService.layer().pipe(
-    Layer.provideMerge(reviewContextLayer),
+    Layer.provideMerge(GitService.layer),
+    Layer.provideMerge(gitProviderLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
   const prerequisitesLayer = Prerequisites.layer({
-    appImagePath: configuration.paths.appImage,
+    appImagePath: Option.getOrNull(configuration.paths.appImageOption),
     diffDashCliPath: configuration.paths.diffDashCli,
-    executableSearchPath: configuration.environment.executableSearchPath,
-    executablePathExtensions: configuration.environment.executablePathExtensions,
-    homeDirectory: configuration.environment.homeDirectory,
+    executableSearchPath,
+    executablePathExtensions: Option.getOrNull(
+      configuration.environment.executablePathExtensionsOption,
+    ),
+    homeDirectory: Option.getOrNull(configuration.environment.homeDirectoryOption),
     platform: configuration.application.platform,
   }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
 
@@ -225,10 +215,20 @@ export const createCoreLayer = (
     gitProviderLayer,
     walkthroughLayer,
     ViewedFileStore.layer,
+    WalkthroughOperationStore.layer,
     WalkthroughStore.layer,
     reviewAgentLayer,
     threadAnchorMapperLayer,
-  ).pipe(Layer.provide(DatabaseService.layer(databasePath)), Layer.provide(processLayer))
+  ).pipe(
+    Layer.provide(databaseLayer),
+    Layer.provide(processLayer),
+    Layer.provide(ProcessFileSystem.layer),
+  )
 
-  return coreOperationLayer.pipe(Layer.provide(businessServicesLayer))
+  return coreOperationLayer.pipe(
+    Layer.provide(businessServicesLayer),
+    Layer.catchCause((cause) =>
+      Layer.effect(CoreOperationService, Effect.failCause(Cause.map(cause, toCoreStartupError))),
+    ),
+  )
 }

@@ -1,11 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": "../..",
     "jsx": "react-jsx",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node", "vite/client"],
-    "paths": { "@/*": ["packages/app/src/*"] }
+    "paths": { "@/*": ["../../packages/app/src/*"] }
   },
   "include": ["src", "test", "vite.config.ts", "../../packages/app/src/vite-env.d.ts"]
 }

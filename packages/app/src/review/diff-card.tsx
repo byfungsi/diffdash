@@ -21,6 +21,7 @@ import {
 } from "./thread-annotations"
 import { diffCardDomId } from "./viewed-file-viewport"
 import { Badge } from "@/shared/ui/badge"
+import { isHTMLElement } from "@/shared/dom"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
 import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
@@ -120,7 +121,7 @@ export const OpenDiffCard = ({
   >(({ annotationSide, event, lineNumber, numberColumn }) => {
     if (numberColumn) return
     if (
-      event.target instanceof Element &&
+      isHTMLElement(event.target) &&
       event.target.closest("[data-review-thread-annotation]") !== null
     ) {
       return
@@ -409,7 +410,7 @@ export const OpenDiffCard = ({
 
 const diffLineNumberFromEventPath = (path: readonly EventTarget[]) => {
   for (const target of path) {
-    if (!(target instanceof HTMLElement)) continue
+    if (!isHTMLElement(target)) continue
     const value = target.getAttribute("data-line") ?? target.getAttribute("data-column-number")
     if (value === null) continue
     const lineNumber = Number(value)

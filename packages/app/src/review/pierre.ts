@@ -1,4 +1,6 @@
 import { registerDiffDashSyntax } from "./diffdash-syntax"
+import { VirtualizedFileDiff } from "@pierre/diffs"
+import { Predicate } from "effect"
 
 registerDiffDashSyntax()
 
@@ -10,9 +12,9 @@ export {
   type PostRenderPhase,
   type SelectionSide,
   Virtualizer as DiffVirtualizer,
-  VirtualizedFileDiff,
   type VirtualFileMetrics,
 } from "@pierre/diffs"
+export { VirtualizedFileDiff }
 export {
   FileDiff,
   PatchDiff,
@@ -25,6 +27,15 @@ export {
 } from "@pierre/diffs/react"
 export { prepareFileTreeInput } from "@pierre/trees"
 export { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react"
+
+/** Narrows a Pierre callback value to a virtualized diff by its stable public methods. */
+export const isVirtualizedFileDiff = <Annotation = undefined>(
+  value: object,
+): value is VirtualizedFileDiff<Annotation> =>
+  "getLinePosition" in value &&
+  Predicate.isFunction(value.getLinePosition) &&
+  "getVirtualizedHeight" in value &&
+  Predicate.isFunction(value.getVirtualizedHeight)
 
 // Vite's worker query exposes the module as a worker-constructor default export.
 // oxlint-disable-next-line import/default

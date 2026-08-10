@@ -1,11 +1,10 @@
-import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
-import { RegistryContext, useAtomValue } from "@effect-atom/atom-react"
+import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { useContext, useEffect, useRef, useState } from "react"
+import { runRendererPromise, useReviewContent } from "@/platform/renderer-runtime"
 
 import {
-  type ReviewSnapshotLoadResult,
   type ReviewSnapshotPageProjection,
   type ReviewSnapshotPageReader,
   ReviewSnapshotPageSession,
@@ -18,8 +17,6 @@ export type {
 
 /** Incremental parsed-file loading state for one renderer manifest. */
 export interface ReviewSnapshotPages extends ReviewSnapshotPageProjection {
-  readonly getFile: (fileId: ReviewFileId) => ParsedDiffFile | null
-  readonly loadFiles: (fileIds: readonly ReviewFileId[]) => Promise<ReviewSnapshotLoadResult>
   readonly pageReader: ReviewSnapshotPageReader
   readonly setPinnedFileIds: (fileIds: ReadonlySet<ReviewFileId>) => void
 }
@@ -29,9 +26,9 @@ const maskedProjection = (manifest: ReviewSnapshotManifest): ReviewSnapshotPageP
     projectId: manifest.projectId,
     snapshotId: manifest.snapshotId,
     files: Object.freeze([]),
-    loadingFileIds: Object.freeze(new Set<ReviewFileId>()),
-    tooLargeFileIds: Object.freeze(new Set<ReviewFileId>()),
-    fileErrors: Object.freeze(new Map<ReviewFileId, string>()),
+    loadingFileIds: new Set<ReviewFileId>(),
+    tooLargeFileIds: new Set<ReviewFileId>(),
+    fileErrors: new Map<ReviewFileId, string>(),
     snapshotRefresh: Object.freeze({ _tag: "idle" }),
   })
 
@@ -41,12 +38,13 @@ export const useReviewSnapshotPages = (
   onExpired: () => void | Promise<void>,
 ): ReviewSnapshotPages => {
   const registry = useContext(RegistryContext)
+  const reviewContent = useReviewContent()
   const manifestRef = useRef(manifest)
   manifestRef.current = manifest
   const [session] = useState(
     () =>
       new ReviewSnapshotPageSession(registry, manifest, {
-        getPage: (request) => window.diffDash.reviewSnapshots.getPage(request),
+        getPage: (request) => runRendererPromise(reviewContent.snapshots.getPage(request)),
         onExpired,
       }),
   )
@@ -68,7 +66,7 @@ export const useReviewSnapshotPages = (
   const disposeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   session.updateRuntime({
-    getPage: (request) => window.diffDash.reviewSnapshots.getPage(request),
+    getPage: (request) => runRendererPromise(reviewContent.snapshots.getPage(request)),
     onExpired,
   })
 
@@ -92,8 +90,6 @@ export const useReviewSnapshotPages = (
     : maskedProjection(manifest)
   return {
     ...currentProjection,
-    getFile: pageReader.getFile,
-    loadFiles: pageReader.loadFiles,
     pageReader,
     setPinnedFileIds: session.setPinnedFileIds,
   }

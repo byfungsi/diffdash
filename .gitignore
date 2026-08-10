@@ -12,6 +12,8 @@ packages/web/dist/
 *.sqlite-wal
 !packages/desktop/src/main/services/fixtures/database-v8-populated.sqlite
 test-results/
+packages/app/.vitest-attachments/
+**/__screenshots__/
 demo/.cache/
 tools/demo-video/.cache/
 tools/demo-video/output/

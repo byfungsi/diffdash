@@ -11,13 +11,14 @@ import { Effect, Layer, Option, Redacted, Stream } from "effect"
 
 import {
   AgentExecutionPolicy,
+  AgentProviderId,
   AgentProviderOperationError,
   AgentSessionId,
   McpToolName,
-  ReviewRevision,
   type ReviewThreadRequest,
   WalkthroughRequest,
 } from "@diffdash/agent-provider"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import {
   agentCancellationConformance,
@@ -37,17 +38,15 @@ import { TempResources } from "@diffdash/process/temp-resource"
 import {
   makeOpenCodeProvider,
   makeOpenCodeServerConfig,
-  OPENCODE_AUTO_MODELS,
   OPENCODE_DEFAULT_MODEL,
   OPENCODE_MODELS,
-  OPENCODE_PROVIDER_ID,
   OPENCODE_REVIEW_POLICY,
   OPENCODE_WALKTHROUGH_POLICY,
   resolveOpenCodeExecutable,
 } from "./opencode"
 
 const operationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: OPENCODE_PROVIDER_ID,
+  providerId: AgentProviderId.make("opencode"),
   fallbackReason: "OpenCode test execution failed",
 })
 
@@ -114,14 +113,18 @@ const makeHarness = (options: HarnessOptions = {}) => {
             stderrTruncated: false,
             outputTruncated: false,
             message: String(cause),
-            cause,
+            cause: cause instanceof Error ? cause : new Error(String(cause)),
           }),
       }),
     streamLines: (request) => {
       calls.push({ command: request.command, args: request.args, options: request, prompt: null })
-      return Stream.acquireRelease(
-        Effect.sync(() => void (serverAcquired = true)),
-        () => Effect.sync(() => void (serverReleased = true)),
+      return Stream.scoped(
+        Stream.fromEffect(
+          Effect.acquireRelease(
+            Effect.sync(() => void (serverAcquired = true)),
+            () => Effect.sync(() => void (serverReleased = true)),
+          ),
+        ),
       ).pipe(
         Stream.flatMap(() =>
           Stream.concat(
@@ -429,7 +432,7 @@ describe("OpenCode provider", () => {
     }),
   )
 
-  it.effect("owns defaults, automatic tiers, executable resolution, and scoped server config", () =>
+  it.effect("owns models, defaults, executable resolution, and scoped server config", () =>
     Effect.gen(function* () {
       expect(OPENCODE_DEFAULT_MODEL).toBe("openai/gpt-5.6-terra")
       expect(OPENCODE_MODELS.map(({ id, displayName }) => ({ id, displayName }))).toEqual([
@@ -439,10 +442,6 @@ describe("OpenCode provider", () => {
         { id: "anthropic/claude-opus-5", displayName: "Claude Opus 5" },
         { id: "anthropic/claude-sonnet-5", displayName: "Claude Sonnet 5" },
         { id: "anthropic/claude-haiku-4-5", displayName: "Claude Haiku 4.5" },
-      ])
-      expect(OPENCODE_AUTO_MODELS.balanced).toEqual([
-        "anthropic/claude-sonnet-5",
-        "openai/gpt-5.6-terra",
       ])
       expect(OPENCODE_WALKTHROUGH_POLICY).toMatchObject({
         repository: "local-working-copy",

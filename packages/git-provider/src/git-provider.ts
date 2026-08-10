@@ -1,8 +1,9 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import {
   GitProviderDescriptor,
   GitProviderDiagnostic,
+  GitFileRevision,
   GitProviderId,
   HostedRepository,
   HostedRepositoryLocator,
@@ -12,9 +13,14 @@ import {
   HostedReviewLocator,
   HostedReviewSummary,
   ReviewDecision,
+  ReviewRevision,
   sameHostedRepository,
   sameHostedReview,
 } from "@diffdash/domain/git-provider"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { WebUrl } from "@diffdash/domain/web-url"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 
 export {
   BranchRevision,
@@ -22,6 +28,7 @@ export {
   GitProviderDescriptor,
   GitProviderDiagnostic,
   GitProviderId,
+  GitFileRevision,
   GitProviderKind,
   HostedRepository,
   HostedRepositoryLocator,
@@ -34,10 +41,13 @@ export {
   HostedReviewNumber,
   HostedReviewSummary,
   ProviderActor,
+  ProviderActorId,
   RepositoryNamespace,
+  RepositoryRelativePath,
   ChangedFile,
   ReviewCommit,
   ReviewDecision,
+  ReviewRevision,
   GitProviderTerminology,
   makeHostedRepositoryKey,
   makeHostedRepositoryLocator,
@@ -46,6 +56,10 @@ export {
   sameHostedRepository,
   sameHostedReview,
 } from "@diffdash/domain/git-provider"
+export { DiffFileStatus } from "@diffdash/domain/diff"
+export { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+export { WebUrl } from "@diffdash/domain/web-url"
+export { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 
 /** Provider-owned checkout instructions consumed by local workspace management. */
 export class HostedReviewCheckoutSpec extends Schema.Class<HostedReviewCheckoutSpec>(
@@ -54,8 +68,8 @@ export class HostedReviewCheckoutSpec extends Schema.Class<HostedReviewCheckoutS
   repository: HostedRepositoryLocator,
   review: HostedReviewLocator,
   remoteUrl: Schema.String,
-  fetchRef: Schema.String,
-  revision: Schema.String,
+  fetchRef: RepositoryComparisonRef,
+  revision: ReviewRevision,
 }) {}
 
 /** Provider-neutral repository search input. */
@@ -71,7 +85,7 @@ export class GitRepositorySearchScope extends Schema.Class<GitRepositorySearchSc
   "GitRepositorySearchScope",
 )({
   login: Schema.String,
-  kind: Schema.Literal("user", "organization"),
+  kind: Schema.Literals(["user", "organization"]),
 }) {}
 
 /** Unknown configured provider ID. */
@@ -97,9 +111,9 @@ export class GitProviderOperationError extends Schema.TaggedError<GitProviderOpe
   "GitProviderOperationError",
   {
     providerId: GitProviderId,
-    operation: Schema.String,
+    operation: DiagnosticOperation,
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.ErrorInstance()),
   },
 ) {}
 
@@ -151,27 +165,24 @@ export interface GitProviderRegistration {
   ) => Effect.Effect<void, GitProviderOperationError>
   readonly repositoryUrl: (
     repository: HostedRepositoryLocator,
-  ) => Effect.Effect<string, GitProviderOperationError>
+  ) => Effect.Effect<WebUrl, GitProviderOperationError>
   readonly fileUrl: (
     repository: HostedRepositoryLocator,
-    path: string,
-    revision: string,
-  ) => Effect.Effect<string, GitProviderOperationError>
+    path: RepositoryRelativePath,
+    revision: GitFileRevision,
+  ) => Effect.Effect<WebUrl, GitProviderOperationError>
   readonly bootstrapBareRepository: (
     repository: HostedRepositoryLocator,
     destination: string,
   ) => Effect.Effect<void, GitProviderOperationError>
   readonly checkoutSpec: (
     review: HostedReviewLocator,
-  ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>
-  readonly checkoutSpecAtRevision?: (
-    review: HostedReviewLocator,
-    revision: string,
+    revision: ReviewRevision,
   ) => Effect.Effect<HostedReviewCheckoutSpec, GitProviderOperationError>
 }
 
 /** Registry of configured hosted Git provider instances. */
-export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegistry")<
+export class GitProviderRegistry extends Context.Service<
   GitProviderRegistry,
   {
     readonly list: Effect.Effect<readonly GitProviderRegistration[]>
@@ -185,7 +196,7 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
       AmbiguousGitRemoteError | GitProviderOperationError
     >
   }
->() {
+>()("@diffdash/GitProviderRegistry") {
   /** Builds a registry and fails immediately when instance IDs collide. */
   static readonly layer = (registrations: readonly GitProviderRegistration[]) =>
     Layer.effect(
@@ -205,8 +216,8 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
         return GitProviderRegistry.of({
           list: Effect.succeed([...providers.values()]),
           get: (providerId) =>
-            Effect.fromNullable(providers.get(providerId)).pipe(
-              Effect.orElseFail(() => UnknownGitProviderError.make({ providerId })),
+            Effect.fromOption(Option.fromNullishOr(providers.get(providerId)), () =>
+              UnknownGitProviderError.make({ providerId }),
             ),
           resolveRemote: Effect.fn("GitProviderRegistry.resolveRemote")(function* (remoteUrl) {
             const matches = (yield* Effect.all(
@@ -227,13 +238,17 @@ export class GitProviderRegistry extends Context.Tag("@diffdash/GitProviderRegis
 }
 
 const InvalidRegistrationProviderId = GitProviderId.make("invalid-provider")
-const PublishingTools = Schema.Array(Schema.String.pipe(Schema.minLength(1)))
+const PublishingTools = Schema.Array(Schema.String.pipe(Schema.check(Schema.isMinLength(1))))
 const RepositoryResults = Schema.Array(HostedRepository)
 const ReviewSummaryResults = Schema.Array(HostedReviewSummary)
 const SearchScopeResults = Schema.Array(GitRepositorySearchScope)
 
 const providerResultError = (providerId: GitProviderId, operation: string, message: string) =>
-  GitProviderOperationError.make({ providerId, operation, message })
+  GitProviderOperationError.make({
+    providerId,
+    operation: DiagnosticOperation.make(operation),
+    message,
+  })
 
 const malformedResult = (providerId: GitProviderId, operation: string) =>
   providerResultError(providerId, operation, "Provider returned malformed data")
@@ -247,10 +262,10 @@ const wrongTargetResult = (providerId: GitProviderId, operation: string) =>
 const decodeResult = <A, I>(
   providerId: GitProviderId,
   operation: string,
-  schema: Schema.Schema<A, I>,
-  value: unknown,
+  schema: Schema.Codec<A, I, never, never>,
+  value: I,
 ) =>
-  Schema.decodeUnknown(schema)(value).pipe(
+  Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError(() => malformedResult(providerId, operation)),
   )
 
@@ -279,7 +294,7 @@ const requireReviewProvider = (
 
 const validateRegistration = (registration: GitProviderRegistration) =>
   Effect.gen(function* () {
-    const descriptor = yield* Schema.decodeUnknown(GitProviderDescriptor)(
+    const descriptor = yield* Schema.decodeUnknownEffect(GitProviderDescriptor)(
       registration.descriptor,
     ).pipe(
       Effect.mapError(() => malformedResult(InvalidRegistrationProviderId, "register.descriptor")),
@@ -293,7 +308,6 @@ const validateRegistration = (registration: GitProviderRegistration) =>
     )
     const listSearchScopes = registration.listSearchScopes
     const listAssignedReviews = registration.listAssignedReviews
-    const checkoutSpecAtRevision = registration.checkoutSpecAtRevision
     const resolveRepository = registration.resolveRepository
 
     return {
@@ -449,9 +463,7 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               registration.repositoryUrl(repository),
             ),
           ),
-          Effect.flatMap((result) =>
-            decodeResult(providerId, "repositoryUrl", Schema.String, result),
-          ),
+          Effect.flatMap((result) => decodeResult(providerId, "repositoryUrl", WebUrl, result)),
         ),
       fileUrl: (repository, path, revision) =>
         requireRepositoryProvider(providerId, "fileUrl", repository).pipe(
@@ -460,7 +472,7 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               registration.fileUrl(repository, path, revision),
             ),
           ),
-          Effect.flatMap((result) => decodeResult(providerId, "fileUrl", Schema.String, result)),
+          Effect.flatMap((result) => decodeResult(providerId, "fileUrl", WebUrl, result)),
         ),
       bootstrapBareRepository: (repository, destination) =>
         requireRepositoryProvider(providerId, "bootstrapBareRepository", repository).pipe(
@@ -473,47 +485,23 @@ const validateRegistration = (registration: GitProviderRegistration) =>
             decodeResult(providerId, "bootstrapBareRepository", Schema.Void, result),
           ),
         ),
-      checkoutSpec: (review) =>
+      checkoutSpec: (review, revision) =>
         requireReviewProvider(providerId, "checkoutSpec", review).pipe(
           Effect.andThen(
-            invokeProvider(providerId, "checkoutSpec", () => registration.checkoutSpec(review)),
+            invokeProvider(providerId, "checkoutSpec", () =>
+              registration.checkoutSpec(review, revision),
+            ),
           ),
           Effect.flatMap((result) =>
             decodeResult(providerId, "checkoutSpec", HostedReviewCheckoutSpec, result),
           ),
           Effect.flatMap((result) =>
             sameHostedReview(result.review, review) &&
-            sameHostedRepository(result.repository, review.repository)
+            sameHostedRepository(result.repository, review.repository) &&
+            result.revision === revision
               ? Effect.succeed(result)
               : wrongTargetResult(providerId, "checkoutSpec"),
           ),
         ),
-      ...(checkoutSpecAtRevision === undefined
-        ? {}
-        : {
-            checkoutSpecAtRevision: (review: HostedReviewLocator, revision: string) =>
-              requireReviewProvider(providerId, "checkoutSpecAtRevision", review).pipe(
-                Effect.andThen(
-                  invokeProvider(providerId, "checkoutSpecAtRevision", () =>
-                    checkoutSpecAtRevision(review, revision),
-                  ),
-                ),
-                Effect.flatMap((result) =>
-                  decodeResult(
-                    providerId,
-                    "checkoutSpecAtRevision",
-                    HostedReviewCheckoutSpec,
-                    result,
-                  ),
-                ),
-                Effect.flatMap((result) =>
-                  sameHostedReview(result.review, review) &&
-                  sameHostedRepository(result.repository, review.repository) &&
-                  result.revision === revision
-                    ? Effect.succeed(result)
-                    : wrongTargetResult(providerId, "checkoutSpecAtRevision"),
-                ),
-              ),
-          }),
     } satisfies GitProviderRegistration
   })

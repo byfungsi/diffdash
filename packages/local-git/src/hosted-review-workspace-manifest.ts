@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { readFile, rename, writeFile } from "node:fs/promises"
 
-import { Effect, Exit, Predicate, Schema } from "effect"
+import { Effect, Predicate, Schema } from "effect"
 
 import { withFileLock } from "./hosted-review-workspace-file-lock"
+import { completeWithFinalizer } from "./hosted-review-workspace-finalizer"
 import {
   HostedReviewWorkspacePoolError,
   isNodeError,
   poolError,
+  toError,
 } from "./hosted-review-workspace-pool-error"
 import {
   type ManagedWorkspaceFilesystem,
@@ -18,6 +20,7 @@ import {
 } from "./hosted-review-workspace-paths"
 
 const MANIFEST_VERSION = 2
+const JsonFromString = Schema.fromJsonString(Schema.Json)
 
 const WorktreeLease = Schema.Struct({
   id: Schema.String,
@@ -32,7 +35,7 @@ const WorktreeSlot = Schema.Struct({
   id: Schema.String,
   providerId: Schema.String,
   repositoryKey: Schema.String,
-  state: Schema.Literal("preparing", "leased", "cleaning", "available", "quarantined"),
+  state: Schema.Literals(["preparing", "leased", "cleaning", "available", "quarantined"]),
   headSha: Schema.NullOr(Schema.String),
   reviewNumber: Schema.NullOr(Schema.Number),
   lastThreadId: Schema.NullOr(Schema.String),
@@ -75,13 +78,13 @@ export const mutateManifest = <A>(
       const changed = yield* Effect.try({
         try: () => change(manifest),
         catch: (cause) =>
-          cause instanceof HostedReviewWorkspacePoolError
+          Schema.is(HostedReviewWorkspacePoolError)(cause)
             ? cause
             : poolError(
                 "manifest",
                 "manifest.change",
                 "Could not update the worktree pool manifest.",
-                cause,
+                toError(cause),
               ),
       })
       yield* validateManifestPaths(filesystem, changed.manifest)
@@ -117,10 +120,10 @@ const readManifest = (
           "manifest",
           "manifest.read",
           "DiffDash could not read its isolated worktree manifest.",
-          cause,
+          toError(cause),
         ),
     }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         isNodeError(cause.cause, "ENOENT") ? Effect.succeed(null) : Effect.fail(cause),
       ),
     )
@@ -128,28 +131,28 @@ const readManifest = (
       return { version: MANIFEST_VERSION, repositories: [], slots: [] }
     }
 
-    const parsed = yield* Effect.try({
-      try: (): unknown => JSON.parse(contents),
-      catch: (cause) =>
+    const parsed = yield* Schema.decodeUnknownEffect(JsonFromString)(contents).pipe(
+      Effect.mapError((cause) =>
         poolError(
           "manifest",
           "manifest.read",
           "DiffDash could not parse its isolated worktree manifest.",
-          cause,
+          toError(cause),
         ),
-    })
-    if (Predicate.isReadonlyRecord(parsed) && parsed.version === 1) {
+      ),
+    )
+    if (Predicate.isReadonlyObject(parsed) && parsed.version === 1) {
       yield* filesystem.remove(filesystem.path("repositories"), "manifest.invalidateV1")
       return { version: MANIFEST_VERSION, repositories: [], slots: [] }
     }
 
-    const manifest = yield* Schema.decodeUnknown(WorktreeManifest)(parsed).pipe(
+    const manifest = yield* Schema.decodeUnknownEffect(WorktreeManifest)(parsed).pipe(
       Effect.mapError((cause) =>
         poolError(
           "manifest",
           "manifest.read",
           "DiffDash could not validate its isolated worktree manifest.",
-          cause,
+          toError(cause),
         ),
       ),
     )
@@ -177,7 +180,7 @@ const writeManifest = (
           "manifest",
           "manifest.write",
           "DiffDash could not update its isolated workspace files.",
-          cause,
+          toError(cause),
         ),
     })
     yield* filesystem.validate(temporaryPath, "manifest.rename.temporary")
@@ -189,7 +192,7 @@ const writeManifest = (
           "manifest",
           "manifest.rename",
           "DiffDash could not atomically replace its workspace manifest.",
-          cause,
+          toError(cause),
         ),
     })
   })
@@ -230,24 +233,12 @@ const deriveManifestPath = <A>(derive: () => A) =>
   Effect.try({
     try: derive,
     catch: (cause) =>
-      cause instanceof HostedReviewWorkspacePoolError
+      Schema.is(HostedReviewWorkspacePoolError)(cause)
         ? cause
         : poolError(
             "manifest",
             "manifest.path",
             "DiffDash could not validate a path from its workspace manifest.",
-            cause,
+            toError(cause),
           ),
-  })
-
-const completeWithFinalizer = <A, E, R, E2, R2>(
-  effect: Effect.Effect<A, E, R>,
-  finalizer: Effect.Effect<void, E2, R2>,
-): Effect.Effect<A, E | E2, R | R2> =>
-  Effect.gen(function* () {
-    const effectExit = yield* Effect.exit(effect)
-    const finalizerExit = yield* Effect.exit(finalizer)
-    if (Exit.isFailure(finalizerExit)) return yield* Effect.failCause(finalizerExit.cause)
-    if (Exit.isFailure(effectExit)) return yield* Effect.failCause(effectExit.cause)
-    return effectExit.value
   })

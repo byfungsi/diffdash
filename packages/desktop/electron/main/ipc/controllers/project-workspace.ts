@@ -1,5 +1,4 @@
 import { CoreMethod } from "@diffdash/core"
-import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { ApplicationRuntime } from "../../application-runtime"
 import { IpcControllerRegistry } from "./controller-registry"
 
@@ -8,11 +7,6 @@ export const defineProjectWorkspaceHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.define(InvokeChannel.projectWorkspaceGet, async (_event, request) =>
-    runtime.execute(CoreMethod.projectWorkspaceGet, request),
-  )
-
-  handlers.define(InvokeChannel.projectWorkspaceSave, async (_event, request) =>
-    runtime.execute(CoreMethod.projectWorkspaceSave, request),
-  )
+  handlers.defineCore(CoreMethod.projectWorkspaceGet, runtime.execute)
+  handlers.defineCore(CoreMethod.projectWorkspaceSave, runtime.execute)
 }

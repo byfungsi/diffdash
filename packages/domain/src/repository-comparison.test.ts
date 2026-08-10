@@ -36,7 +36,7 @@ describe("RepositoryComparisonTarget", () => {
     "g".repeat(40),
     "a".repeat(41),
   ])("rejects malformed commit SHA %s", (value) => {
-    expect(() => GitCommitSha.make(value)).toThrow(/pattern/)
+    expect(() => GitCommitSha.make(value)).toThrow(/Schema validation failed/)
   })
 
   it("includes every immutable comparison coordinate in the review key", () => {

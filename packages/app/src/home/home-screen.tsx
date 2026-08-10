@@ -298,15 +298,13 @@ const ProjectCard = ({
   <article className="bg-surface-inset border-border-subtle hover:border-border grid grid-cols-[minmax(0,1fr)_auto] overflow-hidden rounded-md border transition-colors">
     <button
       type="button"
-      aria-label={`Open project ${project.owner}/${project.name}`}
+      aria-label={`Open project ${project.displayIdentity}`}
       className="flex min-w-0 items-center gap-3 p-3 text-left"
       onClick={onOpen}
     >
       <RepoSourceIcon repo={project} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">
-          {project.owner}/{project.name}
-        </span>
+        <span className="block truncate text-sm font-medium">{project.displayIdentity}</span>
         <span className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-1.5 text-xs">
           <span>{projectIdentityLabel(project)}</span>
           {project.localPath === null ? null : (
@@ -319,7 +317,7 @@ const ProjectCard = ({
       <Button
         size="icon-sm"
         variant="ghost"
-        aria-label={`${project.isFavorite ? "Unpin" : "Pin"} ${project.owner}/${project.name}`}
+        aria-label={`${project.isFavorite ? "Unpin" : "Pin"} ${project.displayIdentity}`}
         title={project.isFavorite ? "Unpin project" : "Pin project"}
         onClick={() => onSetFavorite(!project.isFavorite)}
       >
@@ -333,7 +331,7 @@ const ProjectCard = ({
         <Button
           size="icon-sm"
           variant="ghost"
-          aria-label={`Forget ${project.owner}/${project.name}`}
+          aria-label={`Forget ${project.displayIdentity}`}
           title="Forget project from Home"
           onClick={onForget}
         >
@@ -411,9 +409,7 @@ const SearchResults = ({
           >
             <RepoSourceIcon repo={project} />
             <span className="min-w-0">
-              <span className="block truncate text-sm font-medium">
-                {project.owner}/{project.name}
-              </span>
+              <span className="block truncate text-sm font-medium">{project.displayIdentity}</span>
               <span className="text-muted-foreground block truncate text-xs">
                 {projectIdentityLabel(project)}
               </span>
@@ -459,9 +455,10 @@ const RepoSourceIcon = ({ repo }: { readonly repo: Repo }) =>
   )
 
 const projectIdentityLabel = (project: Repo) => {
-  if (project.provider === "local") return "Local only"
+  if (project.hostedLocator === null) return "Local only"
   return project.localPath === null ? "Hosted" : "Hosted + local"
 }
 
-const hostedRepositoryLabel = (repository: HostedRepository) =>
+/** Formats a hosted repository for home-screen presentation and related actions. */
+export const hostedRepositoryLabel = (repository: HostedRepository) =>
   `${repository.locator.namespace}/${repository.locator.name}`

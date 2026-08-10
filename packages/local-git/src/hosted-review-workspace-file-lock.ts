@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { link, lstat, open, readFile, rm } from "node:fs/promises"
 
-import { Clock, Effect, Either, Exit, Predicate, Schema } from "effect"
+import { Clock, Effect, Option, Result, Schema } from "effect"
 
-import { isNodeError, poolError } from "./hosted-review-workspace-pool-error"
+import { completeWithFinalizer } from "./hosted-review-workspace-finalizer"
+import { isNodeError, poolError, toError } from "./hosted-review-workspace-pool-error"
 import type {
   ManagedWorkspaceFilesystem,
   ManagedWorkspacePath,
@@ -14,6 +15,15 @@ const LOCK_RETRY_MS = 50
 const LOCK_TIMEOUT_MS = 5_000
 const CORRUPT_LOCK_STALE_MS = 5_000
 const PROCESS_NONCE = randomUUID()
+const LockOwnerJson = Schema.Struct({
+  token: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  processNonce: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  pid: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+  createdAt: Schema.String,
+})
+const PartialLockOwnerJson = Schema.Struct({
+  pid: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
+})
 
 interface LockOwner {
   readonly token: string
@@ -54,7 +64,7 @@ export interface FileLockOperations {
 /** A raw filesystem failure raised by replaceable file-lock operations. */
 export class FileLockOperationError extends Schema.TaggedError<FileLockOperationError>()(
   "FileLockOperationError",
-  { cause: Schema.Defect },
+  { cause: Schema.ErrorInstance() },
 ) {}
 
 /** The production Node filesystem implementation for file-lock operations. */
@@ -75,19 +85,19 @@ export const nodeFileLockOperations: FileLockOperations = {
           await handle.close()
           handle = undefined
         } catch (cause) {
-          const cleanupFailures: unknown[] = []
+          const cleanupFailures: Error[] = []
           if (handle !== undefined) {
             try {
               await handle.close()
             } catch (closeCause) {
-              cleanupFailures.push(closeCause)
+              cleanupFailures.push(toError(closeCause))
             }
           }
           if (created) {
             try {
               await rm(path, { force: true })
             } catch (removeCause) {
-              cleanupFailures.push(removeCause)
+              cleanupFailures.push(toError(removeCause))
             }
           }
           if (cleanupFailures.length > 0) {
@@ -100,17 +110,17 @@ export const nodeFileLockOperations: FileLockOperations = {
           throw cause
         }
       },
-      catch: (cause) => FileLockOperationError.make({ cause }),
+      catch: (cause) => FileLockOperationError.make({ cause: toError(cause) }),
     }),
   publish: (claimPath, lockPath) =>
     Effect.tryPromise({
       try: () => link(claimPath, lockPath),
-      catch: (cause) => FileLockOperationError.make({ cause }),
+      catch: (cause) => FileLockOperationError.make({ cause: toError(cause) }),
     }),
   read: (path) =>
     Effect.tryPromise({
       try: () => readFile(path, "utf8"),
-      catch: (cause) => FileLockOperationError.make({ cause }),
+      catch: (cause) => FileLockOperationError.make({ cause: toError(cause) }),
     }),
   identity: (path) =>
     Effect.tryPromise({
@@ -122,12 +132,12 @@ export const nodeFileLockOperations: FileLockOperations = {
           modifiedAtMs: details.mtimeMs,
         }
       },
-      catch: (cause) => FileLockOperationError.make({ cause }),
+      catch: (cause) => FileLockOperationError.make({ cause: toError(cause) }),
     }),
   remove: (path) =>
     Effect.tryPromise({
       try: () => rm(path, { force: true }),
-      catch: (cause) => FileLockOperationError.make({ cause }),
+      catch: (cause) => FileLockOperationError.make({ cause: toError(cause) }),
     }),
 }
 
@@ -141,7 +151,7 @@ export const makeFileLock =
     timeoutMs = LOCK_TIMEOUT_MS,
   ): Effect.Effect<A, E | ReturnType<typeof poolError>, R> =>
     validateTimeout(timeoutMs).pipe(
-      Effect.zipRight(
+      Effect.andThen(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* restore(filesystem.ensureParent(lockPath, "lock.parent"))
@@ -162,16 +172,22 @@ export const makeFileLock =
             )
 
             const lifecycle = restore(filesystem.validate(claimPath, "lock.claim.path")).pipe(
-              Effect.zipRight(
+              Effect.andThen(
                 restore(
                   operations
                     .createClaim(claimPath, contents)
                     .pipe(Effect.mapError((cause) => lockError("lock.claim.write", cause.cause))),
                 ),
               ),
-              Effect.zipRight(restore(filesystem.validate(claimPath, "lock.claim.validate"))),
+              Effect.andThen(restore(filesystem.validate(claimPath, "lock.claim.validate"))),
               Effect.flatMap(() =>
-                restore(operationIdentity(operations, claimPath, "lock.claim.identity")),
+                restore(
+                  operations
+                    .identity(claimPath)
+                    .pipe(
+                      Effect.mapError((cause) => lockError("lock.claim.identity", cause.cause)),
+                    ),
+                ),
               ),
               Effect.flatMap((claimIdentity) =>
                 acquirePublishedLock(
@@ -182,7 +198,7 @@ export const makeFileLock =
                   timeoutMs,
                   restore,
                 ).pipe(
-                  Effect.zipRight(
+                  Effect.andThen(
                     completeWithFinalizer(
                       restore(use()),
                       releasePublishedLock(
@@ -217,7 +233,7 @@ export const isProcessAlive = (pid: number | undefined) => {
     process.kill(pid, 0)
     return true
   } catch (cause) {
-    return isNodeError(cause, "EPERM")
+    return isNodeError(toError(cause), "EPERM")
   }
 }
 
@@ -235,10 +251,10 @@ const acquirePublishedLock = (
 
     for (;;) {
       yield* restore(filesystem.validate(lockPath, "lock.publish.path"))
-      const publication = yield* operations.publish(claimPath, lockPath).pipe(Effect.either)
-      if (Either.isRight(publication)) return
-      if (!isNodeError(publication.left.cause, "EEXIST")) {
-        return yield* lockError("lock.publish", publication.left.cause)
+      const publication = yield* operations.publish(claimPath, lockPath).pipe(Effect.result)
+      if (Result.isSuccess(publication)) return
+      if (!isNodeError(publication.failure.cause, "EEXIST")) {
+        return yield* lockError("lock.publish", publication.failure.cause)
       }
 
       const observed = yield* restore(inspectLock(operations, filesystem, lockPath))
@@ -262,14 +278,14 @@ const inspectLock = (
   lockPath: ManagedWorkspacePath,
 ): Effect.Effect<ObservedLock | null, ReturnType<typeof poolError>> =>
   filesystem.validate(lockPath, "lock.inspect.path").pipe(
-    Effect.zipRight(
+    Effect.andThen(
       operations.identity(lockPath).pipe(
         Effect.flatMap((identity) =>
           operations
             .read(lockPath)
             .pipe(Effect.map((contents) => ({ contents, identity, owner: parseOwner(contents) }))),
         ),
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           isNodeError(cause.cause, "ENOENT")
             ? Effect.succeed(null)
             : Effect.fail(lockError("lock.inspect", cause.cause)),
@@ -287,7 +303,7 @@ const stealObservedLock = (
   // The existing well-known link blocks cooperating contenders during this identity recheck.
   // An unrelated actor with filesystem access can still unlink and replace it before remove().
   filesystem.validate(lockPath, "lock.steal.path").pipe(
-    Effect.zipRight(inspectLock(operations, filesystem, lockPath)),
+    Effect.andThen(inspectLock(operations, filesystem, lockPath)),
     Effect.flatMap((current) =>
       current !== null && sameObservation(current, observed)
         ? operations
@@ -305,7 +321,7 @@ const releasePublishedLock = (
   contents: string,
 ) =>
   filesystem.validate(lockPath, "lock.release.path").pipe(
-    Effect.zipRight(inspectLock(operations, filesystem, lockPath)),
+    Effect.andThen(inspectLock(operations, filesystem, lockPath)),
     Effect.flatMap((observed) => {
       if (
         observed === null ||
@@ -336,11 +352,11 @@ const cleanupClaim = (
   filesystem
     .validate(claimPath, "lock.claim.cleanup.path")
     .pipe(
-      Effect.zipRight(
+      Effect.andThen(
         operations
           .remove(claimPath)
           .pipe(
-            Effect.catchAll((cause) =>
+            Effect.catch((cause) =>
               isNodeError(cause.cause, "ENOENT")
                 ? Effect.void
                 : Effect.fail(lockError("lock.claim.cleanup", cause.cause)),
@@ -348,24 +364,6 @@ const cleanupClaim = (
           ),
       ),
     )
-
-const operationIdentity = (
-  operations: FileLockOperations,
-  path: ManagedWorkspacePath,
-  operation: string,
-) => operations.identity(path).pipe(Effect.mapError((cause) => lockError(operation, cause.cause)))
-
-const completeWithFinalizer = <A, E, R, E2, R2>(
-  effect: Effect.Effect<A, E, R>,
-  finalizer: Effect.Effect<void, E2, R2>,
-): Effect.Effect<A, E | E2, R | R2> =>
-  Effect.gen(function* () {
-    const effectExit = yield* Effect.exit(effect)
-    const finalizerExit = yield* Effect.exit(finalizer)
-    if (Exit.isFailure(finalizerExit)) return yield* Effect.failCause(finalizerExit.cause)
-    if (Exit.isFailure(effectExit)) return yield* Effect.failCause(effectExit.cause)
-    return effectExit.value
-  })
 
 const validateTimeout = (timeoutMs: number) =>
   Number.isSafeInteger(timeoutMs) && timeoutMs >= 0
@@ -391,45 +389,18 @@ const shouldSteal = (observed: ObservedLock) => {
 }
 
 const parseOwner = (contents: string): LockOwner | null => {
-  try {
-    const parsed: unknown = JSON.parse(contents)
-    if (
-      Predicate.isReadonlyRecord(parsed) &&
-      typeof parsed.token === "string" &&
-      parsed.token.length > 0 &&
-      typeof parsed.processNonce === "string" &&
-      parsed.processNonce.length > 0 &&
-      typeof parsed.pid === "number" &&
-      Number.isSafeInteger(parsed.pid) &&
-      parsed.pid > 0 &&
-      typeof parsed.createdAt === "string" &&
-      Number.isFinite(Date.parse(parsed.createdAt))
-    ) {
-      return {
-        token: parsed.token,
-        processNonce: parsed.processNonce,
-        pid: parsed.pid,
-        createdAt: parsed.createdAt,
-      }
-    }
-  } catch {
-    return null
-  }
-  return null
+  const parsed = Option.getOrNull(
+    Schema.decodeUnknownOption(Schema.fromJsonString(LockOwnerJson))(contents),
+  )
+  return parsed !== null && Number.isFinite(Date.parse(parsed.createdAt)) ? parsed : null
 }
 
 const parsePartialPid = (contents: string): number | null => {
-  try {
-    const parsed: unknown = JSON.parse(contents)
-    return Predicate.isReadonlyRecord(parsed) &&
-      typeof parsed.pid === "number" &&
-      Number.isSafeInteger(parsed.pid) &&
-      parsed.pid > 0
-      ? parsed.pid
-      : null
-  } catch {
-    return null
-  }
+  return (
+    Option.getOrNull(
+      Schema.decodeUnknownOption(Schema.fromJsonString(PartialLockOwnerJson))(contents),
+    )?.pid ?? null
+  )
 }
 
 const sameObservation = (left: ObservedLock, right: ObservedLock) =>
@@ -443,5 +414,10 @@ const lockFileName = (path: ManagedWorkspacePath) => {
   return segments[segments.length - 1] ?? "lock"
 }
 
-const lockError = (operation: string, cause: unknown) =>
-  poolError("lock", operation, "DiffDash could not lock its isolated worktree pool.", cause)
+const lockError = <A>(operation: string, cause: A) =>
+  poolError(
+    "lock",
+    operation,
+    "DiffDash could not lock its isolated worktree pool.",
+    toError(cause),
+  )

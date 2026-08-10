@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either } from "effect"
+import { Effect, Result } from "effect"
 
 import {
   GitProviderOperationError,
+  ReviewRevision,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
 } from "@diffdash/git-provider"
@@ -33,7 +34,10 @@ describe("Fixture Forge provider", () => {
 
       const detail = yield* provider.getReview(review.locator)
       const diff = yield* provider.getReviewDiff(review.locator)
-      const checkout = yield* provider.checkoutSpec(review.locator)
+      const checkout = yield* provider.checkoutSpec(
+        review.locator,
+        ReviewRevision.make("fixture-head"),
+      )
 
       expect(detail.summary.title).toBe("Fixture merge request flow")
       expect(detail.files[0]?.path).toBe("src/fixture.ts")
@@ -45,22 +49,22 @@ describe("Fixture Forge provider", () => {
   it.effect("rejects a same-provider locator for another repository or review", () =>
     Effect.gen(function* () {
       const provider = createFixtureGitProvider()
-      const repositoryResult = yield* Effect.either(
+      const repositoryResult = yield* Effect.result(
         provider.listReviews(
           makeHostedRepositoryLocator("fixture", "platform/backend", "other-service"),
         ),
       )
-      const reviewResult = yield* Effect.either(
+      const reviewResult = yield* Effect.result(
         provider.getReview(makeHostedReviewLocator("fixture", "platform/backend", "service", 74)),
       )
 
-      expect(Either.isLeft(repositoryResult)).toBe(true)
-      expect(Either.isLeft(reviewResult)).toBe(true)
-      if (Either.isLeft(repositoryResult)) {
-        expect(repositoryResult.left).toBeInstanceOf(GitProviderOperationError)
+      expect(Result.isFailure(repositoryResult)).toBe(true)
+      expect(Result.isFailure(reviewResult)).toBe(true)
+      if (Result.isFailure(repositoryResult)) {
+        expect(repositoryResult.failure).toBeInstanceOf(GitProviderOperationError)
       }
-      if (Either.isLeft(reviewResult)) {
-        expect(reviewResult.left).toBeInstanceOf(GitProviderOperationError)
+      if (Result.isFailure(reviewResult)) {
+        expect(reviewResult.failure).toBeInstanceOf(GitProviderOperationError)
       }
     }),
   )

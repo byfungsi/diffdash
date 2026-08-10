@@ -1,4 +1,5 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { randomUUID } from "node:crypto"
 
 import { type SaveAgentRunArtifactInput, StoredAgentRunArtifact } from "@diffdash/domain/agent-run"
@@ -6,14 +7,14 @@ import {
   AgentRunId,
   ReviewAgentArtifact,
   ReviewAgentArtifactId,
+  ReviewAgentArtifactMetadata,
   ReviewAgentArtifactType,
   ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
 import { ReviewThreadId } from "@diffdash/domain/review-thread"
-import { DatabaseService, type DatabaseTransaction } from "./database"
+import { type Database, type DatabaseRow, makeDatabase, toError } from "./database"
 
-const ArtifactMetadata = Schema.Record({ key: Schema.String, value: Schema.Unknown })
-const ArtifactMetadataJson = Schema.parseJson(ArtifactMetadata)
+const ArtifactMetadataJson = Schema.fromJsonString(ReviewAgentArtifactMetadata)
 
 const AgentRunArtifactRow = Schema.Struct({
   id: ReviewAgentArtifactId,
@@ -25,27 +26,43 @@ const AgentRunArtifactRow = Schema.Struct({
   content: Schema.String,
   content_digest: Schema.String,
   metadata_json: ArtifactMetadataJson,
-  truncated: Schema.Literal(0, 1),
-  original_size: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+  truncated: Schema.Literals([0, 1]),
+  original_size: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   created_at: Schema.String,
 })
+const AgentRunArtifactRows = Schema.Array(AgentRunArtifactRow)
 
 const AgentRunOwnerRow = Schema.Struct({
   provider: ReviewAgentProviderId,
   thread_id: ReviewThreadId,
 })
 
+const AgentRunArtifactStoreOperation = Schema.Literals([
+  "get.query",
+  "get.decode",
+  "get",
+  "save.encodeMetadata",
+  "save",
+  "save.decode",
+  "listForRun.query",
+  "listForRun.decode",
+  "listForThread.query",
+  "listForThread.decode",
+])
+type AgentRunArtifactStoreOperation = typeof AgentRunArtifactStoreOperation.Type
+type AgentRunArtifactListOperation = "listForRun" | "listForThread"
+
 /** A typed failure from normalized agent artifact persistence operations. */
 export class AgentRunArtifactStoreError extends Schema.TaggedError<AgentRunArtifactStoreError>()(
   "AgentRunArtifactStoreError",
   {
-    operation: Schema.String,
-    cause: Schema.Defect,
+    operation: AgentRunArtifactStoreOperation,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
 /** Persistence and thread/run queries for normalized provider artifacts. */
-export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifactStore")<
+export class AgentRunArtifactStore extends Context.Service<
   AgentRunArtifactStore,
   {
     readonly save: (
@@ -61,11 +78,11 @@ export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifa
       threadId: ReviewThreadId,
     ) => Effect.Effect<readonly StoredAgentRunArtifact[], AgentRunArtifactStoreError>
   }
->() {
+>()("@diffdash/AgentRunArtifactStore") {
   static readonly layer = Layer.effect(
     AgentRunArtifactStore,
     Effect.gen(function* () {
-      const database = yield* DatabaseService
+      const database = makeDatabase(yield* SqlClient.SqlClient)
 
       const get = Effect.fn("AgentRunArtifactStore.get")(function (
         artifactId: ReviewAgentArtifactId,
@@ -74,62 +91,62 @@ export class AgentRunArtifactStore extends Context.Tag("@diffdash/AgentRunArtifa
           Effect.mapError((cause) =>
             AgentRunArtifactStoreError.make({ operation: "get.query", cause }),
           ),
-          Effect.flatMap((row) =>
-            Effect.try({
-              try: () => decodeArtifactRow(requireArtifactRow(row, artifactId)),
-              catch: (cause) => AgentRunArtifactStoreError.make({ operation: "get.decode", cause }),
-            }),
-          ),
+          Effect.flatMap((row) => requireArtifactRow("get.decode", row, artifactId)),
+          Effect.flatMap((row) => decodeArtifact("get.decode", row)),
         )
       })
 
-      const list = (operation: string, where: string, id: AgentRunId | ReviewThreadId) =>
+      const list = (
+        operation: AgentRunArtifactListOperation,
+        where: string,
+        id: AgentRunId | ReviewThreadId,
+      ) =>
         database.all(artifactSelect(where), [id]).pipe(
           Effect.mapError((cause) =>
             AgentRunArtifactStoreError.make({ operation: `${operation}.query`, cause }),
           ),
-          Effect.flatMap((rows) => decodeArtifactRows(`${operation}.decode`, rows)),
+          Effect.flatMap((rows) => decodeArtifacts(`${operation}.decode`, rows)),
         )
 
       return AgentRunArtifactStore.of({
         save: Effect.fn("AgentRunArtifactStore.save")(function (input) {
-          return Schema.encode(ArtifactMetadataJson)(input.artifact.metadata).pipe(
+          return Schema.encodeEffect(ArtifactMetadataJson)(input.artifact.metadata).pipe(
             Effect.mapError((cause) =>
               AgentRunArtifactStoreError.make({ operation: "save.encodeMetadata", cause }),
             ),
             Effect.flatMap((metadataJson) =>
-              database.transaction("agentRunArtifacts.save", (transaction) => {
-                assertArtifactOwner(transaction, input)
-                const id = ReviewAgentArtifactId.make(randomUUID())
-                const createdAt = new Date().toISOString()
-                transaction.run(
-                  `INSERT INTO agent_run_artifacts (
-                    id, run_id, thread_id, type, title, content, content_digest,
-                    metadata_json, truncated, original_size, created_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    id,
-                    input.runId,
-                    input.threadId,
-                    input.artifact.type,
-                    input.artifact.title,
-                    input.artifact.content,
-                    input.artifact.contentDigest,
-                    metadataJson,
-                    input.artifact.truncated ? 1 : 0,
-                    input.artifact.originalSize,
-                    createdAt,
-                  ],
-                )
-                return requireArtifactRow(
-                  transaction.get(artifactSelect("WHERE artifact.id = ?"), [id]),
-                  id,
-                )
-              }),
+              database.transaction(
+                Effect.gen(function* () {
+                  yield* assertArtifactOwner(database, input)
+                  const id = ReviewAgentArtifactId.make(randomUUID())
+                  const createdAt = new Date().toISOString()
+                  yield* database.run(
+                    `INSERT INTO agent_run_artifacts (
+                      id, run_id, thread_id, type, title, content, content_digest,
+                      metadata_json, truncated, original_size, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                      id,
+                      input.runId,
+                      input.threadId,
+                      input.artifact.type,
+                      input.artifact.title,
+                      input.artifact.content,
+                      input.artifact.contentDigest,
+                      metadataJson,
+                      input.artifact.truncated ? 1 : 0,
+                      input.artifact.originalSize,
+                      createdAt,
+                    ],
+                  )
+                  const row = yield* database.get(artifactSelect("WHERE artifact.id = ?"), [id])
+                  return yield* requireArtifactRow("save", row, id)
+                }),
+              ),
             ),
-            Effect.flatMap((row) => decodeArtifactEffect("save.decode", row)),
+            Effect.flatMap((row) => decodeArtifact("save.decode", row)),
             Effect.mapError((cause) =>
-              cause instanceof AgentRunArtifactStoreError
+              Schema.is(AgentRunArtifactStoreError)(cause)
                 ? cause
                 : AgentRunArtifactStoreError.make({ operation: "save", cause }),
             ),
@@ -154,54 +171,86 @@ const artifactSelect = (where: string) => `
   ${where}
   ORDER BY artifact.created_at ASC, artifact.id ASC`
 
-const assertArtifactOwner = (
-  transaction: DatabaseTransaction,
+const assertArtifactOwner = Effect.fn("AgentRunArtifactStore.assertArtifactOwner")(function* (
+  database: Database,
   input: SaveAgentRunArtifactInput,
-) => {
-  const row = transaction.get("SELECT provider, thread_id FROM agent_runs WHERE id = ?", [
+) {
+  const row = yield* database.get("SELECT provider, thread_id FROM agent_runs WHERE id = ?", [
     input.runId,
   ])
-  if (row === undefined) throw new Error(`Agent run not found: ${input.runId}`)
-  const owner = Schema.decodeUnknownSync(AgentRunOwnerRow)(row)
-  if (owner.thread_id !== input.threadId) throw new Error("Artifact thread does not own agent run")
-  if (owner.provider !== input.artifact.provider) {
-    throw new Error("Artifact provider does not match agent run provider")
+  const owner = yield* Effect.fromOption(row, () =>
+    AgentRunArtifactStoreError.make({
+      operation: "save",
+      cause: new Error(`Agent run not found: ${input.runId}`),
+    }),
+  ).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(AgentRunOwnerRow)),
+    Effect.mapError((cause) =>
+      Schema.is(AgentRunArtifactStoreError)(cause)
+        ? cause
+        : AgentRunArtifactStoreError.make({ operation: "save", cause }),
+    ),
+  )
+  if (owner.thread_id !== input.threadId) {
+    return yield* AgentRunArtifactStoreError.make({
+      operation: "save",
+      cause: new Error("Artifact thread does not own agent run"),
+    })
   }
-}
+  if (owner.provider !== input.artifact.provider) {
+    return yield* AgentRunArtifactStoreError.make({
+      operation: "save",
+      cause: new Error("Artifact provider does not match agent run provider"),
+    })
+  }
+})
 
-const requireArtifactRow = (row: unknown, artifactId: ReviewAgentArtifactId) => {
-  if (row === undefined) throw new Error(`Agent run artifact not found: ${artifactId}`)
-  return row
-}
+const requireArtifactRow = (
+  operation: AgentRunArtifactStoreOperation,
+  row: Option.Option<DatabaseRow>,
+  artifactId: ReviewAgentArtifactId,
+) =>
+  Effect.fromOption(row, () =>
+    AgentRunArtifactStoreError.make({
+      operation,
+      cause: new Error(`Agent run artifact not found: ${artifactId}`),
+    }),
+  )
 
-const decodeArtifactEffect = (operation: string, input: unknown) =>
-  Effect.try({
-    try: () => decodeArtifactRow(input),
-    catch: (cause) => AgentRunArtifactStoreError.make({ operation, cause }),
+const decodeArtifact = (operation: AgentRunArtifactStoreOperation, input: DatabaseRow) =>
+  Schema.decodeUnknownEffect(AgentRunArtifactRow)(input).pipe(
+    Effect.flatMap(makeStoredArtifact),
+    Effect.mapError((cause) =>
+      AgentRunArtifactStoreError.make({ operation, cause: toError(cause) }),
+    ),
+  )
+
+const decodeArtifacts = (operation: AgentRunArtifactStoreOperation, rows: readonly DatabaseRow[]) =>
+  Schema.decodeUnknownEffect(AgentRunArtifactRows)(rows).pipe(
+    Effect.flatMap((decoded) => Effect.forEach(decoded, makeStoredArtifact)),
+    Effect.mapError((cause) =>
+      AgentRunArtifactStoreError.make({ operation, cause: toError(cause) }),
+    ),
+  )
+
+const makeStoredArtifact = Effect.fn("AgentRunArtifactStore.makeStoredArtifact")(function* (
+  row: typeof AgentRunArtifactRow.Type,
+) {
+  const artifact = yield* ReviewAgentArtifact.makeEffect({
+    type: row.type,
+    provider: row.provider,
+    title: row.title,
+    content: row.content,
+    contentDigest: row.content_digest,
+    metadata: row.metadata_json,
+    truncated: row.truncated === 1,
+    originalSize: row.original_size,
   })
-
-const decodeArtifactRows = (operation: string, rows: readonly unknown[]) =>
-  Effect.try({
-    try: () => rows.map(decodeArtifactRow),
-    catch: (cause) => AgentRunArtifactStoreError.make({ operation, cause }),
-  })
-
-const decodeArtifactRow = (input: unknown) => {
-  const row = Schema.decodeUnknownSync(AgentRunArtifactRow)(input)
-  return StoredAgentRunArtifact.make({
+  return yield* StoredAgentRunArtifact.makeEffect({
     id: row.id,
     runId: row.run_id,
     threadId: row.thread_id,
-    artifact: ReviewAgentArtifact.make({
-      type: row.type,
-      provider: row.provider,
-      title: row.title,
-      content: row.content,
-      contentDigest: row.content_digest,
-      metadata: row.metadata_json,
-      truncated: row.truncated === 1,
-      originalSize: row.original_size,
-    }),
+    artifact,
     createdAt: row.created_at,
   })
-}
+})

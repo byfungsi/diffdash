@@ -1,7 +1,11 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { ChangedFile, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import {
+  ChangedFile,
+  HostedRepositorySource,
+  makeHostedRepositoryLocator,
+} from "@diffdash/domain/git-provider"
 import { ProjectRemoteSelectionRequired } from "@diffdash/domain/project-workspace"
 import {
   makeRepositoryComparisonReviewKey,
@@ -11,7 +15,7 @@ import {
   repositoryComparisonHeadRevision,
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
-import type { Repo } from "@diffdash/domain/repository"
+import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
 import { RepositoryComparisonSnapshot } from "@diffdash/domain/review-context"
 import { makeReviewDiffIdentity, makeReviewSnapshotId } from "@diffdash/domain/review-identity"
 import {
@@ -19,14 +23,20 @@ import {
   HostedReviewWorkspacePoolError,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
+import { CoreAbsolutePath } from "../core-configuration"
 import { GitProvider } from "./git-provider"
 import { RepositoryLinker } from "./repository-linker"
+import { CoreExpectedCause, toCoreExpectedCause } from "../core-error-cause"
+
+const RepositoryComparisonOperation = Schema.String.pipe(
+  Schema.brand("RepositoryComparisonOperation"),
+)
 
 /** A recoverable failure while resolving an immutable repository comparison. */
 export class RepositoryComparisonSourceError extends Schema.TaggedError<RepositoryComparisonSourceError>()(
   "RepositoryComparisonSourceError",
   {
-    code: Schema.Literal(
+    code: Schema.Literals([
       "repository-not-found",
       "repository-ambiguous",
       "provider-unavailable",
@@ -35,15 +45,15 @@ export class RepositoryComparisonSourceError extends Schema.TaggedError<Reposito
       "no-common-ancestor",
       "revision-changed",
       "acquisition-failed",
-    ),
-    operation: Schema.String,
+    ]),
+    operation: RepositoryComparisonOperation,
     reason: Schema.String,
-    cause: Schema.Defect,
+    cause: CoreExpectedCause,
   },
 ) {}
 
 /** Resolves saved repository selectors and pins immutable Git comparison coordinates. */
-export class RepositoryComparisonSource extends Context.Tag("@diffdash/RepositoryComparisonSource")<
+export class RepositoryComparisonSource extends Context.Service<
   RepositoryComparisonSource,
   {
     readonly resolve: (
@@ -57,10 +67,10 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
     ) => Effect.Effect<RepositoryComparisonSnapshot, RepositoryComparisonSourceError>
     readonly useWorkspace: <A, E>(
       target: RepositoryComparisonTarget,
-      run: (localPath: string) => Effect.Effect<A, E>,
+      run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | RepositoryComparisonSourceError>
   }
->() {
+>()("@diffdash/RepositoryComparisonSource") {
   static readonly layer = Layer.effect(
     RepositoryComparisonSource,
     Effect.gen(function* () {
@@ -72,7 +82,15 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
         command: OpenRepositoryComparisonCommand,
       ) {
         const saved = yield* resolveSavedRepository(repositories, command)
-        const repository = yield* locatorFromRepo(saved)
+        const repository = saved.hostedLocator
+        if (repository === null) {
+          return yield* sourceError(
+            "repository-not-found",
+            "resolve.repositoryIdentity",
+            "The saved repository does not have a hosted identity.",
+            new Error("Saved repository is local-only"),
+          )
+        }
         if (saved.localPath === null) {
           const available = yield* providers.isAvailable(repository.providerId)
           if (!available) {
@@ -96,7 +114,7 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
             baseRef: command.baseRef,
             headRef: command.headRef,
             bootstrapBareRepository: (destination) =>
-              providers.bootstrapBareRepository(repository, destination),
+              providers.bootstrapBareRepository(repository, CoreAbsolutePath.make(destination)),
           })
           .pipe(Effect.mapError(mapWorkspaceError))
 
@@ -124,7 +142,7 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
               ),
             ),
           )
-        if (saved !== null) return saved
+        if (Option.isSome(saved)) return saved.value
         return yield* sourceError(
           "repository-not-found",
           "acquire.repository",
@@ -147,7 +165,10 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
             headSha: target.headSha,
             mergeBaseSha: target.mergeBaseSha,
             bootstrapBareRepository: (destination: string) =>
-              providers.bootstrapBareRepository(target.repository, destination),
+              providers.bootstrapBareRepository(
+                target.repository,
+                CoreAbsolutePath.make(destination),
+              ),
           },
         } as const
       })
@@ -195,12 +216,12 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
 
       const useWorkspace = <A, E>(
         target: RepositoryComparisonTarget,
-        run: (localPath: string) => Effect.Effect<A, E>,
+        run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
       ): Effect.Effect<A, E | RepositoryComparisonSourceError> =>
         comparisonInput(target).pipe(
           Effect.flatMap(({ input }) => workspaces.useComparison(input, run)),
           Effect.mapError((cause) =>
-            cause instanceof HostedReviewWorkspacePoolError ? mapWorkspaceError(cause) : cause,
+            Schema.is(HostedReviewWorkspacePoolError)(cause) ? mapWorkspaceError(cause) : cause,
           ),
         )
 
@@ -210,17 +231,17 @@ export class RepositoryComparisonSource extends Context.Tag("@diffdash/Repositor
 }
 
 const resolveSavedRepository = (
-  repositories: RepositoryLinker["Type"],
+  repositories: RepositoryLinker["Service"],
   command: OpenRepositoryComparisonCommand,
 ) => {
   const selector = command.repository
   if (selector === null) {
-    return repositories.openProject(command.localPath).pipe(
+    return repositories.openProject(RepositoryCheckoutPath.make(command.localPath)).pipe(
       Effect.mapError((cause) =>
         sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
       ),
       Effect.flatMap((result) => {
-        if (result instanceof ProjectRemoteSelectionRequired) {
+        if (Schema.is(ProjectRemoteSelectionRequired)(result)) {
           return sourceError(
             "repository-ambiguous",
             "resolve.currentRepository",
@@ -232,7 +253,7 @@ const resolveSavedRepository = (
             ),
           )
         }
-        if (result.repo.provider === "local") {
+        if (!Schema.is(HostedRepositorySource)(result.repo.source)) {
           return sourceError(
             "repository-not-found",
             "resolve.currentRepository",
@@ -260,14 +281,14 @@ const resolveSavedRepository = (
         ),
       ),
       Effect.flatMap((repository) =>
-        repository === null
+        Option.isNone(repository)
           ? sourceError(
               "repository-not-found",
               "resolve.repository",
               "The requested repository is not saved or linked in DiffDash.",
               new Error(`Saved repository not found: ${selector.providerId}`),
             )
-          : Effect.succeed(repository),
+          : Effect.succeed(repository.value),
       ),
     )
   }
@@ -278,7 +299,7 @@ const resolveSavedRepository = (
         "acquisition-failed",
         "resolve.repository",
         "DiffDash could not load saved repositories.",
-        cause,
+        toCoreExpectedCause(cause),
       ),
     ),
     Effect.flatMap((saved) => {
@@ -286,9 +307,9 @@ const resolveSavedRepository = (
       const name = selector.name.toLocaleLowerCase("en-US")
       const matches = saved.filter(
         (repository) =>
-          repository.provider !== "local" &&
-          repository.owner.toLocaleLowerCase("en-US") === namespace &&
-          repository.name.toLocaleLowerCase("en-US") === name,
+          Schema.is(HostedRepositorySource)(repository.source) &&
+          repository.source.locator.namespace.toLocaleLowerCase("en-US") === namespace &&
+          repository.source.locator.name.toLocaleLowerCase("en-US") === name,
       )
       const match = matches[0]
       if (matches.length === 1 && match !== undefined) return Effect.succeed(match)
@@ -305,24 +326,18 @@ const resolveSavedRepository = (
         "resolve.repository",
         "The repository exists on multiple providers. Qualify it as provider:namespace/name.",
         new Error(
-          `Ambiguous repository providers: ${matches.map(({ provider }) => provider).join(", ")}`,
+          `Ambiguous repository providers: ${matches
+            .flatMap((repository) =>
+              Schema.is(HostedRepositorySource)(repository.source)
+                ? [repository.source.locator.providerId]
+                : [],
+            )
+            .join(", ")}`,
         ),
       )
     }),
   )
 }
-
-const locatorFromRepo = (repository: Repo) =>
-  Effect.try({
-    try: () => makeHostedRepositoryLocator(repository.provider, repository.owner, repository.name),
-    catch: (cause) =>
-      sourceError(
-        "acquisition-failed",
-        "resolve.repositoryIdentity",
-        "The saved repository has an invalid hosted identity.",
-        cause,
-      ),
-  })
 
 const mapWorkspaceError = (
   cause: HostedReviewWorkspacePoolError,
@@ -342,5 +357,11 @@ const sourceError = (
   code: RepositoryComparisonSourceError["code"],
   operation: string,
   reason: string,
-  cause: unknown,
-) => RepositoryComparisonSourceError.make({ code, operation, reason, cause })
+  cause: CoreExpectedCause,
+) =>
+  RepositoryComparisonSourceError.make({
+    code,
+    operation: RepositoryComparisonOperation.make(operation),
+    reason,
+    cause,
+  })
