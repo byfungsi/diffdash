@@ -410,7 +410,7 @@ export const OpenDiffCard = ({
 
 const diffLineNumberFromEventPath = (path: readonly EventTarget[]) => {
   for (const target of path) {
-    if (!(target instanceof HTMLElement)) continue
+    if (!isHTMLElement(target)) continue
     const value = target.getAttribute("data-line") ?? target.getAttribute("data-column-number")
     if (value === null) continue
     const lineNumber = Number(value)
