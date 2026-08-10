@@ -17,6 +17,11 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("fileTreeSelection")()
   })
 
+  it("copies the current file path and exact new-side line from a diff context menu", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("diffLineContextMenu")()
+  })
+
   it("FUN-212 AC: owns viewport input through supersession, Escape, and stale completion", async () => {
     expect.hasAssertions()
     await appBrowserScenario("reviewNavigationLifecycle")()

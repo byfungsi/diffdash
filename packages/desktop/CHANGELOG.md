@@ -1,5 +1,21 @@
 # DiffDash Changelog
 
+## 0.7.2
+
+### Patch Changes
+
+- [#70](https://github.com/byfungsi/diffdash/pull/70) [`ac38132`](https://github.com/byfungsi/diffdash/commit/ac381320341f573b85d7435fb0791cdd6cfefefd) Thanks [@hanipcode](https://github.com/hanipcode)! - Improve code readability by reducing the intensity of diff highlights.
+
+- [#69](https://github.com/byfungsi/diffdash/pull/69) [`2b4a61d`](https://github.com/byfungsi/diffdash/commit/2b4a61d71f40041b42b0d087c86270a273f69a5f) Thanks [@hanipcode](https://github.com/hanipcode)! - Add a diff-line context menu for copying exact file references and a keyboard shortcut for toggling the project sidebar.
+
+- [#69](https://github.com/byfungsi/diffdash/pull/69) [`2b4a61d`](https://github.com/byfungsi/diffdash/commit/2b4a61d71f40041b42b0d087c86270a273f69a5f) Thanks [@hanipcode](https://github.com/hanipcode)! - Extract the runtime-neutral embedded DiffDash Core foundation and keep Electron focused on native host responsibilities.
+
+## 0.7.1
+
+### Patch Changes
+
+- [#65](https://github.com/byfungsi/diffdash/pull/65) [`2e432fa`](https://github.com/byfungsi/diffdash/commit/2e432fa6e60e87a8fc2833a4c53a878943a86fe2) Thanks [@hanipcode](https://github.com/hanipcode)! - Show actionable, privacy-safe provider failure guidance in walkthroughs and AI review threads.
+
 ## 0.7.0
 
 ### Minor Changes

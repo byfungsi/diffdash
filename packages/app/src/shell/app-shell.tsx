@@ -87,6 +87,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { UpdateBanner } from "@/shared/ui/update-banner"
 import { agentProviderCatalogAtom } from "@/walkthrough/atoms"
 import { CommandPaletteDialog, type CommandPaletteItem } from "./command-palette"
+import { isMacPlatform } from "./keyboard-shortcut-platform"
 import { KeyboardShortcutReference } from "./keyboard-shortcut-reference"
 import { WorkbenchContextActionsProvider } from "./workbench-context-actions"
 import { WorkbenchTitlebar } from "./workbench-titlebar"
@@ -461,6 +462,40 @@ export function AppShell() {
     window.addEventListener("keydown", openShortcutReference, true)
     return () => window.removeEventListener("keydown", openShortcutReference, true)
   }, [])
+
+  useEffect(() => {
+    const toggleProjectSidebar = (event: KeyboardEvent) => {
+      const primaryModifierPressed = isMacPlatform()
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey
+      if (
+        appState?.onboardingCompleted !== true ||
+        screen !== "project" ||
+        !primaryModifierPressed ||
+        event.altKey ||
+        event.shiftKey ||
+        event.repeat ||
+        event.key.toLowerCase() !== "b"
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      const activeElement = document.activeElement
+      if (
+        reviewSidebarExpanded &&
+        activeElement !== null &&
+        activeElement.closest("[data-review-sidebar-collapse-region]") !== null
+      ) {
+        document.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")?.focus()
+      }
+      setReviewSidebarExpanded((expanded) => !expanded)
+    }
+
+    window.addEventListener("keydown", toggleProjectSidebar, true)
+    return () => window.removeEventListener("keydown", toggleProjectSidebar, true)
+  }, [appState?.onboardingCompleted, reviewSidebarExpanded, screen])
 
   useEffect(() => {
     const openGoToPalette = (event: KeyboardEvent) => {

@@ -4,7 +4,7 @@ import { Button } from "@/shared/ui/button"
 import { isHTMLElement } from "@/shared/dom"
 import { keyboardShortcutModifierLabel } from "./keyboard-shortcut-platform"
 
-type ShortcutToken = "mod" | "shift" | "enter" | "escape" | "slash" | "f" | "g" | "k" | "v"
+type ShortcutToken = "mod" | "shift" | "enter" | "escape" | "slash" | "b" | "f" | "g" | "k" | "v"
 
 type ShortcutEntry = {
   readonly label: string
@@ -27,6 +27,7 @@ const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
   {
     label: "Review",
     shortcuts: [
+      { label: "Toggle sidebar", keys: [["mod", "b"]] },
       { label: "Review actions", keys: [["mod", "shift", "k"]] },
       { label: "Toggle viewed file", keys: [["v"]] },
     ],
@@ -53,6 +54,7 @@ const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
 ]
 
 const TOKEN_LABELS: Readonly<Record<Exclude<ShortcutToken, "mod">, string>> = {
+  b: "B",
   enter: "Enter",
   escape: "Esc",
   f: "F",
