@@ -37,6 +37,7 @@ const commandOptions = {
 const parseOptions = (args) => {
   const options = new Map()
   for (const argument of args) {
+    if (argument === "--") continue
     if (!argument.startsWith("--") || !argument.includes("=")) {
       throw new Error(`Invalid option: ${argument}`)
     }

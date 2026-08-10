@@ -13,6 +13,7 @@ test("rejects misspelled command options instead of silently using defaults", as
     execFilePromise(process.execPath, [
       cli,
       "measure",
+      "--",
       "--pid=123",
       "--fixture=linux-test",
       "--session=baseline",
