@@ -385,10 +385,9 @@ const outputChunks = (
 ): Effect.Effect<Stream.Stream<NodeProcessChunk, NodeProcessIoFailure>, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const queue = yield* Queue.bounded<
-        NodeProcessChunk,
-        Cause.Done<void> | NodeProcessIoFailure
-      >(bufferSize)
+      const queue = yield* Queue.bounded<NodeProcessChunk, Cause.Done<void> | NodeProcessIoFailure>(
+        bufferSize,
+      )
       let active = true
       let pending = Promise.resolve()
       const ended = new Set<ProcessOutputSource>()
