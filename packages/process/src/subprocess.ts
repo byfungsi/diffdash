@@ -3,6 +3,7 @@ import { delimiter, join, resolve } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import {
   Context,
+  Cause,
   Data,
   Deferred,
   Effect,
@@ -319,7 +320,7 @@ function spawnNode(
       child.once("close", onClose)
       child.stdin.on("error", onStdinError)
 
-      const output = outputChunks(
+      const output = yield* outputChunks(
         child,
         input.options.maxBufferedEvents,
         input.capture,
@@ -381,82 +382,85 @@ const outputChunks = (
   bufferSize: number,
   capture: BoundedOutput,
   onLimit: (failure: ProcessLimitFailure) => void,
-): Stream.Stream<NodeProcessChunk, NodeProcessIoFailure> =>
-  Stream.callback<NodeProcessChunk, NodeProcessIoFailure>(
-    (queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => {
-          let active = true
-          let pending = Promise.resolve()
-          const ended = new Set<ProcessOutputSource>()
-          const pause = () => {
-            child.stdout.pause()
-            child.stderr.pause()
-          }
-          const resume = () => {
-            if (!active) return
-            child.stdout.resume()
-            child.stderr.resume()
-          }
-          const enqueue = (effect: () => Promise<void>) => {
-            pause()
-            pending = pending
-              .then(effect, effect)
-              .catch(() => undefined)
-              .finally(resume)
-          }
-          const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
-            const copied = Buffer.from(bytes)
-            try {
-              capture.append(source, copied)
-            } catch (cause) {
-              if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
-            }
-            enqueue(() =>
-              Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
-            )
-          }
-          const onError = (source: ProcessOutputSource) => (cause: Error) =>
-            enqueue(() =>
-              Effect.runPromise(
-                Queue.fail(queue, new NodeProcessIoFailure({ source, cause })).pipe(Effect.asVoid),
-              ),
-            )
-          const onEnd = (source: ProcessOutputSource) => () => {
-            ended.add(source)
-            if (ended.size === 2) {
-              enqueue(() => Effect.runPromise(Queue.end(queue).pipe(Effect.asVoid)))
-            }
-          }
-          const onStdoutData = onData("stdout")
-          const onStderrData = onData("stderr")
-          const onStdoutError = onError("stdout")
-          const onStderrError = onError("stderr")
-          const onStdoutEnd = onEnd("stdout")
-          const onStderrEnd = onEnd("stderr")
-          child.stdout.on("data", onStdoutData)
-          child.stderr.on("data", onStderrData)
-          child.stdout.once("error", onStdoutError)
-          child.stderr.once("error", onStderrError)
-          child.stdout.once("end", onStdoutEnd)
-          child.stderr.once("end", onStderrEnd)
-          if (child.stdout.readableEnded) onStdoutEnd()
-          if (child.stderr.readableEnded) onStderrEnd()
+): Effect.Effect<Stream.Stream<NodeProcessChunk, NodeProcessIoFailure>, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const queue = yield* Queue.bounded<
+        NodeProcessChunk,
+        Cause.Done<void> | NodeProcessIoFailure
+      >(bufferSize)
+      let active = true
+      let pending = Promise.resolve()
+      const ended = new Set<ProcessOutputSource>()
+      const pause = () => {
+        child.stdout.pause()
+        child.stderr.pause()
+      }
+      const resume = () => {
+        if (!active) return
+        child.stdout.resume()
+        child.stderr.resume()
+      }
+      const enqueue = (effect: () => Promise<void>) => {
+        pause()
+        pending = pending
+          .then(effect, effect)
+          .catch(() => undefined)
+          .finally(resume)
+      }
+      const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
+        const copied = Buffer.from(bytes)
+        try {
+          capture.append(source, copied)
+        } catch (cause) {
+          if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
+        }
+        enqueue(() =>
+          Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
+        )
+      }
+      const onError = (source: ProcessOutputSource) => (cause: Error) =>
+        enqueue(() =>
+          Effect.runPromise(
+            Queue.fail(queue, new NodeProcessIoFailure({ source, cause })).pipe(Effect.asVoid),
+          ),
+        )
+      const onEnd = (source: ProcessOutputSource) => () => {
+        ended.add(source)
+        if (ended.size === 2) {
+          enqueue(() => Effect.runPromise(Queue.end(queue).pipe(Effect.asVoid)))
+        }
+      }
+      const onStdoutData = onData("stdout")
+      const onStderrData = onData("stderr")
+      const onStdoutError = onError("stdout")
+      const onStderrError = onError("stderr")
+      const onStdoutEnd = onEnd("stdout")
+      const onStderrEnd = onEnd("stderr")
+      child.stdout.on("data", onStdoutData)
+      child.stderr.on("data", onStderrData)
+      child.stdout.once("error", onStdoutError)
+      child.stderr.once("error", onStderrError)
+      child.stdout.once("end", onStdoutEnd)
+      child.stderr.once("end", onStderrEnd)
+      if (child.stdout.readableEnded) onStdoutEnd()
+      if (child.stderr.readableEnded) onStderrEnd()
 
-          return () => {
-            active = false
-            child.stdout.off("data", onStdoutData)
-            child.stderr.off("data", onStderrData)
-            child.stdout.off("error", onStdoutError)
-            child.stderr.off("error", onStderrError)
-            child.stdout.off("end", onStdoutEnd)
-            child.stderr.off("end", onStderrEnd)
-          }
-        }),
-        (removeListeners) => Effect.sync(removeListeners),
-      ),
-    { bufferSize, strategy: "suspend" },
-  )
+      return {
+        stream: Stream.fromQueue(queue),
+        cleanup: () => {
+          active = false
+          child.stdout.off("data", onStdoutData)
+          child.stderr.off("data", onStderrData)
+          child.stdout.off("error", onStdoutError)
+          child.stderr.off("error", onStderrError)
+          child.stdout.off("end", onStdoutEnd)
+          child.stderr.off("end", onStderrEnd)
+        },
+      }
+    }),
+    ({ cleanup }) => Effect.sync(cleanup),
+  ).pipe(Effect.map(({ stream }) => stream))
 
 const writeChildStdin = (
   child: ChildProcessWithoutNullStreams,
