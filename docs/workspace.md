@@ -19,9 +19,11 @@ platform or dependency primitive; otherwise place it in the closest domain, prov
 or infrastructure package. Add a new package only for a cohesive runtime-neutral API needed across
 multiple owners. Do not create catch-all utility packages.
 
-Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime and
+Current tooling packages are `@diffdash/demo` for deterministic scenario data/runtime,
 `@diffdash/demo-video` for independent Playwright clips, branded HTML covers, FFmpeg assembly,
-verification, and local playback. Generated recordings and tool caches remain ignored.
+verification, and local playback, and `@diffdash/repository-scale` for ignored local comparison
+fixtures and process-tree memory plateau measurements. Generated recordings, fixtures, reports, and
+tool caches remain ignored.
 
 `@diffdash/e2e` owns full-product Playwright projects and deterministic Electron fixtures. Browser
 component tests remain with `@diffdash/app`; full-product development and packaged flows run through

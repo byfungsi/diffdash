@@ -93,6 +93,7 @@ const documentedPackageDependencies = new Map([
   ["@diffdash/download-worker", []],
   ["@diffdash/demo", ["@diffdash/domain", "@diffdash/protocol"]],
   ["@diffdash/demo-video", ["@diffdash/app", "@diffdash/demo", "@diffdash/protocol"]],
+  ["@diffdash/repository-scale", []],
 ])
 const desktopErrorAdapterDependencies = new Map([
   [

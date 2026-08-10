@@ -1,0 +1,19 @@
+{
+  "name": "@diffdash/repository-scale",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs",
+    "typecheck": "pnpm build",
+    "prepare": "node src/cli.mjs prepare",
+    "measure": "node src/cli.mjs measure",
+    "evaluate": "node src/cli.mjs evaluate",
+    "test": "node --test test/*.test.mjs",
+    "lint": "oxlint src test --no-error-on-unmatched-pattern"
+  },
+  "devDependencies": {
+    "oxlint": "catalog:"
+  }
+}
