@@ -77,6 +77,7 @@ const documentedPackageDependencies = new Map([
       "@diffdash/agent-provider-codex",
       "@diffdash/agent-provider-fixture",
       "@diffdash/agent-provider-opencode",
+      "@diffdash/core-rpc",
       "@diffdash/domain",
       "@diffdash/git-provider",
       "@diffdash/git-provider-fixture",

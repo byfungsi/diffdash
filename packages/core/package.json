@@ -20,6 +20,7 @@
     "@diffdash/agent-provider-codex": "workspace:*",
     "@diffdash/agent-provider-fixture": "workspace:*",
     "@diffdash/agent-provider-opencode": "workspace:*",
+    "@diffdash/core-rpc": "workspace:*",
     "@diffdash/domain": "workspace:*",
     "@diffdash/git-provider": "workspace:*",
     "@diffdash/git-provider-fixture": "workspace:*",

@@ -2,7 +2,7 @@ import { AppState } from "@diffdash/domain/app-state"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
-import { AppStateReadFailure } from "./failure"
+import { AppStateGetDefectSchema, AppStateReadFailure } from "./failure"
 import { HostRequestContext } from "./identity"
 import {
   CoreRpcDeadlineMilliseconds,
@@ -16,6 +16,7 @@ export const AppStateGetRpc = Rpc.make("AppState.get", {
   payload: HostRequestContext,
   success: AppState,
   error: AppStateReadFailure,
+  defect: AppStateGetDefectSchema,
 }).annotate(
   CoreRpcMethodPolicyAnnotation,
   CoreRpcMethodPolicy.make({

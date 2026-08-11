@@ -1,21 +1,35 @@
 import { AppState } from "@diffdash/domain/app-state"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Schema } from "effect"
+import { Cause, Effect, Exit, Result, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
+import * as Rpc from "effect/unstable/rpc/Rpc"
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import { AppStateGetRpc, CoreBusinessRpcs } from "./business"
-import { CoreControlRpcs, CoreHealthRpc } from "./control"
-import { AppStateReadFailure, CoreRpcSafeMessage } from "./failure"
+import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "./control"
+import {
+  AppStateGetDefect,
+  AppStateReadFailure,
+  CoreHealthDefect,
+  CoreHealthIdentityMismatchFailure,
+  CoreRpcSafeMessage,
+} from "./failure"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
   CoreRequestContext,
   CoreRequestId,
+  DatabaseOwnershipAuthorizationId,
   HostRequestContext,
   HostRequestId,
 } from "./identity"
-import { CoreHealth } from "./lifecycle"
+import {
+  AuthorizeDatabaseOwnershipRequest,
+  CoreHealth,
+  CoreShutdownAcknowledged,
+  DatabaseOwnershipAuthorized,
+} from "./lifecycle"
 
 const request = HostRequestContext.make({
   applicationInstanceId: ApplicationInstanceId.make("app-1"),
@@ -27,6 +41,34 @@ const hostCapabilityRequest = CoreRequestContext.make({
   applicationInstanceId: request.applicationInstanceId,
   processEpoch: request.processEpoch,
   requestId: CoreRequestId.make("c:request-1"),
+})
+
+const authorizationRequest = AuthorizeDatabaseOwnershipRequest.make({
+  ...request,
+  authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-1"),
+})
+
+const authorized = DatabaseOwnershipAuthorized.make({
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  authorizationId: authorizationRequest.authorizationId,
+  lifecycle: "recovering",
+})
+
+const shutdownAcknowledged = CoreShutdownAcknowledged.make({
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  lifecycle: "draining",
+})
+
+const identityFailure = CoreHealthIdentityMismatchFailure.make({
+  code: "CORE_REQUEST_IDENTITY_MISMATCH",
+  method: "Core.health",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  retryClass: "automatic",
+  safeMessage: "DiffDash Core rejected a request for a different process identity.",
 })
 
 const state = AppState.make({ onboardingCompleted: true })
@@ -41,21 +83,42 @@ const failure = AppStateReadFailure.make({
   safeMessage: "DiffDash could not read application state.",
 })
 
+const appStateDefect = AppStateGetDefect.make({
+  code: "APP_STATE_INTERNAL_ERROR",
+  method: "AppState.get",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  retryClass: "notRetryable",
+  safeMessage: "DiffDash Core encountered an internal application-state error.",
+})
+
+const healthDefect = CoreHealthDefect.make({
+  _tag: "CoreControlDefect",
+  code: "CORE_INTERNAL_ERROR",
+  method: "Core.health",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  retryClass: "notRetryable",
+  safeMessage: "DiffDash Core encountered an internal control-plane error.",
+})
+
 describe("Core RPC declarations", () => {
   it.effect("executes health through the native in-memory RPC client and server", () => {
-    const handlers = CoreControlRpcs.toLayer({
-      "Core.health": (input) =>
-        Effect.succeed(
-          CoreHealth.make({
-            applicationInstanceId: input.applicationInstanceId,
-            processEpoch: input.processEpoch,
-            lifecycle: "awaitingOwnership",
-          }),
-        ),
-    })
+    const healthRpcs = RpcGroup.make(CoreHealthRpc)
+    const handlers = healthRpcs.toLayerHandler("Core.health", (input) =>
+      Effect.succeed(
+        CoreHealth.make({
+          applicationInstanceId: input.applicationInstanceId,
+          processEpoch: input.processEpoch,
+          lifecycle: "awaitingOwnership",
+        }),
+      ),
+    )
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreControlRpcs)
+      const client = yield* RpcTest.makeClient(healthRpcs)
       const health = yield* client["Core.health"](request)
 
       expect(health).toEqual({
@@ -100,6 +163,10 @@ describe("Core RPC declarations", () => {
     const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
     const encodedValues = [
       Schema.encodeSync(CoreHealthRpc.payloadSchema)(request),
+      Schema.encodeSync(CoreHealthRpc.errorSchema)(identityFailure),
+      Schema.encodeSync(CoreAuthorizeDatabaseOwnershipRpc.payloadSchema)(authorizationRequest),
+      Schema.encodeSync(CoreAuthorizeDatabaseOwnershipRpc.successSchema)(authorized),
+      Schema.encodeSync(CoreShutdownRpc.successSchema)(shutdownAcknowledged),
       Schema.encodeSync(CoreRequestContext)(hostCapabilityRequest),
       Schema.encodeSync(AppStateGetRpc.successSchema)(state),
       Schema.encodeSync(AppStateGetRpc.errorSchema)(failure),
@@ -114,16 +181,58 @@ describe("Core RPC declarations", () => {
     })
 
     expect(Schema.decodeUnknownSync(CoreHealthRpc.payloadSchema)(decodedValues[0])).toEqual(request)
-    expect(Schema.decodeUnknownSync(CoreRequestContext)(decodedValues[1])).toEqual(
+    expect(Schema.decodeUnknownSync(CoreHealthRpc.errorSchema)(decodedValues[1])).toEqual(
+      identityFailure,
+    )
+    expect(
+      Schema.decodeUnknownSync(CoreAuthorizeDatabaseOwnershipRpc.payloadSchema)(decodedValues[2]),
+    ).toEqual(authorizationRequest)
+    expect(
+      Schema.decodeUnknownSync(CoreAuthorizeDatabaseOwnershipRpc.successSchema)(decodedValues[3]),
+    ).toEqual(authorized)
+    expect(Schema.decodeUnknownSync(CoreShutdownRpc.successSchema)(decodedValues[4])).toEqual(
+      shutdownAcknowledged,
+    )
+    expect(Schema.decodeUnknownSync(CoreRequestContext)(decodedValues[5])).toEqual(
       hostCapabilityRequest,
     )
-    expect(Schema.decodeUnknownSync(AppStateGetRpc.successSchema)(decodedValues[2])).toEqual(state)
-    const decodedFailure = Schema.decodeUnknownSync(AppStateGetRpc.errorSchema)(decodedValues[3])
+    expect(Schema.decodeUnknownSync(AppStateGetRpc.successSchema)(decodedValues[6])).toEqual(state)
+    const decodedFailure = Schema.decodeUnknownSync(AppStateGetRpc.errorSchema)(decodedValues[7])
     expect(decodedFailure).toEqual(failure)
     expect(decodedFailure).not.toBeInstanceOf(Error)
     expect(decodedFailure).not.toHaveProperty("cause")
     expect(decodedFailure).not.toHaveProperty("stack")
     expect(decodedFailure).not.toHaveProperty("path")
+  })
+
+  it("roundtrips a sanitized control defect without private diagnostics", () => {
+    const schema = Rpc.exitSchema(CoreHealthRpc)
+    const encoded = Schema.encodeSync(schema)(Exit.die(healthDefect))
+    const decoded = Schema.decodeSync(schema)(encoded)
+
+    expect(Exit.isFailure(decoded)).toBe(true)
+    if (Exit.isSuccess(decoded)) throw new Error("Expected a defect exit")
+
+    const defect = Cause.squash(decoded.cause)
+    expect(defect).toEqual(healthDefect)
+    expect(defect).not.toHaveProperty("cause")
+    expect(defect).not.toHaveProperty("stack")
+    expect(defect).not.toHaveProperty("path")
+  })
+
+  it("roundtrips a sanitized AppState defect without private diagnostics", () => {
+    const schema = Rpc.exitSchema(AppStateGetRpc)
+    const encoded = Schema.encodeSync(schema)(Exit.die(appStateDefect))
+    const decoded = Schema.decodeSync(schema)(encoded)
+
+    expect(Exit.isFailure(decoded)).toBe(true)
+    if (Exit.isSuccess(decoded)) throw new Error("Expected a defect exit")
+
+    const defect = Cause.squash(decoded.cause)
+    expect(defect).toEqual(appStateDefect)
+    expect(defect).not.toHaveProperty("cause")
+    expect(defect).not.toHaveProperty("stack")
+    expect(defect).not.toHaveProperty("path")
   })
 
   it("rejects control characters and Unicode line separators in safe messages", () => {

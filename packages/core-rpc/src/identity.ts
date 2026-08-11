@@ -18,6 +18,14 @@ export const CoreProcessEpoch = BoundedIdentity.pipe(Schema.brand("CoreProcessEp
 /** Identity of one Core process lifetime within an application instance. */
 export type CoreProcessEpoch = typeof CoreProcessEpoch.Type
 
+/** Idempotency identity persisted by Electron before Core may acquire product SQLite. */
+export const DatabaseOwnershipAuthorizationId = BoundedIdentity.pipe(
+  Schema.brand("DatabaseOwnershipAuthorizationId"),
+)
+
+/** Idempotency identity persisted by Electron before Core may acquire product SQLite. */
+export type DatabaseOwnershipAuthorizationId = typeof DatabaseOwnershipAuthorizationId.Type
+
 /** Application-level correlation identity allocated by Electron for a Core request. */
 export const HostRequestId = Schema.String.pipe(
   Schema.check(Schema.isMinLength(3)),

@@ -17,6 +17,8 @@ describe("Core RPC method policy", () => {
     > = []
 
     expect(CoreControlRpcs.requests.has("Core.health")).toBe(true)
+    expect(CoreControlRpcs.requests.has("Core.authorizeDatabaseOwnership")).toBe(true)
+    expect(CoreControlRpcs.requests.has("Core.shutdown")).toBe(true)
     expect(CoreBusinessRpcs.requests.has("AppState.get")).toBe(true)
     expect(new Set(declarations.map(([tag]) => tag)).size).toBe(declarations.length)
     for (const [tag, declaration] of declarations) {

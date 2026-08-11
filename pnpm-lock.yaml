@@ -414,6 +414,9 @@ importers:
       '@diffdash/agents':
         specifier: workspace:*
         version: link:../agents
+      '@diffdash/core-rpc':
+        specifier: workspace:*
+        version: link:../core-rpc
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain

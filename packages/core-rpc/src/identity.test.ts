@@ -6,6 +6,7 @@ import {
   CoreProcessEpoch,
   CoreRequestContext,
   CoreRequestId,
+  DatabaseOwnershipAuthorizationId,
   HostRequestContext,
   HostRequestId,
 } from "./identity"
@@ -46,5 +47,8 @@ describe("Core RPC identity", () => {
     expect(
       Result.isFailure(Schema.decodeUnknownResult(ApplicationInstanceId)("x".repeat(101))),
     ).toBe(true)
+    expect(Result.isFailure(Schema.decodeUnknownResult(DatabaseOwnershipAuthorizationId)(""))).toBe(
+      true,
+    )
   })
 })
