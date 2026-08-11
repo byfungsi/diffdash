@@ -23,6 +23,7 @@ graph TD
   core --> agentSdk["@diffdash/agent-provider"]
   core --> gitProviders["Git provider leaves"]
   core --> agentProviders["Agent provider leaves"]
+  coreRpc["@diffdash/core-rpc"] --> domain["@diffdash/domain"]
 
   app --> protocol
   app --> domain["@diffdash/domain"]
@@ -51,6 +52,10 @@ demo and promotional output but is never shipped in the desktop application.
 - `@diffdash/domain` is the lowest product model layer and imports no platform or provider package.
 - `@diffdash/protocol` depends only on browser-safe domain contracts and Effect. It never imports
   Electron, Node, persistence, or a concrete provider.
+- `@diffdash/core-rpc` owns runtime-neutral native Effect RPC declarations shared only by Electron
+  and Core. It depends only on approved domain contracts and Effect, and never imports renderer IPC,
+  host, persistence, settings, or runtime adapters. Effect owns RPC correlation and serialization;
+  DiffDash annotations add application identities, logical budgets, and lifecycle policy.
 - `@diffdash/app` is browser-safe. Renderer code reaches privileged capabilities only through the
   typed protocol implemented by preload.
 - `@diffdash/process`, `@diffdash/settings`, and `@diffdash/persistence` own subprocess, JSON, and

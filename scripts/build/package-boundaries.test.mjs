@@ -45,6 +45,7 @@ const browserSafePackages = new Set([
 const concreteProviderPattern = /^@diffdash\/(?:agent-provider|git-provider)-/
 const strictProductionPackages = new Set([
   "@diffdash/domain",
+  "@diffdash/core-rpc",
   "@diffdash/protocol",
   "@diffdash/agent-provider",
   "@diffdash/agents",
@@ -56,6 +57,7 @@ const strictProductionPackages = new Set([
 const explicitUnknownBoundaryFiles = new Set(["packages/agent-provider/src/provider-json.ts"])
 const documentedPackageDependencies = new Map([
   ["@diffdash/domain", []],
+  ["@diffdash/core-rpc", ["@diffdash/domain"]],
   ["@diffdash/agent-provider", ["@diffdash/domain"]],
   ["@diffdash/protocol", ["@diffdash/domain"]],
   ["@diffdash/app", ["@diffdash/domain", "@diffdash/protocol"]],
@@ -418,6 +420,30 @@ test("protocol depends only on browser-safe domain contracts", () => {
     .map((file) => readFileSync(file, "utf8"))
     .join("\n")
   assert.doesNotMatch(source, /["']@diffdash\/agent-provider(?:-[^"']+)?(?:\/[^"']*)?["']/)
+})
+
+test("Core RPC contracts remain runtime-neutral and inaccessible to the renderer", () => {
+  const coreRpc = manifests.find(({ manifest }) => manifest.name === "@diffdash/core-rpc")
+  const app = manifests.find(({ manifest }) => manifest.name === "@diffdash/app")
+  assert.ok(coreRpc, "@diffdash/core-rpc must exist")
+  assert.ok(app, "@diffdash/app must exist")
+  assert.deepEqual(Object.keys(coreRpc.manifest.dependencies), ["@diffdash/domain", "effect"])
+  assert.equal(app.manifest.dependencies["@diffdash/core-rpc"], undefined)
+
+  const source = sourceFiles(join(coreRpc.directory, "src"))
+    .filter((file) => !/\.test\.[cm]?[jt]sx?$/.test(file))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(
+    source,
+    /(?:from\s*|import\s*\()(["'])(?:electron|react|@diffdash\/(?:app|core|desktop|persistence|process|protocol|settings))(?:\/[^"']*)?\1/,
+    "@diffdash/core-rpc cannot import renderer, host, transport, or infrastructure packages",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:CoreRpcEnvelope|CoreRpcRequest|CoreRpcResponse|CoreProtocolVersion|CoreSchemaFingerprint|CoreCompatibility)\b/,
+    "@diffdash/core-rpc cannot define migration aliases, custom envelopes, or compatibility negotiation",
+  )
 })
 
 test("provider manifests remain platform-neutral leaves", () => {

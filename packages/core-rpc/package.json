@@ -1,0 +1,33 @@
+{
+  "name": "@diffdash/core-rpc",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./business": "./src/business.ts",
+    "./control": "./src/control.ts",
+    "./failure": "./src/failure.ts",
+    "./host-capability": "./src/host-capability.ts",
+    "./identity": "./src/identity.ts",
+    "./lifecycle": "./src/lifecycle.ts",
+    "./method-policy": "./src/method-policy.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && pnpm test:bun",
+    "test:bun": "bun scripts/bun-conformance.ts",
+    "lint": "oxlint src scripts --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

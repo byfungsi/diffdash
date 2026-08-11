@@ -37,6 +37,12 @@ model, defaults, and runtime-requirement schemas rather than copying their struc
 owns the reusable React application, theme, UI primitives, renderer adapters, and browser tests.
 Electron and the demo-video recorder are thin hosts that consume its explicit package exports.
 
+`@diffdash/core-rpc` owns the runtime-neutral Electron/Core RPC contract. It declares native Effect
+RPC groups, shared process/request identities, lifecycle values, stable plain public failures, and
+exhaustive method-policy annotations. It depends only on Effect and approved `@diffdash/domain`
+contracts. Renderer code cannot depend on it, and it owns no sockets, process launch, persistence,
+custom framing, compatibility negotiation, or migration-only protocol aliases.
+
 `@diffdash/process` owns one Effect service for captured and line-streaming subprocess execution,
 generic executable discovery, and scoped private temporary resources. Node callbacks and process
 signals are confined to a private adapter; command interpretation remains with Git and agent
