@@ -120,6 +120,10 @@ RPC middleware now enforces process identity and ready-only business admission b
 handlers. `CoreLifecycle` owns the authoritative decision and drain interruption; method-specific
 middleware maps that decision to exact wire failures without adding a custom dispatcher or transport
 envelope. Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
+Core privately merges the disjoint control and business audiences into one scoped, transport-neutral
+`RpcServer`; its protocol remains supplied by the later authenticated host transport. Serialized
+MessagePack integration proves that handlers and admission share one lifecycle without activating an
+external process or changing current embedded production ownership.
 
 The host must call `start` before any business operation. Concurrent and repeated startup calls
 share one acquisition, startup failures are normalized to Core-owned errors, and repeated disposal
