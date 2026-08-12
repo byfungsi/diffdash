@@ -72,7 +72,6 @@ import {
 import type { ColorScheme } from "@/settings/theme"
 import { useCaptureAnalytics } from "@/shared/analytics"
 import { isHTMLElement } from "@/shared/dom"
-import type { TransportError } from "@diffdash/protocol/transport-error"
 import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { EmptyState } from "@/shared/ui/empty-state"
@@ -1041,9 +1040,14 @@ export const ReviewDetailView = ({
     reviewSearchOpen,
   ])
   const handleDiffRendered = useStableCallback<
-    (reviewKey: string, node: HTMLElement, instance: object, phase: PostRenderPhase) => void
+    (
+      reviewKey: string,
+      node: HTMLElement,
+      instance: Parameters<NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>>[1],
+      phase: PostRenderPhase,
+    ) => void
   >((reviewKey, node, instance, phase) => {
-    if (isVirtualizedFileDiff<TransportError>(instance)) {
+    if (isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) {
       const previous = reviewDiffRegistrationsRef.current.get(reviewKey)
       if (previous !== undefined && previous.host !== node) {
         reviewDiffResizeObserverRef.current?.unobserve(previous.host)

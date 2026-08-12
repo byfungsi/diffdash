@@ -55,6 +55,7 @@ import {
   defaultExecutablePath,
   findExecutableInPath,
   type ExecutablePath,
+  type FindExecutableOptions,
 } from "@diffdash/process/executable"
 import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
@@ -179,10 +180,14 @@ export const resolveOpenCodeExecutable = (
   const openCodeBin = home.length > 0 ? join(home, ".opencode", "bin") : ""
   const normalizedPath =
     openCodeBin.length === 0 ? guiPath : [openCodeBin, guiPath].filter(Boolean).join(delimiter)
+  const pathExtOptions: Pick<FindExecutableOptions, "pathExt"> =
+    options.pathExt === undefined ? {} : { pathExt: options.pathExt }
+  const platformOptions: Pick<FindExecutableOptions, "platform"> =
+    options.platform === undefined ? {} : { platform: options.platform }
   return findExecutableInPath(executable, {
     envPath: normalizedPath,
-    ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
-    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...pathExtOptions,
+    ...platformOptions,
   })
 }
 
@@ -274,11 +279,16 @@ const writePromptFile = (
   prompt: string,
 ) =>
   tempResources
-    .makeTempFileScoped(prompt, {
-      ...(directory === undefined ? {} : { parentDirectory: directory }),
-      prefix: "opencode-prompt-",
-      fileName: "prompt.txt",
-    })
+    .makeTempFileScoped(
+      prompt,
+      directory === undefined
+        ? { prefix: "opencode-prompt-", fileName: "prompt.txt" }
+        : {
+            parentDirectory: directory,
+            prefix: "opencode-prompt-",
+            fileName: "prompt.txt",
+          },
+    )
     .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
 
 const executeReview = (

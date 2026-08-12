@@ -146,13 +146,21 @@ export const OpenDiffCard = ({
     })
   })
   const interactiveDiffOptions = useMemo<FileDiffOptions<ReviewThreadAnnotation>>(
-    () => ({
-      ...diffOptions,
-      ...(renderAsPlainText ? { tokenizeMaxLength: 0 } : {}),
-      onGutterUtilityClick,
-      onLineClick,
-      onPostRender,
-    }),
+    () =>
+      renderAsPlainText
+        ? {
+            ...diffOptions,
+            tokenizeMaxLength: 0,
+            onGutterUtilityClick,
+            onLineClick,
+            onPostRender,
+          }
+        : {
+            ...diffOptions,
+            onGutterUtilityClick,
+            onLineClick,
+            onPostRender,
+          },
     [diffOptions, onGutterUtilityClick, onLineClick, onPostRender, renderAsPlainText],
   )
   useLayoutEffect(

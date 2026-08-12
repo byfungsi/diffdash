@@ -48,27 +48,30 @@ type BrowserWindowOptionsInput = {
 export const createDiffDashBrowserWindowOptions = ({
   iconPath,
   preloadPath,
-}: BrowserWindowOptionsInput): BrowserWindowConstructorOptions => ({
-  width: 1320,
-  height: 860,
-  minWidth: 720,
-  minHeight: 720,
-  title: "DiffDash",
-  titleBarStyle: "hidden",
-  trafficLightPosition: { x: 10, y: 17 },
-  show: false,
-  backgroundColor: "#ffffff",
-  autoHideMenuBar: true,
-  ...(iconPath === null ? {} : { icon: iconPath }),
-  webPreferences: {
+}: BrowserWindowOptionsInput): BrowserWindowConstructorOptions => {
+  const options: BrowserWindowConstructorOptions = {
+    width: 1320,
+    height: 860,
+    minWidth: 720,
+    minHeight: 720,
+    title: "DiffDash",
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 10, y: 17 },
+    show: false,
+    backgroundColor: "#ffffff",
+    autoHideMenuBar: true,
+  }
+  if (iconPath !== null) options.icon = iconPath
+  options.webPreferences = {
     preload: preloadPath,
     sandbox: false,
     contextIsolation: true,
     nodeIntegration: false,
     webSecurity: true,
     allowRunningInsecureContent: false,
-  },
-})
+  }
+  return options
+}
 
 /** Creates the single renderer trust policy shared by window navigation and IPC. */
 export const createRendererSecurityPolicy = ({

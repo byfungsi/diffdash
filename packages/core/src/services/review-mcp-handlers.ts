@@ -59,7 +59,7 @@ export class ReviewMcpHandlers extends Context.Service<
   )
 }
 
-const available = (data: object): DiffDashMcpToolResponse => ({
+const available = <Data>(data: Data): DiffDashMcpToolResponse => ({
   status: "available",
   data: Schema.decodeUnknownSync(Schema.Json)(data),
 })

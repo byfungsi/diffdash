@@ -181,11 +181,14 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
         if (row.error !== null) {
           return invalid("run", row.id, "Completed agent runs cannot contain an error.")
         }
+        const providerRun =
+          row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }
+        const usage = row.usage_json === null ? {} : { usage: row.usage_json }
         return Effect.succeed(
           CompletedAgentRun.make({
             ...identity,
-            ...(row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }),
-            ...(row.usage_json === null ? {} : { usage: row.usage_json }),
+            ...providerRun,
+            ...usage,
             completedAt: row.completed_at,
           }),
         )
@@ -197,10 +200,11 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
           "Failed agent runs require an error and cannot contain usage.",
         )
       }
+      const providerRun = row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }
       return Effect.succeed(
         FailedAgentRun.make({
           ...identity,
-          ...(row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }),
+          ...providerRun,
           error: row.error,
           completedAt: row.completed_at,
         }),

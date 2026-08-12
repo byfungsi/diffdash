@@ -30,7 +30,7 @@ export const isDocumentOrShadowRoot = <Value>(
   "activeElement" in value
 
 /** Identifies an abort DOM exception without relying on a realm-specific constructor. */
-export const isAbortDOMException = (value: object): value is DOMException =>
+export const isAbortDOMException = <Value>(value: Value): value is Value & DOMException =>
   Predicate.isObject(value) &&
   "name" in value &&
   value.name === "AbortError" &&

@@ -2,6 +2,7 @@ import { Effect, Match, Option, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
+  type AgentArtifactMetadata,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentExecutionPolicy,
@@ -513,13 +514,17 @@ const consumeAssistant = (
       const textBlock = Option.getOrNull(Schema.decodeUnknownOption(ClaudeTextBlock)(block))
       if (textBlock !== null) {
         if (textBlock.text !== undefined && textBlock.text.length > 0) {
+          const messageIdMetadata: AgentArtifactMetadata =
+            message.id === undefined ? {} : { messageId: message.id }
+          const modelMetadata: AgentArtifactMetadata =
+            message.model === undefined ? {} : { model: message.model }
           state.artifacts.push({
             type: "provider-message",
             title: "Claude assistant message",
             content: textBlock.text,
             metadata: {
-              ...(message.id === undefined ? {} : { messageId: message.id }),
-              ...(message.model === undefined ? {} : { model: message.model }),
+              ...messageIdMetadata,
+              ...modelMetadata,
             },
           })
         }
@@ -552,14 +557,17 @@ const consumeToolResults = (state: ClaudeTurnState, event: ClaudeStreamEvent) =>
     const toolUse =
       toolResult.tool_use_id === undefined ? undefined : state.toolUses.get(toolResult.tool_use_id)
     const name = toolUse?.name ?? toolResult.name ?? "unknown"
+    const toolUseMetadata: AgentArtifactMetadata = toolUseId === null ? {} : { toolUseId }
+    const errorMetadata: AgentArtifactMetadata =
+      toolResult.is_error === undefined ? {} : { isError: String(toolResult.is_error) }
     state.artifacts.push({
       type: artifactTypeForClaudeTool(name),
       title: `Claude tool: ${toolTitle(name, toolUse?.input)}`,
       content: claudeToolContent(toolResult.content),
       metadata: {
-        ...(toolUseId === null ? {} : { toolUseId }),
+        ...toolUseMetadata,
         tool: name,
-        ...(toolResult.is_error === undefined ? {} : { isError: String(toolResult.is_error) }),
+        ...errorMetadata,
       },
     })
   }
@@ -601,11 +609,16 @@ const withMcpConfigPath = <A, E, R>(
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
   Effect.scoped(
     tempResources
-      .makeTempFileScoped(JSON.stringify(makeMcpConfig(request)), {
-        ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
-        prefix: "diffdash-claude-",
-        fileName: "mcp.json",
-      })
+      .makeTempFileScoped(
+        JSON.stringify(makeMcpConfig(request)),
+        tempDirectory === undefined
+          ? { prefix: "diffdash-claude-", fileName: "mcp.json" }
+          : {
+              parentDirectory: tempDirectory,
+              prefix: "diffdash-claude-",
+              fileName: "mcp.json",
+            },
+      )
       .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 

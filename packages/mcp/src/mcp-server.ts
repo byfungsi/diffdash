@@ -449,10 +449,11 @@ const createRunServer = (
     }),
     (input) => {
       const { path, ...rest } = input
+      const optionalPath = path === undefined ? {} : { path }
       return context.handlers.execute({
         tool: DiffDashReviewMcpTool.searchReviewDiff,
         ...rest,
-        ...(path === undefined ? {} : { path }),
+        ...optionalPath,
       })
     },
   )
@@ -496,10 +497,11 @@ const createRunServer = (
     }),
     (input) => {
       const { path, ...rest } = input
+      const optionalPath = path === undefined ? {} : { path }
       return context.handlers.execute({
         tool: DiffDashReviewMcpTool.searchRepository,
         ...rest,
-        ...(path === undefined ? {} : { path }),
+        ...optionalPath,
       })
     },
   )
@@ -525,10 +527,11 @@ const createRunServer = (
     }),
     (input) => {
       const { beforeSequence, ...rest } = input
+      const optionalBeforeSequence = beforeSequence === undefined ? {} : { beforeSequence }
       return context.handlers.execute({
         tool: DiffDashReviewMcpTool.getOlderThreadMessages,
         ...rest,
-        ...(beforeSequence === undefined ? {} : { beforeSequence }),
+        ...optionalBeforeSequence,
       })
     },
   )

@@ -1129,48 +1129,32 @@ const assertNavigationBudgets = (budgets: ReviewNavigationBudgets): void => {
   }
 }
 
-const isReviewNavigationUnavailableError = (
-  value: object,
-): value is ReviewNavigationUnavailableError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) =>
-        "name" in value &&
-        value.name === "ReviewNavigationUnavailableError" &&
-        "reason" in value &&
-        Predicate.isString(value.reason),
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationUnavailableError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationUnavailableError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationUnavailableError" &&
+  "reason" in value &&
+  Predicate.isString(value.reason)
 
-const isReviewNavigationSnapshotExpiredError = (
-  value: object,
-): value is ReviewNavigationSnapshotExpiredError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) => "name" in value && value.name === "ReviewNavigationSnapshotExpiredError",
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationSnapshotExpiredError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationSnapshotExpiredError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationSnapshotExpiredError"
 
-const isReviewNavigationOperationalError = (
-  value: object,
-): value is ReviewNavigationOperationalError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) =>
-        "name" in value &&
-        value.name === "ReviewNavigationOperationalError" &&
-        "reason" in value &&
-        Predicate.isString(value.reason) &&
-        "retryable" in value &&
-        Predicate.isBoolean(value.retryable),
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationOperationalError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationOperationalError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationOperationalError" &&
+  "reason" in value &&
+  Predicate.isString(value.reason) &&
+  "retryable" in value &&
+  Predicate.isBoolean(value.retryable)
 
 const isExtensionNavigationTarget = (target: ReviewNavigationTarget): boolean =>
   Match.valueTags(target, {

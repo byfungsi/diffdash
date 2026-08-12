@@ -82,22 +82,23 @@ export const TransportErrorPayload = Schema.Struct({
 })
 
 /** Converts an unknown boundary failure without exposing its stack or cause. */
-export const toTransportError = (error: TransportErrorInput, operation?: string) => {
+export const toTransportError = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+  operation?: string,
+) => {
   const decoded = decodeTransportError(error)
   return decoded === null
     ? normalizedTransportError({
         code: "INTERNAL_ERROR",
         message: UNKNOWN_TRANSPORT_ERROR_MESSAGE,
-        ...(operation === undefined ? {} : { operation }),
+        operation,
       })
     : normalizedTransportError({
         code: decoded.code,
         message: decoded.message,
         operation: decoded.operation ?? operation,
-        ...(decoded.diagnostic === undefined ? {} : { diagnostic: decoded.diagnostic }),
-        ...(decoded.providerFailure === undefined
-          ? {}
-          : { providerFailure: decoded.providerFailure }),
+        diagnostic: decoded.diagnostic,
+        providerFailure: decoded.providerFailure,
       })
 }
 
@@ -112,13 +113,15 @@ export const transportError = (
   normalizedTransportError({
     code,
     message,
-    ...(operation === undefined ? {} : { operation }),
-    ...(diagnostic === undefined ? {} : { diagnostic }),
-    ...(providerFailure === undefined ? {} : { providerFailure }),
+    operation,
+    diagnostic,
+    providerFailure,
   })
 
 /** Structurally decodes either a protocol value or its standard Error bridge encoding. */
-export const decodeTransportError = (error: TransportErrorInput): TransportError | null => {
+export const decodeTransportError = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+): TransportError | null => {
   const direct = Schema.decodeUnknownResult(TransportError)(error)
   if (Result.isSuccess(direct)) return normalizedTransportError(direct.success)
 
@@ -141,11 +144,14 @@ export const decodeTransportError = (error: TransportErrorInput): TransportError
 }
 
 /** Returns whether an error-like value carries the protocol bridge marker, even if malformed. */
-export const hasBridgeTransportErrorEncoding = (error: TransportErrorInput): boolean =>
-  errorMessage(error)?.includes(LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX) === true
+export const hasBridgeTransportErrorEncoding = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+): boolean => errorMessage(error)?.includes(LEGACY_BRIDGE_TRANSPORT_ERROR_PREFIX) === true
 
 /** Returns a bounded single-line message from a protocol error, or the safe fallback. */
-export const safeTransportErrorMessage = (error: TransportErrorInput) => {
+export const safeTransportErrorMessage = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+) => {
   const decoded = decodeTransportError(error)
   return decoded === null
     ? UNKNOWN_TRANSPORT_ERROR_MESSAGE
@@ -153,7 +159,9 @@ export const safeTransportErrorMessage = (error: TransportErrorInput) => {
 }
 
 /** Identifies the narrow transport failures that are safe to retry idempotently. */
-export const isTransientTransportError = (error: TransportErrorInput): boolean => {
+export const isTransientTransportError = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+): boolean => {
   const decoded = decodeTransportError(error)
   return decoded?.code === "IPC_FAILURE"
 }
@@ -192,18 +200,27 @@ const normalizedTransportError = (error: {
             MAX_PUBLIC_ERROR_OPERATION_LENGTH,
           ),
         )
-  return TransportError.make({
+  const properties: {
+    readonly code: string
+    readonly message: string
+    operation?: DiagnosticOperation
+    diagnostic?: TransportErrorDiagnosticTrace
+    providerFailure?: AgentProviderFailure
+  } = {
     code: /^[A-Za-z0-9._:-]+$/.test(error.code)
       ? error.code.slice(0, MAX_PUBLIC_ERROR_CODE_LENGTH)
       : "INTERNAL_ERROR",
     message: sanitizeTransportErrorMessage(error.message),
-    ...(operation === undefined ? {} : { operation }),
-    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
-    ...(error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }),
-  })
+  }
+  if (operation !== undefined) properties.operation = operation
+  if (error.diagnostic !== undefined) properties.diagnostic = error.diagnostic
+  if (error.providerFailure !== undefined) properties.providerFailure = error.providerFailure
+  return TransportError.make(properties)
 }
 
-const errorMessage = (error: TransportErrorInput): string | null => {
+const errorMessage = <Input extends TransportErrorInput>(
+  error: Input extends TransportErrorInput ? Input : never,
+): string | null => {
   if (!Predicate.isReadonlyObject(error)) return null
   const message = error.message
   return Predicate.isString(message) ? message : null

@@ -83,16 +83,20 @@ export const makeDesktopHostConfiguration = (
   source: DesktopHostConfigurationSource,
   startup: DesktopStartupConfiguration,
 ): Effect.Effect<DesktopHostConfiguration, CoreConfigurationError> => {
-  const paths = resolveApplicationPaths({
+  const pathSource = {
     environment: source.environment,
-    ...(source.homeDirectory === undefined ? {} : { homeDirectory: source.homeDirectory }),
     identity: source.identity,
     moduleDirectory: source.moduleDirectory,
     packaged: source.packaged,
     resourcesPath: source.resourcesPath,
     temporaryDirectory: source.temporaryDirectory,
     userDataDirectory: source.userDataDirectory,
-  })
+  }
+  const paths = resolveApplicationPaths(
+    source.homeDirectory === undefined
+      ? pathSource
+      : { ...pathSource, homeDirectory: source.homeDirectory },
+  )
   const core = {
     application: {
       version: source.version,

@@ -7,7 +7,9 @@ const JsonFromString = Schema.fromJsonString(Schema.Json)
 type ProviderJsonInput = Schema.Json | bigint | object | undefined | symbol
 
 /** Parses plain or fenced provider JSON, preserving non-string values and invalid input. */
-export const parseProviderJsonText = (value: ProviderJsonInput): ProviderJsonInput => {
+export const parseProviderJsonText = <Input extends ProviderJsonInput>(
+  value: Input,
+): ProviderJsonInput => {
   if (!Predicate.isString(value)) return value
   const trimmed = value.trim()
   const json = trimmed.startsWith("```")
@@ -17,7 +19,7 @@ export const parseProviderJsonText = (value: ProviderJsonInput): ProviderJsonInp
 }
 
 /** Serializes unknown provider content without throwing, including cyclic and BigInt values. */
-export const providerJsonContent = (value: ProviderJsonInput): string => {
+export const providerJsonContent = <Input extends ProviderJsonInput>(value: Input): string => {
   if (Predicate.isString(value)) return value
   const ancestors: object[] = []
   try {

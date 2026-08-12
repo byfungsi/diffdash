@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path"
 
 import {
   AgentArtifactCandidate,
+  type AgentArtifactMetadata,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentExecutionPolicy,
@@ -754,6 +755,9 @@ const adaptAgentMessageItem = (
     )
   }
   const status = extractItemStatus(completedItem.item)
+  const itemIdMetadata: AgentArtifactMetadata =
+    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
+  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
   return Effect.succeed({
     text,
     artifact: {
@@ -761,8 +765,8 @@ const adaptAgentMessageItem = (
       title: "Codex assistant message",
       content: text,
       metadata: {
-        ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-        ...(status === null ? {} : { status }),
+        ...itemIdMetadata,
+        ...statusMetadata,
       },
     },
   })
@@ -789,15 +793,19 @@ const adaptCommandExecutionItem = (completedItem: CodexCommandExecutionItem): Pe
       completedItem.item.result?.content,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ command, status }, completedItem.item)
+  const itemIdMetadata: AgentArtifactMetadata =
+    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
+  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
+  const exitCodeMetadata: AgentArtifactMetadata = exitCode === null ? {} : { exitCode }
   return {
     type: "shell-output",
     title: boundedArtifactTitle("Codex command", command),
     content,
     metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
+      ...itemIdMetadata,
       command,
-      ...(status === null ? {} : { status }),
-      ...(exitCode === null ? {} : { exitCode }),
+      ...statusMetadata,
+      ...exitCodeMetadata,
     },
   }
 }
@@ -825,15 +833,18 @@ const adaptMcpToolCallItem = (completedItem: CodexMcpToolCallItem): PendingArtif
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ status }, completedItem.item)
+  const itemIdMetadata: AgentArtifactMetadata =
+    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
+  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
   return {
     type: server === "diffdash" ? "mcp-tool-result" : "unknown",
     title: boundedArtifactTitle("Codex MCP", `${server}/${tool}`),
     content,
     metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
+      ...itemIdMetadata,
       server,
       tool,
-      ...(status === null ? {} : { status }),
+      ...statusMetadata,
     },
   }
 }
@@ -874,30 +885,38 @@ const adaptSearchItem = (
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ query, url, status }, completedItem.item)
+  const itemIdMetadata: AgentArtifactMetadata =
+    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
+  const queryMetadata: AgentArtifactMetadata = query === null ? {} : { query }
+  const urlMetadata: AgentArtifactMetadata = url === null ? {} : { url }
+  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
   return {
     type,
     title: boundedArtifactTitle(title, query ?? url ?? status),
     content,
     metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
+      ...itemIdMetadata,
       eventType: completedItem.itemType,
-      ...(query === null ? {} : { query }),
-      ...(url === null ? {} : { url }),
-      ...(status === null ? {} : { status }),
+      ...queryMetadata,
+      ...urlMetadata,
+      ...statusMetadata,
     },
   }
 }
 
 const adaptUnknownCompletedItem = (completedItem: CodexUnknownCompletedItem): PendingArtifact => {
   const status = extractItemStatus(completedItem.item)
+  const itemIdMetadata: AgentArtifactMetadata =
+    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
+  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
   return {
     type: "unknown",
     title: boundedArtifactTitle("Unknown Codex completed item", completedItem.itemType),
     content: jsonContent(completedItem.item),
     metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
+      ...itemIdMetadata,
       eventType: completedItem.itemType,
-      ...(status === null ? {} : { status }),
+      ...statusMetadata,
     },
   }
 }
@@ -1092,11 +1111,16 @@ const withOutputSchemaPath = <A, E, R>(
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
   Effect.scoped(
     tempResources
-      .makeTempFileScoped(JSON.stringify(reviewResponseJsonSchema), {
-        ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
-        prefix: "diffdash-codex-",
-        fileName: "review-thread-response.schema.json",
-      })
+      .makeTempFileScoped(
+        JSON.stringify(reviewResponseJsonSchema),
+        tempDirectory === undefined
+          ? { prefix: "diffdash-codex-", fileName: "review-thread-response.schema.json" }
+          : {
+              parentDirectory: tempDirectory,
+              prefix: "diffdash-codex-",
+              fileName: "review-thread-response.schema.json",
+            },
+      )
       .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 

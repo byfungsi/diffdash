@@ -129,17 +129,23 @@ const rendererTransportError = (
   diagnostic?: TransportErrorDiagnosticTrace,
 ) => transportError(code, `${channel} failed: ${message}`, operation, diagnostic)
 
-const failureResult = <Value>(error: ReturnType<typeof transportError>): BridgeResult<Value> => ({
-  _tag: "Failure",
-  error: {
-    _tag: "TransportError",
-    code: error.code,
-    message: error.message,
-    ...(error.operation === undefined ? {} : { operation: error.operation }),
-    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
-    ...(error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }),
-  },
-})
+const failureResult = <Value>(error: ReturnType<typeof transportError>): BridgeResult<Value> => {
+  const operation = error.operation === undefined ? {} : { operation: error.operation }
+  const diagnostic = error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }
+  const providerFailure =
+    error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }
+  return {
+    _tag: "Failure",
+    error: {
+      _tag: "TransportError",
+      code: error.code,
+      message: error.message,
+      ...operation,
+      ...diagnostic,
+      ...providerFailure,
+    },
+  }
+}
 
 const toRendererPayload = <A>(value: A): RendererPayload => {
   if (Schema.is(Schema.Json)(value)) return value

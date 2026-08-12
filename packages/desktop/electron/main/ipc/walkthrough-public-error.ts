@@ -289,10 +289,10 @@ const persistedWalkthroughFailure = (
   }
 }
 
-const publicProviderOperationError = (
+const publicProviderOperationError = <Failure extends TransportFailure>(
   error: AgentProviderOperationError,
-  cause: TransportFailure,
-  stackSource: TransportFailure,
+  cause: Failure,
+  stackSource: Failure,
   operation: string,
 ) => {
   const provider = publicProviderId(error.providerId)
@@ -381,15 +381,15 @@ const publicProviderOperationError = (
   )
 }
 
-const parseProviderOperationError = (
-  input: TransportFailure,
+const parseProviderOperationError = <Input extends TransportFailure>(
+  input: Input,
 ): AgentProviderOperationError | null => {
   if (Schema.is(AgentProviderOperationError)(input)) return input
   return Result.getOrNull(Schema.decodeUnknownResult(AgentProviderOperationError)(input))
 }
 
-const parseKnownProviderProcessFailure = (
-  input: TransportFailure,
+const parseKnownProviderProcessFailure = <Input extends TransportFailure>(
+  input: Input,
 ): typeof KnownProviderProcessFailure.Type | null => {
   if (Schema.is(KnownProviderProcessFailure)(input)) return input
   return Result.getOrNull(Schema.decodeUnknownResult(KnownProviderProcessFailure)(input))
@@ -474,11 +474,11 @@ export const providerFailurePresentation = (
   }
 }
 
-const publicProcessDiagnostic = (
+const publicProcessDiagnostic = <StackSource extends TransportFailure>(
   error: AgentProviderOperationError,
   cause: typeof KnownProviderProcessFailure.Type,
-  stackSource: TransportFailure,
-  causeStackSource: TransportFailure,
+  stackSource: StackSource,
+  causeStackSource: StackSource,
 ) =>
   new TransportErrorDiagnosticTrace({
     provider: publicProviderId(error.providerId),
@@ -513,13 +513,13 @@ const walkthroughProviderFailure = (providerId: string, category: AgentProviderF
     resetsAt: null,
   })
 
-const taggedCause = (cause: TransportFailure): string | null => {
+const taggedCause = <Cause extends TransportFailure>(cause: Cause): string | null => {
   const decoded = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }))(cause)
   const value = Option.getOrNull(decoded)
   return value === null ? null : safeDiagnosticTag(value._tag, "UnknownCause")
 }
 
-const structuralCause = (error: TransportFailure): TransportFailure => {
+const structuralCause = <Failure extends TransportFailure>(error: Failure): TransportFailure => {
   const decoded = Schema.decodeUnknownOption(
     Schema.Struct({ cause: Schema.Union([Schema.Json, Schema.ErrorInstance()]) }),
   )(error)
@@ -577,7 +577,7 @@ const sanitizedInternalStackFrames = (
 const safeDiagnosticTag = (value: string, fallback: string): string =>
   /^[A-Za-z0-9._:-]{1,100}$/u.test(value) ? value : fallback
 
-const errorName = (error: TransportFailure): string =>
+const errorName = <Failure extends TransportFailure>(error: Failure): string =>
   Schema.is(Schema.ErrorInstance())(error)
     ? safeDiagnosticTag(error.name, "UnknownCause")
     : "UnknownCause"

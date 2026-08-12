@@ -1,13 +1,14 @@
 import {
+  type FileDiffOptions,
   isVirtualizedFileDiff,
   type PostRenderPhase,
   type SelectionSide,
   VirtualizedFileDiff,
 } from "./pierre"
 import { findRenderedDiffLine } from "./review-rendered-line"
+import type { ReviewThreadAnnotation } from "./thread-annotations"
 import { isTextNode } from "@/shared/dom"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
-import type { TransportError } from "@diffdash/protocol/transport-error"
 
 /** CSS Custom Highlight registry key for non-active review search matches. */
 export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
@@ -24,8 +25,12 @@ type ReviewSearchScrollTarget = {
 
 type SearchDiffRegistration = {
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<TransportError>
+  readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
 }
+
+type PierrePostRenderInstance = Parameters<
+  NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
+>[1]
 
 /** Bridges parsed review occurrences to Pierre's virtualized shadow-DOM lines. */
 export class ReviewSearchHighlightManager {
@@ -61,7 +66,12 @@ export class ReviewSearchHighlightManager {
   }
 
   /** Tracks a Pierre host as virtualization mounts, updates, or removes its rows. */
-  handlePostRender(reviewKey: string, host: HTMLElement, instance: object, phase: PostRenderPhase) {
+  handlePostRender(
+    reviewKey: string,
+    host: HTMLElement,
+    instance: PierrePostRenderInstance,
+    phase: PostRenderPhase,
+  ) {
     if (phase === "unmount") {
       const registration = this.registrations.get(reviewKey)
       if (registration?.host === host) {
@@ -76,7 +86,7 @@ export class ReviewSearchHighlightManager {
       return
     }
 
-    if (!isVirtualizedFileDiff<TransportError>(instance)) return
+    if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
     this.registrations.set(reviewKey, { host, instance })
     this.scheduleRebuild()
   }

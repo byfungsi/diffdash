@@ -99,13 +99,11 @@ export class Prerequisites extends Context.Service<
               Object.values(provider.capabilities).some(AgentProviderCapabilityStatus.guards.Ready),
             )
             .map(({ id }) => CodingAgentName.make(id))
-          const diffDashCliInPath = yield* findExecutableInPath("diffdash", {
-            envPath: options.executableSearchPath,
-            ...(options.executablePathExtensions === null
-              ? {}
-              : { pathExt: options.executablePathExtensions }),
-            platform: options.platform,
-          })
+          const diffDashCliInPath = yield* findDiffDashExecutable(
+            options.executableSearchPath,
+            options.executablePathExtensions,
+            options.platform,
+          )
           const userLocalSearchPath =
             options.homeDirectory === null
               ? ""
@@ -115,13 +113,11 @@ export class Prerequisites extends Context.Service<
                 ].join(delimiter)
           const diffDashCli = Option.isSome(diffDashCliInPath)
             ? diffDashCliInPath
-            : yield* findExecutableInPath("diffdash", {
-                envPath: userLocalSearchPath,
-                ...(options.executablePathExtensions === null
-                  ? {}
-                  : { pathExt: options.executablePathExtensions }),
-                platform: options.platform,
-              })
+            : yield* findDiffDashExecutable(
+                userLocalSearchPath,
+                options.executablePathExtensions,
+                options.platform,
+              )
 
           return AppPrerequisites.make({
             checkedAt: new Date().toISOString(),
@@ -192,6 +188,15 @@ const commandAvailable = (processes: ProcessRunner, command: string) =>
     Effect.as(true),
     Effect.catch(() => Effect.succeed(false)),
   )
+
+const findDiffDashExecutable = (
+  envPath: ExecutableSearchPath | string,
+  pathExt: ExecutablePathExtensions | null,
+  platform: NodeJS.Platform,
+) => {
+  if (pathExt === null) return findExecutableInPath("diffdash", { envPath, platform })
+  return findExecutableInPath("diffdash", { envPath, pathExt, platform })
+}
 
 const agentSetupRequirement = (provider: AgentProviderStatus) => {
   const supported = Object.values(provider.capabilities).filter(
@@ -397,11 +402,11 @@ const refreshAppImageCliLaunchersWithFileSystem = Effect.fn(
   )
     return
 
-  const diffDashInPath = yield* findExecutableInPath("diffdash", {
-    envPath: executableSearchPath,
-    ...(executablePathExtensions === null ? {} : { pathExt: executablePathExtensions }),
+  const diffDashInPath = yield* findDiffDashExecutable(
+    executableSearchPath,
+    executablePathExtensions,
     platform,
-  })
+  )
   const candidates = new Set([
     Option.getOrNull(diffDashInPath),
     homeDirectory === null ? null : join(homeDirectory, ".local", "bin", "diffdash"),

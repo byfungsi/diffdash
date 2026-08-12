@@ -14,7 +14,6 @@ import type {
 } from "@diffdash/domain/review-navigation"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
-import type { TransportError } from "@diffdash/protocol/transport-error"
 import type { RefObject } from "react"
 import { Match, Result, Schema } from "effect"
 
@@ -30,12 +29,13 @@ import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-na
 import type { DiffVirtualizer, VirtualizedFileDiff } from "./pierre"
 import type { ReviewSearchHighlightManager } from "./review-search-highlights"
 import type { ReviewSnapshotPageReader } from "./review-snapshot-page-session"
+import type { ReviewThreadAnnotation } from "./thread-annotations"
 
 /** Runtime Pierre registration retained only by the viewport execution plane. */
 export interface ReviewDiffRegistration {
   readonly generation: number
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<TransportError>
+  readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
   readonly rendered: boolean
 }
 

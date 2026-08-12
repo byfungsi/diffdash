@@ -1,5 +1,5 @@
 import { registerDiffDashSyntax } from "./diffdash-syntax"
-import { VirtualizedFileDiff } from "@pierre/diffs"
+import { type FileDiff as PierreFileDiff, VirtualizedFileDiff } from "@pierre/diffs"
 import { Predicate } from "effect"
 
 registerDiffDashSyntax()
@@ -30,8 +30,9 @@ export { FileTree as PierreFileTree, useFileTree } from "@pierre/trees/react"
 
 /** Narrows a Pierre callback value to a virtualized diff by its stable public methods. */
 export const isVirtualizedFileDiff = <Annotation = undefined>(
-  value: object,
+  value: PierreFileDiff<Annotation>,
 ): value is VirtualizedFileDiff<Annotation> =>
+  Predicate.isObject(value) &&
   "getLinePosition" in value &&
   Predicate.isFunction(value.getLinePosition) &&
   "getVirtualizedHeight" in value &&

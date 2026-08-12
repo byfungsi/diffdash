@@ -221,17 +221,23 @@ export class RepositoryLinker extends Context.Service<
         detected: Effect.Success<ReturnType<typeof detectHosted>>,
         isFavorite: boolean,
       ) {
-        return yield* persist(
-          UpsertRepositoryInput.make({
-            source: HostedRepositorySource.make({ locator: detected.identity }),
-            checkout: LinkedCheckout.make({
-              remoteUrl: detected.checkout.remoteUrl,
-              path: detected.checkout.rootPath,
-            }),
-            ...(isFavorite ? { isFavorite: true } : {}),
-          }),
-          "DiffDash could not save the local repository link.",
-        )
+        const input = isFavorite
+          ? UpsertRepositoryInput.make({
+              source: HostedRepositorySource.make({ locator: detected.identity }),
+              checkout: LinkedCheckout.make({
+                remoteUrl: detected.checkout.remoteUrl,
+                path: detected.checkout.rootPath,
+              }),
+              isFavorite: true,
+            })
+          : UpsertRepositoryInput.make({
+              source: HostedRepositorySource.make({ locator: detected.identity }),
+              checkout: LinkedCheckout.make({
+                remoteUrl: detected.checkout.remoteUrl,
+                path: detected.checkout.rootPath,
+              }),
+            })
+        return yield* persist(input, "DiffDash could not save the local repository link.")
       })
 
       const reconcileLocalAliases = Effect.fn("RepositoryLinker.reconcileLocalAliases")(function* (
@@ -446,11 +452,16 @@ export class RepositoryLinker extends Context.Service<
           const repo = Option.isSome(located)
             ? located.value
             : yield* persist(
-                UpsertRepositoryInput.make({
-                  source: HostedRepositorySource.make({ locator: resolved.locator }),
-                  checkout: RemoteOnly.make({ remoteUrl: resolved.url }),
-                  ...(isFavorite ? { isFavorite: true } : {}),
-                }),
+                isFavorite
+                  ? UpsertRepositoryInput.make({
+                      source: HostedRepositorySource.make({ locator: resolved.locator }),
+                      checkout: RemoteOnly.make({ remoteUrl: resolved.url }),
+                      isFavorite: true,
+                    })
+                  : UpsertRepositoryInput.make({
+                      source: HostedRepositorySource.make({ locator: resolved.locator }),
+                      checkout: RemoteOnly.make({ remoteUrl: resolved.url }),
+                    }),
                 "DiffDash could not save the hosted repository.",
               )
           if (isFavorite && !repo.isFavorite) {

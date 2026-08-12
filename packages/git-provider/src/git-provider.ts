@@ -309,6 +309,54 @@ const validateRegistration = (registration: GitProviderRegistration) =>
     const listSearchScopes = registration.listSearchScopes
     const listAssignedReviews = registration.listAssignedReviews
     const resolveRepository = registration.resolveRepository
+    const resolveRepositoryRegistration: Pick<GitProviderRegistration, "resolveRepository"> =
+      resolveRepository === undefined
+        ? {}
+        : {
+            resolveRepository: (repository) =>
+              requireRepositoryProvider(providerId, "resolveRepository", repository).pipe(
+                Effect.andThen(
+                  invokeProvider(providerId, "resolveRepository", () =>
+                    resolveRepository(repository),
+                  ),
+                ),
+                Effect.flatMap((result) =>
+                  decodeResult(providerId, "resolveRepository", ResolvedHostedRepository, result),
+                ),
+                Effect.flatMap((result) =>
+                  result.locator.providerId === providerId
+                    ? Effect.succeed(result)
+                    : wrongProviderResult(providerId, "resolveRepository"),
+                ),
+              ),
+          }
+    const searchScopeRegistration: Pick<GitProviderRegistration, "listSearchScopes"> =
+      listSearchScopes === undefined
+        ? {}
+        : {
+            listSearchScopes: () =>
+              invokeProvider(providerId, "listSearchScopes", listSearchScopes).pipe(
+                Effect.flatMap((results) =>
+                  decodeResult(providerId, "listSearchScopes", SearchScopeResults, results),
+                ),
+              ),
+          }
+    const assignedReviewRegistration: Pick<GitProviderRegistration, "listAssignedReviews"> =
+      listAssignedReviews === undefined
+        ? {}
+        : {
+            listAssignedReviews: () =>
+              invokeProvider(providerId, "listAssignedReviews", listAssignedReviews).pipe(
+                Effect.flatMap((results) =>
+                  decodeResult(providerId, "listAssignedReviews", ReviewSummaryResults, results),
+                ),
+                Effect.flatMap((results) =>
+                  results.every(({ locator }) => locator.repository.providerId === providerId)
+                    ? Effect.succeed(results)
+                    : wrongProviderResult(providerId, "listAssignedReviews"),
+                ),
+              ),
+          }
 
     return {
       descriptor,
@@ -334,26 +382,7 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongProviderResult(providerId, "parseRemote"),
           ),
         ),
-      ...(resolveRepository === undefined
-        ? {}
-        : {
-            resolveRepository: (repository) =>
-              requireRepositoryProvider(providerId, "resolveRepository", repository).pipe(
-                Effect.andThen(
-                  invokeProvider(providerId, "resolveRepository", () =>
-                    resolveRepository(repository),
-                  ),
-                ),
-                Effect.flatMap((result) =>
-                  decodeResult(providerId, "resolveRepository", ResolvedHostedRepository, result),
-                ),
-                Effect.flatMap((result) =>
-                  result.locator.providerId === providerId
-                    ? Effect.succeed(result)
-                    : wrongProviderResult(providerId, "resolveRepository"),
-                ),
-              ),
-          }),
+      ...resolveRepositoryRegistration,
       searchRepositories: (input) =>
         invokeProvider(providerId, "searchRepositories", () =>
           registration.searchRepositories(input),
@@ -367,31 +396,8 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongProviderResult(providerId, "searchRepositories"),
           ),
         ),
-      ...(listSearchScopes === undefined
-        ? {}
-        : {
-            listSearchScopes: () =>
-              invokeProvider(providerId, "listSearchScopes", listSearchScopes).pipe(
-                Effect.flatMap((results) =>
-                  decodeResult(providerId, "listSearchScopes", SearchScopeResults, results),
-                ),
-              ),
-          }),
-      ...(listAssignedReviews === undefined
-        ? {}
-        : {
-            listAssignedReviews: () =>
-              invokeProvider(providerId, "listAssignedReviews", listAssignedReviews).pipe(
-                Effect.flatMap((results) =>
-                  decodeResult(providerId, "listAssignedReviews", ReviewSummaryResults, results),
-                ),
-                Effect.flatMap((results) =>
-                  results.every(({ locator }) => locator.repository.providerId === providerId)
-                    ? Effect.succeed(results)
-                    : wrongProviderResult(providerId, "listAssignedReviews"),
-                ),
-              ),
-          }),
+      ...searchScopeRegistration,
+      ...assignedReviewRegistration,
       listReviews: (repository) =>
         requireRepositoryProvider(providerId, "listReviews", repository).pipe(
           Effect.andThen(

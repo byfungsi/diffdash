@@ -219,7 +219,7 @@ const validateConfig = (config: ReviewSnapshotCacheConfig) => {
   }
 }
 
-const deepFreeze = (value: object): void => {
+const deepFreeze = <Value>(value: Value): void => {
   if (!Predicate.isObject(value) || Object.isFrozen(value)) return
   for (const child of Object.values(value)) {
     if (Predicate.isObject(child)) deepFreeze(child)

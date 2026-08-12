@@ -6,14 +6,19 @@ import {
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 
 /** Creates the Electron-owned updater from native application facts. */
-export const createApplicationUpdater = (configuration: DesktopHostConfiguration): DesktopUpdater =>
-  createDesktopUpdater({
-    adapter: nativeUpdaterAdapter(),
-    ...(configuration.updater.appImagePath === null
+export const createApplicationUpdater = (
+  configuration: DesktopHostConfiguration,
+): DesktopUpdater => {
+  const appImagePath =
+    configuration.updater.appImagePath === null
       ? {}
-      : { appImagePath: configuration.updater.appImagePath }),
+      : { appImagePath: configuration.updater.appImagePath }
+  return createDesktopUpdater({
+    adapter: nativeUpdaterAdapter(),
+    ...appImagePath,
     arch: configuration.application.architecture,
     currentVersion: configuration.application.version,
     packaged: configuration.application.packaged,
     platform: configuration.application.platform,
   })
+}

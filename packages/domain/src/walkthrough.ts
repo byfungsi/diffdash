@@ -27,7 +27,6 @@ export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
 } as const
 
 const MAX_SAMPLED_FILE_TREE_CHARS = 60_000
-type WalkthroughInput = Schema.Json | object | undefined
 
 /** Risk level assigned to a walkthrough stop. */
 export const WalkthroughRisk = Schema.Literals(["critical", "review", "support"])
@@ -331,8 +330,8 @@ export const prepareWalkthroughPromptInput = (
 /**
  * Decodes generated walkthrough output, validates hunk references, and adds omitted hunks to Support.
  */
-export const validateWalkthrough = (
-  input: WalkthroughInput,
+export const validateWalkthrough = <Input>(
+  input: Input,
   hunkDigest: readonly WalkthroughHunkDigest[],
 ): Effect.Effect<Walkthrough, WalkthroughValidationError> =>
   Schema.decodeUnknownEffect(Walkthrough)(normalizeWalkthroughInput(input)).pipe(
@@ -740,7 +739,7 @@ const validateWalkthroughHunkCoverage = (
   )
 }
 
-const normalizeWalkthroughInput = (input: WalkthroughInput): WalkthroughInput => {
+const normalizeWalkthroughInput = <Input>(input: Input) => {
   if (!Predicate.isReadonlyObject(input)) return input
   if ("support" in input && input.support !== undefined) return input
   return { ...input, support: [] }

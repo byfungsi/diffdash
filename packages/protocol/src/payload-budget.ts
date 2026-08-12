@@ -17,8 +17,8 @@ export interface PayloadStructureLimits {
 }
 
 /** Returns the exact UTF-8 bytes of a bounded JSON-safe payload. */
-export const jsonSafeUtf8ByteLength = (
-  value: JsonPayloadValue,
+export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
+  value: Value,
   limits: PayloadStructureLimits = DEFAULT_PAYLOAD_STRUCTURE_LIMITS,
 ): number => {
   validatePositiveSafeInteger(limits.maxDepth, "maxDepth")
@@ -93,8 +93,8 @@ export const jsonSafeUtf8ByteLength = (
 }
 
 /** Rejects a JSON-safe payload whose aggregate UTF-8 representation exceeds the byte budget. */
-export const assertJsonPayloadWithinBudget = (
-  value: JsonPayloadValue,
+export const assertJsonPayloadWithinBudget = <Value extends JsonPayloadValue>(
+  value: Value,
   maxBytes: number,
   operation?: string,
 ): number => {

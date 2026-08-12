@@ -124,22 +124,32 @@ export const hostedRepositoryInput = (
   checkout: RepositoryCheckout,
   isFavorite?: boolean,
 ): UpsertRepositoryInput =>
-  UpsertRepositoryInput.make({
-    source: HostedRepositorySource.make({ locator }),
-    checkout,
-    ...(isFavorite === undefined ? {} : { isFavorite }),
-  })
+  isFavorite === undefined
+    ? UpsertRepositoryInput.make({
+        source: HostedRepositorySource.make({ locator }),
+        checkout,
+      })
+    : UpsertRepositoryInput.make({
+        source: HostedRepositorySource.make({ locator }),
+        checkout,
+        isFavorite,
+      })
 
 /** Builds schema-validated local repository persistence input. */
 export const localRepositoryInput = (
   checkout: LinkedCheckout,
   isFavorite?: boolean,
 ): UpsertRepositoryInput =>
-  UpsertRepositoryInput.make({
-    source: LocalRepositorySource.make(),
-    checkout,
-    ...(isFavorite === undefined ? {} : { isFavorite }),
-  })
+  isFavorite === undefined
+    ? UpsertRepositoryInput.make({
+        source: LocalRepositorySource.make(),
+        checkout,
+      })
+    : UpsertRepositoryInput.make({
+        source: LocalRepositorySource.make(),
+        checkout,
+        isFavorite,
+      })
 
 /** Builds a linked checkout while preserving file and hosted remote URL behavior. */
 export const linkedRepositoryCheckout = (remoteUrl: string, path: string): LinkedCheckout =>
