@@ -13,12 +13,10 @@ import {
   CoreShutdownIdentityMismatchFailure,
   CoreShutdownLifecycleRejectedFailure,
 } from "@diffdash/core-rpc/failure"
+import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
 import type {
-  ApplicationInstanceId,
-  CoreProcessEpoch,
   DatabaseOwnershipAuthorizationId,
   HostRequestContext,
-  HostRequestId,
 } from "@diffdash/core-rpc/identity"
 import { Context, Data, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect"
 
@@ -56,6 +54,25 @@ export class CoreLifecycleTransitionError extends Schema.TaggedError<CoreLifecyc
   },
 ) {}
 
+/** Internal rejection raised when business work targets another Core process identity. */
+export class CoreBusinessIdentityMismatchError extends Schema.TaggedError<CoreBusinessIdentityMismatchError>()(
+  "CoreBusinessIdentityMismatchError",
+  {
+    applicationInstanceId: ApplicationInstanceId,
+    processEpoch: CoreProcessEpoch,
+    requestId: HostRequestId,
+  },
+) {}
+
+/** Internal rejection raised when Core cannot currently admit business work. */
+export class CoreBusinessLifecycleRejectedError extends Schema.TaggedError<CoreBusinessLifecycleRejectedError>()(
+  "CoreBusinessLifecycleRejectedError",
+  {
+    requestId: HostRequestId,
+    lifecycle: CoreLifecycleState,
+  },
+) {}
+
 /** Fixed identity of the Core process controlled by one lifecycle service. */
 export interface CoreLifecycleIdentity {
   /** Application process that launched this Core. */
@@ -67,6 +84,11 @@ export interface CoreLifecycleIdentity {
 
 /** Final bootstrap state machine used by Core control RPC handlers and startup orchestration. */
 export interface CoreLifecycleOperations {
+  /** Admits business work only for the current process identity while Core is ready. */
+  readonly admitBusinessRequest: (
+    request: HostRequestContext,
+  ) => Effect.Effect<void, CoreBusinessIdentityMismatchError | CoreBusinessLifecycleRejectedError>
+
   /** Reads health after rejecting requests for another application or process epoch. */
   readonly health: (
     request: HostRequestContext,
@@ -209,6 +231,26 @@ export const makeCoreLifecycle = (
         processEpoch: identity.processEpoch,
         lifecycle: lifecycleOf(state),
       })
+    })
+
+    const admitBusinessRequest = Effect.fn("CoreLifecycle.admitBusinessRequest")(function* (
+      request: HostRequestContext,
+    ) {
+      if (!matchesIdentity(request)) {
+        return yield* CoreBusinessIdentityMismatchError.make({
+          applicationInstanceId: identity.applicationInstanceId,
+          processEpoch: identity.processEpoch,
+          requestId: request.requestId,
+        })
+      }
+      const state = yield* Ref.get(stateRef)
+      if (!State.$is("Ready")(state)) {
+        return yield* CoreBusinessLifecycleRejectedError.make({
+          requestId: request.requestId,
+          lifecycle: lifecycleOf(state),
+        })
+      }
+      return undefined
     })
 
     const authorizeDatabaseOwnership = Effect.fn("CoreLifecycle.authorizeDatabaseOwnership")(
@@ -411,6 +453,7 @@ export const makeCoreLifecycle = (
     )
 
     return CoreLifecycle.of({
+      admitBusinessRequest,
       health,
       authorizeDatabaseOwnership,
       shutdown,

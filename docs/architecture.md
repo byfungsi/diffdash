@@ -115,6 +115,12 @@ Each Core call returns `CoreResult<Value, Failure>` with an exact method-correla
 union. The Electron application-runtime adapter deliberately unwraps that result into the existing
 IPC error adapters; only defects reject directly from `EmbeddedCore`.
 
+The external-Core RPC path remains inactive until the atomic production cutover. Its native Effect
+RPC middleware now enforces process identity and ready-only business admission before invoking Core
+handlers. `CoreLifecycle` owns the authoritative decision and drain interruption; method-specific
+middleware maps that decision to exact wire failures without adding a custom dispatcher or transport
+envelope. Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
+
 The host must call `start` before any business operation. Concurrent and repeated startup calls
 share one acquisition, startup failures are normalized to Core-owned errors, and repeated disposal
 shares one cleanup. Calls made before startup, during disposal, or after disposal return a typed

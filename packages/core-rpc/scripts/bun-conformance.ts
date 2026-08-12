@@ -6,7 +6,9 @@ import { AppStateGetRpc } from "../src/business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "../src/control"
 import {
   AppStateGetDefect,
+  AppStateGetAdmissionFailure,
   AppStateGetDefectSchema,
+  AppStateGetLifecycleRejectedFailure,
   AppStateReadFailure,
   CoreHealthIdentityMismatchFailure,
 } from "../src/failure"
@@ -82,6 +84,16 @@ const appStateDefect = AppStateGetDefect.make({
   retryClass: "notRetryable",
   safeMessage: "DiffDash Core encountered an internal application-state error.",
 })
+const admissionFailure = AppStateGetLifecycleRejectedFailure.make({
+  code: "CORE_LIFECYCLE_REJECTED",
+  method: "AppState.get",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  lifecycle: "recovering",
+  retryClass: "automatic",
+  safeMessage: "DiffDash Core is not ready to serve application requests.",
+})
 
 const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
 const encodedValues = [
@@ -94,6 +106,7 @@ const encodedValues = [
   Schema.encodeSync(AppStateGetRpc.successSchema)(state),
   Schema.encodeSync(AppStateGetRpc.errorSchema)(failure),
   Schema.encodeSync(AppStateGetDefectSchema)(appStateDefect),
+  Schema.encodeSync(AppStateGetAdmissionFailure)(admissionFailure),
 ]
 const decodedValues = encodedValues.flatMap((value) => {
   const bytes = parser.encode(value)
@@ -114,6 +127,9 @@ const decodedHostCapabilityRequest = Schema.decodeUnknownSync(CoreRequestContext
 const decodedState = Schema.decodeUnknownSync(AppStateGetRpc.successSchema)(decodedValues[6])
 const decodedFailure = Schema.decodeUnknownSync(AppStateGetRpc.errorSchema)(decodedValues[7])
 const decodedAppStateDefect = Schema.decodeUnknownSync(AppStateGetDefectSchema)(decodedValues[8])
+const decodedAdmissionFailure = Schema.decodeUnknownSync(AppStateGetAdmissionFailure)(
+  decodedValues[9],
+)
 
 assert(decodedRequest.requestId === request.requestId, "Bun request identity roundtrip failed")
 assert(
@@ -149,6 +165,10 @@ assert(
 assert(!("cause" in decodedAppStateDefect), "Bun AppState defect exposed a cause")
 assert(!("stack" in decodedAppStateDefect), "Bun AppState defect exposed a stack")
 assert(!("path" in decodedAppStateDefect), "Bun AppState defect exposed a path")
+assert(
+  decodedAdmissionFailure.code === admissionFailure.code,
+  "Bun AppState admission failure roundtrip failed",
+)
 
 const boundedParser = RpcSerialization.makeMsgPack({ maxBufferSize: 2 }).makeUnsafe()
 const incompleteFrame = Uint8Array.of(0xd9)

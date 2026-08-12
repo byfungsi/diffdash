@@ -1,5 +1,5 @@
 import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
-import { AppStateGetDefect, AppStateReadFailure } from "@diffdash/core-rpc/failure"
+import { AppStateReadFailure } from "@diffdash/core-rpc/failure"
 import { AppState } from "@diffdash/settings/app-state"
 import { Effect } from "effect"
 
@@ -20,19 +20,6 @@ export const coreBusinessRpcHandlersLayer = CoreBusinessRpcs.toLayer(
               retryClass: "userAction",
               safeMessage: "DiffDash could not read application state.",
             }),
-          ),
-          Effect.catchDefect(() =>
-            Effect.die(
-              AppStateGetDefect.make({
-                code: "APP_STATE_INTERNAL_ERROR",
-                method: "AppState.get",
-                applicationInstanceId: request.applicationInstanceId,
-                processEpoch: request.processEpoch,
-                requestId: request.requestId,
-                retryClass: "notRetryable",
-                safeMessage: "DiffDash Core encountered an internal application-state error.",
-              }),
-            ),
           ),
         ),
     }

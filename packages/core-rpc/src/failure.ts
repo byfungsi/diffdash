@@ -51,6 +51,48 @@ const CoreControlDefectIdentity = {
 
 const CoreRpcDefectValue = Schema.NullishOr(Schema.ObjectKeyword)
 
+/** Identity mismatch returned before `AppState.get` may execute. */
+export const AppStateGetIdentityMismatchFailure = Schema.TaggedStruct(
+  "CoreIdentityMismatchFailure",
+  {
+    code: Schema.Literal("CORE_REQUEST_IDENTITY_MISMATCH"),
+    method: Schema.Literal("AppState.get"),
+    ...CoreRpcFailureIdentity,
+    retryClass: Schema.Literal("automatic"),
+    safeMessage: Schema.Literal(
+      "DiffDash Core rejected a request for a different process identity.",
+    ),
+  },
+).annotate({ identifier: "AppStateGetIdentityMismatchFailure" })
+
+/** Identity mismatch returned before `AppState.get` may execute. */
+export type AppStateGetIdentityMismatchFailure = typeof AppStateGetIdentityMismatchFailure.Type
+
+/** Lifecycle rejection returned before `AppState.get` may execute. */
+export const AppStateGetLifecycleRejectedFailure = Schema.TaggedStruct(
+  "CoreLifecycleRejectedFailure",
+  {
+    code: Schema.Literal("CORE_LIFECYCLE_REJECTED"),
+    method: Schema.Literal("AppState.get"),
+    ...CoreRpcFailureIdentity,
+    lifecycle: CoreLifecycleState,
+    retryClass: Schema.Literal("automatic"),
+    safeMessage: Schema.Literal("DiffDash Core is not ready to serve application requests."),
+  },
+).annotate({ identifier: "AppStateGetLifecycleRejectedFailure" })
+
+/** Lifecycle rejection returned before `AppState.get` may execute. */
+export type AppStateGetLifecycleRejectedFailure = typeof AppStateGetLifecycleRejectedFailure.Type
+
+/** Expected failures raised while admitting `AppState.get`. */
+export const AppStateGetAdmissionFailure = Schema.Union([
+  AppStateGetIdentityMismatchFailure,
+  AppStateGetLifecycleRejectedFailure,
+])
+
+/** Expected failures raised while admitting `AppState.get`. */
+export type AppStateGetAdmissionFailure = typeof AppStateGetAdmissionFailure.Type
+
 /** Identity mismatch returned by `Core.health`. */
 export const CoreHealthIdentityMismatchFailure = Schema.TaggedStruct(
   "CoreIdentityMismatchFailure",

@@ -87,6 +87,7 @@ describe("Core control RPC handlers", () => {
         lifecycle: "recovering",
       })
       const blockingLifecycle = CoreLifecycle.of({
+        admitBusinessRequest: () => Effect.void,
         health: () =>
           Effect.succeed(
             CoreHealth.make({
@@ -138,6 +139,7 @@ describe("Core control RPC handlers", () => {
   it.effect("projects unexpected handler defects to a method-scoped safe value", () =>
     Effect.gen(function* () {
       const defectingLifecycle = CoreLifecycle.of({
+        admitBusinessRequest: () => Effect.void,
         health: () => Effect.die(new Error("private /Users/example/repository/path")),
         authorizeDatabaseOwnership: () => Effect.die("unused"),
         shutdown: () => Effect.die("unused"),

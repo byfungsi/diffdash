@@ -1,4 +1,5 @@
 import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
+import { AppStateGetAdmissionMiddleware } from "@diffdash/core-rpc/admission"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -23,6 +24,7 @@ const state = SharedAppState.make({ onboardingCompleted: true })
 
 const makeTestLayer = (get: Effect.Effect<SharedAppState, AppStateError>) =>
   coreBusinessRpcHandlersLayer.pipe(
+    Layer.provideMerge(Layer.succeed(AppStateGetAdmissionMiddleware, (effect) => effect)),
     Layer.provide(
       Layer.succeed(
         AppState,
@@ -63,25 +65,4 @@ describe("Core business RPC handlers", () => {
       expect(JSON.stringify(failure)).not.toContain("/Users/example")
     }).pipe(Effect.provide(makeTestLayer(Effect.fail(storageFailure))))
   })
-
-  it.effect("projects unexpected application-state defects to a method-scoped safe value", () =>
-    Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
-      const defect = yield* client["AppState.get"](request).pipe(Effect.catchDefect(Effect.succeed))
-
-      expect(defect).toEqual({
-        _tag: "AppStateGetDefect",
-        code: "APP_STATE_INTERNAL_ERROR",
-        method: "AppState.get",
-        ...request,
-        retryClass: "notRetryable",
-        safeMessage: "DiffDash Core encountered an internal application-state error.",
-      })
-      expect(JSON.stringify(defect)).not.toContain("/Users/example")
-    }).pipe(
-      Effect.provide(
-        makeTestLayer(Effect.die(new Error("private /Users/example/repository/path"))),
-      ),
-    ),
-  )
 })

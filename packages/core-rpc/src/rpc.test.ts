@@ -1,15 +1,19 @@
 import { AppState } from "@diffdash/domain/app-state"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Result, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
+import { AppStateGetAdmissionMiddleware } from "./admission"
 import { AppStateGetRpc, CoreBusinessRpcs } from "./business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "./control"
 import {
   AppStateGetDefect,
+  AppStateGetAdmissionFailure,
+  AppStateGetIdentityMismatchFailure,
+  AppStateGetLifecycleRejectedFailure,
   AppStateReadFailure,
   CoreHealthDefect,
   CoreHealthIdentityMismatchFailure,
@@ -83,6 +87,29 @@ const failure = AppStateReadFailure.make({
   safeMessage: "DiffDash could not read application state.",
 })
 
+const admissionIdentityFailure = AppStateGetIdentityMismatchFailure.make({
+  code: "CORE_REQUEST_IDENTITY_MISMATCH",
+  method: "AppState.get",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  retryClass: "automatic",
+  safeMessage: "DiffDash Core rejected a request for a different process identity.",
+})
+
+const admissionLifecycleFailure = AppStateGetLifecycleRejectedFailure.make({
+  code: "CORE_LIFECYCLE_REJECTED",
+  method: "AppState.get",
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+  lifecycle: "recovering",
+  retryClass: "automatic",
+  safeMessage: "DiffDash Core is not ready to serve application requests.",
+})
+
+const passAppStateAdmissionLayer = Layer.succeed(AppStateGetAdmissionMiddleware, (effect) => effect)
+
 const appStateDefect = AppStateGetDefect.make({
   code: "APP_STATE_INTERNAL_ERROR",
   method: "AppState.get",
@@ -139,7 +166,27 @@ describe("Core RPC declarations", () => {
       const result = yield* client["AppState.get"](request)
 
       expect(result).toEqual(state)
-    }).pipe(Effect.provide(handlers))
+    }).pipe(Effect.provide(handlers), Effect.provide(passAppStateAdmissionLayer))
+  })
+
+  it.effect("preserves a stable plain AppState admission failure through native RPC", () => {
+    const handlers = CoreBusinessRpcs.toLayer({
+      "AppState.get": () => Effect.succeed(state),
+    })
+    const admissionLayer = Layer.succeed(AppStateGetAdmissionMiddleware, () =>
+      Effect.fail(admissionLifecycleFailure),
+    )
+
+    return Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const result = yield* client["AppState.get"](request).pipe(Effect.flip)
+
+      expect(result).toEqual(admissionLifecycleFailure)
+      expect(result).not.toBeInstanceOf(Error)
+      expect(result).not.toHaveProperty("cause")
+      expect(result).not.toHaveProperty("stack")
+      expect(result).not.toHaveProperty("path")
+    }).pipe(Effect.provide(handlers), Effect.provide(admissionLayer))
   })
 
   it.effect("preserves a stable plain AppState failure through native in-memory RPC", () => {
@@ -156,7 +203,7 @@ describe("Core RPC declarations", () => {
       expect(result).not.toHaveProperty("cause")
       expect(result).not.toHaveProperty("stack")
       expect(result).not.toHaveProperty("path")
-    }).pipe(Effect.provide(handlers))
+    }).pipe(Effect.provide(handlers), Effect.provide(passAppStateAdmissionLayer))
   })
 
   it("roundtrips request, success, and expected failure schemas through native MessagePack", () => {
@@ -170,6 +217,8 @@ describe("Core RPC declarations", () => {
       Schema.encodeSync(CoreRequestContext)(hostCapabilityRequest),
       Schema.encodeSync(AppStateGetRpc.successSchema)(state),
       Schema.encodeSync(AppStateGetRpc.errorSchema)(failure),
+      Schema.encodeSync(AppStateGetAdmissionFailure)(admissionIdentityFailure),
+      Schema.encodeSync(AppStateGetAdmissionFailure)(admissionLifecycleFailure),
     ]
 
     const decodedValues = encodedValues.flatMap((value) => {
@@ -203,6 +252,20 @@ describe("Core RPC declarations", () => {
     expect(decodedFailure).not.toHaveProperty("cause")
     expect(decodedFailure).not.toHaveProperty("stack")
     expect(decodedFailure).not.toHaveProperty("path")
+    const decodedIdentityFailure = Schema.decodeUnknownSync(AppStateGetAdmissionFailure)(
+      decodedValues[8],
+    )
+    const decodedLifecycleFailure = Schema.decodeUnknownSync(AppStateGetAdmissionFailure)(
+      decodedValues[9],
+    )
+    expect(decodedIdentityFailure).toEqual(admissionIdentityFailure)
+    expect(decodedLifecycleFailure).toEqual(admissionLifecycleFailure)
+    const decodedExit = Schema.decodeSync(Rpc.exitSchema(AppStateGetRpc))(
+      Schema.encodeSync(Rpc.exitSchema(AppStateGetRpc))(Exit.fail(admissionLifecycleFailure)),
+    )
+    expect(Exit.isFailure(decodedExit)).toBe(true)
+    if (Exit.isSuccess(decodedExit)) throw new Error("Expected AppState admission failure exit")
+    expect(Cause.squash(decodedExit.cause)).toEqual(admissionLifecycleFailure)
   })
 
   it("roundtrips a sanitized control defect without private diagnostics", () => {

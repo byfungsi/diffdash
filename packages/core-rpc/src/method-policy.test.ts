@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import type * as Rpc from "effect/unstable/rpc/Rpc"
 
+import { AppStateGetAdmissionMiddleware } from "./admission"
 import { CoreBusinessRpcs } from "./business"
 import { CoreControlRpcs } from "./control"
 import { CoreHostCapabilityRpcs } from "./host-capability"
@@ -20,6 +21,9 @@ describe("Core RPC method policy", () => {
     expect(CoreControlRpcs.requests.has("Core.authorizeDatabaseOwnership")).toBe(true)
     expect(CoreControlRpcs.requests.has("Core.shutdown")).toBe(true)
     expect(CoreBusinessRpcs.requests.has("AppState.get")).toBe(true)
+    expect(CoreBusinessRpcs.requests.get("AppState.get")?.middlewares).toEqual(
+      new Set([AppStateGetAdmissionMiddleware]),
+    )
     expect(new Set(declarations.map(([tag]) => tag)).size).toBe(declarations.length)
     for (const [tag, declaration] of declarations) {
       const policy = getCoreRpcMethodPolicy(declaration)

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./admission": "./src/admission.ts",
     "./business": "./src/business.ts",
     "./control": "./src/control.ts",
     "./failure": "./src/failure.ts",
