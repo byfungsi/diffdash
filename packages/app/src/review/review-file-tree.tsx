@@ -176,6 +176,21 @@ export const ReviewFileTree = ({
         aria-label="Changed files"
         className="text-review-sidebar-fg block h-full bg-transparent text-xs [&_*]:border-review-tree-indent"
         model={model}
+        onClickCapture={(event) => {
+          const activeSelectedPath = appliedSelectedPathRef.current
+          if (activeSelectedPath === null) return
+          const clickedPath = event.nativeEvent
+            .composedPath()
+            .find(
+              (target) => target instanceof HTMLElement && target.dataset.itemPath !== undefined,
+            )
+          if (
+            clickedPath instanceof HTMLElement &&
+            clickedPath.dataset.itemPath === activeSelectedPath
+          ) {
+            onSelectPathRef.current(activeSelectedPath)
+          }
+        }}
         style={{ background: "transparent" }}
       />
     </div>
