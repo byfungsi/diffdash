@@ -793,7 +793,20 @@ index 0000000..3333333
       writeFileSync(join(rootPath, "main.txt"), "main\n")
       commitAll(rootPath, "main")
       const firstParentSha = git(rootPath, "rev-parse", "HEAD")
-      git(rootPath, "merge", "--no-ff", "feature", "-m", "merge feature")
+      git(
+        rootPath,
+        "-c",
+        "user.name=DiffDash Test",
+        "-c",
+        "user.email=test@diffdash.dev",
+        "-c",
+        "commit.gpgSign=false",
+        "merge",
+        "--no-ff",
+        "feature",
+        "-m",
+        "merge feature",
+      )
       const mergeSha = git(rootPath, "rev-parse", "HEAD")
 
       const service = yield* GitService.pipe(
