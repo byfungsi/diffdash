@@ -133,6 +133,15 @@ the exact launched application instance and process epoch. Real socket integrati
 disconnect scope cleanup without activating an external process or changing current embedded
 production ownership.
 
+The inactive Electron host coordinator owns one memoized bootstrap acquisition per application
+scope. It creates a fresh short private runtime directory, process epoch, request ID, and redacted
+one-time token; invokes the future verified launcher through a scoped transport-listening seam; then
+builds the native client and completes authenticated health and exact epoch verification. Its private
+state sequence is `idle -> preparingRuntime -> transportListening -> authenticating -> epochVerified
+-> awaitingOwnership`. Concurrent and repeated starts share one session. Any failure closes the
+client, launcher resources, and runtime directory immediately and exposes only a stage plus fixed safe
+message; the socket path and token are not retained in the returned session or public failure.
+
 The host must call `start` before any business operation. Concurrent and repeated startup calls
 share one acquisition, startup failures are normalized to Core-owned errors, and repeated disposal
 shares one cleanup. Calls made before startup, during disposal, or after disposal return a typed
