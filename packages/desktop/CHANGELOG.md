@@ -1,5 +1,19 @@
 # DiffDash Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- [#75](https://github.com/byfungsi/diffdash/pull/75) [`d225812`](https://github.com/byfungsi/diffdash/commit/d2258123479a8f2320523f6b5f2117122d76a4cc) Thanks [@hanipcode](https://github.com/hanipcode)! - Add a last-commit CLI review command and reload review diffs with Cmd+R or Ctrl+R.
+
+### Patch Changes
+
+- [#67](https://github.com/byfungsi/diffdash/pull/67) [`d4e5af0`](https://github.com/byfungsi/diffdash/commit/d4e5af0da120961f16b0f0b06f89d26c2cbf5cac) Thanks [@hanipcode](https://github.com/hanipcode)! - Extract the runtime-neutral embedded DiffDash Core foundation, move durable stores onto Effect SQL's
+  generic client with Node and Bun SQLite adapters, and keep Electron focused on native host
+  responsibilities.
+
+- [#72](https://github.com/byfungsi/diffdash/pull/72) [`5dd2706`](https://github.com/byfungsi/diffdash/commit/5dd2706b3806b18577f6ebbb9d497d74be4e528b) Thanks [@hanipcode](https://github.com/hanipcode)! - Allow reviewers to navigate back to an already-selected file after scrolling away from it.
+
 ## 0.7.2
 
 ### Patch Changes
