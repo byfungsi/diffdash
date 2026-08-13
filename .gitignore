@@ -17,6 +17,7 @@ packages/app/.vitest-attachments/
 demo/.cache/
 tools/demo-video/.cache/
 tools/demo-video/output/
+tools/repository-scale/.cache/
 .env
 .env.local
 .env.*.local
