@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs",
     "typecheck": "pnpm build",
-    "prepare": "node src/cli.mjs prepare",
+    "benchmark:prepare": "node src/cli.mjs prepare",
     "measure": "node src/cli.mjs measure",
     "evaluate": "node src/cli.mjs evaluate",
     "test": "node --test test/*.test.mjs",

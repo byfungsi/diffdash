@@ -13,7 +13,7 @@
     "demo:video": "pnpm --filter @diffdash/demo-video video",
     "demo:verify": "pnpm --filter @diffdash/demo-video verify",
     "demo:dashboard": "pnpm --filter @diffdash/demo-video dashboard",
-    "repository-scale:prepare": "pnpm --filter @diffdash/repository-scale prepare",
+    "repository-scale:prepare": "pnpm --filter @diffdash/repository-scale benchmark:prepare",
     "repository-scale:measure": "pnpm --filter @diffdash/repository-scale measure",
     "repository-scale:evaluate": "pnpm --filter @diffdash/repository-scale evaluate",
     "dist": "pnpm --filter @diffdash/desktop dist",
