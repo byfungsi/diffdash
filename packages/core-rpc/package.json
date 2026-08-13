@@ -12,7 +12,8 @@
     "./host-capability": "./src/host-capability.ts",
     "./identity": "./src/identity.ts",
     "./lifecycle": "./src/lifecycle.ts",
-    "./method-policy": "./src/method-policy.ts"
+    "./method-policy": "./src/method-policy.ts",
+    "./transport": "./src/transport.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

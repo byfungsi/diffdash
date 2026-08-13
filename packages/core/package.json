@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/core.ts",
-    "./e2e": "./src/e2e.ts"
+    "./e2e": "./src/e2e.ts",
+    "./rpc-socket-host": "./src/core-rpc-socket-host.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

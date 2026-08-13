@@ -51,6 +51,19 @@ const CoreControlDefectIdentity = {
 
 const CoreRpcDefectValue = Schema.NullishOr(Schema.ObjectKeyword)
 
+/** Stable failure returned when a private Core transport cannot authenticate its host. */
+export const CoreTransportAuthenticationFailure = Schema.TaggedStruct(
+  "CoreTransportAuthenticationFailure",
+  {
+    code: Schema.Literal("CORE_TRANSPORT_AUTHENTICATION_FAILED"),
+    retryClass: Schema.Literal("notRetryable"),
+    safeMessage: Schema.Literal("DiffDash Core rejected an unauthenticated host connection."),
+  },
+).annotate({ identifier: "CoreTransportAuthenticationFailure" })
+
+/** Stable failure returned when a private Core transport cannot authenticate its host. */
+export type CoreTransportAuthenticationFailure = typeof CoreTransportAuthenticationFailure.Type
+
 /** Identity mismatch returned before `AppState.get` may execute. */
 export const AppStateGetIdentityMismatchFailure = Schema.TaggedStruct(
   "CoreIdentityMismatchFailure",

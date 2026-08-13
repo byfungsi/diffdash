@@ -509,6 +509,9 @@ importers:
       '@diffdash/core':
         specifier: workspace:*
         version: link:../core
+      '@diffdash/core-rpc':
+        specifier: workspace:*
+        version: link:../core-rpc
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain

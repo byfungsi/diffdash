@@ -1,5 +1,7 @@
-import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
-import { CoreControlRpcs } from "@diffdash/core-rpc/control"
+import {
+  AuthenticatedCoreServerRpcs,
+  CORE_TRANSPORT_TOKEN_HEADER,
+} from "@diffdash/core-rpc/transport"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -11,7 +13,19 @@ import { AuthorizeDatabaseOwnershipRequest } from "@diffdash/core-rpc/lifecycle"
 import { AppState as SharedAppState } from "@diffdash/domain/app-state"
 import { AppState } from "@diffdash/settings/app-state"
 import { describe, expect, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope } from "effect"
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Redacted,
+  Ref,
+  Scope,
+} from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { FromClientEncoded, FromServerEncoded } from "effect/unstable/rpc/RpcMessage"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -20,7 +34,7 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { coreRpcServerLayer } from "./core-rpc-server"
 
-const CoreServerRpcs = CoreControlRpcs.merge(CoreBusinessRpcs)
+const CoreServerRpcs = AuthenticatedCoreServerRpcs
 
 const identity = {
   applicationInstanceId: ApplicationInstanceId.make("app-1"),
@@ -38,6 +52,10 @@ const authorizationRequest = AuthorizeDatabaseOwnershipRequest.make({
 })
 
 const state = SharedAppState.make({ onboardingCompleted: true })
+const transportToken = "test-core-transport-token-32-bytes"
+
+const authenticated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  RpcClient.withHeaders(effect, { [CORE_TRANSPORT_TOKEN_HEADER]: transportToken })
 
 const roundtrip = <Message>(
   parser: RpcSerialization.Parser,
@@ -122,31 +140,71 @@ const makeTestLayer = (get: Effect.Effect<SharedAppState>) => {
   )
   const dependenciesLayer = Layer.mergeAll(lifecycleLayer, appStateLayer, protocolPairLayer)
 
-  return coreRpcServerLayer.pipe(Layer.provideMerge(dependenciesLayer))
+  return coreRpcServerLayer({ token: Redacted.make(transportToken) }).pipe(
+    Layer.provideMerge(dependenciesLayer),
+  )
 }
 
 describe("Core RPC server", () => {
+  it.effect("requires health before ownership authorization", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcClient.make(CoreServerRpcs)
+      const rejected = yield* authenticated(
+        client["Core.authorizeDatabaseOwnership"](authorizationRequest),
+      ).pipe(Effect.flip)
+
+      expect(rejected).toMatchObject({
+        _tag: "CoreTransportAuthenticationFailure",
+        code: "CORE_TRANSPORT_AUTHENTICATION_FAILED",
+      })
+      expect(yield* authenticated(client["Core.health"](request))).toMatchObject({
+        lifecycle: "awaitingOwnership",
+      })
+    }).pipe(Effect.provide(makeTestLayer(Effect.succeed(state)))),
+  )
+
+  it.effect("rejects an invalid transport token without consuming the valid credential", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcClient.make(CoreServerRpcs)
+      const rejected = yield* RpcClient.withHeaders(client["Core.health"](request), {
+        [CORE_TRANSPORT_TOKEN_HEADER]: "wrong-token",
+      }).pipe(Effect.flip)
+
+      expect(rejected).toEqual({
+        _tag: "CoreTransportAuthenticationFailure",
+        code: "CORE_TRANSPORT_AUTHENTICATION_FAILED",
+        retryClass: "notRetryable",
+        safeMessage: "DiffDash Core rejected an unauthenticated host connection.",
+      })
+      expect(yield* authenticated(client["Core.health"](request))).toMatchObject({
+        ...identity,
+        lifecycle: "awaitingOwnership",
+      })
+    }).pipe(Effect.provide(makeTestLayer(Effect.succeed(state)))),
+  )
+
   it.effect("shares lifecycle state across serialized control and business RPC", () =>
     Effect.gen(function* () {
       const client = yield* RpcClient.make(CoreServerRpcs)
 
-      expect(yield* client["Core.health"](request)).toEqual({
+      expect(yield* authenticated(client["Core.health"](request))).toEqual({
         ...identity,
-        lifecycle: "starting",
+        lifecycle: "awaitingOwnership",
       })
-      const rejected = yield* client["AppState.get"](request).pipe(Effect.flip)
+      const rejected = yield* authenticated(client["AppState.get"](request)).pipe(Effect.flip)
       expect(rejected).toMatchObject({
         _tag: "CoreLifecycleRejectedFailure",
-        lifecycle: "starting",
+        lifecycle: "awaitingOwnership",
       })
 
       const lifecycle = yield* CoreLifecycle
-      yield* lifecycle.awaitOwnershipAuthorization
-      yield* client["Core.authorizeDatabaseOwnership"](authorizationRequest)
-      expect(yield* client["Core.health"](request)).toMatchObject({ lifecycle: "recovering" })
+      yield* authenticated(client["Core.authorizeDatabaseOwnership"](authorizationRequest))
+      expect(yield* authenticated(client["Core.health"](request))).toMatchObject({
+        lifecycle: "recovering",
+      })
       yield* lifecycle.completeRecovery
 
-      expect(yield* client["AppState.get"](request)).toEqual(state)
+      expect(yield* authenticated(client["AppState.get"](request))).toEqual(state)
     }).pipe(Effect.provide(makeTestLayer(Effect.succeed(state)))),
   )
 
@@ -159,11 +217,12 @@ describe("Core RPC server", () => {
 
       return yield* Effect.gen(function* () {
         const client = yield* RpcClient.make(CoreServerRpcs)
+        yield* authenticated(client["Core.health"](request))
         const staleRequest = HostRequestContext.make({
           ...request,
           processEpoch: CoreProcessEpoch.make("epoch-stale"),
         })
-        const failure = yield* client["AppState.get"](staleRequest).pipe(Effect.flip)
+        const failure = yield* authenticated(client["AppState.get"](staleRequest)).pipe(Effect.flip)
 
         expect(failure).toMatchObject({
           _tag: "CoreIdentityMismatchFailure",
@@ -188,13 +247,17 @@ describe("Core RPC server", () => {
       return yield* Effect.gen(function* () {
         const lifecycle = yield* CoreLifecycle
         const client = yield* RpcClient.make(CoreServerRpcs)
-        yield* lifecycle.awaitOwnershipAuthorization
-        yield* client["Core.authorizeDatabaseOwnership"](authorizationRequest)
+        yield* authenticated(client["Core.health"](request))
+        yield* authenticated(client["Core.authorizeDatabaseOwnership"](authorizationRequest))
         yield* lifecycle.completeRecovery
 
-        const requestFiber = yield* client["AppState.get"](request).pipe(Effect.forkScoped)
+        const requestFiber = yield* authenticated(client["AppState.get"](request)).pipe(
+          Effect.forkScoped,
+        )
         yield* Deferred.await(started)
-        expect(yield* client["Core.shutdown"](request)).toMatchObject({ lifecycle: "draining" })
+        expect(yield* authenticated(client["Core.shutdown"](request))).toMatchObject({
+          lifecycle: "draining",
+        })
         yield* Deferred.await(interrupted)
         yield* Fiber.interrupt(requestFiber)
       }).pipe(Effect.provide(testLayer))
@@ -217,10 +280,12 @@ describe("Core RPC server", () => {
       )
       const client = yield* RpcClient.make(CoreServerRpcs).pipe(Effect.provide(context))
       const lifecycle = Context.get(context, CoreLifecycle)
-      yield* lifecycle.awaitOwnershipAuthorization
-      yield* client["Core.authorizeDatabaseOwnership"](authorizationRequest)
+      yield* authenticated(client["Core.health"](request))
+      yield* authenticated(client["Core.authorizeDatabaseOwnership"](authorizationRequest))
       yield* lifecycle.completeRecovery
-      const requestFiber = yield* client["AppState.get"](request).pipe(Effect.forkScoped)
+      const requestFiber = yield* authenticated(client["AppState.get"](request)).pipe(
+        Effect.forkScoped,
+      )
       yield* Deferred.await(started)
 
       yield* Scope.close(serverScope, Exit.void)

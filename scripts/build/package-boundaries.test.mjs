@@ -90,7 +90,10 @@ const documentedPackageDependencies = new Map([
       "@diffdash/settings",
     ],
   ],
-  ["@diffdash/desktop", ["@diffdash/app", "@diffdash/core", "@diffdash/protocol"]],
+  [
+    "@diffdash/desktop",
+    ["@diffdash/app", "@diffdash/core", "@diffdash/core-rpc", "@diffdash/protocol"],
+  ],
   ["@diffdash/e2e", ["@diffdash/desktop"]],
   ["@diffdash/web", []],
   ["@diffdash/download-worker", []],

@@ -6,7 +6,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
-import { AppStateGetAdmissionMiddleware } from "./admission"
+import { AppStateGetAdmissionMiddleware, CoreTransportAuthenticationMiddleware } from "./admission"
 import { AppStateGetRpc, CoreBusinessRpcs } from "./business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "./control"
 import {
@@ -109,6 +109,10 @@ const admissionLifecycleFailure = AppStateGetLifecycleRejectedFailure.make({
 })
 
 const passAppStateAdmissionLayer = Layer.succeed(AppStateGetAdmissionMiddleware, (effect) => effect)
+const passTransportAuthenticationLayer = Layer.succeed(
+  CoreTransportAuthenticationMiddleware,
+  (effect) => effect,
+)
 
 const appStateDefect = AppStateGetDefect.make({
   code: "APP_STATE_INTERNAL_ERROR",
@@ -153,7 +157,7 @@ describe("Core RPC declarations", () => {
         processEpoch: "epoch-1",
         lifecycle: "awaitingOwnership",
       })
-    }).pipe(Effect.provide(handlers))
+    }).pipe(Effect.provide(handlers), Effect.provide(passTransportAuthenticationLayer))
   })
 
   it.effect("preserves AppState success through the native in-memory RPC client and server", () => {
@@ -166,7 +170,11 @@ describe("Core RPC declarations", () => {
       const result = yield* client["AppState.get"](request)
 
       expect(result).toEqual(state)
-    }).pipe(Effect.provide(handlers), Effect.provide(passAppStateAdmissionLayer))
+    }).pipe(
+      Effect.provide(handlers),
+      Effect.provide(passAppStateAdmissionLayer),
+      Effect.provide(passTransportAuthenticationLayer),
+    )
   })
 
   it.effect("preserves a stable plain AppState admission failure through native RPC", () => {
@@ -186,7 +194,11 @@ describe("Core RPC declarations", () => {
       expect(result).not.toHaveProperty("cause")
       expect(result).not.toHaveProperty("stack")
       expect(result).not.toHaveProperty("path")
-    }).pipe(Effect.provide(handlers), Effect.provide(admissionLayer))
+    }).pipe(
+      Effect.provide(handlers),
+      Effect.provide(admissionLayer),
+      Effect.provide(passTransportAuthenticationLayer),
+    )
   })
 
   it.effect("preserves a stable plain AppState failure through native in-memory RPC", () => {
@@ -203,7 +215,11 @@ describe("Core RPC declarations", () => {
       expect(result).not.toHaveProperty("cause")
       expect(result).not.toHaveProperty("stack")
       expect(result).not.toHaveProperty("path")
-    }).pipe(Effect.provide(handlers), Effect.provide(passAppStateAdmissionLayer))
+    }).pipe(
+      Effect.provide(handlers),
+      Effect.provide(passAppStateAdmissionLayer),
+      Effect.provide(passTransportAuthenticationLayer),
+    )
   })
 
   it("roundtrips request, success, and expected failure schemas through native MessagePack", () => {

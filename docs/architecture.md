@@ -121,9 +121,16 @@ handlers. `CoreLifecycle` owns the authoritative decision and drain interruption
 middleware maps that decision to exact wire failures without adding a custom dispatcher or transport
 envelope. Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
 Core privately merges the disjoint control and business audiences into one scoped, transport-neutral
-`RpcServer`; its protocol remains supplied by the later authenticated host transport. Serialized
-MessagePack integration proves that handlers and admission share one lifecycle without activating an
-external process or changing current embedded production ownership.
+`RpcServer`. The first inactive external-host vertical supplies the native Unix socket protocol with
+bounded MessagePack input, a private `0700` runtime directory, and a `0600` socket. A one-time redacted
+credential carried in native RPC headers atomically binds the first authenticated Effect client ID;
+wrong credentials do not consume it, and no later connection can authenticate even after disconnect.
+Authentication advances the existing public lifecycle from `starting` to `awaitingOwnership`, while
+socket listening, connection, and host-side epoch verification remain private transport states.
+Electron owns a scoped native client and independently rejects a health value that does not identify
+the exact launched application instance and process epoch. Real socket integration proves native
+disconnect scope cleanup without activating an external process or changing current embedded
+production ownership.
 
 The host must call `start` before any business operation. Concurrent and repeated startup calls
 share one acquisition, startup failures are normalized to Core-owned errors, and repeated disposal

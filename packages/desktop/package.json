@@ -37,6 +37,7 @@
     "@diffdash/agent-provider": "workspace:*",
     "@diffdash/app": "workspace:*",
     "@diffdash/core": "workspace:*",
+    "@diffdash/core-rpc": "workspace:*",
     "@diffdash/domain": "workspace:*",
     "@diffdash/persistence": "workspace:*",
     "@diffdash/protocol": "workspace:*",
