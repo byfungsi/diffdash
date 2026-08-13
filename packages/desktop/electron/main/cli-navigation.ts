@@ -10,6 +10,7 @@ import {
   CliRepositorySelector,
   LinkRepositoryCommand,
   OpenBranchDiffCommand,
+  OpenLastCommitCommand,
   OpenProjectCommand,
   OpenPullRequestCommand,
   OpenRepositoryComparisonCommand,
@@ -135,6 +136,16 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
       }),
     ),
   ).pipe(Command.withDescription("Open local changes against a branch"))
+  const lastCommit = Command.make("last-commit", {}, () =>
+    select(
+      OpenLastCommitCommand.make({
+        localPath: CliRepositoryPath.make(resolve(cwd)),
+      }),
+    ),
+  ).pipe(
+    Command.withAlias("lc"),
+    Command.withDescription("Open the last commit against its first parent"),
+  )
   const baseRef = gitRevisionArgument("base")
   const headRef = gitRevisionArgument("head")
   const repository = Flag.string("repository").pipe(
@@ -178,7 +189,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
     ),
   ).pipe(
     Command.withDescription("Desktop code review for local and hosted Git repositories"),
-    Command.withSubcommands([install, pullRequest, diff, compare, repair]),
+    Command.withSubcommands([install, pullRequest, diff, lastCommit, compare, repair]),
   )
 
   const normalizedArgs = normalizePublicArguments(args)

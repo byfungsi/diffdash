@@ -169,6 +169,7 @@ export interface DiffDashApi {
       localPath: RepositoryCheckoutPath,
       branchName: RepositoryComparisonRef | null,
     ) => Promise<LocalReviewTarget>
+    readonly resolveLastCommit: (localPath: RepositoryCheckoutPath) => Promise<LocalReviewTarget>
   }
   readonly repositoryComparisons: {
     readonly resolve: (

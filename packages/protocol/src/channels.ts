@@ -20,6 +20,7 @@ export const InvokeChannel = {
   listHostedRepositorySearchScopes: "hostedRepositories:listSearchScopes",
   searchHostedRepositories: "hostedRepositories:search",
   resolveLocalBranch: "localReviews:resolveBranch",
+  resolveLastCommit: "localReviews:resolveLastCommit",
   resolveRepositoryComparison: "repositoryComparisons:resolve",
   acquireHostedReviewSnapshot: "reviewSnapshots:acquireHosted",
   acquireLocalReviewSnapshot: "reviewSnapshots:acquireLocal",

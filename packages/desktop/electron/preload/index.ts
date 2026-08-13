@@ -110,6 +110,8 @@ const api: DiffDashBridgeApi = {
   localReviews: {
     resolveBranch: (localPath, branchName) =>
       transport.invoke(InvokeChannel.resolveLocalBranch, { localPath, branchName }),
+    resolveLastCommit: (localPath) =>
+      transport.invoke(InvokeChannel.resolveLastCommit, { localPath }),
   },
   repositoryComparisons: {
     resolve: (command) => transport.invoke(InvokeChannel.resolveRepositoryComparison, { command }),

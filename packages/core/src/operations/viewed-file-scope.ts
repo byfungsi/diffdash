@@ -24,6 +24,10 @@ export const localViewedFileScope = (
       comparisonKind: "branch" as const,
       comparisonTarget: branchName,
     }),
+    lastCommit: ({ headSha }) => ({
+      comparisonKind: "branch" as const,
+      comparisonTarget: headSha,
+    }),
   })
   return LocalViewedFileScope.make({
     repoId,

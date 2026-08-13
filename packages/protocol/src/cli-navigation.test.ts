@@ -13,6 +13,7 @@ import {
   CliNavigationCommand,
   CliRepositorySelector,
   OpenRepositoryComparisonCommand,
+  OpenLastCommitCommand,
 } from "./cli-navigation"
 
 describe("CliNavigationCommand", () => {
@@ -43,6 +44,14 @@ describe("CliNavigationCommand", () => {
 
     const encoded = Schema.encodeSync(CliNavigationCommand)(command)
 
+    expect(Schema.decodeUnknownSync(CliNavigationCommand)(encoded)).toEqual(command)
+  })
+
+  it("round-trips a last-commit command", () => {
+    const command = OpenLastCommitCommand.make({
+      localPath: RepositoryCheckoutPath.make("/workspace/linux"),
+    })
+    const encoded = Schema.encodeSync(CliNavigationCommand)(command)
     expect(Schema.decodeUnknownSync(CliNavigationCommand)(encoded)).toEqual(command)
   })
 

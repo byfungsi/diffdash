@@ -142,6 +142,12 @@ describe("diffdash CLI", () => {
         "pr",
         "42",
       ])
+      await expect(runHarness(["lc"])).resolves.toEqual([
+        resolvedHarnessRoot,
+        `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--",
+        "lc",
+      ])
       await expect(runHarness(["compare", "v6.0", "v6.1"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
