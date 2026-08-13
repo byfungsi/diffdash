@@ -34,6 +34,9 @@ const makeDependencies = () => ({
   resolveLocalReview: async () => {
     throw new Error("Not used by this test")
   },
+  resolveLastCommit: async () => {
+    throw new Error("Not used by this test")
+  },
   resolveRepositoryComparison: async () => {
     throw new Error("Not used by this test")
   },

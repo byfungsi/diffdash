@@ -15,8 +15,18 @@ export const BranchComparison = Schema.TaggedStruct("branch", {
   baseSha: ReviewRevision,
 })
 
+/** One immutable commit compared with its first parent, or the empty tree for a root commit. */
+export const LastCommitComparison = Schema.TaggedStruct("lastCommit", {
+  baseSha: ReviewRevision,
+  headSha: ReviewRevision,
+})
+
 /** The comparison strategy used to build a local review. */
-export const LocalReviewComparison = Schema.Union([WorkingTreeComparison, BranchComparison])
+export const LocalReviewComparison = Schema.Union([
+  WorkingTreeComparison,
+  BranchComparison,
+  LastCommitComparison,
+])
 
 /** The comparison strategy used to build a local review. */
 export type LocalReviewComparison = typeof LocalReviewComparison.Type
@@ -78,6 +88,11 @@ export const localReviewTargetKey = (target: LocalReviewTarget) =>
       "branch",
       (comparison) =>
         `${target.rootPath}\u0000branch\u0000${comparison.baseRef}\u0000${comparison.baseSha}`,
+    ),
+    Match.tag(
+      "lastCommit",
+      (comparison) =>
+        `${target.rootPath}\u0000lastCommit\u0000${comparison.baseSha}\u0000${comparison.headSha}`,
     ),
     Match.exhaustive,
   )

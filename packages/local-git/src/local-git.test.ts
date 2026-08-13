@@ -50,6 +50,18 @@ const makeProcessLayer = (run: FakeProcessRun) =>
     }),
   )
 
+const makeLastCommitProcessLayer = (readRevisions: FakeProcessRun) =>
+  makeProcessLayer((command, args, request) => {
+    const joined = args.join(" ")
+    if (joined.includes("rev-parse --show-toplevel")) {
+      return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
+    }
+    if (joined.includes("rev-list --parents -n 1 HEAD")) {
+      return readRevisions(command, args, request)
+    }
+    throw new Error(`Unexpected git call: ${joined}`)
+  })
+
 describe("GitService", () => {
   it.effect(
     "detects a local Git checkout root and origin URL without parsing provider identity",
@@ -129,6 +141,155 @@ describe("GitService", () => {
       expect(
         yield* service.currentBranch(RepositoryCheckoutPath.make("/workspace/repo")),
       ).toBeNull()
+    }),
+  )
+
+  it.effect("resolves a last commit with its validated parent", () =>
+    Effect.gen(function* () {
+      const headSha = "b".repeat(40)
+      const parentSha = "a".repeat(40)
+      const layer = GitService.layer.pipe(
+        Layer.provide(
+          makeLastCommitProcessLayer((_command, args) =>
+            Effect.succeed(makeProcessResult(`  ${headSha}   ${parentSha}\n`, args)),
+          ),
+        ),
+      )
+      const service = yield* GitService.pipe(Effect.provide(layer))
+
+      expect(
+        yield* service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+      ).toMatchObject({
+        rootPath: "/workspace/repo",
+        comparison: { _tag: "lastCommit", baseSha: parentSha, headSha },
+      })
+    }),
+  )
+
+  it.effect("resolves a root commit against the empty tree", () =>
+    Effect.gen(function* () {
+      const headSha = "b".repeat(40)
+      const layer = GitService.layer.pipe(
+        Layer.provide(
+          makeLastCommitProcessLayer((_command, args) =>
+            Effect.succeed(makeProcessResult(`${headSha}\n`, args)),
+          ),
+        ),
+      )
+      const service = yield* GitService.pipe(Effect.provide(layer))
+
+      expect(
+        yield* service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+      ).toMatchObject({
+        comparison: {
+          _tag: "lastCommit",
+          baseSha: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+          headSha,
+        },
+      })
+    }),
+  )
+
+  it.effect("translates only last-commit command failures", () =>
+    Effect.gen(function* () {
+      const processFailure = ProcessExitError.make({
+        command: "git",
+        args: ["-C", "/workspace/repo", "rev-list", "--parents", "-n", "1", "HEAD"],
+        cwd: null,
+        exitCode: 128,
+        signal: null,
+        stdout: "",
+        stderr: "fatal: ambiguous argument 'HEAD'",
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        outputTruncated: false,
+        message: "Command exited with code 128",
+      })
+      const layer = GitService.layer.pipe(
+        Layer.provide(makeLastCommitProcessLayer(() => Effect.fail(processFailure))),
+      )
+      const service = yield* GitService.pipe(Effect.provide(layer))
+      const result = yield* Effect.result(
+        service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
+
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "LocalReviewTargetError",
+        operation: "lastCommit.resolve",
+        reason: "The repository does not have a commit to review",
+        cause: processFailure,
+      })
+    }),
+  )
+
+  it.effect("preserves checkout-root resolution failures for last-commit reviews", () =>
+    Effect.gen(function* () {
+      let readLastCommit = false
+      const processesLayer = makeProcessLayer((_command, args) => {
+        const joined = args.join(" ")
+        if (joined.includes("rev-parse --show-toplevel")) {
+          return Effect.succeed(makeProcessResult("relative/path\n", args))
+        }
+        if (joined.includes("rev-list --parents -n 1 HEAD")) readLastCommit = true
+        throw new Error(`Unexpected git call: ${joined}`)
+      })
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
+      )
+      const result = yield* Effect.result(
+        service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
+
+      expect(Result.isFailure(result) && result.failure).toBeInstanceOf(ProcessOutputError)
+      expect(readLastCommit).toBe(false)
+    }),
+  )
+
+  it.effect("rejects empty last-commit output", () =>
+    Effect.gen(function* () {
+      const layer = GitService.layer.pipe(
+        Layer.provide(
+          makeLastCommitProcessLayer((_command, args) =>
+            Effect.succeed(makeProcessResult("  \n", args)),
+          ),
+        ),
+      )
+      const service = yield* GitService.pipe(Effect.provide(layer))
+      const result = yield* Effect.result(
+        service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
+
+      expect(Result.isFailure(result) && result.failure).toMatchObject({
+        _tag: "LocalReviewTargetError",
+        operation: "lastCommit.resolve",
+        reason: "The repository does not have a commit to review",
+        cause: null,
+      })
+    }),
+  )
+
+  it.effect("rejects invalid last-commit head and parent output", () =>
+    Effect.gen(function* () {
+      for (const stdout of ["invalid-head", `${"b".repeat(40)} invalid-parent`]) {
+        const layer = GitService.layer.pipe(
+          Layer.provide(
+            makeLastCommitProcessLayer((_command, args) =>
+              Effect.succeed(makeProcessResult(stdout, args)),
+            ),
+          ),
+        )
+        const service = yield* GitService.pipe(Effect.provide(layer))
+        const result = yield* Effect.result(
+          service.resolveLastCommit(RepositoryCheckoutPath.make("/workspace/repo")),
+        )
+
+        expect(Result.isFailure(result) && result.failure).toMatchObject({
+          _tag: "LocalReviewTargetError",
+          operation: "lastCommit.resolve",
+          reason: "The repository does not have a commit to review",
+          cause: expect.any(Error),
+        })
+      }
     }),
   )
 
@@ -559,6 +720,95 @@ index 0000000..3333333
         expect(git(rootPath, "branch", "--show-current")).toBe(branchBefore)
         expect(git(rootPath, "status", "--porcelain", "--untracked-files=all")).toBe(statusBefore)
       }),
+  )
+
+  it.effect("reviews only HEAD against its first parent and excludes checkout changes", () =>
+    Effect.gen(function* () {
+      const rootPath = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-last-commit-test-"))),
+        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
+      )
+      git(rootPath, "init", "-b", "main")
+      writeFileSync(join(rootPath, "base.txt"), "base\n")
+      commitAll(rootPath, "base")
+      const baseSha = git(rootPath, "rev-parse", "HEAD")
+      writeFileSync(join(rootPath, "committed.txt"), "committed\n")
+      commitAll(rootPath, "last")
+      const headSha = git(rootPath, "rev-parse", "HEAD")
+      writeFileSync(join(rootPath, "staged.txt"), "staged\n")
+      git(rootPath, "add", "staged.txt")
+      writeFileSync(join(rootPath, "untracked.txt"), "untracked\n")
+
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
+      )
+      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
+      const snapshot = yield* service.getLocalReviewSnapshot(target)
+
+      expect(target.comparison).toMatchObject({ _tag: "lastCommit", baseSha, headSha })
+      expect(snapshot.detail.title).toBe("Last commit")
+      expect(snapshot.baseRevision).toBe(baseSha)
+      expect(snapshot.headRevision).toBe(headSha)
+      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["committed.txt"])
+    }),
+  )
+
+  it.effect("compares a root commit with Git's empty tree", () =>
+    Effect.gen(function* () {
+      const rootPath = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-root-commit-test-"))),
+        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
+      )
+      git(rootPath, "init", "-b", "main")
+      writeFileSync(join(rootPath, "root.txt"), "root\n")
+      commitAll(rootPath, "root")
+
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
+      )
+      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
+      const snapshot = yield* service.getLocalReviewSnapshot(target)
+
+      expect(target.comparison).toMatchObject({
+        _tag: "lastCommit",
+        baseSha: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      })
+      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["root.txt"])
+    }),
+  )
+
+  it.effect("compares a merge commit with its first parent", () =>
+    Effect.gen(function* () {
+      const rootPath = yield* Effect.acquireRelease(
+        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-merge-commit-test-"))),
+        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
+      )
+      git(rootPath, "init", "-b", "main")
+      writeFileSync(join(rootPath, "base.txt"), "base\n")
+      commitAll(rootPath, "base")
+      git(rootPath, "checkout", "-b", "feature")
+      writeFileSync(join(rootPath, "feature.txt"), "feature\n")
+      commitAll(rootPath, "feature")
+      git(rootPath, "checkout", "main")
+      writeFileSync(join(rootPath, "main.txt"), "main\n")
+      commitAll(rootPath, "main")
+      const firstParentSha = git(rootPath, "rev-parse", "HEAD")
+      git(rootPath, "merge", "--no-ff", "feature", "-m", "merge feature")
+      const mergeSha = git(rootPath, "rev-parse", "HEAD")
+
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
+      )
+      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
+      const snapshot = yield* service.getLocalReviewSnapshot(target)
+
+      expect(target.comparison).toMatchObject({
+        _tag: "lastCommit",
+        baseSha: firstParentSha,
+        headSha: mergeSha,
+      })
+      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["feature.txt"])
+    }),
   )
 
   it.effect("FUN-80 AC: rejects a local snapshot that changes during repeated capture", () =>

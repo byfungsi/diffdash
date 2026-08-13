@@ -21,6 +21,7 @@ type RepositoryMethod =
   | typeof CoreMethod.projectWorkspaceSave
   | typeof CoreMethod.repairRepositoryIdentities
   | typeof CoreMethod.resolveLocalBranch
+  | typeof CoreMethod.resolveLastCommit
   | typeof CoreMethod.searchHostedRepositories
   | typeof CoreMethod.setRepositoryFavorite
 
@@ -52,6 +53,7 @@ export const makeRepositoryOperationHandlers: Effect.Effect<
     [CoreMethod.repairRepositoryIdentities]: () => repositories.repairIdentities(),
     [CoreMethod.resolveLocalBranch]: ({ localPath, branchName }) =>
       git.resolveBranchComparison(localPath, branchName),
+    [CoreMethod.resolveLastCommit]: ({ localPath }) => git.resolveLastCommit(localPath),
     [CoreMethod.searchHostedRepositories]: ({ providerId, query, namespaces }) =>
       gitProvider.searchRepositories(
         RepositorySearchRequest.make({ providerId, query, owners: namespaces }),

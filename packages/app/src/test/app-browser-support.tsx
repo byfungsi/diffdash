@@ -6066,6 +6066,17 @@ scenario("homeToReview", async () => {
   calls.getPullRequestDetail.mockClear()
   calls.getPullRequestDiff.mockClear()
   calls.getHostedReviewSnapshot.mockClear()
+  const reloadShortcut = dispatchKeyboardShortcut("r", { metaKey: true })
+  expect(reloadShortcut.defaultPrevented).toBe(true)
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledWith({ review: expect.anything() })
+    expect(calls.getPullRequestDetail).toHaveBeenCalledWith({ review: expect.anything() })
+    expect(calls.getPullRequestDiff).toHaveBeenCalledWith({ review: expect.anything() })
+  })
+
+  calls.getPullRequestDetail.mockClear()
+  calls.getPullRequestDiff.mockClear()
+  calls.getHostedReviewSnapshot.mockClear()
   dispatchKeyboardShortcut("k", { metaKey: true, shiftKey: true })
   await vi.waitFor(() => {
     expect(document.querySelector('dialog[aria-label="Review actions"]')).not.toBeNull()
@@ -7285,6 +7296,13 @@ const installDiffDashApi = (
           }),
         }),
     ),
+    resolveLastCommit: vi.fn<DiffDashApi["localReviews"]["resolveLastCommit"]>(async (localPath) =>
+      LocalReviewTarget.make({
+        kind: "local",
+        rootPath: localPath,
+        comparison: localDiff.comparison,
+      }),
+    ),
     getPullRequestDetail: vi.fn<
       (
         request: Parameters<DiffDashApi["reviewSnapshots"]["acquireHosted"]>[0],
@@ -7475,6 +7493,7 @@ const installDiffDashApi = (
     },
     localReviews: {
       resolveBranch: calls.resolveBranch,
+      resolveLastCommit: calls.resolveLastCommit,
     },
     repositoryComparisons: {
       resolve: calls.resolveRepositoryComparison,

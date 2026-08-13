@@ -253,6 +253,11 @@ export const InvokeContract = {
     }),
     LocalReviewTarget,
   ),
+  [InvokeChannel.resolveLastCommit]: defineInvoke(
+    InvokeChannel.resolveLastCommit,
+    Schema.Struct({ localPath: RepositoryCheckoutPath }),
+    LocalReviewTarget,
+  ),
   [InvokeChannel.resolveRepositoryComparison]: defineInvoke(
     InvokeChannel.resolveRepositoryComparison,
     ResolveRepositoryComparisonRequest,

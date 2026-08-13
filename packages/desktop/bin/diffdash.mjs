@@ -19,7 +19,7 @@ const executablePath = fileURLToPath(import.meta.url)
 const packageRoot = resolve(dirname(executablePath), "..")
 const mainEntry = resolve(packageRoot, "out/main/index.js")
 const usage =
-  "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash pr [pr-number]\n       diffdash diff [branch-name]\n       diffdash compare <base> <head> [--repository=<repository>]\n       diffdash repair\n       diffdash --install-cli [directory]\n"
+  "Usage: diffdash [path]\n       diffdash install [path]\n       diffdash pr [pr-number]\n       diffdash diff [branch-name]\n       diffdash last-commit | lc\n       diffdash compare <base> <head> [--repository=<repository>]\n       diffdash repair\n       diffdash --install-cli [directory]\n"
 const CLI_ARGUMENT = "--diffdash-cli-v1"
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(usage)

@@ -12,6 +12,7 @@ export const defineReviewHandlers = (
   handlers.defineCore(CoreMethod.getHostedReviewDecision, runtime.execute)
   handlers.defineCore(CoreMethod.submitHostedReviewDecision, runtime.execute)
   handlers.defineCore(CoreMethod.resolveLocalBranch, runtime.execute)
+  handlers.defineCore(CoreMethod.resolveLastCommit, runtime.execute)
   handlers.defineCore(CoreMethod.resolveRepositoryComparison, runtime.execute)
   handlers.defineCore(CoreMethod.acquireHostedReviewSnapshot, runtime.execute)
   handlers.defineCore(CoreMethod.acquireLocalReviewSnapshot, runtime.execute)

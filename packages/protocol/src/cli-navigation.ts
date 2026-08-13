@@ -52,6 +52,12 @@ export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffComm
   },
 ) {}
 
+/** Open the checkout's current HEAD commit compared with its first parent. */
+export class OpenLastCommitCommand extends Schema.TaggedClass<OpenLastCommitCommand>()(
+  "openLastCommit",
+  { localPath: CliRepositoryPath },
+) {}
+
 /** Hosted repository selector supplied by a public CLI invocation. */
 export class CliRepositorySelector extends Schema.Class<CliRepositorySelector>(
   "CliRepositorySelector",
@@ -97,6 +103,7 @@ export const CliNavigationCommand = Schema.Union([
   LinkRepositoryCommand,
   OpenPullRequestCommand,
   OpenBranchDiffCommand,
+  OpenLastCommitCommand,
   OpenRepositoryComparisonCommand,
   RepairRepositoryIdentitiesCommand,
   CliNavigationErrorCommand,

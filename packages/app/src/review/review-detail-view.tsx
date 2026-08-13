@@ -1182,6 +1182,13 @@ export const ReviewDetailView = ({
         return
       }
 
+      if (isModKey(event) && key === "r" && !event.altKey && !event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!isReloading) onReload()
+        return
+      }
+
       if (reviewSearchOpen && isModKey(event) && key === "g") {
         event.preventDefault()
         event.stopPropagation()
@@ -1248,6 +1255,8 @@ export const ReviewDetailView = ({
     goToPaletteOpen,
     moveReviewSearch,
     navigationLocked,
+    isReloading,
+    onReload,
     onSidebarExpandedChange,
     openReviewSearch,
     reviewSearchOpen,

@@ -84,6 +84,7 @@ export const CoreMethod = {
   listHostedRepositorySearchScopes: "GitProviders.listSearchScopes",
   searchHostedRepositories: "GitProviders.searchRepositories",
   resolveLocalBranch: "LocalReviews.resolveBranch",
+  resolveLastCommit: "LocalReviews.resolveLastCommit",
   resolveRepositoryComparison: "RepositoryComparisons.resolve",
   acquireHostedReviewSnapshot: "ReviewSnapshots.acquireHosted",
   acquireLocalReviewSnapshot: "ReviewSnapshots.acquireLocal",
@@ -138,6 +139,7 @@ export const CoreMethodChannel = {
   [CoreMethod.listHostedRepositorySearchScopes]: InvokeChannel.listHostedRepositorySearchScopes,
   [CoreMethod.searchHostedRepositories]: InvokeChannel.searchHostedRepositories,
   [CoreMethod.resolveLocalBranch]: InvokeChannel.resolveLocalBranch,
+  [CoreMethod.resolveLastCommit]: InvokeChannel.resolveLastCommit,
   [CoreMethod.resolveRepositoryComparison]: InvokeChannel.resolveRepositoryComparison,
   [CoreMethod.acquireHostedReviewSnapshot]: InvokeChannel.acquireHostedReviewSnapshot,
   [CoreMethod.acquireLocalReviewSnapshot]: InvokeChannel.acquireLocalReviewSnapshot,
@@ -304,6 +306,7 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.listHostedRepositorySearchScopes]: CoreGitProviderFailure
   readonly [CoreMethod.searchHostedRepositories]: CoreGitProviderFailure
   readonly [CoreMethod.resolveLocalBranch]: ProcessExecutionError | LocalReviewTargetError
+  readonly [CoreMethod.resolveLastCommit]: ProcessExecutionError | LocalReviewTargetError
   readonly [CoreMethod.resolveRepositoryComparison]: RepositoryComparisonSourceError
   readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
   readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError

@@ -17,6 +17,9 @@ export class ProjectWorkspace extends Context.Service<
       localPath: string,
       branchName: Option.Option<string>,
     ) => Effect.Effect<LocalReviewTarget, RendererApiError>
+    readonly resolveLastCommit: (
+      localPath: string,
+    ) => Effect.Effect<LocalReviewTarget, RendererApiError>
     readonly resolveRepositoryComparison: (
       command: OpenRepositoryComparisonCommand,
     ) => Effect.Effect<ResolvedRepositoryComparison, RendererApiError>
@@ -38,6 +41,10 @@ export const projectWorkspaceLayer = Layer.effect(
               onSome: RepositoryComparisonRef.make,
             }),
           ),
+        ),
+      resolveLastCommit: (localPath) =>
+        invokePreload(InvokeChannel.resolveLastCommit, () =>
+          api.localReviews.resolveLastCommit(RepositoryCheckoutPath.make(localPath)),
         ),
       resolveRepositoryComparison: (command) =>
         invokePreload(InvokeChannel.resolveRepositoryComparison, () =>

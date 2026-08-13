@@ -132,6 +132,8 @@ export function AppShell() {
           runRendererPromise(repositories.openProject(localPath, selectedRepository)),
         resolveLocalReview: (localPath, branchName) =>
           runRendererPromise(projectWorkspace.resolveLocalReview(localPath, branchName)),
+        resolveLastCommit: (localPath) =>
+          runRendererPromise(projectWorkspace.resolveLastCommit(localPath)),
         resolveRepositoryComparison: (command) =>
           runRendererPromise(projectWorkspace.resolveRepositoryComparison(command)),
         saveWorkspace: (input) => runRendererPromise(preferences.saveWorkspace(input)),
@@ -741,6 +743,10 @@ export function AppShell() {
           kind: "branchDiff",
           branchName: openBranchDiff.branchName,
         })
+      },
+      openLastCommit: async (openLastCommit) => {
+        setCliNavigationError(null)
+        await openProjectPath(openLastCommit.localPath, { kind: "lastCommit" })
       },
       openRepositoryComparison: async (openRepositoryComparison) => {
         setCliNavigationError(null)

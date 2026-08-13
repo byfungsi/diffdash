@@ -30,6 +30,7 @@ export type ProjectOpenIntent =
   | { readonly kind: "workingTree" }
   | { readonly kind: "pullRequest"; readonly number: number }
   | { readonly kind: "branchDiff"; readonly branchName: string | null }
+  | { readonly kind: "lastCommit" }
 
 /** React-independent project state produced by session orchestration. */
 export type ProjectSessionProjection = {
@@ -78,6 +79,7 @@ type ProjectSessionDependencies = {
     localPath: string,
     branchName: Option.Option<string>,
   ) => Promise<LocalReviewTarget>
+  readonly resolveLastCommit: (localPath: string) => Promise<LocalReviewTarget>
   readonly resolveRepositoryComparison: (
     command: OpenRepositoryComparisonCommand,
   ) => Promise<ResolvedRepositoryComparison>
@@ -212,6 +214,11 @@ export class ProjectSession {
         repo.localPath,
         Option.fromNullishOr(intent.branchName),
       )
+      projection = projectProjection(repo, "files", { kind: "localDiff", target }, null)
+      reviewType = "local_diff"
+    } else if (intent.kind === "lastCommit") {
+      if (repo.localPath === null) throw new Error("The opened project has no local checkout.")
+      const target = await this.dependencies.resolveLastCommit(repo.localPath)
       projection = projectProjection(repo, "files", { kind: "localDiff", target }, null)
       reviewType = "local_diff"
     } else if (intent.kind === "pullRequest") {

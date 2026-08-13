@@ -869,6 +869,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         }
         return branch.target
       },
+      resolveLastCommit: async () => {
+        throw new Error("Last-commit review is unavailable in the demo fixture")
+      },
     },
     repositoryComparisons: {
       resolve: async () => {

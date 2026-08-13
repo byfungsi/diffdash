@@ -130,6 +130,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     scope.kind === "local"
       ? Match.valueTags(scope.target.comparison, {
           branch: (comparison) => comparison,
+          lastCommit: () => null,
           workingTree: () => null,
         })
       : null

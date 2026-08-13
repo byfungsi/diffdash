@@ -35,6 +35,14 @@ describe("parseCliNavigationCommand", () => {
       _tag: "openBranchDiff",
       branchName: "release/next",
     })
+    expect(parse(["last-commit"])).toMatchObject({
+      _tag: "openLastCommit",
+      localPath: "/workspace/repo",
+    })
+    expect(parse(["lc"])).toMatchObject({
+      _tag: "openLastCommit",
+      localPath: "/workspace/repo",
+    })
     expect(parse(["compare", "v6.0", "v6.1", "--repository=torvalds/linux"])).toMatchObject({
       _tag: "openRepositoryComparison",
       localPath: "/workspace/repo",
@@ -95,6 +103,10 @@ describe("parseCliNavigationCommand", () => {
       message: expect.stringContaining("Too many arguments"),
     })
     expect(parse(["repair", "extra"])).toMatchObject({
+      _tag: "error",
+      message: expect.stringContaining("Too many arguments"),
+    })
+    expect(parse(["last-commit", "extra"])).toMatchObject({
       _tag: "error",
       message: expect.stringContaining("Too many arguments"),
     })
