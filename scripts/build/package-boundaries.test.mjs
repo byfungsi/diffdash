@@ -125,7 +125,11 @@ const sourceFiles = (directory) =>
     .filter((file) => lstatSync(file).isFile())
     .toSorted()
 
-const workspaceImportPattern = /(?:from\s*|import\s*\()(["'])(@diffdash\/[^/"']+)(?:\/[^"']*)?\1/g
+const workspaceImportPattern =
+  /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)(["'])(@diffdash\/[^/"']+)(?:\/[^"']*)?\1/g
+
+const workspaceImports = (source) =>
+  [...source.matchAll(workspaceImportPattern)].map((match) => match[2])
 
 const exportedUnknownOutputPatterns = [
   /\bexport\s+(?:default\s+)?(?:async\s+)?function\s*([\w$]*)[^;{}]*?\)\s*:\s*[^;{=]*\bunknown\b[^;{=]*\s*\{/g,
@@ -165,6 +169,25 @@ test("exported unknown output detection distinguishes inputs from erased outputs
       export function erasedReturn(): unknown { return "value" }
     `),
     ["erasedValue", "erasedPromise", "erasedReturn"],
+  )
+})
+
+test("workspace import detection covers static, dynamic, side-effect, re-export, and CommonJS forms", () => {
+  assert.deepEqual(
+    workspaceImports(`
+      import { value } from "@diffdash/static/subpath"
+      import "@diffdash/side-effect"
+      export * from "@diffdash/re-export"
+      const dynamic = import("@diffdash/dynamic")
+      const commonJs = require("@diffdash/commonjs/subpath")
+    `),
+    [
+      "@diffdash/static",
+      "@diffdash/side-effect",
+      "@diffdash/re-export",
+      "@diffdash/dynamic",
+      "@diffdash/commonjs",
+    ],
   )
 })
 
@@ -232,8 +255,7 @@ test("source package imports follow the documented package dependency allowlist"
     for (const file of files.filter((candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate))) {
       const relativeFile = relative(root, file)
       const adapterDependencies = desktopErrorAdapterDependencies.get(relativeFile) ?? new Set()
-      for (const match of readFileSync(file, "utf8").matchAll(workspaceImportPattern)) {
-        const dependency = match[2]
+      for (const dependency of workspaceImports(readFileSync(file, "utf8"))) {
         assert.ok(
           allowedDependencies.has(dependency) || adapterDependencies.has(dependency),
           `${relativeFile} imports undocumented package dependency ${dependency}`,
@@ -244,9 +266,7 @@ test("source package imports follow the documented package dependency allowlist"
 
   for (const [file, dependencies] of desktopErrorAdapterDependencies) {
     const importedDependencies = new Set(
-      [...readFileSync(resolve(root, file), "utf8").matchAll(workspaceImportPattern)].map(
-        (match) => match[2],
-      ),
+      workspaceImports(readFileSync(resolve(root, file), "utf8")),
     )
     assert.ok(
       [...dependencies].every((dependency) => importedDependencies.has(dependency)),

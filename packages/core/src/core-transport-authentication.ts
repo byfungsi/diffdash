@@ -61,7 +61,11 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
             )
             if (!tokensEqual(Redacted.value(options.token), presentedToken)) return false
 
-            yield* lifecycle.awaitOwnershipAuthorization.pipe(Effect.orDie)
+            yield* lifecycle.awaitOwnershipAuthorization.pipe(
+              Effect.catchTag("CoreLifecycleTransitionError", (error) =>
+                error.from === "failed" ? Effect.void : Effect.die(error),
+              ),
+            )
             yield* Ref.set(boundClient, {
               clientId: request.client.id,
               healthCompleted: false,

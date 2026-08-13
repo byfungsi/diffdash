@@ -146,6 +146,19 @@ const makeTestLayer = (get: Effect.Effect<SharedAppState>) => {
 }
 
 describe("Core RPC server", () => {
+  it.effect("reports a failed lifecycle to the first authenticated health request", () =>
+    Effect.gen(function* () {
+      const lifecycle = yield* CoreLifecycle
+      yield* lifecycle.fail
+      const client = yield* RpcClient.make(CoreServerRpcs)
+
+      expect(yield* authenticated(client["Core.health"](request))).toEqual({
+        ...identity,
+        lifecycle: "failed",
+      })
+    }).pipe(Effect.provide(makeTestLayer(Effect.succeed(state)))),
+  )
+
   it.effect("requires health before ownership authorization", () =>
     Effect.gen(function* () {
       const client = yield* RpcClient.make(CoreServerRpcs)

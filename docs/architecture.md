@@ -53,12 +53,13 @@ demo and promotional output but is never shipped in the desktop application.
 - `@diffdash/domain` is the lowest product model layer and imports no platform or provider package.
 - `@diffdash/protocol` depends only on browser-safe domain contracts and Effect. It never imports
   Electron, Node, persistence, or a concrete provider.
-- `@diffdash/core-rpc` owns runtime-neutral native Effect RPC declarations for Core and the future
-  external-Core Electron gateway. Core is its only current consumer; the checkpoint that activates
-  external Core will add the desktop dependency and package-graph edge atomically. The contract
-  package depends only on approved domain contracts and Effect, and never imports renderer IPC,
-  host, persistence, settings, or runtime adapters. Effect owns RPC correlation and serialization;
-  DiffDash annotations add application identities, logical budgets, and lifecycle policy.
+- `@diffdash/core-rpc` owns runtime-neutral native Effect RPC declarations shared by Core and the
+  inactive external-Core Electron client. Desktop already owns that client dependency and
+  package-graph edge, while production continues to use embedded Core until atomic cutover. The
+  contract package depends only on approved domain contracts and Effect, and never imports renderer
+  IPC, host, persistence, settings, or runtime adapters. Effect owns RPC correlation and
+  serialization; DiffDash annotations add application identities, logical budgets, and lifecycle
+  policy.
 - `@diffdash/app` is browser-safe. Renderer code reaches privileged capabilities only through the
   typed protocol implemented by preload.
 - `@diffdash/process`, `@diffdash/settings`, and `@diffdash/persistence` own subprocess, JSON, and
