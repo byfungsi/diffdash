@@ -12,7 +12,7 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("dismissRepositoryBanner")()
   })
 
-  it("keeps file-tree selection current after navigating to a collapsed card", async () => {
+  it("re-navigates to a selected file after the user scrolls away", async () => {
     expect.hasAssertions()
     await appBrowserScenario("fileTreeSelection")()
   })

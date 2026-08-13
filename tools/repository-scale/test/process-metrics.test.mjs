@@ -1,0 +1,200 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+
+import {
+  classifyProcess,
+  evaluateSwitchMemoryPlateau,
+  measureProcessTree,
+  parseLinuxIo,
+  parseLinuxSmaps,
+  parseLinuxStatus,
+  parseProcessList,
+  validateSwitchReports,
+} from "../src/process-metrics.mjs"
+
+test("parses process lists and classifies DiffDash ownership", () => {
+  const processes = parseProcessList(`
+  100 1 2048 /Applications/DiffDash
+  101 100 1024 /Applications/DiffDash --type=renderer
+  102 100 512 diffdash-core
+  103 100 256 git diff
+  104 100 128 /Applications/DiffDash --type=utility --utility-sub-type=network.mojom.NetworkService
+`)
+  assert.equal(processes[0].rssBytes, 2_097_152)
+  assert.deepEqual(
+    processes.map((process) => classifyProcess(process, 100)),
+    ["electron", "renderer", "coreWorker", "child", "child"],
+  )
+})
+
+test("parses Linux memory and I/O counters", () => {
+  assert.deepEqual(parseLinuxStatus("VmRSS:\t120 kB\nRssAnon:\t80 kB\nVmSwap:\t20 kB\n"), {
+    privateBytes: 81_920,
+    rssBytes: 122_880,
+    swapBytes: 20_480,
+  })
+  assert.deepEqual(parseLinuxIo("read_bytes: 120\nwrite_bytes: 45\n"), {
+    readBytes: 120,
+    writeBytes: 45,
+  })
+  assert.deepEqual(parseLinuxSmaps("Private_Clean: 30 kB\nPrivate_Dirty: 50 kB\nSwap: 10 kB\n"), {
+    privateBytes: 81_920,
+    swapBytes: 10_240,
+  })
+})
+
+test("reports process peaks, I/O deltas, and a complete steady window", async () => {
+  const rss = [100, 110, 110, 111]
+  let index = 0
+  let currentTime = 0
+  const report = await measureProcessTree({
+    rootPid: 100,
+    durationMs: 3,
+    intervalMs: 1,
+    plateauWindowMs: 2,
+    plateauThreshold: 0.02,
+    capture: async () => {
+      const value = rss[Math.min(index, rss.length - 1)]
+      index += 1
+      return {
+        capturedAt: new Date(index * 1_000).toISOString(),
+        byRole: {
+          electron: {
+            rssBytes: value,
+            privateBytes: value - 10,
+            swapBytes: 0,
+            readBytes: 1,
+            writeBytes: 2,
+          },
+          renderer: {
+            rssBytes: 0,
+            privateBytes: null,
+            swapBytes: null,
+            readBytes: null,
+            writeBytes: null,
+          },
+          coreWorker: {
+            rssBytes: 0,
+            privateBytes: null,
+            swapBytes: null,
+            readBytes: null,
+            writeBytes: null,
+          },
+          child: {
+            rssBytes: 0,
+            privateBytes: null,
+            swapBytes: null,
+            readBytes: null,
+            writeBytes: null,
+          },
+        },
+        counters: [
+          {
+            pid: 100,
+            role: "electron",
+            readBytes: index * 10,
+            writeBytes: index * 5,
+          },
+        ],
+      }
+    },
+    now: () => currentTime,
+    wait: async (milliseconds) => {
+      currentTime += milliseconds
+    },
+  })
+
+  assert.equal(report.peaks.electron.rssBytes, 111)
+  assert.equal(report.peaks.electron.readBytes, 30)
+  assert.equal(report.peaks.electron.writeBytes, 15)
+  assert.equal(report.totalPeakRssBytes, 111)
+  assert.equal(report.totalFinalRssBytes, 111)
+  assert.equal(report.steadyWindow.reached, true)
+})
+
+test("does not report a steady window before the complete duration is observed", async () => {
+  let currentTime = 0
+  const report = await measureProcessTree({
+    rootPid: 100,
+    durationMs: 1,
+    intervalMs: 1,
+    plateauWindowMs: 2,
+    plateauThreshold: 0.05,
+    capture: async () => ({
+      capturedAt: new Date(currentTime).toISOString(),
+      byRole: Object.fromEntries(
+        ["electron", "renderer", "coreWorker", "child"].map((role) => [
+          role,
+          {
+            rssBytes: role === "electron" ? 100 : 0,
+            privateBytes: null,
+            swapBytes: null,
+            readBytes: null,
+            writeBytes: null,
+          },
+        ]),
+      ),
+      counters: [],
+    }),
+    now: () => currentTime,
+    wait: async (milliseconds) => {
+      currentTime += milliseconds
+    },
+  })
+
+  assert.equal(report.steadyWindow.reached, false)
+})
+
+test("evaluates ten switches with warm-up, absolute tolerance, and growth detection", () => {
+  const mebibyte = 1024 * 1024
+  const stable = [500, 600, 550, 520, 522, 519, 521, 520, 523, 521].map((totalFinalRssBytes) => ({
+    totalFinalRssBytes: totalFinalRssBytes * mebibyte,
+  }))
+  const stableEvaluation = evaluateSwitchMemoryPlateau(stable)
+  assert.equal(stableEvaluation.toleranceBytes, 32 * mebibyte)
+  assert.equal(stableEvaluation.passed, true)
+
+  const growing = [500, 600, 550, 520, 521, 522, 523, 524, 525, 526].map((totalFinalRssBytes) => ({
+    totalFinalRssBytes: totalFinalRssBytes * mebibyte,
+  }))
+  const growingEvaluation = evaluateSwitchMemoryPlateau(growing)
+  assert.equal(growingEvaluation.monotonicGrowth, true)
+  assert.equal(growingEvaluation.passed, false)
+  const growingWithPause = [500, 600, 550, 520, 521, 522, 522, 523, 524, 525].map(
+    (totalFinalRssBytes) => ({ totalFinalRssBytes: totalFinalRssBytes * mebibyte }),
+  )
+  assert.equal(evaluateSwitchMemoryPlateau(growingWithPause).monotonicGrowth, true)
+  assert.throws(() => evaluateSwitchMemoryPlateau(stable.slice(1)), /exactly ten switches/)
+})
+
+test("rejects stale, incomplete, and mixed switch reports", () => {
+  const reports = Array.from({ length: 10 }, (_, index) => ({
+    version: 1,
+    fixtureId: "linux-test",
+    session: "baseline",
+    switchIndex: index + 1,
+    platform: "linux",
+    totalFinalRssBytes: 500 * 1024 * 1024,
+    steadyWindow: { reached: true },
+  }))
+  assert.deepEqual(validateSwitchReports(reports, "baseline"), {
+    fixtureId: "linux-test",
+    platform: "linux",
+  })
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(5, { ...reports[5], steadyWindow: { reached: false } }),
+        "baseline",
+      ),
+    /Switch 6 did not reach/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(7, { ...reports[7], switchIndex: 9 }), "baseline"),
+    /Switch 8 has mismatched identity/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(9, { ...reports[9], platform: "darwin" }), "baseline"),
+    /same platform/,
+  )
+})
