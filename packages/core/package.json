@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/core.ts"
+    ".": "./src/core.ts",
+    "./e2e": "./src/e2e.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
@@ -13,6 +14,7 @@
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {
+    "@diffdash/agents": "workspace:*",
     "@diffdash/agent-provider": "workspace:*",
     "@diffdash/agent-provider-claude": "workspace:*",
     "@diffdash/agent-provider-codex": "workspace:*",
@@ -23,12 +25,11 @@
     "@diffdash/git-provider-fixture": "workspace:*",
     "@diffdash/git-provider-github": "workspace:*",
     "@diffdash/local-git": "workspace:*",
+    "@diffdash/mcp": "workspace:*",
     "@diffdash/persistence": "workspace:*",
     "@diffdash/process": "workspace:*",
     "@diffdash/protocol": "workspace:*",
-    "@diffdash/review-agent": "workspace:*",
     "@diffdash/settings": "workspace:*",
-    "@diffdash/walkthrough": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "posthog-node": "5.41.0"

@@ -1,9 +1,4 @@
-import type {
-  Appearance,
-  DarkTheme,
-  LightTheme,
-  ThemePreferences,
-} from "@diffdash/domain/ai-settings"
+import type { Appearance, ThemePreferences } from "@diffdash/domain/ai-settings"
 
 /** Browser color scheme used for native controls and luminance-dependent utilities. */
 export type ColorScheme = "light" | "dark"
@@ -57,15 +52,12 @@ export const resolveThemePreference = (
   systemColorScheme: ColorScheme,
 ): ResolvedTheme => {
   const colorScheme = resolveColorScheme(appearance, systemColorScheme)
-  return colorScheme === "light" ? resolveLightTheme(themes.light) : resolveDarkTheme(themes.dark)
+  if (colorScheme === "light") {
+    return themes.light === "diffdash" ? "diffdash-light" : themes.light
+  }
+  return themes.dark === "diffdash" ? "diffdash-dark" : themes.dark
 }
 
 /** Reads the browser's current system color scheme. */
 export const getSystemColorScheme = (): ColorScheme =>
   window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-
-const resolveLightTheme = (theme: LightTheme): ResolvedTheme =>
-  theme === "diffdash" ? "diffdash-light" : theme
-
-const resolveDarkTheme = (theme: DarkTheme): ResolvedTheme =>
-  theme === "diffdash" ? "diffdash-dark" : theme

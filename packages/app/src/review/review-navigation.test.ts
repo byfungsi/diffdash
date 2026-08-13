@@ -8,7 +8,7 @@ import {
   type ReviewNavigationOrigin,
   ReviewSnapshotAddress,
 } from "@diffdash/domain/review-navigation"
-import { Registry } from "@effect-atom/atom-react"
+import { AtomRegistry } from "effect/unstable/reactivity"
 import { transportError } from "@diffdash/protocol/transport-error"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -91,11 +91,11 @@ const fakeTimerScheduler = (): ReviewNavigationScheduler => ({
   },
 })
 
-const registries: Registry.Registry[] = []
+const registries: AtomRegistry.AtomRegistry[] = []
 const controllers: ReviewNavigatorController[] = []
 
 const makeController = (options?: ConstructorParameters<typeof ReviewNavigatorController>[1]) => {
-  const registry = Registry.make()
+  const registry = AtomRegistry.make()
   const controller = new ReviewNavigatorController(registry, options)
   registries.push(registry)
   controllers.push(controller)

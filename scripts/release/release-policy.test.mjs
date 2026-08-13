@@ -14,11 +14,13 @@ import {
   isReleaseTag,
   isReleaseVersion,
   isStableReleasePrefix,
+  normalizePublicBaseUrl,
   parseStableReleasePrefix,
   releaseTagForVersion,
   releaseVersionFromChangelogHeading,
   releaseVersionFromTag,
   releaseVersionFromVersionOrTag,
+  releasePrefixesToPrune,
   retainedReleasePrefixes,
   runWithRetries,
   selectReleaseArtifacts,
@@ -80,6 +82,27 @@ test("recognizes only stable numeric R2 release prefixes", () => {
   assert.equal(isStableReleasePrefix("releases/1.2.3/"), true)
   assert.equal(isStableReleasePrefix("releases/v1.2.3-beta.1/"), false)
   assert.equal(isStableReleasePrefix("releases/v1.2.3/assets/"), false)
+})
+
+test("normalizes valid public origins with the native URL parser", () => {
+  assert.equal(normalizePublicBaseUrl("download.example.test/"), "https://download.example.test")
+  assert.equal(
+    normalizePublicBaseUrl("https://download.example.test///"),
+    "https://download.example.test",
+  )
+  assert.equal(normalizePublicBaseUrl("http://localhost:8787"), "http://localhost:8787")
+  assert.equal(
+    normalizePublicBaseUrl("https://download.example.test:443"),
+    "https://download.example.test",
+  )
+  for (const value of [
+    "ftp://download.example.test",
+    "https://user@download.example.test",
+    "https://download.example.test/releases",
+    "https://download.example.test?channel=stable",
+  ]) {
+    assert.throws(() => normalizePublicBaseUrl(value), /HTTP\(S\) origin/u)
+  }
 })
 
 test("requires the release tag to match the package version", () => {
@@ -285,4 +308,24 @@ test("retains the promoted release and two newest other stable releases", () => 
     ),
     new Set(["releases/v0.3.1/", "releases/v0.4.0/", "releases/v0.3.0/"]),
   )
+})
+
+test("prunes abandoned, draft, deleted, and old numeric candidates without deleting protected releases", () => {
+  const prefixes = [
+    "releases/v0.2.0/",
+    "releases/v0.3.0/",
+    "releases/v0.3.1/",
+    "releases/v0.4.0/",
+    "releases/v0.5.0/",
+    "releases/v0.6.0/",
+    "releases/v0.7.0-beta.1/",
+    "releases/manual-upload/",
+  ]
+  const publishedTags = new Set(["v0.2.0", "v0.3.0", "v0.3.1", "v0.4.0"])
+
+  assert.deepEqual(releasePrefixesToPrune(prefixes, publishedTags, "v0.3.1"), [
+    "releases/v0.2.0/",
+    "releases/v0.5.0/",
+    "releases/v0.6.0/",
+  ])
 })

@@ -14,7 +14,7 @@ export const REVIEW_EXTENSION_TARGET_MAX_BYTES = 16 * 1_024
 
 /** A registered extension's stable namespace. */
 export const ReviewNavigationExtensionId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewNavigationExtensionId"),
 )
 
@@ -23,7 +23,7 @@ export type ReviewNavigationExtensionId = typeof ReviewNavigationExtensionId.Typ
 
 /** Monotonic identifier allocated by one review navigator. */
 export const ReviewNavigationRequestId = Schema.Int.pipe(
-  Schema.positive(),
+  Schema.check(Schema.isGreaterThan(0)),
   Schema.brand("ReviewNavigationRequestId"),
 )
 
@@ -42,9 +42,9 @@ export class ReviewSnapshotAddress extends Schema.Class<ReviewSnapshotAddress>(
 export class ReviewLinePoint extends Schema.Class<ReviewLinePoint>("ReviewLinePoint")({
   hunkId: ReviewHunkId,
   hunkFingerprint: ReviewHunkFingerprint,
-  side: Schema.Literal("old", "new"),
-  lineNumber: Schema.Int.pipe(Schema.nonNegative()),
-  column: Schema.optional(Schema.Int.pipe(Schema.nonNegative())),
+  side: Schema.Literals(["old", "new"]),
+  lineNumber: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  column: Schema.optional(Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
 }) {}
 
 /** Navigates to one file card. */
@@ -85,12 +85,14 @@ class UncheckedRangeReviewNavigationTarget extends Schema.TaggedClass<UncheckedR
 
 /** Navigates to one ordered, single-file parsed range. */
 export const RangeReviewNavigationTarget = UncheckedRangeReviewNavigationTarget.pipe(
-  Schema.filter(
-    ({ start, end }) =>
-      start.hunkId !== end.hunkId ||
-      start.lineNumber < end.lineNumber ||
-      (start.lineNumber === end.lineNumber && (start.column ?? 0) <= (end.column ?? 0)),
-    { message: () => "Range endpoints must be ordered" },
+  Schema.check(
+    Schema.makeFilter(
+      ({ start, end }) =>
+        start.hunkId !== end.hunkId ||
+        start.lineNumber < end.lineNumber ||
+        (start.lineNumber === end.lineNumber && (start.column ?? 0) <= (end.column ?? 0)),
+      { message: "Range endpoints must be ordered" },
+    ),
   ),
 )
 
@@ -113,17 +115,26 @@ export type ReviewNavigationJsonValue =
   | { readonly [key: string]: ReviewNavigationJsonValue }
 
 /** Runtime schema for JSON-only extension payloads. */
-export const ReviewNavigationJsonValue: Schema.Schema<ReviewNavigationJsonValue> = Schema.suspend(
+export const ReviewNavigationJsonValue: Schema.Codec<ReviewNavigationJsonValue> = Schema.suspend(
   () =>
-    Schema.Union(
+    Schema.Union([
       Schema.Null,
       Schema.Boolean,
       Schema.String,
-      Schema.JsonNumber,
+      Schema.Finite,
       Schema.Array(ReviewNavigationJsonValue),
-      Schema.Record({ key: Schema.String, value: ReviewNavigationJsonValue }),
-    ),
+      Schema.Record(Schema.String, ReviewNavigationJsonValue),
+    ]),
 )
+
+/** Extension-owned identity for one semantic navigation target. */
+export const ReviewNavigationExtensionTargetId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewNavigationExtensionTargetId"),
+)
+
+/** Extension-owned identity for one semantic navigation target. */
+export type ReviewNavigationExtensionTargetId = typeof ReviewNavigationExtensionTargetId.Type
 
 class UncheckedExtensionReviewNavigationTarget extends Schema.TaggedClass<UncheckedExtensionReviewNavigationTarget>()(
   "extension",
@@ -131,20 +142,22 @@ class UncheckedExtensionReviewNavigationTarget extends Schema.TaggedClass<Unchec
     extensionId: ReviewNavigationExtensionId,
     targetType: Schema.NonEmptyString,
     targetId: Schema.NonEmptyString,
-    payloadVersion: Schema.Int.pipe(Schema.nonNegative()),
+    payloadVersion: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
     payload: ReviewNavigationJsonValue,
   },
 ) {}
 
 /** Bounded, namespaced extension-owned semantic target. */
 export const ExtensionReviewNavigationTarget = UncheckedExtensionReviewNavigationTarget.pipe(
-  Schema.filter(
-    ({ payload }) =>
-      new TextEncoder().encode(JSON.stringify(payload)).byteLength <=
-      REVIEW_EXTENSION_TARGET_MAX_BYTES,
-    {
-      message: () => `Extension target payload exceeds ${REVIEW_EXTENSION_TARGET_MAX_BYTES} bytes`,
-    },
+  Schema.check(
+    Schema.makeFilter(
+      ({ payload }) =>
+        new TextEncoder().encode(JSON.stringify(payload)).byteLength <=
+        REVIEW_EXTENSION_TARGET_MAX_BYTES,
+      {
+        message: `Extension target payload exceeds ${REVIEW_EXTENSION_TARGET_MAX_BYTES} bytes`,
+      },
+    ),
   ),
 )
 
@@ -152,14 +165,14 @@ export const ExtensionReviewNavigationTarget = UncheckedExtensionReviewNavigatio
 export type ExtensionReviewNavigationTarget = typeof ExtensionReviewNavigationTarget.Type
 
 /** Every selector-free target supported by a version 1 review location. */
-export const ReviewNavigationTarget = Schema.Union(
+export const ReviewNavigationTarget = Schema.Union([
   FileReviewNavigationTarget,
   HunkReviewNavigationTarget,
   LineReviewNavigationTarget,
   RangeReviewNavigationTarget,
   ThreadReviewNavigationTarget,
   ExtensionReviewNavigationTarget,
-)
+])
 
 /** Every selector-free target supported by a version 1 review location. */
 export type ReviewNavigationTarget = typeof ReviewNavigationTarget.Type
@@ -175,14 +188,14 @@ export class ReviewLocationV1 extends Schema.Class<ReviewLocationV1>("ReviewLoca
 export class ReviewNavigationBehavior extends Schema.Class<ReviewNavigationBehavior>(
   "ReviewNavigationBehavior",
 )({
-  alignment: Schema.Literal("start", "center", "nearest"),
-  focus: Schema.Literal("preserve", "target"),
-  selection: Schema.Literal("preserve", "update"),
-  visibility: Schema.Literal("respect-current", "temporarily-reveal"),
+  alignment: Schema.Literals(["start", "center", "nearest"]),
+  focus: Schema.Literals(["preserve", "target"]),
+  selection: Schema.Literals(["preserve", "update"]),
+  visibility: Schema.Literals(["respect-current", "temporarily-reveal"]),
 }) {}
 
 /** User surface that originated a review navigation request. */
-export const ReviewNavigationOrigin = Schema.Literal(
+export const ReviewNavigationOrigin = Schema.Literals([
   "file-tree",
   "walkthrough",
   "search-preview",
@@ -190,7 +203,7 @@ export const ReviewNavigationOrigin = Schema.Literal(
   "thread-detail",
   "command",
   "extension",
-)
+])
 
 /** User surface that originated a review navigation request. */
 export type ReviewNavigationOrigin = typeof ReviewNavigationOrigin.Type
@@ -205,7 +218,7 @@ export class ReviewNavigationInput extends Schema.Class<ReviewNavigationInput>(
 }) {}
 
 /** Internal execution phase exposed through its privacy-safe public projection. */
-export const ReviewNavigationPhase = Schema.Literal(
+export const ReviewNavigationPhase = Schema.Literals([
   "validating",
   "resolving",
   "loading-resource",
@@ -215,26 +228,26 @@ export const ReviewNavigationPhase = Schema.Literal(
   "activating-window",
   "focusing",
   "verifying",
-)
+])
 
 /** Internal execution phase exposed through its privacy-safe public projection. */
 export type ReviewNavigationPhase = typeof ReviewNavigationPhase.Type
 
 /** Privacy-safe target category exposed in public status. */
-export const ReviewNavigationTargetKind = Schema.Literal(
+export const ReviewNavigationTargetKind = Schema.Literals([
   "file",
   "hunk",
   "line",
   "range",
   "thread",
   "extension",
-)
+])
 
 /** Privacy-safe target category exposed in public status. */
 export type ReviewNavigationTargetKind = typeof ReviewNavigationTargetKind.Type
 
 /** Deterministic reason a semantic location cannot execute locally. */
-export const ReviewNavigationUnavailableReason = Schema.Literal(
+export const ReviewNavigationUnavailableReason = Schema.Literals([
   "invalidLocation",
   "unsupportedVersion",
   "noActiveReview",
@@ -247,13 +260,13 @@ export const ReviewNavigationUnavailableReason = Schema.Literal(
   "extensionTargetInvalid",
   "notFocusable",
   "fileContentUnavailable",
-)
+])
 
 /** Deterministic reason a semantic location cannot execute locally. */
 export type ReviewNavigationUnavailableReason = typeof ReviewNavigationUnavailableReason.Type
 
 /** Operational reason an otherwise compatible request could not complete. */
-export const ReviewNavigationFailureReason = Schema.Literal(
+export const ReviewNavigationFailureReason = Schema.Literals([
   "snapshotLoadFailed",
   "fileLoadFailed",
   "extensionResolveFailed",
@@ -262,7 +275,7 @@ export const ReviewNavigationFailureReason = Schema.Literal(
   "windowActivationFailed",
   "focusFailed",
   "deadlineExceeded",
-)
+])
 
 /** Operational reason an otherwise compatible request could not complete. */
 export type ReviewNavigationFailureReason = typeof ReviewNavigationFailureReason.Type
@@ -272,7 +285,7 @@ export class CompletedReviewNavigationOutcome extends Schema.TaggedClass<Complet
   "completed",
   {
     requestId: ReviewNavigationRequestId,
-    achieved: Schema.Literal("revealed", "focused"),
+    achieved: Schema.Literals(["revealed", "focused"]),
   },
 ) {}
 
@@ -290,7 +303,7 @@ export class CancelledReviewNavigationOutcome extends Schema.TaggedClass<Cancell
   "cancelled",
   {
     requestId: ReviewNavigationRequestId,
-    reason: Schema.Literal("caller", "user", "review-changed", "bridge-lost"),
+    reason: Schema.Literals(["caller", "user", "review-changed", "bridge-lost"]),
   },
 ) {}
 
@@ -315,13 +328,13 @@ export class FailedReviewNavigationOutcome extends Schema.TaggedClass<FailedRevi
 ) {}
 
 /** Exactly one terminal result returned for every accepted request. */
-export const ReviewNavigationOutcome = Schema.Union(
+export const ReviewNavigationOutcome = Schema.Union([
   CompletedReviewNavigationOutcome,
   SupersededReviewNavigationOutcome,
   CancelledReviewNavigationOutcome,
   UnavailableReviewNavigationOutcome,
   FailedReviewNavigationOutcome,
-)
+])
 
 /** Exactly one terminal result returned for every accepted request. */
 export type ReviewNavigationOutcome = typeof ReviewNavigationOutcome.Type
@@ -348,10 +361,10 @@ export class ActiveReviewNavigationStatus extends Schema.TaggedClass<ActiveRevie
 ) {}
 
 /** Read-only public projection of the local review navigation machine. */
-export const ReviewNavigationStatus = Schema.Union(
+export const ReviewNavigationStatus = Schema.Union([
   IdleReviewNavigationStatus,
   ActiveReviewNavigationStatus,
-)
+])
 
 /** Read-only public projection of the local review navigation machine. */
 export type ReviewNavigationStatus = typeof ReviewNavigationStatus.Type

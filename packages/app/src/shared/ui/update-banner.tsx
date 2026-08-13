@@ -1,5 +1,6 @@
 import { Download, Loader2, RefreshCw, RotateCcw, X } from "lucide-react"
 import { useState } from "react"
+import { Match } from "effect"
 
 import { Button } from "@/shared/ui/button"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
@@ -17,15 +18,13 @@ export const UpdateBanner = ({
   readonly onRestart: () => void
 }) => {
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
-  const version = "version" in state ? state.version : null
+  const projection = updateBannerProjection(state)
 
-  if (state["_tag"] === "idle" || state["_tag"] === "unsupported") return null
   if (
-    (state["_tag"] === "available" || state["_tag"] === "downloaded") &&
-    dismissedVersion === state.version
+    projection === null ||
+    (projection.dismissalKey !== null && dismissedVersion === projection.dismissalKey)
   )
     return null
-  if (state["_tag"] === "error" && dismissedVersion === state.currentVersion) return null
 
   return (
     <aside
@@ -34,49 +33,47 @@ export const UpdateBanner = ({
     >
       <div className="flex items-start gap-3">
         <div className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg">
-          {state["_tag"] === "available" ? <Download className="size-4" /> : null}
-          {state["_tag"] === "checking" || state["_tag"] === "downloading" ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : null}
-          {state["_tag"] === "downloaded" ? <RotateCcw className="size-4" /> : null}
-          {state["_tag"] === "error" ? <RefreshCw className="size-4" /> : null}
+          {projection.icon === "download" ? <Download className="size-4" /> : null}
+          {projection.icon === "loading" ? <Loader2 className="size-4 animate-spin" /> : null}
+          {projection.icon === "restart" ? <RotateCcw className="size-4" /> : null}
+          {projection.icon === "retry" ? <RefreshCw className="size-4" /> : null}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">{updateTitle(state)}</div>
-          <p className="text-muted-foreground mt-1 text-xs leading-5">{updateDetail(state)}</p>
+          <div className="text-sm font-semibold">{projection.title}</div>
+          <p className="text-muted-foreground mt-1 text-xs leading-5">{projection.detail}</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {state["_tag"] === "available" ? (
+            {projection.action === "download" ? (
               <Button size="sm" onClick={onDownload}>
                 Download update
               </Button>
             ) : null}
-            {state["_tag"] === "downloaded" ? (
+            {projection.action === "restart" ? (
               <Button size="sm" onClick={onRestart}>
                 Restart and update
               </Button>
             ) : null}
-            {state["_tag"] === "downloaded" ? (
+            {projection.action === "restart" ? (
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setDismissedVersion(state.version)}
+                onClick={() => setDismissedVersion(projection.dismissalKey)}
               >
                 Later
               </Button>
             ) : null}
-            {state["_tag"] === "error" ? (
+            {projection.action === "retry" ? (
               <Button size="sm" variant="outline" onClick={onCheck}>
                 Try again
               </Button>
             ) : null}
           </div>
         </div>
-        {state["_tag"] === "available" || state["_tag"] === "error" ? (
+        {projection.dismissible ? (
           <Button
             size="icon-xs"
             variant="ghost"
             aria-label="Dismiss update notice"
-            onClick={() => setDismissedVersion(version ?? state.currentVersion)}
+            onClick={() => setDismissedVersion(projection.dismissalKey)}
           >
             <X className="size-3.5" />
           </Button>
@@ -86,20 +83,63 @@ export const UpdateBanner = ({
   )
 }
 
-const updateTitle = (state: AppUpdateState) => {
-  if (state["_tag"] === "checking") return "Checking for updates"
-  if (state["_tag"] === "available") return `DiffDash v${state.version} is available`
-  if (state["_tag"] === "downloading") return `Downloading DiffDash v${state.version}`
-  if (state["_tag"] === "downloaded") return `DiffDash v${state.version} is ready`
-  if (state["_tag"] === "error") return "Update failed"
-  return "DiffDash updates"
+type UpdateBannerProjection = {
+  readonly action: "download" | "restart" | "retry" | null
+  readonly detail: string
+  readonly dismissible: boolean
+  readonly dismissalKey: string | null
+  readonly icon: "download" | "loading" | "restart" | "retry"
+  readonly title: string
 }
 
-const updateDetail = (state: AppUpdateState) => {
-  if (state["_tag"] === "checking") return "Looking for a newer stable release."
-  if (state["_tag"] === "available") return "Download it now and choose when to restart."
-  if (state["_tag"] === "downloading") return `${Math.round(state.percent)}% downloaded.`
-  if (state["_tag"] === "downloaded") return "Restart when you are ready to install the update."
-  if (state["_tag"] === "error") return state.message
-  return ""
+const updateBannerProjection = (state: AppUpdateState): UpdateBannerProjection | null => {
+  return Match.valueTags(state, {
+    idle: () => null,
+    unsupported: () => null,
+    checking: () =>
+      ({
+        action: null,
+        detail: "Looking for a newer stable release.",
+        dismissible: false,
+        dismissalKey: null,
+        icon: "loading",
+        title: "Checking for updates",
+      }) as const,
+    available: (available) =>
+      ({
+        action: "download",
+        detail: "Download it now and choose when to restart.",
+        dismissible: true,
+        dismissalKey: available.version,
+        icon: "download",
+        title: `DiffDash v${available.version} is available`,
+      }) as const,
+    downloading: (downloading) =>
+      ({
+        action: null,
+        detail: `${Math.round(downloading.percent)}% downloaded.`,
+        dismissible: false,
+        dismissalKey: null,
+        icon: "loading",
+        title: `Downloading DiffDash v${downloading.version}`,
+      }) as const,
+    downloaded: (downloaded) =>
+      ({
+        action: "restart",
+        detail: "Restart when you are ready to install the update.",
+        dismissible: false,
+        dismissalKey: downloaded.version,
+        icon: "restart",
+        title: `DiffDash v${downloaded.version} is ready`,
+      }) as const,
+    error: (failed) =>
+      ({
+        action: "retry",
+        detail: failed.message,
+        dismissible: true,
+        dismissalKey: failed.currentVersion,
+        icon: "retry",
+        title: "Update failed",
+      }) as const,
+  })
 }

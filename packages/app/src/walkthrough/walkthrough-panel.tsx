@@ -7,6 +7,7 @@ import {
   summarizeWalkthroughHunksByPath,
   type Walkthrough,
   type WalkthroughHunkDigest,
+  type WalkthroughHunkId,
   type WalkthroughRisk,
 } from "@diffdash/domain/walkthrough"
 import { Check, Copy, FolderGit2, GitBranch, GitPullRequest, Sparkles, Star } from "lucide-react"
@@ -31,7 +32,7 @@ export type WalkthroughReviewStep = {
   readonly title: string
   readonly summary: string
   readonly risk: WalkthroughRisk
-  readonly hunkIds: readonly string[]
+  readonly hunkIds: readonly WalkthroughHunkId[]
   readonly chapterTitle: string | null
 }
 

@@ -1,4 +1,7 @@
 import {
+  AIAgentSelection,
+  AIModelId,
+  AIProviderId,
   AISettings,
   CodeThemePreferences,
   DEFAULT_AI_SETTINGS,
@@ -17,7 +20,17 @@ const ignoreRejection = (_error: unknown): void => undefined
 
 describe("settings mutation coordinator", () => {
   it("restores nested settings classes after an Electron structured clone", () => {
-    const cloned = structuredClone(DEFAULT_AI_SETTINGS)
+    const settings = AISettings.make({
+      ...DEFAULT_AI_SETTINGS,
+      selections: {
+        ...DEFAULT_AI_SETTINGS.selections,
+        "review-thread": AIAgentSelection.cases.Pinned.make({
+          providerId: AIProviderId.make("future-provider"),
+          modelId: AIModelId.make("future-model"),
+        }),
+      },
+    })
+    const cloned = structuredClone(settings)
 
     expect(cloned.layout).not.toBeInstanceOf(RendererLayoutSettings)
     const parsed = parseRendererSettings(cloned)
@@ -27,6 +40,11 @@ describe("settings mutation coordinator", () => {
     expect(parsed.codeThemes).toBeInstanceOf(CodeThemePreferences)
     expect(parsed.layout).toBeInstanceOf(RendererLayoutSettings)
     expect(parsed.layout.review).toBeInstanceOf(ReviewPaneSettings)
+    expect(parsed.selections["review-thread"]).toEqual({
+      _tag: "Pinned",
+      providerId: "future-provider",
+      modelId: "future-model",
+    })
   })
 
   it("restores Catppuccin selections from an Electron structured clone", () => {

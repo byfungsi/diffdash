@@ -1,4 +1,6 @@
-import type { ReviewViewedFileWrite } from "./review-source-operations"
+import type { ReviewViewedFileWrite } from "@/platform/review-source-operations"
+import type { TransportError } from "@diffdash/protocol/transport-error"
+import { rendererTransportError } from "@/shared/errors"
 
 /** Optimistic UI state changed by one viewed-file mutation. */
 export type ViewedFileMutationSnapshot = {
@@ -18,7 +20,7 @@ type ViewedFileMutationDependencies = {
   readonly write: (write: ReviewViewedFileWrite) => Promise<void>
   readonly onOptimistic: (mutation: ViewedFileMutation) => void
   readonly onRollback: (reviewKey: string, snapshot: ViewedFileMutationSnapshot) => void
-  readonly onError: (write: ReviewViewedFileWrite, error: unknown) => void
+  readonly onError: (write: ReviewViewedFileWrite, error: TransportError) => void
 }
 
 /** Ordered and coalescing viewed-file mutation API. */
@@ -76,7 +78,7 @@ export const createViewedFileMutationCoordinator = (
       } catch (error) {
         if (versions.get(reviewKey) === mutation.version) {
           dependencies.onRollback(reviewKey, confirmed.get(reviewKey) ?? mutation.previous)
-          dependencies.onError(mutation.write, error)
+          dependencies.onError(mutation.write, rendererTransportError(error, "viewedFiles:set"))
         }
       }
     }

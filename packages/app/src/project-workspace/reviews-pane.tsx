@@ -1,6 +1,7 @@
 import type { HostedReviewSummary } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import type { Repo } from "@diffdash/domain/repository"
+import { Match } from "effect"
 import { AlertTriangle, GitBranch, GitPullRequest, Loader2, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -11,7 +12,6 @@ import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
 
-import { matchRibbonLifecycle } from "./ribbon-lifecycle"
 import {
   projectReviewsLifecycle,
   type HostedReviewsLifecycle,
@@ -44,7 +44,7 @@ export const ReviewsPane = ({
       onSelect={onSelect}
     />
   )
-  const content = matchRibbonLifecycle(lifecycle, {
+  const content = Match.valueTags(lifecycle, {
     loading: () => sources,
     ready: () => sources,
     empty: () => (
@@ -118,7 +118,7 @@ export const ReviewsPane = ({
         <h2 className="text-caption min-w-0 flex-1 truncate font-semibold tracking-wide uppercase">
           Reviews
         </h2>
-        {repo.provider === "local" ? null : (
+        {repo.hostedLocator === null ? null : (
           <Button
             size="icon-xs"
             variant="ghost"
@@ -179,21 +179,28 @@ const renderLocalLifecycle = (
   onRefresh: () => void,
   onSelect: (target: SelectedReviewTarget) => void,
 ) =>
-  matchRibbonLifecycle(lifecycle, {
+  Match.valueTags(lifecycle, {
     loading: () => localReviewContent(repo, "Checking working tree...", true, null, null, onSelect),
-    ready: ({ data, refreshing }) =>
+    ready: ({ data, refresh }) =>
       localReviewContent(
         repo,
         data.files.length === 0
           ? "Clean working tree"
           : `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
-        refreshing,
+        refresh === "refreshing",
         null,
         null,
         onSelect,
       ),
-    empty: ({ refreshing }) =>
-      localReviewContent(repo, "Clean working tree", refreshing, null, null, onSelect),
+    empty: ({ refresh }) =>
+      localReviewContent(
+        repo,
+        "Clean working tree",
+        refresh === "refreshing",
+        null,
+        null,
+        onSelect,
+      ),
     unavailable: ({ reason }) => <SourceMessage>{reason}</SourceMessage>,
     failure: ({ error }) =>
       localReviewContent(
@@ -204,22 +211,22 @@ const renderLocalLifecycle = (
         onRefresh,
         onSelect,
       ),
-    stale: ({ data, reason, refreshing }) =>
+    stale: ({ data, reason, refresh }) =>
       localReviewContent(
         repo,
         `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
-        refreshing,
+        refresh === "refreshing",
         reason,
         onRefresh,
         onSelect,
       ),
     invalid: ({ reason }) =>
       localReviewContent(repo, "Working tree status invalid", false, reason, null, onSelect),
-    degraded: ({ data, issues, refreshing }) =>
+    degraded: ({ data, issues, refresh }) =>
       localReviewContent(
         repo,
         `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
-        refreshing,
+        refresh === "refreshing",
         issues.join(" "),
         onRefresh,
         onSelect,
@@ -275,7 +282,7 @@ const renderHostedLifecycle = (
   lifecycle: HostedReviewsLifecycle,
   onSelect: (target: SelectedReviewTarget) => void,
 ) =>
-  matchRibbonLifecycle(lifecycle, {
+  Match.valueTags(lifecycle, {
     loading: () => (
       <ProjectWorkspaceStatePanel
         announcement="loading"
@@ -284,12 +291,12 @@ const renderHostedLifecycle = (
         tone="neutral"
       />
     ),
-    ready: ({ data, refreshing }) => (
-      <HostedReviewList reviews={data} refreshing={refreshing} onSelect={onSelect} />
+    ready: ({ data, refresh }) => (
+      <HostedReviewList reviews={data} refreshing={refresh === "refreshing"} onSelect={onSelect} />
     ),
-    empty: ({ refreshing }) => (
+    empty: ({ refresh }) => (
       <SourceMessage>
-        {refreshing ? "Refreshing pull requests..." : "No open pull requests."}
+        {refresh === "refreshing" ? "Refreshing pull requests..." : "No open pull requests."}
       </SourceMessage>
     ),
     unavailable: ({ reason }) => <SourceMessage>{reason}</SourceMessage>,
@@ -301,10 +308,14 @@ const renderHostedLifecycle = (
         tone="danger"
       />
     ),
-    stale: ({ data, reason, refreshing }) => (
+    stale: ({ data, reason, refresh }) => (
       <div className="space-y-2">
         <SourceWarning>{reason}</SourceWarning>
-        <HostedReviewList reviews={data} refreshing={refreshing} onSelect={onSelect} />
+        <HostedReviewList
+          reviews={data}
+          refreshing={refresh === "refreshing"}
+          onSelect={onSelect}
+        />
       </div>
     ),
     invalid: ({ reason }) => (
@@ -315,10 +326,14 @@ const renderHostedLifecycle = (
         tone="danger"
       />
     ),
-    degraded: ({ data, issues, refreshing }) => (
+    degraded: ({ data, issues, refresh }) => (
       <div className="space-y-2">
         <SourceWarning>{issues.join(" ")}</SourceWarning>
-        <HostedReviewList reviews={data} refreshing={refreshing} onSelect={onSelect} />
+        <HostedReviewList
+          reviews={data}
+          refreshing={refresh === "refreshing"}
+          onSelect={onSelect}
+        />
       </div>
     ),
   })

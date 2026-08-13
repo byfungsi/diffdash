@@ -14,6 +14,7 @@
     "@diffdash/agent-provider-fixture",
     "@diffdash/agent-provider-opencode",
     "@diffdash/app",
+    "@diffdash/agents",
     "@diffdash/domain",
     "@diffdash/download-worker",
     "@diffdash/e2e",
@@ -24,9 +25,7 @@
     "@diffdash/persistence",
     "@diffdash/process",
     "@diffdash/protocol",
-    "@diffdash/review-agent",
     "@diffdash/settings",
-    "@diffdash/walkthrough",
     "@diffdash/web",
     "@diffdash/demo",
     "@diffdash/demo-video"

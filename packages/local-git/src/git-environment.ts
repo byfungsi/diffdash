@@ -21,10 +21,3 @@ export const gitProcessRequest = (
     ...options,
     unsetEnv: [...REPOSITORY_SCOPED_GIT_ENV, ...(options.unsetEnv ?? [])],
   })
-
-/** Copies an environment without variables that redirect Git to the parent's repository. */
-export const sanitizedGitEnvironment = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
-  const sanitized = { ...environment }
-  for (const key of REPOSITORY_SCOPED_GIT_ENV) delete sanitized[key]
-  return sanitized
-}

@@ -1,5 +1,5 @@
-import { Atom } from "@effect-atom/atom-react"
-import { Effect, Schema } from "effect"
+import { Effect, Option } from "effect"
+import { Atom } from "effect/unstable/reactivity"
 
 import {
   type GitProviderDescriptor,
@@ -9,70 +9,85 @@ import {
 import type { RepositorySearchScope } from "@diffdash/domain/repository"
 import { type Repo } from "@diffdash/domain/repository"
 import { HostedProviderRequest, HostedRepositorySearchRequest } from "@diffdash/protocol/hosted-git"
-import { fetchEffect, fetchSchemaEffect } from "@/shared/effect-api"
+import { rendererRuntime } from "@/platform/renderer-runtime"
+import { Repositories } from "@/platform/repositories"
 import { makeSchemaAtomKeyCodec } from "@/shared/schema-atom-key"
+
+const EMPTY_REPOS: readonly Repo[] = []
+const EMPTY_PROVIDERS: readonly GitProviderDescriptor[] = []
+const EMPTY_HOSTED_REPOSITORIES: readonly HostedRepository[] = []
+const EMPTY_SEARCH_SCOPES: readonly RepositorySearchScope[] = []
 
 const remoteSearchAtomKeyCodec = makeSchemaAtomKeyCodec(HostedRepositorySearchRequest)
 
 /** All repositories known to the renderer. */
-export const repositoriesAtom = Atom.make(
-  fetchEffect(() => window.diffDash.repositories.list()),
-  {
-    initialValue: [] as readonly Repo[],
-  },
-).pipe(Atom.keepAlive)
+export const repositoriesAtom = rendererRuntime
+  .atom(
+    Effect.gen(function* () {
+      const repositories = yield* Repositories
+      return yield* repositories.list(Option.none())
+    }),
+    {
+      initialValue: EMPTY_REPOS,
+    },
+  )
+  .pipe(Atom.keepAlive)
 
 /** Registered hosted Git providers. */
-export const providersAtom = Atom.make(
-  fetchEffect(() => window.diffDash.providers.list()),
-  {
-    initialValue: [] as readonly GitProviderDescriptor[],
-  },
-).pipe(Atom.keepAlive)
+export const providersAtom = rendererRuntime
+  .atom(
+    Effect.gen(function* () {
+      const repositories = yield* Repositories
+      return yield* repositories.listProviders()
+    }),
+    {
+      initialValue: EMPTY_PROVIDERS,
+    },
+  )
+  .pipe(Atom.keepAlive)
 
 /** Locally persisted repository search. */
 export const repositorySearchAtom = Atom.family((query: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     query.length === 0
-      ? Effect.succeed([] as readonly Repo[])
-      : fetchEffect(() => window.diffDash.repositories.list(query)),
-    { initialValue: [] as readonly Repo[] },
+      ? Effect.succeed(EMPTY_REPOS)
+      : Effect.gen(function* () {
+          const repositories = yield* Repositories
+          return yield* repositories.list(Option.some(query))
+        }),
+    { initialValue: EMPTY_REPOS },
   ),
 )
 
 /** Provider-backed repository search. */
 export const remoteRepositorySearchAtom = Atom.family((key: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     Effect.gen(function* () {
-      const request = parseRemoteSearchAtomKey(key)
+      const request = key.length === 0 ? null : remoteSearchAtomKeyCodec.decode(key)
       if (request === null || request.query.length === 0) {
-        return [] as readonly HostedRepository[]
+        return EMPTY_HOSTED_REPOSITORIES
       }
-      return yield* fetchSchemaEffect(Schema.Array(HostedRepository), () =>
-        window.diffDash.hostedRepositories.searchRepositories(request),
-      )
+      const repositories = yield* Repositories
+      return yield* repositories.searchHosted(request)
     }),
-    { initialValue: [] as readonly HostedRepository[] },
+    { initialValue: EMPTY_HOSTED_REPOSITORIES },
   ),
 )
 
 /** Search scopes available for one provider. */
 export const searchScopesAtom = Atom.family((providerId: string) =>
-  Atom.make(
+  rendererRuntime.atom(
     providerId.length === 0
-      ? Effect.succeed([] as readonly RepositorySearchScope[])
-      : fetchEffect(() =>
-          window.diffDash.hostedRepositories.listSearchScopes(
+      ? Effect.succeed(EMPTY_SEARCH_SCOPES)
+      : Effect.gen(function* () {
+          const repositories = yield* Repositories
+          return yield* repositories.listSearchScopes(
             HostedProviderRequest.make({ providerId: GitProviderId.make(providerId) }),
-          ),
-        ),
-    { initialValue: [] as readonly RepositorySearchScope[] },
+          )
+        }),
+    { initialValue: EMPTY_SEARCH_SCOPES },
   ),
 )
-
-/** Applies the selected owner scope to local bookmark search. */
-export const scopedLocalSearchQuery = (query: string, scope: string | null) =>
-  scope === null ? query : `${scope}/${query}`
 
 /** Stable key for provider repository search atoms. */
 export const remoteSearchAtomKey = (
@@ -80,5 +95,3 @@ export const remoteSearchAtomKey = (
   query: string,
   owners: readonly string[],
 ) => remoteSearchAtomKeyCodec.encode({ providerId, query, namespaces: owners })
-
-const parseRemoteSearchAtomKey = remoteSearchAtomKeyCodec.decode

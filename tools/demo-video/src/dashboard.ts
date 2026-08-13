@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, relative } from "node:path"
 
 import { demoOutputRoot } from "./environment"
+import { escapeHtml } from "./html"
 import { assertDemoSlug, resolveContainedPath } from "./paths"
 
 const mediaTypes = new Map([
@@ -218,15 +219,3 @@ const dashboardHtml = (
   )}</aside><main><header class="top"><h1 id="title">Select a recording</h1></header><section class="stage"><video id="player" controls preload="metadata"></video></section></main><script>
 const items=[...document.querySelectorAll('.item')],player=document.querySelector('#player'),title=document.querySelector('#title');function select(item){items.forEach(current=>current.classList.toggle('active',current===item));player.src=item.dataset.source;title.textContent=item.dataset.title}items.forEach(item=>item.addEventListener('click',()=>select(item)));if(items[0])select(items[0]);
 </script></body></html>`
-
-const escapeHtml = (value: string) =>
-  value.replace(/[&<>"']/gu, (character) => {
-    const entities: Readonly<Record<string, string>> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    }
-    return entities[character] ?? character
-  })

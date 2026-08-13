@@ -1,12 +1,9 @@
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
 import { parseCreateReleaseTagArguments } from "./release-arguments.mjs"
-import { releaseTagForVersion } from "./release-policy.mjs"
+import { deriveReleaseContext } from "./release-context.mjs"
 
 parseCreateReleaseTagArguments()
-const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
-const version = packageJson.version
-const tag = releaseTagForVersion(version)
+const { tag } = deriveReleaseContext({ commitRef: "HEAD" })
 const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" })
 
 if (status.trim().length > 0) {

@@ -6,6 +6,7 @@ import {
   makeHostedRepositoryKey,
   makeHostedReviewKey,
 } from "@diffdash/domain/git-provider"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { GitProviderRegistration } from "./git-provider"
 
 /** Shared fixtures required by the hosted Git provider conformance suite. */
@@ -50,8 +51,12 @@ export const gitProviderConformance = (name: string, fixtures: GitProviderConfor
         yield* provider.getReviewDiff(review.locator)
         yield* provider.getReviewDecision(review.locator)
         yield* provider.bootstrapBareRepository(repository.locator, "/tmp/provider-conformance.git")
-        const checkout = yield* provider.checkoutSpec(review.locator)
+        const checkout = yield* provider.checkoutSpec(
+          review.locator,
+          ReviewRevision.make("provider-conformance-revision"),
+        )
         expect(checkout.review).toEqual(review.locator)
+        expect(checkout.revision).toBe("provider-conformance-revision")
       }),
     )
   })

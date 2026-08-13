@@ -7,10 +7,11 @@ import {
   type OpencodeClient,
   type Part,
 } from "@opencode-ai/sdk/v2"
-import { Deferred, Effect, Option, Redacted, Schema, Stream } from "effect"
+import { Deferred, Effect, Match, Option, Predicate, Redacted, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
+  AgentArtifactMetadata,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentExecutionPolicy,
@@ -27,21 +28,21 @@ import {
   AgentUsage,
   InvalidAgentProviderResponseError,
   isAgentExecutionPolicyEnforced,
-  McpToolName,
   type AgentCapability,
   type AgentProviderRegistration,
   type ReviewThreadRequest,
-  ReviewThreadResponse,
   ReviewThreadResult,
   type WalkthroughRequest,
   WalkthroughResult,
+  WebUrl,
 } from "@diffdash/agent-provider"
+import {
+  normalizeReviewThreadAgentResponse as normalizeResponse,
+  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
+  ReviewThreadAgentResponse,
+} from "@diffdash/domain/review-agent"
 import { parseProviderJsonText } from "@diffdash/agent-provider/provider-json"
 import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
-import {
-  normalizeProviderReviewThreadResponse as normalizeResponse,
-  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
-} from "@diffdash/agent-provider/review-output"
 import {
   boundedProviderDiagnostic,
   makeAgentProviderOperationErrorFactory,
@@ -66,9 +67,6 @@ const operationErrors = makeAgentProviderOperationErrorFactory({
 const walkthroughMessage =
   "Generate a DiffDash walkthrough from the attached prompt file. Return JSON only."
 
-/** Stable OpenCode provider identity. */
-export const OPENCODE_PROVIDER_ID = providerId
-
 /** OpenCode model selected for new installations. */
 export const OPENCODE_DEFAULT_MODEL = AgentModelId.make("openai/gpt-5.6-terra")
 
@@ -82,23 +80,13 @@ export const OPENCODE_MODELS = [
   modelDescriptor("anthropic/claude-haiku-4-5", "Claude Haiku 4.5", "fast"),
 ] as const
 
-/** OpenCode candidates used by automatic quality routing, in fallback order. */
-export const OPENCODE_AUTO_MODELS = {
-  best: [AgentModelId.make("anthropic/claude-opus-5"), AgentModelId.make("openai/gpt-5.6-sol")],
-  balanced: [
-    AgentModelId.make("anthropic/claude-sonnet-5"),
-    AgentModelId.make("openai/gpt-5.6-terra"),
-  ],
-  fast: [AgentModelId.make("anthropic/claude-haiku-4-5"), AgentModelId.make("openai/gpt-5.6-luna")],
-} as const
-
 /** Static OpenCode provider contribution. */
 export const OPENCODE_MANIFEST = AgentProviderManifest.make({
   descriptor: AgentProviderDescriptor.make({
     id: providerId,
     displayName: "OpenCode",
     description: "Local OpenCode CLI and SDK integration.",
-    homepage: "https://opencode.ai",
+    homepage: WebUrl.make("https://opencode.ai"),
   }),
   models: [...OPENCODE_MODELS],
   defaults: AgentProviderDefaults.make({
@@ -341,7 +329,7 @@ interface OpenCodeToolPart {
   readonly status: "completed" | "error"
   readonly title: string
   readonly content: string
-  readonly metadata: Readonly<Record<string, unknown>>
+  readonly metadata: AgentArtifactMetadata
 }
 
 interface OpenCodePatchPart {
@@ -357,7 +345,7 @@ interface OpenCodeTurnOutput {
   readonly messageId: string
   readonly modelId: string
   readonly providerId: string
-  readonly structured: unknown
+  readonly structured: Schema.Json
   readonly parts: readonly OpenCodePart[]
   readonly usage: AgentUsage
 }
@@ -368,13 +356,16 @@ const runOpenCodeTurn = (
 ): Effect.Effect<OpenCodeTurnOutput, AgentProviderOperationError> =>
   Effect.scoped(
     Effect.gen(function* () {
-      const client = yield* startOpenCode(dependencies, makeReviewServerConfig(request))
+      const client = yield* startOpenCode(
+        dependencies,
+        makeOpenCodeServerConfig(request.mcp.endpoint, request.mcp.bearerToken),
+      )
       return yield* callSession(client, request)
     }),
   ).pipe(
     Effect.raceFirst(
       Effect.sleep(request.timeoutMs).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           operationErrors.fromReason(
             "review-thread",
             "Timed out waiting for OpenCode review response",
@@ -401,12 +392,15 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
       )
       .pipe(
         Stream.runForEach((event) => {
-          const { _tag: tag } = event
-          if (tag !== "ProcessLine" || event.source !== "stdout") return Effect.void
-          const match = /^opencode server listening.*on\s+(https?:\/\/[^\s]+)/u.exec(event.line)
-          return match?.[1] === undefined
-            ? Effect.void
-            : Deferred.succeed(ready, match[1]).pipe(Effect.asVoid)
+          return Match.value(event).pipe(
+            Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) => {
+              const match = /^opencode server listening.*on\s+(https?:\/\/[^\s]+)/u.exec(line.line)
+              return match?.[1] === undefined
+                ? Effect.void
+                : Deferred.succeed(ready, match[1]).pipe(Effect.asVoid)
+            }),
+            Match.orElse(() => Effect.void),
+          )
         }),
         Effect.mapError(operationErrors.fromCause("review-thread")),
         Effect.tapError((cause) => Deferred.fail(ready, cause).pipe(Effect.ignore)),
@@ -423,7 +417,7 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
       )
     yield* process.pipe(Effect.forkScoped)
     const timeout = Effect.sleep("5 seconds").pipe(
-      Effect.zipRight(
+      Effect.andThen(
         operationErrors.fromReason(
           "review-thread",
           "Timed out waiting for OpenCode server",
@@ -442,7 +436,7 @@ const availableLoopbackPort = () =>
     server.once("error", onError)
     server.listen(0, "127.0.0.1", () => {
       const address = server.address()
-      if (address === null || typeof address === "string") {
+      if (address === null || Predicate.isString(address)) {
         server.close()
         reject(new Error("Unable to allocate an OpenCode loopback port"))
         return
@@ -492,7 +486,7 @@ const callSession = (client: OpencodeClient, request: ReviewThreadRequest) =>
         messageId: message.info.id,
         modelId: message.info.modelID,
         providerId: message.info.providerID,
-        structured: message.info.structured,
+        structured: parseJsonValue(message.info.structured),
         parts: message.parts.flatMap(toBoundaryPart),
         usage: AgentUsage.make({
           inputTokens: nonNegative(message.info.tokens.input),
@@ -562,14 +556,11 @@ export const makeOpenCodeServerConfig = (
   },
 })
 
-const makeReviewServerConfig = (request: ReviewThreadRequest) =>
-  makeOpenCodeServerConfig(request.mcp.endpoint, request.mcp.bearerToken)
-
 const clonePermissionRules = (): NonNullable<Config["permission"]> =>
   Object.fromEntries(
     Object.entries(OPENCODE_PERMISSION_RULES).map(([name, rule]) => [
       name,
-      typeof rule === "string" ? rule : { ...rule },
+      Schema.is(Schema.String)(rule) ? rule : { ...rule },
     ]),
   )
 
@@ -637,8 +628,12 @@ const allowedMetadataKeys = new Set([
   "status",
 ])
 
-const allowlistedMetadata = (metadata: Readonly<Record<string, unknown>>) =>
-  Object.fromEntries(Object.entries(metadata).filter(([key]) => allowedMetadataKeys.has(key)))
+const allowlistedMetadata = <A>(metadata: A): AgentArtifactMetadata => {
+  const parsed = Schema.decodeUnknownSync(AgentArtifactMetadata)(metadata ?? {})
+  return Schema.decodeUnknownSync(AgentArtifactMetadata)(
+    Object.fromEntries(Object.entries(parsed).filter(([key]) => allowedMetadataKeys.has(key))),
+  )
+}
 
 const toArtifactCandidate = (part: OpenCodePart): readonly AgentArtifactCandidate[] => {
   if (part.type === "patch") return []
@@ -680,10 +675,9 @@ const artifactTypeForTool = (toolName: string): AgentArtifactCandidate["type"] =
 
 const decodeReviewResponse = (
   output: OpenCodeTurnOutput,
-): Effect.Effect<ReviewThreadResponse, InvalidAgentProviderResponseError> => {
-  const candidate =
-    output.structured === undefined ? parseTextResponse(output.parts) : output.structured
-  return Schema.decodeUnknown(ReviewThreadResponse)(normalizeResponse(candidate)).pipe(
+): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> => {
+  const candidate = output.structured === null ? parseTextResponse(output.parts) : output.structured
+  return Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(normalizeResponse(candidate)).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,
@@ -696,14 +690,20 @@ const decodeReviewResponse = (
   )
 }
 
-const parseTextResponse = (parts: readonly OpenCodePart[]): unknown => {
+const parseTextResponse = (parts: readonly OpenCodePart[]): Schema.Json => {
   const text = parts
     .filter((part): part is OpenCodeTextPart => part.type === "text")
     .map((part) => part.text)
     .join("\n")
     .trim()
-  return parseProviderJsonText(text)
+  return Option.getOrElse(
+    Schema.decodeUnknownOption(Schema.Json)(parseProviderJsonText(text)),
+    () => text,
+  )
 }
+
+const parseJsonValue = <A>(value: A): Schema.Json =>
+  Option.getOrElse(Schema.decodeUnknownOption(Schema.Json)(value), () => null)
 
 const requirePolicy = (
   capability: AgentCapability,
@@ -750,10 +750,3 @@ function modelDescriptor(id: string, displayName: string, quality: "fast" | "bal
 }
 
 const nonNegative = (value: number) => (Number.isFinite(value) && value >= 0 ? value : null)
-
-/** Converts a provider-owned model to its SDK identity. */
-export const openCodeModelId = (modelId: string) => AgentModelId.make(modelId)
-
-/** Converts host tool names to SDK identities for a scoped review request. */
-export const openCodeMcpToolNames = (tools: readonly string[]) =>
-  tools.map((tool) => McpToolName.make(tool))

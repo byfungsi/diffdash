@@ -11,7 +11,9 @@ import {
   ReviewAgentProgress,
   type ReviewAgentProgressStage,
 } from "@diffdash/domain/review-agent"
-import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { WebUrl } from "@diffdash/domain/web-url"
+import { Array as EffectArray, Match, Order } from "effect"
 import {
   HostedReviewTarget,
   MarkdownBody,
@@ -39,8 +41,15 @@ import {
   useRef,
   useState,
 } from "react"
-import { captureAnalytics } from "@/shared/analytics"
+import { useCaptureAnalytics } from "@/shared/analytics"
+import {
+  runRendererPromise,
+  useDesktopRuntime,
+  useRendererStream,
+  useReviewAutomation,
+} from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
+import { isDocumentOrShadowRoot } from "@/shared/dom"
 import { formatTimestamp } from "@/shared/timestamp"
 import { Badge } from "@/shared/ui/badge"
 import { Button } from "@/shared/ui/button"
@@ -104,6 +113,8 @@ export type ReviewThreadsController = {
 
 /** Loads and mutates persisted review threads exclusively through the typed preload API. */
 export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsController {
+  const captureAnalytics = useCaptureAnalytics()
+  const automation = useReviewAutomation()
   const [details, setDetails] = useState<readonly ReviewThreadDetails[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -115,18 +126,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const hostedReview = scope.kind === "hosted" ? scope.review : null
   const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
   const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
-  const localBranchName =
-    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
-      ? scope.target.comparison.branchName
+  const localComparison =
+    scope.kind === "local"
+      ? Match.valueTags(scope.target.comparison, {
+          branch: (comparison) => comparison,
+          workingTree: () => null,
+        })
       : null
-  const localBaseRef =
-    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
-      ? scope.target.comparison.baseRef
-      : null
-  const localBaseSha =
-    scope.kind === "local" && scope.target.comparison["_tag"] === "branch"
-      ? scope.target.comparison.baseSha
-      : null
+  const localBranchName = localComparison?.branchName ?? null
+  const localBaseRef = localComparison?.baseRef ?? null
+  const localBaseSha = localComparison?.baseSha ?? null
   const localTarget = useMemo(
     () =>
       localRootPath === null
@@ -162,11 +171,10 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setLoading(true)
     setError(null)
     try {
-      const threads = await window.diffDash.reviewThreads.list(
-        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-      )
-      const loaded = await Promise.all(
-        threads.map((thread) => window.diffDash.reviewThreads.get(thread.id)),
+      const loaded = await runRendererPromise(
+        automation.threads.listDetails(
+          reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+        ),
       )
       setDetails(sortThreadDetails(loaded))
     } catch (cause) {
@@ -176,14 +184,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     }
   }
 
-  useEffect(() => {
-    return window.diffDash.reviewThreads.onAgentProgress((progress) => {
+  useRendererStream(
+    automation.threads.progress,
+    (progress) => {
       setAgentProgress((current) => [
         ...current.filter((item) => item.threadId !== progress.threadId),
         progress,
       ])
-    })
-  }, [])
+    },
+    (cause) => setError(formatError(cause, "Could not receive review progress")),
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -200,16 +210,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setAgentErrors({})
     setLoading(true)
     setError(null)
-    window.diffDash.reviewThreads
-      .list(reviewThreadTarget(hostedReview, localTarget, comparisonTarget))
-      .then((threads) =>
-        Promise.all(threads.map((thread) => window.diffDash.reviewThreads.get(thread.id))),
-      )
+    runRendererPromise(
+      automation.threads.listDetails(
+        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+      ),
+    )
       .then((loaded) => {
         if (!cancelled) setDetails(sortThreadDetails(loaded))
         return undefined
       })
-      .catch((cause: unknown) => {
+      .catch((cause) => {
         if (!cancelled) setError(formatError(cause, "Could not load review threads"))
       })
       .finally(() => {
@@ -227,11 +237,12 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     hostedReview,
     localTarget,
     localTargetKey,
+    automation,
   ])
 
   const refreshThreadDetails = async (threadId: ReviewThreadId) => {
     try {
-      const refreshed = await window.diffDash.reviewThreads.get(threadId)
+      const refreshed = await runRendererPromise(automation.threads.get(threadId))
       setDetails((current) =>
         sortThreadDetails([...current.filter((item) => item.thread.id !== threadId), refreshed]),
       )
@@ -263,15 +274,17 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       ReviewAgentProgress.make({ threadId, stage: "preparing-context" }),
     ])
     try {
-      const pending = window.diffDash.reviewThreads.runAgent(
-        RunReviewThreadAgentRequest.make({
-          threadId,
-          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-          repoId: currentDetails.thread.repoId,
-          reviewKey: currentDetails.thread.reviewKey,
-          expectedBaseRevision: ReviewRevision.make(baseRevision),
-          expectedHeadRevision: ReviewRevision.make(headRevision),
-        }),
+      const pending = runRendererPromise(
+        automation.threads.runAgent(
+          RunReviewThreadAgentRequest.make({
+            threadId,
+            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+            repoId: ReviewProjectId.make(currentDetails.thread.repoId),
+            reviewKey: currentDetails.thread.reviewKey,
+            expectedBaseRevision: ReviewRevision.make(baseRevision),
+            expectedHeadRevision: ReviewRevision.make(headRevision),
+          }),
+        ),
       )
       window.setTimeout(() => void refreshThread(threadId).catch(() => undefined), 100)
       const result = await pending
@@ -292,9 +305,13 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       const refreshed = await refreshThreadDetails(threadId).catch(() => null)
       const latestMessage = refreshed?.messages.at(-1)
       const persistedNewFailure =
-        latestMessage?.author === "agent" &&
-        latestMessage.status === "failed" &&
-        latestMessage.id !== previousLatestMessageId
+        latestMessage !== undefined &&
+        Match.valueTags(latestMessage, {
+          Failed: (message) => message.id !== previousLatestMessageId,
+          User: () => false,
+          Pending: () => false,
+          Completed: () => false,
+        })
       if (!persistedNewFailure) {
         setAgentErrors((current) => ({
           ...current,
@@ -313,14 +330,16 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
       throw new Error("Review revisions are unavailable")
     }
     try {
-      const created = await window.diffDash.reviewThreads.create(
-        CreateReviewThreadRequest.make({
-          target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-          expectedBaseRevision: ReviewRevision.make(baseRevision),
-          expectedHeadRevision: ReviewRevision.make(headRevision),
-          anchor,
-          bodyMarkdown: MarkdownBody.make(bodyMarkdown),
-        }),
+      const created = await runRendererPromise(
+        automation.threads.create(
+          CreateReviewThreadRequest.make({
+            target: reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
+            expectedBaseRevision: ReviewRevision.make(baseRevision),
+            expectedHeadRevision: ReviewRevision.make(headRevision),
+            anchor,
+            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
+          }),
+        ),
       )
       setDetails((current) => sortThreadDetails([...current, created]))
       captureAnalytics({
@@ -342,11 +361,13 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
 
   const addUserMessage = async (threadId: ReviewThreadId, bodyMarkdown: string) => {
     try {
-      const updatedDetails = await window.diffDash.reviewThreads.addUserMessage(
-        AddReviewThreadUserMessageRequest.make({
-          threadId,
-          bodyMarkdown: MarkdownBody.make(bodyMarkdown),
-        }),
+      const updatedDetails = await runRendererPromise(
+        automation.threads.addUserMessage(
+          AddReviewThreadUserMessageRequest.make({
+            threadId,
+            bodyMarkdown: MarkdownBody.make(bodyMarkdown),
+          }),
+        ),
       )
       setDetails((current) => replaceThreadDetails(current, updatedDetails))
       setError(null)
@@ -444,8 +465,7 @@ export function ReviewThreadComposer({
       (entries) => {
         if (entries.some((entry) => entry.target === form && !entry.isIntersecting)) {
           const root = textarea.getRootNode()
-          const activeElement =
-            root instanceof Document || root instanceof ShadowRoot ? root.activeElement : null
+          const activeElement = isDocumentOrShadowRoot(root) ? root.activeElement : null
           if (activeElement === textarea) textarea.blur()
         }
       },
@@ -551,12 +571,24 @@ export function ReviewThreadPanel({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const previousRevision = reviewThreadIsPreviousRevision(thread)
-  const hasPendingAgentMessage = messages.some(
-    (message) => message.author === "agent" && message.status === "pending",
+  const hasPendingAgentMessage = messages.some((message) =>
+    Match.valueTags(message, {
+      Pending: () => true,
+      User: () => false,
+      Completed: () => false,
+      Failed: () => false,
+    }),
   )
   const progressLabel = REVIEW_AGENT_PROGRESS_LABELS[agentProgress ?? "preparing-context"]
   const latestMessage = messages.at(-1)
-  const hasUnansweredUserMessage = latestMessage?.author === "user"
+  const hasUnansweredUserMessage =
+    latestMessage !== undefined &&
+    Match.valueTags(latestMessage, {
+      User: () => true,
+      Pending: () => false,
+      Completed: () => false,
+      Failed: () => false,
+    })
   const visibleAgentError = agentError
   const agentActive = agentRunning || hasPendingAgentMessage
   const interruptedTurn = hasUnansweredUserMessage && !agentActive
@@ -566,7 +598,15 @@ export function ReviewThreadPanel({
       visibleAgentError ??
       (interruptedTurn ? "The agent response did not start. Retry to try again." : null))
   const historyUpdateKey = `${messages
-    .map((message) => `${message.id}:${message.status}:${message.updatedAt}`)
+    .map(
+      (message) =>
+        `${message.id}:${Match.valueTags(message, {
+          User: () => "User",
+          Pending: () => "Pending",
+          Completed: () => "Completed",
+          Failed: () => "Failed",
+        })}:${message.updatedAt}`,
+    )
     .join("\u0000")}\u0001${agentRunning ? agentProgress : "idle"}`
 
   useEffect(() => {
@@ -606,7 +646,7 @@ export function ReviewThreadPanel({
           ? "flex min-h-0 flex-1 flex-col rounded-none border-0 shadow-none"
           : "my-2 rounded-lg border shadow-xs",
       )}
-      aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} review thread`}
+      aria-label={`${anchorLabel(thread.displayAnchor)} review thread`}
       data-review-thread-id={thread.id}
     >
       {onOpenDetail === undefined ? null : (
@@ -626,7 +666,7 @@ export function ReviewThreadPanel({
       <div
         ref={historyRef}
         role="log"
-        aria-label={`${anchorLabel(thread.currentAnchor ?? thread.originalAnchor)} conversation history`}
+        aria-label={`${anchorLabel(thread.displayAnchor)} conversation history`}
         aria-relevant="additions text"
         tabIndex={0}
         data-review-thread-history
@@ -645,17 +685,28 @@ export function ReviewThreadPanel({
         }}
       >
         {previousRevision ||
-        thread.anchorStatus === "outdated" ||
-        thread.anchorStatus === "unresolved_anchor" ? (
+        Match.valueTags(thread.currentAnchor, {
+          Active: () => false,
+          Outdated: () => true,
+          Unresolved: () => true,
+        }) ? (
           <div className="flex flex-wrap items-center gap-1.5">
             {previousRevision ? (
               <Badge variant="outline" className="text-caption h-5 px-1.5 text-muted-foreground">
                 Previous revision
               </Badge>
             ) : null}
-            {thread.anchorStatus === "outdated" || thread.anchorStatus === "unresolved_anchor" ? (
+            {Match.valueTags(thread.currentAnchor, {
+              Active: () => false,
+              Outdated: () => true,
+              Unresolved: () => true,
+            }) ? (
               <Badge variant="outline" className="text-caption h-5 px-1.5 text-muted-foreground">
-                {thread.anchorStatus === "outdated" ? "Outdated" : "Anchor unavailable"}
+                {Match.valueTags(thread.currentAnchor, {
+                  Active: () => "Anchor unavailable",
+                  Outdated: () => "Outdated",
+                  Unresolved: () => "Anchor unavailable",
+                })}
               </Badge>
             ) : null}
           </div>
@@ -717,6 +768,10 @@ export function ReviewThreadPanel({
 
 /** Safe, dependency-free Markdown subset for persisted review messages. */
 export function ReviewMarkdown({ children }: { readonly children: string }) {
+  const desktop = useDesktopRuntime()
+  const openExternalUrl = (url: string) => {
+    void runRendererPromise(desktop.openExternalUrl(WebUrl.make(url))).catch(() => undefined)
+  }
   const lines = children.replaceAll("\r\n", "\n").split("\n")
   const blocks: ReactNode[] = []
   let index = 0
@@ -748,7 +803,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
     }
     const heading = /^(#{1,3})\s+(.+)$/.exec(line)
     if (heading !== null) {
-      const content = inlineMarkdown(heading[2] ?? "")
+      const content = inlineMarkdown(heading[2] ?? "", openExternalUrl)
       const className = "font-semibold tracking-tight"
       blocks.push(
         heading[1]?.length === 1 ? (
@@ -777,7 +832,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
       blocks.push(
         <ul key={`list-${index}`} className="list-disc space-y-0.5 pl-4">
           {items.map((item) => (
-            <li key={item.key}>{inlineMarkdown(item.value)}</li>
+            <li key={item.key}>{inlineMarkdown(item.value, openExternalUrl)}</li>
           ))}
         </ul>,
       )
@@ -789,7 +844,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
           key={`quote-${index}`}
           className="border-primary/50 text-muted-foreground border-l-2 pl-2"
         >
-          {inlineMarkdown(line.slice(2))}
+          {inlineMarkdown(line.slice(2), openExternalUrl)}
         </blockquote>,
       )
       index += 1
@@ -808,7 +863,7 @@ export function ReviewMarkdown({ children }: { readonly children: string }) {
     }
     blocks.push(
       <p key={`paragraph-${index}`} className="leading-5">
-        {inlineMarkdown(paragraph.join("\n"))}
+        {inlineMarkdown(paragraph.join("\n"), openExternalUrl)}
       </p>,
     )
   }
@@ -827,34 +882,65 @@ const ThreadMessage = ({
   readonly retryAvailable: boolean
   readonly onRetry: () => void
 }) => {
-  const agent = message.author === "agent"
-  const pending = message.status === "pending"
-  const failed = message.status === "failed"
-  const failurePresentation = reviewFailurePresentation(message.failure)
+  const messageView = Match.valueTags(message, {
+    User: (user) => ({
+      agent: false,
+      body: user.bodyMarkdown,
+      failurePresentation: null,
+      failed: false,
+      pending: false,
+    }),
+    Pending: () => ({
+      agent: true,
+      body: null,
+      failurePresentation: null,
+      failed: false,
+      pending: true,
+    }),
+    Completed: (completed) => ({
+      agent: true,
+      body: completed.bodyMarkdown,
+      failurePresentation: null,
+      failed: false,
+      pending: false,
+    }),
+    Failed: (failedMessage) => ({
+      agent: true,
+      body: null,
+      failurePresentation: Match.valueTags(failedMessage.failure, {
+        Provider: ({ details }) => reviewFailurePresentation(details),
+        Internal: () => null,
+      }),
+      failed: true,
+      pending: false,
+    }),
+  })
   return (
     <section
       className={cn(
         "max-w-[92%] rounded-lg border px-3 py-2 text-xs",
-        agent ? "bg-muted/55 mr-auto" : "bg-primary/8 border-primary/20 ml-auto",
+        messageView.agent ? "bg-muted/55 mr-auto" : "bg-primary/8 border-primary/20 ml-auto",
       )}
-      aria-label={`${agent ? "Agent" : "User"} message`}
+      aria-label={`${messageView.agent ? "Agent" : "User"} message`}
     >
       <div className="text-muted-foreground mb-1.5 flex items-center gap-1.5 text-caption font-medium">
-        {agent ? <Bot className="size-3" /> : <UserRound className="size-3" />}
-        <span>{agent ? "Agent" : "You"}</span>
-        <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+        {messageView.agent ? <Bot className="size-3" /> : <UserRound className="size-3" />}
+        <span>{messageView.agent ? "Agent" : "You"}</span>
+        <time dateTime={message.createdAt}>
+          {formatTimestamp(message.createdAt, message.createdAt)}
+        </time>
       </div>
-      {message.bodyMarkdown.length > 0 && !pending && !failed ? (
-        <ReviewMarkdown>{message.bodyMarkdown}</ReviewMarkdown>
+      {messageView.body !== null && messageView.body.length > 0 ? (
+        <ReviewMarkdown>{messageView.body}</ReviewMarkdown>
       ) : null}
-      {pending ? (
+      {messageView.pending ? (
         <UnicodeLoadingText className="text-muted-foreground mt-1.5 text-xs" text={progressLabel} />
       ) : null}
-      {failed ? (
+      {messageView.failed ? (
         <div className="text-destructive mt-1.5 space-y-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <AlertCircle className="size-3" />
-            <span role="alert">{failurePresentation.title}</span>
+            <span role="alert">{messageView.failurePresentation?.title}</span>
             <Button
               size="xs"
               variant="outline"
@@ -865,7 +951,7 @@ const ThreadMessage = ({
               Retry
             </Button>
           </div>
-          <p className="text-muted-foreground">{failurePresentation.guidance}</p>
+          <p className="text-muted-foreground">{messageView.failurePresentation?.guidance}</p>
         </div>
       ) : null}
     </section>
@@ -969,7 +1055,10 @@ const providerDisplayName = (providerId: string): string => {
   return providerId
 }
 
-const inlineMarkdown = (value: string): readonly ReactNode[] => {
+const inlineMarkdown = (
+  value: string,
+  openExternalUrl: (url: string) => void,
+): readonly ReactNode[] => {
   const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*[^*]+\*|\n)/g
   let offset = 0
   return value
@@ -998,7 +1087,7 @@ const inlineMarkdown = (value: string): readonly ReactNode[] => {
             className="text-link underline underline-offset-2"
             onClick={(event) => {
               event.preventDefault()
-              if (link[2] !== undefined) void window.diffDash.openExternalUrl(link[2])
+              if (link[2] !== undefined) openExternalUrl(link[2])
             }}
           >
             {link[1]}
@@ -1017,17 +1106,11 @@ const replaceThreadDetails = (
   replacement: ReviewThreadDetails,
 ) => details.map((item) => (item.thread.id === replacement.thread.id ? replacement : item))
 
-const sortThreadDetails = (details: readonly ReviewThreadDetails[]) => {
-  const sorted: ReviewThreadDetails[] = []
-  for (const item of details) {
-    const insertionIndex = sorted.findIndex(
-      (candidate) => candidate.thread.createdAt.localeCompare(item.thread.createdAt) > 0,
-    )
-    if (insertionIndex < 0) sorted.push(item)
-    else sorted.splice(insertionIndex, 0, item)
-  }
-  return sorted
-}
+const sortThreadDetails = (details: readonly ReviewThreadDetails[]) =>
+  EffectArray.sort(
+    details,
+    Order.mapInput(Order.String, (detail: ReviewThreadDetails) => detail.thread.createdAt),
+  )
 
 const reviewThreadTarget = (
   hostedReview: HostedReviewLocator | null,
@@ -1049,10 +1132,12 @@ const anchorLabel = (anchor: ReviewThreadAnchor) => {
 
 /** Explains why a persisted thread cannot navigate to the current diff. */
 export const fallbackThreadLabel = (details: ReviewThreadDetails) => {
-  if (details.thread.anchorStatus === "outdated") return "Outdated"
-  if (details.thread.anchorStatus === "unresolved_anchor") return "Anchor unavailable"
-  if (reviewThreadIsPreviousRevision(details.thread)) return "Previous revision"
-  return "Location unavailable"
+  return Match.valueTags(details.thread.currentAnchor, {
+    Outdated: () => "Outdated",
+    Unresolved: () => "Anchor unavailable",
+    Active: () =>
+      reviewThreadIsPreviousRevision(details.thread) ? "Previous revision" : "Location unavailable",
+  })
 }
 
 /** Whether a thread originated on a revision older than its latest mapped review snapshot. */
@@ -1063,5 +1148,3 @@ export const reviewThreadIsPreviousRevision = (thread: ReviewThread) =>
 /** Compact GitHub-style side and line label for an inline review disclosure. */
 export const reviewLineLabel = (anchor: ReviewThreadAnchor) =>
   `${anchor.side === "old" ? "L" : "R"}${anchor.lineNumber}`
-
-const formatMessageTime = (value: string) => formatTimestamp(value, value)

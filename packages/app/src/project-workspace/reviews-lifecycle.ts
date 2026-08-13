@@ -1,17 +1,23 @@
 import type { HostedReviewSummary } from "@diffdash/domain/git-provider"
 import type { LocalReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import type { Repo } from "@diffdash/domain/repository"
-import { Result } from "@effect-atom/atom-react"
+import { Cause, Match, Option } from "effect"
+import { AsyncResult } from "effect/unstable/reactivity"
+import { rendererTransportError, type RendererFailure } from "@/shared/errors"
 
 import type { RibbonLifecycle } from "./ribbon-lifecycle"
 
 /** Independently loaded local review source shown by the Reviews ribbon. */
-export type LocalReviewsLifecycle = RibbonLifecycle<LocalReviewSnapshotManifest, unknown, string>
+export type LocalReviewsLifecycle = RibbonLifecycle<
+  LocalReviewSnapshotManifest,
+  RendererFailure,
+  string
+>
 
 /** Independently loaded hosted review source shown by the Reviews ribbon. */
 export type HostedReviewsLifecycle = RibbonLifecycle<
   readonly HostedReviewSummary[],
-  unknown,
+  RendererFailure,
   string
 >
 
@@ -22,21 +28,30 @@ export interface ReviewsLifecycleData {
 }
 
 /** Composite Reviews ribbon lifecycle across local and hosted review sources. */
-export type ReviewsLifecycle = RibbonLifecycle<ReviewsLifecycleData, unknown, string>
+export type ReviewsLifecycle = RibbonLifecycle<ReviewsLifecycleData, RendererFailure, string>
 
 /** Projects the local working-tree atom without depending on hosted review availability. */
 export const projectLocalReviewsLifecycle = (
   repo: Repo,
-  result: Result.Result<LocalReviewSnapshotManifest | null, unknown>,
+  result: AsyncResult.AsyncResult<LocalReviewSnapshotManifest | null, RendererFailure>,
 ): LocalReviewsLifecycle => {
   if (repo.localPath === null) return { _tag: "unavailable", reason: "No local checkout linked." }
-  if (Result.isSuccess(result)) {
+  if (AsyncResult.isSuccess(result)) {
     if (result.value === null) return { _tag: "loading" }
+    const refresh = AsyncResult.isWaiting(result) ? "refreshing" : "idle"
     return result.value.files.length === 0
-      ? { _tag: "empty", refreshing: Result.isWaiting(result) }
-      : { _tag: "ready", data: result.value, refreshing: Result.isWaiting(result) }
+      ? { _tag: "empty", refresh }
+      : { _tag: "ready", data: result.value, refresh }
   }
-  if (Result.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) {
+    const failure = Cause.findErrorOption(result.cause)
+    return {
+      _tag: "failure",
+      error: Option.isSome(failure)
+        ? failure.value
+        : rendererTransportError(result.cause, "renderer:local-reviews"),
+    }
+  }
   return { _tag: "loading" }
 }
 
@@ -47,22 +62,57 @@ export const projectReviewsLifecycle = (
 ): ReviewsLifecycle => {
   const data = { local, hosted }
   const sources = [local, hosted] as const
-  const refreshing = sources.some(sourceRefreshing)
-  const invalid = sources.find((source) => source._tag === "invalid")
-  if (invalid !== undefined) return { _tag: "invalid", reason: invalid.reason }
+  const refresh = sources.some(sourceRefreshing) ? "refreshing" : "idle"
+  const invalidReason = sources
+    .map((source) =>
+      Match.valueTags(source, {
+        invalid: ({ reason }) => reason,
+        loading: () => null,
+        ready: () => null,
+        empty: () => null,
+        unavailable: () => null,
+        failure: () => null,
+        stale: () => null,
+        degraded: () => null,
+      }),
+    )
+    .find((reason) => reason !== null)
+  if (invalidReason !== undefined && invalidReason !== null) {
+    return { _tag: "invalid", reason: invalidReason }
+  }
 
-  const staleReasons = sources.flatMap((source) => (source._tag === "stale" ? [source.reason] : []))
+  const staleReasons = sources.flatMap((source) =>
+    Match.valueTags(source, {
+      stale: ({ reason }) => [reason],
+      loading: () => [],
+      ready: () => [],
+      empty: () => [],
+      unavailable: () => [],
+      failure: () => [],
+      invalid: () => [],
+      degraded: () => [],
+    }),
+  )
   if (staleReasons.length > 0) {
     return {
       _tag: "stale",
       data,
       reason: staleReasons.join(" "),
-      refreshing,
+      refresh,
     }
   }
 
-  const usable = sources.filter(
-    (source) => source._tag === "ready" || source._tag === "empty" || source._tag === "degraded",
+  const usable = sources.filter((source) =>
+    Match.valueTags(source, {
+      ready: () => true,
+      empty: () => true,
+      degraded: () => true,
+      loading: () => false,
+      unavailable: () => false,
+      failure: () => false,
+      stale: () => false,
+      invalid: () => false,
+    }),
   )
   const issues = sources.flatMap(sourceIssue)
   if (usable.length > 0 && issues.length > 0) {
@@ -72,51 +122,116 @@ export const projectReviewsLifecycle = (
         _tag: "degraded",
         data,
         issues: [firstIssue, ...remainingIssues],
-        refreshing,
+        refresh,
       }
     }
   }
 
-  if (sources.every((source) => source._tag === "loading")) return { _tag: "loading" }
-  if (sources.every((source) => source._tag === "empty")) {
-    return { _tag: "empty", refreshing }
+  if (
+    sources.every((source) =>
+      Match.valueTags(source, {
+        loading: () => true,
+        ready: () => false,
+        empty: () => false,
+        unavailable: () => false,
+        failure: () => false,
+        stale: () => false,
+        invalid: () => false,
+        degraded: () => false,
+      }),
+    )
+  ) {
+    return { _tag: "loading" }
   }
-  if (issues.length === 0) return { _tag: "ready", data, refreshing }
+  if (
+    sources.every((source) =>
+      Match.valueTags(source, {
+        empty: () => true,
+        loading: () => false,
+        ready: () => false,
+        unavailable: () => false,
+        failure: () => false,
+        stale: () => false,
+        invalid: () => false,
+        degraded: () => false,
+      }),
+    )
+  ) {
+    return { _tag: "empty", refresh }
+  }
+  if (issues.length === 0) return { _tag: "ready", data, refresh }
 
-  const failure = sources.find((source) => source._tag === "failure")
-  if (failure !== undefined) return { _tag: "failure", error: failure.error }
+  const failureError = sources
+    .map((source) =>
+      Match.valueTags(source, {
+        failure: ({ error }) => error,
+        loading: () => null,
+        ready: () => null,
+        empty: () => null,
+        unavailable: () => null,
+        stale: () => null,
+        invalid: () => null,
+        degraded: () => null,
+      }),
+    )
+    .find((error) => error !== null)
+  if (failureError !== undefined && failureError !== null) {
+    return { _tag: "failure", error: failureError }
+  }
   return { _tag: "unavailable", reason: issues.join(" ") }
 }
 
 const sourceRefreshing = (source: LocalReviewsLifecycle | HostedReviewsLifecycle): boolean =>
-  source._tag === "ready" ||
-  source._tag === "empty" ||
-  source._tag === "stale" ||
-  source._tag === "degraded"
-    ? source.refreshing
-    : false
+  Match.valueTags(source, {
+    ready: ({ refresh }) => refresh === "refreshing",
+    empty: ({ refresh }) => refresh === "refreshing",
+    stale: ({ refresh }) => refresh === "refreshing",
+    degraded: ({ refresh }) => refresh === "refreshing",
+    loading: () => false,
+    unavailable: () => false,
+    failure: () => false,
+    invalid: () => false,
+  })
 
 const sourceIssue = (source: LocalReviewsLifecycle | HostedReviewsLifecycle): readonly string[] => {
-  if (source._tag === "loading") return ["One review source is still loading."]
-  if (source._tag === "unavailable") return [source.reason]
-  if (source._tag === "failure") return ["One review source could not be loaded."]
-  if (source._tag === "degraded") return source.issues
-  return []
+  return Match.valueTags(source, {
+    loading: () => ["One review source is still loading."],
+    unavailable: ({ reason }) => [reason],
+    failure: () => ["One review source could not be loaded."],
+    degraded: ({ issues }) => issues,
+    ready: () => [],
+    empty: () => [],
+    stale: () => [],
+    invalid: () => [],
+  })
 }
 
 /** Projects hosted pull requests without depending on working-tree availability. */
 export const projectHostedReviewsLifecycle = (
   repo: Repo,
-  result: Result.Result<readonly HostedReviewSummary[], unknown>,
+  result: AsyncResult.AsyncResult<readonly HostedReviewSummary[], RendererFailure>,
 ): HostedReviewsLifecycle => {
-  if (repo.provider === "local") {
+  if (
+    Match.valueTags(repo.source, {
+      local: () => true,
+      hosted: () => false,
+    })
+  )
     return { _tag: "unavailable", reason: "This is a local-only project." }
-  }
-  if (Result.isSuccess(result)) {
+  if (AsyncResult.isSuccess(result)) {
+    const refresh = AsyncResult.isWaiting(result) ? "refreshing" : "idle"
     return result.value.length === 0
-      ? { _tag: "empty", refreshing: Result.isWaiting(result) }
-      : { _tag: "ready", data: result.value, refreshing: Result.isWaiting(result) }
+      ? { _tag: "empty", refresh }
+      : { _tag: "ready", data: result.value, refresh }
   }
-  if (Result.isFailure(result)) return { _tag: "failure", error: result.cause }
+  if (AsyncResult.isFailure(result)) {
+    const failure = Cause.findErrorOption(result.cause)
+    return {
+      _tag: "failure",
+      error: Option.isSome(failure)
+        ? failure.value
+        : rendererTransportError(result.cause, "renderer:hosted-reviews"),
+    }
+  }
   return { _tag: "loading" }
 }

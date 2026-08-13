@@ -3,32 +3,40 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AgentPromptVersion, ThreadMemorySummaryAlgorithm } from "@diffdash/domain/agent-run"
+import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewAgentArtifact,
   ReviewAgentArtifactId,
+  ReviewAgentProviderId,
+  ReviewAgentProviderRunId,
   ReviewAgentUsage,
 } from "@diffdash/domain/review-agent"
 import {
   makeReviewKey,
   ReviewKey,
+  ReviewProjectId,
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
+  CurrentReviewAnchor,
   HostedReviewTarget,
   LineReviewAnchor,
   MarkdownBody,
   type ReviewThreadId,
 } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, ManagedRuntime, Schema } from "effect"
+import { Effect, Result, Layer, ManagedRuntime, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { AgentRunArtifactStore } from "./agent-run-artifact-store"
-import { AgentRunStore } from "./agent-run-store"
-import { DatabaseService } from "./database"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { RepositoryStore } from "./repository-store"
 import { ReviewThreadStore } from "./review-thread-store"
 import {
@@ -39,7 +47,7 @@ import {
   ReviewTurnTargetError,
   type ReviewTurnWriteStep,
 } from "./review-turn-store"
-import { ThreadMemoryStore } from "./thread-memory-store"
+import { hostedTestRepositoryInput } from "./test-support/repository"
 
 const review = makeHostedReviewLocator("github", "fungsi", "diffdash", 10)
 const reviewKey = makeReviewKey(review)
@@ -48,7 +56,7 @@ const headRevision = ReviewRevision.make("head-10")
 const target = HostedReviewTarget.make({ kind: "hosted", review })
 const anchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-10"),
-  filePath: "src/review-turn.ts",
+  filePath: RepositoryRelativePath.make("src/review-turn.ts"),
   oldPath: null,
   hunkId: ReviewHunkId.make("hunk-10"),
   hunkFingerprint: ReviewHunkFingerprint.make("fingerprint-10"),
@@ -65,31 +73,30 @@ const CountsRow = Schema.Struct({
   memory: Schema.Number,
 })
 
+const RunInspectionRow = Schema.Struct({
+  status: Schema.Literals(["running", "completed", "failed"]),
+  error: Schema.NullOr(Schema.String),
+})
+
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-review-turn-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
 const makeLayer = (databasePath: string, afterWrite?: (step: ReviewTurnWriteStep) => void) => {
-  const database = DatabaseService.layer(databasePath)
+  const database = DatabaseNode.layer(databasePath)
   return Layer.mergeAll(
     RepositoryStore.layer,
     ReviewThreadStore.layer,
-    AgentRunStore.layer,
     AgentRunArtifactStore.layer,
-    ThreadMemoryStore.layer,
     ReviewTurnStore.layerWith(afterWrite === undefined ? {} : { afterWrite }),
   ).pipe(Layer.provideMerge(database))
 }
 
 const createHostedThread = Effect.gen(function* () {
-  const repository = yield* (yield* RepositoryStore).upsertRepository({
-    provider: "github",
-    owner: "fungsi",
-    name: "diffdash",
-    remoteUrl: "https://github.com/fungsi/diffdash",
-    localPath: "/workspace/diffdash",
-  })
+  const repository = yield* (yield* RepositoryStore).upsertRepository(
+    hostedTestRepositoryInput({ localPath: "/workspace/diffdash" }),
+  )
   const details = yield* (yield* ReviewThreadStore).create({
     repoId: repository.id,
     reviewKey,
@@ -102,7 +109,7 @@ const createHostedThread = Effect.gen(function* () {
   return { repository, details }
 })
 
-const validateInput = (threadId: ReviewThreadId, repoId: string) => ({
+const validateInput = (threadId: ReviewThreadId, repoId: ReviewProjectId) => ({
   threadId,
   target,
   repoId,
@@ -111,42 +118,70 @@ const validateInput = (threadId: ReviewThreadId, repoId: string) => ({
   headRevision,
 })
 
-const beginInput = (threadId: ReviewThreadId, repoId: string, mapping: ReviewTurnMappingToken) => ({
+const beginInput = (
+  threadId: ReviewThreadId,
+  repoId: ReviewProjectId,
+  mapping: ReviewTurnMappingToken,
+) => ({
   ...validateInput(threadId, repoId),
   mapping,
-  provider: "opencode",
+  provider: ReviewAgentProviderId.make("opencode"),
   model: "test-model",
   promptVersion: AgentPromptVersion.make("review-thread-v3"),
 })
 
 const readCounts = Effect.gen(function* () {
-  const database = yield* DatabaseService
+  const database = makeDatabase(yield* SqlClient.SqlClient)
   const row = yield* database.get(`SELECT
       (SELECT COUNT(*) FROM agent_runs) AS runs,
       (SELECT COUNT(*) FROM review_thread_messages
         WHERE author = 'agent' AND status = 'pending') AS pending_messages,
       (SELECT COUNT(*) FROM agent_run_artifacts) AS artifacts,
       (SELECT COUNT(*) FROM thread_memory) AS memory`)
-  return yield* Schema.decodeUnknown(CountsRow)(row)
+  return yield* Schema.decodeUnknownEffect(CountsRow)(Option.getOrThrow(row))
 })
 
+const inspectRun = (runId: string) =>
+  Effect.gen(function* () {
+    const database = makeDatabase(yield* SqlClient.SqlClient)
+    const row = yield* database.get("SELECT status, error FROM agent_runs WHERE id = ?", [runId])
+    return yield* Effect.fromOption(row).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(RunInspectionRow)),
+    )
+  })
+
 describe("ReviewTurnStore", () => {
-  it.scoped("accepts a local review under a linked hosted project identity", () =>
+  it.effect("accepts a legacy carried_forward active mapping", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
-        const rootPath = "/workspace/diffdash"
+        const { repository, details } = yield* createHostedThread
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run(
+          "UPDATE review_threads SET anchor_status = 'carried_forward' WHERE id = ?",
+          [details.thread.id],
+        )
+
+        const mapping = yield* (yield* ReviewTurnStore).validateTarget(
+          validateInput(details.thread.id, repository.id),
+        )
+        expect(mapping.currentAnchor).toEqual(anchor)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("accepts a local review under a linked hosted project identity", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const rootPath = RepositoryCheckoutPath.make("/workspace/diffdash")
         const localTarget = LocalReviewTarget.make({ kind: "local", rootPath })
         const localKey = ReviewKey.make(
           `local:${createHash("sha256").update(rootPath).digest("hex")}`,
         )
-        const repository = yield* (yield* RepositoryStore).upsertRepository({
-          provider: "github",
-          owner: "fungsi",
-          name: "diffdash",
-          remoteUrl: "https://github.com/fungsi/diffdash",
-          localPath: rootPath,
-        })
+        const repository = yield* (yield* RepositoryStore).upsertRepository(
+          hostedTestRepositoryInput({ localPath: rootPath }),
+        )
         const details = yield* (yield* ReviewThreadStore).create({
           repoId: repository.id,
           reviewKey: localKey,
@@ -172,7 +207,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rolls back beginTurn after every aggregate write", () =>
+  it.effect("rolls back beginTurn after every aggregate write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -186,11 +221,11 @@ describe("ReviewTurnStore", () => {
         const mapping = yield* turns.validateTarget(validateInput(details.thread.id, repository.id))
         for (const step of ["begin.run", "begin.message", "begin.thread"] as const) {
           failAt = step
-          const result = yield* Effect.either(
+          const result = yield* Effect.result(
             turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
           )
-          expect(Either.isLeft(result)).toBe(true)
-          if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewTurnStoreError)
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewTurnStoreError)
           expect(yield* readCounts).toEqual({
             runs: 0,
             pending_messages: 0,
@@ -205,7 +240,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rolls back all artifacts, message, run, and memory after every completion write", () =>
+  it.effect("rolls back all artifacts, message, run, and memory after every completion write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -230,7 +265,7 @@ describe("ReviewTurnStore", () => {
                 id: artifactId,
                 artifact: ReviewAgentArtifact.make({
                   type: "provider_message",
-                  provider: "opencode",
+                  provider: ReviewAgentProviderId.make("opencode"),
                   title: "Provider response",
                   content: "Atomic response.",
                   contentDigest: "sha256:complete",
@@ -266,12 +301,12 @@ describe("ReviewTurnStore", () => {
           "complete.thread",
         ] as const) {
           failAt = step
-          const result = yield* Effect.either(complete())
-          expect(Either.isLeft(result)).toBe(true)
-          const run = yield* (yield* AgentRunStore).get(begun.run.id)
+          const result = yield* Effect.result(complete())
+          expect(Result.isFailure(result)).toBe(true)
+          const run = yield* inspectRun(begun.run.id)
           const persisted = yield* (yield* ReviewThreadStore).get(details.thread.id)
           expect(run.status).toBe("running")
-          expect(persisted.messages.at(-1)?.status).toBe("pending")
+          expect(persisted.messages.at(-1)?._tag).toBe("Pending")
           expect(yield* readCounts).toEqual({
             runs: 1,
             pending_messages: 1,
@@ -282,8 +317,8 @@ describe("ReviewTurnStore", () => {
 
         failAt = null
         const completed = yield* complete()
-        expect(completed.messages.at(-1)?.status).toBe("complete")
-        expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("completed")
+        expect(completed.messages.at(-1)?._tag).toBe("Completed")
+        expect((yield* inspectRun(begun.run.id)).status).toBe("completed")
         expect(yield* readCounts).toEqual({
           runs: 1,
           pending_messages: 0,
@@ -294,7 +329,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("keeps failed run and message status in agreement after every failure write", () =>
+  it.effect("keeps failed run and message status in agreement after every failure write", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       let failAt: ReviewTurnWriteStep | null = null
@@ -318,22 +353,22 @@ describe("ReviewTurnStore", () => {
 
         for (const step of ["fail.message", "fail.run", "fail.thread"] as const) {
           failAt = step
-          expect(Either.isLeft(yield* Effect.either(fail()))).toBe(true)
-          expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
+          expect(Result.isFailure(yield* Effect.result(fail()))).toBe(true)
+          expect((yield* inspectRun(begun.run.id)).status).toBe("running")
           expect(
-            (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?.status,
-          ).toBe("pending")
+            (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?._tag,
+          ).toBe("Pending")
         }
 
         failAt = null
         const failed = yield* fail()
-        expect(failed.messages.at(-1)?.status).toBe("failed")
-        expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("failed")
+        expect(failed.messages.at(-1)?._tag).toBe("Failed")
+        expect((yield* inspectRun(begun.run.id)).status).toBe("failed")
       }).pipe(Effect.provide(layer))
     }),
   )
 
-  it.scoped("rejects wrong targets, stale revisions, and mapping races without mutation", () =>
+  it.effect("rejects wrong targets, stale revisions, and mapping races without mutation", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -345,17 +380,20 @@ describe("ReviewTurnStore", () => {
           kind: "hosted",
           review: makeHostedReviewLocator("github", "fungsi", "other", 10),
         })
-        const wrongLocal = LocalReviewTarget.make({ kind: "local", rootPath: "/wrong/repo" })
+        const wrongLocal = LocalReviewTarget.make({
+          kind: "local",
+          rootPath: RepositoryCheckoutPath.make("/wrong/repo"),
+        })
 
         for (const input of [
           { ...valid, target: wrongReview },
           { ...valid, target: wrongLocal },
-          { ...valid, repoId: "github:fungsi/other" },
+          { ...valid, repoId: ReviewProjectId.make("github:fungsi/other") },
           { ...valid, headRevision: ReviewRevision.make("stale-head") },
         ]) {
-          const result = yield* Effect.either(turns.validateTarget(input))
-          expect(Either.isLeft(result)).toBe(true)
-          if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(ReviewTurnTargetError)
+          const result = yield* Effect.result(turns.validateTarget(input))
+          expect(Result.isFailure(result)).toBe(true)
+          if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ReviewTurnTargetError)
           expect(yield* readCounts).toEqual({
             runs: 0,
             pending_messages: 0,
@@ -370,15 +408,14 @@ describe("ReviewTurnStore", () => {
             threadId: details.thread.id,
             currentBaseRevision: baseRevision,
             currentHeadRevision: headRevision,
-            currentAnchor: movedAnchor,
-            anchorStatus: "active",
+            currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor: movedAnchor }),
           },
         ])
-        const raced = yield* Effect.either(
+        const raced = yield* Effect.result(
           turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
         )
-        expect(Either.isLeft(raced)).toBe(true)
-        if (Either.isLeft(raced)) expect(raced.left).toBeInstanceOf(ReviewTurnTargetError)
+        expect(Result.isFailure(raced)).toBe(true)
+        if (Result.isFailure(raced)) expect(raced.failure).toBeInstanceOf(ReviewTurnTargetError)
         expect(yield* readCounts).toEqual({
           runs: 0,
           pending_messages: 0,
@@ -389,7 +426,7 @@ describe("ReviewTurnStore", () => {
     }),
   )
 
-  it.scoped("rejects completion and failure that do not own the active run/message pair", () =>
+  it.effect("rejects completion and failure that do not own the active run/message pair", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -399,7 +436,7 @@ describe("ReviewTurnStore", () => {
         const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
         const wrongMessageId = begun.details.messages[0]?.id
         if (wrongMessageId === undefined) throw new Error("Expected initial user message")
-        const completion = yield* Effect.either(
+        const completion = yield* Effect.result(
           turns.completeTurn({
             threadId: details.thread.id,
             runId: begun.run.id,
@@ -411,7 +448,7 @@ describe("ReviewTurnStore", () => {
             memoryUpdate: null,
           }),
         )
-        const failure = yield* Effect.either(
+        const failure = yield* Effect.result(
           turns.failTurn({
             threadId: details.thread.id,
             runId: begun.run.id,
@@ -420,21 +457,22 @@ describe("ReviewTurnStore", () => {
             failure: null,
           }),
         )
-        expect(Either.isLeft(completion)).toBe(true)
-        expect(Either.isLeft(failure)).toBe(true)
-        if (Either.isLeft(completion)) {
-          expect(completion.left).toBeInstanceOf(ReviewTurnOwnershipError)
+        expect(Result.isFailure(completion)).toBe(true)
+        expect(Result.isFailure(failure)).toBe(true)
+        if (Result.isFailure(completion)) {
+          expect(completion.failure).toBeInstanceOf(ReviewTurnOwnershipError)
         }
-        if (Either.isLeft(failure)) expect(failure.left).toBeInstanceOf(ReviewTurnOwnershipError)
-        expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
+        if (Result.isFailure(failure))
+          expect(failure.failure).toBeInstanceOf(ReviewTurnOwnershipError)
+        expect((yield* inspectRun(begun.run.id)).status).toBe("running")
         expect(
-          (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?.status,
-        ).toBe("pending")
+          (yield* (yield* ReviewThreadStore).get(details.thread.id)).messages.at(-1)?._tag,
+        ).toBe("Pending")
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
 
-  it.scoped("leaves committed interrupted state untouched when a target check fails", () =>
+  it.effect("leaves committed interrupted state untouched when a target check fails", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
       yield* Effect.gen(function* () {
@@ -443,15 +481,86 @@ describe("ReviewTurnStore", () => {
         const valid = validateInput(details.thread.id, repository.id)
         const mapping = yield* turns.validateTarget(valid)
         const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
-        const rejected = yield* Effect.either(
-          turns.validateTarget({ ...valid, repoId: "github:fungsi/wrong" }),
+        const rejected = yield* Effect.result(
+          turns.validateTarget({
+            ...valid,
+            repoId: ReviewProjectId.make("github:fungsi/wrong"),
+          }),
         )
-        expect(Either.isLeft(rejected)).toBe(true)
-        if (Either.isLeft(rejected)) expect(rejected.left).toBeInstanceOf(ReviewTurnTargetError)
-        expect((yield* (yield* AgentRunStore).get(begun.run.id)).status).toBe("running")
+        expect(Result.isFailure(rejected)).toBe(true)
+        if (Result.isFailure(rejected))
+          expect(rejected.failure).toBeInstanceOf(ReviewTurnTargetError)
+        expect((yield* inspectRun(begun.run.id)).status).toBe("running")
         const persisted = yield* (yield* ReviewThreadStore).get(details.thread.id)
-        expect(persisted.messages.at(-1)?.status).toBe("pending")
+        expect(persisted.messages.at(-1)?._tag).toBe("Pending")
         expect(persisted.messages.at(-1)?.id).toBe(begun.pendingMessage.id)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects malformed aggregate run and memory rows at the review-turn boundary", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const { repository, details } = yield* createHostedThread
+        const threads = yield* ReviewThreadStore
+        const turns = yield* ReviewTurnStore
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const targetInput = validateInput(details.thread.id, repository.id)
+        const mapping = yield* turns.validateTarget(targetInput)
+        const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
+        yield* turns.completeTurn({
+          threadId: details.thread.id,
+          runId: begun.run.id,
+          messageId: begun.pendingMessage.id,
+          bodyMarkdown: MarkdownBody.make("Initial response."),
+          artifacts: [],
+          providerRunId: ReviewAgentProviderRunId.make("provider-run-1"),
+          usage: null,
+          memoryUpdate: null,
+        })
+        yield* threads.addUserMessage({
+          threadId: details.thread.id,
+          bodyMarkdown: MarkdownBody.make("Follow-up question."),
+        })
+
+        yield* database.run("UPDATE agent_runs SET usage_json = ? WHERE id = ?", [
+          "not-json",
+          begun.run.id,
+        ])
+        const malformedRun = yield* Effect.result(
+          turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
+        )
+        expect(Result.isFailure(malformedRun) && malformedRun.failure).toEqual(
+          expect.objectContaining<Partial<ReviewTurnStoreError>>({
+            operation: DiagnosticOperation.make("decode.run"),
+          }),
+        )
+
+        yield* database.run("UPDATE agent_runs SET usage_json = NULL WHERE id = ?", [begun.run.id])
+        yield* database.run(
+          `INSERT INTO thread_memory (
+             thread_id, summary, summarized_through_sequence, summary_algorithm,
+             summary_version, important_artifact_ids_json, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            details.thread.id,
+            "Malformed memory",
+            begun.pendingMessage.sequence,
+            "provider-summary",
+            1,
+            "not-json",
+            new Date().toISOString(),
+          ],
+        )
+        const malformedMemory = yield* Effect.result(
+          turns.beginTurn(beginInput(details.thread.id, repository.id, mapping)),
+        )
+        expect(Result.isFailure(malformedMemory) && malformedMemory.failure).toEqual(
+          expect.objectContaining<Partial<ReviewTurnStoreError>>({
+            operation: DiagnosticOperation.make("decode.memory"),
+          }),
+        )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -518,7 +627,7 @@ describe("ReviewTurnStore", () => {
       ).toBe(1)
       const recovered = await afterCrash.runPromise(
         Effect.gen(function* () {
-          const run = yield* (yield* AgentRunStore).get(begun.run.id)
+          const run = yield* inspectRun(begun.run.id)
           const details = yield* (yield* ReviewThreadStore).get(begun.run.threadId)
           return { run, message: details.messages.at(-1) }
         }),
@@ -526,10 +635,12 @@ describe("ReviewTurnStore", () => {
       expect(recovered.run.status).toBe("failed")
       expect(recovered.message).toMatchObject({
         id: begun.pendingMessage.id,
-        status: "failed",
+        _tag: "Failed",
         agentRunId: begun.run.id,
       })
-      expect(recovered.run.error).toBe(recovered.message?.bodyMarkdown)
+      expect(recovered.run.error).toBe(
+        "The previous local agent run was interrupted. Retry to try again.",
+      )
     } finally {
       await beforeCrash.dispose()
       await afterCrash.dispose()

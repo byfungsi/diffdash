@@ -3,22 +3,41 @@ import {
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
+  ReviewProjectId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
+import { AgentRunId, ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import {
+  AgentPromptVersion,
+  CompletedAgentRun,
+  FailedAgentRun,
+  RunningAgentRun,
+} from "@diffdash/domain/agent-run"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import {
+  CurrentReviewAnchor,
+  CompletedAgentReviewThreadMessage,
+  CompletedAgentReviewTurn,
+  FailedAgentReviewThreadMessage,
+  FailedAgentReviewTurn,
   LineReviewAnchor,
   MarkdownBody,
+  PendingAgentReviewThreadMessage,
+  PendingAgentReviewTurn,
+  ProviderReviewThreadMessageFailure,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
-  ReviewThreadMessage,
   ReviewThreadMessageId,
+  UserReviewThreadMessage,
+  UserReviewTurn,
 } from "@diffdash/domain/review-thread"
 import type { ReactNode } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { page, userEvent } from "vitest/browser"
 import { ReviewThreadListPane } from "./review-thread-sidebar"
 import {
   ReviewMarkdown,
@@ -33,7 +52,7 @@ let root: Root | null = null
 
 const lineAnchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-browser"),
-  filePath: "src/example.ts",
+  filePath: RepositoryRelativePath.make("src/example.ts"),
   oldPath: null,
   hunkId: ReviewHunkId.make("hunk-browser"),
   hunkFingerprint: ReviewHunkFingerprint.make("fingerprint-browser"),
@@ -55,21 +74,10 @@ describe("review thread UI", () => {
     const onCancel = vi.fn<() => void>()
     render(<ReviewThreadComposer label="Line comment" onCancel={onCancel} onSubmit={onSubmit} />)
 
-    await vi.waitFor(() => expect(document.querySelector("textarea")).not.toBeNull())
-    const textarea = document.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Thread message"]',
-    )
-    expect(textarea).not.toBeNull()
-    expect(document.activeElement).toBe(textarea)
-    setTextareaValue(textarea!, "**Check** this path")
-    textarea!.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: "Enter",
-        metaKey: true,
-      }),
-    )
+    const textarea = page.getByLabelText("Thread message")
+    expect(document.activeElement).toBe(await textarea.findElement())
+    await textarea.fill("**Check** this path")
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
 
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce())
     expect(onSubmit.mock.calls[0]?.[0]).toBe("**Check** this path")
@@ -107,11 +115,10 @@ describe("review thread UI", () => {
     expect(document.body.textContent).not.toContain("private provider stderr")
 
     expect(document.querySelector('[aria-label="Reply to this line comment"]')).toBeNull()
-    const retry = [...document.querySelectorAll("button")].find(
-      (button) =>
-        button.textContent === "Retry" && button.closest('[aria-label="Agent message"]') !== null,
-    )
-    retry?.click()
+    await page
+      .getByLabelText("Agent message")
+      .getByRole("button", { name: "Retry", exact: true })
+      .click()
     await vi.waitFor(() => expect(retryAgentMessage).toHaveBeenCalledOnce())
     await vi.waitFor(() => expect(onRefresh).toHaveBeenCalledWith(details.thread.id))
     expect(document.querySelector("button")?.textContent).not.toContain("Close")
@@ -131,6 +138,37 @@ describe("review thread UI", () => {
     expect(document.body.textContent).toContain("Previous revision")
   })
 
+  it("renders tagged unavailable-anchor copy while retaining the original display location", () => {
+    const outdated = threadDetails({
+      currentAnchor: CurrentReviewAnchor.cases.Outdated.make({}),
+    })
+    render(
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={outdated}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
+    )
+
+    expect(document.body.textContent).toContain("Outdated")
+    expect(document.querySelector("article")?.getAttribute("aria-label")).toContain(
+      "src/example.ts:7",
+    )
+
+    render(
+      <ReviewThreadPanel
+        agentRunning={false}
+        details={threadDetails({
+          currentAnchor: CurrentReviewAnchor.cases.Unresolved.make({}),
+        })}
+        onAddUserMessage={threadMessageActionMock()}
+        onRefresh={threadActionMock()}
+      />,
+    )
+    expect(document.body.textContent).toContain("Anchor unavailable")
+  })
+
   it("labels inline reviews by diff side and line instead of internal hunk identity", () => {
     expect(reviewLineLabel(lineAnchor)).toBe("R7")
     expect(reviewLineLabel(LineReviewAnchor.make({ ...lineAnchor, side: "old" }))).toBe("L7")
@@ -148,12 +186,8 @@ describe("review thread UI", () => {
       />,
     )
 
-    const textarea = document.querySelector<HTMLTextAreaElement>(
-      'textarea[aria-label="Thread message"]',
-    )
-    expect(textarea).not.toBeNull()
-    setTextareaValue(textarea!, "Can you explain the edge case?")
-    buttonNamed("Send").click()
+    await page.getByLabelText("Thread message").fill("Can you explain the edge case?")
+    await page.getByRole("button", { name: "Send", exact: true }).click()
     await vi.waitFor(() =>
       expect(onAddUserMessage).toHaveBeenCalledWith(
         details.thread.id,
@@ -183,7 +217,7 @@ describe("review thread UI", () => {
     expect(document.body.textContent).not.toContain("OpenCode")
     expect(document.body.textContent).not.toContain("The agent response did not start")
     expect(document.querySelector('[role="alert"]')).toBeNull()
-    expect(buttonsNamed("Retry")).toHaveLength(0)
+    expect(page.getByRole("button", { name: "Retry", exact: true }).all()).toHaveLength(0)
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
 
@@ -204,9 +238,7 @@ describe("review thread UI", () => {
     )
 
     expect(document.body.textContent).toContain("No review agent provider is available")
-    const localRetry = [...document.querySelectorAll<HTMLButtonElement>("button")].at(-1)
-    expect(localRetry?.textContent).toBe("Retry")
-    localRetry?.click()
+    await page.getByRole("button", { name: "Retry", exact: true }).last().click()
     await vi.waitFor(() =>
       expect(retryAgentMessage).toHaveBeenCalledWith(
         details.thread.id,
@@ -232,7 +264,7 @@ describe("review thread UI", () => {
 
     expect(document.body.textContent).toContain("The agent response did not start")
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
-    buttonNamed("Retry").click()
+    await page.getByRole("button", { name: "Retry", exact: true }).click()
     await vi.waitFor(() =>
       expect(retryAgentMessage).toHaveBeenCalledWith(details.thread.id, details.messages[0]?.id),
     )
@@ -332,7 +364,7 @@ describe("review thread UI", () => {
     )
     render(sidebar(true, null))
     expect(document.body.textContent).not.toContain("1 thread")
-    expect(buttonNamed("Agent settings")).not.toBeNull()
+    expect(page.getByRole("button", { name: "Agent settings", exact: true }).query()).not.toBeNull()
     expect(document.querySelector("[data-review-thread-line-label]")?.textContent).toBe("R7")
     expect(document.querySelector(".lucide-move-right")).toBeNull()
     expect(document.querySelector("output")?.textContent).toContain("Loading")
@@ -341,7 +373,7 @@ describe("review thread UI", () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not load review threads",
     )
-    buttonNamed("Retry").click()
+    await page.getByRole("button", { name: "Retry", exact: true }).click()
     await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce())
   })
 
@@ -369,87 +401,108 @@ const safe = true
   })
 })
 
-const threadDetails = ({ previousRevision = false, pending = true } = {}) => {
+const threadDetails = ({
+  previousRevision = false,
+  pending = true,
+  currentAnchor = CurrentReviewAnchor.cases.Active.make({ anchor: lineAnchor }),
+}: {
+  readonly previousRevision?: boolean
+  readonly pending?: boolean
+  readonly currentAnchor?: CurrentReviewAnchor
+} = {}) => {
   const threadId = ReviewThreadId.make("thread-1")
   const currentRevision = ReviewRevision.make("head-current")
   const originalRevision = ReviewRevision.make(previousRevision ? "head-previous" : "head-current")
-  return ReviewThreadDetails.make({
-    thread: ReviewThread.make({
-      id: threadId,
-      repoId: "repo-1",
-      reviewKey: ReviewKey.make("github:fungsi/diffdash#65"),
-      prNumber: 65,
-      baseRevision: ReviewRevision.make("base-previous"),
-      headRevision: originalRevision,
-      currentBaseRevision: ReviewRevision.make("base-current"),
-      currentHeadRevision: currentRevision,
-      originalAnchor: lineAnchor,
-      currentAnchor: lineAnchor,
-      anchorStatus: "active",
-      createdAt: "2026-07-12T09:00:00Z",
-      updatedAt: "2026-07-12T09:01:00Z",
-    }),
-    messages: [
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make("message-user"),
-        threadId,
-        sequence: 1,
-        author: "user",
-        bodyMarkdown: MarkdownBody.make("**Check** the `value`."),
-        status: "complete",
-        agentRunId: null,
-        createdAt: "2026-07-12T09:00:00Z",
-        updatedAt: "2026-07-12T09:00:00Z",
-      }),
-      ...(pending
-        ? [
-            ReviewThreadMessage.make({
-              id: ReviewThreadMessageId.make("message-pending"),
-              threadId,
-              sequence: 2,
-              author: "agent",
-              bodyMarkdown: MarkdownBody.make("Looking at the call path..."),
-              status: "pending",
-              agentRunId: "run-1",
-              createdAt: "2026-07-12T09:00:10Z",
-              updatedAt: "2026-07-12T09:00:10Z",
-            }),
-          ]
-        : [
-            ReviewThreadMessage.make({
-              id: ReviewThreadMessageId.make("message-complete"),
-              threadId,
-              sequence: 2,
-              author: "agent",
-              bodyMarkdown: MarkdownBody.make("The edge case is covered."),
-              status: "complete",
-              agentRunId: "run-1",
-              createdAt: "2026-07-12T09:00:10Z",
-              updatedAt: "2026-07-12T09:00:10Z",
-            }),
-          ]),
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make("message-failed"),
-        threadId,
-        sequence: 3,
-        author: "agent",
-        bodyMarkdown: MarkdownBody.make("private provider stderr"),
-        status: "failed",
-        agentRunId: "run-2",
-        failure: AgentProviderFailure.make({
-          version: 1,
-          providerId: "claude",
-          capability: "review-thread",
-          category: "authentication",
-          processKind: "exit",
-          exitCode: 1,
-          signal: null,
-          httpStatus: null,
-          retryAfterSeconds: null,
-          resetsAt: null,
+  const thread = ReviewThread.make({
+    id: threadId,
+    repoId: ReviewProjectId.make("repo-1"),
+    reviewKey: ReviewKey.make("github:fungsi/diffdash#65"),
+    prNumber: 65,
+    baseRevision: ReviewRevision.make("base-previous"),
+    headRevision: originalRevision,
+    currentBaseRevision: ReviewRevision.make("base-current"),
+    currentHeadRevision: currentRevision,
+    originalAnchor: lineAnchor,
+    currentAnchor,
+    createdAt: "2026-07-12T09:00:00Z",
+    updatedAt: "2026-07-12T09:01:00Z",
+  })
+  const runIdentity = (id: string, startedAt: string) => ({
+    id: AgentRunId.make(id),
+    threadId,
+    reviewKey: thread.reviewKey,
+    baseRevision: thread.baseRevision,
+    headRevision: thread.headRevision,
+    provider: ReviewAgentProviderId.make("fixture"),
+    model: "fixture-model",
+    promptVersion: AgentPromptVersion.make("fixture-v1"),
+    startedAt,
+  })
+  const userMessage = UserReviewThreadMessage.make({
+    id: ReviewThreadMessageId.make("message-user"),
+    threadId,
+    sequence: 1,
+    bodyMarkdown: MarkdownBody.make("**Check** the `value`."),
+    createdAt: "2026-07-12T09:00:00Z",
+    updatedAt: "2026-07-12T09:00:00Z",
+  })
+  const responseIdentity = {
+    id: ReviewThreadMessageId.make(pending ? "message-pending" : "message-complete"),
+    threadId,
+    sequence: 2,
+    agentRunId: AgentRunId.make("run-1"),
+    createdAt: "2026-07-12T09:00:10Z",
+    updatedAt: "2026-07-12T09:00:10Z",
+  }
+  const responseTurn = pending
+    ? PendingAgentReviewTurn.make({
+        message: PendingAgentReviewThreadMessage.make(responseIdentity),
+        run: RunningAgentRun.make(runIdentity("run-1", responseIdentity.createdAt)),
+      })
+    : CompletedAgentReviewTurn.make({
+        message: CompletedAgentReviewThreadMessage.make({
+          ...responseIdentity,
+          bodyMarkdown: MarkdownBody.make("The edge case is covered."),
         }),
-        createdAt: "2026-07-12T09:01:00Z",
-        updatedAt: "2026-07-12T09:01:00Z",
+        run: CompletedAgentRun.make({
+          ...runIdentity("run-1", responseIdentity.createdAt),
+          completedAt: responseIdentity.updatedAt,
+        }),
+      })
+  const failedMessage = FailedAgentReviewThreadMessage.make({
+    id: ReviewThreadMessageId.make("message-failed"),
+    threadId,
+    sequence: 3,
+    agentRunId: AgentRunId.make("run-2"),
+    failure: ProviderReviewThreadMessageFailure.make({
+      details: AgentProviderFailure.make({
+        version: 1,
+        providerId: ReviewAgentProviderId.make("claude"),
+        capability: "review-thread",
+        category: "authentication",
+        processKind: "exit",
+        exitCode: 1,
+        signal: null,
+        httpStatus: null,
+        retryAfterSeconds: null,
+        resetsAt: null,
+      }),
+    }),
+    createdAt: "2026-07-12T09:01:00Z",
+    updatedAt: "2026-07-12T09:01:00Z",
+  })
+  return ReviewThreadDetails.make({
+    thread,
+    conversation: [
+      UserReviewTurn.make({ message: userMessage }),
+      responseTurn,
+      FailedAgentReviewTurn.make({
+        message: failedMessage,
+        run: FailedAgentRun.make({
+          ...runIdentity("run-2", failedMessage.createdAt),
+          error: "Agent response failed.",
+          completedAt: failedMessage.updatedAt,
+        }),
       }),
     ],
   })
@@ -458,29 +511,56 @@ const threadDetails = ({ previousRevision = false, pending = true } = {}) => {
 const userOnlyThreadDetails = () => {
   const populated = threadDetails({ pending: false })
   const initialMessage = populated.messages[0]
-  if (initialMessage === undefined) throw new Error("Expected an initial user message")
+  if (initialMessage?._tag !== "User") throw new Error("Expected an initial user message")
   return ReviewThreadDetails.make({
     thread: populated.thread,
-    messages: [initialMessage],
+    conversation: [UserReviewTurn.make({ message: initialMessage })],
   })
 }
 
 const appendMessage = (details: ReviewThreadDetails, id: string, author: "agent" | "user") =>
   ReviewThreadDetails.make({
     thread: details.thread,
-    messages: [
-      ...details.messages,
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make(id),
-        threadId: details.thread.id,
-        sequence: details.messages.length + 1,
-        author,
-        bodyMarkdown: MarkdownBody.make(`New ${author} message`),
-        status: "complete",
-        agentRunId: author === "agent" ? `${id}-run` : null,
-        createdAt: "2026-07-12T09:02:00Z",
-        updatedAt: "2026-07-12T09:02:00Z",
-      }),
+    conversation: [
+      ...details.conversation,
+      ...(author === "user"
+        ? [
+            UserReviewTurn.make({
+              message: UserReviewThreadMessage.make({
+                id: ReviewThreadMessageId.make(id),
+                threadId: details.thread.id,
+                sequence: details.messages.length + 1,
+                bodyMarkdown: MarkdownBody.make(`New ${author} message`),
+                createdAt: "2026-07-12T09:02:00Z",
+                updatedAt: "2026-07-12T09:02:00Z",
+              }),
+            }),
+          ]
+        : [
+            CompletedAgentReviewTurn.make({
+              message: CompletedAgentReviewThreadMessage.make({
+                id: ReviewThreadMessageId.make(id),
+                threadId: details.thread.id,
+                sequence: details.messages.length + 1,
+                bodyMarkdown: MarkdownBody.make(`New ${author} message`),
+                agentRunId: AgentRunId.make(`${id}-run`),
+                createdAt: "2026-07-12T09:02:00Z",
+                updatedAt: "2026-07-12T09:02:00Z",
+              }),
+              run: CompletedAgentRun.make({
+                id: AgentRunId.make(`${id}-run`),
+                threadId: details.thread.id,
+                reviewKey: details.thread.reviewKey,
+                baseRevision: details.thread.baseRevision,
+                headRevision: details.thread.headRevision,
+                provider: ReviewAgentProviderId.make("fixture"),
+                model: "fixture-model",
+                promptVersion: AgentPromptVersion.make("fixture-v1"),
+                startedAt: "2026-07-12T09:02:00Z",
+                completedAt: "2026-07-12T09:02:00Z",
+              }),
+            }),
+          ]),
     ],
   })
 
@@ -507,25 +587,6 @@ const render = (node: ReactNode) => {
   document.body.append(element)
   root = createRoot(element)
   flushSync(() => root?.render(node))
-}
-
-const buttonNamed = (name: string) => {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (candidate) => candidate.textContent?.trim() === name,
-  )
-  if (button === undefined) throw new Error(`Button not found: ${name}`)
-  return button
-}
-
-const buttonsNamed = (name: string) =>
-  [...document.querySelectorAll<HTMLButtonElement>("button")].filter(
-    (candidate) => candidate.textContent?.trim() === name,
-  )
-
-const setTextareaValue = (textarea: HTMLTextAreaElement, value: string) => {
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
-  setter?.call(textarea, value)
-  textarea.dispatchEvent(new Event("input", { bubbles: true }))
 }
 
 const nextAnimationFrame = () =>

@@ -1,18 +1,20 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Schema } from "effect"
 
-import { AgentRunId, ReviewAgentUsage } from "./review-agent"
+import { AgentRunId, ReviewAgentProviderId, ReviewAgentUsage } from "./review-agent"
 import { ReviewKey, ReviewRevision } from "./review-identity"
 import { ReviewThreadId } from "./review-thread"
 import {
   AgentPromptVersion,
   AgentRun,
+  CompletedAgentRun,
+  RunningAgentRun,
   ThreadMemory,
   ThreadMemorySummaryAlgorithm,
 } from "./agent-run"
 
 describe("AgentRun", () => {
-  it("FUN-72 AC: models nullable normalized usage on runs", () => {
+  it("models run lifecycle fields structurally", () => {
     const usage = ReviewAgentUsage.make({
       inputTokens: 120,
       outputTokens: 40,
@@ -21,24 +23,44 @@ describe("AgentRun", () => {
       costUsd: 0.0042,
     })
     const runId = AgentRunId.make("run-72")
-    const completed = AgentRun.make({
+    const completed = CompletedAgentRun.make({
       id: runId,
       threadId: ReviewThreadId.make("thread-72"),
       reviewKey: ReviewKey.make("github:fungsi/diffdash#72"),
       baseRevision: ReviewRevision.make("base-72"),
       headRevision: ReviewRevision.make("head-72"),
-      provider: "claude",
+      provider: ReviewAgentProviderId.make("claude"),
       model: "claude-sonnet-4",
       promptVersion: AgentPromptVersion.make("thread-v1"),
-      status: "completed",
-      providerRunId: null,
       usage,
-      error: null,
       startedAt: "2026-07-12T00:00:00.000Z",
       completedAt: "2026-07-12T00:00:01.000Z",
     })
     expect(completed.usage).toEqual(usage)
-    expect(AgentRun.make({ ...completed, status: "running", usage: null }).usage).toBeNull()
+    const running = RunningAgentRun.make({
+      id: AgentRunId.make("run-running"),
+      threadId: completed.threadId,
+      reviewKey: completed.reviewKey,
+      baseRevision: completed.baseRevision,
+      headRevision: completed.headRevision,
+      provider: completed.provider,
+      model: completed.model,
+      promptVersion: completed.promptVersion,
+      startedAt: completed.startedAt,
+    })
+    expect(running._tag).toBe("Running")
+    expect(Schema.encodeSync(AgentRun)(running)).toEqual({
+      _tag: "Running",
+      id: "run-running",
+      threadId: "thread-72",
+      reviewKey: "github:fungsi/diffdash#72",
+      baseRevision: "base-72",
+      headRevision: "head-72",
+      provider: "claude",
+      model: "claude-sonnet-4",
+      promptVersion: "thread-v1",
+      startedAt: "2026-07-12T00:00:00.000Z",
+    })
   })
 })
 
@@ -67,5 +89,17 @@ describe("ThreadMemory", () => {
         summaryVersion: 0,
       }),
     ).toThrow("summaryVersion")
+    expect(() =>
+      Schema.decodeUnknownSync(ThreadMemory)({
+        ...valid,
+        summarizedThroughSequence: 1.5,
+      }),
+    ).toThrow("summarizedThroughSequence")
+    expect(() =>
+      Schema.decodeUnknownSync(ThreadMemory)({
+        ...valid,
+        updatedAt: "2026-07-12T00:00:00+00:00",
+      }),
+    ).toThrow("updatedAt")
   })
 })

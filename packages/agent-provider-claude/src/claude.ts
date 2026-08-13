@@ -1,4 +1,4 @@
-import { Effect, Predicate, Redacted, Schema, Stream } from "effect"
+import { Effect, Match, Option, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
@@ -12,7 +12,6 @@ import {
   AgentProviderId,
   AgentProviderManifest,
   AgentProviderOperationError,
-  type AgentProviderProbeError,
   AgentRuntimeRequirement,
   AgentSessionId,
   AgentSessionSupport,
@@ -21,31 +20,24 @@ import {
   isAgentExecutionPolicyEnforced,
   McpToolName,
   type AgentCapability,
-  type AgentCapabilityProbe,
   type AgentProviderRegistration,
   type ReviewThreadRequest,
-  ReviewThreadResponse,
   ReviewThreadResult,
   type WalkthroughRequest,
   WalkthroughResult,
+  WebUrl,
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
 import {
-  arrayAt,
-  nonNegativeNumberAt,
-  numberAt,
-  parseProviderJsonlObject,
+  normalizeReviewThreadAgentResponse as normalizeResponse,
+  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
+  ReviewThreadAgentResponse,
+} from "@diffdash/domain/review-agent"
+import {
   parseProviderJsonText as parseResult,
   providerJsonContent as jsonContent,
-  providerMetadata as metadata,
-  recordAt,
-  stringAt,
 } from "@diffdash/agent-provider/provider-json"
 import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
-import {
-  normalizeProviderReviewThreadResponse as normalizeResponse,
-  REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
-} from "@diffdash/agent-provider/review-output"
 import {
   boundedProviderDiagnostic,
   type AgentProviderFailureCategory,
@@ -77,9 +69,6 @@ const sensitiveReadRules = [
 ] as const
 const mutationRules = ["Edit", "Write", "NotebookEdit", "Bash"] as const
 
-/** Stable Claude provider identity. */
-export const CLAUDE_PROVIDER_ID = providerId
-
 /** Claude model selected for new installations. */
 export const CLAUDE_DEFAULT_MODEL = AgentModelId.make("claude-sonnet-5")
 
@@ -90,20 +79,13 @@ export const CLAUDE_MODELS = [
   modelDescriptor("claude-haiku-4-5", "Haiku 4.5", "fast"),
 ] as const
 
-/** Claude candidates used by automatic quality routing. */
-export const CLAUDE_AUTO_MODELS = {
-  best: AgentModelId.make("claude-opus-5"),
-  balanced: CLAUDE_DEFAULT_MODEL,
-  fast: AgentModelId.make("claude-haiku-4-5"),
-} as const
-
 /** Static Claude provider contribution. */
 export const CLAUDE_MANIFEST = AgentProviderManifest.make({
   descriptor: AgentProviderDescriptor.make({
     id: providerId,
     displayName: "Claude",
     description: "Local Anthropic Claude Code CLI integration.",
-    homepage: "https://docs.anthropic.com/en/docs/claude-code",
+    homepage: WebUrl.make("https://docs.anthropic.com/en/docs/claude-code"),
   }),
   models: [...CLAUDE_MODELS],
   defaults: AgentProviderDefaults.make({
@@ -196,16 +178,6 @@ const probeClaudeRuntime = (processes: ProcessRunner) =>
     unavailableReason: "Claude is not installed or available",
   })
 
-/** Probes Claude prerequisites and policy enforcement for one declared capability. */
-export const probeClaudeCapability = (
-  processes: ProcessRunner,
-  capability: AgentCapability,
-  controls: ClaudePermissionControls = defaultPermissionControls,
-): Effect.Effect<AgentCapabilityProbe, AgentProviderProbeError> =>
-  projectAgentCapabilityProbe(probeClaudeRuntime(processes), capability, () =>
-    policyEnforcementFailure(controls),
-  )
-
 const policyEnforcementFailure = (controls: ClaudePermissionControls): string | null => {
   if (!controls.nonInteractivePermissionMode)
     return "Claude noninteractive permissions are required"
@@ -260,21 +232,91 @@ const makeWalkthroughArgs = (request: WalkthroughRequest) => [
   ...reasoningEffortArgs(request.reasoningEffort),
 ]
 
+const ClaudeJsonObject = Schema.StructWithRest(Schema.Struct({}), [
+  Schema.Record(Schema.String, Schema.Json),
+])
+type ClaudeJsonObject = typeof ClaudeJsonObject.Type
+
+const NonNegativeFinite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+const ClaudeUsage = Schema.Struct({
+  input_tokens: Schema.optionalKey(NonNegativeFinite),
+  output_tokens: Schema.optionalKey(NonNegativeFinite),
+  cache_read_input_tokens: Schema.optionalKey(NonNegativeFinite),
+  cache_creation_input_tokens: Schema.optionalKey(NonNegativeFinite),
+})
+type ClaudeUsage = typeof ClaudeUsage.Type
+
+const ClaudeMessage = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  model: Schema.optionalKey(Schema.String),
+  usage: Schema.optionalKey(ClaudeUsage),
+  content: Schema.optionalKey(Schema.Array(Schema.Json)),
+})
+type ClaudeMessage = typeof ClaudeMessage.Type
+
+const ClaudeStreamEvent = Schema.StructWithRest(
+  Schema.Struct({
+    type: Schema.optionalKey(Schema.String),
+    subtype: Schema.optionalKey(Schema.String),
+    session_id: Schema.optionalKey(Schema.String),
+    is_error: Schema.optionalKey(Schema.Boolean),
+    result: Schema.optionalKey(Schema.Json),
+    structured_output: Schema.optionalKey(Schema.Json),
+    total_cost_usd: Schema.optionalKey(Schema.Finite),
+    usage: Schema.optionalKey(ClaudeUsage),
+    message: Schema.optionalKey(Schema.Union([ClaudeMessage, Schema.String])),
+    error: Schema.optionalKey(Schema.Json),
+  }),
+  [Schema.Record(Schema.String, Schema.Json)],
+)
+type ClaudeStreamEvent = typeof ClaudeStreamEvent.Type
+
+const ClaudeStreamEventFromJson = Schema.fromJsonString(ClaudeStreamEvent)
+
+const ClaudeTextBlock = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.optionalKey(Schema.String),
+})
+
+const ClaudeToolUseBlock = Schema.Struct({
+  type: Schema.Literal("tool_use"),
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  input: Schema.optionalKey(ClaudeJsonObject),
+})
+
+const ClaudeToolResultBlock = Schema.Struct({
+  type: Schema.Literal("tool_result"),
+  tool_use_id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  content: Schema.optionalKey(Schema.Json),
+  is_error: Schema.optionalKey(Schema.Boolean),
+})
+
+const ClaudeTextPart = Schema.Struct({ text: Schema.String })
+const ClaudeToolInputDetails = Schema.Struct({
+  file_path: Schema.optionalKey(Schema.String),
+  path: Schema.optionalKey(Schema.String),
+  command: Schema.optionalKey(Schema.String),
+})
+const ClaudeErrorDetails = Schema.Struct({ message: Schema.String })
+
 interface ToolUse {
   readonly name: string
-  readonly input: Readonly<Record<string, unknown>>
+  readonly input: ClaudeJsonObject
 }
 
 interface PendingArtifact {
   readonly type: AgentArtifactCandidate["type"]
   readonly title: string
   readonly content: string
-  readonly metadata: Readonly<Record<string, unknown>>
+  readonly metadata: AgentArtifactCandidate["metadata"]
 }
 
 interface ClaudeTurnState {
   sessionId: string | null
-  finalResponse: unknown
+  finalResponse: Schema.Json
   sawResult: boolean
   usage: AgentUsage | null
   failureHint: AgentProviderFailureCategory | null
@@ -326,10 +368,12 @@ const executeReview = (
             .pipe(
               Stream.mapError(operationErrors.fromCause("review-thread")),
               Stream.runForEach((event) => {
-                const { _tag: tag } = event
-                return tag === "ProcessLine" && event.source === "stdout"
-                  ? consumeClaudeLine(state, event.line)
-                  : Effect.void
+                return Match.value(event).pipe(
+                  Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) =>
+                    consumeClaudeLine(state, line.line),
+                  ),
+                  Match.orElse(() => Effect.void),
+                )
               }),
             )
           if (!state.sawResult) {
@@ -396,7 +440,7 @@ const consumeClaudeLine = (
       }
     }
     const event = yield* parseJsonLine(line)
-    const type = stringAt(event, "type")
+    const type = event.type ?? null
     if (type === null) {
       return yield* operationErrors.fromReason(
         "review-thread",
@@ -404,8 +448,7 @@ const consumeClaudeLine = (
         "invalid-response",
       )
     }
-    const sessionId = stringAt(event, "session_id")
-    if (sessionId !== null) state.sessionId = sessionId
+    if (event.session_id !== undefined) state.sessionId = event.session_id
     switch (type) {
       case "assistant":
         yield* consumeAssistant(state, event)
@@ -416,14 +459,18 @@ const consumeClaudeLine = (
         return
       case "result":
         state.sawResult = true
-        if (event.is_error === true || stringAt(event, "subtype") === "error") {
+        if (event.is_error === true || event.subtype === "error") {
           return yield* operationErrors.fromReason(
             "review-thread",
-            stringAt(event, "result") ?? "Claude result reported an error",
+            Schema.is(Schema.String)(event.result)
+              ? event.result
+              : "Claude result reported an error",
           )
         }
-        state.finalResponse = parseResult(event.structured_output ?? event.result)
-        state.usage = parseClaudeUsage(recordAt(event, "usage"), numberAt(event, "total_cost_usd"))
+        state.finalResponse = parseJsonValue(
+          parseResult(event.structured_output ?? event.result ?? null),
+        )
+        state.usage = parseClaudeUsage(event.usage ?? null, event.total_cost_usd ?? null)
         return
       case "error":
         return yield* operationErrors.fromReason(
@@ -431,7 +478,7 @@ const consumeClaudeLine = (
           errorMessage(event) ?? "Claude emitted an error event",
         )
       case "system":
-        if (stringAt(event, "subtype") === "error") {
+        if (event.subtype === "error") {
           return yield* operationErrors.fromReason(
             "review-thread",
             errorMessage(event) ?? "Claude system error",
@@ -448,10 +495,10 @@ const consumeClaudeLine = (
 
 const consumeAssistant = (
   state: ClaudeTurnState,
-  event: Readonly<Record<string, unknown>>,
+  event: ClaudeStreamEvent,
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
-    const message = recordAt(event, "message")
+    const message = Option.getOrNull(Schema.decodeUnknownOption(ClaudeMessage)(event.message))
     if (message === null) {
       return yield* operationErrors.fromReason(
         "review-thread",
@@ -459,56 +506,61 @@ const consumeAssistant = (
         "invalid-response",
       )
     }
-    const usage = recordAt(message, "usage")
-    if (usage !== null) state.usage = parseClaudeUsage(usage, state.usage?.costUsd ?? null)
-    for (const block of arrayAt(message, "content")) {
-      if (!Predicate.isReadonlyRecord(block)) continue
-      const blockType = stringAt(block, "type")
-      if (blockType === "text") {
-        const text = stringAt(block, "text")
-        if (text !== null && text.length > 0) {
+    if (message.usage !== undefined) {
+      state.usage = parseClaudeUsage(message.usage, state.usage?.costUsd ?? null)
+    }
+    for (const block of message.content ?? []) {
+      const textBlock = Option.getOrNull(Schema.decodeUnknownOption(ClaudeTextBlock)(block))
+      if (textBlock !== null) {
+        if (textBlock.text !== undefined && textBlock.text.length > 0) {
           state.artifacts.push({
             type: "provider-message",
             title: "Claude assistant message",
-            content: text,
-            metadata: metadata({
-              messageId: stringAt(message, "id"),
-              model: stringAt(message, "model"),
-            }),
+            content: textBlock.text,
+            metadata: {
+              ...(message.id === undefined ? {} : { messageId: message.id }),
+              ...(message.model === undefined ? {} : { model: message.model }),
+            },
           })
         }
-      } else if (blockType === "tool_use") {
-        const id = stringAt(block, "id")
-        const name = stringAt(block, "name")
-        if (id === null || name === null) {
+        continue
+      }
+      const toolUseBlock = Option.getOrNull(Schema.decodeUnknownOption(ClaudeToolUseBlock)(block))
+      if (toolUseBlock !== null) {
+        if (toolUseBlock.id === undefined || toolUseBlock.name === undefined) {
           return yield* operationErrors.fromReason(
             "review-thread",
             "Claude tool_use block omitted id or name",
             "invalid-response",
           )
         }
-        state.toolUses.set(id, { name, input: recordAt(block, "input") ?? {} })
+        state.toolUses.set(toolUseBlock.id, {
+          name: toolUseBlock.name,
+          input: toolUseBlock.input ?? {},
+        })
       }
     }
   })
 
-const consumeToolResults = (state: ClaudeTurnState, event: Readonly<Record<string, unknown>>) => {
-  const message = recordAt(event, "message")
-  const blocks = message === null ? [event] : arrayAt(message, "content")
+const consumeToolResults = (state: ClaudeTurnState, event: ClaudeStreamEvent) => {
+  const message = Option.getOrNull(Schema.decodeUnknownOption(ClaudeMessage)(event.message))
+  const blocks = message === null ? [event] : (message.content ?? [])
   for (const block of blocks) {
-    if (!Predicate.isReadonlyRecord(block) || stringAt(block, "type") !== "tool_result") continue
-    const toolUseId = stringAt(block, "tool_use_id")
-    const toolUse = toolUseId === null ? undefined : state.toolUses.get(toolUseId)
-    const name = toolUse?.name ?? stringAt(block, "name") ?? "unknown"
+    const toolResult = Option.getOrNull(Schema.decodeUnknownOption(ClaudeToolResultBlock)(block))
+    if (toolResult === null) continue
+    const toolUseId = toolResult.tool_use_id ?? null
+    const toolUse =
+      toolResult.tool_use_id === undefined ? undefined : state.toolUses.get(toolResult.tool_use_id)
+    const name = toolUse?.name ?? toolResult.name ?? "unknown"
     state.artifacts.push({
       type: artifactTypeForClaudeTool(name),
       title: `Claude tool: ${toolTitle(name, toolUse?.input)}`,
-      content: claudeToolContent(block.content),
-      metadata: metadata({
-        toolUseId,
+      content: claudeToolContent(toolResult.content),
+      metadata: {
+        ...(toolUseId === null ? {} : { toolUseId }),
         tool: name,
-        isError: typeof block.is_error === "boolean" ? String(block.is_error) : null,
-      }),
+        ...(toolResult.is_error === undefined ? {} : { isError: String(toolResult.is_error) }),
+      },
     })
   }
 }
@@ -522,10 +574,7 @@ const artifactTypeForClaudeTool = (name: string): AgentArtifactCandidate["type"]
   return "unknown"
 }
 
-const parseClaudeUsage = (
-  usage: Readonly<Record<string, unknown>> | null,
-  costUsd: number | null,
-): AgentUsage | null =>
+const parseClaudeUsage = (usage: ClaudeUsage | null, costUsd: number | null): AgentUsage | null =>
   usage === null
     ? costUsd === null
       ? null
@@ -537,10 +586,10 @@ const parseClaudeUsage = (
           costUsd,
         })
     : AgentUsage.make({
-        inputTokens: nonNegativeNumberAt(usage, "input_tokens"),
-        outputTokens: nonNegativeNumberAt(usage, "output_tokens"),
-        cacheReadTokens: nonNegativeNumberAt(usage, "cache_read_input_tokens"),
-        cacheWriteTokens: nonNegativeNumberAt(usage, "cache_creation_input_tokens"),
+        inputTokens: usage.input_tokens ?? null,
+        outputTokens: usage.output_tokens ?? null,
+        cacheReadTokens: usage.cache_read_input_tokens ?? null,
+        cacheWriteTokens: usage.cache_creation_input_tokens ?? null,
         costUsd: costUsd === null || costUsd >= 0 ? costUsd : null,
       })
 
@@ -571,9 +620,9 @@ const makeMcpConfig = (request: ReviewThreadRequest) => ({
 })
 
 const decodeReviewResponse = (
-  value: unknown,
-): Effect.Effect<ReviewThreadResponse, InvalidAgentProviderResponseError> =>
-  Schema.decodeUnknown(ReviewThreadResponse)(normalizeResponse(value)).pipe(
+  value: Schema.Json,
+): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> =>
+  Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(normalizeResponse(value)).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,
@@ -616,48 +665,53 @@ const reasoningEffortArgs = (effort: WalkthroughRequest["reasoningEffort"]) => [
 ]
 
 const parseJsonLine = (line: string) =>
-  parseProviderJsonlObject(line).pipe(
+  Schema.decodeUnknownEffect(ClaudeStreamEventFromJson)(line).pipe(
     Effect.mapError((cause) =>
       operationErrors.fromReason(
         "review-thread",
-        `Claude emitted invalid stream-json: ${cause.reason}`,
+        `Claude emitted invalid stream-json: ${String(cause)}`,
         "invalid-response",
       ),
     ),
   )
 
-const claudeRateLimitCategory = (
-  event: Readonly<Record<string, unknown>>,
-): AgentProviderFailureCategory =>
+const claudeRateLimitCategory = (event: ClaudeStreamEvent): AgentProviderFailureCategory =>
   /(?:five[_ -]?hour|seven[_ -]?day|session|daily|weekly|monthly|usage)/iu.test(
     JSON.stringify(event),
   )
     ? "usage-limited"
     : "rate-limited"
 
-const toolTitle = (name: string, input: Readonly<Record<string, unknown>> | undefined) => {
+const toolTitle = (name: string, input: ClaudeJsonObject | undefined) => {
   if (input === undefined) return name
-  const detail =
-    stringAt(input, "file_path") ?? stringAt(input, "path") ?? stringAt(input, "command")
+  const details = Option.getOrNull(Schema.decodeUnknownOption(ClaudeToolInputDetails)(input))
+  const detail = details?.file_path ?? details?.path ?? details?.command ?? null
   return detail === null ? name : `${name} ${detail}`
 }
 
-const claudeToolContent = (content: unknown): string => {
-  if (typeof content === "string") return content
+const claudeToolContent = (content: Schema.Json | undefined): string => {
+  if (Schema.is(Schema.String)(content)) return content
   if (!Array.isArray(content)) return jsonContent(content)
   const text = content.flatMap((part) => {
-    if (!Predicate.isReadonlyRecord(part)) return []
-    const value = stringAt(part, "text")
-    return value === null ? [] : [value]
+    const textPart = Option.getOrNull(Schema.decodeUnknownOption(ClaudeTextPart)(part))
+    return textPart === null ? [] : [textPart.text]
   })
   return text.length > 0 ? text.join("\n") : jsonContent(content)
 }
 
-const errorMessage = (event: Readonly<Record<string, unknown>>) => {
-  const direct = stringAt(event, "message") ?? stringAt(event, "error")
+const parseJsonValue = <A>(value: A): Schema.Json =>
+  Option.getOrElse(Schema.decodeUnknownOption(Schema.Json)(value), () => null)
+
+const errorMessage = (event: ClaudeStreamEvent) => {
+  const direct = Schema.is(Schema.String)(event.message)
+    ? event.message
+    : Schema.is(Schema.String)(event.error)
+      ? event.error
+      : null
   if (direct !== null) return direct
-  const error = recordAt(event, "error")
-  return error === null ? null : stringAt(error, "message")
+  return (
+    Option.getOrNull(Schema.decodeUnknownOption(ClaudeErrorDetails)(event.error))?.message ?? null
+  )
 }
 
 function modelDescriptor(id: string, displayName: string, quality: "fast" | "balanced" | "best") {
@@ -668,13 +722,3 @@ function modelDescriptor(id: string, displayName: string, quality: "fast" | "bal
     quality,
   })
 }
-
-/** Converts a provider-owned model to its SDK identity. */
-export const claudeModelId = (model: string) => AgentModelId.make(model)
-
-/** Converts host tool names to SDK identities for a scoped review request. */
-export const claudeMcpToolNames = (tools: readonly string[]) =>
-  tools.map((tool) => McpToolName.make(tool))
-
-/** Redacts a token at the host/provider boundary. */
-export const claudeMcpToken = (token: string) => Redacted.make(token)

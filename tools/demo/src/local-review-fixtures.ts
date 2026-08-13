@@ -6,28 +6,31 @@ import {
   LocalReviewTarget,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
 import {
   makeReviewDiffIdentity,
   makeReviewSnapshotId,
   ReviewKey,
+  ReviewProjectId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
+  CurrentReviewAnchor,
   LineReviewAnchor,
-  MarkdownBody,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
-  ReviewThreadMessage,
-  ReviewThreadMessageId,
 } from "@diffdash/domain/review-thread"
+import { makeDemoReviewTurn } from "./review-thread-fixtures"
 import {
   buildWalkthroughHunkDigest,
   StoredWalkthrough,
   Walkthrough,
   WalkthroughChapter,
+  type WalkthroughHunkId,
   walkthroughHostedReviewScope,
   walkthroughLocalDiffScope,
   WalkthroughStop,
@@ -35,7 +38,7 @@ import {
 } from "@diffdash/domain/walkthrough"
 import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
 
-const rootPath = "/Users/demo/emberline-dispatch"
+const rootPath = RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch")
 const workingTreeBaseSha = "4b7c939f526dce56d26f4383a832e23186c24684"
 const branchMergeBaseSha = "73e9bd92aeb7c0f4bf61e152ead72dc60ef128bf"
 const branchTargetTipSha = "dbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -64,9 +67,9 @@ export const createDemoLocalReviewFixtures = (
     kind: "local",
     rootPath,
     comparison: BranchComparison.make({
-      branchName: "dev",
-      baseRef: "refs/remotes/origin/dev",
-      baseSha: branchMergeBaseSha,
+      branchName: RepositoryComparisonRef.make("dev"),
+      baseRef: RepositoryComparisonRef.make("refs/remotes/origin/dev"),
+      baseSha: ReviewRevision.make(branchMergeBaseSha),
     }),
   })
   const working = makeFixture({
@@ -116,8 +119,8 @@ const makeFixture = (input: {
   const headRevision = ReviewRevision.make(diffIdentity)
   const detail = LocalReviewDetail.make({
     rootPath,
-    repoName: input.scenario.repository.name,
-    branchName: input.scenario.manifest.pullRequest.headRefName,
+    repoName: input.scenario.manifest.repository.name,
+    branchName: RepositoryComparisonRef.make(input.scenario.manifest.pullRequest.headRefName),
     comparison: input.target.comparison,
     baseSha: baseRevision,
     headSha: headRevision,
@@ -183,7 +186,7 @@ const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalRev
       return local === undefined ? [] : [[hosted.id, local.id] as const]
     }),
   )
-  const mapIds = (ids: readonly string[]) =>
+  const mapIds = (ids: readonly WalkthroughHunkId[]) =>
     ids.map((id) => {
       const localId = localIdByHostedId.get(id)
       if (localId === undefined) throw new Error(`Local walkthrough cannot map hunk ${id}`)
@@ -191,7 +194,7 @@ const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalRev
     })
   const source = revision.walkthrough.walkthrough
   return StoredWalkthrough.make({
-    repoId: `local:${revision.detail.summary.locator.repository.name}`,
+    repoId: ReviewProjectId.make(`local:${revision.detail.summary.locator.repository.name}`),
     prNumber: null,
     reviewKey: snapshot.reviewKey,
     baseSha: snapshot.baseRevision,
@@ -217,7 +220,7 @@ const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalRev
 
 const localThread = (
   fixtureId: DemoLocalReviewFixture["id"],
-  repoId: string,
+  repoId: ReviewProjectId,
   snapshot: LocalReviewSnapshot,
   path: string,
 ) => {
@@ -250,33 +253,31 @@ const localThread = (
   })
   const threadId = ReviewThreadId.make(`thread-local-${fixtureId}`)
   const createdAt = fixtureId === "working-tree" ? "2026-07-10T08:40:00Z" : "2026-07-10T08:41:00Z"
+  const thread = ReviewThread.make({
+    id: threadId,
+    repoId,
+    reviewKey: snapshot.reviewKey,
+    prNumber: null,
+    baseRevision: snapshot.baseRevision,
+    headRevision: snapshot.headRevision,
+    currentBaseRevision: snapshot.baseRevision,
+    currentHeadRevision: snapshot.headRevision,
+    originalAnchor: anchor,
+    currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor }),
+    createdAt,
+    updatedAt: createdAt,
+  })
   return ReviewThreadDetails.make({
-    thread: ReviewThread.make({
-      id: threadId,
-      repoId,
-      reviewKey: snapshot.reviewKey,
-      prNumber: null,
-      baseRevision: snapshot.baseRevision,
-      headRevision: snapshot.headRevision,
-      currentBaseRevision: snapshot.baseRevision,
-      currentHeadRevision: snapshot.headRevision,
-      originalAnchor: anchor,
-      currentAnchor: anchor,
-      anchorStatus: "active",
-      createdAt,
-      updatedAt: createdAt,
-    }),
-    messages: [
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make(`message-local-${fixtureId}`),
-        threadId,
+    thread,
+    conversation: [
+      makeDemoReviewTurn(thread, {
+        id: `message-local-${fixtureId}`,
         sequence: 0,
-        author: "user",
-        bodyMarkdown: MarkdownBody.make(
+        bodyMarkdown:
           fixtureId === "working-tree"
             ? "Should this unpushed claim change include a recovery test?"
             : "Does the merge-base comparison contain only branch-authored changes?",
-        ),
+        author: "user",
         status: "complete",
         agentRunId: null,
         createdAt,

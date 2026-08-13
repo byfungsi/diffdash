@@ -1,12 +1,19 @@
 import { Schema } from "effect"
+import { WebUrl } from "@diffdash/domain/web-url"
+
+/** HTTP(S) base URL used by the native updater feed. */
+export const AppUpdateFeedUrl = WebUrl
+
+/** HTTP(S) base URL used by the native updater feed. */
+export type AppUpdateFeedUrl = typeof AppUpdateFeedUrl.Type
 
 /** Why automatic updates are unavailable for the current installation. */
-export const AppUpdateUnsupportedReason = Schema.Literal(
+export const AppUpdateUnsupportedReason = Schema.Literals([
   "development",
   "platform",
   "architecture",
   "installation",
-)
+])
 
 /** Why automatic updates are unavailable for the current installation. */
 export type AppUpdateUnsupportedReason = typeof AppUpdateUnsupportedReason.Type
@@ -59,7 +66,7 @@ export class AppUpdateFailed extends Schema.TaggedClass<AppUpdateFailed>()("erro
 }) {}
 
 /** Renderer-safe automatic update lifecycle state. */
-export const AppUpdateState = Schema.Union(
+export const AppUpdateState = Schema.Union([
   AppUpdateUnsupported,
   AppUpdateIdle,
   AppUpdateChecking,
@@ -67,7 +74,7 @@ export const AppUpdateState = Schema.Union(
   AppUpdateDownloading,
   AppUpdateDownloaded,
   AppUpdateFailed,
-)
+])
 
 /** Renderer-safe automatic update lifecycle state. */
 export type AppUpdateState = typeof AppUpdateState.Type

@@ -1,14 +1,13 @@
-import { FileSystem, Path } from "@effect/platform"
-import { Context, Effect, Layer, Schema, type Scope } from "effect"
+import { Context, Effect, FileSystem, Layer, Path, Schema, type Scope } from "effect"
 import { tmpdir } from "node:os"
 
 /** A typed failure while creating a secure temporary resource. */
 export class TempResourceError extends Schema.TaggedError<TempResourceError>()(
   "TempResourceError",
   {
-    operation: Schema.Literal("create-directory", "create-file", "prepare-output-path"),
+    operation: Schema.Literals(["create-directory", "create-file", "prepare-output-path"]),
     path: Schema.NullOr(Schema.String),
-    cause: Schema.Defect,
+    cause: Schema.ErrorInstance(),
   },
 ) {}
 
@@ -38,10 +37,9 @@ export interface TempResourceOperations {
 }
 
 /** Effect Platform-backed service for private scoped temporary resources. */
-export class TempResources extends Context.Tag("@diffdash/process/TempResources")<
-  TempResources,
-  TempResourceOperations
->() {
+export class TempResources extends Context.Service<TempResources, TempResourceOperations>()(
+  "@diffdash/process/TempResources",
+) {
   static readonly layer = Layer.effect(
     TempResources,
     Effect.gen(function* () {

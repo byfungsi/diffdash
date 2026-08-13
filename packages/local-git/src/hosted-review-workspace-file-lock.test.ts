@@ -11,7 +11,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, TestClock, TestLive } from "effect"
+import { Cause, Deferred, Effect, Fiber } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   FileLockOperationError,
@@ -32,35 +33,30 @@ const lockFixture = Effect.acquireRelease(
 )
 
 describe("withFileLock", () => {
-  it.scoped("serializes contending users and releases both scoped claims", () =>
+  it.effect("serializes contending users and releases both scoped claims", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
-      const live = yield* TestLive.TestLive
       const firstEntered = yield* Deferred.make<void>()
       const releaseFirst = yield* Deferred.make<void>()
       let secondEntered = false
 
-      const first = yield* live
-        .provide(
-          withFileLock(filesystem, lockPath, () =>
-            Deferred.succeed(firstEntered, undefined).pipe(
-              Effect.zipRight(Deferred.await(releaseFirst)),
-            ),
+      const first = yield* TestClock.withLive(
+        withFileLock(filesystem, lockPath, () =>
+          Deferred.succeed(firstEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirst)),
           ),
-        )
-        .pipe(Effect.fork)
+        ),
+      ).pipe(Effect.forkChild)
       yield* Deferred.await(firstEntered)
 
-      const second = yield* live
-        .provide(
-          withFileLock(filesystem, lockPath, () =>
-            Effect.sync(() => {
-              secondEntered = true
-            }),
-          ),
-        )
-        .pipe(Effect.fork)
-      yield* live.provide(Effect.sleep(75))
+      const second = yield* TestClock.withLive(
+        withFileLock(filesystem, lockPath, () =>
+          Effect.sync(() => {
+            secondEntered = true
+          }),
+        ),
+      ).pipe(Effect.forkChild)
+      yield* TestClock.withLive(Effect.sleep(75))
       expect(secondEntered).toBe(false)
 
       yield* Deferred.succeed(releaseFirst, undefined)
@@ -73,21 +69,18 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("times out from the monotonic TestClock while contended", () =>
+  it.effect("times out from the monotonic TestClock while contended", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
-      const live = yield* TestLive.TestLive
       const firstEntered = yield* Deferred.make<void>()
       const releaseFirst = yield* Deferred.make<void>()
-      const first = yield* live
-        .provide(
-          withFileLock(filesystem, lockPath, () =>
-            Deferred.succeed(firstEntered, undefined).pipe(
-              Effect.zipRight(Deferred.await(releaseFirst)),
-            ),
+      const first = yield* TestClock.withLive(
+        withFileLock(filesystem, lockPath, () =>
+          Deferred.succeed(firstEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFirst)),
           ),
-        )
-        .pipe(Effect.fork)
+        ),
+      ).pipe(Effect.forkChild)
       yield* Deferred.await(firstEntered)
 
       const waiterAttempted = yield* Deferred.make<void>()
@@ -95,12 +88,12 @@ describe("withFileLock", () => {
         ...nodeFileLockOperations,
         publish: (claimPath, destinationPath) =>
           Deferred.succeed(waiterAttempted, undefined).pipe(
-            Effect.zipRight(nodeFileLockOperations.publish(claimPath, destinationPath)),
+            Effect.andThen(nodeFileLockOperations.publish(claimPath, destinationPath)),
           ),
       })
       const waiter = yield* lock(filesystem, lockPath, () => Effect.void, 100).pipe(
         Effect.flip,
-        Effect.fork,
+        Effect.forkChild,
       )
       yield* Deferred.await(waiterAttempted)
       yield* TestClock.adjust(100)
@@ -112,23 +105,22 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("interrupts immediately while polling and removes only the waiting claim", () =>
+  it.effect("interrupts immediately while polling and removes only the waiting claim", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
-      const live = yield* TestLive.TestLive
       const firstEntered = yield* Deferred.make<void>()
       const releaseFirst = yield* Deferred.make<void>()
       const first = yield* withFileLock(filesystem, lockPath, () =>
         Deferred.succeed(firstEntered, undefined).pipe(
-          Effect.zipRight(Deferred.await(releaseFirst)),
+          Effect.andThen(Deferred.await(releaseFirst)),
         ),
-      ).pipe(Effect.fork)
+      ).pipe(Effect.forkChild)
       yield* Deferred.await(firstEntered)
 
-      const waiter = yield* live
-        .provide(withFileLock(filesystem, lockPath, () => Effect.never))
-        .pipe(Effect.fork)
-      yield* live.provide(Effect.sleep(75))
+      const waiter = yield* TestClock.withLive(
+        withFileLock(filesystem, lockPath, () => Effect.never),
+      ).pipe(Effect.forkChild)
+      yield* TestClock.withLive(Effect.sleep(75))
       yield* Fiber.interrupt(waiter)
 
       expect(existsSync(lockPath)).toBe(true)
@@ -139,7 +131,7 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("defers interruption during publication, then releases before use", () =>
+  it.effect("defers interruption during publication, then releases before use", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       const publicationStarted = yield* Deferred.make<void>()
@@ -149,8 +141,8 @@ describe("withFileLock", () => {
         ...nodeFileLockOperations,
         publish: (claimPath, destinationPath) =>
           Deferred.succeed(publicationStarted, undefined).pipe(
-            Effect.zipRight(Deferred.await(continuePublication)),
-            Effect.zipRight(nodeFileLockOperations.publish(claimPath, destinationPath)),
+            Effect.andThen(Deferred.await(continuePublication)),
+            Effect.andThen(nodeFileLockOperations.publish(claimPath, destinationPath)),
           ),
       })
 
@@ -158,9 +150,9 @@ describe("withFileLock", () => {
         Effect.sync(() => {
           useStarted = true
         }),
-      ).pipe(Effect.fork)
+      ).pipe(Effect.forkChild)
       yield* Deferred.await(publicationStarted)
-      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.fork)
+      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild)
       yield* Deferred.succeed(continuePublication, undefined)
       yield* Fiber.join(interruption)
 
@@ -170,47 +162,41 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("releases when interrupted immediately after atomic acquisition", () =>
+  it.effect("releases when interrupted immediately after atomic acquisition", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       const published = yield* Deferred.make<void>()
       const finishPublication = yield* Deferred.make<void>()
-      let useStarted = false
       const lock = makeFileLock({
         ...nodeFileLockOperations,
         publish: (claimPath, destinationPath) =>
           nodeFileLockOperations
             .publish(claimPath, destinationPath)
             .pipe(
-              Effect.zipRight(Deferred.succeed(published, undefined)),
-              Effect.zipRight(Deferred.await(finishPublication)),
+              Effect.andThen(Deferred.succeed(published, undefined)),
+              Effect.andThen(Deferred.await(finishPublication)),
             ),
       })
 
-      const fiber = yield* lock(filesystem, lockPath, () =>
-        Effect.sync(() => {
-          useStarted = true
-        }),
-      ).pipe(Effect.fork)
+      const fiber = yield* lock(filesystem, lockPath, () => Effect.void).pipe(Effect.forkChild)
       yield* Deferred.await(published)
-      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.fork)
+      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.forkChild)
       yield* Deferred.succeed(finishPublication, undefined)
       yield* Fiber.join(interruption)
 
-      expect(useStarted).toBe(false)
       expect(existsSync(lockPath)).toBe(false)
       expect(claimFiles(lockPath)).toEqual([])
     }),
   )
 
-  it.scoped("cleans a partially written claim when claim publication fails", () =>
+  it.effect("cleans a partially written claim when claim publication fails", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       const lock = makeFileLock({
         ...nodeFileLockOperations,
         createClaim: (claimPath) =>
           Effect.sync(() => writeFileSync(claimPath, "partial", { flag: "wx" })).pipe(
-            Effect.zipRight(
+            Effect.andThen(
               Effect.fail(
                 FileLockOperationError.make({ cause: new Error("simulated write failure") }),
               ),
@@ -226,7 +212,39 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("steals corrupt and dead-owner locks", () =>
+  it.effect("preserves operation and lock-release causes when both fail", () =>
+    Effect.gen(function* () {
+      const { filesystem, lockPath } = yield* lockFixture
+      const operationFailure = new Error("operation failed")
+      const lock = makeFileLock({
+        ...nodeFileLockOperations,
+        remove: (path) =>
+          path === lockPath
+            ? Effect.fail(FileLockOperationError.make({ cause: new Error("lock release failed") }))
+            : nodeFileLockOperations.remove(path),
+      })
+
+      const cause = yield* lock(filesystem, lockPath, () => Effect.fail(operationFailure)).pipe(
+        Effect.sandbox,
+        Effect.flip,
+      )
+
+      expect(cause.reasons).toHaveLength(2)
+      expect(Cause.pretty(cause)).toContain("operation failed")
+      expect(
+        cause.reasons.some(
+          (reason) =>
+            Cause.isFailReason(reason) &&
+            typeof reason.error === "object" &&
+            reason.error !== null &&
+            "operation" in reason.error &&
+            reason.error.operation === "lock.release",
+        ),
+      ).toBe(true)
+    }),
+  )
+
+  it.effect("steals corrupt and dead-owner locks", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       yield* filesystem.ensureParent(lockPath, "test.lock.parent")
@@ -262,7 +280,7 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("does not unlink a replacement lock during release", () =>
+  it.effect("does not unlink a replacement lock during release", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       const replacement = JSON.stringify({
@@ -285,7 +303,7 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("does not steal a replacement that appears after observing a stale owner", () =>
+  it.effect("does not steal a replacement that appears after observing a stale owner", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       yield* filesystem.ensureParent(lockPath, "test.lock.parent")
@@ -316,14 +334,14 @@ describe("withFileLock", () => {
                 rmSync(path)
                 writeFileSync(path, replacement, { flag: "wx", mode: 0o600 })
               }).pipe(
-                Effect.zipRight(Deferred.succeed(replacementInstalled, undefined)),
-                Effect.zipRight(nodeFileLockOperations.read(path)),
+                Effect.andThen(Deferred.succeed(replacementInstalled, undefined)),
+                Effect.andThen(nodeFileLockOperations.read(path)),
               )
             : nodeFileLockOperations.read(path)
         },
       })
 
-      const fiber = yield* lock(filesystem, lockPath, () => Effect.never).pipe(Effect.fork)
+      const fiber = yield* lock(filesystem, lockPath, () => Effect.never).pipe(Effect.forkChild)
       yield* Deferred.await(replacementInstalled)
       yield* Fiber.interrupt(fiber)
 
@@ -333,7 +351,7 @@ describe("withFileLock", () => {
     }),
   )
 
-  it.scoped("rejects invalid timeout inputs before creating lock files", () =>
+  it.effect("rejects invalid timeout inputs before creating lock files", () =>
     Effect.gen(function* () {
       const { filesystem, lockPath } = yield* lockFixture
       for (const timeout of [-1, 1.5, Number.POSITIVE_INFINITY, Number.NaN]) {

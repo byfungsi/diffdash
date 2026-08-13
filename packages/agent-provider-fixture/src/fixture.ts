@@ -13,19 +13,17 @@ import {
   type AgentProviderRegistration,
   AgentRuntimeRequirement,
   AgentSessionSupport,
-  ReviewThreadResponse,
   ReviewThreadResult,
   WalkthroughResult,
 } from "@diffdash/agent-provider"
+import { ReviewThreadAgentResponse } from "@diffdash/domain/review-agent"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
 
-/** Stable identity used by the fourth-provider composition proof. */
-export const FIXTURE_AGENT_PROVIDER_ID = AgentProviderId.make("fixture-agent")
-
+const providerId = AgentProviderId.make("fixture-agent")
 const fixtureModel = AgentModelId.make("fixture-model")
 const operationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: FIXTURE_AGENT_PROVIDER_ID,
+  providerId,
   fallbackReason: "Fixture agent execution failed",
 })
 
@@ -40,7 +38,7 @@ export const makeFixtureAgentProvider = (
 ): AgentProviderRegistration => ({
   manifest: AgentProviderManifest.make({
     descriptor: AgentProviderDescriptor.make({
-      id: FIXTURE_AGENT_PROVIDER_ID,
+      id: providerId,
       displayName: "Fixture Agent",
       description: "Deterministic fourth-provider composition fixture.",
       homepage: null,
@@ -110,10 +108,9 @@ export const makeFixtureAgentProvider = (
       isScopedMcpToolSubset(request.mcp.allowedTools, request.policy.allowedMcpTools)
         ? Effect.succeed(
             ReviewThreadResult.make({
-              response: ReviewThreadResponse.make({
+              response: ReviewThreadAgentResponse.make({
                 bodyMarkdown: "Fixture review response",
-                threadSummary: null,
-                referencedLocations: [],
+                referencedAnchors: [],
               }),
               usage: null,
               artifacts: [],

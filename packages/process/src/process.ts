@@ -1,10 +1,11 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Match, Predicate, Queue, Schema, Stream } from "effect"
 
 import {
   BoundedOutput,
   NodeProcessIoFailure,
   NodeProcessSpawner,
   NodeProcessStdinFailure,
+  ProcessLimitFailure,
   StreamOutputDecoder,
   type NodeProcessHandle,
   type ResolvedProcessOptions,
@@ -40,7 +41,7 @@ export const defaultMaxStreamEvents = 20_000
 export const defaultMaxBufferedEvents = 16
 
 /** Identifies the subprocess output channel that produced bytes or a complete line. */
-export const ProcessOutputSource = Schema.Literal("stdout", "stderr")
+export const ProcessOutputSource = Schema.Literals(["stdout", "stderr"])
 
 /** Identifies the subprocess output channel that produced bytes or a complete line. */
 export type ProcessOutputSource = typeof ProcessOutputSource.Type
@@ -48,7 +49,7 @@ export type ProcessOutputSource = typeof ProcessOutputSource.Type
 /** Controls retained bytes and behavior when one output channel exceeds its budget. */
 export class ProcessOutputPolicy extends Schema.Class<ProcessOutputPolicy>("ProcessOutputPolicy")({
   maxBytes: Schema.Number,
-  overflow: Schema.Literal("error", "truncate"),
+  overflow: Schema.Literals(["error", "truncate"]),
 }) {}
 
 /** Structural input accepted when configuring one output channel. */
@@ -82,7 +83,7 @@ export class ProcessRequest extends Schema.Class<ProcessRequest>("ProcessRequest
   cwd: Schema.NullOr(Schema.String),
   stdin: Schema.NullOr(Schema.String),
   timeoutMs: Schema.NullOr(Schema.Number),
-  env: Schema.Record({ key: Schema.String, value: Schema.String }),
+  env: Schema.Record(Schema.String, Schema.String),
   unsetEnv: Schema.Array(Schema.String),
   stdout: Schema.NullOr(ProcessOutputPolicy),
   stderr: Schema.NullOr(ProcessOutputPolicy),
@@ -146,7 +147,7 @@ export class ProcessExit extends Schema.TaggedClass<ProcessExit>()("ProcessExit"
 }) {}
 
 /** Ordered line or successful terminal event from a streamed process. */
-export const ProcessEvent = Schema.Union(ProcessLine, ProcessExit)
+export const ProcessEvent = Schema.Union([ProcessLine, ProcessExit])
 
 /** Ordered line or successful terminal event from a streamed process. */
 export type ProcessEvent = typeof ProcessEvent.Type
@@ -168,19 +169,19 @@ const diagnosticFields = {
 /** Process request options failed validation before spawning. */
 export class InvalidProcessOptionsError extends Schema.TaggedError<InvalidProcessOptionsError>()(
   "InvalidProcessOptionsError",
-  { ...diagnosticFields, option: Schema.String, cause: Schema.Defect },
+  { ...diagnosticFields, option: Schema.String, cause: Schema.ErrorInstance() },
 ) {}
 
 /** The operating system could not spawn the requested process. */
 export class ProcessSpawnError extends Schema.TaggedError<ProcessSpawnError>()(
   "ProcessSpawnError",
-  { ...diagnosticFields, cause: Schema.Defect },
+  { ...diagnosticFields, cause: Schema.ErrorInstance() },
 ) {}
 
 /** The process rejected or failed while receiving stdin. */
 export class ProcessStdinError extends Schema.TaggedError<ProcessStdinError>()(
   "ProcessStdinError",
-  { ...diagnosticFields, cause: Schema.Defect },
+  { ...diagnosticFields, cause: Schema.ErrorInstance() },
 ) {}
 
 /** Process output failed or exceeded a configured byte/event limit. */
@@ -189,8 +190,8 @@ export class ProcessOutputError extends Schema.TaggedError<ProcessOutputError>()
   {
     ...diagnosticFields,
     source: Schema.NullOr(ProcessOutputSource),
-    limit: Schema.Literal("capture-bytes", "events", "line-bytes", "stream-bytes", "io"),
-    cause: Schema.NullOr(Schema.Defect),
+    limit: Schema.Literals(["capture-bytes", "events", "line-bytes", "stream-bytes", "io"]),
+    cause: Schema.NullOr(Schema.ErrorInstance()),
   },
 ) {}
 
@@ -231,10 +232,9 @@ export interface ProcessRunner {
 }
 
 /** Main-process service for scoped, bounded local process execution. */
-export class ProcessService extends Context.Tag("@diffdash/process/ProcessService")<
-  ProcessService,
-  ProcessRunner
->() {
+export class ProcessService extends Context.Service<ProcessService, ProcessRunner>()(
+  "@diffdash/process/ProcessService",
+) {
   static readonly layer = Layer.suspend(makeProcessServiceLayer).pipe(
     Layer.provide(NodeProcessSpawner.layer),
   )
@@ -270,16 +270,12 @@ function makeProcessServiceLayer() {
         Stream.unwrap(
           resolveRequest(request, "streaming").pipe(
             Effect.map((resolved) =>
-              Stream.asyncScoped<ProcessEvent, ProcessExecutionError>(
-                (emit) =>
-                  execute(spawner, request, resolved, (event) =>
-                    Effect.promise(() => emit.single(event)),
-                  ).pipe(
-                    Effect.flatMap((result) =>
-                      Effect.promise(() => emit.single(ProcessExit.make({ result }))),
-                    ),
-                    Effect.flatMap(() => Effect.promise(() => emit.end())),
-                    Effect.catchAll((error) => Effect.promise(() => emit.fail(error))),
+              Stream.callback<ProcessEvent, ProcessExecutionError>(
+                (queue) =>
+                  execute(spawner, request, resolved, (event) => Queue.offer(queue, event)).pipe(
+                    Effect.flatMap((result) => Queue.offer(queue, ProcessExit.make({ result }))),
+                    Effect.andThen(Queue.end(queue)),
+                    Effect.catch((error) => Queue.fail(queue, error)),
                     Effect.forkScoped,
                   ),
                 { bufferSize: resolved.options.maxBufferedEvents, strategy: "suspend" },
@@ -300,7 +296,8 @@ const resolveRequest = (
   Effect.try({
     try: () => {
       const defaults = mode === "captured" ? capturedDefaults : streamingDefaults
-      if (request.command.length === 0) throw new OptionError("command", "command cannot be empty")
+      if (request.command.length === 0)
+        throw OptionError.make({ option: "command", message: "command cannot be empty" })
       if (request.timeoutMs !== null) nonNegativeInteger(request.timeoutMs, "timeoutMs")
       const stdout = request.stdout ?? defaults.stdout
       const stderr = request.stderr ?? defaults.stderr
@@ -350,7 +347,7 @@ const resolveRequest = (
   })
 
 const execute = (
-  spawner: Context.Tag.Service<NodeProcessSpawner>,
+  spawner: Context.Service.Shape<typeof NodeProcessSpawner>,
   request: ProcessRequest,
   resolved: ResolvedExecution,
   emitLine?: (event: ProcessLine) => Effect.Effect<void>,
@@ -389,8 +386,7 @@ const execute = (
           }),
         ),
         Effect.mapError((failure) => {
-          const { _tag: tag } = failure
-          return tag === "ProcessOutputError"
+          return Schema.is(ProcessOutputError)(failure)
             ? failure
             : processOutputError(request, capture, failure)
         }),
@@ -419,8 +415,8 @@ const execute = (
         : Effect.raceFirst(
             execution,
             Effect.sleep(timeoutMs).pipe(
-              Effect.zipRight(handle.terminate),
-              Effect.zipRight(handle.awaitTerminal),
+              Effect.andThen(handle.terminate),
+              Effect.andThen(handle.awaitTerminal),
               Effect.flatMap((timedOutTerminal) =>
                 ProcessTimeoutError.make({
                   ...terminalDiagnostics(request, capture, timedOutTerminal),
@@ -452,34 +448,38 @@ const terminalResult = (
   capture: BoundedOutput,
   terminal: NodeProcessTerminal,
 ): Effect.Effect<ProcessResult, ProcessSpawnError | ProcessExitError> => {
-  const { _tag: terminalTag } = terminal
-  if (terminalTag === "NodeProcessSpawnFailed") {
-    return processSpawnError(request, capture, "Failed to spawn command", terminal.cause)
-  }
-  if (terminal.code !== 0 || terminal.signal !== null) {
-    const message =
-      terminal.code === null
-        ? `Command terminated by ${terminal.signal ?? "an unknown signal"}`
-        : `Command exited with code ${terminal.code}`
-    return ProcessExitError.make({
-      ...diagnostics(request, capture, terminal.code, terminal.signal),
-      message,
-    })
-  }
-  const output = capture.snapshot()
-  return Effect.succeed(
-    ProcessResult.make({
-      command: request.command,
-      args: request.args,
-      cwd: request.cwd,
-      stdout: output.stdout.text,
-      stderr: output.stderr.text,
-      stdoutTruncated: output.stdout.truncated,
-      stderrTruncated: output.stderr.truncated,
-      outputTruncated: output.stdout.truncated || output.stderr.truncated,
-      exitCode: 0,
-      signal: null,
+  return Match.value(terminal).pipe(
+    Match.tag("NodeProcessSpawnFailed", (failed) =>
+      processSpawnError(request, capture, "Failed to spawn command", failed.cause),
+    ),
+    Match.tag("NodeProcessClosed", (closed) => {
+      if (closed.code !== 0 || closed.signal !== null) {
+        const message =
+          closed.code === null
+            ? `Command terminated by ${closed.signal ?? "an unknown signal"}`
+            : `Command exited with code ${closed.code}`
+        return ProcessExitError.make({
+          ...diagnostics(request, capture, closed.code, closed.signal),
+          message,
+        })
+      }
+      const output = capture.snapshot()
+      return Effect.succeed(
+        ProcessResult.make({
+          command: request.command,
+          args: request.args,
+          cwd: request.cwd,
+          stdout: output.stdout.text,
+          stderr: output.stderr.text,
+          stdoutTruncated: output.stdout.truncated,
+          stderrTruncated: output.stderr.truncated,
+          outputTruncated: output.stdout.truncated || output.stderr.truncated,
+          exitCode: 0,
+          signal: null,
+        }),
+      )
     }),
+    Match.exhaustive,
   )
 }
 
@@ -493,30 +493,41 @@ const awaitProcessTerminal = (
     handle.awaitTerminal.pipe(Effect.map((terminal) => ({ _tag: "Terminal" as const, terminal }))),
     handle.awaitExit.pipe(Effect.as({ _tag: "ExitObserved" as const })),
   ).pipe(
-    Effect.flatMap((first) => {
-      const { _tag: firstTag } = first
-      if (firstTag === "Terminal") return Effect.succeed(first.terminal)
-      return Effect.raceFirst(
-        handle.awaitTerminal.pipe(
-          Effect.map((terminal) => ({ _tag: "Terminal" as const, terminal })),
-        ),
-        Effect.sleep(options.exitCloseAfterMs).pipe(Effect.as({ _tag: "CloseTimeout" as const })),
-      ).pipe(
-        Effect.flatMap((afterExit) => {
-          const { _tag: afterExitTag } = afterExit
-          if (afterExitTag === "Terminal") return Effect.succeed(afterExit.terminal)
-          return handle.terminate.pipe(
-            Effect.zipRight(handle.awaitTerminal),
-            Effect.flatMap((terminal) =>
-              ProcessCleanupError.make({
-                ...terminalDiagnostics(request, capture, terminal),
-                message: "Command cleanup reached its termination deadline before stdio closed",
-              }),
+    Effect.flatMap((first) =>
+      Match.value(first).pipe(
+        Match.tag("Terminal", ({ terminal }) => Effect.succeed(terminal)),
+        Match.tag("ExitObserved", () =>
+          Effect.raceFirst(
+            handle.awaitTerminal.pipe(
+              Effect.map((terminal) => ({ _tag: "Terminal" as const, terminal })),
             ),
-          )
-        }),
-      )
-    }),
+            Effect.sleep(options.exitCloseAfterMs).pipe(
+              Effect.as({ _tag: "CloseTimeout" as const }),
+            ),
+          ).pipe(
+            Effect.flatMap((afterExit) =>
+              Match.value(afterExit).pipe(
+                Match.tag("Terminal", ({ terminal }) => Effect.succeed(terminal)),
+                Match.tag("CloseTimeout", () =>
+                  handle.terminate.pipe(
+                    Effect.andThen(handle.awaitTerminal),
+                    Effect.flatMap((terminal) =>
+                      ProcessCleanupError.make({
+                        ...terminalDiagnostics(request, capture, terminal),
+                        message:
+                          "Command cleanup reached its termination deadline before stdio closed",
+                      }),
+                    ),
+                  ),
+                ),
+                Match.exhaustive,
+              ),
+            ),
+          ),
+        ),
+        Match.exhaustive,
+      ),
+    ),
   )
 
 const resolveOutputPolicy = (policy: ProcessOutputPolicy, source: ProcessOutputSource) => ({
@@ -526,25 +537,25 @@ const resolveOutputPolicy = (policy: ProcessOutputPolicy, source: ProcessOutputS
 
 const nonNegativeInteger = (value: number, option: string): number => {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new OptionError(option, `${option} must be a non-negative safe integer`)
+    throw OptionError.make({
+      option,
+      message: `${option} must be a non-negative safe integer`,
+    })
   }
   return value
 }
 
 const positiveInteger = (value: number, option: string): number => {
   nonNegativeInteger(value, option)
-  if (value === 0) throw new OptionError(option, `${option} must be greater than zero`)
+  if (value === 0)
+    throw OptionError.make({ option, message: `${option} must be greater than zero` })
   return value
 }
 
-class OptionError extends Error {
-  constructor(
-    readonly option: string,
-    message: string,
-  ) {
-    super(message)
-  }
-}
+class OptionError extends Schema.TaggedError<OptionError>()("OptionError", {
+  option: Schema.String,
+  message: Schema.String,
+}) {}
 
 const emptyOutput = {
   stdout: { text: "", truncated: false },
@@ -577,30 +588,33 @@ const terminalDiagnostics = (
   capture: BoundedOutput,
   terminal: NodeProcessTerminal,
 ) => {
-  const { _tag: terminalTag } = terminal
-  return terminalTag === "NodeProcessClosed"
-    ? diagnostics(request, capture, terminal.code, terminal.signal)
-    : diagnostics(request, capture, null, null)
+  return Match.value(terminal).pipe(
+    Match.tag("NodeProcessClosed", (closed) =>
+      diagnostics(request, capture, closed.code, closed.signal),
+    ),
+    Match.tag("NodeProcessSpawnFailed", () => diagnostics(request, capture, null, null)),
+    Match.exhaustive,
+  )
 }
 
-const invalidOptionsError = (request: ProcessRequest, cause: unknown) =>
+const invalidOptionsError = <A>(request: ProcessRequest, cause: A) =>
   InvalidProcessOptionsError.make({
     ...diagnostics(request, null, null, null),
-    option: cause instanceof OptionError ? cause.option : "request",
-    message: cause instanceof Error ? cause.message : "Invalid process request",
-    cause,
+    option: Schema.is(OptionError)(cause) ? cause.option : "request",
+    message: Schema.is(Schema.ErrorInstance())(cause) ? cause.message : "Invalid process request",
+    cause: toError(cause),
   })
 
-const processSpawnError = (
+const processSpawnError = <A>(
   request: ProcessRequest,
   capture: BoundedOutput,
   message: string,
-  cause: unknown,
+  cause: A,
 ) =>
   ProcessSpawnError.make({
     ...diagnostics(request, capture, null, null),
     message,
-    cause,
+    cause: toError(cause),
   })
 
 const processStdinError = (
@@ -614,30 +628,50 @@ const processStdinError = (
     cause: failure.cause,
   })
 
-const processOutputError = (request: ProcessRequest, capture: BoundedOutput, cause: unknown) => {
-  const limit =
-    cause instanceof NodeProcessIoFailure
-      ? "io"
-      : typeof cause === "object" && cause !== null && "limit" in cause
-        ? String(cause.limit)
-        : "io"
-  const source =
-    typeof cause === "object" && cause !== null && "source" in cause
-      ? cause.source === "stdout" || cause.source === "stderr"
-        ? cause.source
-        : null
-      : null
+const isNodeProcessIoFailure = (value: unknown): value is NodeProcessIoFailure =>
+  Predicate.isTagged("NodeProcessIoFailure")(value)
+
+const processOutputError = <A>(request: ProcessRequest, capture: BoundedOutput, cause: A) => {
+  const details = Match.type<unknown>().pipe(
+    Match.when(isNodeProcessIoFailure, (failure) => ({
+      limit: "io" as const,
+      source: failure.source,
+      message: failure.cause.message,
+      cause: failure.cause,
+    })),
+    Match.when(Schema.is(ProcessLimitFailure), (failure) => ({
+      limit: failure.limit,
+      source: failure.source,
+      message: failure.message,
+      cause,
+    })),
+    Match.when(Schema.is(Schema.ErrorInstance()), (error) => ({
+      limit: "io" as const,
+      source: null,
+      message: error.message,
+      cause: error,
+    })),
+    Match.orElse(() => ({
+      limit: "io" as const,
+      source: null,
+      message: "Failed while consuming subprocess output",
+      cause,
+    })),
+  )(cause)
   return ProcessOutputError.make({
     ...diagnostics(request, capture, null, null),
-    source,
+    source: details.source,
     limit:
-      limit === "capture-bytes" ||
-      limit === "events" ||
-      limit === "line-bytes" ||
-      limit === "stream-bytes"
-        ? limit
+      details.limit === "capture-bytes" ||
+      details.limit === "events" ||
+      details.limit === "line-bytes" ||
+      details.limit === "stream-bytes"
+        ? details.limit
         : "io",
-    message: cause instanceof Error ? cause.message : "Failed while consuming subprocess output",
-    cause: cause instanceof NodeProcessIoFailure ? cause.cause : cause,
+    message: details.message,
+    cause: toError(details.cause),
   })
 }
+
+const toError = <A>(cause: A): Error =>
+  Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))

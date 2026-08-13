@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Schema } from "effect"
+import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 
 import {
   AgentCapabilityUnavailableError,
@@ -7,6 +7,7 @@ import {
   type AgentProviderRegistration,
   type AgentProviderResolutionError,
   DuplicateAgentProviderError,
+  InvalidAgentProviderRegistrationError,
   MissingAgentProviderError,
   UnsupportedAgentCapabilityError,
   type ReviewThreadCapability,
@@ -14,10 +15,10 @@ import {
 } from "./agent-provider"
 
 /** Explicit route for one capability. Auto is never treated as a provider ID. */
-export const AgentProviderRoute = Schema.Union(
+export const AgentProviderRoute = Schema.Union([
   Schema.Struct({ mode: Schema.Literal("auto") }),
   Schema.Struct({ mode: Schema.Literal("provider"), providerId: AgentProviderId }),
-)
+])
 
 /** Explicit route for one capability. Auto is never treated as a provider ID. */
 export type AgentProviderRoute = typeof AgentProviderRoute.Type
@@ -39,33 +40,43 @@ export const agentAutoRoutingPolicies = (
 /** No automatic candidate can safely serve a capability. */
 export class NoAgentProviderAvailableError extends Schema.TaggedError<NoAgentProviderAvailableError>()(
   "NoAgentProviderAvailableError",
-  { capability: Schema.Literal("walkthrough", "review-thread") },
+  { capability: Schema.Literals(["walkthrough", "review-thread"]) },
 ) {}
 
+/** A registered walkthrough candidate with readiness checked lazily before execution. */
+export interface ResolvedWalkthroughCandidate {
+  readonly registration: AgentProviderRegistration
+  readonly capability: WalkthroughCapability
+  readonly ready: Effect.Effect<void, AgentProviderResolutionError>
+}
+
+/** A registered review-thread candidate with readiness checked lazily before execution. */
+export interface ResolvedReviewThreadCandidate {
+  readonly registration: AgentProviderRegistration
+  readonly capability: ReviewThreadCapability
+  readonly ready: Effect.Effect<void, AgentProviderResolutionError>
+}
+
 /** Provider registration registry with fail-closed capability resolution. */
-export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderRegistry")<
+export class AgentProviderRegistry extends Context.Service<
   AgentProviderRegistry,
   {
     readonly list: Effect.Effect<readonly AgentProviderRegistration[]>
-    readonly get: (
-      providerId: AgentProviderId,
-    ) => Effect.Effect<AgentProviderRegistration, MissingAgentProviderError>
-    readonly resolveWalkthrough: (
+    readonly autoCandidates: AgentAutoRoutingPolicies
+    readonly resolveWalkthroughCandidates: (
       route: AgentProviderRoute,
     ) => Effect.Effect<
-      WalkthroughCapability,
+      readonly ResolvedWalkthroughCandidate[],
       AgentProviderResolutionError | NoAgentProviderAvailableError
     >
-    readonly walkthroughRoute: (route: AgentProviderRoute) => readonly AgentProviderId[]
-    readonly resolveReviewThread: (
+    readonly resolveReviewThreadCandidates: (
       route: AgentProviderRoute,
     ) => Effect.Effect<
-      ReviewThreadCapability,
+      readonly ResolvedReviewThreadCandidate[],
       AgentProviderResolutionError | NoAgentProviderAvailableError
     >
-    readonly reviewThreadRoute: (route: AgentProviderRoute) => readonly AgentProviderId[]
   }
->() {
+>()("@diffdash/AgentProviderRegistry") {
   /** Builds a registry and rejects duplicate IDs before exposing any provider. */
   static readonly layer = (
     registrations: readonly AgentProviderRegistration[],
@@ -80,21 +91,22 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
           if (providers.has(providerId)) {
             return yield* DuplicateAgentProviderError.make({ providerId })
           }
+          yield* validateRegistration(registration)
           providers.set(providerId, registration)
         }
 
         const get = (providerId: AgentProviderId) =>
-          Effect.fromNullable(providers.get(providerId)).pipe(
-            Effect.orElseFail(() => MissingAgentProviderError.make({ providerId })),
+          Effect.fromOption(Option.fromNullishOr(providers.get(providerId)), () =>
+            MissingAgentProviderError.make({ providerId }),
           )
 
-        const walkthrough = capabilityResolver(
+        const walkthrough = candidateResolver(
           "walkthrough",
           get,
           policies.walkthrough,
           (registration) => registration.walkthrough,
         )
-        const reviewThread = capabilityResolver(
+        const reviewThread = candidateResolver(
           "review-thread",
           get,
           policies.reviewThread,
@@ -103,13 +115,9 @@ export class AgentProviderRegistry extends Context.Tag("@diffdash/AgentProviderR
 
         return AgentProviderRegistry.of({
           list: Effect.succeed([...providers.values()]),
-          get,
-          resolveWalkthrough: walkthrough,
-          walkthroughRoute: (route) =>
-            route.mode === "provider" ? [route.providerId] : [...policies.walkthrough],
-          resolveReviewThread: reviewThread,
-          reviewThreadRoute: (route) =>
-            route.mode === "provider" ? [route.providerId] : [...policies.reviewThread],
+          autoCandidates: policies,
+          resolveWalkthroughCandidates: walkthrough,
+          resolveReviewThreadCandidates: reviewThread,
         })
       }),
     )
@@ -130,7 +138,7 @@ const orderedAutoCandidates = (
     .sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id))
     .map(({ id }) => id)
 
-const capabilityResolver = <Capability extends WalkthroughCapability | ReviewThreadCapability>(
+const candidateResolver = <Capability extends WalkthroughCapability | ReviewThreadCapability>(
   capabilityName: "walkthrough" | "review-thread",
   get: (
     providerId: AgentProviderId,
@@ -140,7 +148,14 @@ const capabilityResolver = <Capability extends WalkthroughCapability | ReviewThr
 ) => {
   const resolveExplicit = (
     providerId: AgentProviderId,
-  ): Effect.Effect<Capability, AgentProviderResolutionError> =>
+  ): Effect.Effect<
+    {
+      readonly registration: AgentProviderRegistration
+      readonly capability: Capability
+      readonly ready: Effect.Effect<void, AgentProviderResolutionError>
+    },
+    AgentProviderResolutionError
+  > =>
     Effect.gen(function* () {
       const registration = yield* get(providerId)
       const capability = select(registration)
@@ -150,36 +165,125 @@ const capabilityResolver = <Capability extends WalkthroughCapability | ReviewThr
           capability: capabilityName,
         })
       }
-      const probe = yield* capability.probe
-      return yield* Match.valueTags(probe, {
-        AgentCapabilityReady: () => Effect.succeed(capability),
-        AgentCapabilityPolicyUnsupported: ({ reason }) =>
-          AgentPolicyEnforcementError.make({
-            providerId,
-            capability: capabilityName,
-            reason,
-          }),
-        AgentCapabilityUnavailable: ({ reason }) =>
-          AgentCapabilityUnavailableError.make({
-            providerId,
-            capability: capabilityName,
-            reason,
-          }),
-      })
+      const ready = probeCapability(providerId, capabilityName, capability)
+      yield* ready
+      return { registration, capability, ready: Effect.void }
     })
 
-  const resolveAuto = (
-    remaining: readonly AgentProviderId[],
-  ): Effect.Effect<Capability, NoAgentProviderAvailableError> => {
-    const [providerId, ...rest] = remaining
-    if (providerId === undefined) {
-      return Effect.fail(NoAgentProviderAvailableError.make({ capability: capabilityName }))
-    }
-    return resolveExplicit(providerId).pipe(Effect.catchAll(() => resolveAuto(rest)))
-  }
+  const resolveAutoCandidate = (
+    providerId: AgentProviderId,
+  ): Effect.Effect<
+    {
+      readonly registration: AgentProviderRegistration
+      readonly capability: Capability
+      readonly ready: Effect.Effect<void, AgentProviderResolutionError>
+    },
+    MissingAgentProviderError | UnsupportedAgentCapabilityError
+  > =>
+    Effect.gen(function* () {
+      const registration = yield* get(providerId)
+      const capability = select(registration)
+      if (capability === undefined) {
+        return yield* UnsupportedAgentCapabilityError.make({
+          providerId,
+          capability: capabilityName,
+        })
+      }
+      return {
+        registration,
+        capability,
+        ready: probeCapability(providerId, capabilityName, capability),
+      }
+    })
+
+  const resolveAuto = Effect.fn("AgentProviderRegistry.resolveAutoCandidates")(function* () {
+    const candidates = yield* Effect.forEach(
+      autoCandidates,
+      (providerId) => resolveAutoCandidate(providerId).pipe(Effect.option),
+      { concurrency: 1 },
+    )
+    const available = candidates.flatMap((candidate) =>
+      Option.isSome(candidate) ? [candidate.value] : [],
+    )
+    return available.length === 0
+      ? yield* NoAgentProviderAvailableError.make({ capability: capabilityName })
+      : available
+  })
 
   return (
     route: AgentProviderRoute,
-  ): Effect.Effect<Capability, AgentProviderResolutionError | NoAgentProviderAvailableError> =>
-    route.mode === "provider" ? resolveExplicit(route.providerId) : resolveAuto(autoCandidates)
+  ): Effect.Effect<
+    readonly {
+      readonly registration: AgentProviderRegistration
+      readonly capability: Capability
+      readonly ready: Effect.Effect<void, AgentProviderResolutionError>
+    }[],
+    AgentProviderResolutionError | NoAgentProviderAvailableError
+  > =>
+    route.mode === "provider"
+      ? resolveExplicit(route.providerId).pipe(Effect.map((candidate) => [candidate]))
+      : resolveAuto()
+}
+
+const probeCapability = (
+  providerId: AgentProviderId,
+  capabilityName: "walkthrough" | "review-thread",
+  capability: WalkthroughCapability | ReviewThreadCapability,
+): Effect.Effect<void, AgentProviderResolutionError> =>
+  Effect.gen(function* () {
+    const probe = yield* capability.probe
+    if (probe.capability !== capabilityName) {
+      return yield* InvalidAgentProviderRegistrationError.make({
+        providerId,
+        capability: capabilityName,
+        reason: `Capability probe returned ${probe.capability}.`,
+      })
+    }
+    return yield* Match.valueTags(probe, {
+      AgentCapabilityReady: () => Effect.void,
+      AgentCapabilityPolicyUnsupported: ({ reason }) =>
+        AgentPolicyEnforcementError.make({
+          providerId,
+          capability: capabilityName,
+          reason,
+        }),
+      AgentCapabilityUnavailable: ({ reason }) =>
+        AgentCapabilityUnavailableError.make({
+          providerId,
+          capability: capabilityName,
+          reason,
+        }),
+    })
+  })
+
+const validateRegistration = (registration: AgentProviderRegistration) => {
+  const providerId = registration.manifest.descriptor.id
+  return Effect.forEach(
+    [
+      ["walkthrough", registration.walkthrough] as const,
+      ["reviewThread", registration.reviewThread] as const,
+    ],
+    ([manifestCapability, implementation]) => {
+      const declaration = registration.manifest.capabilities[manifestCapability]
+      const capability = manifestCapability === "walkthrough" ? "walkthrough" : "review-thread"
+      if (declaration.supported !== (implementation !== undefined)) {
+        return InvalidAgentProviderRegistrationError.make({
+          providerId,
+          capability,
+          reason: declaration.supported
+            ? "Manifest declares support but no implementation is registered."
+            : "An implementation is registered but the manifest declares it unsupported.",
+        })
+      }
+      if (!declaration.supported && declaration.autoPriority !== null) {
+        return InvalidAgentProviderRegistrationError.make({
+          providerId,
+          capability,
+          reason: "Unsupported capabilities cannot declare an automatic-routing priority.",
+        })
+      }
+      return Effect.void
+    },
+    { discard: true },
+  )
 }

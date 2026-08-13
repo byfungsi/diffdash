@@ -1,5 +1,6 @@
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { useEffect, useState } from "react"
+import { runRendererPromise, useRendererPreferences } from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
 import {
   type SettingsMutationCoordinator,
@@ -18,12 +19,13 @@ type SettingsMutationController = {
 
 /** Loads settings and coordinates optimistic serialized updates with last-write-wins rendering. */
 export const useSettingsMutation = (): SettingsMutationController => {
+  const preferences = useRendererPreferences()
   const [settings, setSettings] = useState<AISettings>(DEFAULT_AI_SETTINGS)
   const [status, setStatus] = useState<string | null>(null)
   const [coordinator] = useState<SettingsMutationCoordinator>(() =>
     createSettingsMutationCoordinator(DEFAULT_AI_SETTINGS, {
       write: async (nextSettings) =>
-        parseRendererSettings(await window.diffDash.settings.update(nextSettings)),
+        parseRendererSettings(await runRendererPromise(preferences.saveSettings(nextSettings))),
       onOptimistic: (nextSettings) => {
         setSettings(nextSettings)
         setStatus(null)
@@ -41,8 +43,7 @@ export const useSettingsMutation = (): SettingsMutationController => {
 
   useEffect(() => {
     let cancelled = false
-    window.diffDash.settings
-      .get()
+    runRendererPromise(preferences.loadSettings())
       .then((savedSettings) => {
         const parsedSettings = parseRendererSettings(savedSettings)
         if (!cancelled && coordinator.replaceConfirmed(parsedSettings)) setSettings(parsedSettings)
@@ -52,7 +53,7 @@ export const useSettingsMutation = (): SettingsMutationController => {
     return () => {
       cancelled = true
     }
-  }, [coordinator])
+  }, [coordinator, preferences])
 
   return { settings, status, update: coordinator.update }
 }

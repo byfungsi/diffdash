@@ -1,22 +1,35 @@
 import { ParsedDiffFile } from "@diffdash/domain/diff"
-import { makeReviewFileId, makeReviewFilePatchHash } from "@diffdash/domain/review-identity"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import {
+  makeReviewFileId,
+  makeReviewFilePatchHash,
+  ReviewKey,
+} from "@diffdash/domain/review-identity"
 import { prepareFileTreeInput } from "@pierre/trees"
 import { describe, expect, it } from "@effect/vitest"
+import { Schema } from "effect"
 import { buildReviewFileTreeInput } from "./file-tree-adapter"
 
-const file = (path: string, status: ParsedDiffFile["status"] = "modified") =>
-  ParsedDiffFile.make({
+const file = (path: string, status: ParsedDiffFile["status"] = "modified") => {
+  const repositoryPath = RepositoryRelativePath.make(path)
+  return Schema.decodeSync(ParsedDiffFile)({
     additions: 1,
     deletions: 0,
-    fileId: makeReviewFileId(path, null),
-    patchHash: makeReviewFilePatchHash({ hunks: [], oldPath: null, path, status }),
+    fileId: makeReviewFileId(repositoryPath, null),
+    patchHash: makeReviewFilePatchHash({
+      hunks: [],
+      oldPath: null,
+      path: repositoryPath,
+      status,
+    }),
     hunks: [],
     oldPath: null,
     patch: `diff --git a/${path} b/${path}`,
-    path,
-    reviewKey: path,
+    path: repositoryPath,
+    reviewKey: ReviewKey.make(path),
     status,
   })
+}
 
 describe("buildReviewFileTreeInput", () => {
   it("preserves diff order for visible paths and git statuses", () => {

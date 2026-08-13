@@ -5,8 +5,10 @@ import {
   GitProviderId,
   GitProviderKind,
   BranchRevision,
+  ChangedFile,
   HostedRepositoryLocator,
   HostedRepositoryName,
+  HostedReviewDiff,
   HostedReviewSummary,
   HostedReviewLocator,
   HostedReviewNumber,
@@ -16,9 +18,14 @@ import {
   makeHostedReviewKey,
   RepositoryNamespace,
   ProviderActor,
+  ProviderActorId,
   sameHostedRepository,
   sameHostedReview,
 } from "./git-provider"
+import { DiffFileStatus } from "./diff"
+import { ReviewRevision } from "./review-identity"
+import { RepositoryComparisonRef } from "./repository-comparison"
+import { WebUrl } from "./web-url"
 
 const locator = (providerId: string, namespace = "fungsi", name = "diffdash") =>
   HostedRepositoryLocator.make({
@@ -83,17 +90,23 @@ describe("hosted Git provider identities", () => {
       title: "Provider-neutral review",
       body: null,
       author: ProviderActor.make({
-        id: "user-1",
+        id: ProviderActorId.make("user-1"),
         username: "hanif",
         displayName: "Hanif",
         avatarUrl: null,
       }),
       state: "open",
       decision: "approved",
-      url: "https://git.example.com/platform/backend/service/reviews/42",
+      url: WebUrl.make("https://git.example.com/platform/backend/service/reviews/42"),
       draft: false,
-      base: BranchRevision.make({ name: "main", revision: "base" }),
-      head: BranchRevision.make({ name: "feature", revision: "head" }),
+      base: BranchRevision.make({
+        name: RepositoryComparisonRef.make("main"),
+        revision: ReviewRevision.make("base"),
+      }),
+      head: BranchRevision.make({
+        name: RepositoryComparisonRef.make("feature"),
+        revision: ReviewRevision.make("head"),
+      }),
       createdAt: null,
       updatedAt: null,
     })
@@ -107,5 +120,34 @@ describe("hosted Git provider identities", () => {
     expect(() => Schema.decodeUnknownSync(GitProviderId)("local")).toThrow(/./)
     expect(() => Schema.decodeUnknownSync(RepositoryNamespace)("platform//backend")).toThrow(/./)
     expect(() => Schema.decodeUnknownSync(HostedReviewNumber)(0)).toThrow(/./)
+  })
+
+  it("rejects invalid diff counts and provider timestamps", () => {
+    const changedFile = {
+      path: "src/app.ts",
+      additions: 0,
+      deletions: 1,
+      changeType: DiffFileStatus.make("modified"),
+    }
+    const diff = {
+      locator: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
+      headRevision: null,
+      diff: "",
+      fetchedAt: "2026-08-10T00:00:00.000Z",
+    }
+
+    expect(Schema.decodeUnknownSync(ChangedFile)(changedFile).additions).toBe(0)
+    expect(() => Schema.decodeUnknownSync(ChangedFile)({ ...changedFile, additions: -1 })).toThrow(
+      "additions",
+    )
+    expect(() => Schema.decodeUnknownSync(ChangedFile)({ ...changedFile, deletions: 0.5 })).toThrow(
+      "deletions",
+    )
+    expect(() =>
+      Schema.decodeUnknownSync(HostedReviewDiff)({
+        ...diff,
+        fetchedAt: "2026-08-10T00:00:00+00:00",
+      }),
+    ).toThrow("fetchedAt")
   })
 })

@@ -1,10 +1,11 @@
 import { Schema } from "effect"
 
-import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
+import type { HostedReviewLocator } from "./git-provider"
+import type { RepositoryRelativePath } from "./repository-path"
 
 /** Workspace-local identity for one managed review project. */
 export const ReviewProjectId = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewProjectId"),
 )
 
@@ -12,14 +13,17 @@ export const ReviewProjectId = Schema.String.pipe(
 export type ReviewProjectId = typeof ReviewProjectId.Type
 
 /** Canonical identity for one repository review across revisions. */
-export const ReviewKey = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewKey"))
+export const ReviewKey = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewKey"),
+)
 
 /** Canonical identity for one repository review across revisions. */
 export type ReviewKey = typeof ReviewKey.Type
 
 /** A Git commit SHA or local working-tree diff digest identifying one review revision. */
 export const ReviewRevision = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewRevision"),
 )
 
@@ -28,7 +32,7 @@ export type ReviewRevision = typeof ReviewRevision.Type
 
 /** Stable digest identifying the exact raw diff captured by a review snapshot. */
 export const ReviewDiffIdentity = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewDiffIdentity"),
 )
 
@@ -37,7 +41,7 @@ export type ReviewDiffIdentity = typeof ReviewDiffIdentity.Type
 
 /** Immutable identity for one coherent review revision and exact diff. */
 export const ReviewSnapshotId = Schema.String.pipe(
-  Schema.pattern(/^snapshot:v1:[0-9a-f]{32}$/),
+  Schema.check(Schema.isPattern(/^snapshot:v1:[0-9a-f]{32}$/)),
   Schema.brand("ReviewSnapshotId"),
 )
 
@@ -45,14 +49,17 @@ export const ReviewSnapshotId = Schema.String.pipe(
 export type ReviewSnapshotId = typeof ReviewSnapshotId.Type
 
 /** Stable identity for one changed file within review data. */
-export const ReviewFileId = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewFileId"))
+export const ReviewFileId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewFileId"),
+)
 
 /** Stable identity for one changed file within review data. */
 export type ReviewFileId = typeof ReviewFileId.Type
 
 /** Canonical displayed-patch identity used to retain viewed state across revisions. */
 export const ReviewFilePatchHash = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewFilePatchHash"),
 )
 
@@ -60,14 +67,17 @@ export const ReviewFilePatchHash = Schema.String.pipe(
 export type ReviewFilePatchHash = typeof ReviewFilePatchHash.Type
 
 /** Snapshot-local identity for one parsed diff hunk. */
-export const ReviewHunkId = Schema.String.pipe(Schema.minLength(1), Schema.brand("ReviewHunkId"))
+export const ReviewHunkId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewHunkId"),
+)
 
 /** Snapshot-local identity for one parsed diff hunk. */
 export type ReviewHunkId = typeof ReviewHunkId.Type
 
 /** Content identity used to carry unchanged hunks across review revisions. */
 export const ReviewHunkFingerprint = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ReviewHunkFingerprint"),
 )
 
@@ -76,7 +86,9 @@ export type ReviewHunkFingerprint = typeof ReviewHunkFingerprint.Type
 
 /** Creates the canonical persisted review key for one hosted review locator. */
 export const makeReviewKey = (review: HostedReviewLocator) =>
-  ReviewKey.make(makeHostedReviewKey(review))
+  ReviewKey.make(
+    `${review.repository.providerId}:${review.repository.namespace}/${review.repository.name}#${review.number}`,
+  )
 
 /** Hashes exact unified-diff text for deterministic snapshot identity. */
 export const makeReviewDiffIdentity = (diff: string) =>
@@ -99,15 +111,17 @@ export const makeReviewSnapshotId = (input: {
   )
 
 /** Creates a deterministic identity for a changed file, including rename metadata. */
-export const makeReviewFileId = (path: string, oldPath: string | null) =>
-  ReviewFileId.make(`file:${stableReviewHash([oldPath ?? "", path])}`)
+export const makeReviewFileId = (
+  path: RepositoryRelativePath,
+  oldPath: RepositoryRelativePath | null,
+) => ReviewFileId.make(`file:${stableReviewHash([oldPath ?? "", path])}`)
 
 /** Hashes the provider-neutral file patch represented by parsed diff metadata. */
 export const makeReviewFilePatchHash = (file: {
   readonly hunks: readonly { readonly header: string; readonly lines: readonly string[] }[]
   readonly metadata?: readonly string[]
-  readonly oldPath: string | null
-  readonly path: string
+  readonly oldPath: RepositoryRelativePath | null
+  readonly path: RepositoryRelativePath
   readonly status: string
 }) =>
   ReviewFilePatchHash.make(

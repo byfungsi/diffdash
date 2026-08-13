@@ -3,10 +3,11 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Effect, Either, Layer, Stream } from "effect"
+import { Effect, Result, Layer, Stream } from "effect"
 
 import {
   ProcessExitError,
+  ProcessOutputError,
   ProcessResult,
   ProcessService,
   type ProcessExecutionError,
@@ -15,7 +16,10 @@ import {
 } from "@diffdash/process"
 import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./local-git"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { REPOSITORY_SCOPED_GIT_ENV, sanitizedGitEnvironment } from "./git-environment"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { REPOSITORY_SCOPED_GIT_ENV } from "./git-environment"
+import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
 const makeProcessResult = (stdout: string, args: readonly string[]): ProcessResult =>
   ProcessResult.make({
@@ -63,7 +67,9 @@ describe("GitService", () => {
         const layer = GitService.layer.pipe(Layer.provide(processesLayer))
 
         const service = yield* GitService.pipe(Effect.provide(layer))
-        const detected = yield* service.detectRepository("/workspace/repo/src")
+        const detected = yield* service.detectRepository(
+          RepositoryCheckoutPath.make("/workspace/repo/src"),
+        )
 
         expect(detected).toEqual({
           remoteUrl: "git@example.com:owner/repo.git",
@@ -96,7 +102,9 @@ describe("GitService", () => {
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
-      expect(yield* service.listRemotes("/workspace/repo/src")).toEqual([
+      expect(
+        yield* service.listRemotes(RepositoryCheckoutPath.make("/workspace/repo/src")),
+      ).toEqual([
         {
           name: "origin",
           fetchUrls: ["git@example.com:group/repo.git", "https://example.com/group/repo.git"],
@@ -106,6 +114,39 @@ describe("GitService", () => {
           fetchUrls: ["https://upstream.example/group/repo.git"],
         },
       ])
+    }),
+  )
+
+  it.effect("represents detached HEAD as no current branch", () =>
+    Effect.gen(function* () {
+      const processesLayer = makeProcessLayer((_command, args) =>
+        Effect.succeed(makeProcessResult("\n", args)),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
+      )
+
+      expect(
+        yield* service.currentBranch(RepositoryCheckoutPath.make("/workspace/repo")),
+      ).toBeNull()
+    }),
+  )
+
+  it.effect("returns a typed process error when Git reports an invalid checkout root", () =>
+    Effect.gen(function* () {
+      const processesLayer = makeProcessLayer((_command, args) =>
+        Effect.succeed(makeProcessResult("relative/repo\n", args)),
+      )
+      const service = yield* GitService.pipe(
+        Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
+      )
+
+      const result = yield* Effect.result(
+        service.detectRoot(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ProcessOutputError)
     }),
   )
 
@@ -179,10 +220,10 @@ index 0000000..3333333
       }).pipe(Layer.provide(processesLayer))
 
       const service = yield* GitService.pipe(Effect.provide(layer))
-      const detail = yield* service.getLocalReviewDetail("/workspace/repo/src")
-      const diff = yield* service.getLocalReviewDiff("/workspace/repo/src")
+      const reviewPath = RepositoryCheckoutPath.make("/workspace/repo/src")
       parseCalls = 0
-      const snapshot = yield* service.getLocalReviewSnapshot("/workspace/repo/src")
+      const snapshot = yield* service.getLocalReviewSnapshot(reviewPath)
+      const { detail, diff } = snapshot
 
       expect(detail).toMatchObject({
         branchName: "feature/local",
@@ -251,8 +292,11 @@ index 0000000..3333333
       const service = yield* GitService.pipe(
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
-      const target = yield* service.resolveBranchComparison("/workspace/repo", "dev")
-      const detail = yield* service.getLocalReviewDetail(target)
+      const target = yield* service.resolveBranchComparison(
+        RepositoryCheckoutPath.make("/workspace/repo"),
+        RepositoryComparisonRef.make("dev"),
+      )
+      const detail = (yield* service.getLocalReviewSnapshot(target)).detail
 
       expect(target.comparison).toMatchObject({
         _tag: "branch",
@@ -310,7 +354,10 @@ index 0000000..3333333
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
-      const target = yield* service.resolveBranchComparison("/workspace/repo", null)
+      const target = yield* service.resolveBranchComparison(
+        RepositoryCheckoutPath.make("/workspace/repo"),
+        null,
+      )
 
       expect(target.comparison).toMatchObject({
         _tag: "branch",
@@ -352,7 +399,10 @@ index 0000000..3333333
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
-      const target = yield* service.resolveBranchComparison("/workspace/repo", "main")
+      const target = yield* service.resolveBranchComparison(
+        RepositoryCheckoutPath.make("/workspace/repo"),
+        RepositoryComparisonRef.make("main"),
+      )
 
       expect(target.comparison).toMatchObject({
         _tag: "branch",
@@ -407,12 +457,17 @@ index 0000000..3333333
         Effect.provide(GitService.layer.pipe(Layer.provide(processesLayer))),
       )
 
-      const result = yield* Effect.either(service.resolveBranchComparison("/workspace/repo", "dev"))
+      const result = yield* Effect.result(
+        service.resolveBranchComparison(
+          RepositoryCheckoutPath.make("/workspace/repo"),
+          RepositoryComparisonRef.make("dev"),
+        ),
+      )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(LocalReviewTargetError)
-        expect(result.left).toMatchObject({
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(LocalReviewTargetError)
+        expect(result.failure).toMatchObject({
           operation: "branch.mergeBase",
           reason: "Branch dev does not share a common ancestor with the current HEAD",
         })
@@ -420,7 +475,7 @@ index 0000000..3333333
     }),
   )
 
-  it.scoped(
+  it.effect(
     "excludes target-only changes while retaining the current branch and local changes",
     () =>
       Effect.gen(function* () {
@@ -456,7 +511,11 @@ index 0000000..3333333
         const service = yield* GitService.pipe(
           Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
         )
-        const mainTarget = yield* service.resolveBranchComparison(rootPath, "main")
+        const checkoutPath = RepositoryCheckoutPath.make(rootPath)
+        const mainTarget = yield* service.resolveBranchComparison(
+          checkoutPath,
+          RepositoryComparisonRef.make("main"),
+        )
         const mainSnapshot = yield* service.getLocalReviewSnapshot(mainTarget)
         const mainPaths = mainSnapshot.parsedDiff.files.map((file) => file.path)
 
@@ -477,7 +536,10 @@ index 0000000..3333333
         expect(mainSnapshot.diff.diff).toContain("+untracked change")
         expect(mainSnapshot.diff.diff).not.toContain("main only")
 
-        const devTarget = yield* service.resolveBranchComparison(rootPath, "dev")
+        const devTarget = yield* service.resolveBranchComparison(
+          checkoutPath,
+          RepositoryComparisonRef.make("dev"),
+        )
         const devSnapshot = yield* service.getLocalReviewSnapshot(devTarget)
         const devPaths = devSnapshot.parsedDiff.files.map((file) => file.path)
 
@@ -533,10 +595,12 @@ index 0000000..3333333
       })
       const layer = GitService.layer.pipe(Layer.provide(processesLayer))
       const service = yield* GitService.pipe(Effect.provide(layer))
-      const result = yield* Effect.either(service.getLocalReviewSnapshot("/workspace/repo"))
+      const result = yield* Effect.result(
+        service.getLocalReviewSnapshot(RepositoryCheckoutPath.make("/workspace/repo")),
+      )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) expect(result.left).toBeInstanceOf(LocalReviewChangedError)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(LocalReviewChangedError)
     }),
   )
 })
@@ -545,7 +609,7 @@ const git = (cwd: string, ...args: readonly string[]) =>
   execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: sanitizedGitEnvironment(process.env),
+    env: sanitizedGitTestEnvironment(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   }).trim()
 

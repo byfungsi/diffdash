@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Predicate, Schema } from "effect"
 
 import {
   BranchRevision,
@@ -19,9 +19,15 @@ import {
   HostedReviewNumber,
   HostedReviewSummary,
   ProviderActor,
+  ProviderActorId,
+  RepositoryComparisonRef,
   RepositoryNamespace,
+  RepositoryRelativePath,
   ChangedFile,
+  DiagnosticOperation,
   ReviewCommit,
+  ReviewRevision,
+  WebUrl,
   sameHostedRepository,
   sameHostedReview,
   type GitProviderRegistration,
@@ -37,7 +43,9 @@ export interface FixtureGitProviderConfig {
   readonly baseRevision?: string
   readonly headRevision?: string
   readonly remoteUrl?: string
-  readonly bootstrapBareRepository?: (destination: string) => Effect.Effect<void, unknown>
+  readonly bootstrapBareRepository?: (
+    destination: string,
+  ) => Effect.Effect<void, Schema.Defect["Type"]>
 }
 
 /** Creates a complete second provider without importing desktop, renderer, protocol, or persistence code. */
@@ -49,28 +57,38 @@ export const createFixtureGitProvider = (
   const namespace = RepositoryNamespace.make(config.namespace ?? "platform/backend")
   const name = HostedRepositoryName.make(config.repositoryName ?? "service")
   const reviewNumber = HostedReviewNumber.make(config.reviewNumber ?? 73)
-  const baseRevision = config.baseRevision ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  const headRevision = config.headRevision ?? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  const baseRevision = ReviewRevision.make(
+    config.baseRevision ?? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  )
+  const headRevision = ReviewRevision.make(
+    config.headRevision ?? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  )
   const repository = HostedRepositoryLocator.make({ providerId: id, namespace, name })
   const review = HostedReviewLocator.make({ repository, number: reviewNumber })
-  const repositoryUrl = `https://${host}/${namespace}/${name}`
+  const repositoryUrl = WebUrl.make(`https://${host}/${namespace}/${name}`)
   const remoteUrl = config.remoteUrl ?? `${repositoryUrl}.git`
   const summary = HostedReviewSummary.make({
     locator: review,
     title: "Fixture merge request flow",
     body: "A deterministic non-GitHub hosted review.",
     author: ProviderActor.make({
-      id: "fixture-user-1",
+      id: ProviderActorId.make("fixture-user-1"),
       username: "fixture-reviewer",
       displayName: "Fixture Reviewer",
       avatarUrl: null,
     }),
     state: "open",
     decision: "none",
-    url: `${repositoryUrl}/merge-requests/${reviewNumber}`,
+    url: WebUrl.make(`${repositoryUrl}/merge-requests/${reviewNumber}`),
     draft: false,
-    base: BranchRevision.make({ name: "main", revision: baseRevision }),
-    head: BranchRevision.make({ name: "feature/fixture", revision: headRevision }),
+    base: BranchRevision.make({
+      name: BranchRevision.fields.name.make("main"),
+      revision: baseRevision,
+    }),
+    head: BranchRevision.make({
+      name: BranchRevision.fields.name.make("feature/fixture"),
+      revision: headRevision,
+    }),
     createdAt: "2026-07-16T00:00:00.000Z",
     updatedAt: "2026-07-16T01:00:00.000Z",
   })
@@ -79,7 +97,7 @@ export const createFixtureGitProvider = (
       ? Effect.void
       : GitProviderOperationError.make({
           providerId: id,
-          operation,
+          operation: DiagnosticOperation.make(operation),
           message: "Fixture repository locator does not match the configured repository",
         })
   const requireReview = (locator: HostedReviewLocator, operation: string) =>
@@ -87,7 +105,7 @@ export const createFixtureGitProvider = (
       ? Effect.void
       : GitProviderOperationError.make({
           providerId: id,
-          operation,
+          operation: DiagnosticOperation.make(operation),
           message: "Fixture review locator does not match the configured review",
         })
 
@@ -144,7 +162,7 @@ export const createFixtureGitProvider = (
             summary,
             files: [
               ChangedFile.make({
-                path: "src/fixture.ts",
+                path: RepositoryRelativePath.make("src/fixture.ts"),
                 additions: 1,
                 deletions: 1,
                 changeType: "modified",
@@ -184,7 +202,7 @@ export const createFixtureGitProvider = (
     submitReviewDecision: () =>
       GitProviderOperationError.make({
         providerId: id,
-        operation: "submitReviewDecision",
+        operation: DiagnosticOperation.make("submitReviewDecision"),
         message: "Fixture Forge does not support review decisions",
       }),
     repositoryUrl: (locator) =>
@@ -192,10 +210,12 @@ export const createFixtureGitProvider = (
     fileUrl: (locator, path, revision) =>
       requireRepository(locator, "fileUrl").pipe(
         Effect.as(
-          `${repositoryUrl}/files/${encodeURIComponent(revision)}/${path
-            .split("/")
-            .map(encodeURIComponent)
-            .join("/")}`,
+          WebUrl.make(
+            `${repositoryUrl}/files/${encodeURIComponent(revision)}/${path
+              .split("/")
+              .map(encodeURIComponent)
+              .join("/")}`,
+          ),
         ),
       ),
     bootstrapBareRepository: (locator, destination) =>
@@ -204,21 +224,21 @@ export const createFixtureGitProvider = (
         Effect.mapError((cause) =>
           GitProviderOperationError.make({
             providerId: id,
-            operation: "bootstrapBareRepository",
+            operation: DiagnosticOperation.make("bootstrapBareRepository"),
             message: "Fixture Forge could not bootstrap its repository",
-            cause,
+            cause: Predicate.isError(cause) ? cause : new Error(String(cause)),
           }),
         ),
       ),
-    checkoutSpec: (locator) =>
+    checkoutSpec: (locator, revision) =>
       requireReview(locator, "checkoutSpec").pipe(
         Effect.as(
           HostedReviewCheckoutSpec.make({
             repository,
             review,
             remoteUrl,
-            fetchRef: `refs/merge-requests/${reviewNumber}/head`,
-            revision: headRevision,
+            fetchRef: RepositoryComparisonRef.make(`refs/merge-requests/${reviewNumber}/head`),
+            revision,
           }),
         ),
       ),

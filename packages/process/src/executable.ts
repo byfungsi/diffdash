@@ -1,17 +1,14 @@
 import { access, constants } from "node:fs/promises"
 import { delimiter, extname, resolve } from "node:path"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option } from "effect"
+import {
+  ExecutablePath,
+  type ExecutablePath as ExecutablePathType,
+} from "@diffdash/domain/executable-path"
 
 import { executablePath } from "./subprocess"
 
-/** Absolute path to one executable discovered through an explicit search path. */
-export const ExecutablePath = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.brand("ExecutablePath"),
-)
-
-/** Absolute path to one executable discovered through an explicit search path. */
-export type ExecutablePath = typeof ExecutablePath.Type
+export { ExecutablePath } from "@diffdash/domain/executable-path"
 
 /** Options controlling cross-platform executable discovery. */
 export interface FindExecutableOptions {
@@ -44,11 +41,11 @@ export const findExecutableInPath = Effect.fn("findExecutableInPath")(function* 
       catch: () => null,
     }).pipe(
       Effect.as(true),
-      Effect.catchAll(() => Effect.succeed(false)),
+      Effect.catch(() => Effect.succeed(false)),
     )
     if (available) return Option.some(ExecutablePath.make(candidate))
   }
-  return Option.none<ExecutablePath>()
+  return Option.none<ExecutablePathType>()
 })
 
 const executableExtensions = (

@@ -84,7 +84,7 @@
       "id": "thread-replay-lease",
       "originalRevisionId": "01-initial",
       "currentRevisionId": "02-database-clock",
-      "anchorStatus": "active",
+      "anchorState": "Active",
       "locator": {
         "path": "packages/db/src/replay-claims.ts",
         "side": "new",

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Result, Schema } from "effect"
 
 import { parseUnifiedDiff } from "./diff-parser"
 import { makeHostedReviewLocator } from "./git-provider"
+import { ReviewRevision } from "./review-identity"
 import {
   buildWalkthroughHunkDigest,
   flattenWalkthroughStops,
@@ -11,6 +12,10 @@ import {
   validateWalkthrough,
   walkthroughLocalDiffScope,
   walkthroughHostedReviewScope,
+  WalkthroughChapterId,
+  WalkthroughHunkId,
+  WalkthroughStopId,
+  WalkthroughSupportItemId,
 } from "./walkthrough"
 
 const parsedDiff = parseUnifiedDiff(`diff --git a/src/app.tsx b/src/app.tsx
@@ -74,6 +79,38 @@ const validWalkthrough = {
 }
 
 describe("validateWalkthrough", () => {
+  it("keeps walkthrough IDs encoded as their original strings", () => {
+    expect(Schema.encodeSync(WalkthroughChapterId)(WalkthroughChapterId.make("chapter-1"))).toBe(
+      "chapter-1",
+    )
+    expect(Schema.encodeSync(WalkthroughStopId)(WalkthroughStopId.make("stop-1"))).toBe("stop-1")
+    expect(
+      Schema.encodeSync(WalkthroughSupportItemId)(WalkthroughSupportItemId.make("support-1")),
+    ).toBe("support-1")
+    expect(Schema.encodeSync(WalkthroughHunkId)(WalkthroughHunkId.make("hunk-1"))).toBe("hunk-1")
+  })
+
+  it("refuses empty walkthrough identities at schema boundaries", () => {
+    expect(Result.isFailure(Schema.decodeUnknownResult(WalkthroughChapterId)(""))).toBe(true)
+    expect(Result.isFailure(Schema.decodeUnknownResult(WalkthroughStopId)(""))).toBe(true)
+    expect(Result.isFailure(Schema.decodeUnknownResult(WalkthroughSupportItemId)(""))).toBe(true)
+    expect(Result.isFailure(Schema.decodeUnknownResult(WalkthroughHunkId)(""))).toBe(true)
+  })
+
+  it.effect("reports user-provided empty identities through typed walkthrough validation", () =>
+    Effect.gen(function* () {
+      const error = yield* validateWalkthrough(
+        {
+          ...validWalkthrough,
+          chapters: [{ ...validWalkthrough.chapters[0], id: "" }],
+        },
+        hunkDigest,
+      ).pipe(Effect.flip)
+
+      expect(error.reason).toBe("invalid_shape")
+    }),
+  )
+
   it.effect("accepts Codiff-style hunk stops and allows the same file in multiple stops", () =>
     Effect.gen(function* () {
       const walkthrough = yield* validateWalkthrough(validWalkthrough, hunkDigest)
@@ -209,8 +246,11 @@ describe("validateWalkthrough", () => {
 
 describe("focusFilesForWalkthroughHunks", () => {
   it("renders different focused patches for different stops in the same file", () => {
-    const first = focusFilesForWalkthroughHunks(parsedDiff.files, [appEntryHunk?.id ?? ""], scope)
-    const second = focusFilesForWalkthroughHunks(parsedDiff.files, [appFooterHunk?.id ?? ""], scope)
+    if (appEntryHunk === undefined || appFooterHunk === undefined) {
+      throw new Error("Expected app walkthrough hunks")
+    }
+    const first = focusFilesForWalkthroughHunks(parsedDiff.files, [appEntryHunk.id], scope)
+    const second = focusFilesForWalkthroughHunks(parsedDiff.files, [appFooterHunk.id], scope)
 
     expect(first[0]?.path).toBe("src/app.tsx")
     expect(first[0]?.patch).toContain("new entry")
@@ -280,7 +320,7 @@ ${largeLines}`)
 
       const prepared = yield* prepareWalkthroughPromptInput(
         diff.files,
-        walkthroughLocalDiffScope("local-head"),
+        walkthroughLocalDiffScope(ReviewRevision.make("local-head")),
         { maxDiffChars: 10_000, maxFiles: 10, maxHunks: 10, maxLinesPerHunk: 3 },
       )
 
@@ -303,7 +343,7 @@ ${largeLines}`)
 
       const prepared = yield* prepareWalkthroughPromptInput(
         diff.files,
-        walkthroughLocalDiffScope("local-head"),
+        walkthroughLocalDiffScope(ReviewRevision.make("local-head")),
         { maxDiffChars: 120, maxFiles: 10, maxHunks: 10, maxLinesPerHunk: 20 },
       )
 

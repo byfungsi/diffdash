@@ -1,5 +1,8 @@
 /* oxlint-disable vitest/no-standalone-expect, eslint/no-underscore-dangle -- Shared callbacks use Effect-compatible tagged unions. */
 import {
+  AIAgentSelection,
+  AIModelId,
+  AIProviderId,
   AISettings,
   CodeThemePreferences,
   DEFAULT_AI_SETTINGS,
@@ -8,6 +11,7 @@ import {
 import type { AppState } from "@diffdash/domain/app-state"
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
   BranchRevision,
   ChangedFile,
@@ -17,11 +21,13 @@ import {
   GitProviderKind,
   GitProviderTerminology,
   HostedRepository,
+  HostedRepositorySource,
   HostedReviewDetail,
   HostedReviewDiff,
   HostedReviewSummary,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
+  LocalRepositorySource,
   ProviderActor,
 } from "@diffdash/domain/git-provider"
 import {
@@ -43,6 +49,8 @@ import {
   RendererLayoutSettings,
   ReviewPaneSettings,
 } from "@diffdash/domain/renderer-layout-settings"
+import { AgentPromptVersion, CompletedAgentRun } from "@diffdash/domain/agent-run"
+import { AgentRunId, ReviewAgentProviderId } from "@diffdash/domain/review-agent"
 import {
   ProjectOpened,
   ProjectRemoteCandidate,
@@ -50,10 +58,15 @@ import {
   ProjectWorkspaceState,
 } from "@diffdash/domain/project-workspace"
 import {
+  LinkedCheckout,
+  RemoteOnly,
   Repo,
+  RepositoryCheckoutPath,
   RepositoryIdentityRepairSummary,
   RepositorySearchScope,
 } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { WebUrl } from "@diffdash/domain/web-url"
 import {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
@@ -65,29 +78,35 @@ import {
   makeReviewDiffIdentity,
   makeReviewSnapshotId,
   ReviewDiffIdentity,
-  ReviewHunkFingerprint,
-  ReviewHunkId,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
+  CompletedAgentReviewThreadMessage,
+  CompletedAgentReviewTurn,
+  CurrentReviewAnchor,
   MarkdownBody,
   HostedReviewTarget,
   type ReviewThreadAnchor,
   ReviewThread,
   ReviewThreadDetails,
   ReviewThreadId,
-  ReviewThreadMessage,
   ReviewThreadMessageId,
+  UserReviewThreadMessage,
+  UserReviewTurn,
 } from "@diffdash/domain/review-thread"
 import {
   StoredWalkthrough,
   Walkthrough,
   WalkthroughChapter,
+  WalkthroughChapterId,
   WalkthroughGenerationDetails,
+  WalkthroughHunkId,
   WalkthroughStop,
+  WalkthroughStopId,
   WalkthroughSupportItem,
+  WalkthroughSupportItemId,
 } from "@diffdash/domain/walkthrough"
 import {
   AgentModelId,
@@ -101,7 +120,8 @@ import {
   AgentProviderStatus,
   EMPTY_AGENT_PROVIDER_CATALOG,
 } from "@diffdash/protocol/agent-providers"
-import type { DiffDashApi } from "@diffdash/protocol/api"
+import type { DiffDashApi, DiffDashBridgeApi } from "@diffdash/protocol/api"
+import type { BridgeResult } from "@diffdash/protocol/ipc"
 import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
@@ -120,7 +140,13 @@ import {
   OpenWorkingTreeCommand,
   RepairRepositoryIdentitiesCommand,
 } from "@diffdash/protocol/cli-navigation"
-import { AppPrerequisites, SetupRequirement } from "@diffdash/protocol/prerequisites"
+import { InvokeChannel } from "@diffdash/protocol/channels"
+import {
+  AppPrerequisites,
+  CodingAgentName,
+  SetupRequirement,
+  SetupRequirementKey,
+} from "@diffdash/protocol/prerequisites"
 import {
   ReviewSnapshotExpired,
   ReviewSnapshotPageAvailable,
@@ -128,11 +154,14 @@ import {
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
+  ReviewSnapshotSearchMatchId,
 } from "@diffdash/protocol/review-snapshot"
+import { toTransportError, transportError } from "@diffdash/protocol/transport-error"
+import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
 import { StrictMode } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { Schema } from "effect"
 import { afterEach, expect, vi } from "vitest"
-import { buildReviewSearchIndex, searchReviewIndex } from "@/review/review-search"
 import {
   REVIEW_SEARCH_ACTIVE_HIGHLIGHT,
   REVIEW_SEARCH_MATCH_HIGHLIGHT,
@@ -143,15 +172,14 @@ import "../styles.css"
 
 const repo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",
-  id: "repo-1",
+  id: ReviewProjectId.make("repo-1"),
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
-  localPath: null,
-  name: "diffdash",
-  owner: "fungsi",
-  provider: "github",
-  remoteUrl: "https://github.com/fungsi/diffdash",
+  source: HostedRepositorySource.make({
+    locator: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+  }),
+  checkout: RemoteOnly.make({ remoteUrl: "https://github.com/fungsi/diffdash" }),
   updatedAt: "2026-07-07T00:00:00Z",
 })
 
@@ -178,17 +206,26 @@ const provider = GitProviderDescriptor.make({
 
 const staleLocalFavoriteRepo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",
-  id: "local:local/diffdash-fe11f30a1061",
+  id: ReviewProjectId.make("local:local/diffdash-fe11f30a1061"),
   isFavorite: true,
   lastOpenedAt: null,
   lastSyncedAt: null,
-  localPath: "/workspace/diffdash",
-  name: "diffdash-fe11f30a1061",
-  owner: "local",
-  provider: "local",
-  remoteUrl: "file:///workspace/diffdash",
+  source: LocalRepositorySource.make(),
+  checkout: LinkedCheckout.make({
+    remoteUrl: "file:///workspace/diffdash",
+    path: RepositoryCheckoutPath.make("/workspace/diffdash"),
+  }),
   updatedAt: "2026-07-07T00:00:00Z",
 })
+
+const linkedRepo = (repository: Repo, path: string): Repo =>
+  Repo.make({
+    ...repository,
+    checkout: LinkedCheckout.make({
+      remoteUrl: repository.remoteUrl,
+      path: RepositoryCheckoutPath.make(path),
+    }),
+  })
 
 const pullRequest = HostedReviewSummary.make({
   locator: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
@@ -199,21 +236,21 @@ const pullRequest = HostedReviewSummary.make({
     avatarUrl: null,
   }),
   base: BranchRevision.make({
-    name: "main",
-    revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    name: RepositoryComparisonRef.make("main"),
+    revision: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
   }),
   body: "Please review this workspace change.",
   createdAt: "2026-07-07T00:00:00Z",
   decision: "none",
   head: BranchRevision.make({
-    name: "feature/requested-review",
-    revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    name: RepositoryComparisonRef.make("feature/requested-review"),
+    revision: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   }),
   draft: false,
   state: "OPEN",
   title: "Request review flow",
   updatedAt: "2026-07-07T02:00:00Z",
-  url: "https://github.com/fungsi/diffdash/pull/51",
+  url: WebUrl.make("https://github.com/fungsi/diffdash/pull/51"),
 })
 
 const detail = HostedReviewDetail.make({
@@ -224,19 +261,19 @@ const detail = HostedReviewDetail.make({
       additions: 1,
       changeType: "modified",
       deletions: 1,
-      path: "src/app.tsx",
+      path: RepositoryRelativePath.make("src/app.tsx"),
     }),
     ChangedFile.make({
       additions: 1,
       changeType: "modified",
       deletions: 0,
-      path: "docs/readme.md",
+      path: RepositoryRelativePath.make("docs/readme.md"),
     }),
     ChangedFile.make({
       additions: 1,
       changeType: "modified",
       deletions: 1,
-      path: "pnpm-lock.yaml",
+      path: RepositoryRelativePath.make("pnpm-lock.yaml"),
     }),
   ],
 })
@@ -265,7 +302,7 @@ index 5555555..6666666 100644
 -lock old
 +lock new`,
   fetchedAt: "2026-07-07T02:00:00Z",
-  headRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  headRevision: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 })
 
 const fixtureProvider = GitProviderDescriptor.make({
@@ -294,7 +331,7 @@ const fixturePullRequest = HostedReviewSummary.make({
   ...pullRequest,
   locator: makeHostedReviewLocator("fixture", "platform/backend", "service", 73),
   title: "Fixture merge request flow",
-  url: "https://git.fixture.test/platform/backend/service/merge-requests/73",
+  url: WebUrl.make("https://git.fixture.test/platform/backend/service/merge-requests/73"),
 })
 
 const fixtureDetail = HostedReviewDetail.make({
@@ -305,7 +342,7 @@ const fixtureDetail = HostedReviewDetail.make({
       additions: 1,
       changeType: "modified",
       deletions: 1,
-      path: "src/fixture.ts",
+      path: RepositoryRelativePath.make("src/fixture.ts"),
     }),
   ],
 })
@@ -327,8 +364,8 @@ const makeLargeDiffFixture = (lineCount: number, number = 52, tailLineCount = 1)
     { length: lineCount },
     (_, index) => `-const value${index + 1} = "before"\n+const value${index + 1} = "after"`,
   ).join("\n")
-  const largePath = "src/generated-large.ts"
-  const tailPath = "src/tail.ts"
+  const largePath = RepositoryRelativePath.make("src/generated-large.ts")
+  const tailPath = RepositoryRelativePath.make("src/tail.ts")
   const tailChangedLines =
     tailLineCount === 1
       ? "-tail before\n+tail after"
@@ -393,42 +430,37 @@ const makeLongReviewThread = (fixture: ReturnType<typeof makeLargeDiffFixture>, 
     fixture.largeDetail.summary.head.revision ?? "unknown-head",
   )
 
+  const thread = ReviewThread.make({
+    id: threadId,
+    repoId: repo.id,
+    reviewKey: ReviewKey.make(
+      `${fixture.largePullRequest.locator.repository.providerId}:${fixture.largePullRequest.locator.repository.namespace}/${fixture.largePullRequest.locator.repository.name}#${fixture.largePullRequest.locator.number}`,
+    ),
+    prNumber: fixture.largePullRequest.locator.number,
+    baseRevision: currentBaseRevision,
+    headRevision: currentHeadRevision,
+    currentBaseRevision,
+    currentHeadRevision,
+    originalAnchor: anchor,
+    currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor }),
+    createdAt,
+    updatedAt: createdAt,
+  })
   return ReviewThreadDetails.make({
-    thread: ReviewThread.make({
-      id: threadId,
-      repoId: repo.id,
-      reviewKey: ReviewKey.make(
-        `${fixture.largePullRequest.locator.repository.providerId}:${fixture.largePullRequest.locator.repository.namespace}/${fixture.largePullRequest.locator.repository.name}#${fixture.largePullRequest.locator.number}`,
-      ),
-      prNumber: fixture.largePullRequest.locator.number,
-      baseRevision: currentBaseRevision,
-      headRevision: currentHeadRevision,
-      currentBaseRevision,
-      currentHeadRevision,
-      originalAnchor: anchor,
-      currentAnchor: anchor,
-      anchorStatus: "active",
-      createdAt,
-      updatedAt: createdAt,
-    }),
-    messages: Array.from({ length: 80 }, (_message, index) =>
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make(`message-long-${index + 1}`),
-        threadId,
-        sequence: index + 1,
-        author: index % 2 === 0 ? "user" : "agent",
-        bodyMarkdown: MarkdownBody.make(
-          `### Review turn ${index + 1}\n\n${Array.from(
-            { length: 6 },
-            (_line, lineIndex) =>
-              `Detailed review context ${index + 1}.${lineIndex + 1} keeps this history intentionally tall.`,
-          ).join("\n\n")}`,
-        ),
-        status: "complete",
-        agentRunId: index % 2 === 0 ? null : `run-long-${index + 1}`,
+    thread,
+    conversation: Array.from({ length: 80 }, (_message, index) =>
+      makeCompletedFixtureTurn(
+        thread,
+        index + 1,
+        index % 2 === 0 ? "user" : "agent",
+        `### Review turn ${index + 1}\n\n${Array.from(
+          { length: 6 },
+          (_line, lineIndex) =>
+            `Detailed review context ${index + 1}.${lineIndex + 1} keeps this history intentionally tall.`,
+        ).join("\n\n")}`,
+        `message-long-${index + 1}`,
         createdAt,
-        updatedAt: createdAt,
-      }),
+      ),
     ),
   })
 }
@@ -448,48 +480,84 @@ const makeReviewThreadDetails = ({
   const createdAt = "2026-07-23T09:00:00Z"
   const currentBaseRevision = ReviewRevision.make(pullRequest.base.revision ?? "unknown-base")
   const currentHeadRevision = ReviewRevision.make(pullRequest.head.revision ?? "unknown-head")
+  const thread = ReviewThread.make({
+    id: threadId,
+    repoId: repo.id,
+    reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
+    prNumber: pullRequest.locator.number,
+    baseRevision: currentBaseRevision,
+    headRevision: previousRevision
+      ? ReviewRevision.make("head-thread-summary-previous")
+      : currentHeadRevision,
+    currentBaseRevision,
+    currentHeadRevision,
+    originalAnchor: anchor,
+    currentAnchor:
+      status === "active"
+        ? CurrentReviewAnchor.cases.Active.make({ anchor })
+        : status === "outdated"
+          ? CurrentReviewAnchor.cases.Outdated.make({})
+          : CurrentReviewAnchor.cases.Unresolved.make({}),
+    createdAt,
+    updatedAt: createdAt,
+  })
   return ReviewThreadDetails.make({
-    thread: ReviewThread.make({
-      id: threadId,
-      repoId: repo.id,
-      reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
-      prNumber: pullRequest.locator.number,
-      baseRevision: currentBaseRevision,
-      headRevision: previousRevision
-        ? ReviewRevision.make("head-thread-summary-previous")
-        : currentHeadRevision,
-      currentBaseRevision,
-      currentHeadRevision,
-      originalAnchor: anchor,
-      currentAnchor: status === "active" ? anchor : null,
-      anchorStatus: status,
-      createdAt,
-      updatedAt: createdAt,
-    }),
-    messages: [
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make(`${id}-user`),
-        threadId,
-        sequence: 1,
-        author: "user",
-        bodyMarkdown: MarkdownBody.make(`Question for ${anchor.filePath}`),
-        status: "complete",
-        agentRunId: null,
+    thread,
+    conversation: [
+      makeCompletedFixtureTurn(
+        thread,
+        1,
+        "user",
+        `Question for ${anchor.filePath}`,
+        `${id}-user`,
         createdAt,
-        updatedAt: createdAt,
-      }),
-      ReviewThreadMessage.make({
-        id: ReviewThreadMessageId.make(`${id}-agent`),
-        threadId,
-        sequence: 2,
-        author: "agent",
-        bodyMarkdown: MarkdownBody.make(`Response for ${anchor.filePath}`),
-        status: "complete",
-        agentRunId: `${id}-run`,
+      ),
+      makeCompletedFixtureTurn(
+        thread,
+        2,
+        "agent",
+        `Response for ${anchor.filePath}`,
+        `${id}-agent`,
         createdAt,
-        updatedAt: createdAt,
-      }),
+      ),
     ],
+  })
+}
+
+const makeCompletedFixtureTurn = (
+  thread: ReviewThread,
+  sequence: number,
+  author: "user" | "agent",
+  body: string,
+  messageId: string,
+  timestamp: string,
+) => {
+  const identity = {
+    id: ReviewThreadMessageId.make(messageId),
+    threadId: thread.id,
+    sequence,
+    bodyMarkdown: MarkdownBody.make(body),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  if (author === "user") {
+    return UserReviewTurn.make({ message: UserReviewThreadMessage.make(identity) })
+  }
+  const runId = AgentRunId.make(`${messageId}-run`)
+  return CompletedAgentReviewTurn.make({
+    message: CompletedAgentReviewThreadMessage.make({ ...identity, agentRunId: runId }),
+    run: CompletedAgentRun.make({
+      id: runId,
+      threadId: thread.id,
+      reviewKey: thread.reviewKey,
+      baseRevision: thread.baseRevision,
+      headRevision: thread.headRevision,
+      provider: ReviewAgentProviderId.make("fixture"),
+      model: "fixture-model",
+      promptVersion: AgentPromptVersion.make("fixture-v1"),
+      startedAt: timestamp,
+      completedAt: timestamp,
+    }),
   })
 }
 
@@ -499,7 +567,7 @@ const makeManyFileDiffFixture = () => {
   const fileSpecs = Array.from({ length: 14 }, (_, index) => ({
     lineCount:
       index === targetIndex ? 691 : index === 13 ? 24 : ([36, 72, 144, 220][index % 4] ?? 36),
-    path: `src/many/file-${String(index + 1).padStart(2, "0")}.tsx`,
+    path: RepositoryRelativePath.make(`src/many/file-${String(index + 1).padStart(2, "0")}.tsx`),
   }))
   const targetPath = fileSpecs[targetIndex]?.path ?? ""
   const sentinelPath = fileSpecs.at(-1)?.path ?? ""
@@ -560,9 +628,8 @@ ${changedLines}`
 
 const makeCachePressureDiffFixture = () => {
   const number = 59
-  const paths = Array.from(
-    { length: 36 },
-    (_, index) => `src/cache/file-${String(index + 1).padStart(2, "0")}.tsx`,
+  const paths = Array.from({ length: 36 }, (_, index) =>
+    RepositoryRelativePath.make(`src/cache/file-${String(index + 1).padStart(2, "0")}.tsx`),
   )
   const cachePullRequest = HostedReviewSummary.make({
     ...pullRequest,
@@ -600,21 +667,23 @@ index 1111111..2222222 100644
 }
 
 const localReview = LocalReviewDetail.make({
-  baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  branchName: "feature/local-review",
-  diffHash: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+  branchName: RepositoryComparisonRef.make("feature/local-review"),
+  diffHash: ReviewDiffIdentity.make(
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  ),
   fetchedAt: "2026-07-07T04:00:00Z",
   files: [
     ChangedFile.make({
       additions: 1,
       changeType: "modified",
       deletions: 1,
-      path: "src/local.ts",
+      path: RepositoryRelativePath.make("src/local.ts"),
     }),
   ],
-  headSha: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  headSha: ReviewRevision.make("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
   repoName: "local-repo",
-  rootPath: "/workspace/local-repo",
+  rootPath: RepositoryCheckoutPath.make("/workspace/local-repo"),
   title: "Local changes",
 })
 
@@ -636,25 +705,27 @@ index 1111111..2222222 100644
 const generatedLocalHeadSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 const walkthrough = StoredWalkthrough.make({
-  baseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
   createdAt: "2026-07-08T00:00:00Z",
-  headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  headSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   prNumber: 51,
   promptVersion: "walkthrough-v2",
-  repoId: "repo-1",
-  reviewKey: "github:fungsi/diffdash#51",
+  repoId: ReviewProjectId.make("repo-1"),
+  reviewKey: ReviewKey.make("github:fungsi/diffdash#51"),
   walkthrough: Walkthrough.make({
     title: "Review path",
     summary: "Review the app entry point first, then skim supporting docs.",
     chapters: [
       WalkthroughChapter.make({
-        id: "c1",
+        id: WalkthroughChapterId.make("c1"),
         title: "Runtime",
         summary: "Runtime behavior changes.",
         stops: [
           WalkthroughStop.make({
-            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
-            id: "s1",
+            hunkIds: [
+              WalkthroughHunkId.make("src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"),
+            ],
+            id: WalkthroughStopId.make("s1"),
             risk: "critical",
             summary: "The app entry point owns the behavior change.",
             title: "Entry point",
@@ -662,13 +733,15 @@ const walkthrough = StoredWalkthrough.make({
         ],
       }),
       WalkthroughChapter.make({
-        id: "duplicate-chapter",
+        id: WalkthroughChapterId.make("duplicate-chapter"),
         title: "Section A",
         summary: "First configuration section.",
         stops: [
           WalkthroughStop.make({
-            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
-            id: "duplicate-stop",
+            hunkIds: [
+              WalkthroughHunkId.make("src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"),
+            ],
+            id: WalkthroughStopId.make("duplicate-stop"),
             risk: "review",
             summary: "Review the first configuration path.",
             title: "Ci.yml",
@@ -676,13 +749,15 @@ const walkthrough = StoredWalkthrough.make({
         ],
       }),
       WalkthroughChapter.make({
-        id: "duplicate-chapter",
+        id: WalkthroughChapterId.make("duplicate-chapter"),
         title: "Section B",
         summary: "Second configuration section.",
         stops: [
           WalkthroughStop.make({
-            hunkIds: ["src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"],
-            id: "duplicate-stop",
+            hunkIds: [
+              WalkthroughHunkId.make("src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1"),
+            ],
+            id: WalkthroughStopId.make("duplicate-stop"),
             risk: "review",
             summary: "Review the second configuration path.",
             title: "Ci.yml",
@@ -692,8 +767,10 @@ const walkthrough = StoredWalkthrough.make({
     ],
     support: [
       WalkthroughSupportItem.make({
-        hunkIds: ["docs/readme.md:hosted-review:github:fungsi/diffdash#51:h1"],
-        id: "support-docs",
+        hunkIds: [
+          WalkthroughHunkId.make("docs/readme.md:hosted-review:github:fungsi/diffdash#51:h1"),
+        ],
+        id: WalkthroughSupportItemId.make("support-docs"),
         reason: "Docs support the behavior change.",
         title: "Documentation",
       }),
@@ -718,23 +795,25 @@ const sampledWalkthrough = StoredWalkthrough.make({
 const localWalkthrough = StoredWalkthrough.make({
   baseSha: localReview.baseSha,
   createdAt: "2026-07-08T01:00:00Z",
-  headSha: generatedLocalHeadSha,
+  headSha: ReviewRevision.make(generatedLocalHeadSha),
   prNumber: null,
   promptVersion: "walkthrough-v2",
-  repoId: "local-repo-1",
-  reviewKey: "local:local-repo",
+  repoId: ReviewProjectId.make("local-repo-1"),
+  reviewKey: ReviewKey.make("local:local-repo"),
   walkthrough: Walkthrough.make({
     title: "Local review path",
     summary: "Review local changes in working tree order.",
     chapters: [
       WalkthroughChapter.make({
-        id: "c1",
+        id: WalkthroughChapterId.make("c1"),
         title: "Local",
         summary: "Local code changes.",
         stops: [
           WalkthroughStop.make({
-            hunkIds: [`src/local.ts:local-diff:${generatedLocalHeadSha}:h1`],
-            id: "s1",
+            hunkIds: [
+              WalkthroughHunkId.make(`src/local.ts:local-diff:${generatedLocalHeadSha}:h1`),
+            ],
+            id: WalkthroughStopId.make("s1"),
             risk: "review",
             summary: "Local file change.",
             title: "Local file",
@@ -751,7 +830,7 @@ const remoteSearchResult = HostedRepository.make({
   description: "Remote review target",
   isPrivate: false,
   updatedAt: "2026-07-07T03:00:00Z",
-  url: "https://github.com/fungsi/remote-review",
+  url: WebUrl.make("https://github.com/fungsi/remote-review"),
 })
 
 const readyPrerequisites = AppPrerequisites.make({
@@ -759,14 +838,14 @@ const readyPrerequisites = AppPrerequisites.make({
   codingAgentInstalled: true,
   diffDashCliInstalled: true,
   diffDashCliInPath: true,
-  diffDashCliPath: "/usr/local/bin/diffdash",
+  diffDashCliPath: ExecutablePath.make("/usr/local/bin/diffdash"),
   gitInstalled: true,
   ghAuthenticated: true,
   ghInstalled: true,
   ghSearchRepositoriesAvailable: true,
   ghSupported: true,
   ghVersion: "2.76.1",
-  installedCodingAgents: ["codex"],
+  installedCodingAgents: [CodingAgentName.make("codex")],
 })
 
 const readyAgentProviderCatalog = AgentProviderCatalog.make({
@@ -782,20 +861,14 @@ const readyAgentProviderCatalog = AgentProviderCatalog.make({
       displayName,
       description: `${displayName} provider`,
       homepage: null,
-      capabilities: [
-        AgentProviderCapabilityStatus.make({
-          capability: "walkthrough",
-          status: "ready",
+      capabilities: {
+        walkthrough: AgentProviderCapabilityStatus.cases.Ready.make({
           runtimeVersion: "1.0.0",
-          reason: null,
         }),
-        AgentProviderCapabilityStatus.make({
-          capability: "review-thread",
-          status: "ready",
+        "review-thread": AgentProviderCapabilityStatus.cases.Ready.make({
           runtimeVersion: "1.0.0",
-          reason: null,
         }),
-      ],
+      },
       models: [
         AgentProviderModel.make({
           id: AgentModelId.make(model),
@@ -838,14 +911,14 @@ const missingPrerequisites = AppPrerequisites.make({
   installedCodingAgents: [],
   setupRequirements: [
     SetupRequirement.make({
-      key: "provider:github",
+      key: SetupRequirementKey.make("provider:github"),
       providerId: GitProviderId.make("github"),
       title: "GitHub ready",
       description: "Connect GitHub to search repositories and review pull requests.",
       detail: "GitHub needs setup or authentication.",
       ready: false,
       requiredForLocalUse: false,
-      helpUrl: "https://cli.github.com/manual/gh_auth_login",
+      helpUrl: WebUrl.make("https://cli.github.com/manual/gh_auth_login"),
     }),
   ],
 })
@@ -867,14 +940,14 @@ const userLocalCliReadyPrerequisites = AppPrerequisites.make({
   ...readyPrerequisites,
   diffDashCliInstalled: true,
   diffDashCliInPath: false,
-  diffDashCliPath: "/home/user/.local/bin/diffdash",
+  diffDashCliPath: ExecutablePath.make("/home/user/.local/bin/diffdash"),
 })
 
 const userLocalCliReadyWithOtherMissing = AppPrerequisites.make({
   ...missingPrerequisites,
   diffDashCliInstalled: true,
   diffDashCliInPath: false,
-  diffDashCliPath: "/home/user/.local/bin/diffdash",
+  diffDashCliPath: ExecutablePath.make("/home/user/.local/bin/diffdash"),
 })
 
 let root: Root | null = null
@@ -932,6 +1005,7 @@ type AppBrowserScenarioId =
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
   | "projectOpenChooser"
+  | "projectRestoreRace"
   | "projectStateRestoration"
   | "cleanProjectReviews"
   | "failedProjectReviews"
@@ -970,7 +1044,7 @@ type AppBrowserScenarioId =
   | "wrappedSearchConvergence"
 
 const appBrowserScenarios = new Map<AppBrowserScenarioId, AppBrowserScenario>()
-const ignoreRejection = (_error: unknown): void => undefined
+const ignoreRejection = (_error: Schema.Defect["Type"]): void => undefined
 const ignoreSettingsResolution = (_settings: AISettings): void => undefined
 
 const makeBrowserWait = () => {
@@ -1066,25 +1140,25 @@ scenario("appearance", async () => {
           additions: 1,
           changeType: "modified",
           deletions: 1,
-          path: "package.json",
+          path: RepositoryRelativePath.make("package.json"),
         }),
         ChangedFile.make({
           additions: 1,
           changeType: "modified",
           deletions: 1,
-          path: "config/syntax.yaml",
+          path: RepositoryRelativePath.make("config/syntax.yaml"),
         }),
         ChangedFile.make({
           additions: 1,
           changeType: "modified",
           deletions: 1,
-          path: "config/alias.yml",
+          path: RepositoryRelativePath.make("config/alias.yml"),
         }),
         ChangedFile.make({
           additions: 1,
           changeType: "modified",
           deletions: 1,
-          path: "src/syntax.tsx",
+          path: RepositoryRelativePath.make("src/syntax.tsx"),
         }),
       ],
     }),
@@ -1127,8 +1201,12 @@ index 7777777..8888888 100644
     }),
     settings: configuredSettings,
   })
-  expect((await window.diffDash.settings.get()).themes.dark).toBe("catppuccin-mocha")
-  expect((await window.diffDash.settings.get()).codeThemes.dark).toBe("diffdash-dark")
+  const appearanceSettings = await window.diffDash.settings.get()
+  expect(appearanceSettings._tag).toBe("Success")
+  if (appearanceSettings._tag === "Success") {
+    expect(appearanceSettings.value.themes.dark).toBe("catppuccin-mocha")
+    expect(appearanceSettings.value.codeThemes.dark).toBe("diffdash-dark")
+  }
   renderApp()
 
   await vi.waitFor(() => {
@@ -1354,7 +1432,7 @@ scenario("diffViewSettings", async () => {
 })
 
 scenario("diffLineContextMenu", async () => {
-  const path = "src/index.ts"
+  const path = RepositoryRelativePath.make("src/index.ts")
   const lineDetail = HostedReviewDetail.make({
     ...detail,
     files: [
@@ -1669,7 +1747,15 @@ scenario("appStateRecovery", async () => {
   const calls = installDiffDashApi({
     getAppState: async () => {
       attempt += 1
-      if (attempt === 1) throw new Error("Application runtime unavailable")
+      if (attempt === 1) {
+        throw legacyBridgeTransportError(
+          transportError(
+            "APP_STATE_UNAVAILABLE",
+            `${InvokeChannel.appStateGet} failed: Application runtime unavailable`,
+            InvokeChannel.appStateGet,
+          ),
+        )
+      }
       return { onboardingCompleted: true }
     },
   })
@@ -1710,7 +1796,9 @@ scenario("projectOpenChooser", async () => {
     openProject: async (localPath, selectedRepository) =>
       selectedRepository === undefined
         ? ProjectRemoteSelectionRequired.make({ rootPath: localPath, candidates })
-        : ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) }),
+        : ProjectOpened.make({
+            repo: linkedRepo(repo, localPath),
+          }),
   })
   renderApp()
 
@@ -1785,15 +1873,43 @@ scenario("projectStateRestoration", async () => {
   })
 })
 
+scenario("projectRestoreRace", async () => {
+  let releaseRestore: ((state: ProjectWorkspaceState | null) => void) | undefined
+  const calls = installDiffDashApi()
+  calls.getProjectWorkspace.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        releaseRestore = resolve
+      }),
+  )
+  renderApp()
+
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label^="Open review #51:"]')?.click()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("Opened PR #51")
+  })
+
+  releaseRestore?.(null)
+  await Promise.resolve()
+  await vi.waitFor(() => {
+    expect(document.querySelector('button[aria-label="Files"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("Opened PR #51")
+  })
+})
+
 scenario("cleanProjectReviews", async () => {
-  const localRepo = Repo.make({ ...repo, localPath: localReview.rootPath })
+  const localRepo = linkedRepo(repo, localReview.rootPath)
   installDiffDashApi({
     repositories: [localRepo],
     pullRequests: [],
     localReviewDiff: LocalReviewDiff.make({
       ...localDiff,
       diff: "",
-      diffHash: "0000000000000000000000000000000000000000000000000000000000000000",
+      diffHash: ReviewDiffIdentity.make(
+        "0000000000000000000000000000000000000000000000000000000000000000",
+      ),
     }),
   })
   renderApp()
@@ -1815,13 +1931,21 @@ scenario("cleanProjectReviews", async () => {
 
 scenario("failedProjectReviews", async () => {
   const calls = installDiffDashApi()
-  calls.listPullRequests.mockRejectedValue(new Error("Hosted provider unavailable"))
+  calls.listPullRequests.mockRejectedValue(
+    legacyBridgeTransportError(
+      transportError(
+        "HOSTED_PROVIDER_UNAVAILABLE",
+        `${InvokeChannel.listHostedReviews} failed: Hosted provider unavailable`,
+        InvokeChannel.listHostedReviews,
+      ),
+    ),
+  )
   renderApp()
 
   await openDefaultProject()
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("Hosted reviews unavailable")
-    expect(document.body.textContent).toContain("Could not load pull requests")
+    expect(document.body.textContent).toContain("Review sources could not be loaded")
     expect(document.body.textContent).not.toContain("No open pull requests")
   })
 })
@@ -1940,7 +2064,7 @@ scenario("unsupportedGitHubCli", async () => {
       ...readyPrerequisites,
       setupRequirements: [
         SetupRequirement.make({
-          key: "provider:github",
+          key: SetupRequirementKey.make("provider:github"),
           providerId: GitProviderId.make("github"),
           title: "GitHub ready",
           description: "Connect GitHub to search repositories and review pull requests.",
@@ -2059,7 +2183,15 @@ scenario("remoteRepositorySearch", async () => {
 
 scenario("repositorySearchFailure", async () => {
   const calls = installDiffDashApi()
-  calls.searchRepositories.mockRejectedValue(new Error("GitHub search is unavailable"))
+  calls.searchRepositories.mockRejectedValue(
+    legacyBridgeTransportError(
+      transportError(
+        "HOSTED_SEARCH_UNAVAILABLE",
+        `${InvokeChannel.searchHostedRepositories} failed: GitHub search is unavailable`,
+        InvokeChannel.searchHostedRepositories,
+      ),
+    ),
+  )
   renderApp()
 
   await vi.waitFor(() => {
@@ -2146,16 +2278,12 @@ scenario("unavailableProviderRoute", async () => {
       agentProvider.id === "claude"
         ? AgentProviderStatus.make({
             ...agentProvider,
-            capabilities: agentProvider.capabilities.map((capability) =>
-              capability.capability === "walkthrough"
-                ? AgentProviderCapabilityStatus.make({
-                    ...capability,
-                    status: "unavailable",
-                    runtimeVersion: null,
-                    reason: unavailableReason,
-                  })
-                : capability,
-            ),
+            capabilities: {
+              ...agentProvider.capabilities,
+              walkthrough: AgentProviderCapabilityStatus.cases.Unavailable.make({
+                reason: unavailableReason,
+              }),
+            },
           })
         : agentProvider,
     ),
@@ -2164,7 +2292,13 @@ scenario("unavailableProviderRoute", async () => {
     agentProviderCatalog: catalog,
     settings: AISettings.make({
       ...DEFAULT_AI_SETTINGS,
-      routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+      selections: {
+        ...DEFAULT_AI_SETTINGS.selections,
+        walkthrough: AIAgentSelection.cases.Pinned.make({
+          providerId: AIProviderId.make("claude"),
+          modelId: AIModelId.make("claude-sonnet-5"),
+        }),
+      },
     }),
   })
   renderApp()
@@ -2272,7 +2406,13 @@ scenario("explicitProviderRouting", async () => {
     }),
     settings: AISettings.make({
       ...DEFAULT_AI_SETTINGS,
-      routes: { ...DEFAULT_AI_SETTINGS.routes, walkthrough: "claude" },
+      selections: {
+        ...DEFAULT_AI_SETTINGS.selections,
+        walkthrough: AIAgentSelection.cases.Pinned.make({
+          providerId: AIProviderId.make("claude"),
+          modelId: AIModelId.make("claude-sonnet-5"),
+        }),
+      },
     }),
   })
   renderApp()
@@ -2343,7 +2483,13 @@ scenario("walkthroughSettingsPersistence", async () => {
   await vi.waitFor(() => {
     expect(calls.updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
-        routes: expect.objectContaining({ walkthrough: "claude" }),
+        selections: expect.objectContaining({
+          walkthrough: expect.objectContaining({
+            _tag: "Pinned",
+            providerId: "claude",
+            modelId: "claude-sonnet-5",
+          }),
+        }),
       }),
     )
     const autoButton = [
@@ -2354,7 +2500,7 @@ scenario("walkthroughSettingsPersistence", async () => {
 })
 
 scenario("rapidSettingsOrdering", async () => {
-  let rejectFirst: (error: unknown) => void = ignoreRejection
+  let rejectFirst: (error: Schema.Defect["Type"]) => void = ignoreRejection
   let resolveSecond: (settings: AISettings) => void = ignoreSettingsResolution
   let writeCount = 0
   const calls = installDiffDashApi({
@@ -2425,7 +2571,7 @@ scenario("staleLocalFavorites", async () => {
 
 scenario("linkRepositoryBanner", async () => {
   const calls = installDiffDashApi()
-  calls.selectLocalFolder.mockResolvedValue("/workspace/diffdash")
+  calls.selectLocalFolder.mockResolvedValue(RepositoryCheckoutPath.make("/workspace/diffdash"))
   renderApp()
 
   await openDefaultHostedReview()
@@ -2542,8 +2688,12 @@ scenario("cliNumberedPullRequest", async () => {
 scenario("cliPullRequestFailure", async () => {
   const calls = installDiffDashApi()
   calls.openProject.mockRejectedValueOnce(
-    new Error(
-      `repositories:install failed: (FiberFailure) RepositoryLinkError: { "operation": "detectRepository", "reason": "Select a Git repository with a GitHub origin.", "cause": {} } at internal stack`,
+    legacyBridgeTransportError(
+      transportError(
+        "RepositoryLinkError",
+        `${InvokeChannel.openProject} failed: Select a Git repository with a GitHub origin.`,
+        InvokeChannel.openProject,
+      ),
     ),
   )
   renderApp()
@@ -2581,8 +2731,12 @@ scenario("cliBranchComparison", async () => {
 scenario("cliBranchNoAncestor", async () => {
   const calls = installDiffDashApi()
   calls.resolveBranch.mockRejectedValueOnce(
-    new Error(
-      `localReviews:resolveBranch failed: LocalReviewTargetError: { "operation": "branch.mergeBase", "reason": "Branch dev does not share a common ancestor with the current HEAD", "cause": {} }`,
+    legacyBridgeTransportError(
+      transportError(
+        "LocalReviewTargetError",
+        `${InvokeChannel.resolveLocalBranch} failed: Branch dev does not share a common ancestor with the current HEAD`,
+        InvokeChannel.resolveLocalBranch,
+      ),
     ),
   )
   renderApp()
@@ -2842,7 +2996,9 @@ scenario("reviewNavigationLifecycle", async () => {
 })
 
 scenario("longReviewPaths", async () => {
-  const longPath = "src/atomic-webhook-replay-story-with-an-extremely-long-name.test.ts"
+  const longPath = RepositoryRelativePath.make(
+    "src/atomic-webhook-replay-story-with-an-extremely-long-name.test.ts",
+  )
   installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
       ...detail,
@@ -3196,7 +3352,7 @@ scenario("threadNavigationConvergence", async () => {
   const longThread = makeLongReviewThread(fixture, targetLineNumber)
   const details = ReviewThreadDetails.make({
     thread: longThread.thread,
-    messages: longThread.messages.slice(0, 6),
+    conversation: longThread.conversation.slice(0, 6),
   })
   const calls = installDiffDashApi({
     pullRequestDetail: fixture.largeDetail,
@@ -3398,7 +3554,7 @@ scenario("threadComposerShortcut", async () => {
     reviewThreadDetails: [
       ReviewThreadDetails.make({
         thread: longThread.thread,
-        messages: longThread.messages.slice(0, 2),
+        conversation: longThread.conversation.slice(0, 2),
       }),
     ],
     settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
@@ -4105,10 +4261,25 @@ scenario("reviewThreadSidebar", async () => {
 
 scenario("wrappedFileBuffers", async () => {
   const fixture = makeManyFileDiffFixture()
+  const targetFile = requireParsedFile(
+    parseUnifiedDiff(fixture.manyDiff.diff).files,
+    fixture.targetPath,
+  )
+  const targetText = 'const row691 = "TARGET_FINAL_691"'
   installDiffDashApi({
     pullRequestDetail: fixture.manyDetail,
     pullRequestDiff: fixture.manyDiff,
     reviewRequests: [fixture.manyPullRequest],
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      TARGET_FINAL_691: [
+        makeChangedLineSearchMatch(targetFile, {
+          lineNumber: 691,
+          matchedText: "TARGET_FINAL_691",
+          side: "additions",
+          text: targetText,
+        }),
+      ],
+    }),
   })
   renderApp({ strictMode: true })
 
@@ -4187,10 +4358,27 @@ scenario("wrappedFileBuffers", async () => {
 
 scenario("multiFileSearchWrap", async () => {
   const fixture = makeManyFileDiffFixture()
+  const parsedFiles = parseUnifiedDiff(fixture.manyDiff.diff).files
+  const wrapMatches = [0, 7, 8, 9, 10, 11, 12, 13].flatMap((fileIndex) => {
+    const file = parsedFiles[fileIndex]
+    if (file === undefined) throw new Error(`Missing wrapped-search fixture file ${fileIndex}`)
+    const padding = "wrapped-content-".repeat(fileIndex % 3 === 0 ? 6 : 2)
+    return Array.from({ length: 21 }, (_, index) => {
+      const lineNumber = index + 1
+      const text = `const row${lineNumber} = "after ${padding} SEARCH_WRAP_MATCH"`
+      return makeChangedLineSearchMatch(file, {
+        lineNumber,
+        matchedText: "SEARCH_WRAP_MATCH",
+        side: "additions",
+        text,
+      })
+    })
+  })
   installDiffDashApi({
     pullRequestDetail: fixture.manyDetail,
     pullRequestDiff: fixture.manyDiff,
     reviewRequests: [fixture.manyPullRequest],
+    searchReviewSnapshot: reviewSnapshotSearchFixture({ SEARCH_WRAP_MATCH: wrapMatches }),
   })
   renderApp({ strictMode: true })
 
@@ -4290,10 +4478,24 @@ scenario("multiFileSearchWrap", async () => {
 
 scenario("snapshotPageResidency", async () => {
   const fixture = makeCachePressureDiffFixture()
+  const activeFile = requireParsedFile(
+    parseUnifiedDiff(fixture.cacheDiff.diff).files,
+    fixture.paths[0] ?? "",
+  )
   const api = installDiffDashApi({
     pullRequestDetail: fixture.cacheDetail,
     pullRequestDiff: fixture.cacheDiff,
     reviewRequests: [fixture.cachePullRequest],
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      CACHE_PIN_MATCH: [
+        makeChangedLineSearchMatch(activeFile, {
+          lineNumber: 1,
+          matchedText: "CACHE_PIN_MATCH",
+          side: "additions",
+          text: 'const value = "after 0 CACHE_PIN_MATCH"',
+        }),
+      ],
+    }),
     snapshotPageFileLimit: 1,
   })
   renderApp({ strictMode: true })
@@ -4367,13 +4569,40 @@ scenario("snapshotPageResidency", async () => {
 })
 
 scenario("diffSearchSubstrings", async () => {
+  const searchDiff = HostedReviewDiff.make({
+    ...diff,
+    diff: diff.diff.replace(
+      "-old\n+new",
+      "-const previous = createAgent()\n+const AgentProvider = createAgent()",
+    ),
+  })
+  const appFile = requireParsedFile(parseUnifiedDiff(searchDiff.diff).files, "src/app.tsx")
+  const deletionText = "const previous = createAgent()"
+  const additionText = "const AgentProvider = createAgent()"
   installDiffDashApi({
-    pullRequestDiff: HostedReviewDiff.make({
-      ...diff,
-      diff: diff.diff.replace(
-        "-old\n+new",
-        "-const previous = createAgent()\n+const AgentProvider = createAgent()",
-      ),
+    pullRequestDiff: searchDiff,
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      agent: [
+        makeChangedLineSearchMatch(appFile, {
+          lineNumber: 1,
+          matchedText: "Agent",
+          side: "deletions",
+          text: deletionText,
+        }),
+        makeChangedLineSearchMatch(appFile, {
+          lineNumber: 1,
+          matchedText: "Agent",
+          side: "additions",
+          text: additionText,
+        }),
+        makeChangedLineSearchMatch(appFile, {
+          lineNumber: 1,
+          matchedText: "Agent",
+          occurrence: 1,
+          side: "additions",
+          text: additionText,
+        }),
+      ],
     }),
   })
   renderApp()
@@ -4430,11 +4659,33 @@ scenario("diffSearchSubstrings", async () => {
 scenario("diffSearchLatestWork", async () => {
   const oldWait = makeBrowserWait()
   const closingWait = makeBrowserWait()
+  const parsedFiles = parseUnifiedDiff(diff.diff).files
+  const docsFile = requireParsedFile(parsedFiles, "docs/readme.md")
+  const lockFile = requireParsedFile(parsedFiles, "pnpm-lock.yaml")
   const api = installDiffDashApi({
     beforeReviewSnapshotSearch: async (request) => {
       if (request.query === "old") await oldWait.promise
       if (request.query === "lock new") await closingWait.promise
     },
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      "docs update": [
+        makeChangedLineSearchMatch(docsFile, {
+          lineNumber: 1,
+          matchedText: "docs update",
+          side: "additions",
+          text: "docs update",
+        }),
+      ],
+      "lock new": [
+        makeChangedLineSearchMatch(lockFile, {
+          lineNumber: 1,
+          matchedText: "lock new",
+          side: "additions",
+          text: "lock new",
+        }),
+      ],
+      old: [],
+    }),
   })
   renderApp()
 
@@ -4498,6 +4749,20 @@ scenario("diffSearchViewportAnchor", async () => {
     (_, index) => `+docs filler line ${index + 1}`,
   ).join("\n")
   const lockFileStart = diff.diff.indexOf("diff --git a/pnpm-lock.yaml")
+  const searchDiffText = diff.diff
+    .slice(0, lockFileStart)
+    .replace(
+      "@@ -1,1 +1,1 @@\n-old\n+new",
+      `@@ -1,1 +1,81 @@\n-shared app old\n+shared app new\n${fillerLines}`,
+    )
+    .replace(
+      "@@ -1,1 +1,1 @@\n-docs\n+docs update",
+      `@@ -1,1 +1,41 @@\n-shared docs old\n+shared docs update\n${docsFillerLines}`,
+    )
+    .replace("-lock old\n+lock new", "-shared lock old\n+shared lock new")
+  const parsedFiles = parseUnifiedDiff(searchDiffText).files
+  const appFile = requireParsedFile(parsedFiles, "src/app.tsx")
+  const docsFile = requireParsedFile(parsedFiles, "docs/readme.md")
   installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
       ...detail,
@@ -4505,17 +4770,35 @@ scenario("diffSearchViewportAnchor", async () => {
     }),
     pullRequestDiff: HostedReviewDiff.make({
       ...diff,
-      diff: diff.diff
-        .slice(0, lockFileStart)
-        .replace(
-          "@@ -1,1 +1,1 @@\n-old\n+new",
-          `@@ -1,1 +1,81 @@\n-shared app old\n+shared app new\n${fillerLines}`,
-        )
-        .replace(
-          "@@ -1,1 +1,1 @@\n-docs\n+docs update",
-          `@@ -1,1 +1,41 @@\n-shared docs old\n+shared docs update\n${docsFillerLines}`,
-        )
-        .replace("-lock old\n+lock new", "-shared lock old\n+shared lock new"),
+      diff: searchDiffText,
+    }),
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      shared: [
+        makeChangedLineSearchMatch(appFile, {
+          lineNumber: 1,
+          matchedText: "shared",
+          side: "deletions",
+          text: "shared app old",
+        }),
+        makeChangedLineSearchMatch(appFile, {
+          lineNumber: 1,
+          matchedText: "shared",
+          side: "additions",
+          text: "shared app new",
+        }),
+        makeChangedLineSearchMatch(docsFile, {
+          lineNumber: 1,
+          matchedText: "shared",
+          side: "deletions",
+          text: "shared docs old",
+        }),
+        makeChangedLineSearchMatch(docsFile, {
+          lineNumber: 1,
+          matchedText: "shared",
+          side: "additions",
+          text: "shared docs update",
+        }),
+      ],
     }),
     settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
   })
@@ -4598,8 +4881,31 @@ diff --git a/docs/readme.md b/docs/readme.md
 @@ -1 +1,41 @@
 -old docs
 +needle docs result
-${docsFillerLines}`
+  ${docsFillerLines}`
   const parsed = parseUnifiedDiff(searchDiffText)
+  const appFile = requireParsedFile(parsed.files, "src/app.tsx")
+  const docsFile = requireParsedFile(parsed.files, "docs/readme.md")
+  const needleMatches = [
+    ...Array.from({ length: 205 }, (_, index) => {
+      const lineNumber = index + 1
+      const text = `needle result ${lineNumber}`
+      return makeReviewSearchMatch(appFile, {
+        end: "needle".length,
+        hunkLineIndex: lineNumber,
+        newLineNumber: lineNumber,
+        oldLineNumber: null,
+        side: "additions",
+        start: 0,
+        text,
+      })
+    }),
+    makeChangedLineSearchMatch(docsFile, {
+      lineNumber: 1,
+      matchedText: "needle",
+      side: "additions",
+      text: "needle docs result",
+    }),
+  ]
   const calls = installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
       ...detail,
@@ -4613,6 +4919,7 @@ ${docsFillerLines}`
       ),
     }),
     pullRequestDiff: HostedReviewDiff.make({ ...diff, diff: searchDiffText }),
+    searchReviewSnapshot: reviewSnapshotSearchFixture({ needle: needleMatches }),
     settings: AISettings.make({ ...DEFAULT_AI_SETTINGS, diffViewMode: "split" }),
   })
   renderApp()
@@ -4693,7 +5000,29 @@ ${docsFillerLines}`
 })
 
 scenario("diffSearchVisibility", async () => {
-  installDiffDashApi()
+  const parsedFiles = parseUnifiedDiff(diff.diff).files
+  const docsFile = requireParsedFile(parsedFiles, "docs/readme.md")
+  const lockFile = requireParsedFile(parsedFiles, "pnpm-lock.yaml")
+  installDiffDashApi({
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      "docs update": [
+        makeChangedLineSearchMatch(docsFile, {
+          lineNumber: 1,
+          matchedText: "docs update",
+          side: "additions",
+          text: "docs update",
+        }),
+      ],
+      "lock new": [
+        makeChangedLineSearchMatch(lockFile, {
+          lineNumber: 1,
+          matchedText: "lock new",
+          side: "additions",
+          text: "lock new",
+        }),
+      ],
+    }),
+  })
   renderApp()
 
   await openDefaultHostedReview()
@@ -4755,10 +5084,56 @@ scenario("diffSearchVisibility", async () => {
 
 scenario("virtualizedSearch", async () => {
   const fixture = makeLargeDiffFixture(3_000, 56)
+  const parsedFiles = parseUnifiedDiff(fixture.largeDiff.diff).files
+  const largeFile = requireParsedFile(parsedFiles, fixture.largePath)
+  const tailFile = requireParsedFile(parsedFiles, fixture.tailPath)
+  const tailAfterMatch = makeChangedLineSearchMatch(tailFile, {
+    lineNumber: 1,
+    matchedText: "tail after",
+    side: "additions",
+    text: "tail after",
+  })
+  const tailAfterSubstringMatch = makeChangedLineSearchMatch(tailFile, {
+    lineNumber: 1,
+    matchedText: "after",
+    side: "additions",
+    text: "tail after",
+  })
+  const afterMatches = [
+    ...Array.from({ length: 3_000 }, (_, index) => {
+      const lineNumber = index + 1
+      const text = `const value${lineNumber} = "after"`
+      return makeChangedLineSearchMatch(largeFile, {
+        lineNumber,
+        matchedText: "after",
+        side: "additions",
+        text,
+      })
+    }),
+    tailAfterSubstringMatch,
+  ]
   const api = installDiffDashApi({
     pullRequestDetail: fixture.largeDetail,
     pullRequestDiff: fixture.largeDiff,
     reviewRequests: [fixture.largePullRequest],
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      after: afterMatches,
+      "tail after": [tailAfterMatch],
+      value2999: [
+        makeChangedLineSearchMatch(largeFile, {
+          lineNumber: 2_999,
+          matchedText: "value2999",
+          side: "deletions",
+          text: 'const value2999 = "before"',
+        }),
+        makeChangedLineSearchMatch(largeFile, {
+          lineNumber: 2_999,
+          matchedText: "value2999",
+          side: "additions",
+          text: 'const value2999 = "after"',
+        }),
+      ],
+    }),
   })
   renderApp()
 
@@ -4898,15 +5273,33 @@ scenario("virtualizedSearch", async () => {
 scenario("wrappedSearchConvergence", async () => {
   const fixture = makeLargeDiffFixture(300, 57)
   const padding = "x".repeat(1_500)
+  const wrappedDiff = HostedReviewDiff.make({
+    ...fixture.largeDiff,
+    diff: fixture.largeDiff.diff
+      .replaceAll('"before"', `"before ${padding}"`)
+      .replaceAll('"after"', `"after ${padding}"`),
+  })
+  const largeFile = requireParsedFile(parseUnifiedDiff(wrappedDiff.diff).files, fixture.largePath)
   installDiffDashApi({
     pullRequestDetail: fixture.largeDetail,
-    pullRequestDiff: HostedReviewDiff.make({
-      ...fixture.largeDiff,
-      diff: fixture.largeDiff.diff
-        .replaceAll('"before"', `"before ${padding}"`)
-        .replaceAll('"after"', `"after ${padding}"`),
-    }),
+    pullRequestDiff: wrappedDiff,
     reviewRequests: [fixture.largePullRequest],
+    searchReviewSnapshot: reviewSnapshotSearchFixture({
+      value300: [
+        makeChangedLineSearchMatch(largeFile, {
+          lineNumber: 300,
+          matchedText: "value300",
+          side: "deletions",
+          text: `const value300 = "before ${padding}"`,
+        }),
+        makeChangedLineSearchMatch(largeFile, {
+          lineNumber: 300,
+          matchedText: "value300",
+          side: "additions",
+          text: `const value300 = "after ${padding}"`,
+        }),
+      ],
+    }),
   })
   renderApp()
 
@@ -5173,7 +5566,7 @@ scenario("viewedAcrossPushes", async () => {
   dispatchKeyboardShortcut("v")
   await vi.waitFor(() => expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true))
 
-  const secondHead = "cccccccccccccccccccccccccccccccccccccccc"
+  const secondHead = ReviewRevision.make("cccccccccccccccccccccccccccccccccccccccc")
   calls.getPullRequestDetail.mockResolvedValue(
     HostedReviewDetail.make({
       ...detail,
@@ -5196,7 +5589,7 @@ scenario("viewedAcrossPushes", async () => {
     expect(getViewedCheckbox("src/app.tsx")?.checked).toBe(true)
   })
 
-  const thirdHead = "dddddddddddddddddddddddddddddddddddddddd"
+  const thirdHead = ReviewRevision.make("dddddddddddddddddddddddddddddddddddddddd")
   calls.getPullRequestDetail.mockResolvedValue(
     HostedReviewDetail.make({
       ...detail,
@@ -5967,7 +6360,13 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(calls.updateSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        routes: expect.objectContaining({ walkthrough: "claude" }),
+        selections: expect.objectContaining({
+          walkthrough: expect.objectContaining({
+            _tag: "Pinned",
+            providerId: "claude",
+            modelId: "claude-sonnet-5",
+          }),
+        }),
       }),
     )
     expect(document.body.textContent).toContain("Sonnet 5")
@@ -5981,7 +6380,13 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(calls.updateSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        routes: expect.objectContaining({ reviewThread: "claude" }),
+        selections: expect.objectContaining({
+          "review-thread": expect.objectContaining({
+            _tag: "Pinned",
+            providerId: "claude",
+            modelId: "claude-sonnet-5",
+          }),
+        }),
       }),
     )
   })
@@ -6534,6 +6939,97 @@ const stableBrowserCursorHash = (parts: readonly string[]) => {
   return (hash >>> 0).toString(16).padStart(8, "0")
 }
 
+const makeReviewSearchMatch = (
+  file: ParsedDiffFile,
+  input: {
+    readonly end: number
+    readonly hunkLineIndex: number
+    readonly newLineNumber: number | null
+    readonly oldLineNumber: number | null
+    readonly side: "additions" | "context" | "deletions"
+    readonly start: number
+    readonly text: string
+  },
+) => {
+  const hunk = file.hunks[0]
+  if (hunk === undefined) throw new Error(`Missing fixture hunk for ${file.path}`)
+  return ReviewSnapshotSearchMatch.make({
+    id: ReviewSnapshotSearchMatchId.make(
+      `${file.reviewKey}:${hunk.id}:${input.hunkLineIndex}:${input.start}`,
+    ),
+    fileId: file.fileId,
+    filePath: file.path,
+    reviewKey: file.reviewKey,
+    hunkId: hunk.id,
+    hunkFingerprint: hunk.fingerprint,
+    ...input,
+  })
+}
+
+const makeChangedLineSearchMatch = (
+  file: ParsedDiffFile,
+  input: {
+    readonly lineNumber: number
+    readonly matchedText: string
+    readonly occurrence?: number
+    readonly side: "additions" | "deletions"
+    readonly text: string
+  },
+) => {
+  let start = -1
+  let fromIndex = 0
+  for (let index = 0; index <= (input.occurrence ?? 0); index += 1) {
+    start = input.text.indexOf(input.matchedText, fromIndex)
+    if (start < 0) throw new Error(`Missing fixture text ${input.matchedText} in ${file.path}`)
+    fromIndex = start + input.matchedText.length
+  }
+  return makeReviewSearchMatch(file, {
+    end: start + input.matchedText.length,
+    hunkLineIndex: (input.lineNumber - 1) * 2 + (input.side === "additions" ? 1 : 0),
+    newLineNumber: input.side === "additions" ? input.lineNumber : null,
+    oldLineNumber: input.side === "deletions" ? input.lineNumber : null,
+    side: input.side,
+    start,
+    text: input.text,
+  })
+}
+
+const requireParsedFile = (files: readonly ParsedDiffFile[], path: string) => {
+  const file = files.find((candidate) => candidate.path === path)
+  if (file === undefined) throw new Error(`Missing parsed fixture file ${path}`)
+  return file
+}
+
+const reviewSnapshotSearchFixture =
+  (
+    matchesByQuery: Readonly<Record<string, readonly ReviewSnapshotSearchMatch[]>>,
+  ): DiffDashApi["reviewSnapshots"]["search"] =>
+  async (request) => {
+    const unanchored = matchesByQuery[request.query] ?? []
+    const anchorIndex =
+      request.anchor === null
+        ? -1
+        : unanchored.findIndex((match) => match.fileId === request.anchor?.fileId)
+    const matches =
+      anchorIndex > 0
+        ? [...unanchored.slice(anchorIndex), ...unanchored.slice(0, anchorIndex)]
+        : unanchored
+    const cursorMatch =
+      request.cursor === null ? null : /^search:v1:([0-9]+):00000000$/u.exec(request.cursor)
+    const offset = request.cursor === null ? 0 : Number(cursorMatch?.[1])
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > matches.length) {
+      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+    }
+    const end = Math.min(matches.length, offset + request.limit)
+    return ReviewSnapshotSearchAvailable.make({
+      snapshotId: request.snapshotId,
+      matches: matches.slice(offset, end),
+      totalMatches: matches.length,
+      nextCursor:
+        end < matches.length ? ReviewSnapshotSearchCursor.make(`search:v1:${end}:00000000`) : null,
+    })
+  }
+
 const installDiffDashApi = (
   options: {
     readonly appState?: AppState
@@ -6559,6 +7055,7 @@ const installDiffDashApi = (
     readonly repositories?: readonly Repo[]
     readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
+    readonly searchReviewSnapshot?: DiffDashApi["reviewSnapshots"]["search"]
     readonly snapshotPageFileLimit?: number
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
@@ -6569,8 +7066,8 @@ const installDiffDashApi = (
     readonly walkthrough?: StoredWalkthrough
   } = {},
 ) => {
-  const viewedFiles = new Map<string, ParsedDiffFile["patchHash"]>()
-  const localViewedFiles = new Map<string, ParsedDiffFile["patchHash"]>()
+  const viewedFiles = new Map<ReviewKey, ParsedDiffFile["patchHash"]>()
+  const localViewedFiles = new Map<ReviewKey, ParsedDiffFile["patchHash"]>()
   const appState = options.appState ?? { onboardingCompleted: true }
   const diagnostics = options.diagnostics ?? readyPrerequisites
   const repositories = options.repositories ?? [repo]
@@ -6640,10 +7137,9 @@ const installDiffDashApi = (
       return {
         repo: Repo.make({
           ...repo,
-          id: "github:github.com/torvalds/linux",
-          owner: "torvalds",
-          name: "linux",
-          remoteUrl: "https://github.com/torvalds/linux",
+          id: ReviewProjectId.make("github:github.com/torvalds/linux"),
+          source: HostedRepositorySource.make({ locator: repository }),
+          checkout: RemoteOnly.make({ remoteUrl: "https://github.com/torvalds/linux" }),
         }),
         target: RepositoryComparisonTarget.make({
           kind: "repositoryComparison",
@@ -6721,10 +7217,9 @@ const installDiffDashApi = (
       async (remoteRepo) =>
         Repo.make({
           ...repo,
-          id: `${remoteRepo.locator.namespace}/${remoteRepo.locator.name}`,
-          name: remoteRepo.locator.name,
-          owner: remoteRepo.locator.namespace,
-          remoteUrl: remoteRepo.url,
+          id: ReviewProjectId.make(`${remoteRepo.locator.namespace}/${remoteRepo.locator.name}`),
+          source: HostedRepositorySource.make({ locator: remoteRepo.locator }),
+          checkout: RemoteOnly.make({ remoteUrl: remoteRepo.url }),
         }),
     ),
     setRepositoryFavorite: vi.fn<DiffDashApi["repositories"]["setFavorite"]>(async () => repo),
@@ -6750,28 +7245,32 @@ const installDiffDashApi = (
     regenerateLocalWalkthrough: vi.fn<(target: LocalReviewTarget) => Promise<StoredWalkthrough>>(
       async () => localWalkthrough,
     ),
-    installDiffDashCli: vi.fn<
-      () => Promise<{ readonly path: string; readonly pathSetupCommand: string | null }>
-    >(async () => ({
-      path: options.cliInstallResult?.path ?? "/usr/local/bin/diffdash",
+    installDiffDashCli: vi.fn<DiffDashApi["installDiffDashCli"]>(async () => ({
+      path: ExecutablePath.make(options.cliInstallResult?.path ?? "/usr/local/bin/diffdash"),
       pathSetupCommand: options.cliInstallResult?.pathSetupCommand ?? null,
     })),
     installRepository: vi.fn<(localPath: string) => Promise<Repo>>(async (localPath) =>
-      Repo.make({ ...repo, localPath }),
+      linkedRepo(repo, localPath),
     ),
     linkRepository: vi.fn<DiffDashApi["repositories"]["link"]>(async (input) =>
-      Repo.make({ ...repo, localPath: input.localPath }),
+      linkedRepo(repo, input.localPath),
     ),
-    selectLocalFolder: vi.fn<() => Promise<string | null>>(
-      async () => options.selectLocalFolder ?? null,
+    selectLocalFolder: vi.fn<DiffDashApi["repositories"]["selectLocalFolder"]>(async () =>
+      options.selectLocalFolder === undefined || options.selectLocalFolder === null
+        ? null
+        : RepositoryCheckoutPath.make(options.selectLocalFolder),
     ),
     openProject: vi.fn<DiffDashApi["repositories"]["openProject"]>(
       options.openProject ??
-        (async (localPath) => ProjectOpened.make({ repo: Repo.make({ ...repo, localPath }) })),
+        (async (localPath) =>
+          ProjectOpened.make({
+            repo: linkedRepo(repo, localPath),
+          })),
     ),
     repairRepositoryIdentities: vi.fn<DiffDashApi["repositories"]["repairIdentities"]>(async () =>
       RepositoryIdentityRepairSummary.make({
-        resolvedCount: repositories.filter((repository) => repository.provider !== "local").length,
+        resolvedCount: repositories.filter((repository) => repository.hostedLocator !== null)
+          .length,
         unresolvedCount: 0,
         localAliasCount: 0,
       }),
@@ -6803,8 +7302,8 @@ const installDiffDashApi = (
           kind: "local",
           rootPath: localPath,
           comparison: BranchComparison.make({
-            branchName: branchName ?? "main",
-            baseRef: `refs/remotes/origin/${branchName ?? "main"}`,
+            branchName: branchName ?? RepositoryComparisonRef.make("main"),
+            baseRef: RepositoryComparisonRef.make(`refs/remotes/origin/${branchName ?? "main"}`),
             baseSha: localReview.baseSha,
           }),
         }),
@@ -6934,93 +7433,14 @@ const installDiffDashApi = (
   )
   const searchReviewSnapshot = vi.fn<DiffDashApi["reviewSnapshots"]["search"]>(async (request) => {
     await options.beforeReviewSnapshotSearch?.(request)
-    const snapshot = snapshots.get(request.snapshotId)
-    if (snapshot === undefined) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "evicted",
-      })
+    if (options.searchReviewSnapshot !== undefined) {
+      return options.searchReviewSnapshot(request)
     }
-    const index = buildReviewSearchIndex(snapshot.parsedDiff.files)
-    const unanchoredOccurrences = searchReviewIndex(index, request.query)
-    const searchAnchor = request.anchor
-    const anchorFileIndex =
-      searchAnchor === null
-        ? -1
-        : snapshot.parsedDiff.files.findIndex((file) => file.fileId === searchAnchor.fileId)
-    if (searchAnchor !== null && anchorFileIndex < 0) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "mismatched",
-      })
-    }
-    const anchoredIndex =
-      searchAnchor === null
-        ? 0
-        : unanchoredOccurrences.findIndex((occurrence) => {
-            const fileIndex = snapshot.parsedDiff.files.findIndex(
-              (file) => file.reviewKey === occurrence.reviewKey,
-            )
-            return fileIndex >= anchorFileIndex
-          })
-    const occurrences =
-      anchoredIndex > 0
-        ? [
-            ...unanchoredOccurrences.slice(anchoredIndex),
-            ...unanchoredOccurrences.slice(0, anchoredIndex),
-          ]
-        : unanchoredOccurrences
-    const cursorHash = stableBrowserCursorHash([
-      request.query,
-      searchAnchor === null ? "" : `file:${searchAnchor.fileId}`,
-    ])
-    const cursorMatch =
-      request.cursor === null ? null : /^search:v1:([0-9]+):([0-9a-f]{8})$/.exec(request.cursor)
-    const offset = request.cursor === null ? 0 : Number(cursorMatch?.[1])
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > occurrences.length) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "mismatched",
-      })
-    }
-    if (request.cursor !== null && cursorMatch?.[2] !== cursorHash) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "mismatched",
-      })
-    }
-    const end = Math.min(occurrences.length, offset + request.limit)
-    const matches = occurrences.slice(offset, end).flatMap((occurrence) => {
-      const file = snapshot.parsedDiff.files.find(
-        (candidate) => candidate.reviewKey === occurrence.reviewKey,
-      )
-      if (file === undefined) return []
-      return [
-        ReviewSnapshotSearchMatch.make({
-          id: occurrence.id,
-          fileId: file.fileId,
-          filePath: occurrence.filePath,
-          reviewKey: occurrence.reviewKey,
-          hunkId: ReviewHunkId.make(occurrence.hunkId),
-          hunkFingerprint: ReviewHunkFingerprint.make(occurrence.hunkFingerprint),
-          hunkLineIndex: occurrence.hunkLineIndex,
-          newLineNumber: occurrence.newLineNumber,
-          oldLineNumber: occurrence.oldLineNumber,
-          side: occurrence.side,
-          text: occurrence.text,
-          start: occurrence.start,
-          end: occurrence.end,
-        }),
-      ]
-    })
     return ReviewSnapshotSearchAvailable.make({
       snapshotId: request.snapshotId,
-      matches,
-      totalMatches: occurrences.length,
-      nextCursor:
-        end < occurrences.length
-          ? ReviewSnapshotSearchCursor.make(`search:v1:${end}:${cursorHash}`)
-          : null,
+      matches: [],
+      totalMatches: 0,
+      nextCursor: null,
     })
   })
   const api: DiffDashApi = {
@@ -7188,7 +7608,7 @@ const installDiffDashApi = (
 
   Object.defineProperty(window, "diffDash", {
     configurable: true,
-    value: api,
+    value: bridgeApi(api),
   })
 
   return {
@@ -7198,25 +7618,39 @@ const installDiffDashApi = (
     searchReviewSnapshot,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
     linkRepositoryFromCli: (rootPath: string) => {
-      pendingCommands.push(LinkRepositoryCommand.make({ localPath: rootPath }))
+      pendingCommands.push(
+        LinkRepositoryCommand.make({ localPath: RepositoryCheckoutPath.make(rootPath) }),
+      )
       commandsAvailableListener?.()
     },
     openLocalReview: (rootPath: string = localReview.rootPath) => {
-      pendingCommands.push(OpenWorkingTreeCommand.make({ localPath: rootPath }))
+      pendingCommands.push(
+        OpenWorkingTreeCommand.make({ localPath: RepositoryCheckoutPath.make(rootPath) }),
+      )
       commandsAvailableListener?.()
     },
     openPullRequest: (number: number | null, localPath = "/workspace/local-repo") => {
-      pendingCommands.push(OpenPullRequestCommand.make({ localPath, number }))
+      pendingCommands.push(
+        OpenPullRequestCommand.make({
+          localPath: RepositoryCheckoutPath.make(localPath),
+          number,
+        }),
+      )
       commandsAvailableListener?.()
     },
     openBranchDiff: (branchName: string | null, localPath = localReview.rootPath) => {
-      pendingCommands.push(OpenBranchDiffCommand.make({ localPath, branchName }))
+      pendingCommands.push(
+        OpenBranchDiffCommand.make({
+          localPath: RepositoryCheckoutPath.make(localPath),
+          branchName: branchName === null ? null : RepositoryComparisonRef.make(branchName),
+        }),
+      )
       commandsAvailableListener?.()
     },
     openRepositoryComparison: (baseRef: string, headRef: string) => {
       pendingCommands.push(
         OpenRepositoryComparisonCommand.make({
-          localPath: "/workspace/local-repo",
+          localPath: RepositoryCheckoutPath.make("/workspace/local-repo"),
           repository: null,
           baseRef: CliGitRevision.make(baseRef),
           headRef: CliGitRevision.make(headRef),
@@ -7229,6 +7663,44 @@ const installDiffDashApi = (
       commandsAvailableListener?.()
     },
   }
+}
+
+const bridgeEventSubscriptions = new Set([
+  "onAgentProgress",
+  "onCommandsAvailable",
+  "onStateChanged",
+])
+
+const bridgeSuccess = <Value,>(value: Value): BridgeResult<Value> => ({ _tag: "Success", value })
+
+const wrapBridgeValue = (value: object): object =>
+  new Proxy(value, {
+    get(target, property, receiver) {
+      const member = Reflect.get(target, property, receiver)
+      if (typeof member === "function") {
+        if (bridgeEventSubscriptions.has(String(property))) {
+          return (listener: (result: BridgeResult<Schema.Defect["Type"]>) => void) =>
+            Reflect.apply(member, receiver, [
+              (event: Schema.Defect["Type"]) => listener(bridgeSuccess(event)),
+            ])
+        }
+        return (...arguments_: Schema.Defect["Type"][]) => {
+          const result = Reflect.apply(member, receiver, arguments_)
+          if (!(result instanceof Promise)) return result
+          return result.then(
+            (resolved) => bridgeSuccess(resolved),
+            (error) => ({ _tag: "Failure", error: toTransportError(error, String(property)) }),
+          )
+        }
+      }
+      return typeof member === "object" && member !== null ? wrapBridgeValue(member) : member
+    },
+  })
+
+const bridgeApi = (api: DiffDashApi): DiffDashBridgeApi => {
+  // SAFETY: wrapBridgeValue recursively preserves every DiffDashApi member and only adds
+  // the BridgeResult envelopes required by the mapped DiffDashBridgeApi contract.
+  return wrapBridgeValue(api) as DiffDashBridgeApi
 }
 
 const plainAISettings = (settings: AISettings): AISettings =>
@@ -7250,11 +7722,17 @@ const plainAISettings = (settings: AISettings): AISettings =>
         threadDetailWidth: settings.layout.review.threadDetailWidth,
       }),
     }),
-    routes: {
-      walkthrough: settings.routes.walkthrough,
-      reviewThread: settings.routes.reviewThread,
+    selections: {
+      walkthrough: cloneAgentSelection(settings.selections.walkthrough),
+      "review-thread": cloneAgentSelection(settings.selections["review-thread"]),
     },
     telemetryEnabled: settings.telemetryEnabled,
-    autoQuality: settings.autoQuality,
-    models: { ...settings.models },
   })
+
+const cloneAgentSelection = (selection: typeof AIAgentSelection.Type) =>
+  AIAgentSelection.guards.Automatic(selection)
+    ? AIAgentSelection.cases.Automatic.make({ quality: selection.quality })
+    : AIAgentSelection.cases.Pinned.make({
+        providerId: AIProviderId.make(selection.providerId),
+        modelId: selection.modelId === null ? null : AIModelId.make(selection.modelId),
+      })

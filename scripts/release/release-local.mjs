@@ -1,28 +1,24 @@
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
 import path from "node:path"
 import "./load-local-env.mjs"
 import { parseLocalReleaseArguments } from "./release-arguments.mjs"
 import { runSyncCommand } from "./release-command.mjs"
-import { assertTagMatchesVersion, releaseTagForVersion } from "./release-policy.mjs"
+import { deriveReleaseContext } from "./release-context.mjs"
 
 const cli = parseLocalReleaseArguments()
-const packageJson = JSON.parse(readFileSync("packages/desktop/package.json", "utf8"))
-const tag = cli.tag ?? releaseTagForVersion(packageJson.version)
 const releaseAssetsDir = path.resolve(cli.assetsDir ?? "release-assets")
+const context = deriveReleaseContext({ requestedTag: cli.tag })
+const { tag } = context
 const macArch = cli.macArch ?? process.env.RELEASE_MAC_ARCH ?? "all"
 const { skipChecks, skipMac, skipLinux, skipPublish, allowPublished } = cli
-
-assertTagMatchesVersion(tag, packageJson.version)
 
 const status = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()
 if (status.length > 0) {
   throw new Error("Working tree must be clean before building or publishing release artifacts.")
 }
 
-const tagCommit = execFileSync("git", ["rev-list", "-n", "1", tag], { encoding: "utf8" }).trim()
 const headCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
-if (tagCommit !== headCommit) {
+if (context.commit !== headCommit) {
   throw new Error(
     `Release tag ${tag} does not point at HEAD. Refusing to build or publish mismatched local artifacts.`,
   )

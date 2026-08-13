@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Redacted } from "effect"
+import { Effect, Redacted, Result } from "effect"
 
 import {
   AgentArtifactCandidate,
@@ -14,21 +14,22 @@ import {
   AgentProviderDescriptor,
   AgentProviderId,
   AgentProviderManifest,
+  InvalidAgentProviderRegistrationError,
   type AgentProviderRegistration,
   AgentRuntimeRequirement,
   AgentSessionId,
   AgentSessionSupport,
   AgentUsage,
   McpToolName,
-  ReviewRevision,
   type ReviewThreadRequest,
-  ReviewThreadResponse,
   ReviewThreadResult,
   ScopedMcpResult,
   WalkthroughRequest,
   WalkthroughResult,
   isAgentExecutionPolicyEnforced,
 } from "./agent-provider"
+import { ReviewThreadAgentResponse } from "@diffdash/domain/review-agent"
+import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   agentCancellationConformance,
   agentManifestConformance,
@@ -39,6 +40,7 @@ import {
 } from "./testing"
 import { isScopedMcpToolSubset } from "./security"
 import { makeAgentProviderOperationErrorFactory } from "./runtime"
+import { AgentProviderRegistry } from "./registry"
 
 const walkthroughId = AgentProviderId.make("walkthrough-provider")
 const reviewId = AgentProviderId.make("review-provider")
@@ -136,10 +138,9 @@ const reviewRequest = (): ReviewThreadRequest => ({
 })
 
 const reviewResult = ReviewThreadResult.make({
-  response: ReviewThreadResponse.make({
+  response: ReviewThreadAgentResponse.make({
     bodyMarkdown: "Review response",
-    threadSummary: null,
-    referencedLocations: [],
+    referencedAnchors: [],
   }),
   usage: AgentUsage.make({
     inputTokens: 10,
@@ -240,5 +241,136 @@ describe("capability policy probes", () => {
     const requested = AgentExecutionPolicy.make({ ...policy, shell: "read-only" })
     expect(isAgentExecutionPolicyEnforced(requested, enforced)).toBe(true)
     expect(isAgentExecutionPolicyEnforced(enforced, requested)).toBe(false)
+  })
+})
+
+describe("provider registration validation", () => {
+  it.effect("rejects manifest declarations without matching implementations", () => {
+    const registration = walkthroughRegistration()
+    const inconsistent: AgentProviderRegistration = {
+      manifest: registration.manifest,
+    }
+    return Effect.gen(function* () {
+      const result = yield* AgentProviderRegistry.pipe(
+        Effect.provide(
+          AgentProviderRegistry.layer([inconsistent], {
+            walkthrough: [walkthroughId],
+            reviewThread: [],
+          }),
+        ),
+        Effect.result,
+      )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(InvalidAgentProviderRegistrationError)
+      }
+    })
+  })
+
+  it.effect("rejects implementations omitted from the manifest declaration", () => {
+    const registration = walkthroughRegistration()
+    const inconsistent: AgentProviderRegistration = {
+      ...registration,
+      manifest: manifest(walkthroughId, false, false),
+    }
+    return Effect.gen(function* () {
+      const result = yield* AgentProviderRegistry.pipe(
+        Effect.provide(
+          AgentProviderRegistry.layer([inconsistent], {
+            walkthrough: [],
+            reviewThread: [],
+          }),
+        ),
+        Effect.result,
+      )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(InvalidAgentProviderRegistrationError)
+      }
+    })
+  })
+
+  it.effect("rejects probe evidence tagged for another capability", () => {
+    const registration = walkthroughRegistration()
+    const walkthrough = registration.walkthrough
+    if (walkthrough === undefined) throw new Error("Missing walkthrough fixture")
+    const inconsistent: AgentProviderRegistration = {
+      ...registration,
+      walkthrough: {
+        ...walkthrough,
+        probe: Effect.succeed(
+          AgentCapabilityReady.make({ capability: "review-thread", runtimeVersion: "1" }),
+        ),
+      },
+    }
+    return Effect.gen(function* () {
+      const registry = yield* AgentProviderRegistry
+      const result = yield* registry
+        .resolveWalkthroughCandidates({ mode: "provider", providerId: walkthroughId })
+        .pipe(Effect.result)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(InvalidAgentProviderRegistrationError)
+      }
+    }).pipe(
+      Effect.provide(
+        AgentProviderRegistry.layer([inconsistent], {
+          walkthrough: [walkthroughId],
+          reviewThread: [],
+        }),
+      ),
+    )
+  })
+
+  it.effect("returns automatic candidates without probing lower priorities", () => {
+    const fallbackId = AgentProviderId.make("fallback")
+    let primaryProbes = 0
+    let fallbackProbes = 0
+    const primary = walkthroughRegistration()
+    const fallback = walkthroughRegistration()
+    const primaryWalkthrough = primary.walkthrough
+    const fallbackWalkthrough = fallback.walkthrough
+    if (primaryWalkthrough === undefined || fallbackWalkthrough === undefined) {
+      throw new Error("Missing walkthrough fixture")
+    }
+    const registrations: AgentProviderRegistration[] = [
+      {
+        ...primary,
+        walkthrough: {
+          ...primaryWalkthrough,
+          probe: Effect.sync(() => {
+            primaryProbes += 1
+            return AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" })
+          }),
+        },
+      },
+      {
+        ...fallback,
+        manifest: manifest(fallbackId, true, false),
+        walkthrough: {
+          ...fallbackWalkthrough,
+          probe: Effect.sync(() => {
+            fallbackProbes += 1
+            return AgentCapabilityReady.make({ capability: "walkthrough", runtimeVersion: "1" })
+          }),
+        },
+      },
+    ]
+    return Effect.gen(function* () {
+      const registry = yield* AgentProviderRegistry
+      const candidates = yield* registry.resolveWalkthroughCandidates({ mode: "auto" })
+      expect(primaryProbes).toBe(0)
+      expect(fallbackProbes).toBe(0)
+      yield* candidates[0]!.ready
+      expect(primaryProbes).toBe(1)
+      expect(fallbackProbes).toBe(0)
+    }).pipe(
+      Effect.provide(
+        AgentProviderRegistry.layer(registrations, {
+          walkthrough: [walkthroughId, fallbackId],
+          reviewThread: [],
+        }),
+      ),
+    )
   })
 })

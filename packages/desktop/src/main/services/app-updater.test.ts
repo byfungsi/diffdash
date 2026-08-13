@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { AppUpdateFeedUrl } from "@diffdash/protocol/app-update"
 
 import {
   type AppUpdaterOptions,
@@ -12,7 +13,7 @@ const baseOptions = (adapter: NativeUpdaterAdapter): AppUpdaterOptions => ({
   adapter,
   arch: "arm64",
   currentVersion: "0.1.4",
-  feedBaseUrl: "https://updates.example.test/stable",
+  feedBaseUrl: AppUpdateFeedUrl.make("https://updates.example.test/stable"),
   packaged: true,
   platform: "darwin",
 })
@@ -22,7 +23,7 @@ describe("AppUpdater", () => {
     expect(() => nativeUpdaterAdapter()).not.toThrow()
   })
 
-  it.scoped("selects the macOS architecture feed and waits for download approval", () => {
+  it.effect("selects the macOS architecture feed and waits for download approval", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
@@ -55,7 +56,7 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("selects the Linux x64 feed only for a real AppImage", () => {
+  it.effect("selects the Linux x64 feed only for a real AppImage", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
@@ -70,7 +71,7 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("marks deb and development installations as unsupported", () => {
+  it.effect("marks deb and development installations as unsupported", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
@@ -88,7 +89,7 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("retains failures and notifies subscribers", () => {
+  it.effect("retains failures and notifies subscribers", () => {
     const fake = makeFakeUpdater({ checkError: new Error("feed unavailable") })
     const states: string[] = []
 
@@ -96,7 +97,7 @@ describe("AppUpdater", () => {
       const updater = createDesktopUpdater(baseOptions(fake.adapter))
       yield* Effect.addFinalizer(updater.dispose)
       yield* updater.subscribe((state) => states.push(state["_tag"]))
-      yield* Effect.either(updater.check())
+      yield* Effect.result(updater.check())
 
       expect(yield* updater.getState()).toMatchObject({
         _tag: "error",
@@ -106,7 +107,7 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("returns to idle when no update exists and clamps native progress", () => {
+  it.effect("returns to idle when no update exists and clamps native progress", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
@@ -130,7 +131,31 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("rejects download and install requests before their required states", () => {
+  it.effect("ignores stale progress after the lifecycle no longer carries a version", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      fake.emitError(new Error("download failed"))
+      fake.emitProgress(75)
+      expect(yield* updater.getState()).toMatchObject({
+        _tag: "error",
+        message: "download failed",
+      })
+
+      fake.emitDownloaded("0.1.5")
+      fake.emitProgress(90)
+      expect(yield* updater.getState()).toMatchObject({
+        _tag: "downloaded",
+        version: "0.1.5",
+      })
+    })
+  })
+
+  it.effect("rejects download and install requests before their required states", () => {
     const fake = makeFakeUpdater()
 
     return Effect.gen(function* () {
@@ -146,7 +171,44 @@ describe("AppUpdater", () => {
     })
   })
 
-  it.scoped("releases native and renderer subscriptions on disposal", () => {
+  it.effect("rejects download after availability is superseded", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      fake.emitError(new Error("native updater failed"))
+
+      const error = yield* updater.download().pipe(Effect.flip)
+      expect(error).toMatchObject({
+        operation: "download",
+        message: "No update is available to download.",
+      })
+      expect(fake.downloadCount).toBe(0)
+    })
+  })
+
+  it.effect("allows install only after the downloaded transition", () => {
+    const fake = makeFakeUpdater()
+
+    return Effect.gen(function* () {
+      const updater = createDesktopUpdater(baseOptions(fake.adapter))
+      yield* Effect.addFinalizer(updater.dispose)
+
+      fake.emitAvailable("0.1.5")
+      const error = yield* updater.quitAndInstall().pipe(Effect.flip)
+      expect(error).toMatchObject({ operation: "quitAndInstall" })
+      expect(fake.installCount).toBe(0)
+
+      fake.emitDownloaded("0.1.5")
+      yield* updater.quitAndInstall()
+      expect(fake.installCount).toBe(1)
+    })
+  })
+
+  it.effect("releases native and renderer subscriptions on disposal", () => {
     const fake = makeFakeUpdater()
     const states: string[] = []
 
@@ -183,6 +245,7 @@ const makeFakeUpdater = (options: { readonly checkError?: Error } = {}) => {
       checkCount += 1
       for (const listener of checking) listener()
       if (options.checkError !== undefined) throw options.checkError
+      return null
     },
     download: async () => {
       downloadCount += 1

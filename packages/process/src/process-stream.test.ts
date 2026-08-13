@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Either, Fiber, Stream } from "effect"
+import { Deferred, Effect, Result, Fiber, Stream } from "effect"
 import {
   chmodSync,
   existsSync,
@@ -28,8 +28,6 @@ const makeTempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-cli-stream-test-"))),
   (directory) => Effect.sync(() => rmSync(directory, { force: true, recursive: true })),
 )
-
-const collectEvents = (events: Iterable<ProcessEvent>) => Array.from(events)
 
 const streamCli = (command: string, args: readonly string[], options?: ProcessRequestOptions) =>
   Stream.unwrap(
@@ -67,9 +65,7 @@ describe("ProcessService line streaming", () => {
           setTimeout(() => process.stderr.end('warning\\r\\n'), 20)
         }, 20)
       `
-      const events = collectEvents(
-        yield* streamCli(process.execPath, ["-e", script]).pipe(Stream.runCollect),
-      )
+      const events = yield* streamCli(process.execPath, ["-e", script]).pipe(Stream.runCollect)
 
       expect(events.slice(0, 3)).toEqual([
         { _tag: "ProcessLine", source: "stdout", line: "😀" },
@@ -89,7 +85,7 @@ describe("ProcessService line streaming", () => {
     }),
   )
 
-  it.scopedLive("preserves GUI PATH, cwd, environment, and stdin behavior", () =>
+  it.live("preserves GUI PATH, cwd, environment, and stdin behavior", () =>
     Effect.gen(function* () {
       const home = yield* makeTempDirectory
       const cwd = join(home, "worktree")
@@ -106,13 +102,11 @@ describe("ProcessService line streaming", () => {
         chmodSync(commandPath, 0o755)
       })
 
-      const events = collectEvents(
-        yield* streamCli("diffdash-stream-command", [], {
-          cwd,
-          env: { DIFFDASH_VALUE: "from-env", HOME: home, PATH: "" },
-          stdin: "from-stdin\n",
-        }).pipe(Stream.runCollect),
-      )
+      const events = yield* streamCli("diffdash-stream-command", [], {
+        cwd,
+        env: { DIFFDASH_VALUE: "from-env", HOME: home, PATH: "" },
+        stdin: "from-stdin\n",
+      }).pipe(Stream.runCollect)
 
       expect(events[0]).toEqual({
         _tag: "ProcessLine",
@@ -124,55 +118,57 @@ describe("ProcessService line streaming", () => {
 
   it.live("accepts exact newline-free line bytes and fails one byte over", () =>
     Effect.gen(function* () {
-      const exact = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('abcde')"], {
-          maxLineBytes: 5,
-        }).pipe(Stream.runCollect),
-      )
+      const exact = yield* streamCli(process.execPath, ["-e", "process.stdout.write('abcde')"], {
+        maxLineBytes: 5,
+      }).pipe(Stream.runCollect)
       expect(exact[0]).toEqual({ _tag: "ProcessLine", source: "stdout", line: "abcde" })
       expect(exact.at(-1)).toMatchObject({ _tag: "ProcessExit" })
 
-      const over = yield* Effect.either(
+      const over = yield* Effect.result(
         streamCli(process.execPath, ["-e", "process.stdout.write('abcdef')"], {
           maxLineBytes: 5,
           killAfterMs: 25,
           forceKillAfterMs: 25,
         }).pipe(Stream.runCollect),
       )
-      expect(Either.isLeft(over)).toBe(true)
-      if (Either.isLeft(over)) {
-        expect(over.left).toBeInstanceOf(ProcessOutputError)
-        expect(over.left.message).toBe("stdout line exceeded 5 bytes")
+      expect(Result.isFailure(over)).toBe(true)
+      if (Result.isFailure(over)) {
+        expect(over.failure).toBeInstanceOf(ProcessOutputError)
+        expect(over.failure.message).toBe("stdout line exceeded 5 bytes")
       }
     }),
   )
 
   it.live("enforces exact total stream bytes and event counts", () =>
     Effect.gen(function* () {
-      const exactBytes = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('abc\\n')"], {
+      const exactBytes = yield* streamCli(
+        process.execPath,
+        ["-e", "process.stdout.write('abc\\n')"],
+        {
           maxStreamBytes: 4,
-        }).pipe(Stream.runCollect),
-      )
+        },
+      ).pipe(Stream.runCollect)
       expect(exactBytes[0]).toEqual({ _tag: "ProcessLine", source: "stdout", line: "abc" })
 
-      const overBytes = yield* Effect.either(
+      const overBytes = yield* Effect.result(
         streamCli(process.execPath, ["-e", "process.stdout.write('abc\\n')"], {
           maxStreamBytes: 3,
           killAfterMs: 25,
           forceKillAfterMs: 25,
         }).pipe(Stream.runCollect),
       )
-      expect(Either.isLeft(overBytes)).toBe(true)
-      if (Either.isLeft(overBytes)) {
-        expect(overBytes.left.message).toBe("Subprocess stream exceeded 3 total bytes")
+      expect(Result.isFailure(overBytes)).toBe(true)
+      if (Result.isFailure(overBytes)) {
+        expect(overBytes.failure.message).toBe("Subprocess stream exceeded 3 total bytes")
       }
 
-      const exactEvents = collectEvents(
-        yield* streamCli(process.execPath, ["-e", "process.stdout.write('a\\nb\\n')"], {
+      const exactEvents = yield* streamCli(
+        process.execPath,
+        ["-e", "process.stdout.write('a\\nb\\n')"],
+        {
           maxStreamEvents: 2,
-        }).pipe(Stream.runCollect),
-      )
+        },
+      ).pipe(Stream.runCollect)
       expect(
         exactEvents.filter((event) => {
           const { _tag: tag } = event
@@ -180,16 +176,16 @@ describe("ProcessService line streaming", () => {
         }),
       ).toHaveLength(2)
 
-      const overEvents = yield* Effect.either(
+      const overEvents = yield* Effect.result(
         streamCli(process.execPath, ["-e", "process.stdout.write('a\\nb\\n')"], {
           maxStreamEvents: 1,
           killAfterMs: 25,
           forceKillAfterMs: 25,
         }).pipe(Stream.runCollect),
       )
-      expect(Either.isLeft(overEvents)).toBe(true)
-      if (Either.isLeft(overEvents)) {
-        expect(overEvents.left.message).toBe("Subprocess stream exceeded 1 line events")
+      expect(Result.isFailure(overEvents)).toBe(true)
+      if (Result.isFailure(overEvents)) {
+        expect(overEvents.failure.message).toBe("Subprocess stream exceeded 1 line events")
       }
     }),
   )
@@ -202,7 +198,7 @@ describe("ProcessService line streaming", () => {
         process.stderr.write('diagnostic')
         process.exitCode = 7
       `
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         streamCli(process.execPath, ["-e", script], {
           stdout: { maxBytes: 5, overflow: "truncate" },
           stderr: { maxBytes: 10, overflow: "truncate" },
@@ -213,9 +209,9 @@ describe("ProcessService line streaming", () => {
         { _tag: "ProcessLine", source: "stdout", line: "abcdef" },
         { _tag: "ProcessLine", source: "stderr", line: "diagnostic" },
       ])
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toMatchObject({
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
           _tag: "ProcessExitError",
           exitCode: 7,
           stdout: "abcde",
@@ -227,7 +223,7 @@ describe("ProcessService line streaming", () => {
     }),
   )
 
-  it.scopedLive("pauses Node pipes behind a slow consumer without dropping events", () =>
+  it.live("pauses Node pipes behind a slow consumer without dropping events", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const marker = join(directory, "backpressure")
@@ -265,20 +261,20 @@ describe("ProcessService line streaming", () => {
 
   it.live("reports spawn and stdin write failures", () =>
     Effect.gen(function* () {
-      const spawnResult = yield* Effect.either(
+      const spawnResult = yield* Effect.result(
         streamCli("diffdash-stream-command-that-does-not-exist", []).pipe(Stream.runCollect),
       )
-      expect(Either.isLeft(spawnResult)).toBe(true)
-      if (Either.isLeft(spawnResult)) {
-        expect(spawnResult.left).toBeInstanceOf(ProcessSpawnError)
-        expect(spawnResult.left.cause).not.toBeNull()
+      expect(Result.isFailure(spawnResult)).toBe(true)
+      if (Result.isFailure(spawnResult)) {
+        expect(spawnResult.failure).toBeInstanceOf(ProcessSpawnError)
+        expect(spawnResult.failure.cause).not.toBeNull()
       }
 
       const closeStdinScript = `
         require('node:fs').closeSync(0)
         setInterval(() => {}, 1_000)
       `
-      const stdinResult = yield* Effect.either(
+      const stdinResult = yield* Effect.result(
         streamCli(process.execPath, ["-e", closeStdinScript], {
           stdin: "x".repeat(2 * 1024 * 1024),
           timeoutMs: 5_000,
@@ -286,16 +282,16 @@ describe("ProcessService line streaming", () => {
           forceKillAfterMs: 25,
         }).pipe(Stream.runCollect),
       )
-      expect(Either.isLeft(stdinResult)).toBe(true)
-      if (Either.isLeft(stdinResult)) {
-        expect(stdinResult.left).toBeInstanceOf(ProcessStdinError)
-        expect(stdinResult.left.message).toBe("Failed to write command stdin")
-        expect(stdinResult.left.cause).not.toBeNull()
+      expect(Result.isFailure(stdinResult)).toBe(true)
+      if (Result.isFailure(stdinResult)) {
+        expect(stdinResult.failure).toBeInstanceOf(ProcessStdinError)
+        expect(stdinResult.failure.message).toBe("Failed to write command stdin")
+        expect(stdinResult.failure.cause).not.toBeNull()
       }
     }),
   )
 
-  it.scopedLive("times out and escalates the process group from SIGTERM to SIGKILL", () =>
+  it.live("times out and escalates the process group from SIGTERM to SIGKILL", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const marker = join(directory, "timeout-sigterm")
@@ -305,7 +301,7 @@ describe("ProcessService line streaming", () => {
         process.stdout.write(String(process.pid) + '\\n')
         setInterval(() => {}, 1_000)
       `
-      const result = yield* Effect.either(
+      const result = yield* Effect.result(
         streamCli(process.execPath, ["-e", script], {
           env: { MARKER: marker },
           killAfterMs: 500,
@@ -314,18 +310,18 @@ describe("ProcessService line streaming", () => {
         }).pipe(Stream.runCollect),
       )
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(ProcessTimeoutError)
-        expect(result.left.signal).toBe("SIGKILL")
-        const pid = Number.parseInt(result.left.stdout, 10)
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(ProcessTimeoutError)
+        expect(result.failure.signal).toBe("SIGKILL")
+        const pid = Number.parseInt(result.failure.stdout, 10)
         expect(processIsRunning(pid)).toBe(false)
       }
       expect(readFileSync(marker, "utf8")).toBe("SIGTERM")
     }),
   )
 
-  it.scopedLive("terminates and escalates when stream consumption is interrupted", () =>
+  it.live("terminates and escalates when stream consumption is interrupted", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory
       const marker = join(directory, "interrupt-sigterm")
@@ -348,7 +344,7 @@ describe("ProcessService line streaming", () => {
             : Effect.void
         }),
         Stream.runDrain,
-        Effect.fork,
+        Effect.forkChild,
       )
       const pid = yield* Deferred.await(pidReady)
 

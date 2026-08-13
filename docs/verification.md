@@ -131,7 +131,7 @@ record migration-sensitive invariants added during M8.
 | `WALKTHROUGH-CACHE-001` | `[B]` | Cached walkthroughs are isolated by repository, review key, base/head revision, and current prompt version. |
 | `THREAD-001` | `[B]` | Thread store/shared/browser/Electron suites cover line threads, Markdown safety, follow-ups, progress, failed/complete states, retry entry, and revision mapping. |
 | `AGENT-001` | `[B]` | Agent store/memory/orchestration/provider suites cover run/message/artifact/memory lifecycle, current provider protocols, session behavior, and process interruption cleanup. |
-| `MCP-001` | `[B]` | `diffdash-mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, immutable diff/repository context, traversal denial, and local reviews. |
+| `MCP-001` | `[B]` | `packages/mcp/src/mcp-server.test.ts` covers bearer authorization/revocation, bounded read-only tools, request limits, and typed handler routing. |
 | `WORKTREE-001` | `[B]` | `review-worktree-pool.test.ts` covers exact GitHub PR heads, clone reuse, capacity, concurrent leases, revision movement, quarantine, destructive reuse, and checkout non-mutation. |
 | `WORKTREE-RECOVERY-001` | `[B]` | Dead-PID leases and manifest locks are recovered, cleanup failures quarantine slots, the globally oldest idle slot is evicted at capacity, and malicious path segments cannot escape the pool. |
 | `DISTRIBUTION-001` | `[B]` | Packaged E2E, download-worker tests, release infrastructure checks, and release scripts cover unsigned packaging, GitHub-hosted release orchestration, stable artifact routing, and public promotion verification. |

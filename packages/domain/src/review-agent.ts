@@ -1,39 +1,26 @@
-import { Schema } from "effect"
+import { Predicate, Result, Schema } from "effect"
+export { AgentRunId } from "./agent-run-id"
+export { ReviewAgentProviderId } from "./review-agent-provider-id"
+export {
+  ReviewAgentArtifact,
+  ReviewAgentArtifactId,
+  ReviewAgentArtifactMetadata,
+  ReviewAgentArtifactType,
+  ReviewAgentProviderRunId,
+  ReviewAgentUsage,
+} from "./review-agent-run-data"
 
 import { ReviewAnchor, ReviewThreadId } from "./review-thread"
+import {
+  ReviewAgentArtifact,
+  ReviewAgentProviderRunId,
+  ReviewAgentUsage,
+} from "./review-agent-run-data"
 
-/** Persistent identity for one review agent execution. */
-export const AgentRunId = Schema.String.pipe(Schema.minLength(1), Schema.brand("AgentRunId"))
-
-/** Persistent identity for one review agent execution. */
-export type AgentRunId = typeof AgentRunId.Type
-
-/** Persistent identity for one normalized agent artifact. */
-export const ReviewAgentArtifactId = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.brand("ReviewAgentArtifactId"),
-)
-
-/** Persistent identity for one normalized agent artifact. */
-export type ReviewAgentArtifactId = typeof ReviewAgentArtifactId.Type
-
-/** Provider-owned identity for an agent run or session. */
-export const ReviewAgentProviderRunId = Schema.String.pipe(
-  Schema.minLength(1),
-  Schema.brand("ReviewAgentProviderRunId"),
-)
-
-/** Provider-owned identity for an agent run or session. */
-export type ReviewAgentProviderRunId = typeof ReviewAgentProviderRunId.Type
-
-/** Open identity of the provider that produced a review run or artifact. */
-export const ReviewAgentProviderId = Schema.String.pipe(Schema.minLength(1))
-
-/** Open identity of the provider that produced a review run or artifact. */
-export type ReviewAgentProviderId = typeof ReviewAgentProviderId.Type
+type ProviderOwnedValue = Schema.Json | object | bigint | symbol | undefined
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */
-export const ReviewAgentProgressStage = Schema.Literal(
+export const ReviewAgentProgressStage = Schema.Literals([
   "preparing-context",
   "reserving-workspace",
   "creating-repository",
@@ -42,7 +29,7 @@ export const ReviewAgentProgressStage = Schema.Literal(
   "starting-agent",
   "reviewing",
   "restoring-workspace",
-)
+])
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */
 export type ReviewAgentProgressStage = typeof ReviewAgentProgressStage.Type
@@ -69,46 +56,126 @@ export const REVIEW_AGENT_PROGRESS_LABELS: Readonly<Record<ReviewAgentProgressSt
 export class ReviewThreadAgentResponse extends Schema.Class<ReviewThreadAgentResponse>(
   "ReviewThreadAgentResponse",
 )({
-  bodyMarkdown: Schema.String.pipe(Schema.minLength(1)),
-  threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.minLength(1))),
+  bodyMarkdown: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
   referencedAnchors: Schema.optional(Schema.Array(ReviewAnchor)),
 }) {}
 
-/** Normalized artifact categories independent of provider event protocols. */
-export const ReviewAgentArtifactType = Schema.Literal(
-  "file_read",
-  "search_result",
-  "shell_output",
-  "web_result",
-  "diff_context",
-  "mcp_tool_result",
-  "provider_message",
-  "unknown",
-)
+/** Strict JSON Schema accepted by every provider's review structured-output API. */
+export const REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["bodyMarkdown", "threadSummaryUpdate", "referencedAnchors"],
+  properties: {
+    bodyMarkdown: { type: "string", minLength: 1 },
+    threadSummaryUpdate: { type: ["string", "null"], minLength: 1 },
+    referencedAnchors: {
+      type: ["array", "null"],
+      items: {
+        anyOf: [
+          reviewAnchorJsonSchema("review", {}),
+          reviewAnchorJsonSchema("file", {
+            fileId: { type: "string", minLength: 1 },
+            filePath: { type: "string" },
+            oldPath: { type: ["string", "null"] },
+          }),
+          reviewAnchorJsonSchema("hunk", {
+            fileId: { type: "string", minLength: 1 },
+            filePath: { type: "string" },
+            oldPath: { type: ["string", "null"] },
+            hunkId: { type: "string", minLength: 1 },
+            hunkFingerprint: { type: "string", minLength: 1 },
+            header: { type: "string" },
+            oldStart: { type: "number" },
+            oldLines: { type: "number" },
+            newStart: { type: "number" },
+            newLines: { type: "number" },
+          }),
+          reviewAnchorJsonSchema("line", {
+            fileId: { type: "string", minLength: 1 },
+            filePath: { type: "string" },
+            oldPath: { type: ["string", "null"] },
+            hunkId: { type: "string", minLength: 1 },
+            hunkFingerprint: { type: "string", minLength: 1 },
+            hunkHeader: { type: "string" },
+            side: { type: "string", enum: ["old", "new"] },
+            lineNumber: { type: "number" },
+            lineContent: { type: "string" },
+          }),
+        ],
+      },
+    },
+  },
+} as const
 
-/** Normalized artifact categories independent of provider event protocols. */
-export type ReviewAgentArtifactType = typeof ReviewAgentArtifactType.Type
+/** Decodes a raw or JSON-stringified value into a validated review anchor. */
+export const decodeReviewAnchor = (value: ProviderOwnedValue): ReviewAnchor | null => {
+  const serialized = Predicate.isString(value) ? value : reviewAgentJsonContent(value)
+  try {
+    const parsed = Schema.decodeUnknownResult(Schema.Json)(JSON.parse(serialized))
+    if (Result.isFailure(parsed)) return null
+    const decoded = Schema.decodeUnknownResult(ReviewAnchor)(parsed.success)
+    return Result.isSuccess(decoded) ? decoded.success : null
+  } catch {
+    return null
+  }
+}
 
-/** A bounded provider artifact suitable for persistence and later prompt context. */
-export class ReviewAgentArtifact extends Schema.Class<ReviewAgentArtifact>("ReviewAgentArtifact")({
-  type: ReviewAgentArtifactType,
-  provider: ReviewAgentProviderId,
-  title: Schema.String,
-  content: Schema.String,
-  contentDigest: Schema.String,
-  metadata: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
-  truncated: Schema.Boolean,
-  originalSize: Schema.Number,
-}) {}
+/** Converts current and legacy provider fields into the canonical review-agent response shape. */
+export const normalizeReviewThreadAgentResponse = (
+  value: ProviderOwnedValue,
+): ProviderOwnedValue => {
+  if (!Predicate.isReadonlyObject(value)) return value
+  const rawAnchors = value.referencedLocations ?? value.referencedAnchors ?? []
+  const referencedAnchors = Array.isArray(rawAnchors)
+    ? rawAnchors.flatMap((anchor) => {
+        const decoded = decodeReviewAnchor(anchor)
+        return decoded === null ? [] : [decoded]
+      })
+    : rawAnchors
+  const threadSummaryUpdate = value.threadSummary ?? value.threadSummaryUpdate
+  return {
+    bodyMarkdown: value.bodyMarkdown,
+    ...(threadSummaryUpdate === null || threadSummaryUpdate === undefined
+      ? {}
+      : { threadSummaryUpdate }),
+    referencedAnchors,
+  }
+}
 
-/** Provider-neutral usage and cost fields reported for one turn when available. */
-export class ReviewAgentUsage extends Schema.Class<ReviewAgentUsage>("ReviewAgentUsage")({
-  inputTokens: Schema.NullOr(Schema.Number),
-  outputTokens: Schema.NullOr(Schema.Number),
-  cacheReadTokens: Schema.NullOr(Schema.Number),
-  cacheWriteTokens: Schema.NullOr(Schema.Number),
-  costUsd: Schema.NullOr(Schema.Number),
-}) {}
+function reviewAnchorJsonSchema(
+  tag: "review" | "file" | "hunk" | "line",
+  properties: Schema.JsonObject,
+) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["_tag", ...Object.keys(properties)],
+    properties: { _tag: { type: "string", enum: [tag] }, ...properties },
+  }
+}
+
+const reviewAgentJsonContent = (value: ProviderOwnedValue): string => {
+  if (Predicate.isString(value)) return value
+  const ancestors: object[] = []
+  try {
+    const serialized = JSON.stringify(value, function (_key, nestedValue: ProviderOwnedValue) {
+      if (Predicate.isBigInt(nestedValue)) return `${nestedValue.toString()}n`
+      if (!Predicate.isObjectOrArray(nestedValue)) return nestedValue
+      while (ancestors.length > 0 && ancestors.at(-1) !== this) ancestors.pop()
+      if (ancestors.includes(nestedValue)) return "[Circular]"
+      ancestors.push(nestedValue)
+      return nestedValue
+    })
+    if (serialized !== undefined) return serialized
+  } catch {
+    return "[Unserializable]"
+  }
+  if (value === undefined) return "undefined"
+  if (Predicate.isFunction(value)) return "[Function]"
+  if (Predicate.isSymbol(value)) return "[Symbol]"
+  return "[Unserializable]"
+}
 
 /** Complete normalized result from one local review thread provider turn. */
 export class ReviewAgentTurnResult extends Schema.Class<ReviewAgentTurnResult>(

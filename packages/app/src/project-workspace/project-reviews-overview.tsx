@@ -1,5 +1,6 @@
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import type { Repo } from "@diffdash/domain/repository"
+import { Match } from "effect"
 import { GitBranch, GitPullRequest, RefreshCw } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -8,7 +9,6 @@ import { formatError } from "@/shared/errors"
 import { Button } from "@/shared/ui/button"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
 
-import { matchRibbonLifecycle } from "./ribbon-lifecycle"
 import {
   projectReviewsLifecycle,
   type HostedReviewsLifecycle,
@@ -40,14 +40,12 @@ export const ProjectReviewsOverview = ({
     >
       <header>
         <p className="text-muted-foreground text-xs font-medium">Project</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          {repo.owner}/{repo.name}
-        </h1>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight">{repo.displayIdentity}</h1>
         <p className="text-muted-foreground mt-2 text-sm">
           Local changes and hosted pull requests stay together in this workspace.
         </p>
       </header>
-      {matchRibbonLifecycle(lifecycle, {
+      {Match.valueTags(lifecycle, {
         loading: () => (
           <ProjectWorkspaceStatePanel
             announcement="loading"
@@ -149,7 +147,7 @@ const renderLocalOverview = (
         Open working tree
       </Button>
     )
-  return matchRibbonLifecycle(lifecycle, {
+  return Match.valueTags(lifecycle, {
     loading: () => <OverviewStatus text="Checking local changes..." actions={null} />,
     ready: ({ data }) => (
       <OverviewStatus
@@ -179,7 +177,7 @@ const renderLocalOverview = (
 }
 
 const renderHostedOverview = (lifecycle: HostedReviewsLifecycle, onRefresh: () => void) =>
-  matchRibbonLifecycle(lifecycle, {
+  Match.valueTags(lifecycle, {
     loading: () => <OverviewStatus actions={null} text="Loading open pull requests..." />,
     ready: ({ data }) => (
       <OverviewStatus

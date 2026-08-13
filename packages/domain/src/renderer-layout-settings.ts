@@ -20,7 +20,12 @@ export const REVIEW_THREAD_DETAIL_PANE_MAX_WIDTH = 640
 
 /** Valid persisted width for the contextual review pane. */
 export const ReviewContextPaneWidth = Schema.Int.pipe(
-  Schema.between(REVIEW_CONTEXT_PANE_MIN_WIDTH, REVIEW_CONTEXT_PANE_MAX_WIDTH),
+  Schema.check(
+    Schema.isBetween({
+      minimum: REVIEW_CONTEXT_PANE_MIN_WIDTH,
+      maximum: REVIEW_CONTEXT_PANE_MAX_WIDTH,
+    }),
+  ),
   Schema.brand("ReviewContextPaneWidth"),
 )
 
@@ -29,7 +34,12 @@ export type ReviewContextPaneWidth = typeof ReviewContextPaneWidth.Type
 
 /** Valid persisted width for the attached thread-detail pane. */
 export const ReviewThreadDetailPaneWidth = Schema.Int.pipe(
-  Schema.between(REVIEW_THREAD_DETAIL_PANE_MIN_WIDTH, REVIEW_THREAD_DETAIL_PANE_MAX_WIDTH),
+  Schema.check(
+    Schema.isBetween({
+      minimum: REVIEW_THREAD_DETAIL_PANE_MIN_WIDTH,
+      maximum: REVIEW_THREAD_DETAIL_PANE_MAX_WIDTH,
+    }),
+  ),
   Schema.brand("ReviewThreadDetailPaneWidth"),
 )
 

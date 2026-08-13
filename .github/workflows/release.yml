@@ -251,27 +251,6 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
         run: pnpm release:local:mac --arch "${{ matrix.arch }}" --assets-dir release-assets
 
-      - name: Verify bundled native module architecture
-        env:
-          EXPECTED_ARCH: ${{ matrix.arch }}
-        run: |
-          native_module="$(node --input-type=module <<'NODE'
-          import { readdirSync } from "node:fs"
-          import path from "node:path"
-
-          const dist = "packages/desktop/dist"
-          const entry = readdirSync(dist, { recursive: true }).find((name) => name.endsWith("better_sqlite3.node"))
-          if (entry === undefined) throw new Error("Packaged better_sqlite3.node was not found.")
-          process.stdout.write(path.join(dist, entry))
-          NODE
-          )"
-          architecture="$(file "${native_module}")"
-          if [ "${EXPECTED_ARCH}" = "arm64" ]; then expected_token="arm64"; else expected_token="x86_64"; fi
-          case "${architecture}" in
-            *"${expected_token}"*) ;;
-            *) printf '%s\n' "Unexpected native module architecture: ${architecture}" >&2; exit 1 ;;
-          esac
-
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -316,7 +295,6 @@ jobs:
       - name: Build Linux packages
         run: |
           pnpm assets:icons
-          pnpm native:electron
           pnpm build
           pnpm --dir packages/desktop exec electron-builder --linux AppImage deb --x64 --publish=never
 

@@ -1,31 +1,36 @@
-import {
-  eventPayloadSchema,
-  EventContract,
-  FailureEnvelope,
-  InvokeContract,
-  invokeRequestSchema,
-  invokeResponseSchema,
-  successEnvelope,
-} from "@diffdash/protocol/ipc"
+import { bridgeResult, EventContract, InvokeContract } from "@diffdash/protocol/ipc"
 import { assertJsonPayloadWithinBudget } from "@diffdash/protocol/payload-budget"
-import type { EventPayload, InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
+import type {
+  BridgeResult,
+  EventPayload,
+  InvokeRequest,
+  InvokeResponse,
+} from "@diffdash/protocol/ipc"
 import type { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import type { TransportErrorDiagnosticTrace } from "@diffdash/protocol/transport-error"
 import {
-  bridgeTransportError,
   decodeTransportError,
   safeTransportErrorMessage,
   transportError,
 } from "@diffdash/protocol/transport-error"
-import { Schema } from "effect"
+import { Predicate, Schema } from "effect"
+
+type RendererPayload = Parameters<typeof assertJsonPayloadWithinBudget>[0]
+type ElectronBoundaryValue = unknown
 
 /** Narrow ipcRenderer surface consumed by the schema-validated preload transport. */
 export interface RendererIpc {
-  readonly invoke: (channel: string, request: unknown) => Promise<unknown>
-  readonly on: (channel: string, listener: (event: unknown, payload: unknown) => void) => void
+  readonly invoke: (
+    channel: string,
+    request: ElectronBoundaryValue,
+  ) => Promise<ElectronBoundaryValue>
+  readonly on: (
+    channel: string,
+    listener: (event: ElectronBoundaryValue, payload: ElectronBoundaryValue) => void,
+  ) => void
   readonly removeListener: (
     channel: string,
-    listener: (event: unknown, payload: unknown) => void,
+    listener: (event: ElectronBoundaryValue, payload: ElectronBoundaryValue) => void,
   ) => void
 }
 
@@ -34,61 +39,69 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
   invoke: async <Channel extends InvokeChannel>(
     channel: Channel,
     request: InvokeRequest<Channel>,
-  ): Promise<InvokeResponse<Channel>> => {
-    let encodedRequest: unknown
+  ): Promise<BridgeResult<InvokeResponse<Channel>>> => {
+    let encodedRequest: RendererPayload
     try {
-      encodedRequest = Schema.encodeUnknownSync(invokeRequestSchema(channel))(request)
+      encodedRequest = toRendererPayload(encodeRequest(channel, request))
       assertJsonPayloadWithinBudget(
         encodedRequest,
         InvokeContract[channel].maxRequestBytes,
         channel,
       )
     } catch (error) {
-      const transport = decodeTransportError(error)
-      if (transport !== null) throw bridgeTransportError(transport, channel)
-      throw rendererTransportError("INVALID_REQUEST", "Invalid request", channel)
+      const transport = decodeTransportError(toTransportFailure(error))
+      return failureResult(
+        transport ?? rendererTransportError("INVALID_REQUEST", "Invalid request", channel),
+      )
     }
 
-    let rawResponse: unknown
+    let rawResponse: RendererPayload
     try {
-      rawResponse = await ipc.invoke(channel, encodedRequest)
+      rawResponse = toRendererPayload(await ipc.invoke(channel, encodedRequest))
     } catch (cause) {
-      throw rendererTransportError("IPC_FAILURE", safeTransportErrorMessage(cause), channel)
+      return failureResult(
+        rendererTransportError(
+          "IPC_FAILURE",
+          safeTransportErrorMessage(toTransportFailure(cause)),
+          channel,
+        ),
+      )
     }
 
     let envelope
     try {
       assertJsonPayloadWithinBudget(rawResponse, InvokeContract[channel].maxResponseBytes, channel)
-      envelope = Schema.decodeUnknownSync(
-        Schema.Union(successEnvelope(invokeResponseSchema(channel)), FailureEnvelope),
-      )(rawResponse)
+      envelope = Schema.decodeUnknownSync(bridgeResult(InvokeContract[channel].response))(
+        rawResponse,
+      )
     } catch (error) {
-      const transport = decodeTransportError(error)
-      if (transport !== null) throw bridgeTransportError(transport, channel)
-      throw rendererTransportError("INVALID_RESPONSE", "Invalid response", channel)
-    }
-    if (envelope["_tag"] === "Failure") {
-      throw rendererTransportError(
-        envelope.error.code,
-        envelope.error.message,
-        channel,
-        envelope.error.operation,
-        envelope.error.diagnostic,
+      return failureResult(
+        decodeTransportError(toTransportFailure(error)) ??
+          rendererTransportError("INVALID_RESPONSE", "Invalid response", channel),
       )
     }
-    return envelope.value
+    return envelope
   },
 
   subscribe: <Channel extends EventChannel>(
     channel: Channel,
-    listener: (payload: EventPayload<Channel>) => void,
+    listener: (result: BridgeResult<EventPayload<Channel>>) => void,
   ) => {
-    const wrapped = (_event: unknown, rawPayload: unknown) => {
+    const wrapped = (_event: ElectronBoundaryValue, rawPayload: ElectronBoundaryValue) => {
       try {
-        assertJsonPayloadWithinBudget(rawPayload, EventContract[channel].maxPayloadBytes, channel)
-        listener(Schema.decodeUnknownSync(eventPayloadSchema(channel))(rawPayload))
-      } catch {
-        // Invalid host events are isolated from renderer state and future subscriptions.
+        const payload = toRendererPayload(rawPayload)
+        assertJsonPayloadWithinBudget(payload, EventContract[channel].maxPayloadBytes, channel)
+        listener({
+          _tag: "Success",
+          value: Schema.decodeUnknownSync(EventContract[channel].payload)(payload),
+        })
+      } catch (error) {
+        listener(
+          failureResult(
+            decodeTransportError(toTransportFailure(error)) ??
+              rendererTransportError("INVALID_EVENT", "Invalid event", channel),
+          ),
+        )
       }
     }
     ipc.on(channel, wrapped)
@@ -96,11 +109,48 @@ export const createRendererTransport = (ipc: RendererIpc) => ({
   },
 })
 
+const encodeRequest = <Channel extends InvokeChannel>(
+  channel: Channel,
+  request: InvokeRequest<Channel>,
+) => {
+  const schema = InvokeContract[channel].request
+  try {
+    return Schema.encodeUnknownSync(schema)(request)
+  } catch {
+    return Schema.encodeUnknownSync(schema)(Schema.decodeUnknownSync(schema)(request))
+  }
+}
+
 const rendererTransportError = (
   code: string,
   message: string,
-  channel: InvokeChannel,
+  channel: InvokeChannel | EventChannel,
   operation: string = channel,
   diagnostic?: TransportErrorDiagnosticTrace,
-) =>
-  bridgeTransportError(transportError(code, `${channel} failed: ${message}`, operation, diagnostic))
+) => transportError(code, `${channel} failed: ${message}`, operation, diagnostic)
+
+const failureResult = <Value>(error: ReturnType<typeof transportError>): BridgeResult<Value> => ({
+  _tag: "Failure",
+  error: {
+    _tag: "TransportError",
+    code: error.code,
+    message: error.message,
+    ...(error.operation === undefined ? {} : { operation: error.operation }),
+    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
+    ...(error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }),
+  },
+})
+
+const toRendererPayload = <A>(value: A): RendererPayload => {
+  if (Schema.is(Schema.Json)(value)) return value
+  if (Predicate.isObjectOrArray(value)) return value
+  if (Predicate.isBigInt(value) || Predicate.isSymbol(value)) return value
+  return undefined
+}
+
+const toTransportFailure = <A>(value: A): Parameters<typeof decodeTransportError>[0] => {
+  if (Schema.is(Schema.Json)(value)) return value
+  if (Predicate.isObjectOrArray(value)) return value
+  if (Predicate.isBigInt(value) || Predicate.isSymbol(value)) return value
+  return undefined
+}

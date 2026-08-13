@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { decodeDemoManifest, decodeDemoRelease } from "../src/artifacts"
 import type { DemoRelease } from "../src/framework"
-import type { MediaProbe } from "../src/media"
+import { decodeMediaProbe, type MediaProbe } from "../src/media"
 import { assertReleaseMatchesMedia } from "../src/verify"
 
 const release: DemoRelease = {
@@ -52,5 +52,29 @@ describe("demo artifact boundaries", () => {
     expect(() => decodeDemoRelease(JSON.stringify({ ...release, video: "other.mp4" }))).toThrow(
       "video name",
     )
+  })
+
+  it("decodes the ffprobe boundary through its media schema", () => {
+    expect(
+      decodeMediaProbe(
+        JSON.stringify({
+          streams: [{ codec_type: "video", codec_name: "h264", width: 1440, height: 900 }],
+          format: { duration: "42.04" },
+        }),
+      ),
+    ).toEqual({
+      streams: [
+        {
+          codecType: "video",
+          codecName: "h264",
+          width: 1440,
+          height: 900,
+          frameRate: null,
+          pixelFormat: null,
+        },
+      ],
+      durationSeconds: 42.04,
+    })
+    expect(() => decodeMediaProbe('{"streams":"invalid","format":{}}')).toThrow("invalid response")
   })
 })

@@ -1,48 +1,64 @@
 import { Schema } from "effect"
 
+import { NonNegativeInteger, PositiveInteger, UtcIsoTimestamp } from "./domain-scalar"
 import {
-  AgentRunId,
   ReviewAgentArtifact,
   ReviewAgentArtifactId,
-  ReviewAgentProviderId,
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
-} from "./review-agent"
+} from "./review-agent-run-data"
+import { AgentRunId } from "./agent-run-id"
+import { ReviewAgentProviderId } from "./review-agent-provider-id"
 import { ReviewKey, ReviewRevision } from "./review-identity"
-import { ReviewThreadId } from "./review-thread"
+import { ReviewThreadId } from "./review-thread-id"
 
 /** Version identifier for the stable prompt contract used by an agent run. */
 export const AgentPromptVersion = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("AgentPromptVersion"),
 )
 
 /** Version identifier for the stable prompt contract used by an agent run. */
 export type AgentPromptVersion = typeof AgentPromptVersion.Type
 
-/** Lifecycle state for one persisted review-agent run. */
-export const AgentRunStatus = Schema.Literal("running", "completed", "failed")
-
-/** Lifecycle state for one persisted review-agent run. */
-export type AgentRunStatus = typeof AgentRunStatus.Type
-
-/** Persisted lifecycle record for one provider execution in a review thread. */
-export class AgentRun extends Schema.Class<AgentRun>("AgentRun")({
+const AgentRunIdentity = {
   id: AgentRunId,
   threadId: ReviewThreadId,
   reviewKey: ReviewKey,
   baseRevision: ReviewRevision,
   headRevision: ReviewRevision,
   provider: ReviewAgentProviderId,
-  model: Schema.String.pipe(Schema.minLength(1)),
+  model: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
   promptVersion: AgentPromptVersion,
-  status: AgentRunStatus,
-  providerRunId: Schema.NullOr(ReviewAgentProviderRunId),
-  usage: Schema.NullOr(ReviewAgentUsage),
-  error: Schema.NullOr(Schema.String.pipe(Schema.minLength(1))),
-  startedAt: Schema.String,
-  completedAt: Schema.NullOr(Schema.String),
+  startedAt: UtcIsoTimestamp,
+}
+
+/** A provider execution that still owns an active pending response. */
+export class RunningAgentRun extends Schema.TaggedClass<RunningAgentRun>()("Running", {
+  ...AgentRunIdentity,
 }) {}
+
+/** A successfully completed provider execution. */
+export class CompletedAgentRun extends Schema.TaggedClass<CompletedAgentRun>()("Completed", {
+  ...AgentRunIdentity,
+  providerRunId: Schema.optional(ReviewAgentProviderRunId),
+  usage: Schema.optional(ReviewAgentUsage),
+  completedAt: UtcIsoTimestamp,
+}) {}
+
+/** A failed provider execution with a durable diagnostic. */
+export class FailedAgentRun extends Schema.TaggedClass<FailedAgentRun>()("Failed", {
+  ...AgentRunIdentity,
+  providerRunId: Schema.optional(ReviewAgentProviderRunId),
+  error: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  completedAt: UtcIsoTimestamp,
+}) {}
+
+/** Persisted lifecycle record for one provider execution in a review thread. */
+export const AgentRun = Schema.Union([RunningAgentRun, CompletedAgentRun, FailedAgentRun])
+
+/** Persisted lifecycle record for one provider execution in a review thread. */
+export type AgentRun = typeof AgentRun.Type
 
 /** A normalized artifact together with its persistent run and thread ownership. */
 export class StoredAgentRunArtifact extends Schema.Class<StoredAgentRunArtifact>(
@@ -52,7 +68,7 @@ export class StoredAgentRunArtifact extends Schema.Class<StoredAgentRunArtifact>
   runId: AgentRunId,
   threadId: ReviewThreadId,
   artifact: ReviewAgentArtifact,
-  createdAt: Schema.String,
+  createdAt: UtcIsoTimestamp,
 }) {}
 
 /** Input for persisting one already-normalized provider artifact. */
@@ -66,15 +82,15 @@ export class SaveAgentRunArtifactInput extends Schema.Class<SaveAgentRunArtifact
 
 /** Stable identifier for the algorithm that produced a compact thread summary. */
 export const ThreadMemorySummaryAlgorithm = Schema.String.pipe(
-  Schema.minLength(1),
+  Schema.check(Schema.isMinLength(1)),
   Schema.brand("ThreadMemorySummaryAlgorithm"),
 )
 
 /** Stable identifier for the algorithm that produced a compact thread summary. */
 export type ThreadMemorySummaryAlgorithm = typeof ThreadMemorySummaryAlgorithm.Type
 
-const ThreadMemoryWatermark = Schema.Int.pipe(Schema.greaterThanOrEqualTo(0))
-const ThreadMemorySummaryVersion = Schema.Int.pipe(Schema.greaterThanOrEqualTo(1))
+const ThreadMemoryWatermark = NonNegativeInteger
+const ThreadMemorySummaryVersion = PositiveInteger
 
 /** Compact context retained independently from provider session memory. */
 export class ThreadMemory extends Schema.Class<ThreadMemory>("ThreadMemory")({
@@ -84,7 +100,7 @@ export class ThreadMemory extends Schema.Class<ThreadMemory>("ThreadMemory")({
   summaryAlgorithm: ThreadMemorySummaryAlgorithm,
   summaryVersion: ThreadMemorySummaryVersion,
   importantArtifactIds: Schema.Array(ReviewAgentArtifactId),
-  updatedAt: Schema.String,
+  updatedAt: UtcIsoTimestamp,
 }) {}
 
 /** Input for replacing the compact memory associated with one review thread. */

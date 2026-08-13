@@ -1,8 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Error as PlatformError } from "@effect/platform"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Either, Layer } from "effect"
+import { Effect, Result, Layer, PlatformError } from "effect"
 import {
   linkSync,
   mkdirSync,
@@ -28,7 +27,7 @@ const fileStorageLayer = FileStorage.layer.pipe(
 )
 
 describe("file storage", () => {
-  it.scoped("returns null only when the file is missing", () =>
+  it.effect("returns null only when the file is missing", () =>
     Effect.gen(function* () {
       const storage = yield* FileStorage
       const directory = yield* makeTempDirectory
@@ -37,7 +36,7 @@ describe("file storage", () => {
     }).pipe(Effect.provide(fileStorageLayer)),
   )
 
-  it.scoped("writes private pretty JSON with a trailing newline", () =>
+  it.effect("writes private pretty JSON with a trailing newline", () =>
     Effect.gen(function* () {
       const storage = yield* FileStorage
       const directory = yield* makeTempDirectory
@@ -50,7 +49,7 @@ describe("file storage", () => {
     }).pipe(Effect.provide(fileStorageLayer)),
   )
 
-  it.scoped("atomically replaces an existing file", () =>
+  it.effect("atomically replaces an existing file", () =>
     Effect.gen(function* () {
       const storage = yield* FileStorage
       const directory = yield* makeTempDirectory
@@ -70,35 +69,35 @@ describe("file storage", () => {
     }).pipe(Effect.provide(fileStorageLayer)),
   )
 
-  it.scoped("fails instead of treating non-ENOENT read errors as missing", () =>
+  it.effect("fails instead of treating non-ENOENT read errors as missing", () =>
     Effect.gen(function* () {
       const storage = yield* FileStorage
       const directory = yield* makeTempDirectory
       const path = join(directory, "settings.json")
       mkdirSync(path)
 
-      const result = yield* Effect.either(storage.readOptionalTextFile(path))
+      const result = yield* Effect.result(storage.readOptionalTextFile(path))
 
-      expect(Either.isLeft(result)).toBe(true)
-      if (Either.isLeft(result)) {
-        expect(result.left).toBeInstanceOf(PlatformError.SystemError)
-        if (result.left instanceof PlatformError.SystemError) {
-          expect(result.left.reason).not.toBe("NotFound")
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(PlatformError.PlatformError)
+        if (result.failure instanceof PlatformError.PlatformError) {
+          expect(result.failure.reason._tag).not.toBe("NotFound")
         }
       }
     }).pipe(Effect.provide(fileStorageLayer)),
   )
 
-  it.scoped("removes the temporary file when atomic publication fails", () =>
+  it.effect("removes the temporary file when atomic publication fails", () =>
     Effect.gen(function* () {
       const storage = yield* FileStorage
       const directory = yield* makeTempDirectory
       const path = join(directory, "settings.json")
       mkdirSync(path)
 
-      const result = yield* Effect.either(storage.writePrettyJsonFile(path, { enabled: true }))
+      const result = yield* Effect.result(storage.writePrettyJsonFile(path, { enabled: true }))
 
-      expect(Either.isLeft(result)).toBe(true)
+      expect(Result.isFailure(result)).toBe(true)
       expect(readdirSync(directory)).toEqual(["settings.json"])
     }).pipe(Effect.provide(fileStorageLayer)),
   )

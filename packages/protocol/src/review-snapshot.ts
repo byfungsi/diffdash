@@ -3,6 +3,7 @@ import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { Repo } from "@diffdash/domain/repository"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
@@ -13,9 +14,10 @@ import {
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
+  ReviewKey,
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { OpenRepositoryComparisonCommand } from "./cli-navigation"
 
 /** Maximum files that one explicit renderer page request may select. */
@@ -32,7 +34,7 @@ export const REVIEW_SNAPSHOT_SEARCH_MAX_BYTES = 256 * 1_024
 
 /** Opaque stable cursor for a bounded parsed-diff file page. */
 export const ReviewSnapshotPageCursor = Schema.String.pipe(
-  Schema.pattern(/^page:v1:[0-9]+:[0-9a-f]{8}$/),
+  Schema.check(Schema.isPattern(/^page:v1:[0-9]+:[0-9a-f]{8}$/)),
   Schema.brand("ReviewSnapshotPageCursor"),
 )
 
@@ -41,15 +43,24 @@ export type ReviewSnapshotPageCursor = typeof ReviewSnapshotPageCursor.Type
 
 /** Opaque stable cursor for a bounded revision-keyed search page. */
 export const ReviewSnapshotSearchCursor = Schema.String.pipe(
-  Schema.pattern(/^search:v1:[0-9]+:[0-9a-f]{8}$/),
+  Schema.check(Schema.isPattern(/^search:v1:[0-9]+:[0-9a-f]{8}$/)),
   Schema.brand("ReviewSnapshotSearchCursor"),
 )
 
 /** Opaque stable cursor for a bounded revision-keyed search page. */
 export type ReviewSnapshotSearchCursor = typeof ReviewSnapshotSearchCursor.Type
 
+/** Stable identity for one exact literal occurrence in an immutable review snapshot. */
+export const ReviewSnapshotSearchMatchId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("ReviewSnapshotSearchMatchId"),
+)
+
+/** Stable identity for one exact literal occurrence in an immutable review snapshot. */
+export type ReviewSnapshotSearchMatchId = typeof ReviewSnapshotSearchMatchId.Type
+
 /** Reason a renderer must reacquire its review manifest. */
-export const ReviewSnapshotExpiredReason = Schema.Literal("expired", "evicted", "mismatched")
+export const ReviewSnapshotExpiredReason = Schema.Literals(["expired", "evicted", "mismatched"])
 
 /** Reason a renderer must reacquire its review manifest. */
 export type ReviewSnapshotExpiredReason = typeof ReviewSnapshotExpiredReason.Type
@@ -74,7 +85,9 @@ export class ReviewSnapshotPageRequest extends Schema.Class<ReviewSnapshotPageRe
 )({
   snapshotId: ReviewSnapshotId,
   cursor: Schema.NullOr(ReviewSnapshotPageCursor),
-  fileIds: Schema.Array(ReviewFileId).pipe(Schema.maxItems(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
+  fileIds: Schema.Array(ReviewFileId).pipe(
+    Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
+  ),
 }) {}
 
 /** Parsed files returned without truncation under one response budget. */
@@ -82,7 +95,9 @@ export class ReviewSnapshotPageAvailable extends Schema.TaggedClass<ReviewSnapsh
   "available",
   {
     snapshotId: ReviewSnapshotId,
-    files: Schema.Array(ParsedDiffFile).pipe(Schema.maxItems(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
+    files: Schema.Array(ParsedDiffFile).pipe(
+      Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
+    ),
     nextCursor: Schema.NullOr(ReviewSnapshotPageCursor),
   },
 ) {}
@@ -114,7 +129,7 @@ export class OpenRepositoryComparisonFileRequest extends Schema.Class<OpenReposi
   "OpenRepositoryComparisonFileRequest",
 )({
   target: RepositoryComparisonTarget,
-  filePath: Schema.String,
+  filePath: RepositoryRelativePath,
 }) {}
 
 /** Gets or generates a walkthrough for one immutable repository comparison. */
@@ -131,7 +146,7 @@ export class ReviewSnapshotFileTooLarge extends Schema.TaggedClass<ReviewSnapsho
   {
     snapshotId: ReviewSnapshotId,
     file: ReviewSnapshotFileInventory,
-    maxResponseBytes: Schema.Int.pipe(Schema.positive()),
+    maxResponseBytes: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
   },
 ) {}
 
@@ -142,11 +157,11 @@ export class ReviewSnapshotExpired extends Schema.TaggedClass<ReviewSnapshotExpi
 }) {}
 
 /** Bounded parsed-file page, explicit too-large-file state, or stale snapshot state. */
-export const ReviewSnapshotPageResponse = Schema.Union(
+export const ReviewSnapshotPageResponse = Schema.Union([
   ReviewSnapshotPageAvailable,
   ReviewSnapshotFileTooLarge,
   ReviewSnapshotExpired,
-)
+])
 
 /** Bounded parsed-file page, explicit too-large-file state, or stale snapshot state. */
 export type ReviewSnapshotPageResponse = typeof ReviewSnapshotPageResponse.Type
@@ -164,16 +179,22 @@ export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSear
   "ReviewSnapshotSearchRequest",
 )({
   snapshotId: ReviewSnapshotId,
-  query: Schema.String.pipe(Schema.minLength(1), Schema.maxLength(512)),
+  query: Schema.String.pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(512)),
+  ),
   cursor: Schema.NullOr(ReviewSnapshotSearchCursor),
-  limit: Schema.Int.pipe(Schema.between(1, REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT)),
-  anchor: Schema.optionalWith(Schema.NullOr(ReviewSnapshotSearchFileAnchor), {
-    default: () => null,
-  }),
+  limit: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT })),
+  ),
+  anchor: Schema.NullOr(ReviewSnapshotSearchFileAnchor).pipe(
+    Schema.withConstructorDefault(Effect.succeed(null)),
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
 }) {}
 
 /** Semantic side occupied by one immutable parsed-diff search match. */
-export const ReviewSnapshotSearchSide = Schema.Literal("additions", "context", "deletions")
+export const ReviewSnapshotSearchSide = Schema.Literals(["additions", "context", "deletions"])
 
 /** Semantic side occupied by one immutable parsed-diff search match. */
 export type ReviewSnapshotSearchSide = typeof ReviewSnapshotSearchSide.Type
@@ -182,19 +203,19 @@ export type ReviewSnapshotSearchSide = typeof ReviewSnapshotSearchSide.Type
 export class ReviewSnapshotSearchMatch extends Schema.Class<ReviewSnapshotSearchMatch>(
   "ReviewSnapshotSearchMatch",
 )({
-  id: Schema.String,
+  id: ReviewSnapshotSearchMatchId,
   fileId: ReviewFileId,
-  filePath: Schema.String,
-  reviewKey: Schema.String,
+  filePath: RepositoryRelativePath,
+  reviewKey: ReviewKey,
   hunkId: ReviewHunkId,
   hunkFingerprint: ReviewHunkFingerprint,
-  hunkLineIndex: Schema.Int.pipe(Schema.nonNegative()),
-  newLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
-  oldLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+  hunkLineIndex: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  newLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
+  oldLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
   side: ReviewSnapshotSearchSide,
   text: Schema.String,
-  start: Schema.Int.pipe(Schema.nonNegative()),
-  end: Schema.Int.pipe(Schema.nonNegative()),
+  start: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  end: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
 /** One bounded search page plus the complete revision-keyed match count. */
@@ -203,28 +224,28 @@ export class ReviewSnapshotSearchAvailable extends Schema.TaggedClass<ReviewSnap
   {
     snapshotId: ReviewSnapshotId,
     matches: Schema.Array(ReviewSnapshotSearchMatch).pipe(
-      Schema.maxItems(REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT),
+      Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT)),
     ),
-    totalMatches: Schema.Int.pipe(Schema.nonNegative()),
+    totalMatches: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
     nextCursor: Schema.NullOr(ReviewSnapshotSearchCursor),
   },
 ) {}
 
 /** Bounded search result page or stale snapshot state. */
-export const ReviewSnapshotSearchResponse = Schema.Union(
+export const ReviewSnapshotSearchResponse = Schema.Union([
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotExpired,
-)
+])
 
 /** Bounded search result page or stale snapshot state. */
 export type ReviewSnapshotSearchResponse = typeof ReviewSnapshotSearchResponse.Type
 
 /** Hosted or local manifest returned by the acquisition channels. */
-export const AcquiredReviewSnapshotManifest = Schema.Union(
+export const AcquiredReviewSnapshotManifest = Schema.Union([
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
   RepositoryComparisonSnapshotManifest,
-)
+])
 
 /** Hosted or local manifest returned by the acquisition channels. */
 export type AcquiredReviewSnapshotManifest = typeof AcquiredReviewSnapshotManifest.Type

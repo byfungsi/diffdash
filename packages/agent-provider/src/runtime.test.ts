@@ -160,7 +160,7 @@ describe("provider runtime helpers", () => {
     expect(() =>
       AgentProviderFailure.make({
         version: 1,
-        providerId: "fixture",
+        providerId: AgentProviderId.make("fixture"),
         capability: "walkthrough",
         category: "usage-limited",
         processKind: null,
@@ -170,6 +170,6 @@ describe("provider runtime helpers", () => {
         retryAfterSeconds: null,
         resetsAt: "2026-99-99T99:99:99Z",
       }),
-    ).toThrow(/Invalid UTC provider reset timestamp/)
+    ).toThrow(/Schema validation failed/)
   })
 })

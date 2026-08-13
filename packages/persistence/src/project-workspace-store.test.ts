@@ -8,16 +8,19 @@ import {
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Either, Layer, Schema } from "effect"
-import { DatabaseService } from "./database"
+import { Effect, Result, Layer, Option, Schema } from "effect"
+import * as SqlClient from "effect/unstable/sql/SqlClient"
+import { makeDatabase } from "./database"
+import * as DatabaseNode from "./database-node"
 import { ProjectWorkspaceStore, ProjectWorkspaceStoreError } from "./project-workspace-store"
 
 const projectId = ReviewProjectId.make("github:fungsi/diffdash")
@@ -25,14 +28,15 @@ const hostedTarget = HostedReviewTarget.make({
   kind: "hosted",
   review: makeHostedReviewLocator("github", "fungsi", "diffdash", 147),
 })
-const workingTreeTarget = workingTreeReviewTarget("/workspace/diffdash")
+const checkoutPath = RepositoryCheckoutPath.make("/workspace/diffdash")
+const workingTreeTarget = workingTreeReviewTarget(checkoutPath)
 const branchTarget = LocalReviewTarget.make({
   kind: "local",
-  rootPath: "/workspace/diffdash",
+  rootPath: checkoutPath,
   comparison: BranchComparison.make({
-    branchName: "main",
-    baseRef: "refs/heads/main",
-    baseSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    branchName: RepositoryComparisonRef.make("main"),
+    baseRef: RepositoryComparisonRef.make("refs/heads/main"),
+    baseSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
   }),
 })
 const comparisonTarget = RepositoryComparisonTarget.make({
@@ -54,10 +58,10 @@ const makeTempDatabasePath = Effect.acquireRelease(
 ).pipe(Effect.map((directory) => join(directory, "test.sqlite")))
 
 const makeLayer = (databasePath: string) =>
-  ProjectWorkspaceStore.layer.pipe(Layer.provideMerge(DatabaseService.layer(databasePath)))
+  ProjectWorkspaceStore.layer.pipe(Layer.provideMerge(DatabaseNode.layer(databasePath)))
 
 const insertProject = Effect.gen(function* () {
-  const database = yield* DatabaseService
+  const database = makeDatabase(yield* SqlClient.SqlClient)
   yield* database.run(
     `INSERT INTO repos (
       id, provider, owner, name, remote_url, local_path, is_favorite,
@@ -84,7 +88,7 @@ const saveInput = (
   })
 
 describe("ProjectWorkspaceStore", () => {
-  it.scoped("returns null when a project has no workspace state", () =>
+  it.effect("returns null when a project has no workspace state", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -95,7 +99,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips workspace state with no selected review", () =>
+  it.effect("round trips workspace state with no selected review", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -116,7 +120,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips a hosted target independently from the active ribbon", () =>
+  it.effect("round trips a hosted target independently from the active ribbon", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -132,7 +136,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips a working-tree target", () =>
+  it.effect("round trips a working-tree target", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -147,7 +151,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips an exact branch comparison target", () =>
+  it.effect("round trips an exact branch comparison target", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -164,7 +168,7 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("round trips every immutable repository comparison revision", () =>
+  it.effect("round trips every immutable repository comparison revision", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
@@ -184,14 +188,14 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("updates one row with the last saved state and timestamp", () =>
+  it.effect("updates one row with the last saved state and timestamp", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* store.save(saveInput("reviews", hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET updated_at = '2000-01-01T00:00:00.000Z' WHERE repo_id = ?",
@@ -200,7 +204,9 @@ describe("ProjectWorkspaceStore", () => {
 
         const latest = yield* store.save(saveInput("threads", branchTarget))
         const count = decodeCountRow(
-          yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+          Option.getOrThrow(
+            yield* database.get("SELECT COUNT(*) AS count FROM project_workspace_state"),
+          ),
         )
 
         expect(count.count).toBe(1)
@@ -212,22 +218,22 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("reports invalid persisted target JSON as a typed decode error", () =>
+  it.effect("reports invalid persisted target JSON as a typed decode error", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         yield* insertProject
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
+        const database = makeDatabase(yield* SqlClient.SqlClient)
         yield* store.save(saveInput("reviews", hostedTarget))
         yield* database.run(
           "UPDATE project_workspace_state SET selected_review_target_json = '{' WHERE repo_id = ?",
           [projectId],
         )
 
-        const result = yield* Effect.either(store.get(projectId))
-        expect(Either.isLeft(result) && result.left).toEqual(
+        const result = yield* Effect.result(store.get(projectId))
+        expect(Result.isFailure(result) && result.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({
             _tag: "ProjectWorkspaceStoreError",
             operation: "get.decode",
@@ -237,15 +243,15 @@ describe("ProjectWorkspaceStore", () => {
     }),
   )
 
-  it.scoped("rejects orphan state and cascades state when its repository is deleted", () =>
+  it.effect("rejects orphan state and cascades state when its repository is deleted", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
 
       yield* Effect.gen(function* () {
         const store = yield* ProjectWorkspaceStore
-        const database = yield* DatabaseService
-        const orphan = yield* Effect.either(store.save(saveInput("reviews", null)))
-        expect(Either.isLeft(orphan) && orphan.left).toEqual(
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const orphan = yield* Effect.result(store.save(saveInput("reviews", null)))
+        expect(Result.isFailure(orphan) && orphan.failure).toEqual(
           expect.objectContaining<Partial<ProjectWorkspaceStoreError>>({
             _tag: "ProjectWorkspaceStoreError",
             operation: "save.query",

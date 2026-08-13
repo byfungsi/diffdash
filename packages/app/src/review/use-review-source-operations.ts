@@ -1,5 +1,8 @@
 /* oxlint-disable eslint/no-underscore-dangle -- Domain unions use Effect-compatible _tag discriminants. */
-import { useAtomRefresh, useAtomSet } from "@effect-atom/atom-react"
+import { useAtomRefresh, useAtomSet } from "@effect/atom-react"
+import { Match } from "effect"
+import { useReviewSourceOperationsFactory } from "@/platform/renderer-runtime"
+import type { ReviewSourceOperationSet } from "@/platform/review-source-operations"
 import {
   hostedReviewManifestAtom,
   localReviewManifestAtom,
@@ -8,7 +11,9 @@ import {
   repoKey,
 } from "./atoms"
 import type { ReviewSelectionProjection } from "./review-selection"
-import { type ReviewSourceOperations, mapReviewSourceOperations } from "./review-source-operations"
+
+/** Source operations plus cache-tier refresh behavior used by review UI. */
+export type ReviewSourceOperations = ReviewSourceOperationSet & { readonly refresh: () => void }
 
 /** Source-operation mapping while no ready review is available. */
 export type ReviewSourceOperationProjection =
@@ -19,41 +24,66 @@ export type ReviewSourceOperationProjection =
 export const useReviewSourceOperations = (
   selection: ReviewSelectionProjection,
 ): ReviewSourceOperationProjection => {
+  const readySelection = Match.valueTags(selection, {
+    ready: (ready) => ready,
+    loading: () => null,
+    failure: () => null,
+    none: () => null,
+  })
   const hostedKey =
-    selection._tag === "ready" && selection.target.kind === "hosted" ? selection.sourceKey : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => readySelection.sourceKey,
+          local: () => "",
+          repositoryComparison: () => "",
+        })
   const localKey =
-    selection._tag === "ready" && selection.target.kind === "localDiff" ? selection.sourceKey : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => "",
+          local: () => readySelection.sourceKey,
+          repositoryComparison: () => "",
+        })
   const refreshHostedManifest = useAtomRefresh(hostedReviewManifestAtom(hostedKey))
   const refreshLocalManifest = useAtomRefresh(localReviewManifestAtom(localKey))
   const comparisonKey =
-    selection._tag === "ready" && selection.target.kind === "repositoryComparison"
-      ? selection.sourceKey
-      : ""
+    readySelection === null
+      ? ""
+      : Match.valueTags(readySelection.review, {
+          hosted: () => "",
+          local: () => "",
+          repositoryComparison: () => readySelection.sourceKey,
+        })
   const refreshRepositoryComparisonManifest = useAtomRefresh(
     repositoryComparisonManifestAtom(comparisonKey),
   )
   const refreshPullRequests = useAtomSet(refreshPullRequestsAtom)
+  const sourceOperations = useReviewSourceOperationsFactory()
 
-  if (selection._tag !== "ready") return { _tag: "unavailable" }
+  if (readySelection === null) return { _tag: "unavailable" }
 
   return {
     _tag: "ready",
-    operations: mapReviewSourceOperations(selection, {
-      api: window.diffDash,
-      refreshHosted: () => {
-        refreshHostedManifest()
-        if (selection.target.kind === "hosted") {
-          refreshPullRequests(
-            repoKey(
-              selection.target.review.repository.providerId,
-              selection.target.review.repository.namespace,
-              selection.target.review.repository.name,
-            ),
-          )
-        }
+    operations: {
+      ...sourceOperations.make(readySelection.review),
+      refresh: () => {
+        Match.valueTags(readySelection.review, {
+          local: () => refreshLocalManifest(),
+          repositoryComparison: () => refreshRepositoryComparisonManifest(),
+          hosted: (hosted) => {
+            refreshHostedManifest()
+            refreshPullRequests(
+              repoKey(
+                hosted.target.repository.providerId,
+                hosted.target.repository.namespace,
+                hosted.target.repository.name,
+              ),
+            )
+          },
+        })
       },
-      refreshLocal: refreshLocalManifest,
-      refreshRepositoryComparison: refreshRepositoryComparisonManifest,
-    }),
+    },
   }
 }

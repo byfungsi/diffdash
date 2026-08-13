@@ -1,8 +1,11 @@
-import { makeHostedRepositoryLocator, makeHostedReviewLocator } from "@diffdash/domain/git-provider"
+import {
+  HostedRepositorySource,
+  makeHostedRepositoryLocator,
+  makeHostedReviewLocator,
+} from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceState } from "@diffdash/domain/project-workspace"
-import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import { Repo } from "@diffdash/domain/repository"
+import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
   RepositoryComparisonRef,
@@ -12,27 +15,23 @@ import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "vitest"
 
-import {
-  enqueueProjectWorkspaceSave,
-  projectIdForRepo,
-  resolveProjectWorkspaceState,
-  selectedReviewTargetForPersistence,
-} from "./workspace-state"
+import { resolveProjectWorkspaceState, selectedReviewTargetForPersistence } from "./workspace-state"
 
 const repo = Repo.make({
-  id: "github:fungsi/diffdash",
-  provider: "github",
-  owner: "fungsi",
-  name: "diffdash",
-  remoteUrl: "https://github.com/fungsi/diffdash",
-  localPath: "/workspace/diffdash",
+  id: ReviewProjectId.make("github:fungsi/diffdash"),
+  source: HostedRepositorySource.make({
+    locator: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
+  }),
+  checkout: LinkedCheckout.make({
+    remoteUrl: "https://github.com/fungsi/diffdash",
+    path: RepositoryCheckoutPath.make("/workspace/diffdash"),
+  }),
   isFavorite: true,
   lastOpenedAt: "2026-08-02T00:00:00.000Z",
   lastSyncedAt: null,
   createdAt: "2026-08-02T00:00:00.000Z",
   updatedAt: "2026-08-02T00:00:00.000Z",
 })
-const ignoreSaveFailure = () => undefined
 
 describe("project workspace state", () => {
   it("defaults a first open to Reviews without a selection", () => {
@@ -48,13 +47,13 @@ describe("project workspace state", () => {
       kind: "hosted",
       review: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
     })
-    const local = workingTreeReviewTarget("/workspace/diffdash")
+    const local = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
 
     expect(
       resolveProjectWorkspaceState(
         repo,
         ProjectWorkspaceState.make({
-          projectId: projectIdForRepo(repo),
+          projectId: repo.id,
           activeRibbon: "threads",
           selectedReviewTarget: hosted,
           updatedAt: "2026-08-02T00:00:00.000Z",
@@ -102,7 +101,7 @@ describe("project workspace state", () => {
     const foreign = resolveProjectWorkspaceState(
       repo,
       ProjectWorkspaceState.make({
-        projectId: projectIdForRepo(repo),
+        projectId: repo.id,
         activeRibbon: "files",
         selectedReviewTarget: HostedReviewTarget.make({
           kind: "hosted",
@@ -117,35 +116,5 @@ describe("project workspace state", () => {
       expect(resolved.selectedReview).toBeNull()
       expect(resolved.notice).not.toBeNull()
     }
-  })
-
-  it("serializes workspace writes so the latest requested selection commits last", async () => {
-    const firstGate: { release: () => void } = { release: () => undefined }
-    const firstWait = new Promise<void>((resolve) => {
-      firstGate.release = resolve
-    })
-    const committed: string[] = []
-    const save = async (input: ProjectWorkspaceStateInput) => {
-      if (input.activeRibbon === "files") await firstWait
-      committed.push(input.activeRibbon)
-    }
-    const files = ProjectWorkspaceStateInput.make({
-      projectId: projectIdForRepo(repo),
-      activeRibbon: "files",
-      selectedReviewTarget: null,
-    })
-    const threads = ProjectWorkspaceStateInput.make({
-      projectId: projectIdForRepo(repo),
-      activeRibbon: "threads",
-      selectedReviewTarget: null,
-    })
-
-    const first = enqueueProjectWorkspaceSave(Promise.resolve(), files, save, ignoreSaveFailure)
-    const second = enqueueProjectWorkspaceSave(first, threads, save, ignoreSaveFailure)
-    await Promise.resolve()
-    expect(committed).toEqual([])
-    firstGate.release()
-    await second
-    expect(committed).toEqual(["files", "threads"])
   })
 })

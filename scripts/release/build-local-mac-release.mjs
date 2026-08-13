@@ -1,12 +1,4 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import "./load-local-env.mjs"
@@ -16,6 +8,7 @@ import {
   requiredEnvironment,
   requiredMacReleaseAnalyticsEnvironment,
 } from "./release-environment.mjs"
+import { withTemporaryDirectorySync } from "./temporary-directory.mjs"
 
 const cli = parseMacReleaseArguments()
 const desktopRoot = path.resolve("packages/desktop")
@@ -49,43 +42,73 @@ if (process.env.CSC_LINK !== undefined) {
   requiredEnvironment("CSC_KEY_PASSWORD")
 }
 
-const tempDir = mkdtempSync(path.join(tmpdir(), "diffdash-local-release-"))
-const electronBuilderConfig = path.join(tempDir, "electron-builder-local.json")
-const buildConfig = {
-  ...packageJson.build,
-  mac: {
-    ...packageJson.build.mac,
-    forceCodeSigning: true,
-    notarize: false,
-  },
-}
-writeFileSync(electronBuilderConfig, `${JSON.stringify(buildConfig, null, 2)}\n`)
+withTemporaryDirectorySync(path.join(tmpdir(), "diffdash-local-release-"), (tempDir) => {
+  const electronBuilderConfig = path.join(tempDir, "electron-builder-local.json")
+  const buildConfig = {
+    ...packageJson.build,
+    mac: {
+      ...packageJson.build.mac,
+      forceCodeSigning: true,
+      notarize: false,
+    },
+  }
+  writeFileSync(electronBuilderConfig, `${JSON.stringify(buildConfig, null, 2)}\n`)
 
-if (!packageExisting) {
-  rmSync(releaseAssetsDir, { force: true, recursive: true })
-}
-mkdirSync(releaseAssetsDir, { recursive: true })
+  if (!packageExisting) {
+    rmSync(releaseAssetsDir, { force: true, recursive: true })
+  }
+  mkdirSync(releaseAssetsDir, { recursive: true })
 
-if (!packageExisting) {
-  runSyncCommand("pnpm", ["assets:icons"])
-  runSyncCommand("pnpm", ["native:electron"])
-  runSyncCommand("pnpm", ["build"])
-}
+  if (!packageExisting) {
+    runSyncCommand("pnpm", ["assets:icons"])
+    runSyncCommand("pnpm", ["build"])
+  }
 
-for (const arch of archs) {
-  const appPath = macAppPath(arch)
-  const artifactPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.dmg`)
-  const zipPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.zip`)
-  const blockmapPath = `${zipPath}.blockmap`
-  const metadataPath = path.join(desktopRoot, "dist", "latest-mac.yml")
+  for (const arch of archs) {
+    const appPath = macAppPath(arch)
+    const artifactPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.dmg`)
+    const zipPath = path.join(desktopRoot, "dist", `${productName}-${version}-mac-${arch}.zip`)
+    const blockmapPath = `${zipPath}.blockmap`
+    const metadataPath = path.join(desktopRoot, "dist", "latest-mac.yml")
 
-  if (packageExisting) {
-    if (!existsSync(appPath)) {
-      throw new Error(`Existing macOS app was not found: ${appPath}`)
+    if (packageExisting) {
+      if (!existsSync(appPath)) {
+        throw new Error(`Existing macOS app was not found: ${appPath}`)
+      }
+      console.log(`Packaging existing macOS ${arch} app`)
+    } else {
+      console.log(`Building signed macOS ${arch} app`)
+      runSyncCommand(
+        "pnpm",
+        [
+          "exec",
+          "electron-builder",
+          "--config",
+          electronBuilderConfig,
+          "--mac",
+          "zip",
+          `--${arch}`,
+          "--publish=never",
+        ],
+        { cwd: desktopRoot },
+      )
     }
-    console.log(`Packaging existing macOS ${arch} app`)
-  } else {
-    console.log(`Building signed macOS ${arch} app`)
+
+    verifyAppUpdateConfig(appPath)
+
+    if (skipNotarize) {
+      console.log(`Skipping notarization for ${appPath}`)
+    } else {
+      console.log(`Notarizing and stapling ${appPath}`)
+      const notarizeArgs = ["scripts/release/notarize-app.mjs", appPath]
+      if (submissionId !== undefined) {
+        notarizeArgs.push("--submission-id", submissionId)
+      }
+      runSyncCommand("node", notarizeArgs)
+    }
+
+    console.log(`Packaging macOS ${arch} DMG`)
+    rmSync(artifactPath, { force: true })
     runSyncCommand(
       "pnpm",
       [
@@ -93,6 +116,29 @@ for (const arch of archs) {
         "electron-builder",
         "--config",
         electronBuilderConfig,
+        "--prepackaged",
+        appPath,
+        "--mac",
+        "dmg",
+        `--${arch}`,
+        "--publish=never",
+      ],
+      { cwd: desktopRoot },
+    )
+
+    console.log(`Packaging macOS ${arch} updater ZIP`)
+    rmSync(zipPath, { force: true })
+    rmSync(blockmapPath, { force: true })
+    rmSync(metadataPath, { force: true })
+    runSyncCommand(
+      "pnpm",
+      [
+        "exec",
+        "electron-builder",
+        "--config",
+        electronBuilderConfig,
+        "--prepackaged",
+        appPath,
         "--mac",
         "zip",
         `--${arch}`,
@@ -100,87 +146,34 @@ for (const arch of archs) {
       ],
       { cwd: desktopRoot },
     )
-  }
 
-  verifyAppUpdateConfig(appPath)
+    verifyApp(appPath)
 
-  if (skipNotarize) {
-    console.log(`Skipping notarization for ${appPath}`)
-  } else {
-    console.log(`Notarizing and stapling ${appPath}`)
-    const notarizeArgs = ["scripts/release/notarize-app.mjs", appPath]
-    if (submissionId !== undefined) {
-      notarizeArgs.push("--submission-id", submissionId)
+    if (!existsSync(artifactPath)) {
+      throw new Error(`Expected DMG was not created: ${artifactPath}`)
     }
-    runSyncCommand("node", notarizeArgs)
+    if (!existsSync(zipPath)) throw new Error(`Expected updater ZIP was not created: ${zipPath}`)
+    if (!existsSync(blockmapPath)) {
+      throw new Error(`Expected macOS updater blockmap was not created: ${blockmapPath}`)
+    }
+    if (!existsSync(metadataPath)) {
+      throw new Error(`Expected macOS updater metadata was not created: ${metadataPath}`)
+    }
+    const metadata = readFileSync(metadataPath, "utf8")
+    if (!metadata.includes(path.basename(zipPath)) || !metadata.includes(`version: ${version}`)) {
+      throw new Error(`macOS updater metadata does not reference ${path.basename(zipPath)}`)
+    }
+
+    copyFileSync(artifactPath, path.join(releaseAssetsDir, path.basename(artifactPath)))
+    copyFileSync(zipPath, path.join(releaseAssetsDir, path.basename(zipPath)))
+    copyFileSync(blockmapPath, path.join(releaseAssetsDir, path.basename(blockmapPath)))
+    copyFileSync(metadataPath, path.join(releaseAssetsDir, `latest-mac-${arch}.yml`))
+    console.log(`Copied ${path.basename(artifactPath)} to ${releaseAssetsDir}`)
+    console.log(`Copied macOS ${arch} updater artifacts to ${releaseAssetsDir}`)
   }
 
-  console.log(`Packaging macOS ${arch} DMG`)
-  rmSync(artifactPath, { force: true })
-  runSyncCommand(
-    "pnpm",
-    [
-      "exec",
-      "electron-builder",
-      "--config",
-      electronBuilderConfig,
-      "--prepackaged",
-      appPath,
-      "--mac",
-      "dmg",
-      `--${arch}`,
-      "--publish=never",
-    ],
-    { cwd: desktopRoot },
-  )
-
-  console.log(`Packaging macOS ${arch} updater ZIP`)
-  rmSync(zipPath, { force: true })
-  rmSync(blockmapPath, { force: true })
-  rmSync(metadataPath, { force: true })
-  runSyncCommand(
-    "pnpm",
-    [
-      "exec",
-      "electron-builder",
-      "--config",
-      electronBuilderConfig,
-      "--prepackaged",
-      appPath,
-      "--mac",
-      "zip",
-      `--${arch}`,
-      "--publish=never",
-    ],
-    { cwd: desktopRoot },
-  )
-
-  verifyApp(appPath)
-
-  if (!existsSync(artifactPath)) {
-    throw new Error(`Expected DMG was not created: ${artifactPath}`)
-  }
-  if (!existsSync(zipPath)) throw new Error(`Expected updater ZIP was not created: ${zipPath}`)
-  if (!existsSync(blockmapPath)) {
-    throw new Error(`Expected macOS updater blockmap was not created: ${blockmapPath}`)
-  }
-  if (!existsSync(metadataPath)) {
-    throw new Error(`Expected macOS updater metadata was not created: ${metadataPath}`)
-  }
-  const metadata = readFileSync(metadataPath, "utf8")
-  if (!metadata.includes(path.basename(zipPath)) || !metadata.includes(`version: ${version}`)) {
-    throw new Error(`macOS updater metadata does not reference ${path.basename(zipPath)}`)
-  }
-
-  copyFileSync(artifactPath, path.join(releaseAssetsDir, path.basename(artifactPath)))
-  copyFileSync(zipPath, path.join(releaseAssetsDir, path.basename(zipPath)))
-  copyFileSync(blockmapPath, path.join(releaseAssetsDir, path.basename(blockmapPath)))
-  copyFileSync(metadataPath, path.join(releaseAssetsDir, `latest-mac-${arch}.yml`))
-  console.log(`Copied ${path.basename(artifactPath)} to ${releaseAssetsDir}`)
-  console.log(`Copied macOS ${arch} updater artifacts to ${releaseAssetsDir}`)
-}
-
-console.log(`Local macOS release assets are ready in ${releaseAssetsDir}`)
+  console.log(`Local macOS release assets are ready in ${releaseAssetsDir}`)
+})
 
 function nativeArch() {
   if (process.arch === "arm64") return "arm64"

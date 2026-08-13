@@ -9,15 +9,19 @@ import {
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewProjectId,
+  ReviewKey,
   ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewSnapshotSearchAvailable,
   ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchFileAnchor,
   ReviewSnapshotSearchMatch,
+  ReviewSnapshotSearchMatchId,
+  type ReviewSnapshotSearchResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { Registry } from "@effect-atom/atom-react"
+import { AtomRegistry } from "effect/unstable/reactivity"
 import { afterEach, describe, expect, it, vi } from "@effect/vitest"
 
 import {
@@ -38,10 +42,10 @@ const replacementAddress = ReviewSnapshotAddress.make({
 
 const makeMatch = (query: string, globalIndex: number) =>
   ReviewSnapshotSearchMatch.make({
-    id: `${query}-${globalIndex}`,
+    id: ReviewSnapshotSearchMatchId.make(`${query}-${globalIndex}`),
     fileId: ReviewFileId.make(`file:${query}:${globalIndex}`),
-    filePath: `src/${query}-${globalIndex}.ts`,
-    reviewKey: `review:${query}:${globalIndex}`,
+    filePath: RepositoryRelativePath.make(`src/${query}-${globalIndex}.ts`),
+    reviewKey: ReviewKey.make(`review:${query}:${globalIndex}`),
     hunkId: ReviewHunkId.make(`hunk:${query}:${globalIndex}`),
     hunkFingerprint: ReviewHunkFingerprint.make(`fingerprint:${query}:${globalIndex}`),
     hunkLineIndex: globalIndex,
@@ -83,7 +87,7 @@ const deferred = <Value>() => {
   return { promise, resolve }
 }
 
-const registries: Registry.Registry[] = []
+const registries: AtomRegistry.AtomRegistry[] = []
 const controllers: ReviewSearchController[] = []
 
 const makeRuntime = (search: ReviewSearchRuntime["search"]) => {
@@ -113,7 +117,7 @@ const requireOperation = (
 }
 
 const makeController = (runtime: ReviewSearchRuntime, session = address) => {
-  const registry = Registry.make()
+  const registry = AtomRegistry.make()
   const controller = new ReviewSearchController(registry)
   registries.push(registry)
   controllers.push(controller)
@@ -179,8 +183,8 @@ describe("reduceReviewSearch", () => {
 
 describe("ReviewSearchController", () => {
   it("FUN-213 AC: accepts only the latest query response", async () => {
-    const oldResponse = deferred<unknown>()
-    const newResponse = deferred<unknown>()
+    const oldResponse = deferred<ReviewSnapshotSearchResponse>()
+    const newResponse = deferred<ReviewSnapshotSearchResponse>()
     const runtime = makeRuntime((request) =>
       request.query === "old" ? oldResponse.promise : newResponse.promise,
     )
@@ -205,7 +209,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("FUN-213 AC: latest movement wins over a delayed cursor replay", async () => {
-    const continuation = deferred<unknown>()
+    const continuation = deferred<ReviewSnapshotSearchResponse>()
     const runtime = makeRuntime((request) =>
       request.cursor === null
         ? Promise.resolve(makeAvailable({ query: request.query, count: 200, total: 201 }))
@@ -231,7 +235,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("FUN-213 AC: invalidates pending work when the review session is replaced", async () => {
-    const oldResponse = deferred<unknown>()
+    const oldResponse = deferred<ReviewSnapshotSearchResponse>()
     const runtime = makeRuntime((request) =>
       request.snapshotId === snapshotId
         ? oldResponse.promise
@@ -259,7 +263,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("preserves an open query while invalidating same-address manifest work", async () => {
-    const oldResponse = deferred<unknown>()
+    const oldResponse = deferred<ReviewSnapshotSearchResponse>()
     let requestCount = 0
     const runtime = makeRuntime((request) => {
       requestCount += 1
@@ -313,7 +317,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("FUN-213 AC: disposal rejects late responses and terminally closes the controller", async () => {
-    const response = deferred<unknown>()
+    const response = deferred<ReviewSnapshotSearchResponse>()
     const runtime = makeRuntime(() => response.promise)
     const { controller, registry } = makeController(runtime)
     controller.setQuery("late")
@@ -329,7 +333,7 @@ describe("ReviewSearchController", () => {
   })
 
   it("FUN-213 AC: isolates fixed atom bundles inside one registry", async () => {
-    const registry = Registry.make()
+    const registry = AtomRegistry.make()
     registries.push(registry)
     const firstRuntime = makeRuntime((request) =>
       Promise.resolve(makeAvailable({ query: request.query })),

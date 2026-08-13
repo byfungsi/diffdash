@@ -11,10 +11,11 @@ import {
   ReviewSnapshotPageRequest,
   ReviewSnapshotPageResponse,
 } from "@diffdash/protocol/review-snapshot"
-import { Atom, type Registry } from "@effect-atom/atom-react"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
+import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
-import { formatError } from "@/shared/errors"
+import { formatError, rendererTransportError } from "@/shared/errors"
+import type { TransportError } from "@diffdash/protocol/transport-error"
 import { ReviewPageCache } from "./review-page-cache"
 
 const LOAD_ERROR_FALLBACK = "Could not load this diff"
@@ -33,7 +34,7 @@ export type ReviewSnapshotFileLoadStatus =
 export interface ReviewSnapshotLoadResult {
   readonly snapshotId: ReviewSnapshotId
   readonly statuses: ReadonlyMap<ReviewFileId, ReviewSnapshotFileLoadStatus>
-  readonly failureCauses: ReadonlyMap<ReviewFileId, unknown>
+  readonly failureCauses: ReadonlyMap<ReviewFileId, TransportError>
 }
 
 /** Snapshot-level refresh lifecycle kept separate from per-file page failures. */
@@ -42,7 +43,7 @@ export type ReviewSnapshotRefreshStatus =
   | { readonly _tag: "refreshing" }
   | { readonly _tag: "failed"; readonly message: string }
 
-/** Immutable renderer-facing state published by one snapshot page session. */
+/** Read-only renderer-facing snapshot published by one page session. */
 export interface ReviewSnapshotPageProjection {
   readonly projectId: ReviewProjectId
   readonly snapshotId: ReviewSnapshotId
@@ -66,7 +67,7 @@ export interface ReviewSnapshotPageReader {
 
 /** Private IPC and expiry callbacks retained outside atom values. */
 export interface ReviewSnapshotPageRuntime {
-  readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<unknown>
+  readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
   readonly onExpired: () => void | Promise<void>
 }
 
@@ -88,16 +89,6 @@ interface PendingManifestReplacement {
   readonly reject: () => void
 }
 
-const immutableFiles = (files: readonly ParsedDiffFile[]): readonly ParsedDiffFile[] =>
-  Object.freeze([...files])
-
-const immutableFileIds = (fileIds: Iterable<ReviewFileId>): ReadonlySet<ReviewFileId> =>
-  Object.freeze(new Set(fileIds))
-
-const immutableFileErrors = (
-  fileErrors: Iterable<readonly [ReviewFileId, string]>,
-): ReadonlyMap<ReviewFileId, string> => Object.freeze(new Map(fileErrors))
-
 const IDLE_SNAPSHOT_REFRESH: ReviewSnapshotRefreshStatus = Object.freeze({ _tag: "idle" })
 const REFRESHING_SNAPSHOT: ReviewSnapshotRefreshStatus = Object.freeze({ _tag: "refreshing" })
 
@@ -105,10 +96,10 @@ const emptyProjection = (manifest: ReviewSnapshotManifest): ReviewSnapshotPagePr
   Object.freeze({
     projectId: manifest.projectId,
     snapshotId: manifest.snapshotId,
-    files: immutableFiles([]),
-    loadingFileIds: immutableFileIds([]),
-    tooLargeFileIds: immutableFileIds([]),
-    fileErrors: immutableFileErrors([]),
+    files: Object.freeze([]),
+    loadingFileIds: new Set<ReviewFileId>(),
+    tooLargeFileIds: new Set<ReviewFileId>(),
+    fileErrors: new Map<ReviewFileId, string>(),
     snapshotRefresh: IDLE_SNAPSHOT_REFRESH,
   })
 
@@ -126,15 +117,15 @@ const makePendingFileLoad = (
 
 /**
  * Owns one explicitly disposable snapshot paging session while publishing only a
- * fixed pair of immutable Effect Atom values.
+ * fixed pair of read-only Effect Atom values.
  */
 export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
-  readonly #registry: Registry.Registry
+  readonly #registry: AtomRegistry.AtomRegistry
   readonly #cache = new ReviewPageCache()
   readonly #modelAtom: Atom.Writable<ReviewSnapshotPageModel>
   readonly #releases: Array<() => void> = []
   readonly #inFlight = new Map<ReviewFileId, PendingFileLoad>()
-  readonly #failureCauses = new Map<ReviewFileId, unknown>()
+  readonly #failureCauses = new Map<ReviewFileId, TransportError>()
   readonly #manifestReplacementWaiters = new Set<PendingManifestReplacement>()
   #manifest: ReviewSnapshotManifest
   #runtime: ReviewSnapshotPageRuntime | null
@@ -146,14 +137,14 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
   #drainScheduled = false
   #disposed = false
 
-  /** Read-only immutable page state for React and non-React observers. */
+  /** Read-only page snapshot for React and non-React observers. */
   readonly projectionAtom: Atom.Atom<ReviewSnapshotPageProjection>
 
   /** Stable narrowed capability that omits manifest and lifecycle mutation. */
   readonly reader: ReviewSnapshotPageReader
 
   constructor(
-    registry: Registry.Registry,
+    registry: AtomRegistry.AtomRegistry,
     manifest: ReviewSnapshotManifest,
     runtime: ReviewSnapshotPageRuntime,
   ) {
@@ -209,7 +200,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
   readonly getFile = (fileId: ReviewFileId): ParsedDiffFile | null =>
     this.#disposed || this.#expired ? null : this.#cache.get(fileId)
 
-  /** Returns the latest immutable atom projection without relying on a React render. */
+  /** Returns the latest read-only atom projection without relying on a React render. */
   readonly getProjection = (): ReviewSnapshotPageProjection =>
     this.#registry.get(this.projectionAtom)
 
@@ -261,7 +252,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
     this.#persistentPins = new Set(fileIds)
     this.#cache.put([], this.#cachePins())
     if (this.#cache.stats().files !== previousFileCount) {
-      this.#publish({ files: immutableFiles(this.#cache.files()) })
+      this.#publish({ files: Object.freeze([...this.#cache.files()]) })
     }
   }
 
@@ -331,7 +322,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
       added = true
     }
     if (added) {
-      this.#publish({ loadingFileIds: immutableFileIds(this.#inFlight.keys()) })
+      this.#publish({ loadingFileIds: new Set(this.#inFlight.keys()) })
       this.#scheduleDrain()
     }
     await Promise.all(promises)
@@ -404,7 +395,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
         changed = true
       }
     }
-    if (changed) this.#publish({ fileErrors: immutableFileErrors(next) })
+    if (changed) this.#publish({ fileErrors: new Map(next) })
   }
 
   readonly #settleLoads = (loads: readonly PendingFileLoad[]): void => {
@@ -416,7 +407,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
       changed = true
     }
     if (changed && !this.#disposed) {
-      this.#publish({ loadingFileIds: immutableFileIds(this.#inFlight.keys()) })
+      this.#publish({ loadingFileIds: new Set(this.#inFlight.keys()) })
     }
   }
 
@@ -424,7 +415,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
     fileIds: readonly ReviewFileId[],
     message: string,
     generation: number,
-    cause?: unknown,
+    cause?: TransportError,
   ): void => {
     if (!this.#disposed && generation === this.#generation) {
       for (const fileId of fileIds) {
@@ -452,7 +443,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
     this.#settleLoads(affected)
     if (this.#expired || this.#disposed) return
     this.#expired = true
-    this.#publish({ files: immutableFiles([]), snapshotRefresh: REFRESHING_SNAPSHOT })
+    this.#publish({ files: Object.freeze([]), snapshotRefresh: REFRESHING_SNAPSHOT })
     const onExpired = this.#runtime?.onExpired
     if (onExpired === undefined) return
     try {
@@ -499,7 +490,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
           [...remaining],
           formatError(cause, LOAD_ERROR_FALLBACK),
           generation,
-          cause,
+          rendererTransportError(cause, "reviewSnapshots:getPage"),
         )
         return
       }
@@ -511,7 +502,13 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
       ) {
         return
       }
-      if (response["_tag"] === "expired") {
+      if (
+        Match.valueTags(response, {
+          expired: () => true,
+          fileTooLarge: () => false,
+          available: () => false,
+        })
+      ) {
         // oxlint-disable-next-line eslint/no-await-in-loop -- Expiry recovery must settle before this serialized queue can advance.
         await this.#expireSnapshot(generation)
         return
@@ -520,14 +517,19 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
         this.#failFileIds([...remaining], INCOMPLETE_PAGE_ERROR, generation)
         return
       }
-      if (response["_tag"] === "fileTooLarge") {
-        const fileId = response.file.fileId
+      const tooLarge = Match.valueTags(response, {
+        fileTooLarge: (value) => value,
+        expired: () => null,
+        available: () => null,
+      })
+      if (tooLarge !== null) {
+        const fileId = tooLarge.file.fileId
         if (!remaining.has(fileId) || !selection.includes(fileId)) {
           this.#failFileIds([...remaining], INCOMPLETE_PAGE_ERROR, generation)
           return
         }
         this.#publish({
-          tooLargeFileIds: immutableFileIds([...this.#projection().tooLargeFileIds, fileId]),
+          tooLargeFileIds: new Set([...this.#projection().tooLargeFileIds, fileId]),
         })
         this.#updateFileErrors([fileId], null, generation)
         remaining.delete(fileId)
@@ -540,10 +542,17 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
         continue
       }
 
-      const responseFileIds = new Set(response.files.map((file) => file.fileId))
+      const available = Match.valueTags(response, {
+        available: (value) => value,
+        expired: () => null,
+        fileTooLarge: () => null,
+      })
+      if (available === null) return
+
+      const responseFileIds = new Set(available.files.map((file) => file.fileId))
       if (
-        (response.files.length === 0 && response.nextCursor !== null) ||
-        response.files.some(
+        (available.files.length === 0 && available.nextCursor !== null) ||
+        available.files.some(
           (file) => !remaining.has(file.fileId) || !selection.includes(file.fileId),
         )
       ) {
@@ -552,28 +561,28 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
       }
 
       try {
-        this.#cache.put(response.files, this.#cachePins(responseFileIds))
-        this.#publish({ files: immutableFiles(this.#cache.files()) })
+        this.#cache.put(available.files, this.#cachePins(responseFileIds))
+        this.#publish({ files: Object.freeze([...this.#cache.files()]) })
       } catch (cause) {
         this.#failFileIds(
           [...remaining],
           formatError(cause, LOAD_ERROR_FALLBACK),
           generation,
-          cause,
+          rendererTransportError(cause, "reviewSnapshots:getPage"),
         )
         return
       }
 
-      const completed = response.files.flatMap((file) => {
+      const completed = available.files.flatMap((file) => {
         remaining.delete(file.fileId)
         const pending = this.#inFlight.get(file.fileId)
         return pending?.generation === generation ? [pending] : []
       })
       this.#settleLoads(completed)
 
-      if (response.nextCursor !== null) {
+      if (available.nextCursor !== null) {
         // Keep the exact selection paired with its opaque cursor.
-        cursor = response.nextCursor
+        cursor = available.nextCursor
         continue
       }
       if (remaining.size > 0) {
@@ -619,7 +628,7 @@ export class ReviewSnapshotPageSession implements ReviewSnapshotPageReader {
             batch.map((pending) => pending.fileId),
             formatError(cause, LOAD_ERROR_FALLBACK),
             first.generation,
-            cause,
+            rendererTransportError(cause, "reviewSnapshots:getPage"),
           )
         }
       }

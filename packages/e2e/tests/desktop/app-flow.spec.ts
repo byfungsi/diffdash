@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process"
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { _electron as electron, expect, type Locator, type Page, test } from "@playwright/test"
+import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
+import { installExecutableFixture, prependExecutablePath } from "../helpers/executable-fixture"
 
 const desktopRoot = join(process.cwd(), "../desktop")
 
@@ -28,7 +30,7 @@ test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window wi
       DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
       DIFFDASH_E2E_FAKE_GIT_REMOTE: "https://git.fixture.test/platform/backend/service.git",
       DIFFDASH_E2E_HIDDEN: "1",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -128,13 +130,14 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
       DIFFDASH_E2E_FAKE_GIT_PROVIDER: "1",
       DIFFDASH_E2E_FAKE_GIT_REMOTE: "https://git.fixture.test/platform/backend/service.git",
       DIFFDASH_E2E_HIDDEN: "1",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await app.evaluate(({ BrowserWindow }) => {
       const targetWindow = BrowserWindow.getAllWindows()[0]
@@ -158,7 +161,7 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
       })
     expect(
       await window.evaluate(async () => {
-        const catalog = await globalThis.window.diffDash.agentProviders.getCatalog()
+        const catalog = await globalThis.window.diffDashForE2e.agentProviders.getCatalog()
         return {
           fixture: catalog.providers.find(({ id }) => id === "fixture-agent"),
           autoWalkthrough: catalog.autoCandidates.walkthrough,
@@ -237,7 +240,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: `url.${pullRequest.remote}.insteadOf`,
     GIT_CONFIG_VALUE_0: "git@github.com:byfungsi/diffdash.git",
-    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    PATH: prependExecutablePath(fakeBin),
     REAL_GIT_PATH: "/usr/bin/git",
     XDG_CONFIG_HOME: xdgConfigHome,
   }
@@ -250,12 +253,13 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window, { telemetryEnabled: false })
+    await window.evaluate(installDiffDashE2eApi)
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible()),
       )
       .toBe(false)
-    await window.evaluate(() => globalThis.window.diffDash.navigation.activateWindow())
+    await window.evaluate(() => globalThis.window.diffDashForE2e.navigation.activateWindow())
     await expect
       .poll(() =>
         app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible()),
@@ -263,12 +267,12 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .toBe(false)
     expect(
       await window.evaluate(async () => {
-        const settings = await globalThis.window.diffDash.settings.get()
+        const settings = await globalThis.window.diffDashForE2e.settings.get()
         return {
-          onboardingCompleted: (await globalThis.window.diffDash.appState.get())
+          onboardingCompleted: (await globalThis.window.diffDashForE2e.appState.get())
             .onboardingCompleted,
           telemetryEnabled: settings.telemetryEnabled,
-          diffDashType: typeof globalThis.window.diffDash,
+          diffDashType: typeof globalThis.window.diffDashForE2e,
           nodeProcessType: typeof Reflect.get(globalThis.window, "process"),
           nodeRequireType: typeof Reflect.get(globalThis.window, "require"),
         }
@@ -282,24 +286,34 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     })
     const malformedIpcErrors = await window.evaluate(async () => {
       const requests = [
-        Reflect.apply(globalThis.window.diffDash.analytics.capture, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewThreads.list, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewThreads.create, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewThreads.addUserMessage, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewThreads.get, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewThreads.runAgent, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.settings.update, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.appState.update, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.repositories.link, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.hostedRepositories.searchRepositories, undefined, [
+        Reflect.apply(globalThis.window.diffDashForE2e.analytics.capture, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewThreads.list, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewThreads.create, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewThreads.addUserMessage, undefined, [
           null,
         ]),
-        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.acquireHosted, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.acquireLocal, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.getPage, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.reviewSnapshots.search, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.localWalkthroughs.get, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDash.localWalkthroughs.generate, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewThreads.get, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewThreads.runAgent, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.settings.update, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.appState.update, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.repositories.link, undefined, [null]),
+        Reflect.apply(
+          globalThis.window.diffDashForE2e.hostedRepositories.searchRepositories,
+          undefined,
+          [null],
+        ),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.acquireHosted, undefined, [
+          null,
+        ]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.acquireLocal, undefined, [
+          null,
+        ]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.getPage, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.search, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.get, undefined, [null]),
+        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.generate, undefined, [
+          null,
+        ]),
       ]
       return Promise.all(
         requests.map(async (request) => {
@@ -483,15 +497,19 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     })
 
     const restartedWindow = await app.firstWindow()
+    await restartedWindow.evaluate(installDiffDashE2eApi)
     await expect(restartedWindow.getByRole("button", { name: "Continue to DiffDash" })).toHaveCount(
       0,
     )
     expect(
       await restartedWindow.evaluate(async () => {
-        const settings = await globalThis.window.diffDash.settings.get()
+        const settings = await globalThis.window.diffDashForE2e.settings.get()
         return {
           appearance: settings.appearance,
-          provider: settings.routes.walkthrough,
+          provider:
+            settings.selections.walkthrough._tag === "Automatic"
+              ? "auto"
+              : settings.selections.walkthrough.providerId,
           telemetryEnabled: settings.telemetryEnabled,
         }
       }),
@@ -554,7 +572,7 @@ test("opens local working tree review from CLI argument", async ({
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -603,7 +621,7 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_CLAUDE_WALKTHROUGH_INVALID: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -650,7 +668,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -726,7 +744,7 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -796,7 +814,7 @@ for (const fixture of [
         DIFFDASH_E2E_HIDDEN: "1",
         FAKE_REPO_ROOT: localRepo,
         HOME: home,
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        PATH: prependExecutablePath(fakeBin),
         XDG_CONFIG_HOME: xdgConfigHome,
       },
     })
@@ -854,7 +872,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+      PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -900,7 +918,7 @@ test("forwards a CLI command to the running DiffDash instance", async ({
     ...process.env,
     DIFFDASH_E2E_HIDDEN: "1",
     FAKE_REPO_ROOT: localRepo,
-    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    PATH: prependExecutablePath(fakeBin),
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const app = await electron.launch({
@@ -982,7 +1000,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     DIFFDASH_E2E_HIDDEN: "1",
     DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
     FAKE_USE_REAL_GIT: "1",
-    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    PATH: prependExecutablePath(fakeBin),
     REAL_GIT_PATH: "/usr/bin/git",
     XDG_CONFIG_HOME: xdgConfigHome,
   }
@@ -1106,7 +1124,7 @@ test("recreates the closed macOS window for a forwarded CLI command", async ({
     ...process.env,
     DIFFDASH_E2E_HIDDEN: "1",
     FAKE_REPO_ROOT: localRepo,
-    PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    PATH: prependExecutablePath(fakeBin),
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const app = await electron.launch({
@@ -1155,12 +1173,12 @@ test("recreates the closed macOS window for a forwarded CLI command", async ({
 
 const installFakeCli = async (directory: string) => {
   await Promise.all([
-    writeExecutable(join(directory, "diffdash"), fakeDiffDashScript),
-    writeExecutable(join(directory, "gh"), fakeGhScript),
-    writeExecutable(join(directory, "git"), fakeGitScript),
-    writeFakeAgentExecutable(join(directory, "codex"), "codex 0.1.0", fakeCodexScript),
-    writeFakeAgentExecutable(join(directory, "claude"), "claude 0.1.0", fakeClaudeScript),
-    writeFakeAgentExecutable(join(directory, "opencode"), "opencode 0.1.0", fakeOpenCodeScript),
+    installExecutableFixture(directory, "diffdash", fakeDiffDashScript),
+    installExecutableFixture(directory, "gh", fakeGhScript),
+    installExecutableFixture(directory, "git", fakeGitScript),
+    installExecutableFixture(directory, "codex", fakeCodexScript),
+    installExecutableFixture(directory, "claude", fakeClaudeScript),
+    installExecutableFixture(directory, "opencode", fakeOpenCodeScript),
   ])
 }
 
@@ -1236,27 +1254,6 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
   return composer
 }
 
-const writeExecutable = async (path: string, content: string) => {
-  await writeFile(path, content, "utf8")
-  await chmod(path, 0o755)
-}
-
-const writeFakeAgentExecutable = async (path: string, version: string, script: string) => {
-  await Promise.all([
-    writeExecutable(
-      path,
-      `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf '%s\\n' '${version}'
-  exit 0
-fi
-exec /usr/bin/env node "$0.mjs" "$@"
-`,
-    ),
-    writeFile(`${path}.mjs`, script, "utf8"),
-  ])
-}
-
 const countLogLines = async (path: string) => {
   try {
     return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).length
@@ -1268,7 +1265,7 @@ const countLogLines = async (path: string) => {
 const readReviewPersistenceSnapshot = (databasePath: string) => {
   const database = new DatabaseSync(databasePath, { readOnly: true })
   try {
-    const repositories = records(
+    const repositories = parseSqliteRows(
       database
         .prepare(
           `SELECT id, provider, owner, name, remote_url, local_path, is_favorite
@@ -1278,7 +1275,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
         )
         .all(),
     )
-    const workspaceStates = records(
+    const workspaceStates = parseSqliteRows(
       database
         .prepare(
           `SELECT repo_id, active_ribbon, selected_review_target_json, updated_at
@@ -1286,7 +1283,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
         )
         .all(),
     )
-    const runs = records(
+    const runs = parseSqliteRows(
       database
         .prepare(
           `SELECT run.id, run.thread_id, run.review_key, run.base_sha, run.head_sha,
@@ -1319,7 +1316,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
       startedAt: stringField(row, "started_at"),
       completedAt: nullableStringField(row, "completed_at"),
     }))
-    const artifacts = records(
+    const artifacts = parseSqliteRows(
       database
         .prepare(
           `SELECT id, run_id, thread_id, type, title, content, content_digest, metadata_json,
@@ -1340,7 +1337,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
       originalSize: numberField(row, "original_size"),
       createdAt: stringField(row, "created_at"),
     }))
-    const memory = records(
+    const memory = parseSqliteRows(
       database
         .prepare(
           `SELECT thread_id, summary, important_artifact_ids_json, updated_at,
@@ -1357,7 +1354,7 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
       summaryAlgorithm: stringField(row, "summary_algorithm"),
       summaryVersion: numberField(row, "summary_version"),
     }))
-    const agentMessageRunIds = records(
+    const agentMessageRunIds = parseSqliteRows(
       database
         .prepare(
           `SELECT agent_run_id FROM review_thread_messages
@@ -1372,23 +1369,46 @@ const readReviewPersistenceSnapshot = (databasePath: string) => {
   }
 }
 
-const records = (rows: readonly unknown[]): readonly Readonly<Record<string, unknown>>[] =>
+type SqliteValue = null | number | bigint | string | Uint8Array
+
+interface SqliteRow {
+  readonly [columnName: string]: SqliteValue
+}
+
+type JsonValue = string | number | boolean | null | JsonObject | readonly JsonValue[]
+
+interface JsonObject {
+  readonly [key: string]: JsonValue
+}
+
+const parseSqliteRows = (rows: readonly unknown[]): readonly SqliteRow[] =>
   rows.map((row) => {
     if (typeof row !== "object" || row === null || Array.isArray(row)) {
       throw new Error("SQLite returned a non-record row")
     }
-    const record: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(row)) record[key] = value
-    return record
+    const parsed: { [columnName: string]: SqliteValue } = {}
+    for (const [key, value] of Object.entries(row)) {
+      if (
+        value !== null &&
+        typeof value !== "string" &&
+        typeof value !== "number" &&
+        typeof value !== "bigint" &&
+        !(value instanceof Uint8Array)
+      ) {
+        throw new Error(`SQLite field ${key} has an unsupported value`)
+      }
+      parsed[key] = value
+    }
+    return parsed
   })
 
-const stringField = (row: Readonly<Record<string, unknown>>, key: string) => {
+const stringField = (row: SqliteRow, key: string) => {
   const value = row[key]
   if (typeof value !== "string") throw new Error(`SQLite field ${key} is not a string`)
   return value
 }
 
-const nullableStringField = (row: Readonly<Record<string, unknown>>, key: string) => {
+const nullableStringField = (row: SqliteRow, key: string) => {
   const value = row[key]
   if (value !== null && typeof value !== "string") {
     throw new Error(`SQLite field ${key} is not a nullable string`)
@@ -1396,21 +1416,40 @@ const nullableStringField = (row: Readonly<Record<string, unknown>>, key: string
   return value
 }
 
-const numberField = (row: Readonly<Record<string, unknown>>, key: string) => {
+const numberField = (row: SqliteRow, key: string) => {
   const value = row[key]
   if (typeof value !== "number") throw new Error(`SQLite field ${key} is not a number`)
   return value
 }
 
-const jsonField = (row: Readonly<Record<string, unknown>>, key: string): unknown =>
-  JSON.parse(stringField(row, key)) as unknown
+const jsonField = (row: SqliteRow, key: string): JsonValue => {
+  const source = stringField(row, key)
+  let value: unknown
+  try {
+    value = JSON.parse(source)
+  } catch {
+    throw new Error(`SQLite field ${key} is not valid JSON`)
+  }
+  if (!isJsonValue(value)) throw new Error(`SQLite field ${key} is not valid JSON`)
+  return value
+}
 
-const stringArrayJsonField = (row: Readonly<Record<string, unknown>>, key: string) => {
-  const value: unknown = jsonField(row, key)
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+const stringArrayJsonField = (row: SqliteRow, key: string): readonly string[] => {
+  const value = jsonField(row, key)
+  if (!Array.isArray(value)) {
     throw new Error(`SQLite field ${key} is not a string array`)
   }
-  return value
+  return value.map((item) => {
+    if (typeof item !== "string") throw new Error(`SQLite field ${key} is not a string array`)
+    return item
+  })
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "number") return true
+  if (typeof value === "boolean") return true
+  if (Array.isArray(value)) return value.every(isJsonValue)
+  return typeof value === "object" && value !== null && Object.values(value).every(isJsonValue)
 }
 
 const installPullRequestRepository = async (source: string, remote: string) => {

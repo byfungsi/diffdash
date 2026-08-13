@@ -1,13 +1,22 @@
 import { Effect, Predicate, Schema } from "effect"
-import { ParsedDiffFile } from "./diff"
-import { getHiddenDiffFileReason } from "./diff-file-filters"
+import { DiffFileVisibility, ParsedDiffFile } from "./diff"
 import { type HostedReviewLocator, makeHostedReviewKey } from "./git-provider"
 import { changedLineCount, isVeryLargeDiff } from "./large-diff-policy"
-import { makeReviewFilePatchHash } from "./review-identity"
+import {
+  makeReviewFilePatchHash,
+  ReviewKey,
+  ReviewProjectId,
+  ReviewRevision,
+  type ReviewKey as ReviewKeyType,
+  type ReviewProjectId as ReviewProjectIdType,
+  type ReviewRevision as ReviewRevisionType,
+} from "./review-identity"
 import { reviewPathDirectory } from "./review-path"
+import { RepositoryRelativePath } from "./repository-path"
+import { WalkthroughOperationPromptVersion } from "./walkthrough-operation"
 
 /** Prompt/cache version for the bounded hunk-backed walkthrough contract. */
-export const WALKTHROUGH_PROMPT_VERSION = "walkthrough-v4"
+export const WALKTHROUGH_PROMPT_VERSION = WalkthroughOperationPromptVersion.make("walkthrough-v4")
 
 /** Default safety budget for AI walkthrough prompt preparation. */
 export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
@@ -18,25 +27,62 @@ export const DEFAULT_WALKTHROUGH_PROMPT_BUDGET = {
 } as const
 
 const MAX_SAMPLED_FILE_TREE_CHARS = 60_000
+type WalkthroughInput = Schema.Json | object | undefined
 
 /** Risk level assigned to a walkthrough stop. */
-export const WalkthroughRisk = Schema.Literal("critical", "review", "support")
+export const WalkthroughRisk = Schema.Literals(["critical", "review", "support"])
 
 /** Risk level assigned to a walkthrough stop. */
 export type WalkthroughRisk = typeof WalkthroughRisk.Type
 
+/** Stable identity for one conceptual chapter within a walkthrough artifact. */
+export const WalkthroughChapterId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("WalkthroughChapterId"),
+)
+
+/** Stable identity for one conceptual chapter within a walkthrough artifact. */
+export type WalkthroughChapterId = typeof WalkthroughChapterId.Type
+
+/** Stable identity for one ordered review stop within a walkthrough artifact. */
+export const WalkthroughStopId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("WalkthroughStopId"),
+)
+
+/** Stable identity for one ordered review stop within a walkthrough artifact. */
+export type WalkthroughStopId = typeof WalkthroughStopId.Type
+
+/** Stable identity for one lower-priority support item within a walkthrough artifact. */
+export const WalkthroughSupportItemId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("WalkthroughSupportItemId"),
+)
+
+/** Stable identity for one lower-priority support item within a walkthrough artifact. */
+export type WalkthroughSupportItemId = typeof WalkthroughSupportItemId.Type
+
+/** Stable identity for one deterministic review hunk within a walkthrough scope. */
+export const WalkthroughHunkId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("WalkthroughHunkId"),
+)
+
+/** Stable identity for one deterministic review hunk within a walkthrough scope. */
+export type WalkthroughHunkId = typeof WalkthroughHunkId.Type
+
 /** One ordered narrative review stop backed by deterministic hunk IDs. */
 export class WalkthroughStop extends Schema.Class<WalkthroughStop>("WalkthroughStop")({
-  id: Schema.String,
+  id: WalkthroughStopId,
   title: Schema.String,
   summary: Schema.String,
   risk: WalkthroughRisk,
-  hunkIds: Schema.Array(Schema.String),
+  hunkIds: Schema.Array(WalkthroughHunkId),
 }) {}
 
 /** A conceptual group of walkthrough stops in reviewer-oriented order. */
 export class WalkthroughChapter extends Schema.Class<WalkthroughChapter>("WalkthroughChapter")({
-  id: Schema.String,
+  id: WalkthroughChapterId,
   title: Schema.String,
   summary: Schema.String,
   stops: Schema.Array(WalkthroughStop),
@@ -46,14 +92,14 @@ export class WalkthroughChapter extends Schema.Class<WalkthroughChapter>("Walkth
 export class WalkthroughSupportItem extends Schema.Class<WalkthroughSupportItem>(
   "WalkthroughSupportItem",
 )({
-  id: Schema.String,
+  id: WalkthroughSupportItemId,
   title: Schema.String,
   reason: Schema.String,
-  hunkIds: Schema.Array(Schema.String),
+  hunkIds: Schema.Array(WalkthroughHunkId),
 }) {}
 
 /** Strategy used to prepare source material for walkthrough generation. */
-export const WalkthroughGenerationMode = Schema.Literal("standard", "sampled-tree")
+export const WalkthroughGenerationMode = Schema.Literals(["standard", "sampled-tree"])
 
 /** Strategy used to prepare source material for walkthrough generation. */
 export type WalkthroughGenerationMode = typeof WalkthroughGenerationMode.Type
@@ -80,23 +126,23 @@ export class Walkthrough extends Schema.Class<Walkthrough>("Walkthrough")({
 
 /** Cached walkthrough artifact keyed by a concrete review target and prompt version. */
 export class StoredWalkthrough extends Schema.Class<StoredWalkthrough>("StoredWalkthrough")({
-  repoId: Schema.String,
+  repoId: ReviewProjectId,
   prNumber: Schema.NullOr(Schema.Number),
-  reviewKey: Schema.String,
-  baseSha: Schema.String,
-  headSha: Schema.String,
-  promptVersion: Schema.String,
+  reviewKey: ReviewKey,
+  baseSha: ReviewRevision,
+  headSha: ReviewRevision,
+  promptVersion: WalkthroughOperationPromptVersion,
   walkthrough: Walkthrough,
   createdAt: Schema.String,
 }) {}
 
 /** Lookup key for cached walkthrough artifacts. */
 export interface WalkthroughCacheKey {
-  readonly repoId: string
-  readonly reviewKey: string
-  readonly baseSha: string
-  readonly headSha: string
-  readonly promptVersion: string
+  readonly repoId: ReviewProjectIdType
+  readonly reviewKey: ReviewKeyType
+  readonly baseSha: ReviewRevisionType
+  readonly headSha: ReviewRevisionType
+  readonly promptVersion: WalkthroughOperationPromptVersion
 }
 
 /** Input for creating or overwriting a cached walkthrough artifact. */
@@ -106,14 +152,17 @@ export interface SaveWalkthroughInput extends WalkthroughCacheKey {
 }
 
 /** Deterministic hunk metadata exposed to the walkthrough generator and renderer. */
-export interface WalkthroughHunkDigest {
-  readonly id: string
-  readonly path: string
-  readonly header: string
-  readonly additions: number
-  readonly deletions: number
-  readonly synthetic: boolean
-}
+export const WalkthroughHunkDigest = Schema.Struct({
+  id: WalkthroughHunkId,
+  path: RepositoryRelativePath,
+  header: Schema.String,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  synthetic: Schema.Boolean,
+})
+
+/** Deterministic hunk metadata exposed to the walkthrough generator and renderer. */
+export type WalkthroughHunkDigest = typeof WalkthroughHunkDigest.Type
 
 /** Prompt input prepared from a parsed diff after filtering and size bounding. */
 export interface WalkthroughPromptInput {
@@ -133,28 +182,31 @@ export interface WalkthroughPromptBudget {
 }
 
 /** Summary of prompt filtering and truncation applied before generation. */
-export interface WalkthroughPromptStats {
-  readonly totalFiles: number
-  readonly selectedFiles: number
-  readonly hiddenFiles: number
-  readonly omittedFiles: number
-  readonly totalHunks: number
-  readonly selectedHunks: number
-  readonly omittedHunks: number
-  readonly truncatedHunks: number
-  readonly truncatedByCharBudget: boolean
-  readonly usedHiddenFallback: boolean
-}
+export const WalkthroughPromptStats = Schema.Struct({
+  totalFiles: Schema.Number,
+  selectedFiles: Schema.Number,
+  hiddenFiles: Schema.Number,
+  omittedFiles: Schema.Number,
+  totalHunks: Schema.Number,
+  selectedHunks: Schema.Number,
+  omittedHunks: Schema.Number,
+  truncatedHunks: Schema.Number,
+  truncatedByCharBudget: Schema.Boolean,
+  usedHiddenFallback: Schema.Boolean,
+})
+
+/** Summary of prompt filtering and truncation applied before generation. */
+export type WalkthroughPromptStats = typeof WalkthroughPromptStats.Type
 
 /** Review scope segment used in deterministic hunk IDs for one exact hosted review. */
 export const walkthroughHostedReviewScope = (review: HostedReviewLocator) =>
   `hosted-review:${makeHostedReviewKey(review)}`
 
 /** Review scope segment used in deterministic hunk IDs for local working tree changes. */
-export const walkthroughLocalDiffScope = (headSha: string) => `local-diff:${headSha}`
+export const walkthroughLocalDiffScope = (headSha: ReviewRevisionType) => `local-diff:${headSha}`
 
 /** Stable walkthrough scope for one immutable repository comparison. */
-export const walkthroughRepositoryComparisonScope = (reviewKey: string) =>
+export const walkthroughRepositoryComparisonScope = (reviewKey: ReviewKeyType) =>
   `repository-comparison:${reviewKey}`
 
 /** Recoverable validation failure for generated walkthrough output. */
@@ -216,8 +268,8 @@ export const prepareWalkthroughPromptInput = (
   budget: WalkthroughPromptBudget = DEFAULT_WALKTHROUGH_PROMPT_BUDGET,
 ): Effect.Effect<WalkthroughPromptInput, WalkthroughPromptPreparationError> => {
   const validBudget = normalizePromptBudget(budget)
-  const hiddenFiles = files.filter((file) => getHiddenDiffFileReason(file) !== null)
-  const visibleFiles = files.filter((file) => getHiddenDiffFileReason(file) === null)
+  const hiddenFiles = files.filter((file) => DiffFileVisibility.guards.Hidden(file.visibility))
+  const visibleFiles = files.filter((file) => DiffFileVisibility.guards.Visible(file.visibility))
   const usedHiddenFallback = visibleFiles.length === 0 && files.length > 0
   const candidateFiles = usedHiddenFallback ? files : visibleFiles
   const totalHunks = files.reduce((total, file) => total + fileReviewUnitCount(file), 0)
@@ -280,10 +332,10 @@ export const prepareWalkthroughPromptInput = (
  * Decodes generated walkthrough output, validates hunk references, and adds omitted hunks to Support.
  */
 export const validateWalkthrough = (
-  input: unknown,
+  input: WalkthroughInput,
   hunkDigest: readonly WalkthroughHunkDigest[],
 ): Effect.Effect<Walkthrough, WalkthroughValidationError> =>
-  Schema.decodeUnknown(Walkthrough)(normalizeWalkthroughInput(input)).pipe(
+  Schema.decodeUnknownEffect(Walkthrough)(normalizeWalkthroughInput(input)).pipe(
     Effect.mapError(() =>
       WalkthroughValidationError.make({
         reason: "invalid_shape",
@@ -296,7 +348,7 @@ export const validateWalkthrough = (
 /** Creates focused file patches for the selected hunk IDs. */
 export const focusFilesForWalkthroughHunks = (
   files: readonly ParsedDiffFile[],
-  hunkIds: readonly string[],
+  hunkIds: readonly WalkthroughHunkId[],
   scope: string,
 ): readonly ParsedDiffFile[] => {
   const selectedIds = new Set(hunkIds)
@@ -320,7 +372,7 @@ export const focusFilesForWalkthroughHunks = (
     const hunks = selectedHunks.map((entry) => entry.hunk)
 
     return [
-      ParsedDiffFile.make({
+      Schema.decodeSync(ParsedDiffFile)({
         ...file,
         patchHash: makeReviewFilePatchHash({
           hunks,
@@ -328,7 +380,9 @@ export const focusFilesForWalkthroughHunks = (
           path: file.path,
           status: file.status,
         }),
-        reviewKey: `${file.reviewKey}:${selectedHunks.map((entry) => entry.id).join(",")}`,
+        reviewKey: ReviewKey.make(
+          `${file.reviewKey}:${selectedHunks.map((entry) => entry.id).join(",")}`,
+        ),
         additions,
         deletions,
         hunks,
@@ -341,7 +395,7 @@ export const focusFilesForWalkthroughHunks = (
 /** Summarizes selected hunk IDs into path-level line totals for sidebar rows. */
 export const summarizeWalkthroughHunksByPath = (
   hunkDigest: readonly WalkthroughHunkDigest[],
-  hunkIds: readonly string[],
+  hunkIds: readonly WalkthroughHunkId[],
 ) => {
   const selectedIds = new Set(hunkIds)
   const order: string[] = []
@@ -366,7 +420,7 @@ export const summarizeWalkthroughHunksByPath = (
     }
   }
 
-  return order.map((path) => totalsByPath.get(path)).filter(isDefined)
+  return order.map((path) => totalsByPath.get(path)).filter(Predicate.isNotUndefined)
 }
 
 /** Flattens walkthrough chapters into globally ordered stops. */
@@ -627,7 +681,7 @@ const validateWalkthroughHunkCoverage = (
 ): Effect.Effect<Walkthrough, WalkthroughValidationError> => {
   const expectedIds = new Set(hunkDigest.map((hunk) => hunk.id))
   const omittedIds = new Set(expectedIds)
-  const seenIds = new Set<string>()
+  const seenIds = new Set<WalkthroughHunkId>()
   const details: string[] = []
 
   if (walkthrough.chapters.length === 0) {
@@ -676,7 +730,7 @@ const validateWalkthroughHunkCoverage = (
       support: [
         ...walkthrough.support,
         WalkthroughSupportItem.make({
-          id: "support-omitted-hunks",
+          id: WalkthroughSupportItemId.make("support-omitted-hunks"),
           title: "Other changes",
           reason: "Not included in the generated walkthrough.",
           hunkIds: [...omittedIds],
@@ -686,18 +740,18 @@ const validateWalkthroughHunkCoverage = (
   )
 }
 
-const normalizeWalkthroughInput = (input: unknown): unknown => {
-  if (!Predicate.isReadonlyRecord(input)) return input
+const normalizeWalkthroughInput = (input: WalkthroughInput): WalkthroughInput => {
+  if (!Predicate.isReadonlyObject(input)) return input
   if ("support" in input && input.support !== undefined) return input
   return { ...input, support: [] }
 }
 
 const validateHunkIdList = (
-  hunkIds: readonly string[],
+  hunkIds: readonly WalkthroughHunkId[],
   label: string,
-  expectedIds: ReadonlySet<string>,
-  omittedIds: Set<string>,
-  seenIds: Set<string>,
+  expectedIds: ReadonlySet<WalkthroughHunkId>,
+  omittedIds: Set<WalkthroughHunkId>,
+  seenIds: Set<WalkthroughHunkId>,
   details: string[],
 ) => {
   if (hunkIds.length === 0) {
@@ -720,8 +774,8 @@ const validateHunkIdList = (
   })
 }
 
-const walkthroughHunkId = (path: string, scope: string, ordinal: number) =>
-  `${path}:${scope}:h${ordinal}`
+const walkthroughHunkId = (path: string, scope: string, ordinal: number): WalkthroughHunkId =>
+  WalkthroughHunkId.make(`${path}:${scope}:h${ordinal}`)
 
 /** Builds the compact hunk alias used by walkthrough prompts and provider responses. */
 export const makeWalkthroughHunkAlias = (index: number) => `h${index + 1}`
@@ -740,5 +794,3 @@ const fileHeader = (file: ParsedDiffFile) => {
   const firstHunkIndex = lines.findIndex((line) => line.startsWith("@@ "))
   return firstHunkIndex >= 0 ? lines.slice(0, firstHunkIndex) : lines
 }
-
-const isDefined = <A>(value: A | undefined): value is A => value !== undefined

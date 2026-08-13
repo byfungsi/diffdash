@@ -1,5 +1,5 @@
-import { Error as PlatformError, FileSystem, Path } from "@effect/platform"
-import { Context, Effect, Layer, Ref } from "effect"
+import { Context, Effect, FileSystem, Layer, Match, Path, Ref, Schema } from "effect"
+import type { PlatformError } from "effect"
 
 const textEncoder = new TextEncoder()
 
@@ -10,15 +10,14 @@ export interface FileStorageOperations {
   ) => Effect.Effect<string | null, PlatformError.PlatformError>
   readonly writePrettyJsonFile: (
     path: string,
-    value: unknown,
+    value: Schema.Json,
   ) => Effect.Effect<void, PlatformError.PlatformError>
 }
 
 /** Effect Platform-backed durable file storage for application settings and state. */
-export class FileStorage extends Context.Tag("@diffdash/settings/FileStorage")<
-  FileStorage,
-  FileStorageOperations
->() {
+export class FileStorage extends Context.Service<FileStorage, FileStorageOperations>()(
+  "@diffdash/settings/FileStorage",
+) {
   static readonly layer = Layer.effect(
     FileStorage,
     Effect.gen(function* () {
@@ -30,7 +29,11 @@ export class FileStorage extends Context.Tag("@diffdash/settings/FileStorage")<
       ) {
         return yield* fileSystem.readFileString(path).pipe(
           Effect.catchIf(
-            (error) => error instanceof PlatformError.SystemError && error.reason === "NotFound",
+            (error) =>
+              Match.value(error.reason).pipe(
+                Match.when({ _tag: "NotFound" }, () => true),
+                Match.orElse(() => false),
+              ),
             () => Effect.succeed(null),
           ),
         )
@@ -38,7 +41,7 @@ export class FileStorage extends Context.Tag("@diffdash/settings/FileStorage")<
 
       const writePrettyJsonFile = Effect.fn("FileStorage.writePrettyJsonFile")(function* (
         path: string,
-        value: unknown,
+        value: Schema.Json,
       ) {
         const content = textEncoder.encode(`${JSON.stringify(value, null, 2)}\n`)
         const directory = pathService.dirname(path)
@@ -61,7 +64,7 @@ export class FileStorage extends Context.Tag("@diffdash/settings/FileStorage")<
           }),
         ).pipe(
           Effect.onError(() => removeTemporaryFile.pipe(Effect.orDie)),
-          Effect.zipRight(
+          Effect.andThen(
             fileSystem
               .rename(temporaryPath, path)
               .pipe(Effect.onError(() => removeTemporaryFile.pipe(Effect.orDie))),

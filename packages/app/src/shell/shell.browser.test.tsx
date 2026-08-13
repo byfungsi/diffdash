@@ -22,6 +22,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectStateRestoration")()
   })
 
+  it("keeps a user review selection made while workspace restoration is loading", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectRestoreRace")()
+  })
+
   it("shows a clean working tree independently from an empty hosted review list", async () => {
     expect.hasAssertions()
     await appBrowserScenario("cleanProjectReviews")()

@@ -5,27 +5,27 @@ import {
 } from "./renderer-layout-settings"
 
 /** Current persisted settings format. */
-export const AI_SETTINGS_VERSION = 7 as const
+export const AI_SETTINGS_VERSION = 8 as const
 
 /** Application appearance preference. */
-export const Appearance = Schema.Literal("light", "dark", "system")
+export const Appearance = Schema.Literals(["light", "dark", "system"])
 
 /** Application appearance selected in user settings. */
 export type Appearance = typeof Appearance.Type
 
 /** Palette available when the application uses a light color scheme. */
-export const LightTheme = Schema.Literal("diffdash", "catppuccin-latte")
+export const LightTheme = Schema.Literals(["diffdash", "catppuccin-latte"])
 
 /** Palette available when the application uses a light color scheme. */
 export type LightTheme = typeof LightTheme.Type
 
 /** Palette available when the application uses a dark color scheme. */
-export const DarkTheme = Schema.Literal(
+export const DarkTheme = Schema.Literals([
   "diffdash",
   "catppuccin-frappe",
   "catppuccin-macchiato",
   "catppuccin-mocha",
-)
+])
 
 /** Palette available when the application uses a dark color scheme. */
 export type DarkTheme = typeof DarkTheme.Type
@@ -43,12 +43,12 @@ export const DEFAULT_THEME_PREFERENCES = ThemePreferences.make({
 })
 
 /** Syntax-highlighting theme available when the application uses a light color scheme. */
-export const LightCodeTheme = Schema.Literal(
+export const LightCodeTheme = Schema.Literals([
   "rose-pine-dawn",
   "catppuccin-latte",
   "github-light-default",
   "pierre-light-soft",
-)
+])
 
 /** Syntax-highlighting theme available when the application uses a light color scheme. */
 export type LightCodeTheme = typeof LightCodeTheme.Type
@@ -57,7 +57,7 @@ export type LightCodeTheme = typeof LightCodeTheme.Type
 export const DIFFDASH_DARK_CODE_THEME = "diffdash-dark" as const
 
 /** Syntax-highlighting theme available when the application uses a dark color scheme. */
-export const DarkCodeTheme = Schema.Literal(
+export const DarkCodeTheme = Schema.Literals([
   DIFFDASH_DARK_CODE_THEME,
   "rose-pine-moon",
   "catppuccin-frappe",
@@ -65,7 +65,7 @@ export const DarkCodeTheme = Schema.Literal(
   "catppuccin-mocha",
   "github-dark-default",
   "pierre-dark-soft",
-)
+])
 
 /** Syntax-highlighting theme available when the application uses a dark color scheme. */
 export type DarkCodeTheme = typeof DarkCodeTheme.Type
@@ -85,40 +85,58 @@ export const DEFAULT_CODE_THEME_PREFERENCES = CodeThemePreferences.make({
 })
 
 /** Preferred layout for rendered source diffs. */
-export const DiffViewMode = Schema.Literal("auto", "unified", "split")
+export const DiffViewMode = Schema.Literals(["auto", "unified", "split"])
 
 /** Preferred layout for rendered source diffs. */
 export type DiffViewMode = typeof DiffViewMode.Type
 
-/** Automatic model quality used by capability routing. */
-export const AutoQuality = Schema.Literal("fast", "balanced", "best")
+/** Stable agent capabilities independently configured and executed by DiffDash. */
+export const AgentCapability = Schema.Literals(["walkthrough", "review-thread"])
 
-/** Automatic model quality used by capability routing. */
-export type AutoQuality = typeof AutoQuality.Type
+/** Stable agent capabilities independently configured and executed by DiffDash. */
+export type AgentCapability = typeof AgentCapability.Type
 
-/** A capability route selected automatically or pinned to an open provider ID. */
-export const AICapabilityRoute = Schema.String.pipe(Schema.minLength(1))
+/** Provider-neutral model quality used by automatic capability routing. */
+export const AgentModelQuality = Schema.Literals(["fast", "balanced", "best"])
 
-/** A capability route selected automatically or pinned to an open provider ID. */
-export type AICapabilityRoute = typeof AICapabilityRoute.Type
+/** Provider-neutral model quality used by automatic capability routing. */
+export type AgentModelQuality = typeof AgentModelQuality.Type
 
-/** Independent provider routes for each agent capability. */
-export const AICapabilityRoutes = Schema.Struct({
-  walkthrough: AICapabilityRoute,
-  reviewThread: AICapabilityRoute,
+/** Provider identity persisted independently of installed provider packages. */
+export const AIProviderId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("AIProviderId"),
+)
+
+/** Provider identity persisted independently of installed provider packages. */
+export type AIProviderId = typeof AIProviderId.Type
+
+/** Provider-owned model identity persisted independently of provider packages. */
+export const AIModelId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.brand("AIModelId"),
+)
+
+/** Provider-owned model identity persisted independently of provider packages. */
+export type AIModelId = typeof AIModelId.Type
+
+/** Complete routing choice for one agent capability. */
+export const AIAgentSelection = Schema.TaggedUnion({
+  Automatic: { quality: AgentModelQuality },
+  Pinned: { providerId: AIProviderId, modelId: Schema.NullOr(AIModelId) },
 })
 
-/** Independent provider routes for each agent capability. */
-export type AICapabilityRoutes = typeof AICapabilityRoutes.Type
+/** Complete routing choice for one agent capability. */
+export type AIAgentSelection = typeof AIAgentSelection.Type
 
-/** Open provider-to-model selections retained even when a provider package is absent. */
-export const AIProviderModels = Schema.Record({
-  key: Schema.String.pipe(Schema.minLength(1)),
-  value: Schema.String.pipe(Schema.minLength(1)),
+/** Closed routing record containing one authoritative choice per agent capability. */
+export const AIAgentSelections = Schema.Struct({
+  walkthrough: AIAgentSelection,
+  "review-thread": AIAgentSelection,
 })
 
-/** Open provider-to-model selections retained even when a provider package is absent. */
-export type AIProviderModels = typeof AIProviderModels.Type
+/** Closed routing record containing one authoritative choice per agent capability. */
+export type AIAgentSelections = typeof AIAgentSelections.Type
 
 /** User-configurable application settings persisted as versioned JSON. */
 export class AISettings extends Schema.Class<AISettings>("AISettings")({
@@ -128,9 +146,7 @@ export class AISettings extends Schema.Class<AISettings>("AISettings")({
   codeThemes: CodeThemePreferences,
   diffViewMode: DiffViewMode,
   layout: RendererLayoutSettings,
-  routes: AICapabilityRoutes,
-  models: AIProviderModels,
-  autoQuality: AutoQuality,
+  selections: AIAgentSelections,
   telemetryEnabled: Schema.Boolean,
 }) {}
 
@@ -142,8 +158,9 @@ export const DEFAULT_AI_SETTINGS = AISettings.make({
   codeThemes: DEFAULT_CODE_THEME_PREFERENCES,
   diffViewMode: "auto",
   layout: DEFAULT_RENDERER_LAYOUT_SETTINGS,
-  routes: AICapabilityRoutes.make({ walkthrough: "auto", reviewThread: "auto" }),
-  models: {},
-  autoQuality: "balanced",
+  selections: AIAgentSelections.make({
+    walkthrough: AIAgentSelection.cases.Automatic.make({ quality: "balanced" }),
+    "review-thread": AIAgentSelection.cases.Automatic.make({ quality: "balanced" }),
+  }),
   telemetryEnabled: true,
 })
