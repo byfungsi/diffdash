@@ -1,5 +1,5 @@
 import { AppState } from "@diffdash/domain/app-state"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -34,6 +34,19 @@ import {
   CoreShutdownAcknowledged,
   DatabaseOwnershipAuthorized,
 } from "../src/lifecycle"
+import {
+  CancelWalkthroughRequest,
+  GetStoredWalkthroughRequest,
+  GetStoredWalkthroughResult,
+  GetWalkthroughOperationRequest,
+  StartWalkthroughRequest,
+  WalkthroughAttemptSummaries,
+  WalkthroughOperationAccepted,
+  WalkthroughOperationSnapshot,
+  WalkthroughPublicFailure,
+  WalkthroughReviewGeneration,
+  WalkthroughSafeDiagnostic,
+} from "../src/walkthrough"
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -305,6 +318,192 @@ assert(
 assert(!("cause" in decodedExitDefect), "Bun AppState defect exit exposed a cause")
 assert(!("stack" in decodedExitDefect), "Bun AppState defect exit exposed a stack")
 assert(!("path" in decodedExitDefect), "Bun AppState defect exit exposed a path")
+
+const walkthroughReviewGeneration = Schema.decodeUnknownSync(WalkthroughReviewGeneration)({
+  kind: "local",
+  projectId: "project-bun",
+  snapshotId: "snapshot:v1:0123456789abcdef0123456789abcdef",
+  reviewKey: "local:project-bun:working-tree",
+  baseRevision: "base-bun",
+  headRevision: "head-bun",
+})
+const walkthroughAttempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries)([
+  {
+    stage: "execute",
+    outcome: "provider-exit",
+    providerId: "claude",
+    modelId: "claude-opus-5",
+    attempt: 1,
+  },
+])
+const walkthroughStart = Schema.decodeUnknownSync(StartWalkthroughRequest)({
+  ...request,
+  reviewGeneration: walkthroughReviewGeneration,
+  regenerate: false,
+  idempotencyKey: "w:bun-intent",
+})
+const walkthroughAccepted = Schema.decodeUnknownSync(WalkthroughOperationAccepted)({
+  ...request,
+  operationId: "walkthrough-operation-bun",
+  stateVersion: 1,
+  created: true,
+})
+const walkthroughGetOperation = GetWalkthroughOperationRequest.make({
+  ...request,
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughCancel = CancelWalkthroughRequest.make({
+  ...request,
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughGetStored = GetStoredWalkthroughRequest.make({
+  ...request,
+  reviewGeneration: walkthroughReviewGeneration,
+  promptVersion: "walkthrough-v4",
+})
+const walkthroughStoredResult = Schema.decodeUnknownSync(GetStoredWalkthroughResult)({
+  status: "notFound",
+  reviewGeneration: walkthroughReviewGeneration,
+  promptVersion: "walkthrough-v4",
+})
+const walkthroughOperation = Schema.decodeUnknownSync(WalkthroughOperationSnapshot)({
+  acceptedRequest: request,
+  operationId: walkthroughAccepted.operationId,
+  stateVersion: walkthroughAccepted.stateVersion,
+  idempotencyKey: walkthroughStart.idempotencyKey,
+  reviewGeneration: walkthroughReviewGeneration,
+  promptVersion: "walkthrough-v4",
+  configuredRoute: { mode: "auto", quality: "balanced" },
+  candidatePlanFingerprint: `walkthrough-plan:v1:${"a".repeat(64)}`,
+  attempts: walkthroughAttempts,
+  acceptedAt: "2026-08-14T12:00:00.000Z",
+  updatedAt: "2026-08-14T12:00:01.000Z",
+  state: "active",
+  phase: "falling-back",
+})
+const walkthroughFailure = Schema.decodeUnknownSync(WalkthroughPublicFailure)({
+  _tag: "WalkthroughPublicFailure",
+  ...request,
+  method: "Walkthroughs.start",
+  operationId: walkthroughAccepted.operationId,
+  code: "AGENT_PROVIDER_EXIT",
+  providerId: "claude",
+  modelId: "claude-opus-5",
+  retryClass: "userAction",
+  remediation: "reauthenticateProvider",
+  safeMessage: "Provider Claude exited before completing walkthrough generation.",
+  attempts: walkthroughAttempts,
+  diagnostic: {
+    causeTags: ["AgentProviderOperationError", "ProcessExitError"],
+    exitCode: 1,
+    signal: null,
+    providerExcerpt: "Authentication required.\nRun Claude and sign in.",
+    internalFrames: ["WalkthroughService.generate", "executeWalkthroughCandidate"],
+    truncated: false,
+  },
+})
+const encodedWalkthroughValues = [
+  Schema.encodeSync(StartWalkthroughRequest)(walkthroughStart),
+  Schema.encodeSync(WalkthroughOperationAccepted)(walkthroughAccepted),
+  Schema.encodeSync(GetWalkthroughOperationRequest)(walkthroughGetOperation),
+  Schema.encodeSync(CancelWalkthroughRequest)(walkthroughCancel),
+  Schema.encodeSync(GetStoredWalkthroughRequest)(walkthroughGetStored),
+  Schema.encodeSync(GetStoredWalkthroughResult)(walkthroughStoredResult),
+  Schema.encodeSync(WalkthroughOperationSnapshot)(walkthroughOperation),
+  Schema.encodeSync(WalkthroughPublicFailure)(walkthroughFailure),
+]
+const decodedWalkthroughValues = encodedWalkthroughValues.flatMap((value) => {
+  const bytes = parser.encode(value)
+  assert(bytes instanceof Uint8Array, "Bun walkthrough MessagePack must encode binary frames")
+  return parser.decode(bytes)
+})
+const decodedWalkthroughStart = Schema.decodeUnknownSync(StartWalkthroughRequest)(
+  decodedWalkthroughValues[0],
+)
+const decodedWalkthroughAccepted = Schema.decodeUnknownSync(WalkthroughOperationAccepted)(
+  decodedWalkthroughValues[1],
+)
+const decodedWalkthroughGetOperation = Schema.decodeUnknownSync(GetWalkthroughOperationRequest)(
+  decodedWalkthroughValues[2],
+)
+const decodedWalkthroughCancel = Schema.decodeUnknownSync(CancelWalkthroughRequest)(
+  decodedWalkthroughValues[3],
+)
+const decodedWalkthroughGetStored = Schema.decodeUnknownSync(GetStoredWalkthroughRequest)(
+  decodedWalkthroughValues[4],
+)
+const decodedWalkthroughStoredResult = Schema.decodeUnknownSync(GetStoredWalkthroughResult)(
+  decodedWalkthroughValues[5],
+)
+const decodedWalkthroughOperation = Schema.decodeUnknownSync(WalkthroughOperationSnapshot)(
+  decodedWalkthroughValues[6],
+)
+const decodedWalkthroughFailure = Schema.decodeUnknownSync(WalkthroughPublicFailure)(
+  decodedWalkthroughValues[7],
+)
+assert(
+  decodedWalkthroughStart.idempotencyKey === walkthroughStart.idempotencyKey,
+  "Bun walkthrough idempotency identity roundtrip failed",
+)
+assert(
+  decodedWalkthroughAccepted.operationId === walkthroughAccepted.operationId,
+  "Bun walkthrough operation identity roundtrip failed",
+)
+assert(
+  decodedWalkthroughGetOperation.operationId === walkthroughAccepted.operationId &&
+    decodedWalkthroughCancel.operationId === walkthroughAccepted.operationId,
+  "Bun walkthrough operation request roundtrip failed",
+)
+assert(
+  decodedWalkthroughGetStored.promptVersion === "walkthrough-v4" &&
+    decodedWalkthroughStoredResult.status === "notFound",
+  "Bun walkthrough stored lookup roundtrip failed",
+)
+assert(
+  decodedWalkthroughOperation.state === "active" &&
+    decodedWalkthroughOperation.phase === "falling-back",
+  "Bun walkthrough operation state roundtrip failed",
+)
+assert(
+  decodedWalkthroughFailure.code === "AGENT_PROVIDER_EXIT",
+  "Bun walkthrough failure roundtrip failed",
+)
+assert(!(decodedWalkthroughFailure instanceof Error), "Bun walkthrough failure became an Error")
+assert(!("cause" in decodedWalkthroughFailure), "Bun walkthrough failure exposed a cause")
+assert(!("stack" in decodedWalkthroughFailure), "Bun walkthrough failure exposed a stack")
+assert(!("path" in decodedWalkthroughFailure), "Bun walkthrough failure exposed a path")
+assert(
+  Result.isFailure(
+    Schema.decodeUnknownResult(WalkthroughPublicFailure)({
+      ...walkthroughFailure,
+      code: "UNKNOWN_RENDERER_ERROR",
+    }),
+  ),
+  "Bun walkthrough failure accepted an unknown code",
+)
+assert(
+  Result.isFailure(
+    Schema.decodeUnknownResult(WalkthroughAttemptSummaries)(
+      Array.from({ length: 33 }, () => ({
+        stage: "probe",
+        outcome: "ready",
+        providerId: "claude",
+        modelId: null,
+        attempt: 1,
+      })),
+    ),
+  ),
+  "Bun walkthrough attempts exceeded their bound",
+)
+assert(
+  Result.isFailure(
+    Schema.decodeUnknownResult(WalkthroughSafeDiagnostic)({
+      ...walkthroughFailure.diagnostic,
+      providerExcerpt: "/Users/example/private/repository",
+    }),
+  ),
+  "Bun walkthrough diagnostic accepted a private path",
+)
 
 const boundedParser = RpcSerialization.makeMsgPack({ maxBufferSize: 2 }).makeUnsafe()
 const incompleteFrame = Uint8Array.of(0xd9)
