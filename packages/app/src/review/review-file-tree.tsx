@@ -1,4 +1,5 @@
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
+import { Predicate } from "effect"
 import { useEffect, useRef } from "react"
 import { buildReviewFileTreeInput } from "./file-tree-adapter"
 import { PierreFileTree, prepareFileTreeInput, useFileTree } from "./pierre"
@@ -81,6 +82,19 @@ const REVIEW_FILE_TREE_CSS = `
     color: var(--review-danger-text) !important;
   }
 `
+
+const fileTreeItemPath = (target: EventTarget): string | null => {
+  if (!Predicate.hasProperty(target, "dataset") || !Predicate.isObject(target.dataset)) {
+    return null
+  }
+  if (
+    !Predicate.hasProperty(target.dataset, "itemPath") ||
+    !Predicate.isString(target.dataset.itemPath)
+  ) {
+    return null
+  }
+  return target.dataset.itemPath
+}
 
 /** Pierre file tree synchronized with the active diff path. */
 export const ReviewFileTree = ({
@@ -181,13 +195,9 @@ export const ReviewFileTree = ({
           if (activeSelectedPath === null) return
           const clickedPath = event.nativeEvent
             .composedPath()
-            .find(
-              (target) => target instanceof HTMLElement && target.dataset.itemPath !== undefined,
-            )
-          if (
-            clickedPath instanceof HTMLElement &&
-            clickedPath.dataset.itemPath === activeSelectedPath
-          ) {
+            .map(fileTreeItemPath)
+            .find((path) => path !== null)
+          if (clickedPath === activeSelectedPath) {
             onSelectPathRef.current(activeSelectedPath)
           }
         }}
