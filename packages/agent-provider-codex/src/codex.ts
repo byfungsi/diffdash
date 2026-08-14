@@ -1,6 +1,7 @@
 import { Effect, Match, Option, Schema, Stream } from "effect"
 import { readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { delimiter, join } from "node:path"
 
 import {
   AgentArtifactCandidate,
@@ -46,6 +47,11 @@ import {
 } from "@diffdash/agent-provider/runtime"
 import { isScopedMcpToolSubset } from "@diffdash/agent-provider/security"
 import { processRequest, type ProcessResult, type ProcessRunner } from "@diffdash/process"
+import {
+  defaultExecutablePath,
+  findExecutableInPath,
+  type ExecutablePath,
+} from "@diffdash/process/executable"
 import type { TempResourceOperations } from "@diffdash/process/temp-resource"
 
 const providerId = AgentProviderId.make("codex")
@@ -127,13 +133,37 @@ export interface CodexProviderDependencies {
   readonly processes: ProcessRunner
   readonly tempResources: TempResourceOperations
   readonly tempDirectory?: string
+  readonly executablePath?: string
+}
+
+/** Options used to resolve Codex without relying on an interactive shell. */
+export interface ResolveCodexExecutableOptions {
+  readonly envPath?: string
+  readonly home?: string
+  readonly pathExt?: string
+  readonly platform?: NodeJS.Platform
+}
+
+/** Resolves Codex through Bun's user install directory before the GUI-safe PATH. */
+export const resolveCodexExecutable = (
+  options: ResolveCodexExecutableOptions = {},
+): Effect.Effect<Option.Option<ExecutablePath>> => {
+  const home = options.home ?? process.env.HOME ?? process.env.USERPROFILE ?? ""
+  const guiPath = defaultExecutablePath(options.envPath ?? process.env.PATH ?? "", home)
+  const bunBin = home.length > 0 ? join(home, ".bun", "bin") : ""
+  const normalizedPath = bunBin.length === 0 ? guiPath : [bunBin, guiPath].join(delimiter)
+  return findExecutableInPath(executable, {
+    envPath: normalizedPath,
+    ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+  })
 }
 
 /** Creates the complete Codex SDK registration. */
 export const makeCodexProvider = (
   dependencies: CodexProviderDependencies,
 ): AgentProviderRegistration => {
-  const runtimeProbe = probeRuntime(dependencies.processes)
+  const runtimeProbe = probeRuntime(dependencies)
   return {
     manifest: CODEX_MANIFEST,
     walkthrough: {
@@ -147,11 +177,14 @@ export const makeCodexProvider = (
   }
 }
 
-const probeRuntime = (processes: ProcessRunner) =>
+const probeRuntime = (dependencies: CodexProviderDependencies) =>
   probeAgentRuntime({
-    versionOutput: processes
-      .run(processRequest(executable, ["--version"], { timeoutMs: 5_000 }))
-      .pipe(Effect.map((result) => result.stdout)),
+    versionOutput: Effect.gen(function* () {
+      const executablePath = yield* resolveRuntimeExecutable(dependencies, "walkthrough")
+      return yield* dependencies.processes
+        .run(processRequest(executablePath, ["--version"], { timeoutMs: 5_000 }))
+        .pipe(Effect.map((result) => result.stdout))
+    }),
     unavailableReason: "Codex is not installed or available",
   })
 
@@ -164,6 +197,7 @@ const executeWalkthrough = (
 > =>
   Effect.gen(function* () {
     yield* requirePolicy("walkthrough", request.policy, CODEX_WALKTHROUGH_POLICY)
+    const executablePath = yield* resolveRuntimeExecutable(dependencies, "walkthrough")
     const tempDirectory = dependencies.tempDirectory ?? tmpdir()
     return yield* Effect.scoped(
       Effect.gen(function* () {
@@ -177,7 +211,7 @@ const executeWalkthrough = (
         const result = yield* dependencies.processes
           .run(
             processRequest(
-              executable,
+              executablePath,
               makeWalkthroughArgs(request, outputPath, request.workingDirectory === tempDirectory),
               {
                 cwd: request.workingDirectory,
@@ -380,6 +414,7 @@ const executeReview = (
         "policy-violation",
       )
     }
+    const executablePath = yield* resolveRuntimeExecutable(dependencies, "review-thread")
 
     return yield* withOutputSchemaPath(
       dependencies.tempResources,
@@ -395,7 +430,7 @@ const executeReview = (
           }
           yield* dependencies.processes
             .streamLines(
-              processRequest(executable, makeReviewArgs(request, outputSchemaPath), {
+              processRequest(executablePath, makeReviewArgs(request, outputSchemaPath), {
                 cwd: request.workingDirectory,
                 env: { [mcpTokenEnvironmentVariable]: revealScopedMcpToken(request.mcp) },
                 stdin: `${request.stablePrompt}\n\n${request.dynamicPrompt}\n`,
@@ -1079,6 +1114,26 @@ const requirePolicy = (
         "policy-violation",
       )
 }
+
+const resolveRuntimeExecutable = (
+  dependencies: CodexProviderDependencies,
+  capability: AgentCapability,
+): Effect.Effect<string, AgentProviderOperationError> =>
+  dependencies.executablePath === undefined
+    ? resolveCodexExecutable().pipe(
+        Effect.flatMap((resolved) =>
+          Option.match(resolved, {
+            onNone: () =>
+              operationErrors.fromReason(
+                capability,
+                "Codex is not installed or available",
+                "configuration",
+              ),
+            onSome: (path) => Effect.succeed(path),
+          }),
+        ),
+      )
+    : Effect.succeed(dependencies.executablePath)
 
 const errorMessage = (event: CodexProtocolEvent) => {
   if (event.message !== undefined) return event.message

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Effect, Layer, Redacted, Stream } from "effect"
+import { Effect, Layer, Option, Redacted, Stream } from "effect"
 import { readdir, readFile, rm, writeFile } from "node:fs/promises"
-import { mkdtempSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -41,6 +41,7 @@ import {
   CODEX_REVIEW_POLICY,
   CODEX_WALKTHROUGH_POLICY,
   makeCodexProvider,
+  resolveCodexExecutable,
 } from "./codex"
 
 const operationErrors = makeAgentProviderOperationErrorFactory({
@@ -130,7 +131,12 @@ const makeHarness = (
   }
   return {
     calls,
-    registration: makeCodexProvider({ processes, tempResources, tempDirectory: tmpdir() }),
+    registration: makeCodexProvider({
+      processes,
+      tempResources,
+      tempDirectory: tmpdir(),
+      executablePath: "codex",
+    }),
   }
 }
 
@@ -260,6 +266,7 @@ agentCancellationConformance("Codex", {
     const harness = makeHarness()
     const registration = makeCodexProvider({
       tempResources,
+      executablePath: "codex",
       processes: {
         run:
           harness.registration.walkthrough === undefined
@@ -298,6 +305,30 @@ agentCancellationConformance("Codex", {
 })
 
 describe("Codex provider", () => {
+  it.effect("prefers Codex installed by Bun over a stale executable on the GUI PATH", () =>
+    Effect.gen(function* () {
+      const home = mkdtempSync(join(tmpdir(), "diffdash-codex-home-"))
+      const staleBin = mkdtempSync(join(tmpdir(), "diffdash-codex-stale-"))
+      const bunBin = join(home, ".bun", "bin")
+      const bunExecutable = join(bunBin, "codex")
+      mkdirSync(bunBin, { recursive: true })
+      for (const executable of [bunExecutable, join(staleBin, "codex")]) {
+        writeFileSync(executable, "#!/bin/sh\n", "utf8")
+        chmodSync(executable, 0o755)
+      }
+
+      const found = yield* resolveCodexExecutable({ envPath: staleBin, home })
+
+      expect(found.pipe(Option.getOrNull)).toBe(bunExecutable)
+      yield* Effect.promise(() =>
+        Promise.all([
+          rm(home, { force: true, recursive: true }),
+          rm(staleBin, { force: true, recursive: true }),
+        ]).then(() => undefined),
+      )
+    }),
+  )
+
   it.effect("uses one version probe implementation for both capabilities", () =>
     Effect.gen(function* () {
       const harness = makeHarness()
