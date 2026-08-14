@@ -1,8 +1,14 @@
 import { AppState } from "@diffdash/domain/app-state"
-import { Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
+import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
-import { AppStateGetRpc } from "../src/business"
+import {
+  AppStateGetAdmissionMiddleware,
+  CoreTransportAuthenticationMiddleware,
+} from "../src/admission"
+import { AppStateGetRpc, CoreBusinessRpcs } from "../src/business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "../src/control"
 import {
   AppStateGetDefect,
@@ -23,6 +29,7 @@ import {
 } from "../src/identity"
 import {
   AuthorizeDatabaseOwnershipRequest,
+  CoreHealth,
   CoreShutdownAcknowledged,
   DatabaseOwnershipAuthorized,
 } from "../src/lifecycle"
@@ -94,6 +101,93 @@ const admissionFailure = AppStateGetLifecycleRejectedFailure.make({
   retryClass: "automatic",
   safeMessage: "DiffDash Core is not ready to serve application requests.",
 })
+
+const passAppStateAdmissionLayer = Layer.succeed(AppStateGetAdmissionMiddleware, (effect) => effect)
+const passTransportAuthenticationLayer = Layer.succeed(
+  CoreTransportAuthenticationMiddleware,
+  (effect) => effect,
+)
+
+const nativeRpcConformance = Effect.gen(function* () {
+  const healthRpcs = RpcGroup.make(CoreHealthRpc)
+  const healthHandlers = healthRpcs.toLayerHandler("Core.health", (input) =>
+    Effect.succeed(
+      CoreHealth.make({
+        applicationInstanceId: input.applicationInstanceId,
+        processEpoch: input.processEpoch,
+        lifecycle: "awaitingOwnership",
+      }),
+    ),
+  )
+  const healthClient = yield* RpcTest.makeClient(healthRpcs).pipe(Effect.provide(healthHandlers))
+  const health = yield* healthClient["Core.health"](request)
+  assert(health.processEpoch === request.processEpoch, "Bun native RPC health identity failed")
+
+  const successHandlers = CoreBusinessRpcs.toLayer({
+    "AppState.get": () => Effect.succeed(state),
+  })
+  const successClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+    Effect.provide(successHandlers),
+  )
+  const successfulState = yield* successClient["AppState.get"](request)
+  assert(successfulState.onboardingCompleted, "Bun native RPC success failed")
+
+  const failureHandlers = CoreBusinessRpcs.toLayer({
+    "AppState.get": () => Effect.fail(failure),
+  })
+  const failureClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+    Effect.provide(failureHandlers),
+  )
+  const expectedFailure = yield* failureClient["AppState.get"](request).pipe(Effect.flip)
+  assert(expectedFailure.code === failure.code, "Bun native RPC expected failure failed")
+  assert(!(expectedFailure instanceof Error), "Bun native RPC returned an Error instance")
+  assert(!("cause" in expectedFailure), "Bun native RPC failure exposed a cause")
+  assert(!("stack" in expectedFailure), "Bun native RPC failure exposed a stack")
+  assert(!("path" in expectedFailure), "Bun native RPC failure exposed a path")
+
+  const defectHandlers = CoreBusinessRpcs.toLayer({
+    "AppState.get": () => Effect.die(appStateDefect),
+  })
+  const defectClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+    Effect.provide(defectHandlers),
+  )
+  const projectedDefect = yield* defectClient["AppState.get"](request).pipe(
+    Effect.catchDefect(Effect.succeed),
+  )
+  assert(
+    typeof projectedDefect === "object" &&
+      projectedDefect !== null &&
+      "code" in projectedDefect &&
+      projectedDefect.code === appStateDefect.code,
+    "Bun native RPC sanitized defect projection failed",
+  )
+  assert(!("cause" in projectedDefect), "Bun native RPC defect exposed a cause")
+  assert(!("stack" in projectedDefect), "Bun native RPC defect exposed a stack")
+  assert(!("path" in projectedDefect), "Bun native RPC defect exposed a path")
+
+  const started = yield* Deferred.make<void>()
+  const interrupted = yield* Deferred.make<void>()
+  const interruptHandlers = CoreBusinessRpcs.toLayer({
+    "AppState.get": () =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      ),
+  })
+  const interruptClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+    Effect.provide(interruptHandlers),
+  )
+  const requestFiber = yield* interruptClient["AppState.get"](request).pipe(Effect.forkScoped)
+  yield* Deferred.await(started)
+  yield* Fiber.interrupt(requestFiber)
+  yield* Deferred.await(interrupted)
+}).pipe(
+  Effect.provide(passAppStateAdmissionLayer),
+  Effect.provide(passTransportAuthenticationLayer),
+  Effect.scoped,
+)
+
+await Effect.runPromise(nativeRpcConformance)
 
 const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
 const encodedValues = [

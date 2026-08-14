@@ -1,6 +1,6 @@
 import { AppState } from "@diffdash/domain/app-state"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
@@ -221,6 +221,50 @@ describe("Core RPC declarations", () => {
       Effect.provide(passTransportAuthenticationLayer),
     )
   })
+
+  it.effect("projects a sanitized AppState defect through native in-memory RPC", () => {
+    const handlers = CoreBusinessRpcs.toLayer({
+      "AppState.get": () => Effect.die(appStateDefect),
+    })
+
+    return Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const defect = yield* client["AppState.get"](request).pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(defect).toEqual(appStateDefect)
+      expect(defect).not.toBeInstanceOf(Error)
+      expect(defect).not.toHaveProperty("cause")
+      expect(defect).not.toHaveProperty("stack")
+      expect(defect).not.toHaveProperty("path")
+    }).pipe(
+      Effect.provide(handlers),
+      Effect.provide(passAppStateAdmissionLayer),
+      Effect.provide(passTransportAuthenticationLayer),
+    )
+  })
+
+  it.effect("propagates native in-memory client interruption to the server handler", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const handlers = CoreBusinessRpcs.toLayer({
+        "AppState.get": () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          ),
+      })
+      const client = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(Effect.provide(handlers))
+      const requestFiber = yield* client["AppState.get"](request).pipe(Effect.forkScoped)
+
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(requestFiber)
+      yield* Deferred.await(interrupted)
+    }).pipe(
+      Effect.provide(passAppStateAdmissionLayer),
+      Effect.provide(passTransportAuthenticationLayer),
+    ),
+  )
 
   it("roundtrips request, success, and expected failure schemas through native MessagePack", () => {
     const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
