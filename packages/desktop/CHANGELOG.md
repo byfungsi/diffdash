@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.8.1
+
+### Patch Changes
+
+- [#77](https://github.com/byfungsi/diffdash/pull/77) [`abe328a`](https://github.com/byfungsi/diffdash/commit/abe328a5e4247b037063c336d03ceace0e3c1a5a) Thanks [@hanipcode](https://github.com/hanipcode)! - Detect Codex installations managed by Bun when launching DiffDash from the desktop.
+
 ## 0.8.0
 
 ### Minor Changes
