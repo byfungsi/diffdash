@@ -31,6 +31,7 @@ import type {
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import type { CoreRpcHealthVerificationError } from "./core-rpc-client"
 import { revalidateCoreArtifact, type VerifiedCoreArtifact } from "./core-artifact"
+import type { CoreProcessLaunchError } from "./core-process-launcher"
 
 /** Private Electron-side state while establishing one Core process epoch. */
 export const CoreHostBootstrapState = Schema.Literals([
@@ -72,7 +73,11 @@ export interface CoreHostBootstrapOptions {
   readonly temporaryDirectory: string
   readonly startTransport: (
     configuration: CoreHostTransportConfiguration,
-  ) => Effect.Effect<void, CoreHostBootstrapError, Scope.Scope>
+  ) => Effect.Effect<
+    void,
+    CoreHostBootstrapError | CoreProcessLaunchError,
+    FileSystem.FileSystem | Scope.Scope
+  >
   readonly onStateChange?: (state: CoreHostBootstrapState) => Effect.Effect<void>
   readonly generateProcessEpoch?: () => CoreProcessEpoch
   readonly generateRequestId?: () => HostRequestId

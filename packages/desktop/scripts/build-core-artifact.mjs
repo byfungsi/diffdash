@@ -31,6 +31,9 @@ export const buildCoreArtifact = async ({
   try {
     const buildResult = await build({
       absWorkingDir: workspaceDirectory,
+      banner: {
+        js: 'import { createRequire as __diffdashCreateRequire } from "node:module"; const require = __diffdashCreateRequire(import.meta.url);',
+      },
       bundle: true,
       entryPoints: [coreArtifactEntryForMode(normalizedMode)],
       format: "esm",
