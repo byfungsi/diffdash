@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { constants } from "node:fs"
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises"
-import { delimiter, join, resolve as resolvePath } from "node:path"
+import { delimiter, join, resolve as resolvePath, sep } from "node:path"
 import { _electron as electron, expect, test } from "@playwright/test"
 import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
 import { installExecutableFixture, prependExecutablePath } from "../helpers/executable-fixture"
@@ -382,19 +383,65 @@ const packagedAppPaths = (): PackagedAppPaths => {
 }
 
 const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
+  const coreDirectory = join(packaged.resources, "core")
+  const coreEntrypoint = join(coreDirectory, "core.mjs")
+  const coreManifest = join(coreDirectory, "manifest.json")
   await Promise.all([
     assertFile(packaged.executable),
     assertFile(join(packaged.resources, "app.asar")),
     assertFile(join(packaged.resources, "app-update.yml")),
+    assertFile(coreEntrypoint),
+    assertFile(coreManifest),
     ...(packaged.cli === null ? [] : [assertFile(packaged.cli)]),
     ...(packaged.icon === null ? [] : [assertFile(packaged.icon)]),
   ])
   if (packaged.cli !== null) await access(packaged.cli, constants.X_OK)
 
+  const manifest = parseCoreArtifactManifest(await readFile(coreManifest, "utf8"))
+  const entrypoint = await readFile(coreEntrypoint)
+  expect(manifest.buildId).toMatch(/^core-e2e-[a-f0-9]{40}$/u)
+  expect(manifest.entrypoint).toBe("core.mjs")
+  expect(manifest.entrypointSha256).toBe(createHash("sha256").update(entrypoint).digest("hex"))
+  expect(resolvePath(coreDirectory).startsWith(`${resolvePath(packaged.resources)}${sep}`)).toBe(
+    true,
+  )
+  expect(resolvePath(coreDirectory)).not.toContain("app.asar")
+
   const updateConfig = await readFile(join(packaged.resources, "app-update.yml"), "utf8")
   expect(updateConfig).toMatch(/^provider:\s*generic\s*$/m)
   expect(updateConfig).toMatch(/^url:\s*https:\/\/download\.usediffdash\.com\/updates\/stable\s*$/m)
   expect(updateConfig).toMatch(/^updaterCacheDirName:\s*\S+\s*$/m)
+}
+
+const parseCoreArtifactManifest = (text: string) => {
+  const value: unknown = JSON.parse(text)
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("schemaVersion" in value) ||
+    value.schemaVersion !== 1 ||
+    !("buildId" in value) ||
+    typeof value.buildId !== "string" ||
+    !("entrypoint" in value) ||
+    value.entrypoint !== "core.mjs" ||
+    !("entrypointSha256" in value) ||
+    typeof value.entrypointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.entrypointSha256) ||
+    !("runtime" in value) ||
+    typeof value.runtime !== "object" ||
+    value.runtime === null ||
+    !("utility" in value.runtime) ||
+    value.runtime.utility !== true ||
+    !("bun" in value.runtime) ||
+    value.runtime.bun !== false
+  ) {
+    throw new Error("Packaged Core manifest is invalid.")
+  }
+  return {
+    buildId: value.buildId,
+    entrypoint: value.entrypoint,
+    entrypointSha256: value.entrypointSha256,
+  }
 }
 
 const assertFile = async (path: string) => {

@@ -4,8 +4,17 @@ import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdas
 import { CoreHealth } from "@diffdash/core-rpc/lifecycle"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Redacted, Ref } from "effect"
-import { existsSync, mkdtempSync, readdirSync, statSync } from "node:fs"
+import { Deferred, Effect, Fiber, Layer, Option, Redacted, Ref } from "effect"
+import { createHash } from "node:crypto"
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -17,6 +26,7 @@ import {
   type CoreHostBootstrapState,
 } from "./core-host-bootstrap"
 import { CoreRpcClient, CoreRpcHealthVerificationError } from "./core-rpc-client"
+import { VerifiedCoreArtifact } from "./core-artifact"
 
 const applicationInstanceId = ApplicationInstanceId.make("app-bootstrap")
 const processEpoch = CoreProcessEpoch.make("epoch-bootstrap")
@@ -24,10 +34,26 @@ const requestId = HostRequestId.make("h:bootstrap-health")
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const bootstrapDependencies = Layer.merge(
   TempResources.layer.pipe(Layer.provide(platformLayer)),
-  NodePath.layer,
+  Layer.merge(NodeFileSystem.layer, NodePath.layer),
 )
 
+const artifactDirectory = mkdtempSync(join(tmpdir(), "dd-bootstrap-artifact-"))
+const artifactEntrypoint = join(artifactDirectory, "core.mjs")
+const artifactContents = "export const core = true\n"
+writeFileSync(artifactEntrypoint, artifactContents)
+const artifactInfo = statSync(artifactEntrypoint)
+const artifact = new VerifiedCoreArtifact({
+  buildId: "desktop-build-1",
+  entrypointPath: realpathSync(artifactEntrypoint),
+  entrypointSha256: createHash("sha256").update(artifactContents).digest("hex"),
+  device: artifactInfo.dev,
+  inode: Option.some(artifactInfo.ino),
+  size: BigInt(artifactInfo.size),
+  runtime: { utility: true, bun: true },
+})
+
 const options = {
+  artifact,
   applicationInstanceId,
   generateProcessEpoch: () => processEpoch,
   generateRequestId: () => requestId,
@@ -158,6 +184,39 @@ describe("Core host bootstrap", () => {
 
       expect(failure.stage).toBe("authenticating")
       expect(readdirSync(temporaryDirectory)).toEqual([])
+    }).pipe(Effect.provide(bootstrapDependencies)),
+  )
+
+  it.effect("revalidates the artifact immediately before invoking the launcher", () =>
+    Effect.gen(function* () {
+      const temporaryDirectory = mkdtempSync(join(tmpdir(), "dd-bootstrap-parent-"))
+      const directory = mkdtempSync(join(tmpdir(), "dd-bootstrap-replaced-artifact-"))
+      const entrypointPath = join(directory, "core.mjs")
+      writeFileSync(entrypointPath, artifactContents)
+      const info = statSync(entrypointPath)
+      const replacedArtifact = new VerifiedCoreArtifact({
+        ...artifact,
+        entrypointPath: realpathSync(entrypointPath),
+        device: info.dev,
+        inode: Option.some(info.ino),
+        size: BigInt(info.size),
+      })
+      const replacementPath = join(directory, "replacement.mjs")
+      writeFileSync(replacementPath, artifactContents)
+      renameSync(replacementPath, entrypointPath)
+      const launches = yield* Ref.make(0)
+
+      const failure = yield* bootstrapCoreHost({
+        ...options,
+        artifact: replacedArtifact,
+        temporaryDirectory,
+        startTransport: () => Ref.update(launches, (count) => count + 1),
+      }).pipe(Effect.flip)
+
+      expect(failure.stage).toBe("preparingRuntime")
+      expect(yield* Ref.get(launches)).toBe(0)
+      expect(readdirSync(temporaryDirectory)).toEqual([])
+      expect(JSON.stringify(failure)).not.toContain(entrypointPath)
     }).pipe(Effect.provide(bootstrapDependencies)),
   )
 

@@ -13,6 +13,7 @@ import {
   Deferred,
   Effect,
   Exit,
+  FileSystem,
   Layer,
   Path,
   Redacted,
@@ -29,6 +30,7 @@ import type {
 } from "@diffdash/core-rpc/failure"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import type { CoreRpcHealthVerificationError } from "./core-rpc-client"
+import { revalidateCoreArtifact, type VerifiedCoreArtifact } from "./core-artifact"
 
 /** Private Electron-side state while establishing one Core process epoch. */
 export const CoreHostBootstrapState = Schema.Literals([
@@ -56,6 +58,7 @@ export class CoreHostBootstrapError extends Schema.TaggedError<CoreHostBootstrap
 
 /** Private values supplied to the later verified Core launcher. */
 export interface CoreHostTransportConfiguration {
+  readonly artifact: VerifiedCoreArtifact
   readonly socketPath: string
   readonly token: Redacted.Redacted
   readonly applicationInstanceId: ApplicationInstanceId
@@ -64,6 +67,7 @@ export interface CoreHostTransportConfiguration {
 
 /** Inputs and host seams required to establish one authenticated Core epoch. */
 export interface CoreHostBootstrapOptions {
+  readonly artifact: VerifiedCoreArtifact
   readonly applicationInstanceId: ApplicationInstanceId
   readonly temporaryDirectory: string
   readonly startTransport: (
@@ -112,7 +116,7 @@ export const bootstrapCoreHost = (
 ): Effect.Effect<
   CoreHostBootstrapSession,
   CoreHostBootstrapError,
-  TempResources | Path.Path | Scope.Scope
+  TempResources | FileSystem.FileSystem | Path.Path | Scope.Scope
 > =>
   Effect.gen(function* () {
     const tempResources = yield* TempResources
@@ -142,12 +146,16 @@ export const bootstrapCoreHost = (
       const processEpoch = options.generateProcessEpoch?.() ?? CoreProcessEpoch.make(randomUUID())
       const token = options.generateToken?.() ?? Redacted.make(randomBytes(32).toString("hex"))
       const configuration = {
+        artifact: options.artifact,
         socketPath,
         token,
         applicationInstanceId: options.applicationInstanceId,
         processEpoch,
       } as const
 
+      yield* revalidateCoreArtifact(options.artifact).pipe(
+        Effect.mapError(() => bootstrapFailure("preparingRuntime")),
+      )
       yield* options.startTransport(configuration)
       yield* transition("transportListening")
       yield* transition("authenticating")
@@ -201,6 +209,7 @@ export const coreHostBootstrapLayer = (options: CoreHostBootstrapOptions) =>
     CoreHostBootstrap,
     Effect.gen(function* () {
       const tempResources = yield* TempResources
+      const fileSystem = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const scope = yield* Effect.scope
       const result = yield* Deferred.make<CoreHostBootstrapSession, CoreHostBootstrapError>()
@@ -208,6 +217,7 @@ export const coreHostBootstrapLayer = (options: CoreHostBootstrapOptions) =>
       const started = yield* Ref.make(false)
       const acquisition = bootstrapCoreHost(options).pipe(
         Effect.provideService(TempResources, tempResources),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.provideService(Scope.Scope, scope),
       )

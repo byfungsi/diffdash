@@ -94,6 +94,10 @@ The desktop build has two explicit main-process composition roots. Normal `build
 or fixture providers. Playwright tasks select the `e2e` build mode and its separate entrypoint,
 which may decode `DIFFDASH_E2E_*` values and composes Core's fixture-provider export. The E2E
 entrypoint and fixture provider implementations are not reachable from the production main bundle.
+The same fail-closed mode selection produces a deterministic standalone `core.mjs` and bounded
+manifest. Desktop embeds the bundle-derived build identity, while electron-builder copies the exact
+artifact to `resources/core` outside ASAR. Production graph tests reject fixture providers from the
+production Core artifact; the external artifact remains inactive until atomic cutover.
 
 Dependencies must remain acyclic and use `workspace:*`. Relative imports cannot cross package
 roots. Browser-safe exports are bundled in a browser target during the boundary test to reject Node,
@@ -135,7 +139,10 @@ production ownership.
 
 The inactive Electron host coordinator owns one memoized bootstrap acquisition per application
 scope. It creates a fresh short private runtime directory, process epoch, request ID, and redacted
-one-time token; invokes the future verified launcher through a scoped transport-listening seam; then
+one-time token. Before creating the transport, Desktop schema-decodes a bounded build manifest,
+requires the exact Desktop build identity and utility/Bun runtime contract, and verifies the
+canonical outside-ASAR `core.mjs` SHA-256 and file identity. The coordinator revalidates that identity
+immediately before invoking the future launcher through a scoped transport-listening seam; then
 builds the native client and completes authenticated health and exact epoch verification. Its private
 state sequence is `idle -> preparingRuntime -> transportListening -> authenticating -> epochVerified
 -> awaitingOwnership`. Concurrent and repeated starts share one session. Any failure closes the

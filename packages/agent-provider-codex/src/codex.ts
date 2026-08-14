@@ -153,11 +153,14 @@ export const resolveCodexExecutable = (
   const guiPath = defaultExecutablePath(options.envPath ?? process.env.PATH ?? "", home)
   const bunBin = home.length > 0 ? join(home, ".bun", "bin") : ""
   const normalizedPath = bunBin.length === 0 ? guiPath : [bunBin, guiPath].join(delimiter)
-  return findExecutableInPath(executable, {
-    envPath: normalizedPath,
-    ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
-    ...(options.platform === undefined ? {} : { platform: options.platform }),
-  })
+  const executableOptions: {
+    envPath: string
+    pathExt?: string
+    platform?: NodeJS.Platform
+  } = { envPath: normalizedPath }
+  if (options.pathExt !== undefined) executableOptions.pathExt = options.pathExt
+  if (options.platform !== undefined) executableOptions.platform = options.platform
+  return findExecutableInPath(executable, executableOptions)
 }
 
 /** Creates the complete Codex SDK registration. */

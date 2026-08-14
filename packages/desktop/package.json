@@ -15,9 +15,11 @@
   },
   "scripts": {
     "assets:icons": "node scripts/generate-icons.mjs",
-    "dev": "pnpm assets:icons && electron-vite dev",
-    "build": "electron-vite build",
-    "build:e2e": "electron-vite build --mode e2e",
+    "dev": "pnpm assets:icons && pnpm build:core-artifact && electron-vite dev",
+    "build": "pnpm build:core-artifact && electron-vite build",
+    "build:e2e": "pnpm build:core-artifact:e2e && electron-vite build --mode e2e",
+    "build:core-artifact": "node scripts/build-core-artifact.mjs",
+    "build:core-artifact:e2e": "node scripts/build-core-artifact.mjs --mode=e2e",
     "pack": "pnpm assets:icons && pnpm build && electron-builder --dir --publish=never",
     "dist": "pnpm assets:icons && pnpm build && electron-builder --publish=never",
     "dist:mac": "pnpm assets:icons && pnpm build && electron-builder --mac dmg zip --publish=never",
@@ -28,7 +30,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "pnpm test:unit",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run && node --test scripts/build-core-artifact.test.mjs",
     "test:watch": "vitest",
     "lint": "oxlint electron src scripts --no-error-on-unmatched-pattern"
   },
@@ -59,6 +61,7 @@
     "electron": "catalog:",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "esbuild": "0.28.1",
     "oxlint": "catalog:",
     "tailwindcss": "^4.3.2",
     "typescript": "catalog:",
@@ -80,6 +83,12 @@
     ],
     "asarUnpack": [
       "node_modules/**/*.node"
+    ],
+    "extraResources": [
+      {
+        "from": ".generated/core",
+        "to": "core"
+      }
     ],
     "removePackageScripts": true,
     "publish": [

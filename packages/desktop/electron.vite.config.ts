@@ -12,6 +12,27 @@ const packageJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 )(readFileSync(resolve("package.json"), "utf8"))
 const packageVersion = packageJson._tag === "Some" ? packageJson.value.version : "0.0.0"
+const CoreArtifactBuildManifest = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  buildId: Schema.String,
+  entrypoint: Schema.Literal("core.mjs"),
+  entrypointSha256: Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-f0-9]{64}$/u))),
+  runtime: Schema.Struct({
+    utility: Schema.Literal(true),
+    bun: Schema.Literal(false),
+  }),
+})
+
+const coreArtifactBuildIdForMode = (mode: string): string => {
+  const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactBuildManifest))(
+    readFileSync(resolve(".generated/core/manifest.json"), "utf8"),
+  )
+  const expectedPrefix = mode === "e2e" ? "core-e2e-" : "core-production-"
+  if (!manifest.buildId.startsWith(expectedPrefix)) {
+    throw new Error(`Generated Core artifact does not match the ${mode} Desktop build mode.`)
+  }
+  return manifest.buildId
+}
 
 const internalPackages = [
   "@diffdash/agent-provider",
@@ -55,10 +76,12 @@ export default defineConfig(({ mode }) => {
     env.VITE_POSTHOG_HOST || rootEnv.VITE_POSTHOG_HOST || landingEnv.VITE_POSTHOG_HOST || ""
   const posthogKey =
     env.VITE_POSTHOG_KEY || rootEnv.VITE_POSTHOG_KEY || landingEnv.VITE_POSTHOG_KEY || ""
+  const coreArtifactBuildId = coreArtifactBuildIdForMode(mode)
 
   return {
     main: {
       define: {
+        "process.env.DIFFDASH_CORE_BUILD_ID": JSON.stringify(coreArtifactBuildId),
         "process.env.VITE_POSTHOG_HOST": JSON.stringify(posthogHost),
         "process.env.VITE_POSTHOG_KEY": JSON.stringify(posthogKey),
       },

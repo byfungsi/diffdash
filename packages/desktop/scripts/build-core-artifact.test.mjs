@@ -1,0 +1,44 @@
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { mkdtemp, readFile, readdir } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { resolve } from "node:path"
+import test from "node:test"
+
+import { buildCoreArtifact } from "./build-core-artifact.mjs"
+
+const buildIn = async (parent, name, mode) => {
+  const outputDirectory = resolve(parent, name)
+  return buildCoreArtifact({ mode, outputDirectory })
+}
+
+test("builds deterministic production and E2E Core artifacts with isolated provider graphs", async () => {
+  const directory = await mkdtemp(resolve(tmpdir(), "dd-core-build-"))
+  const production = await buildIn(directory, "production", "production")
+  const repeated = await buildIn(directory, "production-repeated", "production")
+  const e2e = await buildIn(directory, "e2e", "e2e")
+
+  const productionEntrypoint = await readFile(resolve(production.outputDirectory, "core.mjs"))
+  const repeatedEntrypoint = await readFile(resolve(repeated.outputDirectory, "core.mjs"))
+  const manifestText = await readFile(resolve(production.outputDirectory, "manifest.json"), "utf8")
+  const e2eManifestText = await readFile(resolve(e2e.outputDirectory, "manifest.json"), "utf8")
+  const productionInputs = Object.keys(production.metafile.inputs).join("\n")
+  const e2eInputs = Object.keys(e2e.metafile.inputs).join("\n")
+
+  assert.deepEqual(await readdir(production.outputDirectory), ["core.mjs", "manifest.json"])
+  assert.deepEqual(productionEntrypoint, repeatedEntrypoint)
+  assert.equal(
+    manifestText,
+    await readFile(resolve(repeated.outputDirectory, "manifest.json"), "utf8"),
+  )
+  assert.match(manifestText, /"buildId": "core-production-[a-f0-9]{40}"/u)
+  assert.match(e2eManifestText, /"buildId": "core-e2e-[a-f0-9]{40}"/u)
+  assert.match(
+    manifestText,
+    new RegExp(createHash("sha256").update(productionEntrypoint).digest("hex"), "u"),
+  )
+  assert.doesNotMatch(productionInputs, /provider-composition\.e2e|provider-fixture/u)
+  assert.match(e2eInputs, /provider-composition\.e2e/u)
+  assert.match(e2eInputs, /agent-provider-fixture/u)
+  assert.match(e2eInputs, /git-provider-fixture/u)
+})
