@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: "22"
+  NODE_VERSION: "22.20.0"
   PNPM_VERSION: "10.26.1"
   RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
   VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
