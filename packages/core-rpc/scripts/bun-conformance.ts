@@ -1,5 +1,6 @@
 import { AppState } from "@diffdash/domain/app-state"
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
@@ -107,6 +108,30 @@ const passTransportAuthenticationLayer = Layer.succeed(
   CoreTransportAuthenticationMiddleware,
   (effect) => effect,
 )
+const mapPrivateAppStateDefectLayer = Layer.succeed(
+  AppStateGetAdmissionMiddleware,
+  (effect, options) =>
+    Effect.gen(function* () {
+      const context = yield* Schema.decodeUnknownEffect(HostRequestContext)(options.payload).pipe(
+        Effect.orDie,
+      )
+      return yield* effect.pipe(
+        Effect.catchDefect(() =>
+          Effect.die(
+            AppStateGetDefect.make({
+              code: "APP_STATE_INTERNAL_ERROR",
+              method: "AppState.get",
+              applicationInstanceId: context.applicationInstanceId,
+              processEpoch: context.processEpoch,
+              requestId: context.requestId,
+              retryClass: "notRetryable",
+              safeMessage: "DiffDash Core encountered an internal application-state error.",
+            }),
+          ),
+        ),
+      )
+    }),
+)
 
 const nativeRpcConformance = Effect.gen(function* () {
   const healthRpcs = RpcGroup.make(CoreHealthRpc)
@@ -146,10 +171,11 @@ const nativeRpcConformance = Effect.gen(function* () {
   assert(!("path" in expectedFailure), "Bun native RPC failure exposed a path")
 
   const defectHandlers = CoreBusinessRpcs.toLayer({
-    "AppState.get": () => Effect.die(appStateDefect),
+    "AppState.get": () => Effect.die(new Error("private /Users/example/repository/path")),
   })
   const defectClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
     Effect.provide(defectHandlers),
+    Effect.provide(mapPrivateAppStateDefectLayer),
   )
   const projectedDefect = yield* defectClient["AppState.get"](request).pipe(
     Effect.catchDefect(Effect.succeed),
@@ -190,6 +216,7 @@ const nativeRpcConformance = Effect.gen(function* () {
 await Effect.runPromise(nativeRpcConformance)
 
 const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
+const appStateExitCodec = Schema.toCodecJson(Rpc.exitSchema(AppStateGetRpc))
 const encodedValues = [
   Schema.encodeSync(CoreHealthRpc.payloadSchema)(request),
   Schema.encodeSync(CoreHealthRpc.errorSchema)(identityFailure),
@@ -201,6 +228,7 @@ const encodedValues = [
   Schema.encodeSync(AppStateGetRpc.errorSchema)(failure),
   Schema.encodeSync(AppStateGetDefectSchema)(appStateDefect),
   Schema.encodeSync(AppStateGetAdmissionFailure)(admissionFailure),
+  Schema.encodeSync(appStateExitCodec)(Exit.die(appStateDefect)),
 ]
 const decodedValues = encodedValues.flatMap((value) => {
   const bytes = parser.encode(value)
@@ -224,6 +252,7 @@ const decodedAppStateDefect = Schema.decodeUnknownSync(AppStateGetDefectSchema)(
 const decodedAdmissionFailure = Schema.decodeUnknownSync(AppStateGetAdmissionFailure)(
   decodedValues[9],
 )
+const decodedDefectExit = Schema.decodeUnknownSync(appStateExitCodec)(decodedValues[10])
 
 assert(decodedRequest.requestId === request.requestId, "Bun request identity roundtrip failed")
 assert(
@@ -263,6 +292,19 @@ assert(
   decodedAdmissionFailure.code === admissionFailure.code,
   "Bun AppState admission failure roundtrip failed",
 )
+assert(Exit.isFailure(decodedDefectExit), "Bun AppState defect exit roundtrip failed")
+if (Exit.isSuccess(decodedDefectExit)) throw new Error("Expected Bun AppState defect exit")
+const decodedExitDefect = Cause.squash(decodedDefectExit.cause)
+assert(
+  typeof decodedExitDefect === "object" &&
+    decodedExitDefect !== null &&
+    "code" in decodedExitDefect &&
+    decodedExitDefect.code === appStateDefect.code,
+  "Bun AppState defect exit identity roundtrip failed",
+)
+assert(!("cause" in decodedExitDefect), "Bun AppState defect exit exposed a cause")
+assert(!("stack" in decodedExitDefect), "Bun AppState defect exit exposed a stack")
+assert(!("path" in decodedExitDefect), "Bun AppState defect exit exposed a path")
 
 const boundedParser = RpcSerialization.makeMsgPack({ maxBufferSize: 2 }).makeUnsafe()
 const incompleteFrame = Uint8Array.of(0xd9)

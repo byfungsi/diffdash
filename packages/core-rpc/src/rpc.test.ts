@@ -114,6 +114,31 @@ const passTransportAuthenticationLayer = Layer.succeed(
   (effect) => effect,
 )
 
+const mapPrivateAppStateDefectLayer = Layer.succeed(
+  AppStateGetAdmissionMiddleware,
+  (effect, options) =>
+    Effect.gen(function* () {
+      const context = yield* Schema.decodeUnknownEffect(HostRequestContext)(options.payload).pipe(
+        Effect.orDie,
+      )
+      return yield* effect.pipe(
+        Effect.catchDefect(() =>
+          Effect.die(
+            AppStateGetDefect.make({
+              code: "APP_STATE_INTERNAL_ERROR",
+              method: "AppState.get",
+              applicationInstanceId: context.applicationInstanceId,
+              processEpoch: context.processEpoch,
+              requestId: context.requestId,
+              retryClass: "notRetryable",
+              safeMessage: "DiffDash Core encountered an internal application-state error.",
+            }),
+          ),
+        ),
+      )
+    }),
+)
+
 const appStateDefect = AppStateGetDefect.make({
   code: "APP_STATE_INTERNAL_ERROR",
   method: "AppState.get",
@@ -224,7 +249,7 @@ describe("Core RPC declarations", () => {
 
   it.effect("projects a sanitized AppState defect through native in-memory RPC", () => {
     const handlers = CoreBusinessRpcs.toLayer({
-      "AppState.get": () => Effect.die(appStateDefect),
+      "AppState.get": () => Effect.die(new Error("private /Users/example/repository/path")),
     })
 
     return Effect.gen(function* () {
@@ -238,7 +263,7 @@ describe("Core RPC declarations", () => {
       expect(defect).not.toHaveProperty("path")
     }).pipe(
       Effect.provide(handlers),
-      Effect.provide(passAppStateAdmissionLayer),
+      Effect.provide(mapPrivateAppStateDefectLayer),
       Effect.provide(passTransportAuthenticationLayer),
     )
   })
@@ -268,6 +293,7 @@ describe("Core RPC declarations", () => {
 
   it("roundtrips request, success, and expected failure schemas through native MessagePack", () => {
     const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
+    const appStateExitCodec = Schema.toCodecJson(Rpc.exitSchema(AppStateGetRpc))
     const encodedValues = [
       Schema.encodeSync(CoreHealthRpc.payloadSchema)(request),
       Schema.encodeSync(CoreHealthRpc.errorSchema)(identityFailure),
@@ -279,6 +305,7 @@ describe("Core RPC declarations", () => {
       Schema.encodeSync(AppStateGetRpc.errorSchema)(failure),
       Schema.encodeSync(AppStateGetAdmissionFailure)(admissionIdentityFailure),
       Schema.encodeSync(AppStateGetAdmissionFailure)(admissionLifecycleFailure),
+      Schema.encodeSync(appStateExitCodec)(Exit.die(appStateDefect)),
     ]
 
     const decodedValues = encodedValues.flatMap((value) => {
@@ -320,6 +347,14 @@ describe("Core RPC declarations", () => {
     )
     expect(decodedIdentityFailure).toEqual(admissionIdentityFailure)
     expect(decodedLifecycleFailure).toEqual(admissionLifecycleFailure)
+    const decodedDefectExit = Schema.decodeUnknownSync(appStateExitCodec)(decodedValues[10])
+    expect(Exit.isFailure(decodedDefectExit)).toBe(true)
+    if (Exit.isSuccess(decodedDefectExit)) throw new Error("Expected AppState defect exit")
+    const decodedDefect = Cause.squash(decodedDefectExit.cause)
+    expect(decodedDefect).toEqual(appStateDefect)
+    expect(decodedDefect).not.toHaveProperty("cause")
+    expect(decodedDefect).not.toHaveProperty("stack")
+    expect(decodedDefect).not.toHaveProperty("path")
     const decodedExit = Schema.decodeSync(Rpc.exitSchema(AppStateGetRpc))(
       Schema.encodeSync(Rpc.exitSchema(AppStateGetRpc))(Exit.fail(admissionLifecycleFailure)),
     )
