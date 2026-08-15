@@ -51,6 +51,10 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
           "Core.authorizeDatabaseOwnership": () => false,
           "Core.shutdown": () => false,
           "AppState.get": () => false,
+          "Walkthroughs.start": () => false,
+          "Walkthroughs.getOperation": () => false,
+          "Walkthroughs.cancel": () => false,
+          "Walkthroughs.getStored": () => false,
         })
         const authenticate = authenticationLock.withPermits(1)(
           Effect.gen(function* () {

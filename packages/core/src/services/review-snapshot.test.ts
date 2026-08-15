@@ -10,6 +10,7 @@ import {
   makeReviewSnapshotId,
   ReviewDiffIdentity,
   ReviewKey,
+  ReviewProjectId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
@@ -210,4 +211,20 @@ describe("ReviewSnapshotService", () => {
       ),
     ),
   )
+
+  it.effect("requires the project bound to an acquired snapshot", () => {
+    const value = snapshot("owned")
+    const owner = ReviewProjectId.make("project-owner")
+    const unrelated = ReviewProjectId.make("project-unrelated")
+    return Effect.gen(function* () {
+      const service = yield* ReviewSnapshotService
+      const acquired = yield* service.acquireLocal(target)
+      yield* service.associateProject(acquired.snapshotId, owner)
+
+      expect(yield* service.getForProject(acquired.snapshotId, owner)).toBe(acquired)
+      const mismatch = yield* Effect.result(service.getForProject(acquired.snapshotId, unrelated))
+      expect(Result.isFailure(mismatch)).toBe(true)
+      if (Result.isFailure(mismatch)) expect(mismatch.failure.reason).toBe("mismatched")
+    }).pipe(Effect.provide(layerFor(() => Effect.succeed(value))))
+  })
 })

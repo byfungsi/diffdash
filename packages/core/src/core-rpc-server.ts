@@ -1,11 +1,15 @@
 import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import { CoreControlRpcs } from "@diffdash/core-rpc/control"
-import { AuthenticatedCoreServerRpcs } from "@diffdash/core-rpc/transport"
+import {
+  AuthenticatedCoreWalkthroughServerRpcs,
+  AuthenticatedCoreServerRpcs,
+} from "@diffdash/core-rpc/transport"
 import { Layer } from "effect"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 
 import { coreBusinessRpcHandlersLayer } from "./core-business-rpc-handlers"
 import { coreControlRpcHandlersLayer } from "./core-control-rpc-handlers"
+import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
   coreTransportAuthenticationLayer,
@@ -27,6 +31,19 @@ export const coreRpcServerLayer = (authentication: CoreTransportAuthenticationOp
       Layer.mergeAll(
         coreControlRpcHandlersLayer,
         coreBusinessRpcHandlersLayer,
+        coreRpcAdmissionLayer,
+        coreTransportAuthenticationLayer(authentication),
+      ),
+    ),
+  )
+
+/** Runs the durable walkthrough RPC audience when an operation runtime is available. */
+export const coreWalkthroughRpcServerLayer = (authentication: CoreTransportAuthenticationOptions) =>
+  RpcServer.layer(AuthenticatedCoreWalkthroughServerRpcs).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        coreControlRpcHandlersLayer,
+        coreWalkthroughRpcHandlersLayer,
         coreRpcAdmissionLayer,
         coreTransportAuthenticationLayer(authentication),
       ),

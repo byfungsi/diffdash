@@ -1,6 +1,7 @@
 import { CoreTransportAuthenticationMiddleware } from "./admission"
 import { AppStateBusinessRpcs, CoreBusinessRpcs } from "./business"
 import { CoreControlRpcs } from "./control"
+import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
 
 /** Private native RPC header carrying the one-time Core transport credential. */
 export const CORE_TRANSPORT_TOKEN_HEADER = "x-diffdash-core-token"
@@ -25,4 +26,14 @@ const AuthenticatedAppStateBusinessRpcs = AppStateBusinessRpcs.middleware(
 /** Authenticated server group for methods backed by concrete handlers in the current Core. */
 export const AuthenticatedCoreServerRpcs = AuthenticatedCoreControlRpcs.merge(
   AuthenticatedAppStateBusinessRpcs,
+)
+
+/** Authenticated walkthrough-only group used to exercise the durable application boundary. */
+export const AuthenticatedWalkthroughBusinessRpcs = WalkthroughBusinessRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
+/** Authenticated control and walkthrough group for the durable walkthrough prototype. */
+export const AuthenticatedCoreWalkthroughServerRpcs = AuthenticatedCoreControlRpcs.merge(
+  AuthenticatedWalkthroughBusinessRpcs,
 )

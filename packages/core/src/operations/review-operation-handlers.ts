@@ -47,6 +47,7 @@ export const makeReviewOperationHandlers: Effect.Effect<
       Effect.gen(function* () {
         const project = yield* repositories.ensureHosted(review.repository, "preserve")
         const snapshot = yield* snapshots.acquireHosted(review)
+        yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
         return makeReviewSnapshotManifest(snapshot, project.id)
       }),
     [CoreMethod.acquireLocalReviewSnapshot]: ({ target }) =>
@@ -55,12 +56,14 @@ export const makeReviewOperationHandlers: Effect.Effect<
         const project = yield* repositories.ensureLocal(
           RepositoryCheckoutPath.make(snapshot.detail.rootPath),
         )
+        yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
         return makeReviewSnapshotManifest(snapshot, project.id)
       }),
     [CoreMethod.acquireRepositoryComparisonSnapshot]: ({ target }) =>
       Effect.gen(function* () {
         const repo = yield* comparisons.repository(target)
         const snapshot = yield* snapshots.acquireComparison(target)
+        yield* snapshots.associateProject(snapshot.snapshotId, repo.id).pipe(Effect.orDie)
         return makeReviewSnapshotManifest(snapshot, repo.id)
       }),
     [CoreMethod.getHostedReviewDecision]: ({ review }) => gitProvider.getReviewDecision(review),

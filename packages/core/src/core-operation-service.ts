@@ -1,22 +1,13 @@
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
-import { Context, Effect, Layer, type Option } from "effect"
+import { Context, Effect, Layer } from "effect"
 
 import {
   type CoreMethod as CoreMethodType,
-  type CoreGetStoredWalkthroughFailure,
   type CoreMethodInput,
   type CoreOperationFailure,
   type CoreOperationOptions,
   type CoreOperationOutput,
-  type CoreWalkthroughOperationFailure,
-  type CoreWalkthroughStartFailure,
-  type GetStoredWalkthrough,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationAccepted,
-  type WalkthroughOperationId as WalkthroughOperationIdType,
-  type WalkthroughOperationResult,
 } from "./core-contract"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
@@ -31,7 +22,10 @@ import { makeReviewResolution } from "./operations/review-resolution"
 import { makeSettingsOperationHandlers } from "./operations/settings-operation-handlers"
 import { makeThreadOperationHandlers } from "./operations/thread-operation-handlers"
 import { makeViewedFileOperationHandlers } from "./operations/viewed-file-operation-handlers"
-import { makeWalkthroughOperations } from "./operations/walkthrough-operations"
+import {
+  makeWalkthroughOperations,
+  type WalkthroughOperations,
+} from "./operations/walkthrough-operations"
 
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
@@ -40,20 +34,7 @@ interface CoreOperationServiceShape {
     input: CoreMethodInput<Method>,
     options?: CoreOperationOptions,
   ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
-  readonly walkthroughs: {
-    readonly start: (
-      request: StartWalkthroughOperation,
-    ) => Effect.Effect<WalkthroughOperationAccepted, CoreWalkthroughStartFailure>
-    readonly getOperation: (
-      operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
-    readonly cancel: (
-      operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
-    readonly getStored: (
-      request: GetStoredWalkthrough,
-    ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
-  }
+  readonly walkthroughs: WalkthroughOperations
 }
 
 /** Internal authority that exposes only cohesive Core operations to the embedded runtime. */

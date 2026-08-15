@@ -5,7 +5,7 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import * as SocketServer from "effect/unstable/socket/SocketServer"
 
-import { coreRpcServerLayer } from "./core-rpc-server"
+import { coreRpcServerLayer, coreWalkthroughRpcServerLayer } from "./core-rpc-server"
 import type { CoreTransportAuthenticationOptions } from "./core-transport-authentication"
 
 /** Native Unix socket endpoint configuration for one Core process epoch. */
@@ -26,7 +26,7 @@ export class CoreRpcSocketSecurityError extends Schema.TaggedError<CoreRpcSocket
 ) {}
 
 /** Runs Core RPC over one private native Unix domain socket. */
-export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
+const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
   const socketServerLayer = Layer.effect(
     SocketServer.SocketServer,
     Effect.gen(function* () {
@@ -67,5 +67,15 @@ export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
     ),
   )
 
-  return coreRpcServerLayer(options).pipe(Layer.provideMerge(protocolLayer))
+  return protocolLayer
 }
+
+/** Runs the currently deployed control and AppState RPC audience over a private native socket. */
+export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
+  coreRpcServerLayer(options).pipe(Layer.provideMerge(coreRpcSocketProtocolLayer(options)))
+
+/** Runs the durable walkthrough RPC audience when its business runtime is composed. */
+export const coreWalkthroughRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
+  coreWalkthroughRpcServerLayer(options).pipe(
+    Layer.provideMerge(coreRpcSocketProtocolLayer(options)),
+  )

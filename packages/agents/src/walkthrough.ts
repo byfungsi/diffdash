@@ -14,6 +14,7 @@ import {
   AgentModelId,
   AgentProviderId,
   type AgentProviderManifest,
+  type AgentProviderRegistration,
   AgentProviderOperationError,
   type AgentProviderResolutionError,
   InvalidAgentProviderResponseError,
@@ -50,6 +51,17 @@ const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
 /** Settings needed to route one walkthrough without knowing concrete providers. */
 export interface WalkthroughRouteSelection {
   readonly selection: AIAgentSelection
+}
+
+/** Ordered provider/model identity captured before walkthrough acceptance. */
+export interface WalkthroughCandidatePlanEntry {
+  readonly providerId: AgentProviderId
+  readonly modelIds: readonly AgentModelId[]
+}
+
+/** Immutable route and candidate plan used for one accepted walkthrough operation. */
+export interface WalkthroughPreparedRoute extends WalkthroughRouteSelection {
+  readonly candidates: readonly WalkthroughCandidatePlanEntry[]
 }
 
 /** Supplies the current user-selected walkthrough route and model preferences. */
@@ -167,6 +179,20 @@ export class WalkthroughGenerationError extends Schema.TaggedError<WalkthroughGe
 export class WalkthroughService extends Context.Service<
   WalkthroughService,
   {
+    readonly prepareRoute: Effect.Effect<WalkthroughPreparedRoute>
+    readonly generatePrepared: (
+      input: WalkthroughGenerationInput,
+      route: WalkthroughPreparedRoute,
+    ) => Effect.Effect<
+      Walkthrough,
+      | WalkthroughGenerationError
+      | WalkthroughValidationError
+      | WalkthroughModelUnavailableError
+      | AgentProviderResolutionError
+      | NoAgentProviderAvailableError
+      | AgentProviderOperationError
+      | InvalidAgentProviderResponseError
+    >
     readonly generate: (
       input: WalkthroughGenerationInput,
     ) => Effect.Effect<
@@ -187,43 +213,56 @@ export class WalkthroughService extends Context.Service<
       Effect.gen(function* () {
         const registry = yield* AgentProviderRegistry
         const routing = yield* WalkthroughRouting
+        const prepareRoute = routing.get.pipe(
+          Effect.flatMap((selection) =>
+            registry.list.pipe(
+              Effect.map((registrations) => ({
+                ...selection,
+                candidates: walkthroughCandidatePlan(registry, registrations, selection),
+              })),
+            ),
+          ),
+        )
 
-        return WalkthroughService.of({
-          generate: Effect.fn("WalkthroughService.generate")(function (input) {
-            const promptContext = buildWalkthroughPromptContext(input)
-            return routing.get.pipe(
-              Effect.flatMap((selection) =>
-                executeWalkthroughRoute(
-                  registry,
-                  selection,
-                  {
-                    prompt: promptContext.prompt,
-                    workingDirectory: walkthroughWorkingDirectory(
-                      input.review,
-                      options.remoteWorkingDirectory,
-                      input.workingDirectory,
-                    ),
-                    reasoningEffort: "low",
-                    timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
-                    policy: WALKTHROUGH_EXECUTION_POLICY,
-                  },
-                  (output) =>
-                    parseModelJson(output).pipe(
-                      Effect.flatMap(decodeWalkthroughProviderOutput),
-                      Effect.map((walkthrough) =>
-                        expandWalkthroughHunkAliases(walkthrough, promptContext.aliasToHunkId),
-                      ),
-                      Effect.flatMap((walkthrough) =>
-                        validateWalkthrough(walkthrough, input.hunkDigest),
-                      ),
-                      Effect.map((walkthrough) =>
-                        Walkthrough.make({ ...walkthrough, generation: input.generation }),
-                      ),
-                    ),
+        const generatePrepared = Effect.fn("WalkthroughService.generatePrepared")(function (
+          input: WalkthroughGenerationInput,
+          route: WalkthroughPreparedRoute,
+        ) {
+          const promptContext = buildWalkthroughPromptContext(input)
+          return executeWalkthroughRoute(
+            registry,
+            route,
+            {
+              prompt: promptContext.prompt,
+              workingDirectory: walkthroughWorkingDirectory(
+                input.review,
+                options.remoteWorkingDirectory,
+                input.workingDirectory,
+              ),
+              reasoningEffort: "low",
+              timeoutMs: WALKTHROUGH_GENERATION_TIMEOUT_MS,
+              policy: WALKTHROUGH_EXECUTION_POLICY,
+            },
+            (output) =>
+              parseModelJson(output).pipe(
+                Effect.flatMap(decodeWalkthroughProviderOutput),
+                Effect.map((walkthrough) =>
+                  expandWalkthroughHunkAliases(walkthrough, promptContext.aliasToHunkId),
+                ),
+                Effect.flatMap((walkthrough) => validateWalkthrough(walkthrough, input.hunkDigest)),
+                Effect.map((walkthrough) =>
+                  Walkthrough.make({ ...walkthrough, generation: input.generation }),
                 ),
               ),
-            )
-          }),
+          )
+        })
+
+        return WalkthroughService.of({
+          prepareRoute,
+          generatePrepared,
+          generate: Effect.fn("WalkthroughService.generate")((input) =>
+            prepareRoute.pipe(Effect.flatMap((route) => generatePrepared(input, route))),
+          ),
         })
       }),
     )
@@ -239,6 +278,33 @@ const walkthroughWorkingDirectory = (
   )
 
 type Registry = Context.Service.Shape<typeof AgentProviderRegistry>
+
+const walkthroughCandidatePlan = (
+  registry: Registry,
+  registrations: readonly AgentProviderRegistration[],
+  selection: WalkthroughRouteSelection,
+): readonly WalkthroughCandidatePlanEntry[] => {
+  const byId = new Map(
+    registrations.map((registration) => [registration.manifest.descriptor.id, registration]),
+  )
+  const providerIds = Match.valueTags(selection.selection, {
+    Automatic: () => registry.autoCandidates.walkthrough,
+    Pinned: ({ providerId }) => [AgentProviderId.make(providerId)],
+  })
+  return providerIds.map((providerId) => {
+    const registration = byId.get(providerId)
+    return {
+      providerId,
+      modelIds:
+        registration === undefined
+          ? Match.valueTags(selection.selection, {
+              Automatic: () => [],
+              Pinned: ({ modelId }) => (modelId === null ? [] : [AgentModelId.make(modelId)]),
+            })
+          : walkthroughModels(registration.manifest, selection, providerId),
+    }
+  })
+}
 type WalkthroughRouteError =
   | WalkthroughModelUnavailableError
   | AgentProviderResolutionError

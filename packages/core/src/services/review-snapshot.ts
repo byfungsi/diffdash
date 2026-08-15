@@ -8,6 +8,8 @@ import type {
   ReviewSnapshot,
 } from "@diffdash/domain/review-context"
 import {
+  ReviewProjectId,
+  type ReviewProjectId as ReviewProjectIdType,
   ReviewSnapshotId,
   type ReviewSnapshotId as ReviewSnapshotIdType,
 } from "@diffdash/domain/review-identity"
@@ -52,6 +54,7 @@ interface SnapshotEntry {
   readonly snapshot: ReviewSnapshot
   readonly expiresAt: number
   lastAccessedAt: number
+  projectId: ReviewProjectIdType | null
 }
 
 interface SnapshotTombstone {
@@ -75,6 +78,14 @@ export class ReviewSnapshotService extends Context.Service<
     readonly get: (
       snapshotId: ReviewSnapshotIdType,
     ) => Effect.Effect<ReviewSnapshot, ReviewSnapshotUnavailableError>
+    readonly getForProject: (
+      snapshotId: ReviewSnapshotIdType,
+      projectId: ReviewProjectIdType,
+    ) => Effect.Effect<ReviewSnapshot, ReviewSnapshotUnavailableError>
+    readonly associateProject: (
+      snapshotId: ReviewSnapshotIdType,
+      projectId: ReviewProjectIdType,
+    ) => Effect.Effect<void, ReviewSnapshotUnavailableError>
     readonly stats: Effect.Effect<ReviewSnapshotCacheStats>
   }
 >()("@diffdash/ReviewSnapshotService") {
@@ -121,12 +132,14 @@ export class ReviewSnapshotService extends Context.Service<
           now: number,
         ): Snapshot => {
           removeExpired(now)
+          const projectId = entries.get(snapshot.snapshotId)?.projectId ?? null
           deepFreeze(snapshot)
           accessSequence += 1
           entries.set(snapshot.snapshotId, {
             snapshot,
             expiresAt: now + config.ttlMs,
             lastAccessedAt: accessSequence,
+            projectId,
           })
           tombstones.delete(snapshot.snapshotId)
 
@@ -189,11 +202,42 @@ export class ReviewSnapshotService extends Context.Service<
           return entry.snapshot
         })
 
+        const associateProject = Effect.fn("ReviewSnapshotService.associateProject")(function* (
+          snapshotId: ReviewSnapshotIdType,
+          projectId: ReviewProjectIdType,
+        ) {
+          yield* get(snapshotId)
+          const entry = entries.get(snapshotId)
+          if (entry === undefined || (entry.projectId !== null && entry.projectId !== projectId)) {
+            return yield* ReviewSnapshotUnavailableError.make({
+              snapshotId,
+              reason: "mismatched",
+            })
+          }
+          entry.projectId = ReviewProjectId.make(projectId)
+        })
+
+        const getForProject = Effect.fn("ReviewSnapshotService.getForProject")(function* (
+          snapshotId: ReviewSnapshotIdType,
+          projectId: ReviewProjectIdType,
+        ) {
+          const snapshot = yield* get(snapshotId)
+          if (entries.get(snapshotId)?.projectId !== projectId) {
+            return yield* ReviewSnapshotUnavailableError.make({
+              snapshotId,
+              reason: "mismatched",
+            })
+          }
+          return snapshot
+        })
+
         return ReviewSnapshotService.of({
           acquireComparison,
           acquireHosted,
           acquireLocal,
+          associateProject,
           get,
+          getForProject,
           stats: Clock.currentTimeMillis.pipe(
             Effect.map((now) => {
               removeExpired(now)

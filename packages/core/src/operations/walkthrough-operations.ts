@@ -1,5 +1,5 @@
-import type { Repo } from "@diffdash/domain/repository"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
 import type {
   HostedReviewSnapshot,
   LocalReviewSnapshot,
@@ -19,11 +19,17 @@ import {
 } from "@diffdash/domain/walkthrough"
 import {
   WalkthroughArtifactReference,
+  type WalkthroughOperationAcceptance,
+  WalkthroughOperationAcceptanceEvidence,
+  WalkthroughOperationCandidatePlanFingerprint,
+  WalkthroughOperationIdempotencyKey,
   WalkthroughExpectedFailure,
   WalkthroughOperationFailureCode,
   WalkthroughOperationId,
   WalkthroughOperationIdentity,
   type WalkthroughOperation,
+  type WalkthroughOperationAcceptedRequest,
+  type WalkthroughOperationReviewGeneration,
   type WalkthroughExpectedFailureCategory,
   type WalkthroughOperationIdentity as WalkthroughOperationIdentityType,
 } from "@diffdash/domain/walkthrough-operation"
@@ -37,6 +43,7 @@ import {
 } from "@diffdash/persistence/walkthrough-store"
 import {
   WalkthroughGenerationInput,
+  type WalkthroughPreparedRoute,
   WalkthroughReviewContext,
   WalkthroughService,
 } from "@diffdash/agents/walkthrough"
@@ -52,7 +59,7 @@ import {
   Semaphore,
   type Scope,
 } from "effect"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 
 import {
   type CoreGetStoredWalkthroughFailure,
@@ -74,7 +81,9 @@ import {
   WalkthroughOperationStateUnavailable,
   WalkthroughOperationSuperseded,
   WalkthroughOperationTerminalFailure,
+  WalkthroughReviewGenerationChangedError,
 } from "../core-contract"
+import { ReviewSnapshotService } from "../services/review-snapshot"
 import { captureCoreDefect } from "../core-defect-boundary"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
 import type { ReviewResolution } from "./review-resolution"
@@ -88,7 +97,7 @@ type RepositoryComparisonTarget = Extract<
 
 interface ResolvedWalkthroughBase<Snapshot extends ReviewSnapshot> {
   readonly regenerate: boolean
-  readonly repo: Repo
+  readonly repoId: ReviewProjectIdType
   readonly snapshot: Snapshot
   readonly prNumber: number | null
 }
@@ -131,6 +140,19 @@ export interface WalkthroughLifecycle {
 
 /** Scoped walkthrough capability including generation and persistent cache access. */
 export interface WalkthroughOperations extends WalkthroughLifecycle {
+  readonly startGeneration: (
+    request: StartWalkthroughGeneration,
+  ) => Effect.Effect<WalkthroughOperationAcceptance, CoreWalkthroughStartFailure>
+  readonly getSnapshot: (
+    operationId: WalkthroughOperationIdType,
+  ) => Effect.Effect<WalkthroughOperation, CoreWalkthroughOperationFailure>
+  readonly cancelSnapshot: (
+    operationId: WalkthroughOperationIdType,
+  ) => Effect.Effect<WalkthroughOperation, CoreWalkthroughOperationFailure>
+  readonly getStoredGeneration: (
+    generation: WalkthroughOperationReviewGeneration,
+    promptVersion: string,
+  ) => Effect.Effect<Option.Option<StoredWalkthrough>, WalkthroughStoreError>
   readonly getStored: (
     request: GetStoredWalkthrough,
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
@@ -138,6 +160,14 @@ export interface WalkthroughOperations extends WalkthroughLifecycle {
     repoId: ReviewProjectIdType,
     snapshot: ReviewSnapshot,
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, WalkthroughStoreError>
+}
+
+/** RPC-oriented immutable generation intent accepted without re-resolving a renderer target. */
+export interface StartWalkthroughGeneration {
+  readonly acceptedRequest: WalkthroughOperationAcceptedRequest
+  readonly idempotencyKey: WalkthroughOperationIdempotencyKey
+  readonly reviewGeneration: WalkthroughOperationReviewGeneration
+  readonly regenerate: boolean
 }
 
 /** Acquires the complete scoped walkthrough capability. */
@@ -148,6 +178,7 @@ export const makeWalkthroughOperations = (
   never,
   | RepositoryComparisonSource
   | Scope.Scope
+  | ReviewSnapshotService
   | WalkthroughOperationStore
   | WalkthroughService
   | WalkthroughStore
@@ -157,6 +188,7 @@ export const makeWalkthroughOperations = (
     const walkthroughService = yield* WalkthroughService
     const operationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
+    const reviewSnapshots = yield* ReviewSnapshotService
     const activeFibers = yield* FiberMap.make<
       WalkthroughOperationIdType,
       WalkthroughWorkerObservation,
@@ -183,6 +215,18 @@ export const makeWalkthroughOperations = (
       return yield* getCached(repo.id, snapshot)
     })
 
+    const getStoredGeneration: WalkthroughOperations["getStoredGeneration"] = Effect.fn(
+      "Core.Walkthroughs.getStoredGeneration",
+    )((generation, promptVersion) =>
+      walkthroughStore.get({
+        repoId: generation.projectId,
+        reviewKey: generation.reviewKey,
+        baseSha: generation.baseRevision,
+        headSha: generation.headRevision,
+        promptVersion,
+      }),
+    )
+
     const resolveWalkthrough = Effect.fn("Core.Walkthroughs.resolve")(function (
       request: StartWalkthroughOperation,
     ): Effect.Effect<ResolvedWalkthrough, CoreWalkthroughStartFailure> {
@@ -194,6 +238,7 @@ export const makeWalkthroughOperations = (
               kind: "hosted" as const,
               target,
               regenerate: request.regenerate,
+              repoId: resolved.repo.id,
               ...resolved,
             })),
           )
@@ -203,6 +248,7 @@ export const makeWalkthroughOperations = (
               kind: "repositoryComparison" as const,
               target,
               regenerate: request.regenerate,
+              repoId: resolved.repo.id,
               ...resolved,
             })),
           )
@@ -212,6 +258,7 @@ export const makeWalkthroughOperations = (
               kind: "local" as const,
               target,
               regenerate: request.regenerate,
+              repoId: resolved.repo.id,
               ...resolved,
             })),
           )
@@ -222,7 +269,7 @@ export const makeWalkthroughOperations = (
       resolved: ResolvedWalkthrough,
       generate: Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure>,
     ) {
-      const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
+      const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
       if (resolved.regenerate) return yield* generate
       const cached = yield* walkthroughStore.get(cacheKey)
       return yield* Option.match(cached, {
@@ -233,18 +280,19 @@ export const makeWalkthroughOperations = (
 
     const generateResolved = Effect.fn("Core.Walkthroughs.generateResolved")(function (
       resolved: ResolvedWalkthrough,
+      route: WalkthroughPreparedRoute,
     ): Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure> {
       switch (resolved.kind) {
         case "hosted":
           return loadOrGenerate(
             resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
                 resolved.snapshot.parsedDiff.files,
                 walkthroughHostedReviewScope(resolved.target.review),
               )
-              const walkthrough = yield* walkthroughService.generate(
+              const walkthrough = yield* walkthroughService.generatePrepared(
                 WalkthroughGenerationInput.make({
                   review: WalkthroughReviewContext.make({
                     kind: "hosted",
@@ -257,6 +305,7 @@ export const makeWalkthroughOperations = (
                   promptStats: Option.some(promptInput.stats),
                   workingDirectory: Option.none(),
                 }),
+                route,
               )
               return yield* walkthroughStore.save({
                 ...cacheKey,
@@ -269,7 +318,7 @@ export const makeWalkthroughOperations = (
           return loadOrGenerate(
             resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
                 resolved.snapshot.parsedDiff.files,
                 walkthroughRepositoryComparisonScope(resolved.snapshot.reviewKey),
@@ -277,7 +326,7 @@ export const makeWalkthroughOperations = (
               const walkthrough = yield* comparisons.useWorkspace(
                 resolved.target,
                 (workingDirectory) =>
-                  walkthroughService.generate(
+                  walkthroughService.generatePrepared(
                     WalkthroughGenerationInput.make({
                       review: WalkthroughReviewContext.make({
                         kind: "repositoryComparison",
@@ -290,6 +339,7 @@ export const makeWalkthroughOperations = (
                       promptStats: Option.some(promptInput.stats),
                       workingDirectory: Option.some(workingDirectory),
                     }),
+                    route,
                   ),
               )
               return yield* walkthroughStore.save({
@@ -303,12 +353,12 @@ export const makeWalkthroughOperations = (
           return loadOrGenerate(
             resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
                 resolved.snapshot.parsedDiff.files,
                 walkthroughLocalDiffScope(resolved.snapshot.headRevision),
               )
-              const walkthrough = yield* walkthroughService.generate(
+              const walkthrough = yield* walkthroughService.generatePrepared(
                 WalkthroughGenerationInput.make({
                   review: WalkthroughReviewContext.make({
                     kind: "localDiff",
@@ -321,6 +371,7 @@ export const makeWalkthroughOperations = (
                   promptStats: Option.some(promptInput.stats),
                   workingDirectory: Option.none(),
                 }),
+                route,
               )
               return yield* walkthroughStore.save({
                 ...cacheKey,
@@ -333,7 +384,11 @@ export const makeWalkthroughOperations = (
     })
 
     const runOperation = Effect.fn("Core.Walkthroughs.runOperation")(
-      function* (operation: WalkthroughOperation, resolved: ResolvedWalkthrough) {
+      function* (
+        operation: WalkthroughOperation,
+        resolved: ResolvedWalkthrough,
+        route: WalkthroughPreparedRoute,
+      ) {
         const running = yield* operationStore.markRunning({
           operationId: operation.id,
           expectedStateVersion: operation.stateVersion,
@@ -342,7 +397,7 @@ export const makeWalkthroughOperations = (
           return Option.none()
         }
 
-        const exit = yield* Effect.exit(generateResolved(resolved))
+        const exit = yield* Effect.exit(generateResolved(resolved, route))
         yield* persistTerminalExit(operationStore, running.operation, exit)
         return Exit.match(exit, {
           onSuccess: () => Option.none(),
@@ -363,38 +418,85 @@ export const makeWalkthroughOperations = (
         ),
     )
 
+    const acceptAndRun = Effect.fn("Core.Walkthroughs.acceptAndRun")(function* (
+      resolved: ResolvedWalkthrough,
+      route: WalkthroughPreparedRoute,
+      acceptanceEvidence: WalkthroughOperationAcceptanceEvidence | null,
+    ) {
+      return yield* startSemaphore.withPermits(1)(
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const acceptance = yield* operationStore.acceptOrGet({
+              operationId: WalkthroughOperationId.make(randomUUID()),
+              identity: operationIdentity(resolved.repoId, resolved.snapshot),
+              regenerate: resolved.regenerate,
+              acceptanceEvidence,
+            })
+            if (acceptance.created) {
+              if (acceptance.operation.regenerationOfOperationId !== null) {
+                yield* FiberMap.remove(activeFibers, acceptance.operation.regenerationOfOperationId)
+              }
+              yield* FiberMap.run(
+                activeFibers,
+                acceptance.operation.id,
+                runOperation(acceptance.operation, resolved, route),
+                { onlyIfMissing: true },
+              )
+            }
+            return acceptance
+          }),
+        ),
+      )
+    })
+
     const start: WalkthroughLifecycle["start"] = Effect.fn("Core.Walkthroughs.start")(
       function* (request) {
         const resolved = yield* resolveWalkthrough(request)
-        return yield* startSemaphore.withPermits(1)(
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              const acceptance = yield* operationStore.acceptOrGet({
-                operationId: WalkthroughOperationId.make(randomUUID()),
-                identity: operationIdentity(resolved.repo.id, resolved.snapshot),
-                regenerate: request.regenerate,
-                acceptanceEvidence: null,
-              })
-              if (acceptance.created) {
-                if (acceptance.operation.regenerationOfOperationId !== null) {
-                  yield* FiberMap.remove(
-                    activeFibers,
-                    acceptance.operation.regenerationOfOperationId,
-                  )
-                }
-                yield* FiberMap.run(
-                  activeFibers,
-                  acceptance.operation.id,
-                  runOperation(acceptance.operation, resolved),
-                  { onlyIfMissing: true },
-                )
-              }
-              return { operationId: acceptance.operation.id }
+        const route = yield* walkthroughService.prepareRoute
+        const acceptance = yield* acceptAndRun(resolved, route, null)
+        return { operationId: acceptance.operation.id }
+      },
+    )
+
+    const startGeneration: WalkthroughOperations["startGeneration"] = Effect.fn(
+      "Core.Walkthroughs.startGeneration",
+    )(function* (request) {
+      const snapshot = yield* reviewSnapshots
+        .getForProject(request.reviewGeneration.snapshotId, request.reviewGeneration.projectId)
+        .pipe(
+          Effect.mapError(() =>
+            WalkthroughReviewGenerationChangedError.make({
+              snapshotId: request.reviewGeneration.snapshotId,
+              reason: "unavailable",
             }),
           ),
         )
-      },
-    )
+      if (!matchesReviewGeneration(snapshot, request.reviewGeneration)) {
+        return yield* WalkthroughReviewGenerationChangedError.make({
+          snapshotId: request.reviewGeneration.snapshotId,
+          reason: "mismatched",
+        })
+      }
+      const route = yield* walkthroughService.prepareRoute
+      const resolved = resolvedFromGeneration(
+        snapshot,
+        request.reviewGeneration.projectId,
+        request.regenerate,
+      )
+      return yield* acceptAndRun(
+        resolved,
+        route,
+        WalkthroughOperationAcceptanceEvidence.make({
+          acceptedRequest: request.acceptedRequest,
+          idempotencyKey: request.idempotencyKey,
+          reviewGeneration: request.reviewGeneration,
+          regenerate: request.regenerate,
+          configuredRoute: configuredRoute(route),
+          candidatePlanFingerprint: candidatePlanFingerprint(route),
+          attempts: [],
+        }),
+      )
+    })
 
     const materializeOperation: (
       operation: WalkthroughOperation,
@@ -480,31 +582,52 @@ export const makeWalkthroughOperations = (
       return yield* materializeOperation(authoritative)
     })
 
+    const getSnapshot: WalkthroughOperations["getSnapshot"] = Effect.fn(
+      "Core.Walkthroughs.getSnapshot",
+    )((operationId) => requireOperation(operationStore, operationId))
+
+    const cancelSnapshot: WalkthroughOperations["cancelSnapshot"] = Effect.fn(
+      "Core.Walkthroughs.cancelSnapshot",
+    )(function* (operationId) {
+      let operation = yield* requireOperation(operationStore, operationId)
+      while (isActiveOperation(operation)) {
+        const transition = yield* operationStore
+          .requestCancellation({
+            operationId,
+            expectedStateVersion: operation.stateVersion,
+          })
+          .pipe(
+            Effect.catchTag("WalkthroughOperationNotFoundError", () =>
+              WalkthroughOperationNotFound.make({ operationId }),
+            ),
+          )
+        operation = transition.operation
+        if (transition.won) {
+          yield* FiberMap.remove(activeFibers, operationId)
+          break
+        }
+      }
+      return operation
+    })
+
     const cancel: WalkthroughLifecycle["cancel"] = Effect.fn("Core.Walkthroughs.cancel")(
       function* (operationId) {
-        let operation = yield* requireOperation(operationStore, operationId)
-        while (isActiveOperation(operation)) {
-          const transition = yield* operationStore
-            .requestCancellation({
-              operationId,
-              expectedStateVersion: operation.stateVersion,
-            })
-            .pipe(
-              Effect.catchTag("WalkthroughOperationNotFoundError", () =>
-                WalkthroughOperationNotFound.make({ operationId }),
-              ),
-            )
-          operation = transition.operation
-          if (transition.won) {
-            yield* FiberMap.remove(activeFibers, operationId)
-            break
-          }
-        }
+        const operation = yield* cancelSnapshot(operationId)
         return yield* materializeOperation(operation)
       },
     )
 
-    return { start, getOperation, cancel, getStored: getStoredWalkthrough, getCached }
+    return {
+      start,
+      startGeneration,
+      getOperation,
+      getSnapshot,
+      cancel,
+      cancelSnapshot,
+      getStored: getStoredWalkthrough,
+      getStoredGeneration,
+      getCached,
+    }
   })
 
 const persistTerminalExit = (
@@ -648,6 +771,77 @@ const operationIdentity = (
     headRevision: snapshot.headRevision,
     promptVersion: WALKTHROUGH_PROMPT_VERSION,
   })
+
+const matchesReviewGeneration = (
+  snapshot: ReviewSnapshot,
+  generation: WalkthroughOperationReviewGeneration,
+) =>
+  Match.valueTags(snapshot, {
+    hosted: () => generation.kind === "hosted",
+    local: () => generation.kind === "local",
+    repositoryComparison: () => generation.kind === "repositoryComparison",
+  }) &&
+  snapshot.snapshotId === generation.snapshotId &&
+  snapshot.reviewKey === generation.reviewKey &&
+  snapshot.baseRevision === generation.baseRevision &&
+  snapshot.headRevision === generation.headRevision
+
+const resolvedFromGeneration = (
+  snapshot: ReviewSnapshot,
+  repoId: ReviewProjectIdType,
+  regenerate: boolean,
+): ResolvedWalkthrough =>
+  Match.valueTags(snapshot, {
+    hosted: (hosted) => ({
+      kind: "hosted" as const,
+      target: { kind: "hosted" as const, review: hosted.detail.summary.locator },
+      regenerate,
+      repoId,
+      snapshot: hosted,
+      prNumber: hosted.detail.summary.locator.number,
+    }),
+    local: (local) => ({
+      kind: "local" as const,
+      target: {
+        kind: "local" as const,
+        rootPath: local.detail.rootPath,
+        comparison: local.detail.comparison,
+      },
+      regenerate,
+      repoId,
+      snapshot: local,
+      prNumber: null,
+    }),
+    repositoryComparison: (comparison) => ({
+      kind: "repositoryComparison" as const,
+      target: comparison.detail.target,
+      regenerate,
+      repoId,
+      snapshot: comparison,
+      prNumber: null,
+    }),
+  })
+
+const configuredRoute = (route: WalkthroughPreparedRoute) =>
+  Match.valueTags(route.selection, {
+    Automatic: ({ quality }) => ({ mode: "auto" as const, quality }),
+    Pinned: ({ providerId, modelId }) => ({
+      mode: "provider" as const,
+      providerId: AgentProviderId.make(providerId),
+      modelId: modelId === null ? null : AgentModelId.make(modelId),
+    }),
+  })
+
+const candidatePlanFingerprint = (route: WalkthroughPreparedRoute) =>
+  WalkthroughOperationCandidatePlanFingerprint.make(
+    `walkthrough-plan:v1:${createHash("sha256")
+      .update(
+        JSON.stringify(
+          route.candidates.map(({ providerId, modelIds }) => ({ providerId, modelIds })),
+        ),
+      )
+      .digest("hex")}`,
+  )
 
 const artifactCacheKey = (artifact: WalkthroughArtifactReference): WalkthroughCacheKey => ({
   repoId: artifact.repoId,

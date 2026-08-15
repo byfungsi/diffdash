@@ -11,7 +11,7 @@ import {
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import type { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewSnapshotId, type ReviewRevision } from "@diffdash/domain/review-identity"
 import type {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
@@ -402,6 +402,15 @@ export interface StartWalkthroughOperation {
   readonly regenerate: boolean
 }
 
+/** Requested immutable walkthrough generation is unavailable or no longer matches its snapshot. */
+export class WalkthroughReviewGenerationChangedError extends Schema.TaggedError<WalkthroughReviewGenerationChangedError>()(
+  "WalkthroughReviewGenerationChangedError",
+  {
+    snapshotId: ReviewSnapshotId,
+    reason: Schema.Literals(["unavailable", "mismatched"]),
+  },
+) {}
+
 /** Hosted review target constructor accepted by the Core walkthrough boundary. */
 export const CoreHostedReviewTarget = HostedReviewTarget
 
@@ -498,6 +507,7 @@ export interface CoreWalkthroughs {
 /** Expected failures while resolving and durably accepting walkthrough work. */
 export type CoreWalkthroughStartFailure =
   | CoreThreadResolutionFailure
+  | WalkthroughReviewGenerationChangedError
   | WalkthroughOperationStoreError
 
 /** Expected failures while reading, cancelling, or materializing durable walkthrough work. */

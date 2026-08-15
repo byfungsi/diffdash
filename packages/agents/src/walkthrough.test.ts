@@ -391,6 +391,29 @@ const serviceLayer = (
 }
 
 describe("WalkthroughService", () => {
+  it.effect("captures the configured route and ordered provider/model plan", () => {
+    const primaryModels = [AgentModelId.make("primary-fast"), AgentModelId.make("primary-balanced")]
+    const fallbackModels = [AgentModelId.make("fallback-balanced")]
+    const registrations = [
+      readyWalkthroughRegistration(primaryProviderId, primaryModels, () => Effect.never),
+      readyWalkthroughRegistration(fallbackProviderId, fallbackModels, () => Effect.never),
+    ]
+    return Effect.gen(function* () {
+      const service = yield* WalkthroughService
+      const route = yield* service.prepareRoute
+
+      expect(route.selection).toMatchObject({ _tag: "Automatic", quality: "balanced" })
+      expect(route.candidates).toEqual([
+        { providerId: fallbackProviderId, modelIds: fallbackModels },
+        { providerId: primaryProviderId, modelIds: primaryModels },
+      ])
+    }).pipe(
+      Effect.provide(
+        serviceLayer(registrations, { mode: "auto" }, [fallbackProviderId, primaryProviderId]),
+      ),
+    )
+  })
+
   it("round-trips generation input through its schema", () => {
     const input = WalkthroughGenerationInput.make({
       ...generationInput,
