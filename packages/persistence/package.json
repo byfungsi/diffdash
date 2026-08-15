@@ -8,6 +8,7 @@
     "./database": "./src/database.ts",
     "./database-ownership": "./src/database-ownership.ts",
     "./resource-catalog": "./src/resource-catalog.ts",
+    "./snapshot-block-store": "./src/snapshot-block-store.ts",
     "./database-node": "./src/database-node.ts",
     "./project-workspace-store": "./src/project-workspace-store.ts",
     "./repository-store": "./src/repository-store.ts",

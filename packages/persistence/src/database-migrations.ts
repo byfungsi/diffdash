@@ -24,6 +24,8 @@ const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY = "walkthrough-operation-accep
 const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION = 1
 const RESOURCE_CATALOG_CAPABILITY = "resource-catalog"
 const RESOURCE_CATALOG_CAPABILITY_VERSION = 1
+const SNAPSHOT_BLOCK_STORAGE_CAPABILITY = "snapshot-block-storage"
+const SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -1004,7 +1006,9 @@ export const databaseRequiresMigration = Effect.fn("databaseRequiresMigration")(
     (yield* readCapabilityVersion(database, WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY)) <
       WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION ||
     (yield* readCapabilityVersion(database, RESOURCE_CATALOG_CAPABILITY)) <
-      RESOURCE_CATALOG_CAPABILITY_VERSION
+      RESOURCE_CATALOG_CAPABILITY_VERSION ||
+    (yield* readCapabilityVersion(database, SNAPSHOT_BLOCK_STORAGE_CAPABILITY)) <
+      SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION
   )
 })
 
@@ -1129,6 +1133,141 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
   const repositoryIdentityInstalled =
     (yield* readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY)) >=
     REPOSITORY_IDENTITY_CAPABILITY_VERSION
+
+  if (
+    (yield* readCapabilityVersion(database, SNAPSHOT_BLOCK_STORAGE_CAPABILITY)) <
+    SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* executeSqlScript(
+          database,
+          `
+          CREATE TABLE review_file_deltas (
+            id TEXT PRIMARY KEY,
+            old_content_id TEXT NOT NULL,
+            new_content_id TEXT NOT NULL,
+            old_mode TEXT NOT NULL,
+            new_mode TEXT NOT NULL,
+            status TEXT NOT NULL,
+            diff_options TEXT NOT NULL,
+            diff_policy_identity TEXT NOT NULL,
+            identity_version INTEGER NOT NULL CHECK (identity_version >= 1),
+            UNIQUE (
+              old_content_id, new_content_id, old_mode, new_mode, status,
+              diff_options, diff_policy_identity, identity_version
+            )
+          );
+
+          CREATE TABLE review_snapshot_manifests (
+            id TEXT PRIMARY KEY,
+            review_key TEXT NOT NULL,
+            base_revision TEXT NOT NULL,
+            head_revision TEXT NOT NULL,
+            semantic_identity TEXT NOT NULL,
+            source_kind TEXT NOT NULL CHECK (source_kind IN ('managedSpool', 'exactGit')),
+            spool_resource_id TEXT REFERENCES resources(id) ON DELETE RESTRICT,
+            repository_identity TEXT,
+            base_object TEXT,
+            head_object TEXT,
+            diff_policy_identity TEXT,
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            CHECK (
+              (source_kind = 'managedSpool' AND spool_resource_id IS NOT NULL AND
+               repository_identity IS NULL AND base_object IS NULL AND head_object IS NULL) OR
+              (source_kind = 'exactGit' AND spool_resource_id IS NULL AND
+               repository_identity IS NOT NULL AND base_object IS NOT NULL AND
+               head_object IS NOT NULL AND diff_policy_identity IS NOT NULL)
+            )
+          );
+
+          CREATE TABLE review_snapshot_files (
+            snapshot_id TEXT NOT NULL REFERENCES review_snapshot_manifests(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            delta_id TEXT NOT NULL REFERENCES review_file_deltas(id) ON DELETE RESTRICT,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            old_path TEXT,
+            additions INTEGER NOT NULL CHECK (additions >= 0),
+            deletions INTEGER NOT NULL CHECK (deletions >= 0),
+            PRIMARY KEY (snapshot_id, ordinal),
+            UNIQUE (snapshot_id, file_id)
+          );
+
+          CREATE INDEX review_snapshot_files_delta_idx
+            ON review_snapshot_files(delta_id, snapshot_id);
+
+          CREATE TABLE review_hunks (
+            id TEXT NOT NULL,
+            delta_id TEXT NOT NULL REFERENCES review_file_deltas(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            fingerprint TEXT NOT NULL,
+            header TEXT NOT NULL,
+            old_start INTEGER NOT NULL CHECK (old_start >= 0),
+            old_lines INTEGER NOT NULL CHECK (old_lines >= 0),
+            new_start INTEGER NOT NULL CHECK (new_start >= 0),
+            new_lines INTEGER NOT NULL CHECK (new_lines >= 0),
+            line_count INTEGER NOT NULL CHECK (line_count >= 0),
+            PRIMARY KEY (delta_id, id),
+            UNIQUE (delta_id, ordinal)
+          );
+
+          CREATE TABLE review_diff_blocks (
+            id TEXT PRIMARY KEY,
+            delta_id TEXT NOT NULL REFERENCES review_file_deltas(id) ON DELETE CASCADE,
+            hunk_id TEXT,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            first_line INTEGER NOT NULL CHECK (first_line >= 0),
+            line_count INTEGER NOT NULL CHECK (line_count > 0),
+            byte_count INTEGER NOT NULL CHECK (byte_count > 0),
+            checksum TEXT NOT NULL,
+            resource_id TEXT NOT NULL UNIQUE REFERENCES resources(id) ON DELETE RESTRICT,
+            reservation_id TEXT NOT NULL UNIQUE REFERENCES resource_reservations(id) ON DELETE RESTRICT,
+            temporary_path TEXT NOT NULL,
+            final_path TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL CHECK (state IN ('pending', 'ready')),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            FOREIGN KEY (delta_id, hunk_id)
+              REFERENCES review_hunks(delta_id, id) ON DELETE CASCADE,
+            UNIQUE (delta_id, ordinal)
+          );
+
+          CREATE INDEX review_diff_blocks_visibility_idx
+            ON review_diff_blocks(delta_id, state, ordinal);
+
+          CREATE TABLE review_block_placements (
+            snapshot_id TEXT NOT NULL REFERENCES review_snapshot_manifests(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            block_id TEXT NOT NULL REFERENCES review_diff_blocks(id) ON DELETE RESTRICT,
+            PRIMARY KEY (snapshot_id, ordinal),
+            UNIQUE (snapshot_id, block_id)
+          );
+
+          CREATE INDEX review_block_placements_block_idx
+            ON review_block_placements(block_id, snapshot_id);
+
+          CREATE TABLE review_snapshot_checkpoints (
+            snapshot_id TEXT NOT NULL REFERENCES review_snapshot_manifests(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            file_ordinal INTEGER NOT NULL CHECK (file_ordinal >= 0),
+            hunk_ordinal INTEGER NOT NULL CHECK (hunk_ordinal >= 0),
+            block_id TEXT NOT NULL REFERENCES review_diff_blocks(id) ON DELETE RESTRICT,
+            byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0),
+            line_offset INTEGER NOT NULL CHECK (line_offset >= 0),
+            PRIMARY KEY (snapshot_id, ordinal)
+          );
+          `,
+        )
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET version = excluded.version, installed_at = excluded.installed_at`,
+          [SNAPSHOT_BLOCK_STORAGE_CAPABILITY, SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION, now],
+        )
+      }),
+    )
+  }
 
   if (!repositoryIdentityInstalled)
     yield* database.transaction(
