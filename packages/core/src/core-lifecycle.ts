@@ -114,6 +114,12 @@ export interface CoreLifecycleOperations {
   /** Runs ownership or recovery work until completion or graceful draining interrupts it. */
   readonly interruptOnDrain: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 
+  /** Waits for Electron's persisted ownership authorization evidence. */
+  readonly ownershipAuthorization: Effect.Effect<DatabaseOwnershipAuthorizationId>
+
+  /** Stops admission after the one authenticated host connection dies. */
+  readonly authenticatedHostDied: Effect.Effect<void, CoreLifecycleTransitionError>
+
   /** Marks authenticated transport ready to receive ownership authorization. */
   readonly awaitOwnershipAuthorization: Effect.Effect<void, CoreLifecycleTransitionError>
 
@@ -146,6 +152,7 @@ export const makeCoreLifecycle = (
   Effect.gen(function* () {
     const stateRef = yield* Ref.make<State>(State.Starting())
     const drainRequested = yield* Deferred.make<void>()
+    const ownershipAuthorized = yield* Deferred.make<DatabaseOwnershipAuthorizationId>()
 
     const matchesIdentity = (request: HostRequestContext): boolean =>
       request.applicationInstanceId === identity.applicationInstanceId &&
@@ -304,7 +311,9 @@ export const makeCoreLifecycle = (
               Failed: (current) => [Result.fail(authorizationRejected(current)), current] as const,
             }),
         )
-        return yield* Effect.fromResult(decision)
+        const authorized = yield* Effect.fromResult(decision)
+        yield* Deferred.succeed(ownershipAuthorized, authorized.authorizationId)
+        return authorized
       },
     )
 
@@ -434,6 +443,21 @@ export const makeCoreLifecycle = (
       }),
     )
 
+    const authenticatedHostDied = Effect.gen(function* () {
+      const shouldDrain = yield* Ref.modify(stateRef, (state): readonly [boolean, State] =>
+        Match.valueTags(state, {
+          Starting: () => [true, State.Draining()] as const,
+          AwaitingOwnership: () => [true, State.Draining()] as const,
+          Recovering: () => [true, State.Draining()] as const,
+          Ready: () => [true, State.Draining()] as const,
+          Failed: () => [true, State.Draining()] as const,
+          Draining: (current) => [false, current] as const,
+          Stopped: (current) => [false, current] as const,
+        }),
+      )
+      if (shouldDrain) yield* Deferred.succeed(drainRequested, undefined)
+    })
+
     const completeShutdown = transition("stopped", (state) =>
       Match.valueTags(state, {
         Draining: () => Option.some(State.Stopped()),
@@ -464,6 +488,8 @@ export const makeCoreLifecycle = (
       authorizeDatabaseOwnership,
       shutdown,
       interruptOnDrain,
+      ownershipAuthorization: Deferred.await(ownershipAuthorized),
+      authenticatedHostDied,
       awaitOwnershipAuthorization,
       completeRecovery,
       completeShutdown,

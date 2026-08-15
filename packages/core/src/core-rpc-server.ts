@@ -12,6 +12,8 @@ import { coreControlRpcHandlersLayer } from "./core-control-rpc-handlers"
 import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
+  CoreAuthenticatedHostSession,
+  coreAuthenticatedHostSessionLayer,
   coreTransportAuthenticationLayer,
   type CoreTransportAuthenticationOptions,
 } from "./core-transport-authentication"
@@ -25,7 +27,10 @@ if (new Set(inboundTags).size !== inboundTags.length) {
 const CoreServerRpcs = AuthenticatedCoreServerRpcs
 
 /** Runs the privileged Core RPC groups through one transport-neutral native server. */
-export const coreRpcServerLayer = (authentication: CoreTransportAuthenticationOptions) =>
+export const coreRpcServerLayer = (
+  authentication: CoreTransportAuthenticationOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession> = coreAuthenticatedHostSessionLayer,
+) =>
   RpcServer.layer(CoreServerRpcs).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -35,10 +40,14 @@ export const coreRpcServerLayer = (authentication: CoreTransportAuthenticationOp
         coreTransportAuthenticationLayer(authentication),
       ),
     ),
+    Layer.provideMerge(hostSessionLayer),
   )
 
 /** Runs the durable walkthrough RPC audience when an operation runtime is available. */
-export const coreWalkthroughRpcServerLayer = (authentication: CoreTransportAuthenticationOptions) =>
+export const coreWalkthroughRpcServerLayer = (
+  authentication: CoreTransportAuthenticationOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession> = coreAuthenticatedHostSessionLayer,
+) =>
   RpcServer.layer(AuthenticatedCoreWalkthroughServerRpcs).pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -48,4 +57,5 @@ export const coreWalkthroughRpcServerLayer = (authentication: CoreTransportAuthe
         coreTransportAuthenticationLayer(authentication),
       ),
     ),
+    Layer.provideMerge(hostSessionLayer),
   )

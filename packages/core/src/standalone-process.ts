@@ -12,6 +12,11 @@ import { Effect, Layer, Option, Schema } from "effect"
 import { isAbsolute } from "node:path"
 
 import { coreLifecycleLayer } from "./core-lifecycle"
+import { runCoreHostLifecycle } from "./core-host-lifecycle"
+import {
+  CoreOwnershipRecovery,
+  coreOwnershipRecoveryNotConfigured,
+} from "./core-ownership-recovery"
 import { coreRpcSocketHostLayer } from "./core-rpc-socket-host"
 
 /** Sanitized startup failure that cannot expose the transport credential or private paths. */
@@ -31,6 +36,7 @@ const startupFailure = (reason: StandaloneCoreProcessError["reason"]) =>
 
 const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(function* (
   encodedConfiguration: Option.Option<string>,
+  ownershipRecovery: CoreOwnershipRecovery["Service"],
 ) {
   const configuration = yield* Effect.fromOption(encodedConfiguration).pipe(
     Effect.mapError(() => startupFailure("configuration-invalid")),
@@ -51,30 +57,35 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
   const appStateLayer = AppState.layer(configuration.statePath).pipe(
     Layer.provide(fileStorageLayer),
   )
+  const identity = {
+    applicationInstanceId: configuration.applicationInstanceId,
+    processEpoch: configuration.processEpoch,
+  } as const
   const hostLayer = coreRpcSocketHostLayer({
     socketPath: configuration.socketPath,
     token: configuration.token,
   }).pipe(
-    Layer.provideMerge(
-      coreLifecycleLayer({
-        applicationInstanceId: configuration.applicationInstanceId,
-        processEpoch: configuration.processEpoch,
-      }),
-    ),
+    Layer.provideMerge(coreLifecycleLayer(identity)),
+    Layer.provideMerge(Layer.succeed(CoreOwnershipRecovery, ownershipRecovery)),
     Layer.provideMerge(appStateLayer),
     Layer.provideMerge(platformLayer),
   )
 
-  return yield* Layer.launch(hostLayer).pipe(
-    Effect.mapError(() => startupFailure("host-start-failed")),
-  )
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(hostLayer)
+      yield* runCoreHostLifecycle(identity).pipe(Effect.provide(context))
+    }),
+  ).pipe(Effect.mapError(() => startupFailure("host-start-failed")))
 })
 
-/** Runs the standalone Core host until Electron terminates or interrupts the process. */
-export const runStandaloneCoreProcess = (): void => {
+/** Runs standalone Core with the selected persisted ownership and recovery implementation. */
+export const runStandaloneCoreProcess = (
+  ownershipRecovery: CoreOwnershipRecovery["Service"] = coreOwnershipRecoveryNotConfigured,
+): void => {
   const encodedConfiguration = Option.fromNullishOr(process.env[CORE_PROCESS_STARTUP_ENV])
   delete process.env[CORE_PROCESS_STARTUP_ENV]
-  NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration), {
+  NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration, ownershipRecovery), {
     disableErrorReporting: true,
   })
 }

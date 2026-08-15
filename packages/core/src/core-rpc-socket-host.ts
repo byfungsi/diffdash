@@ -24,7 +24,16 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import * as SocketServer from "effect/unstable/socket/SocketServer"
 
 import { coreRpcServerLayer, coreWalkthroughRpcServerLayer } from "./core-rpc-server"
-import type { CoreTransportAuthenticationOptions } from "./core-transport-authentication"
+import {
+  CoreAuthenticatedHostSession,
+  coreAuthenticatedHostSessionLayer,
+  type CoreTransportAuthenticationOptions,
+} from "./core-transport-authentication"
+
+const coreRpcSerializationLayer = RpcSerialization.layerMsgPackWith({
+  useRecords: true,
+  maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+})
 
 /** Native Unix socket endpoint configuration for one Core process epoch. */
 export interface CoreRpcSocketHostOptions extends CoreTransportAuthenticationOptions {
@@ -118,17 +127,37 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
       return server
     }),
   )
-  const serializationLayer = RpcSerialization.layerMsgPackWith({
-    useRecords: true,
-    maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
-  })
   const protocolLayer = RpcServer.layerProtocolSocketServer.pipe(
     Layer.provide(socketServerLayer),
-    Layer.provideMerge(serializationLayer),
+    Layer.provideMerge(coreRpcSerializationLayer),
   )
 
   return protocolLayer
 }
+
+const hostDeathAwareProtocolLayer = (
+  options: CoreRpcSocketHostOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession>,
+) =>
+  Layer.effect(
+    RpcServer.Protocol,
+    Effect.gen(function* () {
+      const protocol = yield* RpcServer.Protocol
+      const hostSession = yield* CoreAuthenticatedHostSession
+      const disconnects = yield* Queue.unbounded<number>()
+      yield* Effect.forever(
+        Queue.take(protocol.disconnects).pipe(
+          Effect.tap((clientId) => hostSession.disconnected(clientId)),
+          Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
+        ),
+      ).pipe(Effect.forkScoped)
+      return RpcServer.Protocol.of({ ...protocol, disconnects })
+    }),
+  ).pipe(
+    Layer.provide(coreRpcSocketProtocolLayer(options)),
+    Layer.provideMerge(hostSessionLayer),
+    Layer.provideMerge(coreRpcSerializationLayer),
+  )
 
 /** Applies walkthrough request, response, concurrency, and disconnect bounds to an RPC protocol. */
 export const makeBoundedWalkthroughProtocol = Effect.fn("CoreRpc.makeBoundedWalkthroughProtocol")(
@@ -345,17 +374,26 @@ export const makeBoundedWalkthroughProtocol = Effect.fn("CoreRpc.makeBoundedWalk
   },
 )
 
-const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions) =>
+const boundedWalkthroughSocketProtocolLayer = (
+  options: CoreRpcSocketHostOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession>,
+) =>
   Layer.effect(RpcServer.Protocol, makeBoundedWalkthroughProtocol()).pipe(
-    Layer.provide(coreRpcSocketProtocolLayer(options)),
+    Layer.provide(hostDeathAwareProtocolLayer(options, hostSessionLayer)),
   )
 
 /** Runs the currently deployed control and AppState RPC audience over a private native socket. */
-export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
-  coreRpcServerLayer(options).pipe(Layer.provideMerge(coreRpcSocketProtocolLayer(options)))
+export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
+  const hostSessionLayer = coreAuthenticatedHostSessionLayer
+  return coreRpcServerLayer(options, hostSessionLayer).pipe(
+    Layer.provideMerge(hostDeathAwareProtocolLayer(options, hostSessionLayer)),
+  )
+}
 
 /** Runs the durable walkthrough RPC audience when its business runtime is composed. */
-export const coreWalkthroughRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
-  coreWalkthroughRpcServerLayer(options).pipe(
-    Layer.provideMerge(boundedWalkthroughSocketProtocolLayer(options)),
+export const coreWalkthroughRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
+  const hostSessionLayer = coreAuthenticatedHostSessionLayer
+  return coreWalkthroughRpcServerLayer(options, hostSessionLayer).pipe(
+    Layer.provideMerge(boundedWalkthroughSocketProtocolLayer(options, hostSessionLayer)),
   )
+}

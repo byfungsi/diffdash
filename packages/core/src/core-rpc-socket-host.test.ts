@@ -22,9 +22,11 @@ import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Socket from "effect/unstable/socket/Socket"
 import { chmodSync, statSync } from "node:fs"
+import { createConnection, type Socket as NodeNetSocket } from "node:net"
 
 import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { coreRpcSocketHostLayer } from "./core-rpc-socket-host"
+import { CoreAuthenticatedHostSession } from "./core-transport-authentication"
 
 const identity = {
   applicationInstanceId: ApplicationInstanceId.make("app-socket"),
@@ -64,6 +66,28 @@ const makeClient = (socketPath: string, scope: Scope.Scope) =>
       Effect.provideService(Scope.Scope, scope),
     )
   })
+
+const openRawSocket = (socketPath: string) =>
+  Effect.acquireRelease(
+    Effect.callback<NodeNetSocket, Error>((resume, signal) => {
+      const socket = createConnection(socketPath)
+      const onError = (error: Error) => resume(Effect.fail(error))
+      signal.addEventListener("abort", () => socket.destroy(), { once: true })
+      socket.once("error", onError)
+      socket.once("connect", () => {
+        socket.off("error", onError)
+        resume(Effect.succeed(socket))
+      })
+    }),
+    (socket) => Effect.sync(() => socket.destroy()),
+  )
+
+const awaitRawSocketClose = (socket: NodeNetSocket) =>
+  socket.destroyed
+    ? Effect.void
+    : Effect.callback<void>((resume) => {
+        socket.once("close", () => resume(Effect.void))
+      })
 
 describe("Core RPC Unix socket host", () => {
   it.effect("rejects a socket outside a private runtime directory before binding", () =>
@@ -130,23 +154,46 @@ describe("Core RPC Unix socket host", () => {
       expect(statSync(runtimeDirectory).mode & 0o777).toBe(0o700)
       expect(statSync(socketPath).mode & 0o777).toBe(0o600)
 
+      // Exercise native MessagePack framing directly without introducing a DiffDash frame.
+      const slowloris = yield* openRawSocket(socketPath)
+      slowloris.write(Buffer.from([0xdb, 0x00, 0x10, 0x00, 0x00]))
+      const malformed = yield* openRawSocket(socketPath)
+      malformed.write(Buffer.from([0xc1]))
+      const excessive = yield* openRawSocket(socketPath)
+      const excessiveClosed = yield* awaitRawSocketClose(excessive).pipe(Effect.forkScoped)
+      excessive.write(Buffer.from([0xdb, 0x00, 0x10, 0x00, 0x00]))
+      excessive.write(Buffer.alloc(CORE_RPC_INCOMPLETE_BUFFER_BYTES + 1, 0x61))
+      yield* Fiber.join(excessiveClosed)
+
       const firstClientScope = yield* Scope.make()
       const firstClient = yield* makeClient(socketPath, firstClientScope)
       const health = yield* firstClient["Core.health"](request).pipe(
         RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: token }),
       )
       expect(health).toEqual({ ...identity, lifecycle: "awaitingOwnership" })
-      yield* firstClient["Core.authorizeDatabaseOwnership"](
-        AuthorizeDatabaseOwnershipRequest.make({
+      const staleHealth = yield* firstClient["Core.health"](
+        HostRequestContext.make({
           ...request,
-          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-socket"),
+          processEpoch: CoreProcessEpoch.make("epoch-stale"),
         }),
-      )
-      yield* Context.get(serverContext, CoreLifecycle).completeRecovery
+      ).pipe(Effect.flip)
+      expect(staleHealth).toMatchObject({ code: "CORE_REQUEST_IDENTITY_MISMATCH" })
+      const authorization = AuthorizeDatabaseOwnershipRequest.make({
+        ...request,
+        authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-socket"),
+      })
+      yield* firstClient["Core.authorizeDatabaseOwnership"](authorization)
+      expect(yield* firstClient["Core.authorizeDatabaseOwnership"](authorization)).toMatchObject({
+        lifecycle: "recovering",
+      })
+      const lifecycle = Context.get(serverContext, CoreLifecycle)
+      yield* lifecycle.completeRecovery
+      yield* lifecycle.completeRecovery
       const requestFiber = yield* firstClient["AppState.get"](request).pipe(Effect.forkScoped)
       yield* Deferred.await(requestStarted)
       yield* Scope.close(firstClientScope, Exit.void)
       yield* Deferred.await(requestInterrupted)
+      yield* Context.get(serverContext, CoreAuthenticatedHostSession).awaitDeath
       yield* Fiber.interrupt(requestFiber)
 
       const secondClientScope = yield* Scope.make()
