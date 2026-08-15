@@ -124,6 +124,42 @@ type ResolvedWalkthrough =
   | ResolvedRepositoryComparisonWalkthrough
 
 type WalkthroughWorkerObservation = Option.Option<Cause.Cause<CoreWalkthroughFailure>>
+type WalkthroughWorkerExit = Exit.Exit<WalkthroughWorkerObservation, WalkthroughOperationStoreError>
+
+/** Active-only FiberMap lifecycle for walkthrough workers. */
+export interface WalkthroughActiveWorkers {
+  readonly run: (
+    operationId: WalkthroughOperationIdType,
+    worker: Effect.Effect<WalkthroughWorkerObservation, WalkthroughOperationStoreError>,
+  ) => Effect.Effect<Fiber.Fiber<WalkthroughWorkerExit>>
+  readonly get: (
+    operationId: WalkthroughOperationIdType,
+  ) => Effect.Effect<Option.Option<Fiber.Fiber<WalkthroughWorkerExit>>>
+  readonly cancel: (operationId: WalkthroughOperationIdType) => Effect.Effect<void>
+  readonly size: Effect.Effect<number>
+}
+
+/** Creates scoped active-worker tracking without retaining terminal results. */
+export const makeWalkthroughActiveWorkers: Effect.Effect<
+  WalkthroughActiveWorkers,
+  never,
+  Scope.Scope
+> = Effect.gen(function* () {
+  const fibers = yield* FiberMap.make<WalkthroughOperationIdType, WalkthroughWorkerExit, never>()
+
+  return {
+    run: Effect.fn("Core.Walkthroughs.ActiveWorkers.run")((operationId, worker) =>
+      FiberMap.run(fibers, operationId, Effect.exit(worker), { onlyIfMissing: true }),
+    ),
+    get: Effect.fn("Core.Walkthroughs.ActiveWorkers.get")((operationId) =>
+      FiberMap.get(fibers, operationId),
+    ),
+    cancel: Effect.fn("Core.Walkthroughs.ActiveWorkers.cancel")((operationId) =>
+      FiberMap.remove(fibers, operationId),
+    ),
+    size: FiberMap.size(fibers),
+  }
+})
 
 /** Scoped admission, observation, and cancellation for durable walkthrough operations. */
 export interface WalkthroughLifecycle {
@@ -189,11 +225,7 @@ export const makeWalkthroughOperations = (
     const operationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
     const reviewSnapshots = yield* ReviewSnapshotService
-    const activeFibers = yield* FiberMap.make<
-      WalkthroughOperationIdType,
-      WalkthroughWorkerObservation,
-      WalkthroughOperationStoreError
-    >()
+    const activeWorkers = yield* makeWalkthroughActiveWorkers
     const startSemaphore = yield* Semaphore.make(1)
 
     const getCached: WalkthroughOperations["getCached"] = Effect.fn("Core.Walkthroughs.getCached")(
@@ -434,13 +466,11 @@ export const makeWalkthroughOperations = (
             })
             if (acceptance.created) {
               if (acceptance.operation.regenerationOfOperationId !== null) {
-                yield* FiberMap.remove(activeFibers, acceptance.operation.regenerationOfOperationId)
+                yield* activeWorkers.cancel(acceptance.operation.regenerationOfOperationId)
               }
-              yield* FiberMap.run(
-                activeFibers,
+              yield* activeWorkers.run(
                 acceptance.operation.id,
                 runOperation(acceptance.operation, resolved, route),
-                { onlyIfMissing: true },
               )
             }
             return acceptance
@@ -545,29 +575,31 @@ export const makeWalkthroughOperations = (
     )(function* (operationId) {
       const operation = yield* requireOperation(operationStore, operationId)
       const active = isActiveOperation(operation)
-        ? yield* FiberMap.get(activeFibers, operation.id)
-        : Option.none<Fiber.Fiber<WalkthroughWorkerObservation, WalkthroughOperationStoreError>>()
+        ? yield* activeWorkers.get(operation.id)
+        : Option.none<Fiber.Fiber<WalkthroughWorkerExit>>()
       const workerExit = Option.isSome(active)
         ? Option.some(yield* Fiber.await(active.value))
-        : Option.none<Exit.Exit<WalkthroughWorkerObservation, WalkthroughOperationStoreError>>()
+        : Option.none<Exit.Exit<WalkthroughWorkerExit>>()
       const authoritative = yield* requireOperation(operationStore, operation.id)
       if (
         isActiveOperation(authoritative) &&
         Option.isSome(workerExit) &&
-        Exit.isFailure(workerExit.value)
+        Exit.isSuccess(workerExit.value) &&
+        Exit.isFailure(workerExit.value.value)
       ) {
-        const failure = Cause.findErrorOption(workerExit.value.cause)
+        const failure = Cause.findErrorOption(workerExit.value.value.cause)
         if (Option.isSome(failure)) return yield* failure.value
-        const defect = Cause.findDefect(workerExit.value.cause)
+        const defect = Cause.findDefect(workerExit.value.value.cause)
         if (Result.isSuccess(defect)) return yield* Effect.die(defect.success)
       }
       if (
         authoritative.state === "failed" &&
         Option.isSome(workerExit) &&
         Exit.isSuccess(workerExit.value) &&
-        Option.isSome(workerExit.value.value)
+        Exit.isSuccess(workerExit.value.value) &&
+        Option.isSome(workerExit.value.value.value)
       ) {
-        const cause = workerExit.value.value.value
+        const cause = workerExit.value.value.value.value
         const defect = Cause.findDefect(cause)
         if (Result.isSuccess(defect)) {
           return WalkthroughOperationDefect.make({
@@ -603,7 +635,7 @@ export const makeWalkthroughOperations = (
           )
         operation = transition.operation
         if (transition.won) {
-          yield* FiberMap.remove(activeFibers, operationId)
+          yield* activeWorkers.cancel(operationId)
           break
         }
       }
