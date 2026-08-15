@@ -111,4 +111,27 @@ describe("Core host capability gateway", () => {
       expect(yield* Deferred.await(interrupted)).toBeUndefined()
     }),
   )
+
+  it.effect("projects native defects to source-safe capability failures", () =>
+    Effect.gen(function* () {
+      const client = yield* RpcTest.makeClient(CoreHostCapabilityRpcs).pipe(
+        Effect.provide(
+          coreHostCapabilityGatewayLayer({
+            ...options,
+            native: {
+              ...options.native,
+              openPath: () => Effect.die(new Error("private /Users/example/repository")),
+            },
+          }),
+        ),
+      )
+      const failure = yield* client["Host.openPath"]({
+        context,
+        path: "/tmp/review.txt",
+      }).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ code: "HOST_CAPABILITY_FAILED" })
+      expect(JSON.stringify(failure)).not.toContain("/Users/example")
+    }),
+  )
 })
