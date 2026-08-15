@@ -110,7 +110,10 @@ export class ProgressiveReviewSessionController {
     if (operation !== this.#operation || this.#disposed) return
 
     const connection = await this.gateway.openSession(request)
-    if (operation !== this.#operation || this.#disposed) return
+    if (operation !== this.#operation || this.#disposed) {
+      await this.#closeSupersededConnection(connection)
+      return
+    }
     let active: ActiveSession | null = null
     const rejected: ReviewSessionState[] = []
     const releaseSubscription = connection.subscribe((candidate) => {
@@ -144,6 +147,24 @@ export class ProgressiveReviewSessionController {
       throw new Error("Review session gateway did not synchronously publish its current state")
     }
     established.releaseSubscription = releaseSubscription
+  }
+
+  readonly #closeSupersededConnection = async (
+    connection: ReviewSessionConnection,
+  ): Promise<void> => {
+    const publications: ReviewSessionState[] = []
+    const release = connection.subscribe((candidate) => {
+      if (publications.length === 0) {
+        publications.push(Schema.decodeUnknownSync(ReviewSessionStateSchema)(candidate))
+      }
+    })
+    release()
+    const current = publications.at(0)
+    if (current !== undefined) {
+      await this.gateway.closeSession(
+        CloseReviewSessionRequestSchema.make({ identity: current.identity }),
+      )
+    }
   }
 
   /** Returns capabilities derived from the authoritative tag, never from caller flags. */

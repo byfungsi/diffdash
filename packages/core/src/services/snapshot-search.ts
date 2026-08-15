@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 
-import { HostRequestId } from "@diffdash/core-rpc"
 import { ReviewFileId, ReviewHunkFingerprint, ReviewHunkId } from "@diffdash/domain/review-identity"
 import type { SnapshotFilePlacement, StoredHunk } from "@diffdash/persistence/snapshot-block-store"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -9,7 +8,6 @@ import {
   SnapshotRepository,
   type SnapshotRepositoryError,
   type SnapshotRepositoryIdentity,
-  SnapshotRepositorySessionId,
 } from "./snapshot-repository"
 
 /** Stable content coordinate used to resume a directional search rescan. */
@@ -93,6 +91,7 @@ const SnapshotSearchFailureReason = Schema.Literals([
   "invalidRequest",
   "invalidCursor",
   "sourceUnavailable",
+  "superseded",
 ])
 
 /** Expected fixed-space search rejection. */
@@ -141,7 +140,7 @@ export const snapshotSearchLayer = (
           }
 
           const searchGeneration = ++generation
-          const identity = searchIdentity(input.identity, searchGeneration)
+          const identity = input.identity
           const queryIdentity = searchQueryIdentity(identity, input.query, input.anchorFileId)
           if (input.cursor !== null && input.cursor.queryIdentity !== queryIdentity) {
             return yield* SnapshotSearchError.make({
@@ -150,7 +149,6 @@ export const snapshotSearchLayer = (
             })
           }
 
-          yield* repository.openSession(identity).pipe(Effect.mapError(mapRepositoryError))
           return yield* scanCommittedSnapshot(
             repository,
             identity,
@@ -158,7 +156,8 @@ export const snapshotSearchLayer = (
             queryIdentity,
             options.maximumExcerptBytes,
             onProgress,
-          ).pipe(Effect.ensuring(repository.closeSession(identity).pipe(Effect.ignore)))
+            () => generation === searchGeneration,
+          )
         }),
       })
     }),
@@ -171,6 +170,7 @@ const scanCommittedSnapshot = Effect.fn("SnapshotSearch.scanCommittedSnapshot")(
   queryIdentity: string,
   maximumExcerptBytes: number,
   onProgress: (progress: SnapshotSearchProvisional) => Effect.Effect<void>,
+  isCurrent: () => boolean,
 ) {
   const anchorOrdinal =
     input.anchorFileId === null
@@ -255,6 +255,12 @@ const scanCommittedSnapshot = Effect.fn("SnapshotSearch.scanCommittedSnapshot")(
         nextCursor: null,
         wrapped: false,
       })
+      if (!isCurrent()) {
+        return yield* SnapshotSearchError.make({
+          reason: "superseded",
+          message: "Search was superseded by a newer query",
+        })
+      }
       yield* repository
         .findFile(identity, ReviewFileId.make(file.fileId))
         .pipe(Effect.asVoid, Effect.mapError(mapRepositoryError))
@@ -471,15 +477,6 @@ const sameCoordinate = (left: SnapshotSearchCoordinate, right: SnapshotSearchCoo
   left.hunkOrdinal === right.hunkOrdinal &&
   left.hunkLineIndex === right.hunkLineIndex &&
   left.start === right.start
-
-const searchIdentity = (
-  identity: SnapshotRepositoryIdentity,
-  generation: number,
-): SnapshotRepositoryIdentity => ({
-  ...identity,
-  requestId: HostRequestId.make(`h:search-${generation}`),
-  sessionId: SnapshotRepositorySessionId.make(`${identity.sessionId}:search:${generation}`),
-})
 
 const searchQueryIdentity = (
   identity: SnapshotRepositoryIdentity,

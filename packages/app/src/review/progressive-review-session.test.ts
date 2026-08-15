@@ -235,6 +235,58 @@ describe("ProgressiveReviewSessionController", () => {
     await controller.dispose()
   })
 
+  it("closes a slow open that resolves after a newer session owns the controller", async () => {
+    const firstRequest = makeRequest(1)
+    const firstIdentity = makeIdentity(firstRequest, 1, 1)
+    const firstConnection = new RecordingConnection(
+      IndexingReviewSession.make({
+        identity: firstIdentity,
+        completedUnits: 0,
+        totalUnits: 1,
+      }),
+    )
+    let resolveFirst: (connection: ReviewSessionConnection) => void = () => undefined
+    let notifyOpened: () => void = () => undefined
+    const firstOpened = new Promise<void>((resolve) => {
+      notifyOpened = resolve
+    })
+    const openFirst = new Promise<ReviewSessionConnection>((resolve) => {
+      resolveFirst = resolve
+    })
+    let openings = 0
+    const closed: CloseReviewSessionRequest[] = []
+    const gateway: ReviewSessionGateway = {
+      openSession: async (request) => {
+        openings += 1
+        if (openings === 1) {
+          notifyOpened()
+          return openFirst
+        }
+        return new RecordingConnection(
+          IndexingReviewSession.make({
+            identity: makeIdentity(request, 2, 1),
+            completedUnits: 0,
+            totalUnits: 1,
+          }),
+        )
+      },
+      closeSession: async (request) => {
+        closed.push(request)
+      },
+    }
+    const controller = new ProgressiveReviewSessionController(gateway, () => makeResources([]))
+
+    const superseded = controller.switchSession(firstRequest)
+    await firstOpened
+    await controller.switchSession(makeRequest(2))
+    resolveFirst(firstConnection)
+    await superseded
+
+    expect(closed).toContainEqual({ identity: firstIdentity })
+    expect(controller.diagnostics().state?.identity.reviewKey).toBe(makeRequest(2).reviewKey)
+    await controller.dispose()
+  })
+
   it("performs ten pathological switches with zero retained controller, cache, queue, or shell ownership", async () => {
     const gateway = new RecordingGateway()
     const probes: ResourceProbe[] = []

@@ -107,7 +107,10 @@ describe("Core host capability gateway", () => {
       yield* TestClock.adjust("5 seconds")
       const failure = yield* Fiber.join(fiber)
 
-      expect(failure).toMatchObject({ code: "HOST_CAPABILITY_DEADLINE_EXCEEDED" })
+      expect(failure).toMatchObject({
+        code: "HOST_CAPABILITY_DEADLINE_EXCEEDED",
+        retryClass: "notRetryable",
+      })
       expect(yield* Deferred.await(interrupted)).toBeUndefined()
     }),
   )

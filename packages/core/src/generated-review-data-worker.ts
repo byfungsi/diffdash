@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { readFile, realpath, stat } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Predicate, Schema } from "effect"
 
 import { coreReviewDataWorkerLayer } from "./review-data-worker-coordinator"
 
@@ -39,7 +39,12 @@ const startBunWorker = (moduleUrl: URL): BunWorkerHandle => {
       return () => worker.removeEventListener("message", receive)
     },
     onError: (listener) => {
-      const fail = (event: ErrorEvent): void => listener(event.error)
+      const fail = (event: ErrorEvent): void =>
+        listener(
+          Predicate.isError(event.error)
+            ? event.error
+            : new Error(event.message || "Review data worker failed"),
+        )
       worker.addEventListener("error", fail)
       return () => worker.removeEventListener("error", fail)
     },

@@ -36,6 +36,17 @@ describe("ReviewDataWorkerClient", () => {
     expect(runtime.terminated).toBe(true)
   })
 
+  it("terminates when a batch is attributed to a command that cannot emit batches", async () => {
+    const runtime = new UnsolicitedBatchRuntime()
+    const client = new ReviewDataWorkerClient(runtime, new URL("file:///fixture-worker.mjs"))
+
+    await expect(client.heartbeat()).resolves.toMatchObject({
+      _tag: "Failed",
+      message: "Review data worker emitted an invalid batch",
+    })
+    expect(runtime.terminated).toBe(true)
+  })
+
   it("starts and reclaims a real Node worker thread", async () => {
     const source = `
       const { parentPort } = await import("node:worker_threads");
@@ -99,6 +110,36 @@ class FailingRuntime implements ReviewDataWorkerRuntime {
       },
       terminate: async () => {
         this.terminated = true
+      },
+    }
+  }
+}
+
+class UnsolicitedBatchRuntime implements ReviewDataWorkerRuntime {
+  terminated = false
+
+  start(_moduleUrl: URL): ReviewDataWorkerHandle {
+    const listeners = new Set<(response: ReviewDataWorkerResponse) => void>()
+    return {
+      post: (command) => {
+        queueMicrotask(() => {
+          for (const listener of listeners) {
+            listener({
+              _tag: "Batch",
+              requestId: command.requestId,
+              batch: { events: [], byteCount: 0 },
+            })
+          }
+        })
+      },
+      onResponse: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      onFailure: () => () => undefined,
+      terminate: async () => {
+        this.terminated = true
+        listeners.clear()
       },
     }
   }

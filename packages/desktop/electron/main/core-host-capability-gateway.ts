@@ -56,7 +56,7 @@ const failure = (
     processEpoch: context.processEpoch,
     requestId: context.requestId,
     code,
-    retryClass: code === "HOST_CAPABILITY_DEADLINE_EXCEEDED" ? "automatic" : "notRetryable",
+    retryClass: "notRetryable",
     safeMessage,
   })
 

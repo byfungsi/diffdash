@@ -213,6 +213,8 @@ const publishFixture = Effect.fn("SnapshotSearchTest.publishFixture")(function* 
     checkpoints: [],
     createdAtMs: 2,
   })
+  const repository = yield* SnapshotRepository
+  yield* repository.openSession(identity())
 })
 
 const patchLineCount = (text: string): number => {
@@ -366,12 +368,7 @@ describe("SnapshotSearch", () => {
         yield* Deferred.await(cancelledEntered)
         yield* Fiber.interrupt(cancelled)
         const repository = yield* SnapshotRepository
-        const internalIdentity = {
-          ...identity(),
-          requestId: HostRequestId.make("h:search-3"),
-          sessionId: SnapshotRepositorySessionId.make("session:search:search:3"),
-        }
-        expect(yield* repository.closeSession(internalIdentity)).toBe(false)
+        expect(yield* repository.closeSession(identity())).toBe(true)
       }).pipe(Effect.provide(makeLayer(directory)))
     }),
   )

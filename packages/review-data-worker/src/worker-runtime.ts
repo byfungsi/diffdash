@@ -63,7 +63,13 @@ const isReviewDataWorkerResponseEnvelope = Schema.is(ReviewDataWorkerResponseEnv
 /** Disposable latest-session worker client with one in-flight bounded command. */
 export class ReviewDataWorkerClient {
   readonly #handle: ReviewDataWorkerHandle
-  readonly #pending = new Map<number, (response: ReviewDataWorkerResponse) => void>()
+  readonly #pending = new Map<
+    number,
+    {
+      readonly command: ReviewDataWorkerCommand["_tag"]
+      readonly resolve: (response: ReviewDataWorkerResponse) => void
+    }
+  >()
   readonly #batchListeners = new Set<(batch: IncrementalDiffBatch) => Promise<void> | void>()
   readonly #unsubscribe: () => void
   readonly #unsubscribeFailure: () => void
@@ -82,8 +88,13 @@ export class ReviewDataWorkerClient {
       }
       try {
         Match.value(response).pipe(
-          Match.tag("Batch", ({ batch }) => {
-            if (!isBoundedIncrementalDiffBatch(batch)) {
+          Match.tag("Batch", ({ batch, requestId }) => {
+            const pending = this.#pending.get(requestId)
+            if (
+              pending === undefined ||
+              (pending.command !== "Chunk" && pending.command !== "Finish") ||
+              !isBoundedIncrementalDiffBatch(batch)
+            ) {
               this.#failPending("Review data worker emitted an invalid batch")
               return
             }
@@ -95,13 +106,13 @@ export class ReviewDataWorkerClient {
             })
           }),
           Match.orElse((terminal) => {
-            const resolve = this.#pending.get(terminal.requestId)
-            if (resolve === undefined) return
+            const pending = this.#pending.get(terminal.requestId)
+            if (pending === undefined) return
             this.#pending.delete(terminal.requestId)
             void this.#batchTail.then(
-              () => resolve(terminal),
+              () => pending.resolve(terminal),
               () =>
-                resolve({
+                pending.resolve({
                   _tag: "Failed",
                   requestId: terminal.requestId,
                   message: "Review data worker batch handling failed",
@@ -114,7 +125,9 @@ export class ReviewDataWorkerClient {
       }
     })
     this.#unsubscribeFailure = this.#handle.onFailure((cause) => {
-      this.#failPending(`Review data worker failed: ${cause.message}`)
+      this.#failPending(
+        `Review data worker failed: ${Predicate.isError(cause) ? cause.message : "unknown worker failure"}`,
+      )
     })
   }
 
@@ -180,7 +193,7 @@ export class ReviewDataWorkerClient {
         message: "Review data worker is disposed",
       })
     return new Promise((resolve) => {
-      this.#pending.set(command.requestId, resolve)
+      this.#pending.set(command.requestId, { command: command._tag, resolve })
       try {
         this.#handle.post(command, transfer)
       } catch (cause) {
@@ -199,8 +212,8 @@ export class ReviewDataWorkerClient {
     this.#disposed = true
     this.#unsubscribe()
     this.#unsubscribeFailure()
-    for (const [requestId, resolve] of this.#pending)
-      resolve({ _tag: "Failed", requestId, message })
+    for (const [requestId, pending] of this.#pending)
+      pending.resolve({ _tag: "Failed", requestId, message })
     this.#pending.clear()
     this.#batchListeners.clear()
     void this.#handle.terminate()
@@ -211,8 +224,8 @@ export class ReviewDataWorkerClient {
     this.#disposed = true
     this.#unsubscribe()
     this.#unsubscribeFailure()
-    for (const [requestId, resolve] of this.#pending)
-      resolve({ _tag: "Failed", requestId, message: "Review data worker was terminated" })
+    for (const [requestId, pending] of this.#pending)
+      pending.resolve({ _tag: "Failed", requestId, message: "Review data worker was terminated" })
     this.#pending.clear()
     this.#batchListeners.clear()
     await this.#handle.terminate()
