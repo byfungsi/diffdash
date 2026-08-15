@@ -32,7 +32,15 @@ export const makeSqliteBackupPaths = (databasePath: string, version: number): Sq
 export const checkpointDatabase = Effect.fn("SqliteBackup.checkpoint")(function* (
   database: Database,
 ) {
-  const row = yield* database.get("PRAGMA wal_checkpoint(FULL)")
+  const row = yield* database.get("PRAGMA wal_checkpoint(FULL)").pipe(
+    Effect.timeout("10 seconds"),
+    Effect.catchTag("TimeoutError", () =>
+      DatabaseError.make({
+        operation: DiagnosticOperation.make("backupCheckpointDeadline"),
+        cause: new Error("SQLite pre-migration WAL checkpoint exceeded its 10 second deadline."),
+      }),
+    ),
+  )
   const checkpoint = yield* Schema.decodeUnknownEffect(CheckpointRow)(Option.getOrThrow(row))
   if (checkpoint.busy !== 0 || checkpoint.checkpointed !== checkpoint.log) {
     return yield* DatabaseError.make({

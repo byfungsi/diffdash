@@ -59,6 +59,15 @@ const backupBeforeMigration = <Client extends SqlClient.SqlClient, E, R>(
     yield* checkpointDatabase(database)
     yield* options.createBackup(client, paths.temporary).pipe(
       Effect.andThen(options.verifyBackup(paths.temporary, currentVersion)),
+      Effect.timeout("60 seconds"),
+      Effect.catchTag("TimeoutError", () =>
+        DatabaseError.make({
+          operation: DiagnosticOperation.make("backupDeadline"),
+          cause: new Error(
+            "SQLite backup creation and verification exceeded its 60 second deadline.",
+          ),
+        }),
+      ),
       Effect.onError(() => cleanupSqliteBackup(paths)),
     )
     yield* publishSqliteBackup(paths)
