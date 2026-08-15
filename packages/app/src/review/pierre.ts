@@ -14,6 +14,7 @@ export {
   type FileDiffOptions,
   getSingularPatch,
   type PostRenderPhase,
+  type RenderRange,
   type SelectionSide,
   Virtualizer as DiffVirtualizer,
   type VirtualFileMetrics,

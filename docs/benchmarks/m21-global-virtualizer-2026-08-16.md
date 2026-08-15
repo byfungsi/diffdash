@@ -38,7 +38,8 @@ repository-scale baseline procedure in `repository-scale.md`.
 | Text cache | 128 MiB |
 | Syntax AST / output caches | 32 / 32 MiB |
 | DOM/container cache | 32 MiB |
-| Annotation / measurement caches | 8 / 8 MiB |
+| Annotation / observer / measurement caches | 8 / 2 / 8 MiB |
+| Loaded-range reservation / worker caches | 64 / 16 MiB |
 | Prefetch / pin caches | 16 / 8 MiB |
 
 Queued bytes and reserved output bytes are different counters. Admission fails before either hard

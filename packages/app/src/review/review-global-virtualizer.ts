@@ -9,9 +9,12 @@ export type ReviewCacheKind =
   | "text"
   | "syntax-ast"
   | "syntax-output"
-  | "dom-container"
   | "annotation"
+  | "observer"
   | "measurement"
+  | "reservation"
+  | "worker"
+  | "dom-container"
   | "prefetch"
   | "pin"
 
@@ -31,9 +34,12 @@ const CACHE_KINDS: readonly ReviewCacheKind[] = [
   "text",
   "syntax-ast",
   "syntax-output",
-  "dom-container",
   "annotation",
+  "observer",
   "measurement",
+  "reservation",
+  "worker",
+  "dom-container",
   "prefetch",
   "pin",
 ]
@@ -45,9 +51,12 @@ export const D12_REVIEW_CACHE_BUDGETS: Readonly<Record<ReviewCacheKind, number>>
   text: 128 * MEBIBYTE,
   "syntax-ast": 32 * MEBIBYTE,
   "syntax-output": 32 * MEBIBYTE,
-  "dom-container": 32 * MEBIBYTE,
   annotation: 8 * MEBIBYTE,
+  observer: 2 * MEBIBYTE,
   measurement: 8 * MEBIBYTE,
+  reservation: 64 * MEBIBYTE,
+  worker: 16 * MEBIBYTE,
+  "dom-container": 32 * MEBIBYTE,
   prefetch: 16 * MEBIBYTE,
   pin: 8 * MEBIBYTE,
 }
@@ -75,12 +84,14 @@ export class ReviewRendererCaches {
 
   /** Adds a range atomically, then evicts whole least-recent ranges under each budget. */
   put(rangeKey: string, resources: readonly ReviewCacheResource[]): void {
-    for (const resource of resources) {
-      if (!Number.isSafeInteger(resource.bytes) || resource.bytes < 0) {
-        throw new RangeError("Cache bytes must be a non-negative safe integer")
-      }
-    }
+    validateResources(resources)
     this.delete(rangeKey)
+    this.add(rangeKey, resources)
+  }
+
+  /** Adds newly available resources to an existing range without releasing its current owners. */
+  add(rangeKey: string, resources: readonly ReviewCacheResource[]): void {
+    validateResources(resources)
     for (const resource of resources) {
       const entries = this.entries(resource.kind)
       const previous = entries.get(rangeKey)
@@ -149,6 +160,14 @@ export class ReviewRendererCaches {
     const entries = this.#entries.get(kind)
     if (entries === undefined) throw new Error(`Unknown cache kind: ${kind}`)
     return entries
+  }
+}
+
+const validateResources = (resources: readonly ReviewCacheResource[]): void => {
+  for (const resource of resources) {
+    if (!Number.isSafeInteger(resource.bytes) || resource.bytes < 0) {
+      throw new RangeError("Cache bytes must be a non-negative safe integer")
+    }
   }
 }
 
@@ -242,10 +261,9 @@ export class ReviewShellPool<Shell> {
       try {
         this.adapter.destroy(shell)
       } catch (destroyError) {
-        throw new AggregateError(
-          [error, destroyError],
-          "Could not reset or destroy a renderer shell",
-        )
+        throw new Error("Could not reset or destroy a renderer shell", {
+          cause: destroyError,
+        })
       }
       throw error
     }

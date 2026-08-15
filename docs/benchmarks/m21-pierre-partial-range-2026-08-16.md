@@ -27,7 +27,7 @@ sha512-efyFM9GRfI6WkmHJP0CnZBopuM8yCwGqIKbZHoe1D5PV15VDkr7Vpi8EZt40AYrN1km//utQt
 
 ## Public Surface Proven
 
-`packages/app/src/review/pierre-loaded-range-prototype.ts` uses only package exports:
+`packages/app/src/review/pierre-loaded-range-adapter.ts` uses only package exports:
 
 * `FileDiff.render({ fileDiff, renderRange, lineAnnotations })` receives one loaded bounded range.
 * `FileDiffOptions.diffStyle` preserves unified and split coordinates.
@@ -50,15 +50,17 @@ Pierre only the loaded patch metadata plus dense range window.
 The adapter intentionally keeps these concerns outside Pierre:
 
 * Exact latest-request identity includes project, process epoch, snapshot generation, session epoch,
-  request ID, width, and mode.
+  semantic range key, request ID, width, and mode.
 * A new viewport direction or far target aborts range and highlight signals. Output is checked again
   at publication, so an uncooperative producer cannot publish stale work.
 * Far targets publish estimated shell geometry before I/O.
 * The visible range remains owned until replacement plain text is ready (inverse-sticky retention).
 * Measurement deltas above the anchor adjust logical scroll; large logical offsets rebase into a
   bounded browser scroll page without coordinate loss.
-* Text, highlight, AST/output, DOM/container, annotation, observer, measurement, reservation, and
-  worker owners release as one idempotent lease. The byte-bounded LRU cannot evict only half a range.
+* Text, syntax AST/output, DOM/container, annotation, observer, measurement, reservation, and worker
+  owners are independently accounted by `ReviewRendererCaches` and release through one coordinated
+  range eviction. `ReviewShellPool` resets Pierre, observers, attributes, styles, and children before
+  reusing a host.
 
 Pierre's `primeHighlightCache` does not accept an `AbortSignal`. Production highlighting must remain
 behind the DiffDash cancellable worker lane; `cleanUp` cancels the renderer side and exact identity
@@ -72,23 +74,30 @@ Focused unit coverage proves:
 * rapid reversal cancellation and stale range rejection;
 * stale or semantically changed syntax rejection;
 * inverse-sticky height correction and exact logical-scroll rebasing;
-* byte-budget eviction and release continuation across all coordinated owners.
+* exact semantic-range identity and collision-safe cache keys;
+* additive deferred resources and byte-budget eviction across coordinated owners.
 
 Focused Chromium browser coverage proves:
 
 * partial hunk text renders in unified and split modes with source coordinates 40/50;
-* thread annotations and search text ranges mount on the bounded content;
+* thread annotations remain interactive and search text ranges target bounded content before and
+  after syntax replacement;
 * wrap measurement emits an outer height delta;
-* pooled hosts remove Pierre DOM, observers, style, and stale ownership attributes.
+* rapid reversal aborts plain and syntax signals, stale output cannot publish, and eviction returns a
+  reset host to the pool;
+* text, syntax AST/output, annotations, reservations, workers, observers, measurements, and the DOM
+  shell reach zero accounted bytes on coordinated eviction.
 
 Commands:
 
 ```text
-pnpm --dir packages/app exec vitest --config vitest.config.ts run src/review/pierre-loaded-range-prototype.test.ts
-pnpm --dir packages/app exec vitest --config vitest.browser.config.ts run src/review/pierre-loaded-range-prototype.browser.test.tsx
+pnpm --dir packages/app exec vitest --config vitest.config.ts run src/review/pierre-loaded-range-adapter.test.ts src/review/review-global-virtualizer.test.ts
+pnpm --dir packages/app exec vitest --config vitest.browser.config.ts run src/review/pierre-loaded-range-adapter.browser.test.tsx
 pnpm --filter @diffdash/app typecheck
+pnpm --filter @diffdash/app lint
 ```
 
-This closes only D-13. Numerical D-12 budgets remain pending the full compact-index and global
-virtualizer benchmark; this prototype demonstrates the ownership and API shape without selecting
-those limits.
+This closes D-13 at the feature-local adapter boundary. It does not claim packaged Electron scale,
+RSS, swap, frame-time, real review-worker cancellation, or production review-detail integration.
+Those remain rollout requirements after the adapter is wired to progressive review data, the global
+scroll owner, the production search manager, and worker-backed syntax loading.

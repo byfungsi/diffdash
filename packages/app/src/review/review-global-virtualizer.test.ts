@@ -10,9 +10,12 @@ const cacheBudgets = {
   text: 10,
   "syntax-ast": 20,
   "syntax-output": 20,
-  "dom-container": 20,
   annotation: 20,
+  observer: 20,
   measurement: 20,
+  reservation: 20,
+  worker: 20,
+  "dom-container": 20,
   prefetch: 20,
   pin: 4,
 } as const
@@ -92,12 +95,32 @@ describe("ReviewRendererCaches", () => {
 
     expect(() =>
       caches.put("range", [
-        { kind: "text", bytes: 2, release: vi.fn() },
-        { kind: "syntax-ast", bytes: -1, release: vi.fn() },
+        { kind: "text", bytes: 2, release: vi.fn<() => void>() },
+        { kind: "syntax-ast", bytes: -1, release: vi.fn<() => void>() },
       ]),
     ).toThrow("Cache bytes must be a non-negative safe integer")
     expect(caches.bytes("text")).toBe(4)
     expect(release).not.toHaveBeenCalled()
+  })
+
+  it("adds deferred resources without releasing the mounted range", () => {
+    const released: string[] = []
+    const caches = new ReviewRendererCaches(cacheBudgets)
+    caches.put("range", [
+      { kind: "text", bytes: 4, release: () => released.push("text") },
+      { kind: "dom-container", bytes: 4, release: () => released.push("dom") },
+    ])
+
+    caches.add("range", [
+      { kind: "syntax-ast", bytes: 5, release: () => released.push("ast") },
+      { kind: "worker", bytes: 3, release: () => released.push("worker") },
+    ])
+
+    expect(released).toEqual([])
+    expect(caches.bytes("text")).toBe(4)
+    expect(caches.bytes("syntax-ast")).toBe(5)
+    caches.delete("range")
+    expect(released).toEqual(["text", "ast", "worker", "dom"])
   })
 })
 
