@@ -1,12 +1,17 @@
 import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
+  WalkthroughStartBridgeFailure,
+  type WalkthroughStartBridgeFailure as WalkthroughStartBridgeFailureType,
+} from "@diffdash/protocol/walkthrough-operation"
+import {
   decodeTransportError,
   hasBridgeTransportErrorEncoding,
   sanitizeTransportErrorMessage,
   UNKNOWN_TRANSPORT_ERROR_MESSAGE,
 } from "@diffdash/protocol/transport-error"
 import { rendererFailureInput } from "@/shared/errors"
+import { Result, Schema } from "effect"
 
 /** Review source used to derive the expected walkthrough generation operation. */
 export type WalkthroughErrorReviewSource = "hosted" | "local" | "repositoryComparison"
@@ -33,6 +38,11 @@ export const walkthroughErrorPresentation = <Value>(
   error: Value,
   context: WalkthroughErrorReportContext,
 ): WalkthroughErrorPresentation => {
+  const publicFailure = Schema.decodeUnknownResult(WalkthroughStartBridgeFailure)(error)
+  if (Result.isSuccess(publicFailure)) {
+    return walkthroughPublicFailurePresentation(publicFailure.success, context)
+  }
+
   const input = rendererFailureInput(error)
   const transport = decodeTransportError(input)
   const code =
@@ -92,6 +102,70 @@ export const walkthroughErrorPresentation = <Value>(
     ].join("\n"),
   }
 }
+
+const walkthroughPublicFailurePresentation = (
+  failure: WalkthroughStartBridgeFailureType,
+  context: WalkthroughErrorReportContext,
+): WalkthroughErrorPresentation => ({
+  message:
+    failure.remediation === "reauthenticateProvider" && failure.providerId !== null
+      ? `Provider ${failure.providerId} authentication failed or expired. Sign in again, then retry.`
+      : walkthroughUserMessage(failure.code, failure.safeMessage),
+  report: [
+    "DiffDash walkthrough error",
+    "",
+    `App version: ${safeReportLine(context.appVersion)}`,
+    `Occurred at: ${safeReportLine(context.occurredAt)}`,
+    `Review type: ${walkthroughReviewType(context.reviewSource)}`,
+    `Action: ${context.action === "regenerate" ? "Regenerate" : "Generate"}`,
+    `Configured route: ${safeReportLine(context.provider)}`,
+    `Configured model or quality: ${safeReportLine(context.model)}`,
+    `Platform: ${safeReportLine(context.platform)}`,
+    `Core epoch: ${safeReportLine(failure.processEpoch)}`,
+    `Method: ${failure.method}`,
+    `Request ID: ${safeReportLine(failure.requestId)}`,
+    `Operation ID: ${failure.operationId === null ? "not allocated" : safeReportLine(failure.operationId)}`,
+    `Error source: Core`,
+    `Error code: ${failure.code}`,
+    `Provider: ${failure.providerId === null ? "none" : safeReportLine(failure.providerId)}`,
+    `Model: ${failure.modelId === null ? "none" : safeReportLine(failure.modelId)}`,
+    `Retry class: ${failure.retryClass}`,
+    `Remediation: ${failure.remediation}`,
+    `Details: ${safeReportLine(failure.safeMessage)}`,
+    "",
+    "Attempt summary:",
+    ...(failure.attempts.length === 0
+      ? ["- none"]
+      : failure.attempts.map(
+          (attempt) =>
+            `- ${safeReportLine(attempt.providerId)} / ${attempt.modelId === null ? "default" : safeReportLine(attempt.modelId)} / attempt ${attempt.attempt} / ${attempt.stage} / ${attempt.outcome}`,
+        )),
+    ...(failure.diagnostic === null
+      ? []
+      : [
+          "",
+          "Diagnostic trace:",
+          ...(failure.diagnostic.causeTags.length === 0
+            ? ["- Cause tags: none"]
+            : failure.diagnostic.causeTags.map((tag) => `- ${safeReportLine(tag)}`)),
+          `- Exit code: ${failure.diagnostic.exitCode ?? "none"}`,
+          `- Signal: ${failure.diagnostic.signal ?? "none"}`,
+          `- Truncated: ${failure.diagnostic.truncated ? "yes" : "no"}`,
+          "",
+          "Provider diagnostic:",
+          ...(failure.diagnostic.providerExcerpt === null
+            ? ["> none"]
+            : failure.diagnostic.providerExcerpt
+                .split("\n")
+                .map((line) => `> ${safeReportLine(line)}`)),
+          "",
+          "Internal frames:",
+          ...(failure.diagnostic.internalFrames.length === 0
+            ? ["- none"]
+            : failure.diagnostic.internalFrames.map((frame) => `- ${safeReportLine(frame)}`)),
+        ]),
+  ].join("\n"),
+})
 
 const walkthroughGenerationOperation = (source: WalkthroughErrorReviewSource): string => {
   if (source === "hosted") return InvokeChannel.generateWalkthrough
@@ -194,6 +268,7 @@ const walkthroughProviderFailureMessage = (
     case undefined:
       return null
   }
+  return null
 }
 
 const safeReportLine = (value: string): string =>
