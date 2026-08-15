@@ -33,6 +33,7 @@ describe("ReviewDataWorkerClient", () => {
       _tag: "Failed",
       message: "Review data worker failed: worker crashed",
     })
+    expect(runtime.terminated).toBe(true)
   })
 
   it("starts and reclaims a real Node worker thread", async () => {
@@ -80,6 +81,7 @@ class HeldChunkRuntime implements ReviewDataWorkerRuntime {
 
 class FailingRuntime implements ReviewDataWorkerRuntime {
   #fail: (cause: Error) => void = () => undefined
+  terminated = false
 
   fail(cause: Error): void {
     this.#fail(cause)
@@ -95,7 +97,9 @@ class FailingRuntime implements ReviewDataWorkerRuntime {
           this.#fail = () => undefined
         }
       },
-      terminate: async () => undefined,
+      terminate: async () => {
+        this.terminated = true
+      },
     }
   }
 }

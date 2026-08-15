@@ -8,7 +8,7 @@ export type ReviewDataWorkerCommand =
 /** Bounded response subset emitted by the isolated review data worker. */
 import type { IncrementalDiffBatch } from "./incremental-diff-parser"
 import { isBoundedIncrementalDiffBatch } from "./incremental-diff-parser"
-import { Match, Predicate } from "effect"
+import { Match, Predicate, Schema } from "effect"
 
 export type ReviewDataWorkerResponse =
   | { readonly _tag: "Accepted"; readonly requestId: number }
@@ -36,6 +36,30 @@ export interface ReviewDataWorkerRuntime {
   start(moduleUrl: URL): ReviewDataWorkerHandle
 }
 
+/** Parses one untrusted host command before it reaches the worker parser. */
+const RequestId = Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))
+const ReviewDataWorkerCommandSchema = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("Chunk"), requestId: RequestId, bytes: Schema.Uint8Array }),
+  Schema.Struct({ _tag: Schema.Literal("Finish"), requestId: RequestId }),
+  Schema.Struct({ _tag: Schema.Literal("Heartbeat"), requestId: RequestId }),
+  Schema.Struct({ _tag: Schema.Literal("Cancel"), requestId: RequestId }),
+])
+const ReviewDataWorkerResponseEnvelope = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("Accepted"), requestId: RequestId }),
+  Schema.Struct({ _tag: Schema.Literal("Batch"), requestId: RequestId, batch: Schema.Json }),
+  Schema.Struct({ _tag: Schema.Literal("Heartbeat"), requestId: RequestId }),
+  Schema.Struct({ _tag: Schema.Literal("Finished"), requestId: RequestId }),
+  Schema.Struct({ _tag: Schema.Literal("Cancelled"), requestId: RequestId }),
+  Schema.Struct({
+    _tag: Schema.Literal("Failed"),
+    requestId: RequestId,
+    message: Schema.String.pipe(Schema.check(Schema.isMaxLength(1_024))),
+  }),
+])
+
+export const isReviewDataWorkerCommand = Schema.is(ReviewDataWorkerCommandSchema)
+const isReviewDataWorkerResponseEnvelope = Schema.is(ReviewDataWorkerResponseEnvelope)
+
 /** Disposable latest-session worker client with one in-flight bounded command. */
 export class ReviewDataWorkerClient {
   readonly #handle: ReviewDataWorkerHandle
@@ -52,31 +76,42 @@ export class ReviewDataWorkerClient {
   constructor(runtime: ReviewDataWorkerRuntime, moduleUrl: URL) {
     this.#handle = runtime.start(moduleUrl)
     this.#unsubscribe = this.#handle.onResponse((response) => {
-      Match.value(response).pipe(
-        Match.tag("Batch", ({ batch }) => {
-          if (!isBoundedIncrementalDiffBatch(batch)) {
-            this.#failPending("Review data worker emitted an invalid batch")
-            return
-          }
-          this.#batchTail = this.#batchTail.then(async () => {
-            await Promise.all([...this.#batchListeners].map((listener) => listener(batch)))
-          })
-        }),
-        Match.orElse((terminal) => {
-          const resolve = this.#pending.get(terminal.requestId)
-          if (resolve === undefined) return
-          this.#pending.delete(terminal.requestId)
-          void this.#batchTail.then(
-            () => resolve(terminal),
-            () =>
-              resolve({
-                _tag: "Failed",
-                requestId: terminal.requestId,
-                message: "Review data worker batch handling failed",
-              }),
-          )
-        }),
-      )
+      if (!isReviewDataWorkerResponseEnvelope(response)) {
+        this.#failPending("Review data worker emitted an invalid response")
+        return
+      }
+      try {
+        Match.value(response).pipe(
+          Match.tag("Batch", ({ batch }) => {
+            if (!isBoundedIncrementalDiffBatch(batch)) {
+              this.#failPending("Review data worker emitted an invalid batch")
+              return
+            }
+            this.#batchTail = this.#batchTail.then(async () => {
+              await Promise.all(
+                [...this.#batchListeners].map((listener) => Promise.resolve(listener(batch))),
+              )
+              return undefined
+            })
+          }),
+          Match.orElse((terminal) => {
+            const resolve = this.#pending.get(terminal.requestId)
+            if (resolve === undefined) return
+            this.#pending.delete(terminal.requestId)
+            void this.#batchTail.then(
+              () => resolve(terminal),
+              () =>
+                resolve({
+                  _tag: "Failed",
+                  requestId: terminal.requestId,
+                  message: "Review data worker batch handling failed",
+                }),
+            )
+          }),
+        )
+      } catch {
+        this.#failPending("Review data worker emitted an invalid response")
+      }
     })
     this.#unsubscribeFailure = this.#handle.onFailure((cause) => {
       this.#failPending(`Review data worker failed: ${cause.message}`)
@@ -168,6 +203,7 @@ export class ReviewDataWorkerClient {
       resolve({ _tag: "Failed", requestId, message })
     this.#pending.clear()
     this.#batchListeners.clear()
+    void this.#handle.terminate()
   }
 
   async #dispose(): Promise<void> {

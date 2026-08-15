@@ -9,18 +9,10 @@ import type {
 export interface BunWorkerHandle {
   /** Sends a command and transfers source-owned buffers. */
   postMessage(command: ReviewDataWorkerCommand, transfer?: ReadonlyArray<ArrayBuffer>): void
-  /** Registers a worker response listener. */
-  addEventListener(
-    type: "message",
-    listener: (event: { readonly data: ReviewDataWorkerResponse }) => void,
-  ): void
-  addEventListener(type: "error", listener: (event: { readonly error: Error }) => void): void
-  /** Removes a worker response listener. */
-  removeEventListener(
-    type: "message",
-    listener: (event: { readonly data: ReviewDataWorkerResponse }) => void,
-  ): void
-  removeEventListener(type: "error", listener: (event: { readonly error: Error }) => void): void
+  /** Registers and removes worker response listeners. */
+  onMessage(listener: (response: ReviewDataWorkerResponse) => void): () => void
+  /** Registers and removes worker failure listeners. */
+  onError(listener: (error: Error) => void): () => void
   /** Synchronously requests worker termination. */
   terminate(): void
 }
@@ -39,17 +31,8 @@ export class BunReviewDataWorkerRuntime implements ReviewDataWorkerRuntime {
     const worker = this.#startWorker(moduleUrl)
     return {
       post: (command, transfer = []): void => worker.postMessage(command, transfer),
-      onResponse: (listener): (() => void) => {
-        const receive = (event: { readonly data: ReviewDataWorkerResponse }): void =>
-          listener(event.data)
-        worker.addEventListener("message", receive)
-        return () => worker.removeEventListener("message", receive)
-      },
-      onFailure: (listener): (() => void) => {
-        const fail = (event: { readonly error: Error }): void => listener(event.error)
-        worker.addEventListener("error", fail)
-        return () => worker.removeEventListener("error", fail)
-      },
+      onResponse: (listener): (() => void) => worker.onMessage(listener),
+      onFailure: (listener): (() => void) => worker.onError(listener),
       terminate: async (): Promise<void> => worker.terminate(),
     }
   }

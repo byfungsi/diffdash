@@ -13,10 +13,15 @@ const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const buildId = "desktop-build-1"
 const entrypoint = "export const core = true\n"
 const checksum = createHash("sha256").update(entrypoint).digest("hex")
+const workerEntrypoint = "export const worker = true\n"
+const workerChecksum = createHash("sha256").update(workerEntrypoint).digest("hex")
+const workerBuildId = `review-worker-v1-${workerChecksum.slice(0, 20)}-${workerChecksum.slice(0, 20)}`
 
 const writeArtifact = (manifest: object, contents = entrypoint) => {
   const directory = mkdtempSync(join(tmpdir(), "dd-core-artifact-"))
   writeFileSync(join(directory, "core.mjs"), contents)
+  writeFileSync(join(directory, "review-worker-node.mjs"), workerEntrypoint)
+  writeFileSync(join(directory, "review-worker-bun.mjs"), workerEntrypoint)
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest))
   return directory
 }
@@ -32,6 +37,11 @@ const validManifest = {
   },
   entrypoint: "core.mjs",
   entrypointSha256: checksum,
+  reviewWorker: {
+    buildId: workerBuildId,
+    node: { entrypoint: "review-worker-node.mjs", entrypointSha256: workerChecksum },
+    bun: { entrypoint: "review-worker-bun.mjs", entrypointSha256: workerChecksum },
+  },
   runtime: { utility: true, bun: { minimumVersion: "1.2.0", architecture: process.arch } },
 } as const
 

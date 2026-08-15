@@ -14,7 +14,10 @@ export type {
 export { replayV1Identities } from "./v1-identity-replay"
 export type { ReplayedV1Identities } from "./v1-identity-replay"
 export { consumeReviewDiffSource, ReviewDataWorkerFailure } from "./review-diff-source-consumer"
-export { ReviewDataWorkerClient } from "./worker-runtime"
+export {
+  isReviewDataWorkerCommand,
+  ReviewDataWorkerClient,
+} from "./worker-runtime"
 export type {
   ReviewDataWorkerCommand,
   ReviewDataWorkerHandle,

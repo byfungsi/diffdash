@@ -31,6 +31,40 @@ export const buildCoreArtifact = async ({
 
   let previousMoved = false
   try {
+    const workerBuild = async (entryPoint, outfile, platform) =>
+      build({
+        absWorkingDir: workspaceDirectory,
+        bundle: true,
+        entryPoints: [entryPoint],
+        format: "esm",
+        legalComments: "none",
+        logLevel: "silent",
+        metafile: true,
+        outfile,
+        platform,
+        sourcemap: false,
+        target: "es2022",
+        treeShaking: true,
+      })
+    const nodeWorkerPath = resolve(stagingDirectory, "review-worker-node.mjs")
+    const bunWorkerPath = resolve(stagingDirectory, "review-worker-bun.mjs")
+    const nodeWorkerBuild = await workerBuild(
+      resolve(workspaceDirectory, "packages/review-data-worker/src/node-worker-entrypoint.ts"),
+      nodeWorkerPath,
+      "node",
+    )
+    const bunWorkerBuild = await workerBuild(
+      resolve(workspaceDirectory, "packages/review-data-worker/src/bun-worker-entrypoint.ts"),
+      bunWorkerPath,
+      "neutral",
+    )
+    const nodeWorkerSha256 = createHash("sha256")
+      .update(await readFile(nodeWorkerPath))
+      .digest("hex")
+    const bunWorkerSha256 = createHash("sha256")
+      .update(await readFile(bunWorkerPath))
+      .digest("hex")
+    const reviewWorkerBuildId = `review-worker-v1-${nodeWorkerSha256.slice(0, 20)}-${bunWorkerSha256.slice(0, 20)}`
     const buildResult = await build({
       absWorkingDir: workspaceDirectory,
       banner: {
@@ -38,6 +72,11 @@ export const buildCoreArtifact = async ({
       },
       bundle: true,
       entryPoints: [coreArtifactEntryForMode(normalizedMode)],
+      define: {
+        DIFFDASH_REVIEW_WORKER_BUILD_ID: JSON.stringify(reviewWorkerBuildId),
+        DIFFDASH_REVIEW_WORKER_NODE_SHA256: JSON.stringify(nodeWorkerSha256),
+        DIFFDASH_REVIEW_WORKER_BUN_SHA256: JSON.stringify(bunWorkerSha256),
+      },
       format: "esm",
       legalComments: "none",
       logLevel: "silent",
@@ -61,6 +100,11 @@ export const buildCoreArtifact = async ({
       },
       entrypoint: "core.mjs",
       entrypointSha256,
+      reviewWorker: {
+        buildId: reviewWorkerBuildId,
+        node: { entrypoint: "review-worker-node.mjs", entrypointSha256: nodeWorkerSha256 },
+        bun: { entrypoint: "review-worker-bun.mjs", entrypointSha256: bunWorkerSha256 },
+      },
       runtime: {
         utility: true,
         bun: {
@@ -83,7 +127,17 @@ export const buildCoreArtifact = async ({
     }
     await rename(stagingDirectory, outputDirectory)
     if (previousMoved) await rm(previousDirectory, { recursive: true, force: true })
-    return { manifest, metafile: buildResult.metafile, outputDirectory }
+    return {
+      manifest,
+      metafile: {
+        inputs: {
+          ...buildResult.metafile.inputs,
+          ...nodeWorkerBuild.metafile.inputs,
+          ...bunWorkerBuild.metafile.inputs,
+        },
+      },
+      outputDirectory,
+    }
   } catch (error) {
     await rm(stagingDirectory, { recursive: true, force: true })
     if (previousMoved) {

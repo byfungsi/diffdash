@@ -1,6 +1,7 @@
 export * from "./core-configuration"
 export * from "./core-contract"
 export * from "./core-durable-command-coordinator"
+export * from "./review-data-worker-coordinator"
 export * from "./core-startup-error"
 export { createEmbeddedCore } from "./embedded-core"
 export { PrerequisiteInstallError } from "./services/prerequisites"

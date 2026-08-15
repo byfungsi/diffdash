@@ -3,9 +3,9 @@
 ## Scope
 
 This implementation checkpoint selects strict source/parser limits and a disposable worker protocol
-for FUN-233. It does not claim the final packaged 61,000-file/30,000,000-row RSS benchmark; that
-measurement remains an integration gate once Core supplies staging resources and bundles the worker
-entrypoint for both hosts.
+for FUN-233. The generated Core artifact now stages checksummed Node and Bun worker entrypoints and
+verifies their shared build identity before Desktop accepts the artifact. It does not claim the final
+packaged 61,000-file/30,000,000-row RSS benchmark.
 
 ## D-08 Limits
 
@@ -37,13 +37,16 @@ Source delivery permits one acknowledged chunk at a time. Parser work per turn i
 at 64 KiB plus a 256 KiB partial line, allowing heartbeat commands between turns. Cancellation and
 review switch call runtime termination and resolve every pending request as terminated. A real Node
 worker test proves heartbeat and termination; a deterministic held-parser fake proves heartbeat is
-independent of a pending parse request and cancellation reclaims the handle.
+independent of a pending parse request and cancellation reclaims the handle. Generated-artifact tests
+also execute the parser protocol in real Node and Bun workers, reject an oversized chunk, and verify
+both worker checksums and their combined build identity. Bun was available at `1.2.23` for this check.
 
 ## Remaining Integration Evidence
 
-Core must supply a pre-authorized staging file, persist incoming bytes before acknowledging them,
-replay each closed file range for v1 patch identity, validate every emitted batch, and bundle an
-entrypoint around `attachReviewDataWorker`. Packaged Node and Bun runs must then record heartbeat
-latency, process heap/RSS/private bytes, cancellation latency, and post-termination reclamation on the
-generated 61,000-file/30,000,000-row fixture. Product SQLite must be held open exclusively by Core
-during that run to prove the worker cannot acquire it.
+Production review loading is deliberately not cut over in this work package. Before that cutover,
+Core must supply the pre-authorized source staging resource needed for range replay instead of the
+entrypoints' inert staging capability, then consume the already-composed coordinator from the review
+operation. Packaged Node and Bun runs must record heartbeat latency, process heap/RSS/private bytes,
+cancellation latency, and post-termination reclamation on the generated
+61,000-file/30,000,000-row fixture. Product SQLite must be held open exclusively by Core during that
+run to prove the worker cannot acquire it. No result for that scale measurement is claimed here.

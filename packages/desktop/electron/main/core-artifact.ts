@@ -23,6 +23,17 @@ export const CoreArtifactManifest = Schema.Struct({
   }),
   entrypoint: Schema.Literal("core.mjs"),
   entrypointSha256: Sha256,
+  reviewWorker: Schema.Struct({
+    buildId: CoreBuildId,
+    node: Schema.Struct({
+      entrypoint: Schema.Literal("review-worker-node.mjs"),
+      entrypointSha256: Sha256,
+    }),
+    bun: Schema.Struct({
+      entrypoint: Schema.Literal("review-worker-bun.mjs"),
+      entrypointSha256: Sha256,
+    }),
+  }),
   runtime: Schema.Struct({
     utility: Schema.Literal(true),
     bun: Schema.Struct({
@@ -192,6 +203,44 @@ export const verifyCoreArtifact = (
         () => verificationFailure("entrypoint-invalid"),
       ),
     )
+    const verifyWorker = (workerEntrypoint: string, checksum: string) =>
+      Effect.gen(function* () {
+        const workerPath = path.join(artifactDirectory, workerEntrypoint)
+        const canonicalPath = yield* fileSystem
+          .realPath(workerPath)
+          .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
+        const info = yield* fileSystem.stat(workerPath).pipe(
+          Effect.mapError(() => verificationFailure("entrypoint-invalid")),
+          Effect.filterOrFail(
+            (workerInfo) =>
+              canonicalPath === workerPath &&
+              workerInfo.type === "File" &&
+              workerInfo.size <= BigInt(ENTRYPOINT_MAX_BYTES),
+            () => verificationFailure("entrypoint-invalid"),
+          ),
+        )
+        const bytes = yield* fileSystem
+          .readFile(workerPath)
+          .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
+        yield* Effect.succeed(createHash("sha256").update(bytes).digest("hex")).pipe(
+          Effect.filterOrFail(
+            (actual) => actual === checksum,
+            () => verificationFailure("entrypoint-checksum-mismatch"),
+          ),
+        )
+        return info
+      })
+    yield* verifyWorker(
+      manifest.reviewWorker.node.entrypoint,
+      manifest.reviewWorker.node.entrypointSha256,
+    )
+    yield* verifyWorker(
+      manifest.reviewWorker.bun.entrypoint,
+      manifest.reviewWorker.bun.entrypointSha256,
+    )
+    const expectedWorkerBuildId = `review-worker-v1-${manifest.reviewWorker.node.entrypointSha256.slice(0, 20)}-${manifest.reviewWorker.bun.entrypointSha256.slice(0, 20)}`
+    if (manifest.reviewWorker.buildId !== expectedWorkerBuildId)
+      return yield* verificationFailure("build-identity-mismatch")
 
     return new VerifiedCoreArtifact({
       buildId: manifest.buildId,
