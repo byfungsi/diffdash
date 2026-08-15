@@ -168,6 +168,10 @@ describe("database-node", () => {
           "repository_checkouts",
           "repository_identities",
           "repository_identity_jobs",
+          "resource_leases",
+          "resource_reservations",
+          "resource_roots",
+          "resources",
           "review_thread_messages",
           "review_threads",
           "thread_memory",
@@ -244,7 +248,7 @@ describe("database-node", () => {
         )
         expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -282,7 +286,7 @@ describe("database-node", () => {
           ),
         ).toEqual({ version: 1 })
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -401,7 +405,7 @@ describe("database-node", () => {
           ]),
         )
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -631,7 +635,7 @@ describe("database-node", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.exec("PRAGMA user_version = 14")
+      sqlite.exec("PRAGMA user_version = 15")
       sqlite.close()
 
       const result = yield* Effect.result(
@@ -645,12 +649,12 @@ describe("database-node", () => {
       )
       if (Result.isFailure(result)) {
         expect(String(result.failure.cause)).toContain(
-          "Database schema version 14 is newer than supported version 13",
+          "Database schema version 15 is newer than supported version 14",
         )
       }
 
       const reopened = new DatabaseSync(databasePath, { readOnly: true })
-      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 })
+      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 })
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -686,7 +690,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
         const agentRunsSql = decodeTableSqlRow(
           yield* database.get(
@@ -859,7 +863,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
         expect(
           Option.getOrThrow(
@@ -887,7 +891,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(memory)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -906,7 +910,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(row)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

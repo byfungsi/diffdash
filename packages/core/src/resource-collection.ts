@@ -1,0 +1,273 @@
+import { createHash } from "node:crypto"
+import { lstat, mkdir, realpath, rename, rm } from "node:fs/promises"
+import { isAbsolute, relative, resolve, sep } from "node:path"
+import {
+  type CatalogResource,
+  type CatalogResourceId,
+  type CatalogResourceLocation,
+  ResourceCatalog,
+  ResourceCatalogError,
+  ResourceRecoveryToken,
+  type ResourceRootId,
+} from "@diffdash/persistence/resource-catalog"
+import { Context, Effect, Predicate, Schema } from "effect"
+
+/** External mutation stage performed after durable collection intent commits. */
+export const ResourceAdapterOperation = Schema.Literals(["quarantine", "delete"])
+
+/** External mutation stage performed after durable collection intent commits. */
+export type ResourceAdapterOperation = typeof ResourceAdapterOperation.Type
+
+/** Classified adapter failure safe for retry scheduling and diagnostics. */
+export class ResourceAdapterError extends Schema.TaggedError<ResourceAdapterError>()(
+  "ResourceAdapterError",
+  {
+    operation: ResourceAdapterOperation,
+    resourceId: Schema.String,
+    reason: Schema.String,
+    cause: Schema.ErrorInstance(),
+  },
+) {}
+
+/** Bounded mutation capability for one typed catalog location. */
+export interface ResourceMutationAdapter {
+  readonly quarantine: (
+    resource: CatalogResource,
+    token: ResourceRecoveryToken,
+  ) => Effect.Effect<void, ResourceAdapterError>
+  readonly delete: (
+    resource: CatalogResource,
+    token: ResourceRecoveryToken,
+  ) => Effect.Effect<void, ResourceAdapterError>
+}
+
+/** Complete adapter set required by resource reconciliation. */
+export interface ResourceMutationAdapters {
+  readonly filesystem: ResourceMutationAdapter
+  readonly gitRef: ResourceMutationAdapter
+  readonly updaterPartial: ResourceMutationAdapter
+}
+
+/** Inputs for one new collection intent and mutation pass. */
+export interface CollectResourceInput {
+  readonly resourceId: CatalogResourceId
+  readonly recoveryToken: ResourceRecoveryToken
+  readonly nowMs: number
+  readonly retryAtMs: number
+}
+
+/** Core-owned collection and crash-reconciliation boundary. */
+export class ResourceCollection extends Context.Service<
+  ResourceCollection,
+  {
+    readonly collect: (input: CollectResourceInput) => Effect.Effect<void, ResourceCatalogError>
+    readonly reconcile: (
+      nowMs: number,
+      retryAtMs: number,
+    ) => Effect.Effect<void, ResourceCatalogError>
+  }
+>()("@diffdash/core/ResourceCollection") {}
+
+/** Creates registered-root filesystem mutation with containment and symlink checks. */
+export const makeFilesystemResourceAdapter = (
+  roots: ReadonlyMap<ResourceRootId, string>,
+): ResourceMutationAdapter => ({
+  quarantine: (resource, token) =>
+    filesystemPaths(roots, resource, token, "quarantine").pipe(
+      Effect.flatMap(({ original, quarantined, quarantineDirectory }) =>
+        Effect.tryPromise({
+          try: async () => {
+            const originalExists = await validatePath(original.root, original.path)
+            const quarantinedExists = await validatePath(original.root, quarantined)
+            if (originalExists && quarantinedExists) {
+              throw new Error("Both source and quarantine paths exist")
+            }
+            if (!originalExists || quarantinedExists) return
+            await mkdir(quarantineDirectory, { recursive: true, mode: 0o700 })
+            const quarantineStat = await lstat(quarantineDirectory)
+            if (quarantineStat.isSymbolicLink())
+              throw new Error("Quarantine directory is a symlink")
+            await rename(original.path, quarantined)
+          },
+          catch: (cause) => adapterError("quarantine", resource.id, cause),
+        }),
+      ),
+    ),
+  delete: (resource, token) =>
+    filesystemPaths(roots, resource, token, "delete").pipe(
+      Effect.flatMap(({ original, quarantined }) =>
+        Effect.tryPromise({
+          try: async () => {
+            if (!(await validatePath(original.root, quarantined))) return
+            await rm(quarantined, { recursive: true, force: true, maxRetries: 0 })
+          },
+          catch: (cause) => adapterError("delete", resource.id, cause),
+        }),
+      ),
+    ),
+})
+
+/** Wraps a logical mutation adapter with a hard operation deadline. */
+export const makeBoundedLogicalResourceAdapter = (
+  mutate: (
+    operation: ResourceAdapterOperation,
+    location: CatalogResourceLocation,
+    token: ResourceRecoveryToken,
+  ) => Effect.Effect<void, ResourceAdapterError>,
+  timeoutMs: number,
+): ResourceMutationAdapter => {
+  const run = (
+    operation: ResourceAdapterOperation,
+    resource: CatalogResource,
+    token: ResourceRecoveryToken,
+  ) =>
+    mutate(operation, resource.location, token).pipe(
+      Effect.timeout(`${timeoutMs} millis`),
+      Effect.mapError((cause) =>
+        Schema.is(ResourceAdapterError)(cause)
+          ? cause
+          : adapterError(operation, resource.id, cause),
+      ),
+    )
+  return {
+    quarantine: (resource, token) => run("quarantine", resource, token),
+    delete: (resource, token) => run("delete", resource, token),
+  }
+}
+
+/** Builds collection around a durable catalog and typed mutation adapters. */
+export const makeResourceCollection = (
+  catalog: Context.Service.Shape<typeof ResourceCatalog>,
+  adapters: ResourceMutationAdapters,
+) => {
+  const resume = Effect.fn("ResourceCollection.resume")(function* (
+    resource: CatalogResource,
+    nowMs: number,
+    retryAtMs: number,
+  ) {
+    const token = resource.recoveryToken
+    if (
+      token === null ||
+      resource.policyClass === "durableUserData" ||
+      resource.state === "deleted"
+    ) {
+      return
+    }
+    const adapter = adapters[resource.location.kind]
+    const mutation = Effect.gen(function* () {
+      yield* adapter.quarantine(resource, token)
+      yield* catalog.quarantine({ resourceId: resource.id, recoveryToken: token, nowMs })
+      yield* adapter.delete(resource, token)
+      yield* catalog.completeDeletion({ resourceId: resource.id, recoveryToken: token, nowMs })
+    })
+    yield* mutation.pipe(
+      Effect.catch((cause) =>
+        catalog
+          .failDeletion({
+            resourceId: resource.id,
+            recoveryToken: token,
+            failure: Schema.is(ResourceAdapterError)(cause)
+              ? `${cause.operation}:${cause.reason}`.slice(0, 500)
+              : `${cause.operation}:${cause.cause.message}`.slice(0, 500),
+            retryAtMs,
+            nowMs,
+          })
+          .pipe(Effect.asVoid),
+      ),
+    )
+  })
+
+  return ResourceCollection.of({
+    collect: Effect.fn("ResourceCollection.collect")(function* (input) {
+      const resource = yield* catalog.beginCollection({
+        resourceId: input.resourceId,
+        recoveryToken: input.recoveryToken,
+        nowMs: input.nowMs,
+      })
+      yield* resume(resource, input.nowMs, input.retryAtMs)
+    }),
+    reconcile: Effect.fn("ResourceCollection.reconcile")(function* (nowMs, retryAtMs) {
+      const resources = yield* catalog.list()
+      for (const resource of resources) {
+        if (
+          (resource.state === "collecting" ||
+            resource.state === "quarantined" ||
+            resource.state === "deletionFailed") &&
+          (resource.retryAtMs === null || resource.retryAtMs <= nowMs)
+        ) {
+          yield* resume(resource, nowMs, retryAtMs)
+        }
+      }
+    }),
+  })
+}
+
+const filesystemPaths = (
+  roots: ReadonlyMap<ResourceRootId, string>,
+  resource: CatalogResource,
+  token: ResourceRecoveryToken,
+  operation: ResourceAdapterOperation,
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      if (resource.location.kind !== "filesystem") throw new Error("Expected filesystem location")
+      const configuredRoot = roots.get(resource.location.rootId)
+      if (configuredRoot === undefined) throw new Error("Filesystem root is not registered")
+      if (isAbsolute(resource.location.relativePath))
+        throw new Error("Resource path must be relative")
+      const rootStat = await lstat(configuredRoot)
+      if (rootStat.isSymbolicLink()) throw new Error("Registered root is a symlink")
+      const root = await realpath(configuredRoot)
+      const original = resolve(root, resource.location.relativePath)
+      assertContained(root, original)
+      const quarantineDirectory = resolve(root, ".diffdash-quarantine")
+      const tokenName = createHash("sha256").update(token).digest("hex")
+      const quarantined = resolve(quarantineDirectory, tokenName)
+      assertContained(root, quarantined)
+      return { original: { root, path: original }, quarantineDirectory, quarantined }
+    },
+    catch: (cause) => adapterError(operation, resource.id, cause),
+  })
+
+const validatePath = async (root: string, path: string): Promise<boolean> => {
+  assertContained(root, path)
+  const segments = relative(root, path).split(sep).filter(Boolean)
+  let current = root
+  for (const segment of segments) {
+    current = resolve(current, segment)
+    try {
+      const stat = await lstat(current)
+      if (stat.isSymbolicLink()) throw new Error(`Resource path traverses a symlink: ${segment}`)
+    } catch (cause) {
+      if (isMissingPath(cause)) return false
+      throw cause
+    }
+  }
+  return true
+}
+
+const assertContained = (root: string, candidate: string) => {
+  const child = relative(root, candidate)
+  if (child === "" || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)) {
+    throw new Error("Resource path escapes or aliases its registered root")
+  }
+}
+
+const ErrorCode = Schema.Struct({ code: Schema.String })
+
+const isMissingPath = <Cause>(cause: Cause): boolean =>
+  Schema.is(ErrorCode)(cause) && cause.code === "ENOENT"
+
+const adapterError = <Cause>(
+  operation: ResourceAdapterOperation,
+  resourceId: string,
+  cause: Cause,
+) => {
+  const error = Predicate.isError(cause) ? cause : new Error(String(cause))
+  return ResourceAdapterError.make({
+    operation,
+    resourceId,
+    reason: error.message,
+    cause: error,
+  })
+}

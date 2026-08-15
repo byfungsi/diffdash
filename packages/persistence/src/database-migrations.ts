@@ -13,7 +13,7 @@ interface DatabaseMigration {
   readonly migrate: (database: Database) => Effect.Effect<void, SqlError | DatabaseError>
 }
 
-const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 13
+const MAX_SUPPORTED_DATABASE_SCHEMA_VERSION = 14
 const REPOSITORY_IDENTITY_CAPABILITY = "repository-identity"
 const REPOSITORY_IDENTITY_CAPABILITY_VERSION = 1
 const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
@@ -22,6 +22,8 @@ const REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY = "review-message-run-ownership"
 const REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY_VERSION = 1
 const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY = "walkthrough-operation-acceptance"
 const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION = 1
+const RESOURCE_CATALOG_CAPABILITY = "resource-catalog"
+const RESOURCE_CATALOG_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -787,6 +789,155 @@ const migrations: readonly DatabaseMigration[] = [
       )
     }),
   },
+  {
+    version: 14,
+    migrate: Effect.fn("DatabaseMigration.14")(function* (database) {
+      if (!(yield* tableExists(database, "agent_runs"))) return
+      const messageColumns = yield* tableColumns(database, "review_thread_messages")
+      if (!messageColumns.some(({ name }) => name === "failure_json")) {
+        yield* database.run("ALTER TABLE review_thread_messages ADD COLUMN failure_json TEXT")
+      }
+      yield* executeSqlScript(
+        database,
+        `
+        DROP TABLE IF EXISTS agent_run_artifacts_v14;
+        DROP TABLE IF EXISTS review_thread_messages_v14;
+        DROP TABLE IF EXISTS agent_runs_v14;
+
+        CREATE TABLE agent_runs_v14 (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+          review_key TEXT NOT NULL,
+          base_sha TEXT NOT NULL,
+          head_sha TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          prompt_version TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (
+            status IN ('running', 'completed', 'failed', 'cancelled', 'interrupted')
+          ),
+          provider_run_id TEXT,
+          error TEXT,
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          usage_json TEXT,
+          UNIQUE(id, thread_id),
+          CHECK (
+            (status = 'running' AND completed_at IS NULL AND provider_run_id IS NULL AND
+             usage_json IS NULL AND error IS NULL) OR
+            (status = 'completed' AND completed_at IS NOT NULL AND error IS NULL) OR
+            (status = 'failed' AND completed_at IS NOT NULL AND error IS NOT NULL AND
+             usage_json IS NULL) OR
+            (status IN ('cancelled', 'interrupted') AND completed_at IS NOT NULL AND
+             provider_run_id IS NULL AND usage_json IS NULL AND error IS NULL)
+          )
+        );
+
+        INSERT INTO agent_runs_v14 (
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          status, provider_run_id, error, started_at, completed_at, usage_json
+        )
+        SELECT
+          id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
+          CASE status WHEN 'running' THEN 'interrupted' ELSE status END,
+          CASE status WHEN 'running' THEN NULL ELSE provider_run_id END,
+          CASE status WHEN 'running' THEN NULL ELSE error END,
+          started_at,
+          CASE status
+            WHEN 'running' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ELSE completed_at
+          END,
+          CASE status WHEN 'running' THEN NULL ELSE usage_json END
+        FROM agent_runs;
+
+        CREATE TABLE agent_run_artifacts_v14 (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN (
+            'file_read', 'search_result', 'shell_output', 'web_result',
+            'diff_context', 'mcp_tool_result', 'provider_message', 'unknown'
+          )),
+          title TEXT NOT NULL,
+          content TEXT NOT NULL,
+          content_digest TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          truncated INTEGER NOT NULL CHECK (truncated IN (0, 1)),
+          original_size INTEGER NOT NULL CHECK (original_size >= 0),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(run_id, thread_id) REFERENCES agent_runs_v14(id, thread_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO agent_run_artifacts_v14 SELECT * FROM agent_run_artifacts;
+
+        CREATE TABLE review_thread_messages_v14 (
+          id TEXT PRIMARY KEY,
+          thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+          sequence INTEGER NOT NULL,
+          author TEXT NOT NULL CHECK (author IN ('user', 'agent')),
+          body_markdown TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('pending', 'complete', 'failed')),
+          agent_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          failure_json TEXT,
+          UNIQUE(thread_id, sequence),
+          CHECK (author = 'agent' OR agent_run_id IS NULL),
+          FOREIGN KEY(agent_run_id, thread_id)
+            REFERENCES agent_runs_v14(id, thread_id) ON DELETE CASCADE
+        );
+
+        INSERT INTO review_thread_messages_v14 (
+          id, thread_id, sequence, author, body_markdown, status, agent_run_id,
+          created_at, updated_at, failure_json
+        )
+        SELECT
+          message.id, message.thread_id, message.sequence, message.author,
+          CASE
+            WHEN message.status = 'pending' AND run.status = 'running'
+              THEN 'The previous local agent run was interrupted. Retry to try again.'
+            ELSE message.body_markdown
+          END,
+          CASE
+            WHEN message.status = 'pending' AND run.status = 'running' THEN 'failed'
+            ELSE message.status
+          END,
+          message.agent_run_id, message.created_at,
+          CASE
+            WHEN message.status = 'pending' AND run.status = 'running'
+              THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ELSE message.updated_at
+          END,
+          message.failure_json
+        FROM review_thread_messages AS message
+        LEFT JOIN agent_runs AS run
+          ON run.id = message.agent_run_id AND run.thread_id = message.thread_id;
+
+        DROP TABLE review_thread_messages;
+        DROP TABLE agent_run_artifacts;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v14 RENAME TO agent_runs;
+        ALTER TABLE agent_run_artifacts_v14 RENAME TO agent_run_artifacts;
+        ALTER TABLE review_thread_messages_v14 RENAME TO review_thread_messages;
+
+        CREATE INDEX agent_runs_thread_idx
+          ON agent_runs(thread_id, started_at DESC, id);
+        CREATE UNIQUE INDEX agent_runs_one_running_per_thread_idx
+          ON agent_runs(thread_id) WHERE status = 'running';
+        CREATE INDEX agent_run_artifacts_run_idx
+          ON agent_run_artifacts(run_id, created_at ASC, id);
+        CREATE INDEX agent_run_artifacts_thread_idx
+          ON agent_run_artifacts(thread_id, created_at ASC, id);
+        CREATE INDEX review_thread_messages_thread_idx
+          ON review_thread_messages(thread_id, sequence);
+        CREATE UNIQUE INDEX review_thread_messages_one_pending_agent_per_thread_idx
+          ON review_thread_messages(thread_id) WHERE author = 'agent' AND status = 'pending';
+        CREATE UNIQUE INDEX review_thread_messages_agent_run_idx
+          ON review_thread_messages(agent_run_id) WHERE agent_run_id IS NOT NULL;
+      `,
+      )
+    }),
+  },
 ]
 
 /** Highest core schema version written for rollback-compatible installations. */
@@ -851,7 +1002,9 @@ export const databaseRequiresMigration = Effect.fn("databaseRequiresMigration")(
     (yield* readCapabilityVersion(database, REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY)) <
       REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY_VERSION ||
     (yield* readCapabilityVersion(database, WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY)) <
-      WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION
+      WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION ||
+    (yield* readCapabilityVersion(database, RESOURCE_CATALOG_CAPABILITY)) <
+      RESOURCE_CATALOG_CAPABILITY_VERSION
   )
 })
 
@@ -859,6 +1012,120 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
   database: Database,
 ) {
   if (!(yield* tableExists(database, "repos"))) return
+  if (
+    (yield* readCapabilityVersion(database, RESOURCE_CATALOG_CAPABILITY)) <
+    RESOURCE_CATALOG_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* executeSqlScript(
+          database,
+          `
+          CREATE TABLE IF NOT EXISTS diffdash_capabilities (
+            name TEXT PRIMARY KEY,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            installed_at TEXT NOT NULL
+          );
+
+          CREATE TABLE resource_roots (
+            id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 100),
+            path TEXT NOT NULL UNIQUE CHECK (length(path) BETWEEN 1 AND 4096),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
+          );
+
+          CREATE TABLE resources (
+            id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 200),
+            parent_id TEXT REFERENCES resources(id) ON DELETE RESTRICT,
+            kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 100),
+            policy_class TEXT NOT NULL CHECK (
+              policy_class IN ('durableUserData', 'cache', 'temporary', 'migrationBackup')
+            ),
+            state TEXT NOT NULL CHECK (
+              state IN ('writing', 'ready', 'collecting', 'quarantined', 'deletionFailed', 'deleted')
+            ),
+            generation INTEGER NOT NULL CHECK (generation >= 1),
+            location_kind TEXT NOT NULL CHECK (
+              location_kind IN ('filesystem', 'gitRef', 'updaterPartial')
+            ),
+            root_id TEXT REFERENCES resource_roots(id) ON DELETE RESTRICT,
+            location_value TEXT NOT NULL CHECK (length(location_value) BETWEEN 1 AND 4096),
+            bytes INTEGER NOT NULL CHECK (bytes >= 0),
+            reserved_bytes INTEGER NOT NULL DEFAULT 0 CHECK (reserved_bytes >= 0),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+            last_used_at_ms INTEGER NOT NULL CHECK (last_used_at_ms >= created_at_ms),
+            checksum TEXT,
+            validation TEXT,
+            recovery_token TEXT UNIQUE,
+            failure TEXT,
+            retry_at_ms INTEGER CHECK (retry_at_ms IS NULL OR retry_at_ms >= 0),
+            CHECK (parent_id IS NULL OR parent_id <> id),
+            CHECK (
+              (location_kind = 'filesystem' AND root_id IS NOT NULL) OR
+              (location_kind <> 'filesystem' AND root_id IS NULL)
+            ),
+            CHECK (
+              policy_class <> 'durableUserData' OR
+              (state = 'ready' AND recovery_token IS NULL AND failure IS NULL AND retry_at_ms IS NULL)
+            ),
+            CHECK (
+              (state IN ('collecting', 'quarantined', 'deletionFailed') AND recovery_token IS NOT NULL) OR
+              (state NOT IN ('collecting', 'quarantined', 'deletionFailed') AND recovery_token IS NULL)
+            )
+          );
+
+          CREATE INDEX resources_parent_idx ON resources(parent_id, id);
+          CREATE INDEX resources_collection_idx
+            ON resources(policy_class, state, last_used_at_ms, id);
+
+          CREATE TABLE resource_leases (
+            id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 200),
+            resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+            owner_kind TEXT NOT NULL CHECK (length(owner_kind) BETWEEN 1 AND 100),
+            owner_id TEXT NOT NULL CHECK (length(owner_id) BETWEEN 1 AND 200),
+            application_instance_id TEXT NOT NULL CHECK (length(application_instance_id) BETWEEN 1 AND 100),
+            process_epoch TEXT NOT NULL CHECK (length(process_epoch) BETWEEN 1 AND 100),
+            acquired_at_ms INTEGER NOT NULL CHECK (acquired_at_ms >= 0),
+            renewed_at_ms INTEGER NOT NULL CHECK (renewed_at_ms >= acquired_at_ms),
+            expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > renewed_at_ms),
+            purpose TEXT NOT NULL CHECK (length(purpose) BETWEEN 1 AND 200)
+          );
+
+          CREATE INDEX resource_leases_resource_idx
+            ON resource_leases(resource_id, expires_at_ms, id);
+          CREATE INDEX resource_leases_owner_idx
+            ON resource_leases(application_instance_id, process_epoch, expires_at_ms);
+
+          CREATE TABLE resource_reservations (
+            id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 200),
+            resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+            bytes INTEGER NOT NULL CHECK (bytes > 0),
+            state TEXT NOT NULL CHECK (state IN ('active', 'consumed', 'expired')),
+            created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+            expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms > created_at_ms),
+            consumed_at_ms INTEGER,
+            CHECK (
+              (state = 'consumed' AND consumed_at_ms IS NOT NULL) OR
+              (state <> 'consumed' AND consumed_at_ms IS NULL)
+            )
+          );
+
+          CREATE INDEX resource_reservations_active_idx
+            ON resource_reservations(resource_id, expires_at_ms, id) WHERE state = 'active';
+          `,
+        )
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET
+             version = excluded.version,
+             installed_at = excluded.installed_at`,
+          [RESOURCE_CATALOG_CAPABILITY, RESOURCE_CATALOG_CAPABILITY_VERSION, now],
+        )
+      }),
+    )
+  }
   const repositoryIdentityInstalled =
     (yield* readCapabilityVersion(database, REPOSITORY_IDENTITY_CAPABILITY)) >=
     REPOSITORY_IDENTITY_CAPABILITY_VERSION
