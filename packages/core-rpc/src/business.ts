@@ -11,6 +11,7 @@ import {
   CoreRpcMethodPolicyAnnotation,
   CoreRpcPayloadBytes,
 } from "./method-policy"
+import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
 
 /** Business RPC that reads application state without exposing its storage implementation. */
 export const AppStateGetRpc = Rpc.make("AppState.get", {
@@ -35,5 +36,8 @@ export const AppStateGetRpc = Rpc.make("AppState.get", {
     }),
   )
 
-/** Electron-to-Core business RPC declarations. */
-export const CoreBusinessRpcs = RpcGroup.make(AppStateGetRpc)
+/** App-state business declarations with concrete Core handlers in the current composition. */
+export const AppStateBusinessRpcs = RpcGroup.make(AppStateGetRpc)
+
+/** Authoritative Electron-to-Core business RPC audience catalog. */
+export const CoreBusinessRpcs = AppStateBusinessRpcs.merge(WalkthroughBusinessRpcs)

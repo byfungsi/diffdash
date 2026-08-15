@@ -1,4 +1,4 @@
-import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
+import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import { CoreControlRpcs } from "@diffdash/core-rpc/control"
 import { AuthenticatedCoreServerRpcs } from "@diffdash/core-rpc/transport"
 import { Layer } from "effect"
@@ -12,7 +12,7 @@ import {
   type CoreTransportAuthenticationOptions,
 } from "./core-transport-authentication"
 
-const inboundGroups = [CoreControlRpcs, CoreBusinessRpcs] as const
+const inboundGroups = [CoreControlRpcs, AppStateBusinessRpcs] as const
 const inboundTags = inboundGroups.flatMap((group) => Array.from(group.requests.keys()))
 if (new Set(inboundTags).size !== inboundTags.length) {
   throw new Error("Core RPC audience groups must use disjoint method tags.")

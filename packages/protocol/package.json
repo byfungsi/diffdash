@@ -21,7 +21,8 @@
     "./review-snapshot": "./src/review-snapshot.ts",
     "./testing": "./src/testing.ts",
     "./transport-error": "./src/transport-error.ts",
-    "./viewed-files": "./src/viewed-files.ts"
+    "./viewed-files": "./src/viewed-files.ts",
+    "./walkthrough-operation": "./src/walkthrough-operation.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

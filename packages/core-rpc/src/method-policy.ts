@@ -63,6 +63,7 @@ export type CoreRpcIdempotency = typeof CoreRpcIdempotency.Type
 /** Behavior required when the Core process epoch changes during an operation. */
 export const CoreRpcRestartBehavior = Schema.Literals([
   "retryInNewEpoch",
+  "retryByIdempotencyKey",
   "failOnRestart",
   "resumeByOperationId",
 ])

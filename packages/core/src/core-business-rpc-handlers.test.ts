@@ -1,4 +1,4 @@
-import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
+import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import { AppStateGetAdmissionMiddleware } from "@diffdash/core-rpc/admission"
 import {
   ApplicationInstanceId,
@@ -39,7 +39,7 @@ const makeTestLayer = (get: Effect.Effect<SharedAppState, AppStateError>) =>
 describe("Core business RPC handlers", () => {
   it.effect("reads application state through the native RPC handler", () =>
     Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       expect(yield* client["AppState.get"](request)).toEqual(state)
     }).pipe(Effect.provide(makeTestLayer(Effect.succeed(state)))),
   )
@@ -51,7 +51,7 @@ describe("Core business RPC handlers", () => {
     })
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       const failure = yield* client["AppState.get"](request).pipe(Effect.flip)
 
       expect(failure).toEqual({

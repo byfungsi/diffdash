@@ -7,7 +7,7 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import { AppStateGetAdmissionMiddleware, CoreTransportAuthenticationMiddleware } from "./admission"
-import { AppStateGetRpc, CoreBusinessRpcs } from "./business"
+import { AppStateBusinessRpcs, AppStateGetRpc } from "./business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "./control"
 import {
   AppStateGetDefect,
@@ -186,12 +186,12 @@ describe("Core RPC declarations", () => {
   })
 
   it.effect("preserves AppState success through the native in-memory RPC client and server", () => {
-    const handlers = CoreBusinessRpcs.toLayer({
+    const handlers = AppStateBusinessRpcs.toLayer({
       "AppState.get": () => Effect.succeed(state),
     })
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       const result = yield* client["AppState.get"](request)
 
       expect(result).toEqual(state)
@@ -203,7 +203,7 @@ describe("Core RPC declarations", () => {
   })
 
   it.effect("preserves a stable plain AppState admission failure through native RPC", () => {
-    const handlers = CoreBusinessRpcs.toLayer({
+    const handlers = AppStateBusinessRpcs.toLayer({
       "AppState.get": () => Effect.succeed(state),
     })
     const admissionLayer = Layer.succeed(AppStateGetAdmissionMiddleware, () =>
@@ -211,7 +211,7 @@ describe("Core RPC declarations", () => {
     )
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       const result = yield* client["AppState.get"](request).pipe(Effect.flip)
 
       expect(result).toEqual(admissionLifecycleFailure)
@@ -227,12 +227,12 @@ describe("Core RPC declarations", () => {
   })
 
   it.effect("preserves a stable plain AppState failure through native in-memory RPC", () => {
-    const handlers = CoreBusinessRpcs.toLayer({
+    const handlers = AppStateBusinessRpcs.toLayer({
       "AppState.get": () => Effect.fail(failure),
     })
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       const result = yield* client["AppState.get"](request).pipe(Effect.flip)
 
       expect(result).toEqual(failure)
@@ -248,12 +248,12 @@ describe("Core RPC declarations", () => {
   })
 
   it.effect("projects a sanitized AppState defect through native in-memory RPC", () => {
-    const handlers = CoreBusinessRpcs.toLayer({
+    const handlers = AppStateBusinessRpcs.toLayer({
       "AppState.get": () => Effect.die(new Error("private /Users/example/repository/path")),
     })
 
     return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       const defect = yield* client["AppState.get"](request).pipe(Effect.catchDefect(Effect.succeed))
 
       expect(defect).toEqual(appStateDefect)
@@ -272,14 +272,14 @@ describe("Core RPC declarations", () => {
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()
       const interrupted = yield* Deferred.make<void>()
-      const handlers = CoreBusinessRpcs.toLayer({
+      const handlers = AppStateBusinessRpcs.toLayer({
         "AppState.get": () =>
           Deferred.succeed(started, undefined).pipe(
             Effect.andThen(Effect.never),
             Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
           ),
       })
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(Effect.provide(handlers))
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs).pipe(Effect.provide(handlers))
       const requestFiber = yield* client["AppState.get"](request).pipe(Effect.forkScoped)
 
       yield* Deferred.await(started)

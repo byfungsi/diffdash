@@ -31,6 +31,7 @@ import {
   WalkthroughAttemptSummary,
   WalkthroughCandidatePlanFingerprint,
   WalkthroughConfiguredRoute,
+  WalkthroughFailureCode,
   WalkthroughFailureDetail,
   WalkthroughIdempotencyKey,
   WalkthroughOperationAccepted,
@@ -215,6 +216,50 @@ describe("walkthrough RPC values", () => {
     ).toBe(true)
   })
 
+  it("preserves every classified provider attempt and public failure category", () => {
+    const outcomes = [
+      ["probe", "probe-failed"],
+      ["execute", "options-invalid"],
+      ["execute", "authentication-failed"],
+      ["execute", "authorization-failed"],
+      ["execute", "rate-limited"],
+      ["execute", "usage-limited"],
+      ["execute", "quota-exhausted"],
+      ["execute", "network-failed"],
+      ["execute", "provider-unavailable"],
+      ["execute", "configuration-failed"],
+      ["execute", "invalid-response"],
+      ["execute", "policy-unsupported"],
+      ["execute", "provider-failed"],
+      ["execute", "output-too-large"],
+    ] as const
+    for (const [stage, outcome] of outcomes) {
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(WalkthroughAttemptSummary)({
+            stage,
+            outcome,
+            providerId: "claude",
+            modelId: "claude-opus-5",
+            attempt: 1,
+          }),
+        ),
+      ).toBe(true)
+    }
+
+    const codes = [
+      "AGENT_PROVIDER_USAGE_LIMITED",
+      "AGENT_PROVIDER_CONFIGURATION",
+      "AGENT_PROVIDER_FAILURE",
+      "WALKTHROUGH_REVIEW_RESOLUTION",
+      "WALKTHROUGH_OPERATION_STATE_UNAVAILABLE",
+    ] as const
+    for (const code of codes) {
+      expect(Schema.decodeUnknownSync(WalkthroughFailureCode)(code)).toBe(code)
+      expect(code.startsWith("UNKNOWN_")).toBe(false)
+    }
+  })
+
   it("decodes state-specific operations and exact stored lookup results", () => {
     const completed = Schema.decodeUnknownSync(WalkthroughOperationSnapshot)({
       ...operationCommon,
@@ -357,7 +402,7 @@ describe("walkthrough RPC values", () => {
     const failure = Schema.decodeUnknownSync(WalkthroughPublicFailure)({
       _tag: "WalkthroughPublicFailure",
       ...requestIdentity,
-      method: "Walkthroughs.cancel",
+      method: "Walkthroughs.start",
       operationId,
       attempts,
       ...detail,
@@ -423,8 +468,8 @@ describe("walkthrough RPC values", () => {
       Result.isFailure(
         Schema.decodeUnknownResult(WalkthroughPublicFailure)({
           ...failure,
-          method: "Walkthroughs.start",
-          operationId: null,
+          method: "Walkthroughs.cancel",
+          operationId,
         }),
       ),
     ).toBe(true)

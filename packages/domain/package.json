@@ -13,6 +13,7 @@
     "./diff-hunk-lines": "./src/diff-hunk-lines.ts",
     "./diff-parser": "./src/diff-parser.ts",
     "./diagnostic-operation": "./src/diagnostic-operation.ts",
+    "./domain-scalar": "./src/domain-scalar.ts",
     "./executable-path": "./src/executable-path.ts",
     "./large-diff-policy": "./src/large-diff-policy.ts",
     "./git-provider": "./src/git-provider.ts",

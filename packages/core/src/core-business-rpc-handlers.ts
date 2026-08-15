@@ -1,10 +1,10 @@
-import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
+import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import { AppStateReadFailure } from "@diffdash/core-rpc/failure"
 import { AppState } from "@diffdash/settings/app-state"
 import { Effect } from "effect"
 
 /** Native Effect RPC handlers for business operations already owned by Core. */
-export const coreBusinessRpcHandlersLayer = CoreBusinessRpcs.toLayer(
+export const coreBusinessRpcHandlersLayer = AppStateBusinessRpcs.toLayer(
   Effect.gen(function* () {
     const appState = yield* AppState
     return {

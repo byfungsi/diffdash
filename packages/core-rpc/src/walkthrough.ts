@@ -115,7 +115,7 @@ export const WalkthroughAttemptSummary = Schema.Union([
   Schema.Struct({
     ...WalkthroughAttemptIdentity,
     stage: Schema.Literal("probe"),
-    outcome: Schema.Literals(["ready", "unavailable", "policy-unsupported"]),
+    outcome: Schema.Literals(["ready", "unavailable", "policy-unsupported", "probe-failed"]),
   }),
   Schema.Struct({
     ...WalkthroughAttemptIdentity,
@@ -124,9 +124,22 @@ export const WalkthroughAttemptSummary = Schema.Union([
       "succeeded",
       "spawn-failed",
       "provider-exit",
+      "provider-failed",
       "timeout",
       "io-failed",
+      "options-invalid",
       "cleanup-failed",
+      "authentication-failed",
+      "authorization-failed",
+      "rate-limited",
+      "usage-limited",
+      "quota-exhausted",
+      "network-failed",
+      "provider-unavailable",
+      "configuration-failed",
+      "invalid-response",
+      "policy-unsupported",
+      "output-too-large",
       "model-unavailable",
       "cancelled",
       "interrupted",
@@ -284,8 +297,11 @@ export const WalkthroughFailureCode = Schema.Literals([
   "AGENT_PROVIDER_AUTHENTICATION",
   "AGENT_PROVIDER_AUTHORIZATION",
   "AGENT_PROVIDER_RATE_LIMITED",
+  "AGENT_PROVIDER_USAGE_LIMITED",
   "AGENT_PROVIDER_QUOTA_EXHAUSTED",
   "AGENT_PROVIDER_NETWORK",
+  "AGENT_PROVIDER_CONFIGURATION",
+  "AGENT_PROVIDER_FAILURE",
   "AGENT_PROVIDER_SPAWN",
   "AGENT_PROVIDER_EXIT",
   "AGENT_PROVIDER_TIMEOUT",
@@ -298,7 +314,9 @@ export const WalkthroughFailureCode = Schema.Literals([
   "WALKTHROUGH_INVALID_JSON",
   "WALKTHROUGH_VALIDATION",
   "WALKTHROUGH_REVIEW_GENERATION_CHANGED",
+  "WALKTHROUGH_REVIEW_RESOLUTION",
   "WALKTHROUGH_OPERATION_NOT_FOUND",
+  "WALKTHROUGH_OPERATION_STATE_UNAVAILABLE",
   "WALKTHROUGH_OPERATION_STORE",
   "WALKTHROUGH_STORE",
   "WALKTHROUGH_SUPERSEDED",
@@ -316,6 +334,63 @@ export const WalkthroughFailureCode = Schema.Literals([
 
 /** Stable failure classifications emitted for walkthrough operations. */
 export type WalkthroughFailureCode = typeof WalkthroughFailureCode.Type
+
+const WalkthroughStartFailureCode = Schema.Literals([
+  "NO_AGENT_PROVIDER_AVAILABLE",
+  "AGENT_PROVIDER_UNAVAILABLE",
+  "AGENT_PROVIDER_POLICY_UNSUPPORTED",
+  "AGENT_PROVIDER_AUTHENTICATION",
+  "AGENT_PROVIDER_AUTHORIZATION",
+  "AGENT_PROVIDER_RATE_LIMITED",
+  "AGENT_PROVIDER_USAGE_LIMITED",
+  "AGENT_PROVIDER_QUOTA_EXHAUSTED",
+  "AGENT_PROVIDER_NETWORK",
+  "AGENT_PROVIDER_CONFIGURATION",
+  "AGENT_PROVIDER_FAILURE",
+  "AGENT_PROVIDER_SPAWN",
+  "AGENT_PROVIDER_EXIT",
+  "AGENT_PROVIDER_TIMEOUT",
+  "AGENT_PROVIDER_IO",
+  "AGENT_PROVIDER_CLEANUP",
+  "AGENT_PROVIDER_EMPTY_RESPONSE",
+  "AGENT_PROVIDER_OUTPUT_TOO_LARGE",
+  "WALKTHROUGH_MODEL_UNAVAILABLE",
+  "WALKTHROUGH_PROMPT_PREPARATION",
+  "WALKTHROUGH_INVALID_JSON",
+  "WALKTHROUGH_VALIDATION",
+  "WALKTHROUGH_REVIEW_GENERATION_CHANGED",
+  "WALKTHROUGH_REVIEW_RESOLUTION",
+  "WALKTHROUGH_OPERATION_STORE",
+  "WALKTHROUGH_STORE",
+  "WALKTHROUGH_SUPERSEDED",
+  "WALKTHROUGH_CANCELLED",
+  "WALKTHROUGH_INTERRUPTED",
+  "WALKTHROUGH_INTERNAL_ERROR",
+])
+const WalkthroughGetOperationFailureCode = Schema.Literals([
+  "WALKTHROUGH_OPERATION_NOT_FOUND",
+  "WALKTHROUGH_OPERATION_STATE_UNAVAILABLE",
+  "WALKTHROUGH_OPERATION_STORE",
+  "WALKTHROUGH_INTERNAL_ERROR",
+])
+const WalkthroughCancelFailureCode = Schema.Literals([
+  "WALKTHROUGH_OPERATION_NOT_FOUND",
+  "WALKTHROUGH_OPERATION_STORE",
+  "WALKTHROUGH_INTERNAL_ERROR",
+])
+const WalkthroughGetStoredFailureCode = Schema.Literals([
+  "WALKTHROUGH_STORE",
+  "WALKTHROUGH_INTERNAL_ERROR",
+])
+const WalkthroughAdmissionFailureCode = Schema.Literals([
+  "CORE_UNAVAILABLE",
+  "CORE_RESTARTED",
+  "CORE_DRAINING",
+  "CORE_RPC_ERROR",
+  "REQUEST_TOO_LARGE",
+  "REQUEST_DEADLINE_EXCEEDED",
+  "REQUEST_CANCELLED",
+])
 
 /** Bounded user action that may resolve a classified walkthrough failure. */
 export const WalkthroughRemediation = Schema.Literals([
@@ -471,13 +546,6 @@ const WalkthroughPreAcceptanceFailureCode = Schema.Literals([
   "WALKTHROUGH_REVIEW_GENERATION_CHANGED",
   "WALKTHROUGH_OPERATION_STORE",
   "WALKTHROUGH_INTERNAL_ERROR",
-  "CORE_UNAVAILABLE",
-  "CORE_RESTARTED",
-  "CORE_DRAINING",
-  "CORE_RPC_ERROR",
-  "REQUEST_TOO_LARGE",
-  "REQUEST_DEADLINE_EXCEEDED",
-  "REQUEST_CANCELLED",
 ])
 const WalkthroughPreAcceptanceFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
   ...WalkthroughPublicFailureFields,
@@ -494,29 +562,17 @@ const WalkthroughPreAcceptanceFailure = Schema.TaggedStruct("WalkthroughPublicFa
   ),
 )
 
-/** Stable plain walkthrough failure retaining exact method, request, and operation identity. */
-export const WalkthroughPublicFailure = Schema.Union([
-  Schema.TaggedStruct("WalkthroughPublicFailure", {
-    ...WalkthroughPublicFailureFields,
-    method: Schema.Literal("Walkthroughs.start"),
-    operationId: WalkthroughOperationId,
-  }),
+const WalkthroughAcceptedStartFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughPublicFailureFields,
+  code: WalkthroughStartFailureCode,
+  method: Schema.Literal("Walkthroughs.start"),
+  operationId: WalkthroughOperationId,
+})
+
+/** Stable plain expected failure from `Walkthroughs.start`. */
+export const WalkthroughStartFailure = Schema.Union([
+  WalkthroughAcceptedStartFailure,
   WalkthroughPreAcceptanceFailure,
-  Schema.TaggedStruct("WalkthroughPublicFailure", {
-    ...WalkthroughPublicFailureFields,
-    method: Schema.Literal("Walkthroughs.getOperation"),
-    operationId: WalkthroughOperationId,
-  }),
-  Schema.TaggedStruct("WalkthroughPublicFailure", {
-    ...WalkthroughPublicFailureFields,
-    method: Schema.Literal("Walkthroughs.cancel"),
-    operationId: WalkthroughOperationId,
-  }),
-  Schema.TaggedStruct("WalkthroughPublicFailure", {
-    ...WalkthroughPublicFailureFields,
-    method: Schema.Literal("Walkthroughs.getStored"),
-    operationId: Schema.Null,
-  }),
 ])
   .pipe(
     Schema.check(
@@ -530,7 +586,156 @@ export const WalkthroughPublicFailure = Schema.Union([
       }),
     ),
   )
-  .annotate({ identifier: "WalkthroughPublicFailure" })
+  .annotate({ identifier: "WalkthroughStartFailure" })
+
+/** Stable plain expected failure from `Walkthroughs.start`. */
+export type WalkthroughStartFailure = typeof WalkthroughStartFailure.Type
+
+/** Stable plain expected failure from `Walkthroughs.getOperation`. */
+export const WalkthroughGetOperationFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughPublicFailureFields,
+  code: WalkthroughGetOperationFailureCode,
+  method: Schema.Literal("Walkthroughs.getOperation"),
+  operationId: WalkthroughOperationId,
+})
+  .pipe(
+    Schema.check(
+      Schema.makeFilter(hasRequiredProviderIdentity, {
+        message: "Agent provider failures require provider identity",
+      }),
+    ),
+    Schema.check(
+      Schema.makeFilter(hasMatchingFailureAttempt, {
+        message: "Walkthrough failure provider identity must occur in its attempt history",
+      }),
+    ),
+  )
+  .annotate({ identifier: "WalkthroughGetOperationFailure" })
+
+/** Stable plain expected failure from `Walkthroughs.getOperation`. */
+export type WalkthroughGetOperationFailure = typeof WalkthroughGetOperationFailure.Type
+
+/** Stable plain expected failure from `Walkthroughs.cancel`. */
+export const WalkthroughCancelFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughPublicFailureFields,
+  code: WalkthroughCancelFailureCode,
+  method: Schema.Literal("Walkthroughs.cancel"),
+  operationId: WalkthroughOperationId,
+})
+  .pipe(
+    Schema.check(
+      Schema.makeFilter(hasRequiredProviderIdentity, {
+        message: "Agent provider failures require provider identity",
+      }),
+    ),
+    Schema.check(
+      Schema.makeFilter(hasMatchingFailureAttempt, {
+        message: "Walkthrough failure provider identity must occur in its attempt history",
+      }),
+    ),
+  )
+  .annotate({ identifier: "WalkthroughCancelFailure" })
+
+/** Stable plain expected failure from `Walkthroughs.cancel`. */
+export type WalkthroughCancelFailure = typeof WalkthroughCancelFailure.Type
+
+/** Stable plain expected failure from `Walkthroughs.getStored`. */
+export const WalkthroughGetStoredFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughPublicFailureFields,
+  code: WalkthroughGetStoredFailureCode,
+  method: Schema.Literal("Walkthroughs.getStored"),
+  operationId: Schema.Null,
+})
+  .pipe(
+    Schema.check(
+      Schema.makeFilter(hasRequiredProviderIdentity, {
+        message: "Agent provider failures require provider identity",
+      }),
+    ),
+    Schema.check(
+      Schema.makeFilter(hasMatchingFailureAttempt, {
+        message: "Walkthrough failure provider identity must occur in its attempt history",
+      }),
+    ),
+  )
+  .annotate({ identifier: "WalkthroughGetStoredFailure" })
+
+/** Stable plain expected failure from `Walkthroughs.getStored`. */
+export type WalkthroughGetStoredFailure = typeof WalkthroughGetStoredFailure.Type
+
+const EmptyWalkthroughAttempts = WalkthroughAttemptSummaries.pipe(
+  Schema.check(Schema.isMaxLength(0)),
+)
+const WalkthroughAdmissionFailureFields = {
+  ...HostRequestIdentityFields,
+  code: WalkthroughAdmissionFailureCode,
+  providerId: Schema.Null,
+  modelId: Schema.Null,
+  retryClass: CoreRpcRetryClass,
+  remediation: WalkthroughRemediation,
+  safeMessage: CoreRpcSafeMessage,
+  attempts: EmptyWalkthroughAttempts,
+  diagnostic: Schema.Null,
+} as const
+
+/** Pre-dispatch admission failure from `Walkthroughs.start`. */
+export const WalkthroughStartAdmissionFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughAdmissionFailureFields,
+  method: Schema.Literal("Walkthroughs.start"),
+  operationId: Schema.Null,
+}).annotate({ identifier: "WalkthroughStartAdmissionFailure" })
+
+/** Pre-dispatch admission failure from `Walkthroughs.start`. */
+export type WalkthroughStartAdmissionFailure = typeof WalkthroughStartAdmissionFailure.Type
+
+/** Pre-dispatch admission failure from `Walkthroughs.getOperation`. */
+export const WalkthroughGetOperationAdmissionFailure = Schema.TaggedStruct(
+  "WalkthroughPublicFailure",
+  {
+    ...WalkthroughAdmissionFailureFields,
+    method: Schema.Literal("Walkthroughs.getOperation"),
+    operationId: WalkthroughOperationId,
+  },
+).annotate({ identifier: "WalkthroughGetOperationAdmissionFailure" })
+
+/** Pre-dispatch admission failure from `Walkthroughs.getOperation`. */
+export type WalkthroughGetOperationAdmissionFailure =
+  typeof WalkthroughGetOperationAdmissionFailure.Type
+
+/** Pre-dispatch admission failure from `Walkthroughs.cancel`. */
+export const WalkthroughCancelAdmissionFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  ...WalkthroughAdmissionFailureFields,
+  method: Schema.Literal("Walkthroughs.cancel"),
+  operationId: WalkthroughOperationId,
+}).annotate({ identifier: "WalkthroughCancelAdmissionFailure" })
+
+/** Pre-dispatch admission failure from `Walkthroughs.cancel`. */
+export type WalkthroughCancelAdmissionFailure = typeof WalkthroughCancelAdmissionFailure.Type
+
+/** Pre-dispatch admission failure from `Walkthroughs.getStored`. */
+export const WalkthroughGetStoredAdmissionFailure = Schema.TaggedStruct(
+  "WalkthroughPublicFailure",
+  {
+    ...WalkthroughAdmissionFailureFields,
+    method: Schema.Literal("Walkthroughs.getStored"),
+    operationId: Schema.Null,
+  },
+).annotate({ identifier: "WalkthroughGetStoredAdmissionFailure" })
+
+/** Pre-dispatch admission failure from `Walkthroughs.getStored`. */
+export type WalkthroughGetStoredAdmissionFailure = typeof WalkthroughGetStoredAdmissionFailure.Type
+
+/** Stable plain walkthrough failure retaining exact method, request, and operation identity. */
+export const WalkthroughPublicFailure = Schema.Union([
+  WalkthroughStartFailure,
+  WalkthroughGetOperationFailure,
+  WalkthroughCancelFailure,
+  WalkthroughGetStoredFailure,
+  WalkthroughStartAdmissionFailure,
+  WalkthroughGetOperationAdmissionFailure,
+  WalkthroughCancelAdmissionFailure,
+  WalkthroughGetStoredAdmissionFailure,
+]).annotate({ identifier: "WalkthroughPublicFailure" })
 
 /** Stable plain walkthrough failure retaining exact method, request, and operation identity. */
 export type WalkthroughPublicFailure = typeof WalkthroughPublicFailure.Type
@@ -629,6 +834,34 @@ export const WalkthroughOperationSnapshot = Schema.Union([
 
 /** Authoritative public walkthrough operation state with state-specific terminal data. */
 export type WalkthroughOperationSnapshot = typeof WalkthroughOperationSnapshot.Type
+
+/** Result of cancellation distinguishing cancelled state from another terminal state. */
+export const WalkthroughCancelResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("cancelled"),
+    operation: WalkthroughOperationSnapshot,
+  }).pipe(
+    Schema.check(
+      Schema.makeFilter((result) => result.operation.state === "cancelled", {
+        message: "Cancelled walkthrough result requires cancelled operation state",
+      }),
+    ),
+  ),
+  Schema.Struct({
+    status: Schema.Literal("alreadyCompleted"),
+    operation: WalkthroughOperationSnapshot,
+  }).pipe(
+    Schema.check(
+      Schema.makeFilter(
+        (result) => result.operation.state !== "active" && result.operation.state !== "cancelled",
+        { message: "Already-completed walkthrough result requires a prior terminal state" },
+      ),
+    ),
+  ),
+]).annotate({ identifier: "WalkthroughCancelResult" })
+
+/** Result of cancellation distinguishing cancelled state from another terminal state. */
+export type WalkthroughCancelResult = typeof WalkthroughCancelResult.Type
 
 /** Request to durably accept or find one exact walkthrough generation intent. */
 export class StartWalkthroughRequest extends Schema.Class<StartWalkthroughRequest>(

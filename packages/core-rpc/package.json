@@ -8,6 +8,7 @@
     "./admission": "./src/admission.ts",
     "./business": "./src/business.ts",
     "./control": "./src/control.ts",
+    "./event": "./src/event.ts",
     "./failure": "./src/failure.ts",
     "./host-capability": "./src/host-capability.ts",
     "./identity": "./src/identity.ts",
@@ -15,7 +16,8 @@
     "./method-policy": "./src/method-policy.ts",
     "./process-startup": "./src/process-startup.ts",
     "./transport": "./src/transport.ts",
-    "./walkthrough": "./src/walkthrough.ts"
+    "./walkthrough": "./src/walkthrough.ts",
+    "./walkthrough-rpc": "./src/walkthrough-rpc.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

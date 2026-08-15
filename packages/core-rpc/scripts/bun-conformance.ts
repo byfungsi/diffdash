@@ -1,4 +1,5 @@
 import { AppState } from "@diffdash/domain/app-state"
+import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
@@ -8,9 +9,25 @@ import * as RpcTest from "effect/unstable/rpc/RpcTest"
 import {
   AppStateGetAdmissionMiddleware,
   CoreTransportAuthenticationMiddleware,
+  WalkthroughCancelAdmissionMiddleware,
+  WalkthroughGetOperationAdmissionMiddleware,
+  WalkthroughGetStoredAdmissionMiddleware,
+  WalkthroughStartAdmissionMiddleware,
 } from "../src/admission"
-import { AppStateGetRpc, CoreBusinessRpcs } from "../src/business"
+import { AppStateBusinessRpcs, AppStateGetRpc } from "../src/business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "../src/control"
+import {
+  CoreEventGenerationId,
+  CoreEventMetadata,
+  CoreEventOperationId,
+  CoreEventReason,
+  CoreEventSchemaVersion,
+  CoreEventScopeId,
+  CoreEventScopeName,
+  CoreEventSequence,
+  CoreEventSource,
+  CoreEventTopic,
+} from "../src/event"
 import {
   AppStateGetDefect,
   AppStateGetAdmissionFailure,
@@ -21,6 +38,7 @@ import {
 } from "../src/failure"
 import {
   ApplicationInstanceId,
+  CoreEventId,
   CoreProcessEpoch,
   CoreRequestContext,
   CoreRequestId,
@@ -41,12 +59,33 @@ import {
   GetWalkthroughOperationRequest,
   StartWalkthroughRequest,
   WalkthroughAttemptSummaries,
+  WalkthroughAttemptSummary,
+  WalkthroughCancelAdmissionFailure,
+  WalkthroughCancelFailure,
+  WalkthroughCancelResult,
+  WalkthroughGetOperationAdmissionFailure,
+  WalkthroughGetOperationFailure,
+  WalkthroughGetStoredAdmissionFailure,
+  WalkthroughGetStoredFailure,
+  WalkthroughFailureCode,
   WalkthroughOperationAccepted,
   WalkthroughOperationSnapshot,
   WalkthroughPublicFailure,
   WalkthroughReviewGeneration,
   WalkthroughSafeDiagnostic,
+  WalkthroughStartAdmissionFailure,
 } from "../src/walkthrough"
+import {
+  WalkthroughBusinessRpcs,
+  WalkthroughCancelDefect,
+  WalkthroughCancelRpc,
+  WalkthroughGetOperationDefect,
+  WalkthroughGetOperationRpc,
+  WalkthroughGetStoredDefect,
+  WalkthroughGetStoredRpc,
+  WalkthroughStartDefect,
+  WalkthroughStartRpc,
+} from "../src/walkthrough-rpc"
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -62,6 +101,29 @@ const hostCapabilityRequest = CoreRequestContext.make({
   applicationInstanceId: request.applicationInstanceId,
   processEpoch: request.processEpoch,
   requestId: CoreRequestId.make("c:request-bun"),
+})
+const eventOperationId = CoreEventOperationId.make("operation-bun")
+const eventMetadata = CoreEventMetadata.make({
+  eventId: CoreEventId.make("event-bun"),
+  topic: CoreEventTopic.make("walkthrough.operation.progress"),
+  schemaVersion: CoreEventSchemaVersion.make(1),
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  sequence: CoreEventSequence.make(1),
+  timestamp: "2026-08-15T20:00:00.000Z",
+  scopes: [
+    {
+      name: CoreEventScopeName.make("project"),
+      id: CoreEventScopeId.make("project-bun"),
+    },
+  ],
+  source: CoreEventSource.make("walkthrough-operation"),
+  reason: CoreEventReason.make("state-transition"),
+  subject: {
+    kind: "generationOperation",
+    generationId: CoreEventGenerationId.make("generation-bun"),
+    operationId: eventOperationId,
+  },
 })
 const authorizationRequest = AuthorizeDatabaseOwnershipRequest.make({
   ...request,
@@ -161,19 +223,19 @@ const nativeRpcConformance = Effect.gen(function* () {
   const health = yield* healthClient["Core.health"](request)
   assert(health.processEpoch === request.processEpoch, "Bun native RPC health identity failed")
 
-  const successHandlers = CoreBusinessRpcs.toLayer({
+  const successHandlers = AppStateBusinessRpcs.toLayer({
     "AppState.get": () => Effect.succeed(state),
   })
-  const successClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+  const successClient = yield* RpcTest.makeClient(AppStateBusinessRpcs).pipe(
     Effect.provide(successHandlers),
   )
   const successfulState = yield* successClient["AppState.get"](request)
   assert(successfulState.onboardingCompleted, "Bun native RPC success failed")
 
-  const failureHandlers = CoreBusinessRpcs.toLayer({
+  const failureHandlers = AppStateBusinessRpcs.toLayer({
     "AppState.get": () => Effect.fail(failure),
   })
-  const failureClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+  const failureClient = yield* RpcTest.makeClient(AppStateBusinessRpcs).pipe(
     Effect.provide(failureHandlers),
   )
   const expectedFailure = yield* failureClient["AppState.get"](request).pipe(Effect.flip)
@@ -183,10 +245,10 @@ const nativeRpcConformance = Effect.gen(function* () {
   assert(!("stack" in expectedFailure), "Bun native RPC failure exposed a stack")
   assert(!("path" in expectedFailure), "Bun native RPC failure exposed a path")
 
-  const defectHandlers = CoreBusinessRpcs.toLayer({
+  const defectHandlers = AppStateBusinessRpcs.toLayer({
     "AppState.get": () => Effect.die(new Error("private /Users/example/repository/path")),
   })
-  const defectClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+  const defectClient = yield* RpcTest.makeClient(AppStateBusinessRpcs).pipe(
     Effect.provide(defectHandlers),
     Effect.provide(mapPrivateAppStateDefectLayer),
   )
@@ -206,14 +268,14 @@ const nativeRpcConformance = Effect.gen(function* () {
 
   const started = yield* Deferred.make<void>()
   const interrupted = yield* Deferred.make<void>()
-  const interruptHandlers = CoreBusinessRpcs.toLayer({
+  const interruptHandlers = AppStateBusinessRpcs.toLayer({
     "AppState.get": () =>
       Deferred.succeed(started, undefined).pipe(
         Effect.andThen(Effect.never),
         Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
       ),
   })
-  const interruptClient = yield* RpcTest.makeClient(CoreBusinessRpcs).pipe(
+  const interruptClient = yield* RpcTest.makeClient(AppStateBusinessRpcs).pipe(
     Effect.provide(interruptHandlers),
   )
   const requestFiber = yield* interruptClient["AppState.get"](request).pipe(Effect.forkScoped)
@@ -229,6 +291,23 @@ const nativeRpcConformance = Effect.gen(function* () {
 await Effect.runPromise(nativeRpcConformance)
 
 const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 4_096 }).makeUnsafe()
+const eventMetadataBytes = parser.encode(Schema.encodeSync(CoreEventMetadata)(eventMetadata))
+assert(
+  eventMetadataBytes instanceof Uint8Array,
+  "Bun Core event metadata must encode as MessagePack bytes",
+)
+const [decodedEventMetadataValue] = parser.decode(eventMetadataBytes)
+const decodedEventMetadata = Schema.decodeUnknownSync(CoreEventMetadata)(decodedEventMetadataValue)
+assert(
+  JSON.stringify(decodedEventMetadata) === JSON.stringify(eventMetadata),
+  "Bun Core event metadata roundtrip failed",
+)
+assert(
+  Result.isFailure(
+    Schema.decodeUnknownResult(CoreEventMetadata)({ ...eventMetadata, sequence: 0 }),
+  ),
+  "Bun Core event metadata accepted an invalid sequence",
+)
 const appStateExitCodec = Schema.toCodecJson(Rpc.exitSchema(AppStateGetRpc))
 const encodedValues = [
   Schema.encodeSync(CoreHealthRpc.payloadSchema)(request),
@@ -331,7 +410,7 @@ const walkthroughAttempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries
   {
     stage: "execute",
     outcome: "provider-exit",
-    providerId: "claude",
+    providerId: AgentProviderId.make("claude"),
     modelId: "claude-opus-5",
     attempt: 1,
   },
@@ -381,6 +460,14 @@ const walkthroughOperation = Schema.decodeUnknownSync(WalkthroughOperationSnapsh
   state: "active",
   phase: "falling-back",
 })
+const walkthroughCancelResult = Schema.decodeUnknownSync(WalkthroughCancelResult)({
+  status: "alreadyCompleted",
+  operation: Schema.decodeUnknownSync(WalkthroughOperationSnapshot)({
+    ...walkthroughOperation,
+    state: "interrupted",
+    terminalAt: "2026-08-14T12:00:02.000Z",
+  }),
+})
 const walkthroughFailure = Schema.decodeUnknownSync(WalkthroughPublicFailure)({
   _tag: "WalkthroughPublicFailure",
   ...request,
@@ -402,6 +489,318 @@ const walkthroughFailure = Schema.decodeUnknownSync(WalkthroughPublicFailure)({
     truncated: false,
   },
 })
+const walkthroughStartFailure = Schema.decodeUnknownSync(WalkthroughStartRpc.errorSchema)(
+  walkthroughFailure,
+)
+const walkthroughGetOperationFailure = Schema.decodeUnknownSync(WalkthroughGetOperationFailure)({
+  _tag: "WalkthroughPublicFailure",
+  ...request,
+  method: "Walkthroughs.getOperation",
+  operationId: walkthroughAccepted.operationId,
+  code: "WALKTHROUGH_OPERATION_NOT_FOUND",
+  providerId: null,
+  modelId: null,
+  retryClass: "notRetryable",
+  remediation: "none",
+  safeMessage: "The walkthrough operation was not found.",
+  attempts: [],
+  diagnostic: null,
+})
+const walkthroughCancelFailure = Schema.decodeUnknownSync(WalkthroughCancelFailure)({
+  _tag: "WalkthroughPublicFailure",
+  ...request,
+  method: "Walkthroughs.cancel",
+  operationId: walkthroughAccepted.operationId,
+  code: "WALKTHROUGH_OPERATION_STORE",
+  providerId: null,
+  modelId: null,
+  retryClass: "userAction",
+  remediation: "retry",
+  safeMessage: "DiffDash could not persist walkthrough cancellation.",
+  attempts: [],
+  diagnostic: null,
+})
+const walkthroughGetStoredFailure = Schema.decodeUnknownSync(WalkthroughGetStoredFailure)({
+  _tag: "WalkthroughPublicFailure",
+  ...request,
+  method: "Walkthroughs.getStored",
+  operationId: null,
+  code: "WALKTHROUGH_STORE",
+  providerId: null,
+  modelId: null,
+  retryClass: "userAction",
+  remediation: "retry",
+  safeMessage: "DiffDash could not read the stored walkthrough.",
+  attempts: [],
+  diagnostic: null,
+})
+const walkthroughStartAdmissionFailure = Schema.decodeUnknownSync(WalkthroughStartAdmissionFailure)(
+  {
+    _tag: "WalkthroughPublicFailure",
+    ...request,
+    method: "Walkthroughs.start",
+    operationId: null,
+    code: "CORE_DRAINING",
+    providerId: null,
+    modelId: null,
+    retryClass: "automatic",
+    remediation: "retry",
+    safeMessage: "DiffDash Core is draining.",
+    attempts: [],
+    diagnostic: null,
+  },
+)
+const walkthroughGetOperationAdmissionFailure = Schema.decodeUnknownSync(
+  WalkthroughGetOperationAdmissionFailure,
+)({
+  ...walkthroughStartAdmissionFailure,
+  method: "Walkthroughs.getOperation",
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughCancelAdmissionFailure = Schema.decodeUnknownSync(
+  WalkthroughCancelAdmissionFailure,
+)({
+  ...walkthroughStartAdmissionFailure,
+  method: "Walkthroughs.cancel",
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughGetStoredAdmissionFailure = Schema.decodeUnknownSync(
+  WalkthroughGetStoredAdmissionFailure,
+)({
+  ...walkthroughStartAdmissionFailure,
+  method: "Walkthroughs.getStored",
+  operationId: null,
+})
+const walkthroughDefect = WalkthroughStartDefect.make({
+  _tag: "WalkthroughPublicFailure",
+  ...request,
+  method: "Walkthroughs.start",
+  operationId: walkthroughAccepted.operationId,
+  code: "WALKTHROUGH_INTERNAL_ERROR",
+  providerId: null,
+  modelId: null,
+  retryClass: "notRetryable",
+  remediation: "contactSupport",
+  safeMessage: "DiffDash Core encountered an internal walkthrough error.",
+  attempts: walkthroughAttempts,
+  diagnostic: null,
+})
+const walkthroughGetOperationDefect = WalkthroughGetOperationDefect.make({
+  ...walkthroughDefect,
+  method: "Walkthroughs.getOperation",
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughCancelDefect = WalkthroughCancelDefect.make({
+  ...walkthroughDefect,
+  method: "Walkthroughs.cancel",
+  operationId: walkthroughAccepted.operationId,
+})
+const walkthroughGetStoredDefect = WalkthroughGetStoredDefect.make({
+  ...walkthroughDefect,
+  method: "Walkthroughs.getStored",
+  operationId: null,
+})
+const passWalkthroughAdmissionLayer = Layer.mergeAll(
+  Layer.succeed(WalkthroughStartAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(WalkthroughGetOperationAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(WalkthroughCancelAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(WalkthroughGetStoredAdmissionMiddleware, (effect) => effect),
+)
+
+const walkthroughNativeRpcConformance = Effect.gen(function* () {
+  const successHandlers = WalkthroughBusinessRpcs.toLayer({
+    "Walkthroughs.start": () => Effect.succeed(walkthroughAccepted),
+    "Walkthroughs.getOperation": () => Effect.succeed(walkthroughOperation),
+    "Walkthroughs.cancel": () => Effect.succeed(walkthroughCancelResult),
+    "Walkthroughs.getStored": () => Effect.succeed(walkthroughStoredResult),
+  })
+  const successClient = yield* RpcTest.makeClient(WalkthroughBusinessRpcs).pipe(
+    Effect.provide(successHandlers),
+  )
+  const acceptedResult = yield* successClient["Walkthroughs.start"](walkthroughStart)
+  const operationResult = yield* successClient["Walkthroughs.getOperation"](walkthroughGetOperation)
+  const cancelResult = yield* successClient["Walkthroughs.cancel"](walkthroughCancel)
+  const storedResult = yield* successClient["Walkthroughs.getStored"](walkthroughGetStored)
+  assert(
+    acceptedResult.operationId === walkthroughAccepted.operationId,
+    "Bun walkthrough native RPC acceptance failed",
+  )
+  assert(
+    operationResult.state === "active" && cancelResult.status === "alreadyCompleted",
+    "Bun walkthrough native RPC operation result failed",
+  )
+  assert(storedResult.status === "notFound", "Bun walkthrough native RPC stored lookup failed")
+
+  const failureHandlers = WalkthroughBusinessRpcs.toLayer({
+    "Walkthroughs.start": () => Effect.fail(walkthroughStartFailure),
+    "Walkthroughs.getOperation": () => Effect.fail(walkthroughGetOperationFailure),
+    "Walkthroughs.cancel": () => Effect.fail(walkthroughCancelFailure),
+    "Walkthroughs.getStored": () => Effect.fail(walkthroughGetStoredFailure),
+  })
+  const failureClient = yield* RpcTest.makeClient(WalkthroughBusinessRpcs).pipe(
+    Effect.provide(failureHandlers),
+  )
+  const expectedStartFailure = yield* failureClient["Walkthroughs.start"](walkthroughStart).pipe(
+    Effect.flip,
+  )
+  const expectedGetOperationFailure = yield* failureClient["Walkthroughs.getOperation"](
+    walkthroughGetOperation,
+  ).pipe(Effect.flip)
+  const expectedCancelFailure = yield* failureClient["Walkthroughs.cancel"](walkthroughCancel).pipe(
+    Effect.flip,
+  )
+  const expectedGetStoredFailure = yield* failureClient["Walkthroughs.getStored"](
+    walkthroughGetStored,
+  ).pipe(Effect.flip)
+  assert(
+    expectedStartFailure.code === "AGENT_PROVIDER_EXIT" &&
+      expectedGetOperationFailure.code === "WALKTHROUGH_OPERATION_NOT_FOUND" &&
+      expectedCancelFailure.code === "WALKTHROUGH_OPERATION_STORE" &&
+      expectedGetStoredFailure.code === "WALKTHROUGH_STORE",
+    "Bun walkthrough native RPC expected failures failed",
+  )
+  for (const expectedFailure of [
+    expectedStartFailure,
+    expectedGetOperationFailure,
+    expectedCancelFailure,
+    expectedGetStoredFailure,
+  ]) {
+    assert(!(expectedFailure instanceof Error), "Bun walkthrough expected failure became an Error")
+  }
+
+  const rejectAdmissionLayer = Layer.mergeAll(
+    Layer.succeed(WalkthroughStartAdmissionMiddleware, () =>
+      Effect.fail(walkthroughStartAdmissionFailure),
+    ),
+    Layer.succeed(WalkthroughGetOperationAdmissionMiddleware, () =>
+      Effect.fail(walkthroughGetOperationAdmissionFailure),
+    ),
+    Layer.succeed(WalkthroughCancelAdmissionMiddleware, () =>
+      Effect.fail(walkthroughCancelAdmissionFailure),
+    ),
+    Layer.succeed(WalkthroughGetStoredAdmissionMiddleware, () =>
+      Effect.fail(walkthroughGetStoredAdmissionFailure),
+    ),
+  )
+  const admissionClient = yield* RpcTest.makeClient(WalkthroughBusinessRpcs).pipe(
+    Effect.provide(successHandlers),
+    Effect.provide(rejectAdmissionLayer),
+  )
+  const admissionFailures = [
+    yield* admissionClient["Walkthroughs.start"](walkthroughStart).pipe(Effect.flip),
+    yield* admissionClient["Walkthroughs.getOperation"](walkthroughGetOperation).pipe(Effect.flip),
+    yield* admissionClient["Walkthroughs.cancel"](walkthroughCancel).pipe(Effect.flip),
+    yield* admissionClient["Walkthroughs.getStored"](walkthroughGetStored).pipe(Effect.flip),
+  ]
+  assert(
+    admissionFailures.every((candidate) => candidate.code === "CORE_DRAINING"),
+    "Bun walkthrough native RPC admission failures failed",
+  )
+
+  const defectHandlers = WalkthroughBusinessRpcs.toLayer({
+    "Walkthroughs.start": () => Effect.die(new Error("private /Users/example/repository")),
+    "Walkthroughs.getOperation": () => Effect.die(new Error("private operation defect")),
+    "Walkthroughs.cancel": () => Effect.die(new Error("private cancellation defect")),
+    "Walkthroughs.getStored": () => Effect.die(new Error("private stored defect")),
+  })
+  const defectAdmissionLayer = Layer.mergeAll(
+    Layer.succeed(WalkthroughStartAdmissionMiddleware, (effect) =>
+      effect.pipe(Effect.catchDefect(() => Effect.die(walkthroughDefect))),
+    ),
+    Layer.succeed(WalkthroughGetOperationAdmissionMiddleware, (effect) =>
+      effect.pipe(Effect.catchDefect(() => Effect.die(walkthroughGetOperationDefect))),
+    ),
+    Layer.succeed(WalkthroughCancelAdmissionMiddleware, (effect) =>
+      effect.pipe(Effect.catchDefect(() => Effect.die(walkthroughCancelDefect))),
+    ),
+    Layer.succeed(WalkthroughGetStoredAdmissionMiddleware, (effect) =>
+      effect.pipe(Effect.catchDefect(() => Effect.die(walkthroughGetStoredDefect))),
+    ),
+  )
+  const defectClient = yield* RpcTest.makeClient(WalkthroughBusinessRpcs).pipe(
+    Effect.provide(defectHandlers),
+    Effect.provide(defectAdmissionLayer),
+  )
+  const projectedStartDefect = yield* defectClient["Walkthroughs.start"](walkthroughStart).pipe(
+    Effect.catchDefect(Effect.succeed),
+  )
+  const projectedGetOperationDefect = yield* defectClient["Walkthroughs.getOperation"](
+    walkthroughGetOperation,
+  ).pipe(Effect.catchDefect(Effect.succeed))
+  const projectedCancelDefect = yield* defectClient["Walkthroughs.cancel"](walkthroughCancel).pipe(
+    Effect.catchDefect(Effect.succeed),
+  )
+  const projectedGetStoredDefect = yield* defectClient["Walkthroughs.getStored"](
+    walkthroughGetStored,
+  ).pipe(Effect.catchDefect(Effect.succeed))
+  assert(
+    typeof projectedStartDefect === "object" &&
+      projectedStartDefect !== null &&
+      "method" in projectedStartDefect &&
+      projectedStartDefect.method === "Walkthroughs.start" &&
+      typeof projectedGetOperationDefect === "object" &&
+      projectedGetOperationDefect !== null &&
+      "method" in projectedGetOperationDefect &&
+      projectedGetOperationDefect.method === "Walkthroughs.getOperation" &&
+      typeof projectedCancelDefect === "object" &&
+      projectedCancelDefect !== null &&
+      "method" in projectedCancelDefect &&
+      projectedCancelDefect.method === "Walkthroughs.cancel" &&
+      typeof projectedGetStoredDefect === "object" &&
+      projectedGetStoredDefect !== null &&
+      "method" in projectedGetStoredDefect &&
+      projectedGetStoredDefect.method === "Walkthroughs.getStored",
+    "Bun walkthrough native RPC defect projections failed",
+  )
+  for (const projectedDefect of [
+    projectedStartDefect,
+    projectedGetOperationDefect,
+    projectedCancelDefect,
+    projectedGetStoredDefect,
+  ]) {
+    assert(typeof projectedDefect === "object" && projectedDefect !== null, "Expected defect")
+    assert(!("cause" in projectedDefect), "Bun walkthrough defect exposed a cause")
+    assert(!("stack" in projectedDefect), "Bun walkthrough defect exposed a stack")
+    assert(!("path" in projectedDefect), "Bun walkthrough defect exposed a path")
+  }
+}).pipe(Effect.provide(passWalkthroughAdmissionLayer), Effect.scoped)
+
+await Effect.runPromise(walkthroughNativeRpcConformance)
+
+const walkthroughExits = [
+  [WalkthroughStartRpc, Exit.fail(walkthroughStartFailure)],
+  [WalkthroughStartRpc, Exit.fail(walkthroughStartAdmissionFailure)],
+  [WalkthroughStartRpc, Exit.die(walkthroughDefect)],
+  [WalkthroughGetOperationRpc, Exit.fail(walkthroughGetOperationFailure)],
+  [WalkthroughGetOperationRpc, Exit.fail(walkthroughGetOperationAdmissionFailure)],
+  [WalkthroughGetOperationRpc, Exit.die(walkthroughGetOperationDefect)],
+  [WalkthroughCancelRpc, Exit.fail(walkthroughCancelFailure)],
+  [WalkthroughCancelRpc, Exit.fail(walkthroughCancelAdmissionFailure)],
+  [WalkthroughCancelRpc, Exit.die(walkthroughCancelDefect)],
+  [WalkthroughGetStoredRpc, Exit.fail(walkthroughGetStoredFailure)],
+  [WalkthroughGetStoredRpc, Exit.fail(walkthroughGetStoredAdmissionFailure)],
+  [WalkthroughGetStoredRpc, Exit.die(walkthroughGetStoredDefect)],
+] as const
+for (const [rpc, exit] of walkthroughExits) {
+  const codec = Schema.toCodecJson(Rpc.exitSchema(rpc))
+  const encoded = Schema.encodeSync(codec)(exit)
+  const bytes = parser.encode(encoded)
+  assert(bytes instanceof Uint8Array, "Bun walkthrough exit must encode as MessagePack bytes")
+  const [decodedValue] = parser.decode(bytes)
+  const decodedExit = Schema.decodeUnknownSync(codec)(decodedValue)
+  assert(Exit.isFailure(decodedExit), "Bun walkthrough exit roundtrip failed")
+  if (Exit.isSuccess(decodedExit)) throw new Error("Expected Bun walkthrough failure exit")
+  const decodedCause = Cause.squash(decodedExit.cause)
+  assert(!(decodedCause instanceof Error), "Bun walkthrough exit decoded an Error")
+  assert(
+    typeof decodedCause === "object" && decodedCause !== null,
+    "Bun walkthrough exit did not decode a plain object",
+  )
+  assert(!("cause" in decodedCause), "Bun walkthrough exit exposed a cause")
+  assert(!("stack" in decodedCause), "Bun walkthrough exit exposed a stack")
+  assert(!("path" in decodedCause), "Bun walkthrough exit exposed a path")
+}
+
 const encodedWalkthroughValues = [
   Schema.encodeSync(StartWalkthroughRequest)(walkthroughStart),
   Schema.encodeSync(WalkthroughOperationAccepted)(walkthroughAccepted),
@@ -412,6 +811,53 @@ const encodedWalkthroughValues = [
   Schema.encodeSync(WalkthroughOperationSnapshot)(walkthroughOperation),
   Schema.encodeSync(WalkthroughPublicFailure)(walkthroughFailure),
 ]
+const classifiedWalkthroughValues = [
+  Schema.encodeSync(WalkthroughAttemptSummary)({
+    stage: "probe",
+    outcome: "probe-failed",
+    providerId: AgentProviderId.make("claude"),
+    modelId: null,
+    attempt: 1,
+  }),
+  Schema.encodeSync(WalkthroughAttemptSummary)({
+    stage: "execute",
+    outcome: "usage-limited",
+    providerId: AgentProviderId.make("claude"),
+    modelId: AgentModelId.make("claude-opus-5"),
+    attempt: 1,
+  }),
+  Schema.encodeSync(WalkthroughAttemptSummary)({
+    stage: "execute",
+    outcome: "output-too-large",
+    providerId: AgentProviderId.make("claude"),
+    modelId: AgentModelId.make("claude-opus-5"),
+    attempt: 1,
+  }),
+]
+for (const value of classifiedWalkthroughValues) {
+  const bytes = parser.encode(value)
+  assert(bytes instanceof Uint8Array, "Bun classified attempt must encode as MessagePack bytes")
+  const [decoded] = parser.decode(bytes)
+  Schema.decodeUnknownSync(WalkthroughAttemptSummary)(decoded)
+}
+for (const code of [
+  "AGENT_PROVIDER_USAGE_LIMITED",
+  "AGENT_PROVIDER_CONFIGURATION",
+  "AGENT_PROVIDER_FAILURE",
+  "WALKTHROUGH_REVIEW_RESOLUTION",
+  "WALKTHROUGH_OPERATION_STATE_UNAVAILABLE",
+] as const) {
+  const bytes = parser.encode(Schema.encodeSync(WalkthroughFailureCode)(code))
+  assert(
+    bytes instanceof Uint8Array,
+    "Bun walkthrough failure code must encode as MessagePack bytes",
+  )
+  const [decoded] = parser.decode(bytes)
+  assert(
+    Schema.decodeUnknownSync(WalkthroughFailureCode)(decoded) === code,
+    "Bun walkthrough failure code roundtrip failed",
+  )
+}
 const decodedWalkthroughValues = encodedWalkthroughValues.flatMap((value) => {
   const bytes = parser.encode(value)
   assert(bytes instanceof Uint8Array, "Bun walkthrough MessagePack must encode binary frames")

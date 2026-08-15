@@ -48,6 +48,12 @@ export const CoreRequestId = Schema.String.pipe(
 /** Application-level correlation identity allocated by Core for a host-capability request. */
 export type CoreRequestId = typeof CoreRequestId.Type
 
+/** Identity allocated by Core for one published event. */
+export const CoreEventId = BoundedIdentity.pipe(Schema.brand("CoreEventId"))
+
+/** Identity allocated by Core for one published event. */
+export type CoreEventId = typeof CoreEventId.Type
+
 /** Identity metadata carried by every Electron-originated Core RPC payload. */
 export const HostRequestContext = Schema.Struct({
   applicationInstanceId: ApplicationInstanceId,

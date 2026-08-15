@@ -11,7 +11,7 @@ export const NonNegativeFiniteNumber = Schema.Finite.pipe(
   Schema.check(Schema.isGreaterThanOrEqualTo(0)),
 )
 
-const utcIsoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u
+const utcIsoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u
 
 const isUtcIsoTimestamp = (value: string) => {
   if (!utcIsoPattern.test(value)) return false

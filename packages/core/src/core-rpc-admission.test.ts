@@ -1,4 +1,4 @@
-import { CoreBusinessRpcs } from "@diffdash/core-rpc/business"
+import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -68,7 +68,7 @@ describe("Core RPC admission", () => {
       )
 
       return yield* Effect.gen(function* () {
-        const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+        const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
         const failure = yield* client["AppState.get"](request).pipe(Effect.flip)
 
         expect(failure).toEqual({
@@ -124,7 +124,7 @@ describe("Core RPC admission", () => {
     return Effect.forEach(scenarios, ([expectedLifecycle, arrange]) =>
       Effect.gen(function* () {
         const lifecycle = yield* CoreLifecycle
-        const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+        const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
         yield* arrange(lifecycle)
 
         const failure = yield* client["AppState.get"](request).pipe(Effect.flip)
@@ -149,7 +149,7 @@ describe("Core RPC admission", () => {
       )
 
       return yield* Effect.gen(function* () {
-        const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+        const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
         const staleRequest = HostRequestContext.make({
           ...request,
           processEpoch: CoreProcessEpoch.make("epoch-stale"),
@@ -172,7 +172,7 @@ describe("Core RPC admission", () => {
 
   it.effect("serves AppState.get after recovery completes", () =>
     Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       yield* becomeReady
 
       expect(yield* client["AppState.get"](request)).toEqual(state)
@@ -181,7 +181,7 @@ describe("Core RPC admission", () => {
 
   it.effect("projects an admitted handler defect to the method-scoped safe value", () =>
     Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+      const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
       yield* becomeReady
       const defect = yield* client["AppState.get"](request).pipe(Effect.catchDefect(Effect.succeed))
 
@@ -214,7 +214,7 @@ describe("Core RPC admission", () => {
 
       return yield* Effect.gen(function* () {
         const lifecycle = yield* CoreLifecycle
-        const client = yield* RpcTest.makeClient(CoreBusinessRpcs)
+        const client = yield* RpcTest.makeClient(AppStateBusinessRpcs)
         yield* becomeReady
         const requestFiber = yield* client["AppState.get"](request).pipe(Effect.forkScoped)
         yield* Deferred.await(started)
