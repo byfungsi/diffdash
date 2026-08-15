@@ -160,6 +160,7 @@ export const VisibleDiffBlock = Schema.Struct({
   line_count: PositiveInt,
   byte_count: PositiveInt,
   checksum: Schema.String,
+  resource_id: CatalogResourceId,
   final_path: Schema.String,
 })
 /** Parsed metadata for a transactionally visible closed block. */
@@ -193,6 +194,17 @@ export interface StoredSnapshot {
   readonly createdAtMs: number
 }
 
+/** Snapshot identity and source facts loaded without file or block collections. */
+export type StoredSnapshotHeader = Omit<StoredSnapshot, "files" | "blockIds" | "checkpoints">
+
+/** One bounded managed-file read. */
+export interface ManagedRangeRead {
+  readonly resourceId: CatalogResourceId
+  readonly bytes: Uint8Array
+  readonly offset: number
+  readonly totalBytes: number
+}
+
 const SnapshotBlockStoreOperation = Schema.Literals([
   "registerFileDelta",
   "prepareBlock",
@@ -202,7 +214,11 @@ const SnapshotBlockStoreOperation = Schema.Literals([
   "recoverWrites",
   "publishSnapshot",
   "getSnapshot",
+  "getSnapshotHeader",
+  "listSnapshotFiles",
+  "findSnapshotFile",
   "visibleBlocks",
+  "readManagedRange",
   "deleteSnapshot",
   "beginCollection",
   "quarantineCollection",
@@ -248,9 +264,26 @@ export class SnapshotBlockStore extends Context.Service<
     readonly getSnapshot: (
       id: StoredSnapshotId,
     ) => Effect.Effect<StoredSnapshot, SnapshotBlockStoreError>
+    readonly getSnapshotHeader: (
+      id: StoredSnapshotId,
+    ) => Effect.Effect<StoredSnapshotHeader, SnapshotBlockStoreError>
+    readonly listSnapshotFiles: (
+      id: StoredSnapshotId,
+      offset: number,
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<SnapshotFilePlacement>, SnapshotBlockStoreError>
+    readonly findSnapshotFile: (
+      id: StoredSnapshotId,
+      fileId: string,
+    ) => Effect.Effect<SnapshotFilePlacement, SnapshotBlockStoreError>
     readonly visibleBlocks: (
       deltaId: FileDeltaId,
     ) => Effect.Effect<ReadonlyArray<VisibleDiffBlock>, SnapshotBlockStoreError>
+    readonly readManagedRange: (
+      resourceId: CatalogResourceId,
+      offset: number,
+      length: number,
+    ) => Effect.Effect<ManagedRangeRead, SnapshotBlockStoreError>
     readonly deleteSnapshot: (
       id: StoredSnapshotId,
     ) => Effect.Effect<DeleteSnapshotResult, SnapshotBlockStoreError>
@@ -279,6 +312,28 @@ export class SnapshotBlockStore extends Context.Service<
       Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         const paths = managedPaths(options)
+
+        const getSnapshotHeader = Effect.fn("SnapshotBlockStore.getSnapshotHeader")(function* (
+          id: StoredSnapshotId,
+        ) {
+          const rawManifest = yield* database.get(
+            "SELECT * FROM review_snapshot_manifests WHERE id = ?",
+            [id],
+          )
+          const manifest = yield* Effect.fromOption(
+            rawManifest,
+            () => new Error(`Missing snapshot manifest ${id}`),
+          ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotManifestRow)))
+          return {
+            id: manifest.id,
+            reviewKey: manifest.review_key,
+            baseRevision: manifest.base_revision,
+            headRevision: manifest.head_revision,
+            semanticIdentity: manifest.semantic_identity,
+            source: decodeSource(manifest),
+            createdAtMs: manifest.created_at_ms,
+          }
+        }, mapError("getSnapshotHeader"))
 
         const finalizeBlock = Effect.fn("SnapshotBlockStore.finalizeBlock")(function* (
           id: DiffBlockId,
@@ -656,14 +711,7 @@ export class SnapshotBlockStore extends Context.Service<
           }, mapError("publishSnapshot")),
 
           getSnapshot: Effect.fn("SnapshotBlockStore.getSnapshot")(function* (id) {
-            const rawManifest = yield* database.get(
-              "SELECT * FROM review_snapshot_manifests WHERE id = ?",
-              [id],
-            )
-            const manifest = yield* Effect.fromOption(
-              rawManifest,
-              () => new Error(`Missing snapshot manifest ${id}`),
-            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotManifestRow)))
+            const manifest = yield* getSnapshotHeader(id)
             const files = yield* Schema.decodeUnknownEffect(Schema.Array(SnapshotFileRow))(
               yield* database.all(
                 "SELECT * FROM review_snapshot_files WHERE snapshot_id = ? ORDER BY ordinal",
@@ -683,12 +731,7 @@ export class SnapshotBlockStore extends Context.Service<
               ),
             )
             return {
-              id: manifest.id,
-              reviewKey: manifest.review_key,
-              baseRevision: manifest.base_revision,
-              headRevision: manifest.head_revision,
-              semanticIdentity: manifest.semantic_identity,
-              source: decodeSource(manifest),
+              ...manifest,
               files: files.map((file) => ({
                 ordinal: file.ordinal,
                 deltaId: file.delta_id,
@@ -707,15 +750,47 @@ export class SnapshotBlockStore extends Context.Service<
                 byteOffset: checkpoint.byte_offset,
                 lineOffset: checkpoint.line_offset,
               })),
-              createdAtMs: manifest.created_at_ms,
             }
           }, mapError("getSnapshot")),
+
+          getSnapshotHeader,
+
+          listSnapshotFiles: Effect.fn("SnapshotBlockStore.listSnapshotFiles")(function* (
+            id,
+            offset,
+            limit,
+          ) {
+            const files = yield* Schema.decodeUnknownEffect(Schema.Array(SnapshotFileRow))(
+              yield* database.all(
+                `SELECT * FROM review_snapshot_files
+                 WHERE snapshot_id = ? ORDER BY ordinal LIMIT ? OFFSET ?`,
+                [id, limit, offset],
+              ),
+            )
+            return files.map(toSnapshotFilePlacement)
+          }, mapError("listSnapshotFiles")),
+
+          findSnapshotFile: Effect.fn("SnapshotBlockStore.findSnapshotFile")(function* (
+            id,
+            fileId,
+          ) {
+            const row = yield* database.get(
+              "SELECT * FROM review_snapshot_files WHERE snapshot_id = ? AND file_id = ?",
+              [id, fileId],
+            )
+            const file = yield* Effect.fromOption(
+              row,
+              () => new Error(`Missing snapshot file ${fileId}`),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotFileRow)))
+            return toSnapshotFilePlacement(file)
+          }, mapError("findSnapshotFile")),
 
           visibleBlocks: Effect.fn("SnapshotBlockStore.visibleBlocks")(function* (deltaId) {
             return yield* Schema.decodeUnknownEffect(Schema.Array(VisibleDiffBlock))(
               yield* database.all(
                 `SELECT block.id, block.delta_id, block.hunk_id, block.ordinal, block.first_line,
-                   block.line_count, block.byte_count, block.checksum, block.final_path
+                    block.line_count, block.byte_count, block.checksum, block.resource_id,
+                    block.final_path
                  FROM review_diff_blocks AS block
                  INNER JOIN resources AS resource ON resource.id = block.resource_id
                  WHERE block.delta_id = ? AND block.state = 'ready' AND resource.state = 'ready'
@@ -724,6 +799,51 @@ export class SnapshotBlockStore extends Context.Service<
               ),
             )
           }, mapError("visibleBlocks")),
+
+          readManagedRange: Effect.fn("SnapshotBlockStore.readManagedRange")(function* (
+            resourceId,
+            offset,
+            length,
+          ) {
+            if (
+              !Number.isSafeInteger(offset) ||
+              offset < 0 ||
+              !Number.isSafeInteger(length) ||
+              length <= 0
+            )
+              return yield* Effect.fail(new Error("Managed range bounds are invalid"))
+            const row = yield* database.get(
+              `SELECT resource.id, resource.bytes, resource.location_value, resource.root_id
+               FROM resources AS resource
+               WHERE resource.id = ? AND resource.state = 'ready'
+                 AND resource.location_kind = 'filesystem'`,
+              [resourceId],
+            )
+            const resource = yield* Effect.fromOption(
+              row,
+              () => new Error(`Missing ready managed resource ${resourceId}`),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ManagedResourceRow)))
+            if (resource.root_id !== options.rootId)
+              return yield* Effect.fail(new Error("Managed resource belongs to another root"))
+            const readLength = Math.min(length, Math.max(0, resource.bytes - offset))
+            const bytes = new Uint8Array(readLength)
+            if (readLength > 0) {
+              const descriptor = yield* attemptFile("readManagedRange", () =>
+                open(paths.resolve(resource.location_value), "r"),
+              )
+              yield* Effect.acquireUseRelease(
+                Effect.succeed(descriptor),
+                (handle) =>
+                  attemptFile("readManagedRange", async () => {
+                    const result = await handle.read(bytes, 0, readLength, offset)
+                    if (result.bytesRead !== readLength)
+                      throw new Error("Managed range ended early")
+                  }),
+                (handle) => Effect.promise(() => handle.close()),
+              )
+            }
+            return { resourceId, bytes, offset, totalBytes: resource.bytes }
+          }, mapError("readManagedRange")),
 
           deleteSnapshot: Effect.fn("SnapshotBlockStore.deleteSnapshot")(function* (id) {
             return yield* database.transaction(
@@ -851,6 +971,13 @@ const SnapshotFileRow = Schema.Struct({
   deletions: NonNegativeInt,
 })
 
+const ManagedResourceRow = Schema.Struct({
+  id: CatalogResourceId,
+  bytes: NonNegativeInt,
+  location_value: Schema.String,
+  root_id: Schema.NullOr(ResourceRootId),
+})
+
 const BlockPlacementRow = Schema.Struct({ block_id: DiffBlockId })
 
 const CheckpointRow = Schema.Struct({
@@ -861,6 +988,16 @@ const CheckpointRow = Schema.Struct({
   block_id: DiffBlockId,
   byte_offset: NonNegativeInt,
   line_offset: NonNegativeInt,
+})
+
+const toSnapshotFilePlacement = (file: typeof SnapshotFileRow.Type): SnapshotFilePlacement => ({
+  ordinal: file.ordinal,
+  deltaId: file.delta_id,
+  fileId: file.file_id,
+  path: file.path,
+  oldPath: file.old_path,
+  additions: file.additions,
+  deletions: file.deletions,
 })
 
 const loadPendingBlock = Effect.fn("SnapshotBlockStore.loadPendingBlock")(function* (

@@ -224,6 +224,7 @@ const ResourceCatalogOperation = Schema.Literals([
   "expireReservations",
   "acquireLease",
   "renewLease",
+  "releaseLease",
   "expireOwnership",
   "rebindLease",
   "beginCollection",
@@ -272,6 +273,11 @@ export class ResourceCatalog extends Context.Service<
       readonly processEpoch: string
       readonly renewedAtMs: number
       readonly expiresAtMs: number
+    }) => Effect.Effect<void, ResourceCatalogError>
+    readonly releaseLease: (input: {
+      readonly id: ResourceLeaseId
+      readonly applicationInstanceId: string
+      readonly processEpoch: string
     }) => Effect.Effect<void, ResourceCatalogError>
     readonly expireOwnership: (input: {
       readonly applicationInstanceId: string
@@ -529,6 +535,15 @@ export class ResourceCatalog extends Context.Service<
               ],
             )
             .pipe(Effect.mapError((cause) => catalogError("renewLease", cause)))
+        }),
+        releaseLease: Effect.fn("ResourceCatalog.releaseLease")(function (input) {
+          return database
+            .run(
+              `DELETE FROM resource_leases
+               WHERE id = ? AND application_instance_id = ? AND process_epoch = ?`,
+              [input.id, input.applicationInstanceId, input.processEpoch],
+            )
+            .pipe(Effect.mapError((cause) => catalogError("releaseLease", cause)))
         }),
         expireOwnership: Effect.fn("ResourceCatalog.expireOwnership")(function (input) {
           return database
