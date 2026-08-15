@@ -39,6 +39,7 @@ import { createRendererSecurityPolicy } from "./main/electron-policy"
 import {
   makeDesktopHostConfiguration,
   productionDesktopStartupConfiguration,
+  RendererEntry,
 } from "./main/desktop-host-configuration"
 import { defineIpcHandlers } from "./main/ipc/controllers"
 import { IpcControllerRegistry } from "./main/ipc/controllers/controller-registry"
@@ -877,11 +878,12 @@ const trustedEvent = (url = "http://localhost:5173/") => {
 
 const testRendererSecurityPolicy = () =>
   createRendererSecurityPolicy({
-    developmentRendererUrl: "http://localhost:5173",
-    isPackaged: false,
     isTrustedWebContents: () => true,
     openExternal: async () => undefined,
-    packagedRendererUrl: "file:///app/renderer/index.html",
+    rendererEntry: Schema.decodeUnknownSync(RendererEntry)({
+      _tag: "DevelopmentRendererEntry",
+      url: "http://localhost:5173",
+    }),
   })
 
 const testHostConfiguration = () =>

@@ -35,7 +35,7 @@ import {
   WalkthroughGenerationError,
   WalkthroughModelUnavailableError,
 } from "@diffdash/agents/walkthrough"
-import { Match, Option, Predicate, Result, Schema } from "effect"
+import { Match, Option, Predicate, Schema } from "effect"
 import {
   ReviewContextError,
   WalkthroughOperationArtifactUnavailable,
@@ -55,6 +55,14 @@ const KnownProviderProcessFailure = Schema.Union([
   ProcessOutputError,
   ProcessStdinError,
   ProcessCleanupError,
+])
+const KnownProviderProcessFailureClassification = Schema.Union([
+  Schema.TaggedStruct("ProcessTimeoutError", {}),
+  Schema.TaggedStruct("ProcessSpawnError", {}),
+  Schema.TaggedStruct("ProcessExitError", {}),
+  Schema.TaggedStruct("ProcessOutputError", {}),
+  Schema.TaggedStruct("ProcessStdinError", {}),
+  Schema.TaggedStruct("ProcessCleanupError", {}),
 ])
 type TransportFailure = Schema.Json | object | bigint | symbol | undefined
 
@@ -83,8 +91,13 @@ export const toPublicWalkthroughError = <A>(input: A, operation: string) => {
     )
   }
   const providerOperation = parseProviderOperationError(error)
-  if (providerOperation !== null) {
-    return publicProviderOperationError(providerOperation, structuralCause(error), error, operation)
+  if (Option.isSome(providerOperation)) {
+    return publicProviderOperationError(
+      providerOperation.value,
+      structuralCause(error),
+      error,
+      operation,
+    )
   }
   if (Schema.is(AgentProviderProbeError)(error)) {
     return transportError(
@@ -296,21 +309,15 @@ const publicProviderOperationError = <Failure extends TransportFailure>(
   operation: string,
 ) => {
   const provider = publicProviderId(error.providerId)
-  const processFailure = parseKnownProviderProcessFailure(cause)
-  const causeTag = Match.value(processFailure).pipe(
-    Match.when(null, () => taggedCause(cause)),
-    Match.when(Schema.is(ProcessTimeoutError), () => "ProcessTimeoutError"),
-    Match.when(Schema.is(ProcessSpawnError), () => "ProcessSpawnError"),
-    Match.when(Schema.is(ProcessExitError), () => "ProcessExitError"),
-    Match.when(Schema.is(ProcessOutputError), () => "ProcessOutputError"),
-    Match.when(Schema.is(ProcessStdinError), () => "ProcessStdinError"),
-    Match.when(Schema.is(ProcessCleanupError), () => "ProcessCleanupError"),
-    Match.orElse(() => taggedCause(cause)),
+  const processFailure = Schema.decodeUnknownOption(KnownProviderProcessFailure)(cause)
+  const classification = Schema.decodeUnknownOption(KnownProviderProcessFailureClassification)(
+    cause,
   )
-  const diagnostic =
-    processFailure === null
-      ? undefined
-      : publicProcessDiagnostic(error, processFailure, stackSource, cause)
+  const diagnostic = Option.getOrUndefined(
+    Option.map(processFailure, (failure) =>
+      publicProcessDiagnostic(error, failure, stackSource, cause),
+    ),
+  )
   const publicFailure = AgentProviderFailure.make({
     ...error.failure,
     providerId: publicReviewAgentProviderId(error.failure.providerId),
@@ -323,53 +330,8 @@ const publicProviderOperationError = <Failure extends TransportFailure>(
   if (typed !== null) {
     return transportError(typed.code, typed.message, operation, diagnostic, publicFailure)
   }
-  return Match.value(causeTag).pipe(
-    Match.when("ProcessTimeoutError", () =>
-      transportError(
-        "AgentProviderTimeoutError",
-        `Provider ${provider} timed out during walkthrough generation.`,
-        operation,
-        diagnostic,
-        publicFailure,
-      ),
-    ),
-    Match.when("ProcessSpawnError", () =>
-      transportError(
-        "AgentProviderSpawnError",
-        `DiffDash could not start provider ${provider}.`,
-        operation,
-        diagnostic,
-        publicFailure,
-      ),
-    ),
-    Match.when("ProcessExitError", () =>
-      transportError(
-        "AgentProviderExitError",
-        `Provider ${provider} exited before completing the walkthrough.`,
-        operation,
-        diagnostic,
-        publicFailure,
-      ),
-    ),
-    Match.whenOr("ProcessOutputError", "ProcessStdinError", () =>
-      transportError(
-        "AgentProviderIoError",
-        `DiffDash could not exchange walkthrough data with provider ${provider}.`,
-        operation,
-        diagnostic,
-        publicFailure,
-      ),
-    ),
-    Match.when("ProcessCleanupError", () =>
-      transportError(
-        "AgentProviderCleanupError",
-        `Provider ${provider} did not close cleanly after walkthrough generation.`,
-        operation,
-        diagnostic,
-        publicFailure,
-      ),
-    ),
-    Match.orElse(() =>
+  return Option.match(classification, {
+    onNone: () =>
       transportError(
         "AgentProviderOperationError",
         `Provider ${provider} could not complete walkthrough generation.`,
@@ -377,22 +339,65 @@ const publicProviderOperationError = <Failure extends TransportFailure>(
         diagnostic,
         publicFailure,
       ),
-    ),
-  )
+    onSome: (failure) =>
+      Match.valueTags(failure, {
+        ProcessTimeoutError: () =>
+          transportError(
+            "AgentProviderTimeoutError",
+            `Provider ${provider} timed out during walkthrough generation.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+        ProcessSpawnError: () =>
+          transportError(
+            "AgentProviderSpawnError",
+            `DiffDash could not start provider ${provider}.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+        ProcessExitError: () =>
+          transportError(
+            "AgentProviderExitError",
+            `Provider ${provider} exited before completing the walkthrough.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+        ProcessOutputError: () =>
+          transportError(
+            "AgentProviderIoError",
+            `DiffDash could not exchange walkthrough data with provider ${provider}.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+        ProcessStdinError: () =>
+          transportError(
+            "AgentProviderIoError",
+            `DiffDash could not exchange walkthrough data with provider ${provider}.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+        ProcessCleanupError: () =>
+          transportError(
+            "AgentProviderCleanupError",
+            `Provider ${provider} did not close cleanly after walkthrough generation.`,
+            operation,
+            diagnostic,
+            publicFailure,
+          ),
+      }),
+  })
 }
 
 const parseProviderOperationError = <Input extends TransportFailure>(
   input: Input,
-): AgentProviderOperationError | null => {
-  if (Schema.is(AgentProviderOperationError)(input)) return input
-  return Result.getOrNull(Schema.decodeUnknownResult(AgentProviderOperationError)(input))
-}
-
-const parseKnownProviderProcessFailure = <Input extends TransportFailure>(
-  input: Input,
-): typeof KnownProviderProcessFailure.Type | null => {
-  if (Schema.is(KnownProviderProcessFailure)(input)) return input
-  return Result.getOrNull(Schema.decodeUnknownResult(KnownProviderProcessFailure)(input))
+): Option.Option<AgentProviderOperationError> => {
+  if (Schema.is(AgentProviderOperationError)(input)) return Option.some(input)
+  return Schema.decodeUnknownOption(AgentProviderOperationError)(input)
 }
 
 /** Maps a safe provider failure category to bounded user-facing transport copy. */
@@ -512,12 +517,6 @@ const walkthroughProviderFailure = (providerId: string, category: AgentProviderF
     retryAfterSeconds: null,
     resetsAt: null,
   })
-
-const taggedCause = <Cause extends TransportFailure>(cause: Cause): string | null => {
-  const decoded = Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }))(cause)
-  const value = Option.getOrNull(decoded)
-  return value === null ? null : safeDiagnosticTag(value._tag, "UnknownCause")
-}
 
 const structuralCause = <Failure extends TransportFailure>(error: Failure): TransportFailure => {
   const decoded = Schema.decodeUnknownOption(

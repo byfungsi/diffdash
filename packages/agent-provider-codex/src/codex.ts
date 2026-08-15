@@ -5,7 +5,6 @@ import { delimiter, join } from "node:path"
 
 import {
   AgentArtifactCandidate,
-  type AgentArtifactMetadata,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentExecutionPolicy,
@@ -31,9 +30,9 @@ import {
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
 import {
-  normalizeReviewThreadAgentResponse as normalizeResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
   ReviewThreadAgentResponse,
+  ReviewThreadAgentResponseFromProvider,
 } from "@diffdash/domain/review-agent"
 import {
   parseProviderJsonText as parseJsonText,
@@ -443,14 +442,13 @@ const executeReview = (
             )
             .pipe(
               Stream.mapError(operationErrors.fromCause("review-thread")),
-              Stream.runForEach((event) => {
-                return Match.value(event).pipe(
-                  Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) =>
-                    consumeCodexLine(state, line.line),
-                  ),
-                  Match.orElse(() => Effect.void),
-                )
-              }),
+              Stream.runForEach((event) =>
+                Match.valueTags(event, {
+                  ProcessLine: (line) =>
+                    line.source === "stdout" ? consumeCodexLine(state, line.line) : Effect.void,
+                  ProcessExit: () => Effect.void,
+                }),
+              ),
             )
 
           if (state.lifecycle.stage !== "TurnCompleted") {
@@ -668,8 +666,8 @@ const consumeCompletedItem = (
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
     const completedItem = discriminateCompletedItem(item)
-    yield* Match.value(completedItem).pipe(
-      Match.when({ _tag: "AgentMessage" }, (agentMessage) =>
+    yield* Match.valueTags(completedItem, {
+      AgentMessage: (agentMessage) =>
         Effect.gen(function* () {
           const adapted = yield* adaptAgentMessageItem(agentMessage)
           state.agentMessages.push({
@@ -679,35 +677,28 @@ const consumeCompletedItem = (
           state.nextAgentMessageSequence += 1
           state.artifacts.push(adapted.artifact)
         }),
-      ),
-      Match.when({ _tag: "CommandExecution" }, (commandExecution) =>
+      CommandExecution: (commandExecution) =>
         Effect.sync(() => {
           state.artifacts.push(adaptCommandExecutionItem(commandExecution))
         }),
-      ),
-      Match.when({ _tag: "McpToolCall" }, (mcpToolCall) =>
+      McpToolCall: (mcpToolCall) =>
         Effect.sync(() => {
           state.artifacts.push(adaptMcpToolCallItem(mcpToolCall))
         }),
-      ),
-      Match.when({ _tag: "FileChange" }, () => adaptFileChangeItem()),
-      Match.when({ _tag: "WebSearch" }, (webSearch) =>
+      FileChange: () => adaptFileChangeItem(),
+      WebSearch: (webSearch) =>
         Effect.sync(() => {
           state.artifacts.push(adaptWebSearchItem(webSearch))
         }),
-      ),
-      Match.when({ _tag: "RepositorySearch" }, (repositorySearch) =>
+      RepositorySearch: (repositorySearch) =>
         Effect.sync(() => {
           state.artifacts.push(adaptRepositorySearchItem(repositorySearch))
         }),
-      ),
-      Match.when({ _tag: "Unknown" }, (unknown) =>
+      Unknown: (unknown) =>
         Effect.sync(() => {
           state.artifacts.push(adaptUnknownCompletedItem(unknown))
         }),
-      ),
-      Match.exhaustive,
-    )
+    })
   })
 
 const discriminateCompletedItem = (item: CodexItem): CodexCompletedItem => {
@@ -758,19 +749,16 @@ const adaptAgentMessageItem = (
     )
   }
   const status = extractItemStatus(completedItem.item)
-  const itemIdMetadata: AgentArtifactMetadata =
-    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
-  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
+  const metadata: { itemId?: string; status?: string } = {}
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return Effect.succeed({
     text,
     artifact: {
       type: "provider-message",
       title: "Codex assistant message",
       content: text,
-      metadata: {
-        ...itemIdMetadata,
-        ...statusMetadata,
-      },
+      metadata,
     },
   })
 }
@@ -796,20 +784,17 @@ const adaptCommandExecutionItem = (completedItem: CodexCommandExecutionItem): Pe
       completedItem.item.result?.content,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ command, status }, completedItem.item)
-  const itemIdMetadata: AgentArtifactMetadata =
-    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
-  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
-  const exitCodeMetadata: AgentArtifactMetadata = exitCode === null ? {} : { exitCode }
+  const metadata: { itemId?: string; command: string; status?: string; exitCode?: number } = {
+    command,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
+  if (exitCode !== null) metadata.exitCode = exitCode
   return {
     type: "shell-output",
     title: boundedArtifactTitle("Codex command", command),
     content,
-    metadata: {
-      ...itemIdMetadata,
-      command,
-      ...statusMetadata,
-      ...exitCodeMetadata,
-    },
+    metadata,
   }
 }
 
@@ -836,19 +821,17 @@ const adaptMcpToolCallItem = (completedItem: CodexMcpToolCallItem): PendingArtif
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ status }, completedItem.item)
-  const itemIdMetadata: AgentArtifactMetadata =
-    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
-  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
+  const metadata: { itemId?: string; server: string; tool: string; status?: string } = {
+    server,
+    tool,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return {
     type: server === "diffdash" ? "mcp-tool-result" : "unknown",
     title: boundedArtifactTitle("Codex MCP", `${server}/${tool}`),
     content,
-    metadata: {
-      ...itemIdMetadata,
-      server,
-      tool,
-      ...statusMetadata,
-    },
+    metadata,
   }
 }
 
@@ -888,39 +871,37 @@ const adaptSearchItem = (
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ query, url, status }, completedItem.item)
-  const itemIdMetadata: AgentArtifactMetadata =
-    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
-  const queryMetadata: AgentArtifactMetadata = query === null ? {} : { query }
-  const urlMetadata: AgentArtifactMetadata = url === null ? {} : { url }
-  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
+  const metadata: {
+    itemId?: string
+    eventType: string
+    query?: string
+    url?: string
+    status?: string
+  } = { eventType: completedItem.itemType }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (query !== null) metadata.query = query
+  if (url !== null) metadata.url = url
+  if (status !== null) metadata.status = status
   return {
     type,
     title: boundedArtifactTitle(title, query ?? url ?? status),
     content,
-    metadata: {
-      ...itemIdMetadata,
-      eventType: completedItem.itemType,
-      ...queryMetadata,
-      ...urlMetadata,
-      ...statusMetadata,
-    },
+    metadata,
   }
 }
 
 const adaptUnknownCompletedItem = (completedItem: CodexUnknownCompletedItem): PendingArtifact => {
   const status = extractItemStatus(completedItem.item)
-  const itemIdMetadata: AgentArtifactMetadata =
-    completedItem.itemId === null ? {} : { itemId: completedItem.itemId }
-  const statusMetadata: AgentArtifactMetadata = status === null ? {} : { status }
+  const metadata: { itemId?: string; eventType: string; status?: string } = {
+    eventType: completedItem.itemType,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return {
     type: "unknown",
     title: boundedArtifactTitle("Unknown Codex completed item", completedItem.itemType),
     content: jsonContent(completedItem.item),
-    metadata: {
-      ...itemIdMetadata,
-      eventType: completedItem.itemType,
-      ...statusMetadata,
-    },
+    metadata,
   }
 }
 
@@ -1079,8 +1060,7 @@ const decodeReviewResponse = (
   finalMessage: string | null,
 ): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> => {
   const parsed = finalMessage === null ? null : parseJsonValue(parseJsonText(finalMessage))
-  const candidate = normalizeResponse(parsed)
-  return Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(candidate).pipe(
+  return Schema.decodeUnknownEffect(ReviewThreadAgentResponseFromProvider)(parsed).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,

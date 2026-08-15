@@ -181,17 +181,14 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
         if (row.error !== null) {
           return invalid("run", row.id, "Completed agent runs cannot contain an error.")
         }
-        const providerRun =
-          row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }
-        const usage = row.usage_json === null ? {} : { usage: row.usage_json }
-        return Effect.succeed(
-          CompletedAgentRun.make({
-            ...identity,
-            ...providerRun,
-            ...usage,
-            completedAt: row.completed_at,
-          }),
-        )
+        const completed: {
+          providerRunId?: ReviewAgentProviderRunId
+          usage?: ReviewAgentUsage
+          completedAt: string
+        } & typeof identity = { ...identity, completedAt: row.completed_at }
+        if (row.provider_run_id !== null) completed.providerRunId = row.provider_run_id
+        if (row.usage_json !== null) completed.usage = row.usage_json
+        return Effect.succeed(CompletedAgentRun.make(completed))
       }
       if (row.error === null || row.usage_json !== null) {
         return invalid(
@@ -200,15 +197,13 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
           "Failed agent runs require an error and cannot contain usage.",
         )
       }
-      const providerRun = row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }
-      return Effect.succeed(
-        FailedAgentRun.make({
-          ...identity,
-          ...providerRun,
-          error: row.error,
-          completedAt: row.completed_at,
-        }),
-      )
+      const failed: {
+        providerRunId?: ReviewAgentProviderRunId
+        error: string
+        completedAt: string
+      } & typeof identity = { ...identity, error: row.error, completedAt: row.completed_at }
+      if (row.provider_run_id !== null) failed.providerRunId = row.provider_run_id
+      return Effect.succeed(FailedAgentRun.make(failed))
     }),
   )
 

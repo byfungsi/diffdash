@@ -8,7 +8,7 @@ import {
 } from "@diffdash/core-rpc/process-startup"
 import { FileStorage } from "@diffdash/settings/file-storage"
 import { AppState } from "@diffdash/settings/app-state"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { isAbsolute } from "node:path"
 
 import { coreLifecycleLayer } from "./core-lifecycle"
@@ -30,20 +30,21 @@ const startupFailure = (reason: StandaloneCoreProcessError["reason"]) =>
   })
 
 const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(function* (
-  encodedConfiguration: string | undefined,
+  encodedConfiguration: Option.Option<string>,
 ) {
-  if (
-    encodedConfiguration === undefined ||
-    Buffer.byteLength(encodedConfiguration) > CORE_PROCESS_STARTUP_MAX_BYTES
-  ) {
-    return yield* startupFailure("configuration-invalid")
-  }
-  const configuration = yield* decodeCoreProcessStartupConfiguration(encodedConfiguration).pipe(
+  const configuration = yield* Effect.fromOption(encodedConfiguration).pipe(
     Effect.mapError(() => startupFailure("configuration-invalid")),
+    Effect.filterOrFail(
+      (encoded) => Buffer.byteLength(encoded) <= CORE_PROCESS_STARTUP_MAX_BYTES,
+      () => startupFailure("configuration-invalid"),
+    ),
+    Effect.flatMap(decodeCoreProcessStartupConfiguration),
+    Effect.mapError(() => startupFailure("configuration-invalid")),
+    Effect.filterOrFail(
+      ({ socketPath, statePath }) => isAbsolute(socketPath) && isAbsolute(statePath),
+      () => startupFailure("configuration-invalid"),
+    ),
   )
-  if (!isAbsolute(configuration.socketPath) || !isAbsolute(configuration.statePath)) {
-    return yield* startupFailure("configuration-invalid")
-  }
 
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
   const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
@@ -71,7 +72,7 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
 
 /** Runs the standalone Core host until Electron terminates or interrupts the process. */
 export const runStandaloneCoreProcess = (): void => {
-  const encodedConfiguration = process.env[CORE_PROCESS_STARTUP_ENV]
+  const encodedConfiguration = Option.fromNullishOr(process.env[CORE_PROCESS_STARTUP_ENV])
   delete process.env[CORE_PROCESS_STARTUP_ENV]
   NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration), {
     disableErrorReporting: true,

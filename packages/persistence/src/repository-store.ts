@@ -596,7 +596,7 @@ export class RepositoryStore extends Context.Service<
                       row.name,
                       row.remoteUrl,
                       row.localPath,
-                      input.isFavorite === true ? 1 : 0,
+                      input.favorite === "mark" ? 1 : 0,
                       now,
                       now,
                       now,

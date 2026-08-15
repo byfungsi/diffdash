@@ -119,18 +119,26 @@ const makeLayer = (
     readonly ghAuthenticated?: boolean
     readonly ghSearchRepositoriesAvailable?: boolean
     readonly ghVersion?: string
+    readonly omitProviderDiagnostic?: boolean
   },
 ) =>
   Prerequisites.layer({
     appImagePath:
-      options.appImagePath === undefined ? null : CoreAbsolutePath.make(options.appImagePath),
+      options.appImagePath === undefined
+        ? Option.none()
+        : Option.some(CoreAbsolutePath.make(options.appImagePath)),
     diffDashCliPath: CoreAbsolutePath.make(
       options.diffDashCliPath ?? join(directory, "missing-diffdash-cli"),
     ),
     executableSearchPath: ExecutableSearchPath.make(process.env.PATH ?? ""),
     executablePathExtensions:
-      process.env.PATHEXT === undefined ? null : ExecutablePathExtensions.make(process.env.PATHEXT),
-    homeDirectory: process.env.HOME === undefined ? null : CoreAbsolutePath.make(process.env.HOME),
+      process.env.PATHEXT === undefined
+        ? Option.none()
+        : Option.some(ExecutablePathExtensions.make(process.env.PATHEXT)),
+    homeDirectory:
+      process.env.HOME === undefined
+        ? Option.none()
+        : Option.some(CoreAbsolutePath.make(process.env.HOME)),
     platform: process.platform,
   }).pipe(
     Layer.provideMerge(fakeProcessLayer(options)),
@@ -252,6 +260,29 @@ describe("Prerequisites", () => {
       expect(status.ghVersion).toBeNull()
       expect(status.ghSearchRepositoriesAvailable).toBe(true)
       expect(status.ghSupported).toBe(false)
+    }),
+  )
+
+  it.effect("reports setup guidance when a provider has no diagnostic", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const status = yield* Effect.gen(function* () {
+        const prerequisites = yield* Prerequisites
+        return yield* prerequisites.get
+      }).pipe(
+        Effect.provide(
+          makeLayer(directory, {
+            availableCommands: new Set(),
+            omitProviderDiagnostic: true,
+          }),
+        ),
+      )
+
+      expect(status.providerDiagnostics).toEqual([])
+      expect(status.setupRequirements[0]).toMatchObject({
+        detail: "GitHub needs setup or authentication.",
+        ready: false,
+      })
     }),
   )
 
@@ -442,10 +473,10 @@ describe("Prerequisites", () => {
 
       yield* refreshAppImageCliLaunchers({
         sourcePath: CoreAbsolutePath.make(sourcePath),
-        appImagePath: CoreAbsolutePath.make(appImagePath),
+        appImagePath: Option.some(CoreAbsolutePath.make(appImagePath)),
         executableSearchPath: ExecutableSearchPath.make(fakeBin),
-        executablePathExtensions: null,
-        homeDirectory: CoreAbsolutePath.make(directory),
+        executablePathExtensions: Option.none(),
+        homeDirectory: Option.some(CoreAbsolutePath.make(directory)),
         platform: process.platform,
       }).pipe(Effect.provide(ProcessFileSystem.layer))
 
@@ -495,6 +526,7 @@ const fakeGitProviderLayer = (options: {
   readonly ghAuthenticated?: boolean
   readonly ghSearchRepositoriesAvailable?: boolean
   readonly ghVersion?: string
+  readonly omitProviderDiagnostic?: boolean
 }) => {
   const providerId = GitProviderId.make("github")
   const descriptor = GitProviderDescriptor.make({
@@ -531,7 +563,9 @@ const fakeGitProviderLayer = (options: {
     GitProvider,
     GitProvider.of({
       listProviders: Effect.succeed([descriptor]),
-      diagnoseProviders: Effect.succeed([diagnostic]),
+      diagnoseProviders: Effect.succeed(
+        options.omitProviderDiagnostic === true ? [] : [diagnostic],
+      ),
       parseRemoteUrl: () => unavailableProviderMethod(),
       resolveRepository: () => unavailableProviderMethod(),
       repositoryUrl: () => unavailableProviderMethod(),

@@ -81,6 +81,25 @@ export const TransportErrorPayload = Schema.Struct({
   providerFailure: Schema.optional(AgentProviderFailure),
 })
 
+const EncodedTransportErrorPayload = Schema.Struct({
+  _tag: Schema.Literal("TransportError"),
+  code: Schema.NonEmptyString,
+  message: Schema.String,
+  operation: Schema.optional(Schema.toEncoded(TransportDiagnosticOperation)),
+  diagnostic: Schema.optional(Schema.toEncoded(TransportErrorDiagnosticTrace)),
+  providerFailure: Schema.optional(Schema.toEncoded(AgentProviderFailure)),
+})
+
+/** Normalizing codec between structured-clone transport data and the domain error. */
+export const TransportErrorCodec = EncodedTransportErrorPayload.pipe(
+  Schema.decodeTo(TransportError, {
+    decode: SchemaGetter.transform((error) =>
+      normalizedTransportError(Schema.decodeUnknownSync(TransportError)(error)),
+    ),
+    encode: SchemaGetter.transform((error) => error),
+  }),
+)
+
 /** Converts an unknown boundary failure without exposing its stack or cause. */
 export const toTransportError = <Input extends TransportErrorInput>(
   error: Input extends TransportErrorInput ? Input : never,
@@ -125,8 +144,8 @@ export const decodeTransportError = <Input extends TransportErrorInput>(
   const direct = Schema.decodeUnknownResult(TransportError)(error)
   if (Result.isSuccess(direct)) return normalizedTransportError(direct.success)
 
-  const payload = Schema.decodeUnknownResult(TransportErrorPayload)(error)
-  if (Result.isSuccess(payload)) return normalizedTransportError(payload.success)
+  const payload = Schema.decodeUnknownResult(TransportErrorCodec)(error)
+  if (Result.isSuccess(payload)) return payload.success
 
   const message = errorMessage(error)
   if (message === null) return null

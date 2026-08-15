@@ -5,13 +5,27 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js"
 import type { Scope } from "effect"
-import { Cause, Context, Effect, Exit, Fiber, Layer, Predicate, Redacted, Schema } from "effect"
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect"
 import { z } from "zod"
 import {
   DiffDashReviewMcpTool,
   GetDiffFileRequest,
   GetDiffHunkRequest,
+  GetOlderThreadMessagesRequest,
   GetPriorArtifactRequest,
+  SearchRepositoryRequest,
+  SearchReviewDiffRequest,
   type DiffDashMcpToolResponse,
 } from "@diffdash/protocol/mcp"
 import { truncateUtf8, utf8ByteLength } from "@diffdash/protocol/payload-utf8"
@@ -34,6 +48,7 @@ export type {
 } from "./port"
 
 const MAX_REQUEST_BYTES = 1024 * 1024
+const noop = () => {}
 const DEFAULT_TOOL_OUTPUT_BYTES = 128 * 1024
 const DEFAULT_HUNK_PAGE_LINES = 200
 const MAX_HUNK_PAGE_LINES = 500
@@ -154,7 +169,7 @@ class RequestLease {
 class RunCapability {
   readonly #requests = new Set<RequestLease>()
   readonly #drainWaiters = new Set<() => void>()
-  readonly #revoked = deferredPromise<void>()
+  readonly #revoked = deferredSignal()
   #state: CapabilityState = "active"
 
   constructor(readonly context: DiffDashMcpRunContext) {}
@@ -195,7 +210,7 @@ class RunCapability {
   finishRevoked(): void {
     if (this.#state === "revoked") return
     this.#state = "revoked"
-    this.#revoked.resolve(undefined)
+    this.#revoked.resolve()
   }
 
   #endRequest(lease: RequestLease): void {
@@ -447,15 +462,13 @@ const createRunServer = (
         .max(MAX_DIFF_SEARCH_RESULTS)
         .default(DEFAULT_DIFF_SEARCH_RESULTS),
     }),
-    (input) => {
-      const { path, ...rest } = input
-      const optionalPath = path === undefined ? {} : { path }
-      return context.handlers.execute({
-        tool: DiffDashReviewMcpTool.searchReviewDiff,
-        ...rest,
-        ...optionalPath,
-      })
-    },
+    (input) =>
+      context.handlers.execute(
+        Schema.decodeUnknownSync(SearchReviewDiffRequest)({
+          tool: DiffDashReviewMcpTool.searchReviewDiff,
+          ...input,
+        }),
+      ),
   )
   register(
     DiffDashReviewMcpTool.getDiffHunk,
@@ -495,15 +508,13 @@ const createRunServer = (
       caseSensitive: z.boolean().default(false),
       maxResults: z.number().int().min(1).max(100).default(25),
     }),
-    (input) => {
-      const { path, ...rest } = input
-      const optionalPath = path === undefined ? {} : { path }
-      return context.handlers.execute({
-        tool: DiffDashReviewMcpTool.searchRepository,
-        ...rest,
-        ...optionalPath,
-      })
-    },
+    (input) =>
+      context.handlers.execute(
+        Schema.decodeUnknownSync(SearchRepositoryRequest)({
+          tool: DiffDashReviewMcpTool.searchRepository,
+          ...input,
+        }),
+      ),
   )
   register(
     DiffDashReviewMcpTool.readRepositoryFile,
@@ -525,15 +536,13 @@ const createRunServer = (
       beforeSequence: z.number().int().positive().optional(),
       limit: z.number().int().min(1).max(50).default(10),
     }),
-    (input) => {
-      const { beforeSequence, ...rest } = input
-      const optionalBeforeSequence = beforeSequence === undefined ? {} : { beforeSequence }
-      return context.handlers.execute({
-        tool: DiffDashReviewMcpTool.getOlderThreadMessages,
-        ...rest,
-        ...optionalBeforeSequence,
-      })
-    },
+    (input) =>
+      context.handlers.execute(
+        Schema.decodeUnknownSync(GetOlderThreadMessagesRequest)({
+          tool: DiffDashReviewMcpTool.getOlderThreadMessages,
+          ...input,
+        }),
+      ),
   )
   register(
     DiffDashReviewMcpTool.getPriorArtifact,
@@ -950,14 +959,14 @@ const revokeStartedCapability = (
   })
 
 const beginHttpClose = (server: HttpServer, forceAfterMs: number) => {
-  let forceClose: ReturnType<typeof setTimeout> | undefined = setTimeout(
-    () => server.closeAllConnections(),
-    forceAfterMs,
-  )
+  let forceClose = Option.some(setTimeout(() => server.closeAllConnections(), forceAfterMs))
+  const cancelForceClose = () => {
+    if (Option.isSome(forceClose)) clearTimeout(forceClose.value)
+    forceClose = Option.none()
+  }
   const promise = new Promise<void>((resolve, reject) => {
     server.close((cause) => {
-      if (forceClose !== undefined) clearTimeout(forceClose)
-      forceClose = undefined
+      cancelForceClose()
       if (cause === undefined) resolve()
       else reject(cause)
     })
@@ -965,10 +974,7 @@ const beginHttpClose = (server: HttpServer, forceAfterMs: number) => {
   void promise.catch(() => undefined)
   return {
     promise,
-    cancelForceClose: () => {
-      if (forceClose !== undefined) clearTimeout(forceClose)
-      forceClose = undefined
-    },
+    cancelForceClose,
   }
 }
 
@@ -1010,27 +1016,26 @@ const settleWithin = (
   promise: PromiseLike<unknown>,
   milliseconds: number,
 ): Promise<SettledWithin> => {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<SettledWithin>((resolve) => {
-    timeout = setTimeout(() => resolve({ status: "timed-out" }), milliseconds)
-  })
   const operation = Promise.resolve(promise).then<SettledWithin, SettledWithin>(
     () => ({ status: "completed" }),
     (cause: unknown) => ({ status: "failed", cause }),
   )
-  return Promise.race([operation, deadline]).finally(() => {
-    if (timeout !== undefined) clearTimeout(timeout)
+  let cancelDeadline = noop
+  const deadline = new Promise<SettledWithin>((resolve) => {
+    const timeout = setTimeout(() => resolve({ status: "timed-out" }), milliseconds)
+    cancelDeadline = () => clearTimeout(timeout)
   })
+  return Promise.race([operation, deadline]).finally(() => cancelDeadline())
 }
 
-const deferredPromise = <A>() => {
-  let complete: ((value: A | PromiseLike<A>) => void) | undefined
-  const promise = new Promise<A>((resolve) => {
-    complete = resolve
+const deferredSignal = () => {
+  let complete = noop
+  const promise = new Promise<void>((resolve) => {
+    complete = () => resolve()
   })
   return {
     promise,
-    resolve: (value: A | PromiseLike<A>) => complete?.(value),
+    resolve: () => complete(),
   }
 }
 

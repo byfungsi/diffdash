@@ -174,6 +174,7 @@ describe("ReviewThreadAnchorMapper", () => {
               locator: makeHostedRepositoryLocator("github", "fungsi", "diffdash"),
             }),
             checkout: RemoteOnly.make({ remoteUrl: "https://github.com/fungsi/diffdash" }),
+            favorite: "preserve",
           }),
         )
         const anchors = [

@@ -11,7 +11,7 @@ import {
   WalkthroughOperationTimestamp,
 } from "@diffdash/domain/walkthrough-operation"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Result, Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
@@ -386,50 +386,58 @@ describe("walkthrough RPC declarations", () => {
   })
 
   it("declares exhaustive policies for every walkthrough method", () => {
-    expect(getCoreRpcMethodPolicy(WalkthroughStartRpc)).toEqual({
-      deadlineMs: 5_000,
-      maxRequestBytes: 8 * 1_024,
-      maxResponseBytes: 64 * 1_024,
-      cancellation: "detachedAfterAcceptance",
-      requiredScope: "review",
-      mutationClass: "idempotentMutation",
-      idempotency: "idempotencyKeyRequired",
-      restartBehavior: "retryByIdempotencyKey",
-      requiredHostCapabilities: [],
-    })
-    expect(getCoreRpcMethodPolicy(WalkthroughGetOperationRpc)).toEqual({
-      deadlineMs: 2_000,
-      maxRequestBytes: 2 * 1_024,
-      maxResponseBytes: 384 * 1_024,
-      cancellation: "interruptible",
-      requiredScope: "operation",
-      mutationClass: "read",
-      idempotency: "idempotent",
-      restartBehavior: "resumeByOperationId",
-      requiredHostCapabilities: [],
-    })
-    expect(getCoreRpcMethodPolicy(WalkthroughCancelRpc)).toEqual({
-      deadlineMs: 5_000,
-      maxRequestBytes: 2 * 1_024,
-      maxResponseBytes: 384 * 1_024,
-      cancellation: "uninterruptible",
-      requiredScope: "operation",
-      mutationClass: "idempotentMutation",
-      idempotency: "idempotent",
-      restartBehavior: "resumeByOperationId",
-      requiredHostCapabilities: [],
-    })
-    expect(getCoreRpcMethodPolicy(WalkthroughGetStoredRpc)).toEqual({
-      deadlineMs: 2_000,
-      maxRequestBytes: 8 * 1_024,
-      maxResponseBytes: 384 * 1_024,
-      cancellation: "interruptible",
-      requiredScope: "review",
-      mutationClass: "read",
-      idempotency: "idempotent",
-      restartBehavior: "retryInNewEpoch",
-      requiredHostCapabilities: [],
-    })
+    expect(getCoreRpcMethodPolicy(WalkthroughStartRpc)).toEqual(
+      Option.some({
+        deadlineMs: 5_000,
+        maxRequestBytes: 8 * 1_024,
+        maxResponseBytes: 64 * 1_024,
+        cancellation: "detachedAfterAcceptance",
+        requiredScope: "review",
+        mutationClass: "idempotentMutation",
+        idempotency: "idempotencyKeyRequired",
+        restartBehavior: "retryByIdempotencyKey",
+        requiredHostCapabilities: [],
+      }),
+    )
+    expect(getCoreRpcMethodPolicy(WalkthroughGetOperationRpc)).toEqual(
+      Option.some({
+        deadlineMs: 2_000,
+        maxRequestBytes: 2 * 1_024,
+        maxResponseBytes: 384 * 1_024,
+        cancellation: "interruptible",
+        requiredScope: "operation",
+        mutationClass: "read",
+        idempotency: "idempotent",
+        restartBehavior: "resumeByOperationId",
+        requiredHostCapabilities: [],
+      }),
+    )
+    expect(getCoreRpcMethodPolicy(WalkthroughCancelRpc)).toEqual(
+      Option.some({
+        deadlineMs: 5_000,
+        maxRequestBytes: 2 * 1_024,
+        maxResponseBytes: 384 * 1_024,
+        cancellation: "uninterruptible",
+        requiredScope: "operation",
+        mutationClass: "idempotentMutation",
+        idempotency: "idempotent",
+        restartBehavior: "resumeByOperationId",
+        requiredHostCapabilities: [],
+      }),
+    )
+    expect(getCoreRpcMethodPolicy(WalkthroughGetStoredRpc)).toEqual(
+      Option.some({
+        deadlineMs: 2_000,
+        maxRequestBytes: 8 * 1_024,
+        maxResponseBytes: 384 * 1_024,
+        cancellation: "interruptible",
+        requiredScope: "review",
+        mutationClass: "read",
+        idempotency: "idempotent",
+        restartBehavior: "retryInNewEpoch",
+        requiredHostCapabilities: [],
+      }),
+    )
   })
 
   it("keeps failures method-scoped and roundtrips expected failures and defects via MessagePack", () => {

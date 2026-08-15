@@ -1,4 +1,4 @@
-import { Effect, Match, Predicate } from "effect"
+import { Effect, Predicate } from "effect"
 
 import {
   AgentCapabilityPolicyUnsupported,
@@ -187,16 +187,24 @@ export const classifyProviderFailureText = (value: string): AgentProviderFailure
 
 const processKind = (cause: AgentProviderCause): AgentProviderProcessFailureKind | null => {
   const tag = taggedString(cause, "_tag")
-  return Match.value(tag).pipe(
-    Match.when("InvalidProcessOptionsError", () => "options" as const),
-    Match.when("ProcessSpawnError", () => "spawn" as const),
-    Match.when("ProcessStdinError", () => "stdin" as const),
-    Match.when("ProcessOutputError", () => "output" as const),
-    Match.when("ProcessTimeoutError", () => "timeout" as const),
-    Match.when("ProcessCleanupError", () => "cleanup" as const),
-    Match.when("ProcessExitError", () => "exit" as const),
-    Match.orElse(() => null),
-  )
+  switch (tag) {
+    case "InvalidProcessOptionsError":
+      return "options"
+    case "ProcessSpawnError":
+      return "spawn"
+    case "ProcessStdinError":
+      return "stdin"
+    case "ProcessOutputError":
+      return "output"
+    case "ProcessTimeoutError":
+      return "timeout"
+    case "ProcessCleanupError":
+      return "cleanup"
+    case "ProcessExitError":
+      return "exit"
+    default:
+      return null
+  }
 }
 
 const classificationText = (cause: AgentProviderCause, reason: string) => {

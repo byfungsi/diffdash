@@ -81,8 +81,8 @@ describe("desktop host configuration", () => {
           worktreePoolPath: "/custom/worktree-pool",
         },
         renderer: {
-          developmentUrl: "http://localhost:5173",
-          packagedUrl: "file:///workspace/packages/desktop/out/renderer/index.html",
+          _tag: "DevelopmentRendererEntry",
+          url: "http://localhost:5173",
         },
         updater: { appImagePath: "/opt/DiffDash.AppImage" },
       })
@@ -141,8 +141,60 @@ describe("desktop host configuration", () => {
         preloadPath: "/workspace/packages/desktop/out/preload/index.mjs",
         rendererHtmlPath: "/workspace/packages/desktop/out/renderer/index.html",
       })
-      expect(configuration.renderer.developmentUrl).toBeUndefined()
+      expect(configuration.renderer).toEqual({
+        _tag: "PackagedRendererEntry",
+        url: "file:///workspace/packages/desktop/out/renderer/index.html",
+      })
       expect(configuration.policies.debugOnboarding).toBe(false)
+    }),
+  )
+
+  it.effect("falls back to the packaged renderer entry when development has no URL", () =>
+    Effect.gen(function* () {
+      const configuration = yield* makeDesktopHostConfiguration(
+        {
+          ...source,
+          environment: {},
+        },
+        productionDesktopStartupConfiguration,
+      )
+
+      expect(configuration.renderer).toEqual({
+        _tag: "PackagedRendererEntry",
+        url: "file:///workspace/packages/desktop/out/renderer/index.html",
+      })
+    }),
+  )
+
+  it.effect("ignores the development renderer environment value when packaged", () =>
+    Effect.gen(function* () {
+      const configuration = yield* makeDesktopHostConfiguration(
+        {
+          ...source,
+          packaged: true,
+          environment: { ELECTRON_RENDERER_URL: "not a URL" },
+        },
+        productionDesktopStartupConfiguration,
+      )
+
+      expect(configuration.renderer).toMatchObject({ _tag: "PackagedRendererEntry" })
+    }),
+  )
+
+  it.effect("rejects an invalid selected development renderer URL", () =>
+    Effect.gen(function* () {
+      const error = yield* makeDesktopHostConfiguration(
+        {
+          ...source,
+          environment: { ELECTRON_RENDERER_URL: "file:///tmp/index.html" },
+        },
+        productionDesktopStartupConfiguration,
+      ).pipe(Effect.flip)
+
+      expect(error).toMatchObject({
+        _tag: "RendererConfigurationError",
+        message: "DiffDash renderer configuration is invalid.",
+      })
     }),
   )
 })

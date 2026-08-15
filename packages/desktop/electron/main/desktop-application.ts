@@ -1,4 +1,4 @@
-import { CoreMethod, type CoreConfiguration, type CoreConfigurationError } from "@diffdash/core"
+import { CoreMethod, type CoreConfiguration } from "@diffdash/core"
 import { Effect, Predicate } from "effect"
 import {
   app,
@@ -12,7 +12,10 @@ import type { ApplicationRuntime } from "./application-runtime"
 import { disposeApplicationResources } from "./application-resources"
 import { createApplicationUpdater } from "./application-updater"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
-import type { DesktopHostConfiguration } from "./desktop-host-configuration"
+import type {
+  DesktopHostConfiguration,
+  DesktopHostConfigurationError,
+} from "./desktop-host-configuration"
 import { createRendererSecurityPolicy } from "./electron-policy"
 import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
@@ -99,11 +102,9 @@ const start = async (
   }
 
   const rendererSecurityPolicy = createRendererSecurityPolicy({
-    developmentRendererUrl: configuration.renderer.developmentUrl,
-    isPackaged: configuration.application.packaged,
     isTrustedWebContents: (webContents) => webContents === mainWindow?.webContents,
     openExternal: (url) => shell.openExternal(url),
-    packagedRendererUrl: configuration.renderer.packagedUrl,
+    rendererEntry: configuration.renderer,
   })
   const applicationRuntime = composition.createApplicationRuntime(configuration.core)
   const updater = createApplicationUpdater(configuration)
@@ -148,7 +149,7 @@ export interface DesktopApplicationComposition {
   readonly createApplicationRuntime: (configuration: CoreConfiguration) => ApplicationRuntime
   readonly resolveHostConfiguration: (
     identity: ApplicationIdentity,
-  ) => Effect.Effect<DesktopHostConfiguration, CoreConfigurationError>
+  ) => Effect.Effect<DesktopHostConfiguration, DesktopHostConfigurationError>
 }
 
 /** Starts Electron startup and top-level lifecycle handling. */

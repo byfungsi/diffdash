@@ -1,5 +1,10 @@
 type ElectronBoundaryValue = Parameters<typeof JSON.stringify>[0]
 
+type ShutdownState =
+  | { readonly status: "running" }
+  | { readonly status: "disposing"; readonly disposal: Promise<void> }
+  | { readonly status: "quitAllowed" }
+
 /** Coordinates one graceful runtime disposal before quitting or installing an update. */
 export const createShutdown = ({
   dispose,
@@ -12,35 +17,38 @@ export const createShutdown = ({
   readonly disposalTimeoutMs?: number
   readonly onDisposalError?: (cause: ElectronBoundaryValue) => void
 }) => {
-  let quitAllowed = false
-  let quitRequested = false
-  let disposal: Promise<void> | null = null
+  let state: ShutdownState = { status: "running" }
   const disposeOnce = () => {
-    disposal ??= disposeWithin(dispose, disposalTimeoutMs).catch((cause: ElectronBoundaryValue) => {
-      try {
-        onDisposalError(cause)
-      } catch {
-        defaultDisposalErrorReporter()
-      }
-    })
+    if (state.status === "disposing") return state.disposal
+    if (state.status === "quitAllowed") return Promise.resolve()
+
+    const disposal = disposeWithin(dispose, disposalTimeoutMs).catch(
+      (cause: ElectronBoundaryValue) => {
+        try {
+          onDisposalError(cause)
+        } catch {
+          defaultDisposalErrorReporter()
+        }
+      },
+    )
+    state = { status: "disposing", disposal }
     return disposal
   }
 
   return {
     beforeQuit: (event: { readonly preventDefault: () => void }) => {
-      if (quitAllowed) return
+      if (state.status === "quitAllowed") return
       event.preventDefault()
-      if (quitRequested) return
-      quitRequested = true
+      if (state.status === "disposing") return
       void disposeOnce().then(() => {
-        quitAllowed = true
+        state = { status: "quitAllowed" }
         quit()
         return undefined
       })
     },
     restartAndInstall: async (install: () => Promise<void> | void) => {
       await disposeOnce()
-      quitAllowed = true
+      state = { status: "quitAllowed" }
       try {
         await install()
       } catch (cause) {
@@ -53,15 +61,14 @@ export const createShutdown = ({
 
 const disposeWithin = (dispose: () => Promise<void>, timeoutMs: number) => {
   const boundedTimeout = Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 5_000
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(
-      () => reject(new Error(`Application runtime disposal exceeded ${boundedTimeout}ms`)),
-      boundedTimeout,
-    )
-  })
-  return Promise.race([Promise.resolve().then(dispose), deadline]).finally(() => {
-    if (timeout !== undefined) clearTimeout(timeout)
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Application runtime disposal exceeded ${boundedTimeout}ms`))
+    }, boundedTimeout)
+    void Promise.resolve()
+      .then(dispose)
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timeout))
   })
 }
 

@@ -26,10 +26,12 @@ export const hostedTestRepositoryInput = ({
     localPath === null
       ? remoteOnlyRepositoryCheckout(remoteUrl)
       : linkedRepositoryCheckout(remoteUrl, localPath),
+    "preserve",
   )
 
 /** Builds a linked local repository input for persistence integration tests. */
 export const localTestRepositoryInput = (
   localPath: string,
   remoteUrl = `file://${localPath}`,
-): UpsertRepositoryInput => localRepositoryInput(linkedRepositoryCheckout(remoteUrl, localPath))
+): UpsertRepositoryInput =>
+  localRepositoryInput(linkedRepositoryCheckout(remoteUrl, localPath), "preserve")

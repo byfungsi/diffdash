@@ -1,4 +1,4 @@
-import { Match, Schema, SchemaTransformation } from "effect"
+import { Match, Option, Schema, SchemaTransformation } from "effect"
 import { WebUrl } from "@diffdash/domain/web-url"
 
 /** HTTP or HTTPS URL decoded at the native host boundary. */
@@ -25,8 +25,8 @@ export class CoreAnalyticsEnabled extends Schema.TaggedClass<CoreAnalyticsEnable
 }) {}
 
 const EncodedAnalyticsState = Schema.Struct({
-  host: Schema.NullOr(CoreWebUrl),
-  projectKey: Schema.NullOr(AnalyticsProjectKey),
+  host: Schema.OptionFromNullOr(CoreWebUrl),
+  projectKey: Schema.OptionFromNullOr(AnalyticsProjectKey),
 })
 
 /**
@@ -38,18 +38,17 @@ export const CoreAnalyticsState = EncodedAnalyticsState.pipe(
     Schema.toType(Schema.Union([CoreAnalyticsDisabled, CoreAnalyticsEnabled])),
     SchemaTransformation.transform({
       decode: ({ host, projectKey }) =>
-        host === null || projectKey === null
-          ? CoreAnalyticsDisabled.make()
-          : CoreAnalyticsEnabled.make({ host, projectKey }),
+        Option.isSome(host) && Option.isSome(projectKey)
+          ? CoreAnalyticsEnabled.make({ host: host.value, projectKey: projectKey.value })
+          : CoreAnalyticsDisabled.make(),
       encode: (state) =>
-        Match.value(state).pipe(
-          Match.tag("disabled", () => ({ host: null, projectKey: null })),
-          Match.tag("enabled", (enabled) => ({
-            host: enabled.host,
-            projectKey: enabled.projectKey,
-          })),
-          Match.exhaustive,
-        ),
+        Match.valueTags(state, {
+          disabled: () => ({ host: Option.none(), projectKey: Option.none() }),
+          enabled: (enabled) => ({
+            host: Option.some(enabled.host),
+            projectKey: Option.some(enabled.projectKey),
+          }),
+        }),
     }),
   ),
 )

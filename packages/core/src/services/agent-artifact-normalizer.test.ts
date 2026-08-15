@@ -194,4 +194,69 @@ refresh_token='[redacted]'`)
       }
     }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
   )
+
+  it.effect("rejects non-positive and unsafe content byte limits", () =>
+    Effect.gen(function* () {
+      const normalizer = yield* AgentArtifactNormalizer
+
+      for (const maxContentBytes of [0, Number.MAX_SAFE_INTEGER + 1]) {
+        const error = yield* normalizer
+          .normalize({
+            type: "unknown",
+            provider: ReviewAgentProviderId.make("claude"),
+            title: "Invalid limit",
+            content: "content",
+            metadata: {},
+            maxContentBytes,
+          })
+          .pipe(Effect.flip)
+
+        expect(error).toMatchObject({ _tag: "AgentArtifactNormalizationError" })
+      }
+    }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
+  )
+
+  it.effect("rejects the reserved truncation metadata key", () =>
+    Effect.gen(function* () {
+      const normalizer = yield* AgentArtifactNormalizer
+      const error = yield* normalizer
+        .normalize({
+          type: "unknown",
+          provider: ReviewAgentProviderId.make("claude"),
+          title: "Reserved metadata",
+          content: "content",
+          metadata: { truncation: {} },
+        })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({
+        _tag: "AgentArtifactNormalizationError",
+        reason: expect.stringContaining("reserved by DiffDash"),
+      })
+    }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
+  )
+
+  it.effect("rejects non-finite, undefined, cyclic, and exotic metadata values", () =>
+    Effect.gen(function* () {
+      const normalizer = yield* AgentArtifactNormalizer
+      const cycle = {}
+      Reflect.set(cycle, "self", cycle)
+
+      for (const invalidValue of [Number.POSITIVE_INFINITY, undefined, cycle, new Date(0)]) {
+        const metadata = { nested: null }
+        Reflect.set(metadata, "nested", invalidValue)
+        const error = yield* normalizer
+          .normalize({
+            type: "unknown",
+            provider: ReviewAgentProviderId.make("claude"),
+            title: "Invalid metadata",
+            content: "content",
+            metadata,
+          })
+          .pipe(Effect.flip)
+
+        expect(error).toMatchObject({ _tag: "AgentArtifactNormalizationError" })
+      }
+    }).pipe(Effect.provide(AgentArtifactNormalizer.layer)),
+  )
 })

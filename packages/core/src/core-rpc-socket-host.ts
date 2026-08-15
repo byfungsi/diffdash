@@ -32,22 +32,26 @@ export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      if (Buffer.byteLength(Redacted.value(options.token)) < 32) {
-        return yield* CoreRpcSocketSecurityError.make({ reason: "transport-token-too-short" })
-      }
-      if (Buffer.byteLength(options.socketPath) > 103) {
-        return yield* CoreRpcSocketSecurityError.make({ reason: "socket-path-too-long" })
-      }
+      yield* Effect.succeed(options).pipe(
+        Effect.filterOrFail(
+          ({ token }) => Buffer.byteLength(Redacted.value(token)) >= 32,
+          () => CoreRpcSocketSecurityError.make({ reason: "transport-token-too-short" }),
+        ),
+        Effect.filterOrFail(
+          ({ socketPath }) => Buffer.byteLength(socketPath) <= 103,
+          () => CoreRpcSocketSecurityError.make({ reason: "socket-path-too-long" }),
+        ),
+      )
       const runtimeDirectory = path.dirname(options.socketPath)
-      const runtimeDirectoryInfo = yield* fileSystem.stat(runtimeDirectory)
-      if (
-        runtimeDirectoryInfo.type !== "Directory" ||
-        (runtimeDirectoryInfo.mode & 0o777) !== 0o700
-      ) {
-        return yield* CoreRpcSocketSecurityError.make({
-          reason: "runtime-directory-not-private",
-        })
-      }
+      yield* fileSystem.stat(runtimeDirectory).pipe(
+        Effect.filterOrFail(
+          (info) => info.type === "Directory" && (info.mode & 0o777) === 0o700,
+          () =>
+            CoreRpcSocketSecurityError.make({
+              reason: "runtime-directory-not-private",
+            }),
+        ),
+      )
       const server = yield* NodeSocketServer.make({ path: options.socketPath })
       yield* fileSystem.chmod(options.socketPath, 0o600)
       return server

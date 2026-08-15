@@ -45,7 +45,7 @@ export const makeReviewOperationHandlers: Effect.Effect<
   return {
     [CoreMethod.acquireHostedReviewSnapshot]: ({ review }) =>
       Effect.gen(function* () {
-        const project = yield* repositories.ensureHosted(review.repository)
+        const project = yield* repositories.ensureHosted(review.repository, "preserve")
         const snapshot = yield* snapshots.acquireHosted(review)
         return makeReviewSnapshotManifest(snapshot, project.id)
       }),

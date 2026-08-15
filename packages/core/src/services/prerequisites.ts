@@ -57,11 +57,11 @@ export class Prerequisites extends Context.Service<
 >()("@diffdash/Prerequisites") {
   /** Creates prerequisite checks from host-decoded executable and home paths. */
   static layer(options: {
-    readonly appImagePath: CoreAbsolutePath | null
+    readonly appImagePath: Option.Option<CoreAbsolutePath>
     readonly diffDashCliPath: CoreAbsolutePath
     readonly executableSearchPath: ExecutableSearchPath
-    readonly executablePathExtensions: ExecutablePathExtensions | null
-    readonly homeDirectory: CoreAbsolutePath | null
+    readonly executablePathExtensions: Option.Option<ExecutablePathExtensions>
+    readonly homeDirectory: Option.Option<CoreAbsolutePath>
     readonly platform: NodeJS.Platform
   }): Layer.Layer<
     Prerequisites,
@@ -104,20 +104,19 @@ export class Prerequisites extends Context.Service<
             options.executablePathExtensions,
             options.platform,
           )
-          const userLocalSearchPath =
-            options.homeDirectory === null
-              ? ""
-              : [
-                  join(options.homeDirectory, ".local", "bin"),
-                  join(options.homeDirectory, "bin"),
-                ].join(delimiter)
           const diffDashCli = Option.isSome(diffDashCliInPath)
             ? diffDashCliInPath
-            : yield* findDiffDashExecutable(
-                userLocalSearchPath,
-                options.executablePathExtensions,
-                options.platform,
-              )
+            : yield* Option.match(options.homeDirectory, {
+                onNone: () => Effect.succeed(Option.none<ExecutablePath>()),
+                onSome: (homeDirectory) =>
+                  findDiffDashExecutable(
+                    [join(homeDirectory, ".local", "bin"), join(homeDirectory, "bin")].join(
+                      delimiter,
+                    ),
+                    options.executablePathExtensions,
+                    options.platform,
+                  ),
+              })
 
           return AppPrerequisites.make({
             checkedAt: new Date().toISOString(),
@@ -134,19 +133,24 @@ export class Prerequisites extends Context.Service<
             ghVersion: null,
             installedCodingAgents,
             providerDiagnostics: providerDescriptors.flatMap((descriptor) => {
-              const diagnostic = providerDiagnostics.find(
-                (item) => item.providerId === descriptor.id,
+              const diagnostic = Option.fromNullishOr(
+                providerDiagnostics.find((item) => item.providerId === descriptor.id),
               )
-              return diagnostic === undefined
-                ? []
-                : [ProviderDiagnostic.make({ descriptor, diagnostic })]
+              return Option.toArray(
+                Option.map(diagnostic, (value) =>
+                  ProviderDiagnostic.make({ descriptor, diagnostic: value }),
+                ),
+              )
             }),
             setupRequirements: [
               ...providerDescriptors.map((descriptor) => {
-                const diagnostic = providerDiagnostics.find(
-                  (item) => item.providerId === descriptor.id,
+                const diagnostic = Option.fromNullishOr(
+                  providerDiagnostics.find((item) => item.providerId === descriptor.id),
                 )
-                const ready = diagnostic?.available === true && diagnostic.authenticated
+                const ready = Option.exists(
+                  diagnostic,
+                  (value) => value.available && value.authenticated,
+                )
                 return SetupRequirement.make({
                   key: SetupRequirementKey.make(`provider:${descriptor.id}`),
                   providerId: descriptor.id,
@@ -154,8 +158,12 @@ export class Prerequisites extends Context.Service<
                   description: `Connect ${descriptor.displayName} to search ${descriptor.terminology.repositoryPlural} and review ${descriptor.terminology.reviewPlural}.`,
                   detail: ready
                     ? `${descriptor.displayName} is available and authenticated.`
-                    : (diagnostic?.message ??
-                      `${descriptor.displayName} needs setup or authentication.`),
+                    : Option.match(diagnostic, {
+                        onNone: () => `${descriptor.displayName} needs setup or authentication.`,
+                        onSome: (value) =>
+                          value.message ??
+                          `${descriptor.displayName} needs setup or authentication.`,
+                      }),
                   ready,
                   requiredForLocalUse: false,
                   helpUrl: null,
@@ -191,12 +199,13 @@ const commandAvailable = (processes: ProcessRunner, command: string) =>
 
 const findDiffDashExecutable = (
   envPath: ExecutableSearchPath | string,
-  pathExt: ExecutablePathExtensions | null,
+  pathExt: Option.Option<ExecutablePathExtensions>,
   platform: NodeJS.Platform,
-) => {
-  if (pathExt === null) return findExecutableInPath("diffdash", { envPath, platform })
-  return findExecutableInPath("diffdash", { envPath, pathExt, platform })
-}
+) =>
+  Option.match(pathExt, {
+    onNone: () => findExecutableInPath("diffdash", { envPath, platform }),
+    onSome: (value) => findExecutableInPath("diffdash", { envPath, pathExt: value, platform }),
+  })
 
 const agentSetupRequirement = (provider: AgentProviderStatus) => {
   const supported = Object.values(provider.capabilities).filter(
@@ -209,16 +218,17 @@ const agentSetupRequirement = (provider: AgentProviderStatus) => {
   const setupHint = provider.setup.find(
     (requirement) => requirement.installHint !== null,
   )?.installHint
+  let detail = setupHint ?? `${provider.displayName} needs setup.`
+  if (unavailable !== undefined && !AgentProviderCapabilityStatus.guards.Ready(unavailable)) {
+    detail = unavailable.reason
+  }
+  if (ready) detail = `${provider.displayName} is available.`
   return SetupRequirement.make({
     key: SetupRequirementKey.make(`agent-provider:${provider.id}`),
     providerId: provider.id,
     title: `${provider.displayName} ready`,
     description: provider.description,
-    detail: ready
-      ? `${provider.displayName} is available.`
-      : unavailable !== undefined && !AgentProviderCapabilityStatus.guards.Ready(unavailable)
-        ? unavailable.reason
-        : (setupHint ?? `${provider.displayName} needs setup.`),
+    detail,
     ready,
     requiredForLocalUse: false,
     helpUrl: provider.homepage === null ? null : WebUrl.make(provider.homepage),
@@ -236,32 +246,38 @@ const installDiffDashCli = (
     homeDirectory,
   }: {
     readonly sourcePath: CoreAbsolutePath
-    readonly appImagePath: CoreAbsolutePath | null
+    readonly appImagePath: Option.Option<CoreAbsolutePath>
     readonly executableSearchPath: ExecutableSearchPath
-    readonly homeDirectory: CoreAbsolutePath | null
+    readonly homeDirectory: Option.Option<CoreAbsolutePath>
   },
 ) =>
   Effect.gen(function* () {
-    if (sourcePath.length === 0 || !(yield* fileSystem.exists(sourcePath))) {
-      return yield* PrerequisiteInstallError.make({
-        cause: null,
-        message: "Could not find the bundled DiffDash CLI.",
-        operation: "installDiffDashCli.source",
-      })
-    }
+    yield* fileSystem.exists(sourcePath).pipe(
+      Effect.filterOrFail(
+        (exists) => sourcePath.length > 0 && exists,
+        () =>
+          PrerequisiteInstallError.make({
+            cause: null,
+            message: "Could not find the bundled DiffDash CLI.",
+            operation: "installDiffDashCli.source",
+          }),
+      ),
+    )
 
-    const targetDirectory = yield* firstWritablePathDirectory(
+    const targetDirectoryOption = yield* firstWritablePathDirectory(
       fileSystem,
       executableSearchPath,
       homeDirectory,
     )
-    if (targetDirectory === null) {
-      return yield* PrerequisiteInstallError.make({
-        cause: null,
-        message: "Could not find or create a writable directory for the DiffDash CLI.",
-        operation: "installDiffDashCli.targetDirectory",
-      })
-    }
+    const targetDirectory = yield* Effect.fromOption(targetDirectoryOption).pipe(
+      Effect.mapError(() =>
+        PrerequisiteInstallError.make({
+          cause: null,
+          message: "Could not find or create a writable directory for the DiffDash CLI.",
+          operation: "installDiffDashCli.targetDirectory",
+        }),
+      ),
+    )
 
     yield* fileSystem.ensureDirectory(targetDirectory, { recursive: true })
 
@@ -270,14 +286,14 @@ const installDiffDashCli = (
     if (existing !== null) {
       if (existing.type === "symbolic-link") {
         const linkedPath = resolve(dirname(linkPath), yield* fileSystem.readLink(linkPath))
-        if (appImagePath === null && linkedPath === sourcePath) {
+        if (Option.isNone(appImagePath) && linkedPath === sourcePath) {
           return installResult(linkPath, targetDirectory, executableSearchPath)
         }
         if (isTransientAppImageCliPath(linkedPath)) {
-          if (appImagePath === null) yield* fileSystem.remove(linkPath)
+          if (Option.isNone(appImagePath)) yield* fileSystem.remove(linkPath)
         } else return yield* linkExistsError(linkPath)
       } else if (
-        appImagePath !== null &&
+        Option.isSome(appImagePath) &&
         existing.type === "file" &&
         (yield* fileSystem.readText(linkPath)).includes(APPIMAGE_LAUNCHER_MARKER)
       ) {
@@ -287,17 +303,21 @@ const installDiffDashCli = (
       }
     }
 
-    if (appImagePath !== null) {
-      if (!(yield* fileSystem.exists(appImagePath))) {
-        return yield* PrerequisiteInstallError.make({
-          cause: null,
-          message: "Could not find the persistent DiffDash AppImage.",
-          operation: "installDiffDashCli.appImage",
-        })
-      }
+    if (Option.isSome(appImagePath)) {
+      yield* fileSystem.exists(appImagePath.value).pipe(
+        Effect.filterOrFail(
+          (exists) => exists,
+          () =>
+            PrerequisiteInstallError.make({
+              cause: null,
+              message: "Could not find the persistent DiffDash AppImage.",
+              operation: "installDiffDashCli.appImage",
+            }),
+        ),
+      )
       yield* fileSystem.replaceExecutableAtomically(
         ExecutablePath.make(linkPath),
-        makeAppImageCliLauncher(yield* fileSystem.readText(sourcePath), appImagePath),
+        makeAppImageCliLauncher(yield* fileSystem.readText(sourcePath), appImagePath.value),
       )
     } else {
       yield* fileSystem.access(sourcePath, "executable")
@@ -305,14 +325,12 @@ const installDiffDashCli = (
     }
     return installResult(linkPath, targetDirectory, executableSearchPath)
   }).pipe(
-    Effect.catch((cause) =>
-      Schema.is(PrerequisiteInstallError)(cause)
-        ? Effect.fail(cause)
-        : PrerequisiteInstallError.make({
-            cause,
-            message: "Could not install the DiffDash CLI.",
-            operation: "installDiffDashCli",
-          }),
+    Effect.catchTag("ProcessFileSystemError", (cause) =>
+      PrerequisiteInstallError.make({
+        cause,
+        message: "Could not install the DiffDash CLI.",
+        operation: "installDiffDashCli",
+      }),
     ),
   )
 
@@ -358,10 +376,10 @@ export const refreshAppImageCliLaunchers = Effect.fn("refreshAppImageCliLauncher
   platform,
 }: {
   readonly sourcePath: CoreAbsolutePath
-  readonly appImagePath: CoreAbsolutePath | null
+  readonly appImagePath: Option.Option<CoreAbsolutePath>
   readonly executableSearchPath: ExecutableSearchPath
-  readonly executablePathExtensions: ExecutablePathExtensions | null
-  readonly homeDirectory: CoreAbsolutePath | null
+  readonly executablePathExtensions: Option.Option<ExecutablePathExtensions>
+  readonly homeDirectory: Option.Option<CoreAbsolutePath>
   readonly platform: NodeJS.Platform
 }) {
   const fileSystem = yield* ProcessFileSystem
@@ -388,17 +406,17 @@ const refreshAppImageCliLaunchersWithFileSystem = Effect.fn(
     platform,
   }: {
     readonly sourcePath: CoreAbsolutePath
-    readonly appImagePath: CoreAbsolutePath | null
+    readonly appImagePath: Option.Option<CoreAbsolutePath>
     readonly executableSearchPath: ExecutableSearchPath
-    readonly executablePathExtensions: ExecutablePathExtensions | null
-    readonly homeDirectory: CoreAbsolutePath | null
+    readonly executablePathExtensions: Option.Option<ExecutablePathExtensions>
+    readonly homeDirectory: Option.Option<CoreAbsolutePath>
     readonly platform: NodeJS.Platform
   },
 ) {
   if (
-    appImagePath === null ||
+    Option.isNone(appImagePath) ||
     !(yield* fileSystem.exists(sourcePath)) ||
-    !(yield* fileSystem.exists(appImagePath))
+    !(yield* fileSystem.exists(appImagePath.value))
   )
     return
 
@@ -408,20 +426,18 @@ const refreshAppImageCliLaunchersWithFileSystem = Effect.fn(
     platform,
   )
   const candidates = new Set([
-    Option.getOrNull(diffDashInPath),
-    homeDirectory === null ? null : join(homeDirectory, ".local", "bin", "diffdash"),
-    homeDirectory === null ? null : join(homeDirectory, "bin", "diffdash"),
+    ...Option.toArray(diffDashInPath),
+    ...Option.toArray(Option.map(homeDirectory, (home) => join(home, ".local", "bin", "diffdash"))),
+    ...Option.toArray(Option.map(homeDirectory, (home) => join(home, "bin", "diffdash"))),
   ])
   const source = yield* fileSystem.readText(sourcePath)
-  const launcher = makeAppImageCliLauncher(source, appImagePath)
+  const launcher = makeAppImageCliLauncher(source, appImagePath.value)
   yield* Effect.forEach(
     candidates,
     (candidate) =>
-      candidate === null
-        ? Effect.void
-        : refreshLauncherCandidate(fileSystem, candidate, launcher).pipe(
-            Effect.catch(() => Effect.void),
-          ),
+      refreshLauncherCandidate(fileSystem, candidate, launcher).pipe(
+        Effect.catch(() => Effect.void),
+      ),
     { discard: true },
   )
 })
@@ -443,12 +459,12 @@ const refreshLauncherCandidate = (
 const firstWritablePathDirectory = Effect.fn("firstWritablePathDirectory")(function* (
   fileSystem: ProcessFileSystemOperations,
   executableSearchPath: string,
-  homeDirectory: string | null,
+  homeDirectory: Option.Option<CoreAbsolutePath>,
 ) {
   const pathDirectories = executableSearchPath.split(delimiter).filter((entry) => entry.length > 0)
   const preferredDirectories = [
-    homeDirectory === null ? "" : join(homeDirectory, ".local", "bin"),
-    homeDirectory === null ? "" : join(homeDirectory, "bin"),
+    ...Option.toArray(Option.map(homeDirectory, (home) => join(home, ".local", "bin"))),
+    ...Option.toArray(Option.map(homeDirectory, (home) => join(home, "bin"))),
     "/opt/homebrew/bin",
     "/usr/local/bin",
   ]
@@ -456,10 +472,11 @@ const firstWritablePathDirectory = Effect.fn("firstWritablePathDirectory")(funct
 
   for (const candidate of candidates) {
     const resolvedCandidate = resolve(candidate)
-    if (yield* canWriteDirectory(fileSystem, resolvedCandidate)) return resolvedCandidate
+    if (yield* canWriteDirectory(fileSystem, resolvedCandidate))
+      return Option.some(resolvedCandidate)
   }
 
-  return null
+  return Option.none<string>()
 })
 
 const uniqueDirectories = (directories: readonly string[]) => {

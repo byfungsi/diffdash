@@ -1,4 +1,4 @@
-import { Context, Schema } from "effect"
+import { Context, Option, Schema } from "effect"
 import type * as Rpc from "effect/unstable/rpc/Rpc"
 
 /** Finite RPC deadline measured in milliseconds. */
@@ -106,5 +106,5 @@ export const CoreRpcMethodPolicyAnnotation = Context.Service<never, CoreRpcMetho
 )
 
 /** Reads a Core method policy without assuming a declaration was annotated correctly. */
-export const getCoreRpcMethodPolicy = (rpc: Rpc.Any): CoreRpcMethodPolicy | undefined =>
-  Context.getOrUndefined(rpc.annotations, CoreRpcMethodPolicyAnnotation)
+export const getCoreRpcMethodPolicy = (rpc: Rpc.Any): Option.Option<CoreRpcMethodPolicy> =>
+  Context.getOption(rpc.annotations, CoreRpcMethodPolicyAnnotation)

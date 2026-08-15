@@ -15,6 +15,10 @@ describe("CoreAnalyticsState", () => {
       host: "https://us.i.posthog.com",
       projectKey: "phc_test",
     })
+    expect(Schema.encodeSync(CoreAnalyticsState)(state)).toEqual({
+      host: "https://us.i.posthog.com",
+      projectKey: "phc_test",
+    })
   })
 
   it.each([

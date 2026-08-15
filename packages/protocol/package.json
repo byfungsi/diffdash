@@ -22,7 +22,8 @@
     "./testing": "./src/testing.ts",
     "./transport-error": "./src/transport-error.ts",
     "./viewed-files": "./src/viewed-files.ts",
-    "./walkthrough-operation": "./src/walkthrough-operation.ts"
+    "./walkthrough-operation": "./src/walkthrough-operation.ts",
+    "./walkthrough-operation-state": "./src/walkthrough-operation-state.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

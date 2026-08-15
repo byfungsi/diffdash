@@ -30,7 +30,7 @@ export const makeViewedFileOperationHandlers: Effect.Effect<
 
   return {
     [CoreMethod.listViewedFiles]: (request) =>
-      repositories.ensureHosted(request.review.repository).pipe(
+      repositories.ensureHosted(request.review.repository, "preserve").pipe(
         Effect.flatMap((repo) =>
           viewedFiles
             .listHosted({
@@ -42,7 +42,7 @@ export const makeViewedFileOperationHandlers: Effect.Effect<
         ),
       ),
     [CoreMethod.setViewedFile]: (request) =>
-      repositories.ensureHosted(request.review.repository).pipe(
+      repositories.ensureHosted(request.review.repository, "preserve").pipe(
         Effect.flatMap((repo) =>
           viewedFiles.setHosted({
             repoId: repo.id,

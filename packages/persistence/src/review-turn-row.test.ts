@@ -79,6 +79,8 @@ describe("review lifecycle row compatibility", () => {
         started_at: "2026-08-10T00:00:00.000Z",
         completed_at: "2026-08-10T00:00:01.000Z",
       })
+      expect("providerRunId" in run).toBe(false)
+      expect("usage" in run).toBe(false)
       const messages = yield* Effect.forEach(["message-1", "message-2"], (id, index) =>
         decodeReviewThreadMessageRow({
           id,

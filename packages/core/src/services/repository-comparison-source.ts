@@ -25,7 +25,7 @@ import {
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import { CoreAbsolutePath } from "../core-configuration"
 import { GitProvider } from "./git-provider"
-import { RepositoryLinker } from "./repository-linker"
+import { RepositoryLinker, RepositorySelectionIntent } from "./repository-linker"
 import { CoreExpectedCause, toCoreExpectedCause } from "../core-error-cause"
 
 const RepositoryComparisonOperation = Schema.String.pipe(
@@ -236,34 +236,39 @@ const resolveSavedRepository = (
 ) => {
   const selector = command.repository
   if (selector === null) {
-    return repositories.openProject(RepositoryCheckoutPath.make(command.localPath)).pipe(
-      Effect.mapError((cause) =>
-        sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
-      ),
-      Effect.flatMap((result) => {
-        if (Schema.is(ProjectRemoteSelectionRequired)(result)) {
-          return sourceError(
-            "repository-ambiguous",
-            "resolve.currentRepository",
-            "The current repository has multiple recognized remotes. Pass --repository=provider:namespace/name.",
-            new Error(
-              `Ambiguous current repository remotes: ${result.candidates
-                .map(({ remoteName }) => remoteName)
-                .join(", ")}`,
-            ),
-          )
-        }
-        if (!Schema.is(HostedRepositorySource)(result.repo.source)) {
-          return sourceError(
-            "repository-not-found",
-            "resolve.currentRepository",
-            "The current repository has no recognized hosted remote. Save a hosted repository and pass --repository=provider:namespace/name.",
-            new Error("Current repository has no hosted identity"),
-          )
-        }
-        return Effect.succeed(result.repo)
-      }),
-    )
+    return repositories
+      .openProject(
+        RepositoryCheckoutPath.make(command.localPath),
+        RepositorySelectionIntent.Automatic(),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
+        ),
+        Effect.flatMap((result) => {
+          if (Schema.is(ProjectRemoteSelectionRequired)(result)) {
+            return sourceError(
+              "repository-ambiguous",
+              "resolve.currentRepository",
+              "The current repository has multiple recognized remotes. Pass --repository=provider:namespace/name.",
+              new Error(
+                `Ambiguous current repository remotes: ${result.candidates
+                  .map(({ remoteName }) => remoteName)
+                  .join(", ")}`,
+              ),
+            )
+          }
+          if (!Schema.is(HostedRepositorySource)(result.repo.source)) {
+            return sourceError(
+              "repository-not-found",
+              "resolve.currentRepository",
+              "The current repository has no recognized hosted remote. Save a hosted repository and pass --repository=provider:namespace/name.",
+              new Error("Current repository has no hosted identity"),
+            )
+          }
+          return Effect.succeed(result.repo)
+        }),
+      )
   }
   if (selector.providerId !== null) {
     const requested = makeHostedRepositoryLocator(

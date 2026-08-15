@@ -24,7 +24,7 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Cause, Effect, Layer, Option } from "effect"
+import { Cause, Effect, Layer } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
@@ -191,13 +191,11 @@ export const createCoreLayer = (
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
   const prerequisitesLayer = Prerequisites.layer({
-    appImagePath: Option.getOrNull(configuration.paths.appImageOption),
+    appImagePath: configuration.paths.appImageOption,
     diffDashCliPath: configuration.paths.diffDashCli,
     executableSearchPath,
-    executablePathExtensions: Option.getOrNull(
-      configuration.environment.executablePathExtensionsOption,
-    ),
-    homeDirectory: Option.getOrNull(configuration.environment.homeDirectoryOption),
+    executablePathExtensions: configuration.environment.executablePathExtensionsOption,
+    homeDirectory: configuration.environment.homeDirectoryOption,
     platform: configuration.application.platform,
   }).pipe(Layer.provideMerge(gitProviderLayer), Layer.provideMerge(agentProvidersLayer))
 

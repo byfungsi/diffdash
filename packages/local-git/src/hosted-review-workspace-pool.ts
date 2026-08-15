@@ -20,6 +20,7 @@ import {
   type Manifest,
   type Slot,
   mutateManifest,
+  updateManifest,
   updateSlot,
 } from "./hosted-review-workspace-manifest"
 import {
@@ -355,15 +356,14 @@ const reserveAndPrepare = (
     )
 
     const quarantine = (reason: string) =>
-      mutateManifest(filesystem, (manifest) => ({
-        manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
+      updateManifest(filesystem, (manifest) =>
+        updateSlot(manifest, reservation.slot.id, (slot) => ({
           ...slot,
           state: "quarantined",
           lease: null,
           lastError: reason,
         })),
-        value: undefined,
-      }))
+      )
 
     return yield* prepared.pipe(
       Effect.interruptible,
@@ -768,10 +768,9 @@ const restoreAndRelease = (
   lease: HostedReviewWorkspaceLease,
 ) =>
   Effect.gen(function* () {
-    yield* mutateManifest(filesystem, (manifest) => ({
-      manifest: updateSlot(manifest, lease.slotId, (slot) => ({ ...slot, state: "cleaning" })),
-      value: undefined,
-    }))
+    yield* updateManifest(filesystem, (manifest) =>
+      updateSlot(manifest, lease.slotId, (slot) => ({ ...slot, state: "cleaning" })),
+    )
     const repositoryRoot = pathForRepository(
       filesystem,
       makeHostedRepositoryKey(input.checkout.repository),
@@ -807,18 +806,17 @@ const restoreAndRelease = (
     return yield* cleanup.pipe(
       Effect.matchEffect({
         onFailure: (cause) =>
-          mutateManifest(filesystem, (manifest) => ({
-            manifest: updateSlot(manifest, lease.slotId, (slot) => ({
+          updateManifest(filesystem, (manifest) =>
+            updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "quarantined",
               lease: null,
               lastError: cause.reason,
             })),
-            value: undefined,
-          })).pipe(Effect.andThen(Effect.fail(cause))),
+          ).pipe(Effect.andThen(Effect.fail(cause))),
         onSuccess: () =>
-          mutateManifest(filesystem, (manifest) => ({
-            manifest: updateSlot(manifest, lease.slotId, (slot) => ({
+          updateManifest(filesystem, (manifest) =>
+            updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "available",
               lease: null,
@@ -826,8 +824,7 @@ const restoreAndRelease = (
               lastUsedAt: new Date().toISOString(),
               lastError: null,
             })),
-            value: undefined,
-          })),
+          ),
       }),
     )
   })
@@ -1131,7 +1128,7 @@ const recordRemoteRepositoryUse = (
   repositoryLocator: HostedRepositoryLocator,
   cloned: boolean,
 ) =>
-  mutateManifest(filesystem, (manifest) => {
+  updateManifest(filesystem, (manifest) => {
     const now = new Date().toISOString()
     const repositoryKey = makeHostedRepositoryKey(repositoryLocator)
     const existing = manifest.repositories.find((item) => item.repositoryKey === repositoryKey)
@@ -1142,16 +1139,13 @@ const recordRemoteRepositoryUse = (
       lastUsedAt: now,
     }
     return {
-      manifest: {
-        ...manifest,
-        repositories:
-          existing === undefined
-            ? [...manifest.repositories, repository]
-            : manifest.repositories.map((item) =>
-                item.repositoryKey === repositoryKey ? repository : item,
-              ),
-      },
-      value: undefined,
+      ...manifest,
+      repositories:
+        existing === undefined
+          ? [...manifest.repositories, repository]
+          : manifest.repositories.map((item) =>
+              item.repositoryKey === repositoryKey ? repository : item,
+            ),
     }
   })
 

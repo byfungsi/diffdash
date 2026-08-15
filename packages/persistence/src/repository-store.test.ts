@@ -43,18 +43,18 @@ const hostedInput = (
   remoteUrl: string,
   localPath: string | null = null,
   providerId: GitProviderId = githubProviderId,
-  isFavorite?: boolean,
+  favorite: "preserve" | "mark" = "preserve",
 ) =>
   hostedRepositoryInput(
     makeHostedRepositoryLocator(providerId, owner, name),
     localPath === null
       ? remoteOnlyRepositoryCheckout(remoteUrl)
       : linkedRepositoryCheckout(remoteUrl, localPath),
-    isFavorite,
+    favorite,
   )
 
-const localInput = (localPath: string, remoteUrl: string, isFavorite?: boolean) =>
-  localRepositoryInput(linkedRepositoryCheckout(remoteUrl, localPath), isFavorite)
+const localInput = (localPath: string, remoteUrl: string) =>
+  localRepositoryInput(linkedRepositoryCheckout(remoteUrl, localPath), "preserve")
 
 const getRow = (database: Database, statement: string, params?: SqlParams) =>
   database.get(statement, params).pipe(Effect.map(Option.getOrUndefined))
@@ -79,7 +79,7 @@ describe("RepositoryStore", () => {
             "https://github.com/fungsi/remote-repo",
             null,
             githubProviderId,
-            true,
+            "mark",
           ),
         )
         const local = yield* store.upsertRepository(
@@ -165,6 +165,42 @@ describe("RepositoryStore", () => {
         expect(matches[0]?.id).toBe(repo.id)
         expect(touched.lastOpenedAt).not.toBe("2000-01-01T00:00:00.000Z")
         expect(touched.updatedAt).not.toBe("2000-01-01T00:00:00.000Z")
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("marks or preserves favorites on upsert and only setFavorite can unmark", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* RepositoryStore
+        const input = hostedInput(
+          "fungsi",
+          "favorite-intent",
+          "https://github.com/fungsi/favorite-intent",
+        )
+
+        const initial = yield* store.upsertRepository(input)
+        const marked = yield* store.upsertRepository(
+          hostedInput(
+            "fungsi",
+            "favorite-intent",
+            "https://github.com/fungsi/favorite-intent",
+            null,
+            githubProviderId,
+            "mark",
+          ),
+        )
+        const preservedFavorite = yield* store.upsertRepository(input)
+        const unmarked = yield* store.setFavorite(marked.id, false)
+        const preservedUnmarked = yield* store.upsertRepository(input)
+
+        expect(initial.isFavorite).toBe(false)
+        expect(marked.isFavorite).toBe(true)
+        expect(preservedFavorite.isFavorite).toBe(true)
+        expect(unmarked.isFavorite).toBe(false)
+        expect(preservedUnmarked.isFavorite).toBe(false)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
@@ -762,7 +798,7 @@ describe("RepositoryStore", () => {
             "https://github.com/fungsi/forgettable-repo",
             "/tmp/forgettable-repo",
             githubProviderId,
-            true,
+            "mark",
           ),
         )
 
@@ -794,7 +830,7 @@ describe("RepositoryStore", () => {
             "https://github.com/fungsi/diffdash",
             null,
             githubProviderId,
-            true,
+            "mark",
           ),
         )
         const linked = yield* store.upsertRepository(
@@ -829,7 +865,7 @@ describe("RepositoryStore", () => {
             "git@github.com:xenithlabs/xenith-operator-dashboard-fe.git",
             "/tmp/xenith-operator-dashboard-fe",
             githubProviderId,
-            true,
+            "mark",
           ),
         )
         const current = yield* store.upsertRepository(

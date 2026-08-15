@@ -56,21 +56,19 @@ export const createGitProviderComposition = (
         }),
       )
       .pipe(Effect.asVoid)
-  const baseRevision = Option.isNone(fixture.value.baseRevision)
-    ? {}
-    : { baseRevision: fixture.value.baseRevision.value }
-  const headRevision = Option.isNone(fixture.value.headRevision)
-    ? {}
-    : { headRevision: fixture.value.headRevision.value }
-  return [
-    ...production,
-    createFixtureGitProvider({
-      remoteUrl: fixture.value.remoteUrl,
-      ...baseRevision,
-      ...headRevision,
-      bootstrapBareRepository,
-    }),
-  ]
+  const fixtureConfiguration: {
+    -readonly [Key in keyof FixtureGitProviderConfig]: FixtureGitProviderConfig[Key]
+  } = {
+    remoteUrl: fixture.value.remoteUrl,
+    bootstrapBareRepository,
+  }
+  if (Option.isSome(fixture.value.baseRevision)) {
+    fixtureConfiguration.baseRevision = fixture.value.baseRevision.value
+  }
+  if (Option.isSome(fixture.value.headRevision)) {
+    fixtureConfiguration.headRevision = fixture.value.headRevision.value
+  }
+  return [...production, createFixtureGitProvider(fixtureConfiguration)]
 }
 
 /** E2E provider composition extending production providers with deterministic fixtures. */

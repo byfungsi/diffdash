@@ -9,16 +9,14 @@ import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 export const createApplicationUpdater = (
   configuration: DesktopHostConfiguration,
 ): DesktopUpdater => {
-  const appImagePath =
-    configuration.updater.appImagePath === null
-      ? {}
-      : { appImagePath: configuration.updater.appImagePath }
-  return createDesktopUpdater({
+  const options = {
     adapter: nativeUpdaterAdapter(),
-    ...appImagePath,
     arch: configuration.application.architecture,
     currentVersion: configuration.application.version,
     packaged: configuration.application.packaged,
     platform: configuration.application.platform,
-  })
+  }
+  return configuration.updater.appImagePath === null
+    ? createDesktopUpdater(options)
+    : createDesktopUpdater({ ...options, appImagePath: configuration.updater.appImagePath })
 }

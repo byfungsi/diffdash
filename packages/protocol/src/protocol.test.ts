@@ -43,6 +43,7 @@ import {
   isTransientTransportError,
   safeTransportErrorMessage,
   TransportError,
+  TransportErrorCodec,
   TransportErrorDiagnosticTrace,
   toTransportError,
   transportError,
@@ -404,6 +405,27 @@ describe("protocol boundaries", () => {
     })
     expect(encoded).not.toHaveProperty("stack")
     expect(encoded).not.toHaveProperty("cause")
+  })
+
+  it("normalizes structured-clone transport payloads through the schema codec", () => {
+    const decoded = Schema.decodeUnknownSync(TransportErrorCodec)({
+      _tag: "TransportError",
+      code: "unsafe code",
+      message: "Safe reason\nwith control text",
+      operation: "reviewThreads:get\nprivate",
+    })
+
+    expect(decoded).toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "Safe reason with control text",
+      operation: "reviewThreads:get private",
+    })
+    expect(Schema.encodeSync(TransportErrorCodec)(decoded)).toEqual({
+      _tag: "TransportError",
+      code: "INTERNAL_ERROR",
+      message: "Safe reason with control text",
+      operation: "reviewThreads:get private",
+    })
   })
 
   it("extracts only bounded protocol-owned error messages", () => {

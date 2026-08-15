@@ -1,8 +1,7 @@
 import { CoreTransportAuthenticationMiddleware } from "@diffdash/core-rpc/admission"
 import { CoreTransportAuthenticationFailure } from "@diffdash/core-rpc/failure"
 import { CORE_TRANSPORT_TOKEN_HEADER } from "@diffdash/core-rpc/transport"
-import { Effect, Layer, Option, Redacted, Ref, Semaphore } from "effect"
-import { Match } from "effect"
+import { Effect, Layer, Match, Option, Redacted, Ref, Semaphore } from "effect"
 import * as Headers from "effect/unstable/http/Headers"
 import { timingSafeEqual } from "node:crypto"
 
@@ -24,14 +23,18 @@ const authenticationFailure = CoreTransportAuthenticationFailure.make({
   safeMessage: "DiffDash Core rejected an unauthenticated host connection.",
 })
 
-const tokensEqual = (expected: string, presented: string | undefined): boolean => {
-  if (presented === undefined) return false
-  const expectedBytes = Buffer.from(expected)
-  const presentedBytes = Buffer.from(presented)
-  return (
-    expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
-  )
-}
+const tokensEqual = (expected: string, presented: Option.Option<string>): boolean =>
+  Option.match(presented, {
+    onNone: () => false,
+    onSome: (token) => {
+      const expectedBytes = Buffer.from(expected)
+      const presentedBytes = Buffer.from(token)
+      return (
+        expectedBytes.length === presentedBytes.length &&
+        timingSafeEqual(expectedBytes, presentedBytes)
+      )
+    },
+  })
 
 /** Authenticates and permanently binds the first valid native RPC connection. */
 export const coreTransportAuthenticationLayer = (options: CoreTransportAuthenticationOptions) =>
@@ -39,26 +42,27 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
     CoreTransportAuthenticationMiddleware,
     Effect.gen(function* () {
       const lifecycle = yield* CoreLifecycle
-      const boundClient = yield* Ref.make<BoundClient | undefined>(undefined)
+      const boundClient = yield* Ref.make<Option.Option<BoundClient>>(Option.none())
       const authenticationLock = yield* Semaphore.make(1)
 
       return (effect, request) => {
-        const isHealth = Match.value(request.rpc).pipe(
-          Match.tag("Core.health", () => true),
-          Match.orElse(() => false),
-        )
+        const isHealth = Match.valueTags(request.rpc, {
+          "Core.health": () => true,
+          "Core.authorizeDatabaseOwnership": () => false,
+          "Core.shutdown": () => false,
+          "AppState.get": () => false,
+        })
         const authenticate = authenticationLock.withPermits(1)(
           Effect.gen(function* () {
             const currentClient = yield* Ref.get(boundClient)
-            if (currentClient?.clientId === request.client.id) {
-              return currentClient.healthCompleted || isHealth
+            if (Option.isSome(currentClient)) {
+              return currentClient.value.clientId === request.client.id
+                ? currentClient.value.healthCompleted || isHealth
+                : false
             }
-            if (currentClient !== undefined) return false
             if (!isHealth) return false
 
-            const presentedToken = Option.getOrUndefined(
-              Headers.get(request.headers, CORE_TRANSPORT_TOKEN_HEADER),
-            )
+            const presentedToken = Headers.get(request.headers, CORE_TRANSPORT_TOKEN_HEADER)
             if (!tokensEqual(Redacted.value(options.token), presentedToken)) return false
 
             yield* lifecycle.awaitOwnershipAuthorization.pipe(
@@ -66,10 +70,13 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
                 error.from === "failed" ? Effect.void : Effect.die(error),
               ),
             )
-            yield* Ref.set(boundClient, {
-              clientId: request.client.id,
-              healthCompleted: false,
-            })
+            yield* Ref.set(
+              boundClient,
+              Option.some({
+                clientId: request.client.id,
+                healthCompleted: false,
+              }),
+            )
             return true
           }),
         )
@@ -83,9 +90,11 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
           ? admitted.pipe(
               Effect.tap(() =>
                 Ref.update(boundClient, (current) =>
-                  current?.clientId === request.client.id
-                    ? { ...current, healthCompleted: true }
-                    : current,
+                  Option.map(current, (client) =>
+                    client.clientId === request.client.id
+                      ? { ...client, healthCompleted: true }
+                      : client,
+                  ),
                 ),
               ),
             )

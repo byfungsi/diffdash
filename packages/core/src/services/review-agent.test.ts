@@ -148,6 +148,7 @@ const hostedRepositoryInput = (path: string): UpsertRepositoryInput =>
       remoteUrl: "git@github.com:fungsi/diffdash.git",
       path: RepositoryCheckoutPath.make(path),
     }),
+    favorite: "preserve",
   })
 
 const localRepositoryInput = (path: string): UpsertRepositoryInput =>
@@ -157,6 +158,7 @@ const localRepositoryInput = (path: string): UpsertRepositoryInput =>
       remoteUrl: `file://${path}`,
       path: RepositoryCheckoutPath.make(path),
     }),
+    favorite: "preserve",
   })
 const opencodeProviderId = AgentProviderId.make("opencode")
 const operationErrors = makeAgentProviderOperationErrorFactory({

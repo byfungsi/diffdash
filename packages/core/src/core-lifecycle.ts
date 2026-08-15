@@ -18,7 +18,7 @@ import type {
   DatabaseOwnershipAuthorizationId,
   HostRequestContext,
 } from "@diffdash/core-rpc/identity"
-import { Context, Data, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect"
+import { Context, Data, Deferred, Effect, Layer, Match, Option, Ref, Result, Schema } from "effect"
 
 type State = Data.TaggedEnum<{
   Starting: {}
@@ -33,16 +33,15 @@ type State = Data.TaggedEnum<{
 const State = Data.taggedEnum<State>()
 
 const lifecycleOf = (state: State): CoreLifecycleState =>
-  Match.value(state).pipe(
-    Match.tag("Starting", () => "starting" as const),
-    Match.tag("AwaitingOwnership", () => "awaitingOwnership" as const),
-    Match.tag("Recovering", () => "recovering" as const),
-    Match.tag("Ready", () => "ready" as const),
-    Match.tag("Draining", () => "draining" as const),
-    Match.tag("Stopped", () => "stopped" as const),
-    Match.tag("Failed", () => "failed" as const),
-    Match.exhaustive,
-  )
+  Match.valueTags(state, {
+    Starting: () => "starting" as const,
+    AwaitingOwnership: () => "awaitingOwnership" as const,
+    Recovering: () => "recovering" as const,
+    Ready: () => "ready" as const,
+    Draining: () => "draining" as const,
+    Stopped: () => "stopped" as const,
+    Failed: () => "failed" as const,
+  })
 
 /** Internal failure raised when Core implementation code requests an invalid lifecycle transition. */
 export class CoreLifecycleTransitionError extends Schema.TaggedError<CoreLifecycleTransitionError>()(
@@ -148,66 +147,15 @@ export const makeCoreLifecycle = (
     const stateRef = yield* Ref.make<State>(State.Starting())
     const drainRequested = yield* Deferred.make<void>()
 
-    const healthIdentityMismatch = (requestId: HostRequestId) =>
-      CoreHealthIdentityMismatchFailure.make({
-        code: "CORE_REQUEST_IDENTITY_MISMATCH",
-        method: "Core.health",
-        applicationInstanceId: identity.applicationInstanceId,
-        processEpoch: identity.processEpoch,
-        requestId,
-        retryClass: "automatic",
-        safeMessage: "DiffDash Core rejected a request for a different process identity.",
-      })
-
-    const authorizationIdentityMismatch = (requestId: HostRequestId) =>
-      CoreAuthorizeDatabaseOwnershipIdentityMismatchFailure.make({
-        code: "CORE_REQUEST_IDENTITY_MISMATCH",
-        method: "Core.authorizeDatabaseOwnership",
-        applicationInstanceId: identity.applicationInstanceId,
-        processEpoch: identity.processEpoch,
-        requestId,
-        retryClass: "automatic",
-        safeMessage: "DiffDash Core rejected a request for a different process identity.",
-      })
-
-    const shutdownIdentityMismatch = (requestId: HostRequestId) =>
-      CoreShutdownIdentityMismatchFailure.make({
-        code: "CORE_REQUEST_IDENTITY_MISMATCH",
-        method: "Core.shutdown",
-        applicationInstanceId: identity.applicationInstanceId,
-        processEpoch: identity.processEpoch,
-        requestId,
-        retryClass: "automatic",
-        safeMessage: "DiffDash Core rejected a request for a different process identity.",
-      })
-
     const matchesIdentity = (request: HostRequestContext): boolean =>
       request.applicationInstanceId === identity.applicationInstanceId &&
       request.processEpoch === identity.processEpoch
 
-    const authorizationLifecycleRejected = (requestId: HostRequestId, state: State) =>
-      CoreAuthorizeDatabaseOwnershipLifecycleRejectedFailure.make({
-        code: "CORE_LIFECYCLE_REJECTED",
-        method: "Core.authorizeDatabaseOwnership",
-        applicationInstanceId: identity.applicationInstanceId,
-        processEpoch: identity.processEpoch,
-        requestId,
-        lifecycle: lifecycleOf(state),
-        retryClass: "notRetryable",
-        safeMessage: "DiffDash Core rejected a request in its current lifecycle state.",
-      })
-
-    const shutdownLifecycleRejected = (requestId: HostRequestId, state: State) =>
-      CoreShutdownLifecycleRejectedFailure.make({
-        code: "CORE_LIFECYCLE_REJECTED",
-        method: "Core.shutdown",
-        applicationInstanceId: identity.applicationInstanceId,
-        processEpoch: identity.processEpoch,
-        requestId,
-        lifecycle: lifecycleOf(state),
-        retryClass: "notRetryable",
-        safeMessage: "DiffDash Core rejected a request in its current lifecycle state.",
-      })
+    const admitIdentity = <E>(
+      request: HostRequestContext,
+      onMismatch: () => E,
+    ): Effect.Effect<void, E> =>
+      matchesIdentity(request) ? Effect.void : Effect.fail(onMismatch())
 
     const ownershipMismatch = (requestId: HostRequestId, state: State) =>
       CoreOwnershipAuthorizationMismatchFailure.make({
@@ -222,9 +170,17 @@ export const makeCoreLifecycle = (
       })
 
     const health = Effect.fn("CoreLifecycle.health")(function* (request: HostRequestContext) {
-      if (!matchesIdentity(request)) {
-        return yield* Effect.fail(healthIdentityMismatch(request.requestId))
-      }
+      yield* admitIdentity(request, () =>
+        CoreHealthIdentityMismatchFailure.make({
+          code: "CORE_REQUEST_IDENTITY_MISMATCH",
+          method: "Core.health",
+          applicationInstanceId: identity.applicationInstanceId,
+          processEpoch: identity.processEpoch,
+          requestId: request.requestId,
+          retryClass: "automatic",
+          safeMessage: "DiffDash Core rejected a request for a different process identity.",
+        }),
+      )
       const state = yield* Ref.get(stateRef)
       return CoreHealth.make({
         applicationInstanceId: identity.applicationInstanceId,
@@ -236,13 +192,13 @@ export const makeCoreLifecycle = (
     const admitBusinessRequest = Effect.fn("CoreLifecycle.admitBusinessRequest")(function* (
       request: HostRequestContext,
     ) {
-      if (!matchesIdentity(request)) {
-        return yield* CoreBusinessIdentityMismatchError.make({
+      yield* admitIdentity(request, () =>
+        CoreBusinessIdentityMismatchError.make({
           applicationInstanceId: identity.applicationInstanceId,
           processEpoch: identity.processEpoch,
           requestId: request.requestId,
-        })
-      }
+        }),
+      )
       const state = yield* Ref.get(stateRef)
       if (!State.$is("Ready")(state)) {
         return yield* CoreBusinessLifecycleRejectedError.make({
@@ -255,9 +211,28 @@ export const makeCoreLifecycle = (
 
     const authorizeDatabaseOwnership = Effect.fn("CoreLifecycle.authorizeDatabaseOwnership")(
       function* (request: AuthorizeDatabaseOwnershipRequest) {
-        if (!matchesIdentity(request)) {
-          return yield* Effect.fail(authorizationIdentityMismatch(request.requestId))
-        }
+        yield* admitIdentity(request, () =>
+          CoreAuthorizeDatabaseOwnershipIdentityMismatchFailure.make({
+            code: "CORE_REQUEST_IDENTITY_MISMATCH",
+            method: "Core.authorizeDatabaseOwnership",
+            applicationInstanceId: identity.applicationInstanceId,
+            processEpoch: identity.processEpoch,
+            requestId: request.requestId,
+            retryClass: "automatic",
+            safeMessage: "DiffDash Core rejected a request for a different process identity.",
+          }),
+        )
+        const authorizationRejected = (state: State) =>
+          CoreAuthorizeDatabaseOwnershipLifecycleRejectedFailure.make({
+            code: "CORE_LIFECYCLE_REJECTED",
+            method: "Core.authorizeDatabaseOwnership",
+            applicationInstanceId: identity.applicationInstanceId,
+            processEpoch: identity.processEpoch,
+            requestId: request.requestId,
+            lifecycle: lifecycleOf(state),
+            retryClass: "notRetryable",
+            safeMessage: "DiffDash Core rejected a request in its current lifecycle state.",
+          })
         const decision = yield* Ref.modify(
           stateRef,
           (
@@ -270,8 +245,8 @@ export const makeCoreLifecycle = (
             >,
             State,
           ] =>
-            Match.value(state).pipe(
-              Match.tag("AwaitingOwnership", () => {
+            Match.valueTags(state, {
+              AwaitingOwnership: () => {
                 const next = State.Recovering({
                   authorizationId: request.authorizationId,
                 })
@@ -286,8 +261,8 @@ export const makeCoreLifecycle = (
                   ),
                   next,
                 ] as const
-              }),
-              Match.tag("Recovering", (current) =>
+              },
+              Recovering: (current) =>
                 current.authorizationId === request.authorizationId
                   ? ([
                       Result.succeed(
@@ -304,8 +279,7 @@ export const makeCoreLifecycle = (
                       Result.fail(ownershipMismatch(request.requestId, current)),
                       current,
                     ] as const),
-              ),
-              Match.tag("Ready", (current) =>
+              Ready: (current) =>
                 current.authorizationId === request.authorizationId
                   ? ([
                       Result.succeed(
@@ -322,24 +296,30 @@ export const makeCoreLifecycle = (
                       Result.fail(ownershipMismatch(request.requestId, current)),
                       current,
                     ] as const),
-              ),
-              Match.orElse(
-                (current) =>
-                  [
-                    Result.fail(authorizationLifecycleRejected(request.requestId, current)),
-                    current,
-                  ] as const,
-              ),
-            ),
+              Starting: (current) =>
+                [Result.fail(authorizationRejected(current)), current] as const,
+              Draining: (current) =>
+                [Result.fail(authorizationRejected(current)), current] as const,
+              Stopped: (current) => [Result.fail(authorizationRejected(current)), current] as const,
+              Failed: (current) => [Result.fail(authorizationRejected(current)), current] as const,
+            }),
         )
         return yield* Effect.fromResult(decision)
       },
     )
 
     const shutdown = Effect.fn("CoreLifecycle.shutdown")(function* (request: HostRequestContext) {
-      if (!matchesIdentity(request)) {
-        return yield* Effect.fail(shutdownIdentityMismatch(request.requestId))
-      }
+      yield* admitIdentity(request, () =>
+        CoreShutdownIdentityMismatchFailure.make({
+          code: "CORE_REQUEST_IDENTITY_MISMATCH",
+          method: "Core.shutdown",
+          applicationInstanceId: identity.applicationInstanceId,
+          processEpoch: identity.processEpoch,
+          requestId: request.requestId,
+          retryClass: "automatic",
+          safeMessage: "DiffDash Core rejected a request for a different process identity.",
+        }),
+      )
       const decision = yield* Ref.modify(
         stateRef,
         (
@@ -348,49 +328,60 @@ export const makeCoreLifecycle = (
           Result.Result<CoreShutdownAcknowledged, CoreShutdownLifecycleRejectedFailure>,
           State,
         ] =>
-          Match.value(state).pipe(
-            Match.tag(
-              "Starting",
-              (current) =>
-                [
-                  Result.fail(shutdownLifecycleRejected(request.requestId, current)),
-                  current,
-                ] as const,
-            ),
-            Match.tag(
-              "Stopped",
-              (current) =>
-                [
-                  Result.succeed(
-                    CoreShutdownAcknowledged.make({
-                      applicationInstanceId: identity.applicationInstanceId,
-                      processEpoch: identity.processEpoch,
-                      lifecycle: "stopped",
-                    }),
-                  ),
-                  current,
-                ] as const,
-            ),
-            Match.orElse(() => {
-              const next = State.Draining()
-              return [
+          Match.valueTags(state, {
+            Starting: (current) =>
+              [
+                Result.fail(
+                  CoreShutdownLifecycleRejectedFailure.make({
+                    code: "CORE_LIFECYCLE_REJECTED",
+                    method: "Core.shutdown",
+                    applicationInstanceId: identity.applicationInstanceId,
+                    processEpoch: identity.processEpoch,
+                    requestId: request.requestId,
+                    lifecycle: lifecycleOf(current),
+                    retryClass: "notRetryable",
+                    safeMessage: "DiffDash Core rejected a request in its current lifecycle state.",
+                  }),
+                ),
+                current,
+              ] as const,
+            Stopped: (current) =>
+              [
                 Result.succeed(
                   CoreShutdownAcknowledged.make({
                     applicationInstanceId: identity.applicationInstanceId,
                     processEpoch: identity.processEpoch,
-                    lifecycle: "draining",
+                    lifecycle: "stopped",
                   }),
                 ),
-                next,
-              ] as const
-            }),
-          ),
+                current,
+              ] as const,
+            AwaitingOwnership: () => beginDraining(),
+            Recovering: () => beginDraining(),
+            Ready: () => beginDraining(),
+            Draining: () => beginDraining(),
+            Failed: () => beginDraining(),
+          }),
       )
       const acknowledged = yield* Effect.fromResult(decision)
       if (acknowledged.lifecycle === "draining") {
         yield* Deferred.succeed(drainRequested, undefined)
       }
       return acknowledged
+
+      function beginDraining() {
+        const next = State.Draining()
+        return [
+          Result.succeed(
+            CoreShutdownAcknowledged.make({
+              applicationInstanceId: identity.applicationInstanceId,
+              processEpoch: identity.processEpoch,
+              lifecycle: "draining",
+            }),
+          ),
+          next,
+        ] as const
+      }
     }, Effect.uninterruptible)
 
     const interruptOnDrain = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
@@ -401,55 +392,70 @@ export const makeCoreLifecycle = (
 
     const transition = (
       to: CoreLifecycleState,
-      update: (state: State) => State | undefined,
+      update: (state: State) => Option.Option<State>,
     ): Effect.Effect<void, CoreLifecycleTransitionError> =>
       Ref.modify(
         stateRef,
         (state): readonly [Result.Result<void, CoreLifecycleTransitionError>, State] => {
           const next = update(state)
-          return next === undefined
-            ? [Result.fail(transitionError(state, to)), state]
-            : [Result.succeed(undefined), next]
+          return Option.match(next, {
+            onNone: () => [Result.fail(transitionError(state, to)), state] as const,
+            onSome: (value) => [Result.succeed(undefined), value] as const,
+          })
         },
       ).pipe(Effect.flatMap(Effect.fromResult))
 
     const awaitOwnershipAuthorization = transition("awaitingOwnership", (state) =>
-      Match.value(state).pipe(
-        Match.tag("Starting", () => State.AwaitingOwnership()),
-        Match.tag("AwaitingOwnership", (current) => current),
-        Match.orElse(() => undefined),
-      ),
+      Match.valueTags(state, {
+        Starting: () => Option.some(State.AwaitingOwnership()),
+        AwaitingOwnership: (current) => Option.some<State>(current),
+        Recovering: () => Option.none<State>(),
+        Ready: () => Option.none<State>(),
+        Draining: () => Option.none<State>(),
+        Stopped: () => Option.none<State>(),
+        Failed: () => Option.none<State>(),
+      }),
     )
 
     const completeRecovery = transition("ready", (state) =>
-      Match.value(state).pipe(
-        Match.tag("Recovering", (current) =>
-          State.Ready({
-            authorizationId: current.authorizationId,
-          }),
-        ),
-        Match.tag("Ready", (current) => current),
-        Match.orElse(() => undefined),
-      ),
+      Match.valueTags(state, {
+        Recovering: (current) =>
+          Option.some(
+            State.Ready({
+              authorizationId: current.authorizationId,
+            }),
+          ),
+        Ready: (current) => Option.some<State>(current),
+        Starting: () => Option.none<State>(),
+        AwaitingOwnership: () => Option.none<State>(),
+        Draining: () => Option.none<State>(),
+        Stopped: () => Option.none<State>(),
+        Failed: () => Option.none<State>(),
+      }),
     )
 
     const completeShutdown = transition("stopped", (state) =>
-      Match.value(state).pipe(
-        Match.tag("Draining", () => State.Stopped()),
-        Match.tag("Stopped", (current) => current),
-        Match.orElse(() => undefined),
-      ),
+      Match.valueTags(state, {
+        Draining: () => Option.some(State.Stopped()),
+        Stopped: (current) => Option.some<State>(current),
+        Starting: () => Option.none<State>(),
+        AwaitingOwnership: () => Option.none<State>(),
+        Recovering: () => Option.none<State>(),
+        Ready: () => Option.none<State>(),
+        Failed: () => Option.none<State>(),
+      }),
     )
 
     const markFailed = transition("failed", (state) =>
-      Match.value(state).pipe(
-        Match.tag("Starting", () => State.Failed()),
-        Match.tag("AwaitingOwnership", () => State.Failed()),
-        Match.tag("Recovering", () => State.Failed()),
-        Match.tag("Ready", () => State.Failed()),
-        Match.tag("Failed", (current) => current),
-        Match.orElse(() => undefined),
-      ),
+      Match.valueTags(state, {
+        Starting: () => Option.some(State.Failed()),
+        AwaitingOwnership: () => Option.some(State.Failed()),
+        Recovering: () => Option.some(State.Failed()),
+        Ready: () => Option.some(State.Failed()),
+        Failed: (current) => Option.some<State>(current),
+        Draining: () => Option.none<State>(),
+        Stopped: () => Option.none<State>(),
+      }),
     )
 
     return CoreLifecycle.of({

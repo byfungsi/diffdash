@@ -235,12 +235,7 @@ const walkthroughWorkingDirectory = (
   explicitWorkingDirectory: Option.Option<string>,
 ): string =>
   Option.getOrElse(explicitWorkingDirectory, () =>
-    Match.value(review).pipe(
-      Match.when({ kind: "localDiff" }, ({ localReview }) => localReview.rootPath),
-      Match.when({ kind: "hosted" }, () => remoteWorkingDirectory),
-      Match.when({ kind: "repositoryComparison" }, () => remoteWorkingDirectory),
-      Match.exhaustive,
-    ),
+    review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory,
   )
 
 type Registry = Context.Service.Shape<typeof AgentProviderRegistry>
@@ -489,23 +484,18 @@ const buildWalkthroughPromptContext = ({
     generation,
     prompt: promptStats,
   })
-  const promptMode = Match.value(generation.mode).pipe(
-    Match.when("standard", () => ({
-      sampledTreeGuidance: "",
-      changedFileTreeSection: "",
-    })),
-    Match.when("sampled-tree", () => ({
-      sampledTreeGuidance: `
+  let sampledTreeGuidance = ""
+  let changedFileTreeSection = ""
+  if (generation.mode === "sampled-tree") {
+    sampledTreeGuidance = `
 - This is a sampled-tree walkthrough for an unusually large review.
 - Use the changed file tree to infer each folder's use case, then use representative excerpts to ground the review order.
-- Combine folders that implement the same use case. Do not imply that representative files exhaustively cover the review.`,
-      changedFileTreeSection: `
+- Combine folders that implement the same use case. Do not imply that representative files exhaustively cover the review.`
+    changedFileTreeSection = `
 
 Changed file tree. Folder totals cover the large review; excerpts below are representative samples:
-${changedFileTree}`,
-    })),
-    Match.exhaustive,
-  )
+${changedFileTree}`
+  }
 
   return {
     aliasToHunkId,
@@ -534,11 +524,11 @@ Rules:
 - Do not return support, path, additions, deletions, status, or patch data. DiffDash computes those locally.
 - Do not suggest PR comments.
 - Do not judge likely bugs; only orient the reviewer.
-${promptMode.sampledTreeGuidance}
+  ${sampledTreeGuidance}
 
 Data compact JSON. h=alias, p=path, r=hunk header, a=additions, d=deletions, s=synthetic file unit:
 ${JSON.stringify(payload)}
-${promptMode.changedFileTreeSection}
+  ${changedFileTreeSection}
 
 Bounded diff excerpts. These may omit noisy files and truncate oversized hunks; data.hunks is the source of truth for aliases:
 ${diff}
@@ -699,39 +689,38 @@ const WalkthroughPromptPayload = Schema.Struct({
 const walkthroughReviewPayload = (
   review: WalkthroughReviewContext,
   hunkDigest: readonly WalkthroughHunkDigest[],
-): typeof WalkthroughPromptReview.Type =>
-  Match.value(review).pipe(
-    Match.when({ kind: "localDiff" }, ({ localReview }) =>
-      LocalWalkthroughPromptReview.make({
+): typeof WalkthroughPromptReview.Type => {
+  switch (review.kind) {
+    case "localDiff":
+      return LocalWalkthroughPromptReview.make({
         type: "local-diff",
-        title: localReview.title,
-        repo: localReview.repoName,
-        root: localReview.rootPath,
-        branch: localReview.branchName,
-        base: localReview.baseSha,
-        head: localReview.headSha,
-        files: walkthroughPromptReviewFiles(localReview.files, hunkDigest),
-      }),
-    ),
-    Match.when({ kind: "repositoryComparison" }, ({ comparison }) => {
-      const target = comparison.target
+        title: review.localReview.title,
+        repo: review.localReview.repoName,
+        root: review.localReview.rootPath,
+        branch: review.localReview.branchName,
+        base: review.localReview.baseSha,
+        head: review.localReview.headSha,
+        files: walkthroughPromptReviewFiles(review.localReview.files, hunkDigest),
+      })
+    case "repositoryComparison": {
+      const target = review.comparison.target
       return RepositoryComparisonWalkthroughPromptReview.make({
         type: "repository-comparison",
         context: "diff-only",
         provider: target.repository.providerId,
         namespace: target.repository.namespace,
         repository: target.repository.name,
-        title: comparison.title,
+        title: review.comparison.title,
         base: target.baseRef,
         baseSha: target.baseSha,
         mergeBaseSha: target.mergeBaseSha,
         head: target.headRef,
         headSha: target.headSha,
-        files: walkthroughPromptReviewFiles(comparison.files, hunkDigest),
+        files: walkthroughPromptReviewFiles(review.comparison.files, hunkDigest),
       })
-    }),
-    Match.when({ kind: "hosted" }, ({ hostedReview }) => {
-      const summary = hostedReview.summary
+    }
+    case "hosted": {
+      const summary = review.hostedReview.summary
       return HostedWalkthroughPromptReview.make({
         type: "hosted-review",
         context: "diff-only",
@@ -746,12 +735,12 @@ const walkthroughReviewPayload = (
         baseSha: summary.base.revision,
         head: summary.head.name,
         headSha: summary.head.revision,
-        commits: hostedReview.commits,
-        files: walkthroughPromptReviewFiles(hostedReview.files, hunkDigest),
+        commits: review.hostedReview.commits,
+        files: walkthroughPromptReviewFiles(review.hostedReview.files, hunkDigest),
       })
-    }),
-    Match.exhaustive,
-  )
+    }
+  }
+}
 
 const walkthroughPromptReviewFiles = (
   files: readonly ChangedFile[],

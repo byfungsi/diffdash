@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import { Option } from "effect"
 import type * as Rpc from "effect/unstable/rpc/Rpc"
 
 import {
@@ -12,7 +13,7 @@ import {
 import { CoreBusinessRpcs } from "./business"
 import { CoreControlRpcs } from "./control"
 import { CoreHostCapabilityRpcs } from "./host-capability"
-import { getCoreRpcMethodPolicy } from "./method-policy"
+import { type CoreRpcMethodPolicy, getCoreRpcMethodPolicy } from "./method-policy"
 import {
   AuthenticatedCoreBusinessRpcs,
   AuthenticatedCoreServerRpcs,
@@ -25,12 +26,8 @@ describe("Core RPC method policy", () => {
     declarations.push(...CoreControlRpcs.requests.entries())
     declarations.push(...CoreBusinessRpcs.requests.entries())
     declarations.push(...CoreHostCapabilityRpcs.requests.entries())
-    const retryablePolicies: Array<
-      readonly [string, NonNullable<ReturnType<typeof getCoreRpcMethodPolicy>>]
-    > = []
-    const keyedRetryPolicies: Array<
-      readonly [string, NonNullable<ReturnType<typeof getCoreRpcMethodPolicy>>]
-    > = []
+    const retryablePolicies: Array<readonly [string, CoreRpcMethodPolicy]> = []
+    const keyedRetryPolicies: Array<readonly [string, CoreRpcMethodPolicy]> = []
 
     expect(CoreControlRpcs.requests.has("Core.health")).toBe(true)
     expect(CoreControlRpcs.requests.has("Core.authorizeDatabaseOwnership")).toBe(true)
@@ -54,20 +51,21 @@ describe("Core RPC method policy", () => {
     expect(new Set(declarations.map(([tag]) => tag)).size).toBe(declarations.length)
     for (const [tag, declaration] of declarations) {
       const policy = getCoreRpcMethodPolicy(declaration)
-      expect(policy, `${tag} must declare a complete method policy`).toBeDefined()
-      if (policy === undefined) continue
-      expect(policy.deadlineMs).toBeGreaterThan(0)
-      expect(policy.maxRequestBytes).toBeGreaterThan(0)
-      expect(policy.maxResponseBytes).toBeGreaterThan(0)
-      expect(policy.maxRequestBytes, `${tag} request must fit one native RPC frame`).toBeLessThan(
+      expect(Option.isSome(policy), `${tag} must declare a complete method policy`).toBe(true)
+      if (Option.isNone(policy)) continue
+      const { value } = policy
+      expect(value.deadlineMs).toBeGreaterThan(0)
+      expect(value.maxRequestBytes).toBeGreaterThan(0)
+      expect(value.maxResponseBytes).toBeGreaterThan(0)
+      expect(value.maxRequestBytes, `${tag} request must fit one native RPC frame`).toBeLessThan(
         CORE_RPC_INCOMPLETE_BUFFER_BYTES,
       )
-      expect(policy.maxResponseBytes, `${tag} response must fit one native RPC frame`).toBeLessThan(
+      expect(value.maxResponseBytes, `${tag} response must fit one native RPC frame`).toBeLessThan(
         CORE_RPC_INCOMPLETE_BUFFER_BYTES,
       )
-      if (policy.restartBehavior === "retryInNewEpoch") retryablePolicies.push([tag, policy])
-      if (policy.restartBehavior === "retryByIdempotencyKey") {
-        keyedRetryPolicies.push([tag, policy])
+      if (value.restartBehavior === "retryInNewEpoch") retryablePolicies.push([tag, value])
+      if (value.restartBehavior === "retryByIdempotencyKey") {
+        keyedRetryPolicies.push([tag, value])
       }
     }
 

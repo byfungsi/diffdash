@@ -5,7 +5,7 @@ import { Effect } from "effect"
 
 import { CoreMethod } from "../core-contract"
 import { GitProvider } from "../services/git-provider"
-import { RepositoryLinker } from "../services/repository-linker"
+import { RepositoryLinker, RepositorySelectionIntent } from "../services/repository-linker"
 import type { OperationHandlersFor } from "./operation-handlers"
 
 type RepositoryMethod =
@@ -38,7 +38,7 @@ export const makeRepositoryOperationHandlers: Effect.Effect<
 
   return {
     [CoreMethod.favoriteRemoteRepository]: ({ repository }) =>
-      repositories.ensureHosted(repository.locator, true),
+      repositories.ensureHosted(repository.locator, "mark"),
     [CoreMethod.forgetRepository]: ({ projectId }) => repositories.forget(projectId),
     [CoreMethod.installRepository]: ({ localPath }) => repositories.install(localPath),
     [CoreMethod.linkRepository]: (request) => repositories.link(request),
@@ -47,7 +47,12 @@ export const makeRepositoryOperationHandlers: Effect.Effect<
     [CoreMethod.listProviders]: () => gitProvider.listProviders,
     [CoreMethod.listRepositories]: ({ query }) => repositories.list(query ?? undefined),
     [CoreMethod.openProject]: ({ localPath, selectedRepository }) =>
-      repositories.openProject(localPath, selectedRepository ?? undefined),
+      repositories.openProject(
+        localPath,
+        selectedRepository === null
+          ? RepositorySelectionIntent.Automatic()
+          : RepositorySelectionIntent.Selected({ repository: selectedRepository }),
+      ),
     [CoreMethod.projectWorkspaceGet]: ({ projectId }) => projectWorkspace.get(projectId),
     [CoreMethod.projectWorkspaceSave]: ({ input }) => projectWorkspace.save(input),
     [CoreMethod.repairRepositoryIdentities]: () => repositories.repairIdentities(),

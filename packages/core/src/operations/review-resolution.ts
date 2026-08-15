@@ -7,7 +7,7 @@ import type {
 } from "@diffdash/domain/review-context"
 import type { HostedReviewNumber } from "@diffdash/domain/git-provider"
 import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import { Effect, Match } from "effect"
+import { Effect } from "effect"
 
 import type { CoreThreadResolutionFailure } from "../core-contract"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
@@ -50,7 +50,7 @@ export const makeReviewResolution: Effect.Effect<
   const resolveHosted: ReviewResolution["resolveHosted"] = Effect.fn("Core.Reviews.resolveHosted")(
     function* (target) {
       const snapshot = yield* snapshots.acquireHosted(target.review)
-      const repo = yield* repositories.ensureHosted(target.review.repository)
+      const repo = yield* repositories.ensureHosted(target.review.repository, "preserve")
       return { repo, snapshot, prNumber: target.review.number }
     },
   )
@@ -70,13 +70,17 @@ export const makeReviewResolution: Effect.Effect<
       return { repo, snapshot, prNumber: null }
     },
   )
-  const resolve: ReviewResolution["resolve"] = Effect.fn("Core.Reviews.resolve")((target) =>
-    Match.value(target).pipe(
-      Match.when({ kind: "hosted" }, resolveHosted),
-      Match.when({ kind: "repositoryComparison" }, resolveRepositoryComparison),
-      Match.when({ kind: "local" }, resolveLocal),
-      Match.exhaustive,
-    ),
+  const resolve: ReviewResolution["resolve"] = Effect.fn("Core.Reviews.resolve")(
+    function* (target) {
+      switch (target.kind) {
+        case "hosted":
+          return yield* resolveHosted(target)
+        case "repositoryComparison":
+          return yield* resolveRepositoryComparison(target)
+        case "local":
+          return yield* resolveLocal(target)
+      }
+    },
   )
 
   return { resolve, resolveHosted, resolveRepositoryComparison, resolveLocal }

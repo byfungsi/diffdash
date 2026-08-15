@@ -6,7 +6,7 @@ import {
 } from "@diffdash/core-rpc/failure"
 import { HostRequestContext } from "@diffdash/core-rpc/identity"
 import { getCoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
-import { Effect, Layer, Match, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 
 import { CoreLifecycle } from "./core-lifecycle"
 
@@ -22,39 +22,39 @@ export const coreRpcAdmissionLayer = Layer.effect(
           Effect.orDie,
         )
         return yield* Effect.gen(function* () {
-          if (getCoreRpcMethodPolicy(options.rpc) === undefined) {
-            yield* Effect.die(`Core RPC ${options.rpc._tag} is missing its method policy.`)
-          }
+          yield* Option.match(getCoreRpcMethodPolicy(options.rpc), {
+            onNone: () => Effect.die("Core RPC AppState.get is missing its method policy."),
+            onSome: () => Effect.void,
+          })
           yield* lifecycle.admitBusinessRequest(request).pipe(
-            Effect.mapError((error) =>
-              Match.value(error).pipe(
-                Match.tag("CoreBusinessIdentityMismatchError", (identityError) =>
+            Effect.catchTags({
+              CoreBusinessIdentityMismatchError: (error) =>
+                Effect.fail(
                   AppStateGetIdentityMismatchFailure.make({
                     code: "CORE_REQUEST_IDENTITY_MISMATCH",
                     method: "AppState.get",
-                    applicationInstanceId: identityError.applicationInstanceId,
-                    processEpoch: identityError.processEpoch,
-                    requestId: identityError.requestId,
+                    applicationInstanceId: error.applicationInstanceId,
+                    processEpoch: error.processEpoch,
+                    requestId: error.requestId,
                     retryClass: "automatic",
                     safeMessage:
                       "DiffDash Core rejected a request for a different process identity.",
                   }),
                 ),
-                Match.tag("CoreBusinessLifecycleRejectedError", (lifecycleError) =>
+              CoreBusinessLifecycleRejectedError: (error) =>
+                Effect.fail(
                   AppStateGetLifecycleRejectedFailure.make({
                     code: "CORE_LIFECYCLE_REJECTED",
                     method: "AppState.get",
                     applicationInstanceId: request.applicationInstanceId,
                     processEpoch: request.processEpoch,
-                    requestId: lifecycleError.requestId,
-                    lifecycle: lifecycleError.lifecycle,
+                    requestId: error.requestId,
+                    lifecycle: error.lifecycle,
                     retryClass: "automatic",
                     safeMessage: "DiffDash Core is not ready to serve application requests.",
                   }),
                 ),
-                Match.exhaustive,
-              ),
-            ),
+            }),
           )
           return yield* lifecycle.interruptOnDrain(effect)
         }).pipe(

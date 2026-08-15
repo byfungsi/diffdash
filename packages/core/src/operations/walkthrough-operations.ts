@@ -186,39 +186,36 @@ export const makeWalkthroughOperations = (
     const resolveWalkthrough = Effect.fn("Core.Walkthroughs.resolve")(function (
       request: StartWalkthroughOperation,
     ): Effect.Effect<ResolvedWalkthrough, CoreWalkthroughStartFailure> {
-      return Match.value(request.target).pipe(
-        Match.when({ kind: "hosted" }, (target) =>
-          reviews.resolveHosted(target).pipe(
+      const target = request.target
+      switch (target.kind) {
+        case "hosted":
+          return reviews.resolveHosted(target).pipe(
             Effect.map((resolved) => ({
               kind: "hosted" as const,
               target,
               regenerate: request.regenerate,
               ...resolved,
             })),
-          ),
-        ),
-        Match.when({ kind: "repositoryComparison" }, (target) =>
-          reviews.resolveRepositoryComparison(target).pipe(
+          )
+        case "repositoryComparison":
+          return reviews.resolveRepositoryComparison(target).pipe(
             Effect.map((resolved) => ({
               kind: "repositoryComparison" as const,
               target,
               regenerate: request.regenerate,
               ...resolved,
             })),
-          ),
-        ),
-        Match.when({ kind: "local" }, (target) =>
-          reviews.resolveLocal(target).pipe(
+          )
+        case "local":
+          return reviews.resolveLocal(target).pipe(
             Effect.map((resolved) => ({
               kind: "local" as const,
               target,
               regenerate: request.regenerate,
               ...resolved,
             })),
-          ),
-        ),
-        Match.exhaustive,
-      )
+          )
+      }
     })
 
     const loadOrGenerate = Effect.fn("Core.Walkthroughs.loadOrGenerate")(function* (
@@ -237,21 +234,21 @@ export const makeWalkthroughOperations = (
     const generateResolved = Effect.fn("Core.Walkthroughs.generateResolved")(function (
       resolved: ResolvedWalkthrough,
     ): Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure> {
-      return Match.value(resolved).pipe(
-        Match.when({ kind: "hosted" }, (current) =>
-          loadOrGenerate(
-            current,
+      switch (resolved.kind) {
+        case "hosted":
+          return loadOrGenerate(
+            resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(current.repo.id, current.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
-                current.snapshot.parsedDiff.files,
-                walkthroughHostedReviewScope(current.target.review),
+                resolved.snapshot.parsedDiff.files,
+                walkthroughHostedReviewScope(resolved.target.review),
               )
               const walkthrough = yield* walkthroughService.generate(
                 WalkthroughGenerationInput.make({
                   review: WalkthroughReviewContext.make({
                     kind: "hosted",
-                    hostedReview: current.snapshot.detail,
+                    hostedReview: resolved.snapshot.detail,
                   }),
                   diff: promptInput.diff,
                   hunkDigest: promptInput.hunkDigest,
@@ -263,29 +260,28 @@ export const makeWalkthroughOperations = (
               )
               return yield* walkthroughStore.save({
                 ...cacheKey,
-                prNumber: current.prNumber,
+                prNumber: resolved.prNumber,
                 walkthrough,
               })
             }),
-          ),
-        ),
-        Match.when({ kind: "repositoryComparison" }, (current) =>
-          loadOrGenerate(
-            current,
+          )
+        case "repositoryComparison":
+          return loadOrGenerate(
+            resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(current.repo.id, current.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
-                current.snapshot.parsedDiff.files,
-                walkthroughRepositoryComparisonScope(current.snapshot.reviewKey),
+                resolved.snapshot.parsedDiff.files,
+                walkthroughRepositoryComparisonScope(resolved.snapshot.reviewKey),
               )
               const walkthrough = yield* comparisons.useWorkspace(
-                current.target,
+                resolved.target,
                 (workingDirectory) =>
                   walkthroughService.generate(
                     WalkthroughGenerationInput.make({
                       review: WalkthroughReviewContext.make({
                         kind: "repositoryComparison",
-                        comparison: current.snapshot.detail,
+                        comparison: resolved.snapshot.detail,
                       }),
                       diff: promptInput.diff,
                       hunkDigest: promptInput.hunkDigest,
@@ -302,22 +298,21 @@ export const makeWalkthroughOperations = (
                 walkthrough,
               })
             }),
-          ),
-        ),
-        Match.when({ kind: "local" }, (current) =>
-          loadOrGenerate(
-            current,
+          )
+        case "local":
+          return loadOrGenerate(
+            resolved,
             Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(current.repo.id, current.snapshot)
+              const cacheKey = walkthroughCacheKey(resolved.repo.id, resolved.snapshot)
               const promptInput = yield* prepareWalkthroughPromptInput(
-                current.snapshot.parsedDiff.files,
-                walkthroughLocalDiffScope(current.snapshot.headRevision),
+                resolved.snapshot.parsedDiff.files,
+                walkthroughLocalDiffScope(resolved.snapshot.headRevision),
               )
               const walkthrough = yield* walkthroughService.generate(
                 WalkthroughGenerationInput.make({
                   review: WalkthroughReviewContext.make({
                     kind: "localDiff",
-                    localReview: current.snapshot.detail,
+                    localReview: resolved.snapshot.detail,
                   }),
                   diff: promptInput.diff,
                   hunkDigest: promptInput.hunkDigest,
@@ -333,10 +328,8 @@ export const makeWalkthroughOperations = (
                 walkthrough,
               })
             }),
-          ),
-        ),
-        Match.exhaustive,
-      )
+          )
+      }
     })
 
     const runOperation = Effect.fn("Core.Walkthroughs.runOperation")(

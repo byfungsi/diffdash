@@ -69,6 +69,11 @@ const verificationFailure = (reason: CoreArtifactVerificationError["reason"]) =>
 const MANIFEST_MAX_BYTES = 16 * 1_024
 const ENTRYPOINT_MAX_BYTES = 64 * 1_024 * 1_024
 const JsonManifest = Schema.fromJsonString(CoreArtifactManifest)
+const sameInode = (left: Option.Option<number>, right: Option.Option<number>): boolean =>
+  Option.match(left, {
+    onNone: () => Option.isNone(right),
+    onSome: (inode) => Option.contains(right, inode),
+  })
 
 /** Verifies a canonical outside-ASAR Core manifest and entrypoint before any launch. */
 export const verifyCoreArtifact = (
@@ -81,80 +86,89 @@ export const verifyCoreArtifact = (
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const requestedDirectory = path.resolve(options.artifactDirectory)
-    if (requestedDirectory.split(path.sep).includes("app.asar")) {
-      return yield* verificationFailure("artifact-directory-invalid")
-    }
+    const requestedDirectory = yield* Effect.succeed(path.resolve(options.artifactDirectory)).pipe(
+      Effect.filterOrFail(
+        (directory) => !directory.split(path.sep).includes("app.asar"),
+        () => verificationFailure("artifact-directory-invalid"),
+      ),
+    )
 
-    const artifactDirectory = yield* fileSystem
-      .realPath(requestedDirectory)
-      .pipe(Effect.mapError(() => verificationFailure("artifact-directory-invalid")))
-    if (artifactDirectory.split(path.sep).includes("app.asar")) {
-      return yield* verificationFailure("artifact-directory-invalid")
-    }
-    const directoryInfo = yield* fileSystem
-      .stat(artifactDirectory)
-      .pipe(Effect.mapError(() => verificationFailure("artifact-directory-invalid")))
-    if (directoryInfo.type !== "Directory") {
-      return yield* verificationFailure("artifact-directory-invalid")
-    }
+    const artifactDirectory = yield* fileSystem.realPath(requestedDirectory).pipe(
+      Effect.mapError(() => verificationFailure("artifact-directory-invalid")),
+      Effect.filterOrFail(
+        (directory) => !directory.split(path.sep).includes("app.asar"),
+        () => verificationFailure("artifact-directory-invalid"),
+      ),
+    )
+    yield* fileSystem.stat(artifactDirectory).pipe(
+      Effect.mapError(() => verificationFailure("artifact-directory-invalid")),
+      Effect.filterOrFail(
+        (info) => info.type === "Directory",
+        () => verificationFailure("artifact-directory-invalid"),
+      ),
+    )
 
     const manifestPath = path.join(artifactDirectory, "manifest.json")
     const canonicalManifest = yield* fileSystem
       .realPath(manifestPath)
       .pipe(Effect.mapError(() => verificationFailure("manifest-invalid")))
-    const manifestInfo = yield* fileSystem
-      .stat(manifestPath)
-      .pipe(Effect.mapError(() => verificationFailure("manifest-invalid")))
-    if (
-      canonicalManifest !== manifestPath ||
-      manifestInfo.type !== "File" ||
-      manifestInfo.size > BigInt(MANIFEST_MAX_BYTES)
-    ) {
-      return yield* verificationFailure("manifest-invalid")
-    }
+    yield* fileSystem.stat(manifestPath).pipe(
+      Effect.mapError(() => verificationFailure("manifest-invalid")),
+      Effect.filterOrFail(
+        (info) =>
+          canonicalManifest === manifestPath &&
+          info.type === "File" &&
+          info.size <= BigInt(MANIFEST_MAX_BYTES),
+        () => verificationFailure("manifest-invalid"),
+      ),
+    )
     const manifestText = yield* fileSystem
       .readFileString(manifestPath)
       .pipe(Effect.mapError(() => verificationFailure("manifest-invalid")))
     const manifest = yield* Schema.decodeUnknownEffect(JsonManifest)(manifestText).pipe(
       Effect.mapError(() => verificationFailure("manifest-invalid")),
     )
-    if (manifest.buildId !== options.expectedBuildId) {
-      return yield* verificationFailure("build-identity-mismatch")
-    }
+    yield* Effect.succeed(manifest.buildId).pipe(
+      Effect.filterOrFail(
+        (buildId) => buildId === options.expectedBuildId,
+        () => verificationFailure("build-identity-mismatch"),
+      ),
+    )
 
     const entrypointPath = path.join(artifactDirectory, manifest.entrypoint)
     const canonicalEntrypoint = yield* fileSystem
       .realPath(entrypointPath)
       .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
-    const before = yield* fileSystem
-      .stat(entrypointPath)
-      .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
-    if (
-      canonicalEntrypoint !== entrypointPath ||
-      before.type !== "File" ||
-      before.size > BigInt(ENTRYPOINT_MAX_BYTES)
-    ) {
-      return yield* verificationFailure("entrypoint-invalid")
-    }
+    const before = yield* fileSystem.stat(entrypointPath).pipe(
+      Effect.mapError(() => verificationFailure("entrypoint-invalid")),
+      Effect.filterOrFail(
+        (info) =>
+          canonicalEntrypoint === entrypointPath &&
+          info.type === "File" &&
+          info.size <= BigInt(ENTRYPOINT_MAX_BYTES),
+        () => verificationFailure("entrypoint-invalid"),
+      ),
+    )
     const entrypoint = yield* fileSystem
       .readFile(entrypointPath)
       .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
-    const checksum = createHash("sha256").update(entrypoint).digest("hex")
-    if (checksum !== manifest.entrypointSha256) {
-      return yield* verificationFailure("entrypoint-checksum-mismatch")
-    }
-    const after = yield* fileSystem
-      .stat(entrypointPath)
-      .pipe(Effect.mapError(() => verificationFailure("entrypoint-invalid")))
-    if (
-      after.type !== "File" ||
-      after.dev !== before.dev ||
-      after.ino.pipe(Option.getOrUndefined) !== before.ino.pipe(Option.getOrUndefined) ||
-      after.size !== before.size
-    ) {
-      return yield* verificationFailure("entrypoint-invalid")
-    }
+    yield* Effect.succeed(createHash("sha256").update(entrypoint).digest("hex")).pipe(
+      Effect.filterOrFail(
+        (checksum) => checksum === manifest.entrypointSha256,
+        () => verificationFailure("entrypoint-checksum-mismatch"),
+      ),
+    )
+    const after = yield* fileSystem.stat(entrypointPath).pipe(
+      Effect.mapError(() => verificationFailure("entrypoint-invalid")),
+      Effect.filterOrFail(
+        (info) =>
+          info.type === "File" &&
+          info.dev === before.dev &&
+          sameInode(info.ino, before.ino) &&
+          info.size === before.size,
+        () => verificationFailure("entrypoint-invalid"),
+      ),
+    )
 
     return new VerifiedCoreArtifact({
       buildId: manifest.buildId,
@@ -180,29 +194,34 @@ export const revalidateCoreArtifact = (
 ): Effect.Effect<void, CoreArtifactVerificationError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
-    const info = yield* fileSystem.stat(artifact.entrypointPath)
-    if (
-      info.type !== "File" ||
-      info.dev !== artifact.device ||
-      info.ino.pipe(Option.getOrUndefined) !== artifact.inode.pipe(Option.getOrUndefined) ||
-      info.size !== artifact.size
-    ) {
-      return yield* verificationFailure("entrypoint-invalid")
-    }
+    const info = yield* fileSystem.stat(artifact.entrypointPath).pipe(
+      Effect.filterOrFail(
+        (value) =>
+          value.type === "File" &&
+          value.dev === artifact.device &&
+          sameInode(value.ino, artifact.inode) &&
+          value.size === artifact.size,
+        () => verificationFailure("entrypoint-invalid"),
+      ),
+    )
     const bytes = yield* fileSystem.readFile(artifact.entrypointPath)
-    if (createHash("sha256").update(bytes).digest("hex") !== artifact.entrypointSha256) {
-      return yield* verificationFailure("entrypoint-checksum-mismatch")
-    }
+    yield* Effect.succeed(createHash("sha256").update(bytes).digest("hex")).pipe(
+      Effect.filterOrFail(
+        (checksum) => checksum === artifact.entrypointSha256,
+        () => verificationFailure("entrypoint-checksum-mismatch"),
+      ),
+    )
     const after = yield* fileSystem.stat(artifact.entrypointPath)
-    if (
-      after.type !== "File" ||
-      after.dev !== info.dev ||
-      after.ino.pipe(Option.getOrUndefined) !== info.ino.pipe(Option.getOrUndefined) ||
-      after.size !== info.size
-    ) {
-      return yield* verificationFailure("entrypoint-invalid")
-    }
-    return undefined
+    yield* Effect.succeed(after).pipe(
+      Effect.filterOrFail(
+        (value) =>
+          value.type === "File" &&
+          value.dev === info.dev &&
+          sameInode(value.ino, info.ino) &&
+          value.size === info.size,
+        () => verificationFailure("entrypoint-invalid"),
+      ),
+    )
   }).pipe(
     Effect.catchTag("PlatformError", () => Effect.fail(verificationFailure("entrypoint-invalid"))),
   )

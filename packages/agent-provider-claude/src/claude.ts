@@ -2,7 +2,6 @@ import { Effect, Match, Option, Schema, Stream } from "effect"
 
 import {
   AgentArtifactCandidate,
-  type AgentArtifactMetadata,
   AgentCapabilityDeclaration,
   AgentCapabilityManifest,
   AgentExecutionPolicy,
@@ -30,9 +29,9 @@ import {
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
 import {
-  normalizeReviewThreadAgentResponse as normalizeResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
   ReviewThreadAgentResponse,
+  ReviewThreadAgentResponseFromProvider,
 } from "@diffdash/domain/review-agent"
 import {
   parseProviderJsonText as parseResult,
@@ -368,14 +367,13 @@ const executeReview = (
             )
             .pipe(
               Stream.mapError(operationErrors.fromCause("review-thread")),
-              Stream.runForEach((event) => {
-                return Match.value(event).pipe(
-                  Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) =>
-                    consumeClaudeLine(state, line.line),
-                  ),
-                  Match.orElse(() => Effect.void),
-                )
-              }),
+              Stream.runForEach((event) =>
+                Match.valueTags(event, {
+                  ProcessLine: (line) =>
+                    line.source === "stdout" ? consumeClaudeLine(state, line.line) : Effect.void,
+                  ProcessExit: () => Effect.void,
+                }),
+              ),
             )
           if (!state.sawResult) {
             return yield* operationErrors.fromReason(
@@ -514,18 +512,14 @@ const consumeAssistant = (
       const textBlock = Option.getOrNull(Schema.decodeUnknownOption(ClaudeTextBlock)(block))
       if (textBlock !== null) {
         if (textBlock.text !== undefined && textBlock.text.length > 0) {
-          const messageIdMetadata: AgentArtifactMetadata =
-            message.id === undefined ? {} : { messageId: message.id }
-          const modelMetadata: AgentArtifactMetadata =
-            message.model === undefined ? {} : { model: message.model }
+          const metadata: { messageId?: string; model?: string } = {}
+          if (message.id !== undefined) metadata.messageId = message.id
+          if (message.model !== undefined) metadata.model = message.model
           state.artifacts.push({
             type: "provider-message",
             title: "Claude assistant message",
             content: textBlock.text,
-            metadata: {
-              ...messageIdMetadata,
-              ...modelMetadata,
-            },
+            metadata,
           })
         }
         continue
@@ -557,18 +551,14 @@ const consumeToolResults = (state: ClaudeTurnState, event: ClaudeStreamEvent) =>
     const toolUse =
       toolResult.tool_use_id === undefined ? undefined : state.toolUses.get(toolResult.tool_use_id)
     const name = toolUse?.name ?? toolResult.name ?? "unknown"
-    const toolUseMetadata: AgentArtifactMetadata = toolUseId === null ? {} : { toolUseId }
-    const errorMetadata: AgentArtifactMetadata =
-      toolResult.is_error === undefined ? {} : { isError: String(toolResult.is_error) }
+    const metadata: { toolUseId?: string; tool: string; isError?: string } = { tool: name }
+    if (toolUseId !== null) metadata.toolUseId = toolUseId
+    if (toolResult.is_error !== undefined) metadata.isError = String(toolResult.is_error)
     state.artifacts.push({
       type: artifactTypeForClaudeTool(name),
       title: `Claude tool: ${toolTitle(name, toolUse?.input)}`,
       content: claudeToolContent(toolResult.content),
-      metadata: {
-        ...toolUseMetadata,
-        tool: name,
-        ...errorMetadata,
-      },
+      metadata,
     })
   }
 }
@@ -635,7 +625,7 @@ const makeMcpConfig = (request: ReviewThreadRequest) => ({
 const decodeReviewResponse = (
   value: Schema.Json,
 ): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> =>
-  Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(normalizeResponse(value)).pipe(
+  Schema.decodeUnknownEffect(ReviewThreadAgentResponseFromProvider)(value).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,

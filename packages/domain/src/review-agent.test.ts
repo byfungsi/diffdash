@@ -2,9 +2,9 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Result, Schema } from "effect"
 
 import {
-  normalizeReviewThreadAgentResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   ReviewThreadAgentResponse,
+  ReviewThreadAgentResponseFromProvider,
 } from "./review-agent"
 import { ReviewLevelAnchor } from "./review-thread"
 
@@ -32,7 +32,7 @@ describe("review agent contract", () => {
     const anchor = ReviewLevelAnchor.make({})
 
     expect(
-      normalizeReviewThreadAgentResponse({
+      Schema.decodeUnknownSync(ReviewThreadAgentResponseFromProvider)({
         bodyMarkdown: "Finding",
         threadSummary: "current summary",
         threadSummaryUpdate: "legacy summary",
@@ -46,21 +46,44 @@ describe("review agent contract", () => {
     })
   })
 
-  it("leaves non-record responses unchanged", () => {
-    const value = ["unexpected"]
-    expect(normalizeReviewThreadAgentResponse(value)).toBe(value)
+  it("rejects non-record provider responses", () => {
+    const decoded = Schema.decodeUnknownResult(ReviewThreadAgentResponseFromProvider)([
+      "unexpected",
+    ])
+    expect(Result.isFailure(decoded)).toBe(true)
   })
 
-  it("discards malformed anchors without throwing on provider-owned values", () => {
-    const cyclic: { readonly _tag: string; self?: unknown } = { _tag: "file" }
-    cyclic.self = cyclic
-
+  it("discards malformed anchors without throwing on provider-owned JSON", () => {
     expect(
-      normalizeReviewThreadAgentResponse({
+      Schema.decodeUnknownSync(ReviewThreadAgentResponseFromProvider)({
         bodyMarkdown: "Finding",
-        referencedAnchors: [cyclic, { line: 12n }],
+        referencedAnchors: [{ _tag: "file" }, { line: 12 }],
       }),
     ).toEqual({ bodyMarkdown: "Finding", referencedAnchors: [] })
+  })
+
+  it("encodes optional domain fields as nullable provider fields", () => {
+    const encoded = Schema.encodeSync(ReviewThreadAgentResponseFromProvider)(
+      ReviewThreadAgentResponse.make({ bodyMarkdown: "Finding" }),
+    )
+
+    expect(encoded).toEqual({
+      bodyMarkdown: "Finding",
+      threadSummaryUpdate: null,
+      referencedAnchors: null,
+    })
+  })
+
+  it("decodes nullable provider fields without leaking null into the domain", () => {
+    const decoded = Schema.decodeUnknownSync(ReviewThreadAgentResponseFromProvider)({
+      bodyMarkdown: "Finding",
+      threadSummaryUpdate: null,
+      referencedAnchors: null,
+    })
+
+    expect(decoded.bodyMarkdown).toBe("Finding")
+    expect(decoded.threadSummaryUpdate).toBeUndefined()
+    expect(decoded.referencedAnchors).toEqual([])
   })
 
   it.effect("FUN-70 AC: accepts a valid Markdown response and optional memory update", () =>
