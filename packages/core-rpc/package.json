@@ -20,7 +20,7 @@
     "./walkthrough-rpc": "./src/walkthrough-rpc.ts"
   },
   "scripts": {
-    "benchmark:m21": "pnpm --filter @diffdash/core exec vitest run src/core-rpc-transport-policy.test.ts src/core-walkthrough-rpc-handlers.test.ts src/core-walkthrough-rpc-admission.test.ts && bun scripts/m21-transport-benchmark.ts",
+    "benchmark:m21": "pnpm --filter @diffdash/core exec vitest run src/core-rpc-transport-policy.test.ts src/core-walkthrough-rpc-handlers.test.ts src/core-walkthrough-rpc-admission.test.ts src/embedded-core.test.ts && bun scripts/m21-transport-benchmark.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && pnpm test:bun",

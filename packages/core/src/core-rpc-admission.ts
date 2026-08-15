@@ -146,7 +146,7 @@ const walkthroughStartAdmissionLayer = Layer.effect(
                 ),
             }),
           )
-          return yield* effect.pipe(
+          return yield* lifecycle.interruptOnDrain(effect).pipe(
             Effect.timeoutOrElse({
               duration: policy.deadlineMs,
               orElse: () =>

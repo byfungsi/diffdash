@@ -57,6 +57,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberSet,
   Layer,
   Option,
   Redacted,
@@ -344,6 +345,285 @@ describe("Core walkthrough RPC handlers", () => {
       expect(stored).toMatchObject({ status: "found" })
 
       yield* Scope.close(clientScope, Exit.void)
+      yield* Scope.close(serverScope, Exit.void)
+    }).pipe(Effect.provide(tempResourcesLayer)),
+  )
+
+  it.effect(
+    "finishes an admitted cancellation after socket disconnect and during server close",
+    () =>
+      Effect.gen(function* () {
+        const tempResources = yield* TempResources
+        const runtimeDirectory = yield* tempResources.makeTempDirectoryScoped({
+          prefix: "dd-walkthrough-cancel-",
+        })
+        const socketPath = `${runtimeDirectory}/core.sock`
+        const serverScope = yield* Scope.make()
+        const clientScope = yield* Scope.make()
+        const cancellationStarted = yield* Deferred.make<void>()
+        const releaseCancellation = yield* Deferred.make<void>()
+        const cancellationCompleted = yield* Deferred.make<void>()
+        const cancelled = yield* Ref.make(false)
+        const cancellationOperationsLayer = Layer.succeed(
+          CoreOperationService,
+          CoreOperationService.of({
+            start: Effect.void,
+            execute: () => Effect.die("Unexpected generic Core operation"),
+            walkthroughs: {
+              start: () => Effect.die("Unexpected legacy walkthrough start"),
+              startGeneration: () => Effect.die("Unexpected walkthrough start"),
+              getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
+              getSnapshot: () =>
+                Ref.get(cancelled).pipe(
+                  Effect.map((isCancelled) => (isCancelled ? cancelledOperation : activeOperation)),
+                ),
+              cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
+              cancelSnapshot: () =>
+                Deferred.succeed(cancellationStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseCancellation)),
+                  Effect.andThen(Ref.set(cancelled, true)),
+                  Effect.andThen(Deferred.succeed(cancellationCompleted, undefined)),
+                  Effect.as(cancelledOperation),
+                ),
+              getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
+              getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
+              getCached: () => Effect.die("Unexpected walkthrough cache read"),
+            },
+          }),
+        )
+        const lifecycleLayer = coreLifecycleLayer(requestIdentity)
+        const hostLayer = coreWalkthroughRpcSocketHostLayer({
+          socketPath,
+          token: Redacted.make(transportToken),
+        }).pipe(
+          Layer.provideMerge(lifecycleLayer),
+          Layer.provideMerge(cancellationOperationsLayer),
+          Layer.provideMerge(platformLayer),
+        )
+        const serverContext = yield* Layer.buildWithScope(hostLayer, serverScope)
+        const client = yield* makeSocketClient(socketPath, clientScope)
+        const healthRequest = HostRequestContext.make({
+          ...requestIdentity,
+          requestId: HostRequestId.make("h:walkthrough-cancel-health"),
+        })
+        yield* client["Core.health"](healthRequest).pipe(
+          RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: transportToken }),
+        )
+        yield* client["Core.authorizeDatabaseOwnership"](
+          AuthorizeDatabaseOwnershipRequest.make({
+            ...healthRequest,
+            authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-cancel"),
+          }),
+        )
+        yield* Context.get(serverContext, CoreLifecycle).completeRecovery
+
+        const cancellation = yield* client["Walkthroughs.cancel"](
+          CancelWalkthroughRequest.make({
+            ...requestIdentity,
+            requestId: HostRequestId.make("h:walkthrough-cancel-disconnect"),
+            operationId,
+          }),
+        ).pipe(Effect.forkScoped)
+        yield* Deferred.await(cancellationStarted)
+        yield* Scope.close(clientScope, Exit.void)
+
+        const serverClose = yield* Scope.close(serverScope, Exit.void).pipe(Effect.forkScoped)
+        yield* Effect.yieldNow
+        expect(yield* Deferred.isDone(cancellationCompleted)).toBe(false)
+        expect(Exit.isSuccess(yield* Fiber.await(cancellation))).toBe(false)
+
+        yield* Deferred.succeed(releaseCancellation, undefined)
+        yield* Deferred.await(cancellationCompleted)
+        yield* Fiber.join(serverClose)
+        expect(yield* Ref.get(cancelled)).toBe(true)
+      }).pipe(Effect.provide(tempResourcesLayer)),
+  )
+
+  it.effect("interrupts socket start before durable acceptance", () =>
+    Effect.gen(function* () {
+      const tempResources = yield* TempResources
+      const runtimeDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-walkthrough-start-",
+      })
+      const socketPath = `${runtimeDirectory}/core.sock`
+      const serverScope = yield* Scope.make()
+      const clientScope = yield* Scope.make()
+      const startEntered = yield* Deferred.make<void>()
+      const startInterrupted = yield* Deferred.make<void>()
+      const acceptanceRecorded = yield* Ref.make(false)
+      const startOperationsLayer = Layer.succeed(
+        CoreOperationService,
+        CoreOperationService.of({
+          start: Effect.void,
+          execute: () => Effect.die("Unexpected generic Core operation"),
+          walkthroughs: {
+            start: () => Effect.die("Unexpected legacy walkthrough start"),
+            startGeneration: () =>
+              Deferred.succeed(startEntered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.andThen(Ref.set(acceptanceRecorded, true)),
+                Effect.as(
+                  WalkthroughOperationAcceptance.make({
+                    created: true,
+                    operation: activeOperation,
+                  }),
+                ),
+                Effect.onInterrupt(() => Deferred.succeed(startInterrupted, undefined)),
+              ),
+            getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
+            getSnapshot: () => Effect.die("Unexpected walkthrough read"),
+            cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
+            cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
+            getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
+            getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
+            getCached: () => Effect.die("Unexpected walkthrough cache read"),
+          },
+        }),
+      )
+      const lifecycleLayer = coreLifecycleLayer(requestIdentity)
+      const hostLayer = coreWalkthroughRpcSocketHostLayer({
+        socketPath,
+        token: Redacted.make(transportToken),
+      }).pipe(
+        Layer.provideMerge(lifecycleLayer),
+        Layer.provideMerge(startOperationsLayer),
+        Layer.provideMerge(platformLayer),
+      )
+      const serverContext = yield* Layer.buildWithScope(hostLayer, serverScope)
+      const client = yield* makeSocketClient(socketPath, clientScope)
+      const healthRequest = HostRequestContext.make({
+        ...requestIdentity,
+        requestId: HostRequestId.make("h:walkthrough-start-before-health"),
+      })
+      yield* client["Core.health"](healthRequest).pipe(
+        RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: transportToken }),
+      )
+      yield* client["Core.authorizeDatabaseOwnership"](
+        AuthorizeDatabaseOwnershipRequest.make({
+          ...healthRequest,
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-start-before"),
+        }),
+      )
+      yield* Context.get(serverContext, CoreLifecycle).completeRecovery
+
+      const start = yield* client["Walkthroughs.start"](
+        StartWalkthroughRequest.make({
+          ...requestIdentity,
+          requestId: HostRequestId.make("h:walkthrough-start-before"),
+          reviewGeneration,
+          regenerate: false,
+          idempotencyKey: WalkthroughIdempotencyKey.make("w:start-before"),
+        }),
+      ).pipe(Effect.forkScoped)
+      yield* Deferred.await(startEntered)
+      yield* Scope.close(clientScope, Exit.void)
+      yield* Deferred.await(startInterrupted).pipe(Effect.timeout("1 second"))
+      expect(Exit.isSuccess(yield* Fiber.await(start))).toBe(false)
+      expect(yield* Ref.get(acceptanceRecorded)).toBe(false)
+
+      yield* Scope.close(serverScope, Exit.void)
+    }).pipe(Effect.provide(tempResourcesLayer)),
+  )
+
+  it.effect("keeps the Core-owned worker alive after socket disconnect following acceptance", () =>
+    Effect.gen(function* () {
+      const tempResources = yield* TempResources
+      const runtimeDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-walkthrough-worker-",
+      })
+      const socketPath = `${runtimeDirectory}/core.sock`
+      const serverScope = yield* Scope.make()
+      const clientScope = yield* Scope.make()
+      const acceptanceCommitted = yield* Deferred.make<void>()
+      const releaseAcceptanceResponse = yield* Deferred.make<void>()
+      const workerStarted = yield* Deferred.make<void>()
+      const releaseWorker = yield* Deferred.make<void>()
+      const workerCompleted = yield* Deferred.make<void>()
+      const acceptanceRecorded = yield* Ref.make(false)
+      const startOperationsLayer = Layer.effect(
+        CoreOperationService,
+        Effect.gen(function* () {
+          const workers = yield* FiberSet.make<void, never>()
+          return CoreOperationService.of({
+            start: Effect.void,
+            execute: () => Effect.die("Unexpected generic Core operation"),
+            walkthroughs: {
+              start: () => Effect.die("Unexpected legacy walkthrough start"),
+              startGeneration: () =>
+                Effect.uninterruptible(
+                  Effect.gen(function* () {
+                    yield* Ref.set(acceptanceRecorded, true)
+                    yield* FiberSet.run(
+                      workers,
+                      Deferred.succeed(workerStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseWorker)),
+                        Effect.andThen(Deferred.succeed(workerCompleted, undefined)),
+                      ),
+                    )
+                    yield* Deferred.succeed(acceptanceCommitted, undefined)
+                    yield* Deferred.await(releaseAcceptanceResponse)
+                    return WalkthroughOperationAcceptance.make({
+                      created: true,
+                      operation: activeOperation,
+                    })
+                  }),
+                ),
+              getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
+              getSnapshot: () => Effect.succeed(activeOperation),
+              cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
+              cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
+              getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
+              getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
+              getCached: () => Effect.die("Unexpected walkthrough cache read"),
+            },
+          })
+        }),
+      )
+      const lifecycleLayer = coreLifecycleLayer(requestIdentity)
+      const hostLayer = coreWalkthroughRpcSocketHostLayer({
+        socketPath,
+        token: Redacted.make(transportToken),
+      }).pipe(
+        Layer.provideMerge(lifecycleLayer),
+        Layer.provideMerge(startOperationsLayer),
+        Layer.provideMerge(platformLayer),
+      )
+      const serverContext = yield* Layer.buildWithScope(hostLayer, serverScope)
+      const client = yield* makeSocketClient(socketPath, clientScope)
+      const healthRequest = HostRequestContext.make({
+        ...requestIdentity,
+        requestId: HostRequestId.make("h:walkthrough-worker-health"),
+      })
+      yield* client["Core.health"](healthRequest).pipe(
+        RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: transportToken }),
+      )
+      yield* client["Core.authorizeDatabaseOwnership"](
+        AuthorizeDatabaseOwnershipRequest.make({
+          ...healthRequest,
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-worker"),
+        }),
+      )
+      yield* Context.get(serverContext, CoreLifecycle).completeRecovery
+
+      const start = yield* client["Walkthroughs.start"](
+        StartWalkthroughRequest.make({
+          ...requestIdentity,
+          requestId: HostRequestId.make("h:walkthrough-worker-start"),
+          reviewGeneration,
+          regenerate: false,
+          idempotencyKey: WalkthroughIdempotencyKey.make("w:worker-start"),
+        }),
+      ).pipe(Effect.forkScoped)
+      yield* Deferred.await(acceptanceCommitted)
+      yield* Deferred.await(workerStarted)
+      yield* Scope.close(clientScope, Exit.void)
+      yield* Deferred.succeed(releaseAcceptanceResponse, undefined)
+      expect(Exit.isSuccess(yield* Fiber.await(start))).toBe(false)
+      expect(yield* Ref.get(acceptanceRecorded)).toBe(true)
+      expect(yield* Deferred.isDone(workerCompleted)).toBe(false)
+
+      yield* Deferred.succeed(releaseWorker, undefined)
+      yield* Deferred.await(workerCompleted)
       yield* Scope.close(serverScope, Exit.void)
     }).pipe(Effect.provide(tempResourcesLayer)),
   )

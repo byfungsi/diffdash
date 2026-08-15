@@ -313,6 +313,37 @@ describe("Core walkthrough RPC admission", () => {
     }),
   )
 
+  it.effect("interrupts an admitted start before durable acceptance when draining begins", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const acceptanceRecorded = yield* Ref.make(false)
+      const start = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.andThen(Ref.set(acceptanceRecorded, true)),
+        Effect.as(accepted),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      )
+
+      return yield* Effect.gen(function* () {
+        const lifecycle = yield* CoreLifecycle
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const fiber = yield* client["Walkthroughs.start"](startRequest).pipe(Effect.forkScoped)
+        yield* Deferred.await(started)
+
+        yield* lifecycle.shutdown(requestIdentity)
+        yield* Deferred.await(interrupted)
+        const exit = yield* Fiber.await(fiber)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) throw new Error("Expected walkthrough start to be interrupted")
+        expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        expect(yield* Ref.get(acceptanceRecorded)).toBe(false)
+      }).pipe(Effect.provide(makeTestLayer({ start })))
+    }),
+  )
+
   it.effect("allows admitted cancellation to finish after draining begins", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>()
@@ -390,6 +421,35 @@ describe("Core walkthrough RPC admission", () => {
         })
         yield* Deferred.await(interrupted)
       }).pipe(Effect.provide(makeTestLayer({ getStored })))
+    }),
+  )
+
+  it.effect("interrupts operation reads at their declared deadline", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const getOperation = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      )
+
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const requestFiber = yield* client["Walkthroughs.getOperation"](getOperationRequest).pipe(
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(started)
+        yield* TestClock.adjust("2 seconds")
+
+        const failure = yield* Fiber.join(requestFiber).pipe(Effect.flip)
+        expect(failure).toMatchObject({
+          code: "REQUEST_DEADLINE_EXCEEDED",
+          method: "Walkthroughs.getOperation",
+          operationId,
+        })
+        yield* Deferred.await(interrupted)
+      }).pipe(Effect.provide(makeTestLayer({ getOperation })))
     }),
   )
 

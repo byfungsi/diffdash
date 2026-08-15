@@ -243,9 +243,20 @@ describe("Walkthrough RPC transport policy", () => {
 
       yield* Queue.offer(
         incoming,
-        paddedRequest("larger-read", "Walkthroughs.getStored", getStoredPayload, 3 * 1_024),
+        paddedRequest("exact-stored", "Walkthroughs.getStored", getStoredPayload, 8 * 1_024),
       )
       expect(isExit(yield* Queue.take(sent))).toBe(true)
+
+      yield* Queue.offer(
+        incoming,
+        paddedRequest(
+          "oversized-stored",
+          "Walkthroughs.getStored",
+          getStoredPayload,
+          8 * 1_024 + 1,
+        ),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe("REQUEST_TOO_LARGE")
       expect(yield* Ref.get(entered)).toBe(2)
 
       yield* Queue.offer(
@@ -297,7 +308,7 @@ describe("Walkthrough RPC transport policy", () => {
                         ? exactStartResponse
                         : id === "oversized-start-response"
                           ? oversizedStartResponse
-                          : id === "exact-response"
+                          : String(id).startsWith("exact-")
                             ? exactResponse
                             : oversizedResponse,
                     ),
@@ -343,10 +354,34 @@ describe("Walkthrough RPC transport policy", () => {
 
       yield* Queue.offer(
         incoming,
+        request("exact-operation-response", "Walkthroughs.getOperation", getOperationPayload),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe(null)
+
+      yield* Queue.offer(
+        incoming,
+        request("oversized-operation-response", "Walkthroughs.getOperation", getOperationPayload),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe("RESPONSE_TOO_LARGE")
+
+      yield* Queue.offer(
+        incoming,
+        request("exact-cancel-response", "Walkthroughs.cancel", cancelPayload),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe(null)
+
+      yield* Queue.offer(
+        incoming,
+        request("oversized-cancel-response", "Walkthroughs.cancel", cancelPayload),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe("RESPONSE_TOO_LARGE")
+
+      yield* Queue.offer(
+        incoming,
         request("after-overflow", "Walkthroughs.getOperation", getOperationPayload),
       )
       yield* Queue.take(sent)
-      expect(yield* Ref.get(entered)).toBe(5)
+      expect(yield* Ref.get(entered)).toBe(9)
       expect(384 * 1_024 + 1).toBeLessThan(CORE_RPC_INCOMPLETE_BUFFER_BYTES)
     }),
   )

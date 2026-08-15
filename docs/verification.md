@@ -104,6 +104,21 @@ The following requirement IDs are covered by
 | `PACKAGE-PROVIDER-002` | `[T]` | Fake Git/CLI binaries and local provider fixtures prove packaged workspace bootstrap without credentials or network access. |
 | `PERSIST-PACKAGED-002` | `[T]` | Fixture provider settings, hosted bookmark identity, and completed review response survive a packaged restart. |
 
+## M21 Walkthrough Core Evidence
+
+These FUN-218 requirements are gated together by
+`pnpm --filter @diffdash/core-rpc benchmark:m21`. The external host remains inactive in production;
+FUN-215 owns production cutover and FUN-254 owns renderer replay and cross-process diagnostics.
+
+| Requirement | Class | Evidence |
+|---|---|---|
+| `M21-RPC-AUTH-001` | `[T]` | `core-walkthrough-rpc-handlers.test.ts` authenticates the private Unix socket and serves the complete walkthrough lifecycle only after database ownership authorization and recovery. |
+| `M21-RPC-POLICY-001` | `[T]` | `core-rpc-transport-policy.test.ts` enforces each walkthrough method's exact MessagePack request and response boundary, duplicate live request IDs, 32-request concurrency, and bounded overflow failures. |
+| `M21-RPC-DEADLINE-001` | `[T]` | `core-walkthrough-rpc-admission.test.ts` applies each walkthrough deadline and bounds uninterruptible cancellations that continue after caller timeout. |
+| `M21-RPC-DISCONNECT-001` | `[T]` | Real-socket tests interrupt reads and starts before durable acceptance, preserve the Core-owned worker after accepted-start disconnect, and finish admitted cancellation during client disconnect and server close. |
+| `M21-RPC-RECOVERY-001` | `[T]` | `embedded-core.test.ts` proves accepted active work becomes interrupted after Core disposal and restart without restarting provider work. |
+| `M21-RPC-PRESSURE-001` | `[T]` | `m21-transport-benchmark.ts` and the dated D-01 artifact lock the 512 KiB frame, 16 MiB aggregate reservation, 32 concurrent unary requests, and zero chunk/ack state. |
+
 ## Classified Product Surface
 
 These rows classify implemented behavior already covered by the named suites. More focused rows above
