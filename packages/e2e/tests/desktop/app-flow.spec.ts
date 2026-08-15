@@ -643,6 +643,7 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
 test("reports an explicit Claude walkthrough failure through contextBridge and clipboard", async ({
   browserName: _browserName,
 }, testInfo) => {
+  const forcedCoreHost = readForcedCoreHost()
   const fakeBin = testInfo.outputPath("fake-bin")
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
@@ -665,6 +666,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      ...(forcedCoreHost === null ? {} : { DIFFDASH_E2E_CORE_HOST: forcedCoreHost }),
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
       FAKE_REPO_ROOT: localRepo,
@@ -675,6 +677,13 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
 
   try {
     const window = await app.firstWindow()
+    if (forcedCoreHost !== null) {
+      const coreParentPid = app.process().pid
+      if (coreParentPid === undefined) throw new Error("Electron main process PID is unavailable")
+      await expect
+        .poll(() => hasCoreHostProcess(coreParentPid, forcedCoreHost), { timeout: 15_000 })
+        .toBe(true)
+    }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await window.getByRole("button", { name: "Walkthrough" }).click()
@@ -688,13 +697,26 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
-    expect(report).toContain("Error code: AgentProviderAuthenticationError")
-    expect(report).toContain("Operation: localWalkthroughs:generate")
-    expect(report).toContain("Provider tag: claude")
-    expect(report).toContain("Cause tag: ProcessExitError")
-    expect(report).toContain("Exit code: 9")
-    expect(report).toContain("Reason: Authentication or authorization failure reported.")
-    expect(report).toContain("Stderr: Authentication or authorization failure reported.")
+    if (forcedCoreHost === null) {
+      expect(report).toContain("Error code: AgentProviderAuthenticationError")
+      expect(report).toContain("Operation: localWalkthroughs:generate")
+      expect(report).toContain("Provider tag: claude")
+      expect(report).toContain("Cause tag: ProcessExitError")
+      expect(report).toContain("Exit code: 9")
+      expect(report).toContain("Reason: Authentication or authorization failure reported.")
+      expect(report).toContain("Stderr: Authentication or authorization failure reported.")
+    } else {
+      expect(report).toContain("Method: Walkthroughs.start")
+      expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
+      expect(report).toMatch(/Operation ID: [A-Za-z0-9._:-]+/u)
+      expect(report).toContain("Error code: AGENT_PROVIDER_EXIT")
+      expect(report).toContain("Provider: claude")
+      expect(report).toContain("Model: claude-sonnet-5")
+      expect(report).toContain("Retry class: userAction")
+      expect(report).toContain("execute / provider-exit")
+      expect(report).toContain("- ProcessExitError")
+      expect(report).toContain("- Exit code: 9")
+    }
     expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
     expect(report).not.toContain("Operation: unknown")
     for (const privateValue of [
@@ -714,6 +736,45 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await app.close()
   }
 })
+
+const readForcedCoreHost = (): "bun" | "utility" | null => {
+  if (process.env.DIFFDASH_E2E_FORCED_CORE_HOST_GATE !== "1") return null
+  const host = process.env.DIFFDASH_E2E_CORE_HOST
+  if (host === "bun" || host === "utility") return host
+  throw new Error("The forced Core host gate requires DIFFDASH_E2E_CORE_HOST=bun or utility")
+}
+
+const hasCoreHostProcess = (rootPid: number, host: "bun" | "utility"): boolean => {
+  if (process.platform === "win32") {
+    throw new Error("Forced Core host process verification is not implemented on Windows")
+  }
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line)
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] ?? "" }]
+    })
+  const descendants = new Set([rootPid])
+  let discovered = true
+  while (discovered) {
+    discovered = false
+    for (const row of rows) {
+      if (descendants.has(row.parentPid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid)
+        discovered = true
+      }
+    }
+  }
+  return rows.some((row) => {
+    if (!descendants.has(row.pid) || row.pid === rootPid) return false
+    if (!row.command.includes("core.mjs")) return false
+    return host === "bun"
+      ? /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+      : row.command.includes("--type=utility")
+  })
+}
 
 test("opens the current project Reviews ribbon from the versioned CLI command", async ({
   browserName: _browserName,
