@@ -16,7 +16,7 @@ import {
   type ApplicationInstanceId,
   type CoreProcessEpoch,
 } from "@diffdash/core-rpc"
-import { Clock, Context, Effect, Layer, PubSub, Ref, Stream } from "effect"
+import { Clock, Context, Effect, Layer, PubSub, Ref, Semaphore, Stream } from "effect"
 
 /** Bounded metadata required to publish one hint after authoritative state commits. */
 export interface CoreEventDraft {
@@ -60,87 +60,101 @@ export const makeCoreEventHubLayer = (options: {
   Layer.effect(
     CoreEventHub,
     Effect.gen(function* () {
-      const replayCapacity = options.replayCapacity ?? 256
+      const replayCapacity = Math.max(1, Math.min(256, options.replayCapacity ?? 256))
       const sequence = yield* Ref.make(0)
       const retained = yield* Ref.make<readonly CoreEventHint[]>([])
       const pubsub = yield* PubSub.sliding<CoreEventHint>(replayCapacity)
+      const publication = yield* Semaphore.make(1)
 
-      const publish = Effect.fn("CoreEventHub.publish")(function* (draft: CoreEventDraft) {
-        const nextSequence = yield* Ref.updateAndGet(sequence, (value) => value + 1)
-        const now = yield* Clock.currentTimeMillis
-        const hint: CoreEventHint = {
-          metadata: {
-            eventId: CoreEventId.make(`${options.processEpoch}:${nextSequence}`),
-            topic: CoreEventTopic.make(draft.topic),
-            schemaVersion: CoreEventSchemaVersion.make(draft.schemaVersion),
-            applicationInstanceId: options.applicationInstanceId,
-            processEpoch: options.processEpoch,
-            sequence: CoreEventSequence.make(nextSequence),
-            timestamp: UtcIsoTimestamp.make(new Date(now).toISOString()),
-            scopes: draft.scopes.map(({ name, id }) => ({
-              name: CoreEventScopeName.make(name),
-              id: CoreEventScopeId.make(id),
-            })),
-            source: CoreEventSource.make(draft.source),
-            reason: CoreEventReason.make(draft.reason),
-            subject:
-              draft.subject.kind === "generation"
-                ? {
-                    kind: "generation",
-                    generationId: CoreEventGenerationId.make(draft.subject.generationId),
-                  }
-                : draft.subject.kind === "operation"
-                  ? {
-                      kind: "operation",
-                      operationId: CoreEventOperationId.make(draft.subject.operationId),
-                    }
-                  : draft.subject.kind === "generationOperation"
+      const publish = Effect.fn("CoreEventHub.publish")((draft: CoreEventDraft) =>
+        publication.withPermits(1)(
+          Effect.gen(function* () {
+            const nextSequence = yield* Ref.updateAndGet(sequence, (value) => value + 1)
+            const now = yield* Clock.currentTimeMillis
+            const hint: CoreEventHint = {
+              metadata: {
+                eventId: CoreEventId.make(`${options.processEpoch}:${nextSequence}`),
+                topic: CoreEventTopic.make(draft.topic),
+                schemaVersion: CoreEventSchemaVersion.make(draft.schemaVersion),
+                applicationInstanceId: options.applicationInstanceId,
+                processEpoch: options.processEpoch,
+                sequence: CoreEventSequence.make(nextSequence),
+                timestamp: UtcIsoTimestamp.make(new Date(now).toISOString()),
+                scopes: draft.scopes.map(({ name, id }) => ({
+                  name: CoreEventScopeName.make(name),
+                  id: CoreEventScopeId.make(id),
+                })),
+                source: CoreEventSource.make(draft.source),
+                reason: CoreEventReason.make(draft.reason),
+                subject:
+                  draft.subject.kind === "generation"
                     ? {
-                        kind: "generationOperation",
+                        kind: "generation",
                         generationId: CoreEventGenerationId.make(draft.subject.generationId),
-                        operationId: CoreEventOperationId.make(draft.subject.operationId),
                       }
-                    : { kind: "none" },
-          },
-          kind: draft.kind,
-          stateVersion: CoreStateVersion.make(draft.stateVersion),
-        }
-        yield* Ref.update(retained, (events) => [...events, hint].slice(-replayCapacity))
-        yield* PubSub.publish(pubsub, hint)
-        return hint
-      })
+                    : draft.subject.kind === "operation"
+                      ? {
+                          kind: "operation",
+                          operationId: CoreEventOperationId.make(draft.subject.operationId),
+                        }
+                      : draft.subject.kind === "generationOperation"
+                        ? {
+                            kind: "generationOperation",
+                            generationId: CoreEventGenerationId.make(draft.subject.generationId),
+                            operationId: CoreEventOperationId.make(draft.subject.operationId),
+                          }
+                        : { kind: "none" },
+              },
+              kind: draft.kind,
+              stateVersion: CoreStateVersion.make(draft.stateVersion),
+            }
+            yield* Ref.update(retained, (events) => [...events, hint].slice(-replayCapacity))
+            yield* PubSub.publish(pubsub, hint)
+            return hint
+          }),
+        ),
+      )
 
       const replay = (processEpoch: CoreProcessEpoch, afterSequence: CoreEventSequence | null) =>
-        Ref.get(retained).pipe(
-          Effect.map((events): CoreEventReplayResult => {
-            if (processEpoch !== options.processEpoch) {
-              return {
-                kind: "resyncRequired",
-                processEpoch: options.processEpoch,
-                reason: "epochChanged",
+        publication.withPermits(1)(
+          Effect.all([Ref.get(sequence), Ref.get(retained)]).pipe(
+            Effect.map(([currentSequence, events]): CoreEventReplayResult => {
+              if (processEpoch !== options.processEpoch) {
+                return {
+                  kind: "resyncRequired",
+                  processEpoch: options.processEpoch,
+                  reason: "epochChanged",
+                }
               }
-            }
-            if (afterSequence === null) {
-              return {
-                kind: "resyncRequired",
-                processEpoch: options.processEpoch,
-                reason: "firstConnection",
+              if (afterSequence === null) {
+                return {
+                  kind: "resyncRequired",
+                  processEpoch: options.processEpoch,
+                  reason: "firstConnection",
+                }
               }
-            }
-            const oldest = events[0]?.metadata.sequence
-            if (oldest !== undefined && afterSequence < oldest - 1) {
-              return {
-                kind: "resyncRequired",
-                processEpoch: options.processEpoch,
-                reason: "cursorExpired",
+              if (afterSequence > currentSequence) {
+                return {
+                  kind: "resyncRequired",
+                  processEpoch: options.processEpoch,
+                  reason: "sequenceGap",
+                }
               }
-            }
-            return {
-              kind: "replay",
-              processEpoch: options.processEpoch,
-              events: events.filter((event) => event.metadata.sequence > afterSequence),
-            }
-          }),
+              const oldest = events[0]?.metadata.sequence
+              if (oldest !== undefined && afterSequence < oldest - 1) {
+                return {
+                  kind: "resyncRequired",
+                  processEpoch: options.processEpoch,
+                  reason: "cursorExpired",
+                }
+              }
+              return {
+                kind: "replay",
+                processEpoch: options.processEpoch,
+                events: events.filter((event) => event.metadata.sequence > afterSequence),
+              }
+            }),
+          ),
         )
 
       return CoreEventHub.of({ publish, replay, events: Stream.fromPubSub(pubsub) })

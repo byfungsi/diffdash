@@ -63,6 +63,42 @@ describe("CoreEventHub", () => {
         kind: "resyncRequired",
         reason: "epochChanged",
       })
+      expect(yield* hub.replay(epoch, CoreEventSequence.make(99))).toMatchObject({
+        kind: "resyncRequired",
+        reason: "sequenceGap",
+      })
     }).pipe(Effect.provide(layer)),
+  )
+
+  it.effect("serializes concurrent publication across sequence, retention, and subscribers", () =>
+    Effect.gen(function* () {
+      const hub = yield* CoreEventHub
+      const subscriber = yield* hub.events.pipe(
+        Stream.take(20),
+        Stream.runCollect,
+        Effect.forkChild,
+      )
+      yield* Effect.yieldNow
+      yield* Effect.all(
+        Array.from({ length: 20 }, (_, index) => hub.publish(draft(index + 1))),
+        { concurrency: "unbounded" },
+      )
+
+      expect((yield* Fiber.join(subscriber)).map(({ metadata }) => metadata.sequence)).toEqual(
+        Array.from({ length: 20 }, (_, index) => index + 1),
+      )
+      expect(yield* hub.replay(epoch, CoreEventSequence.make(18))).toMatchObject({
+        kind: "replay",
+        events: [{ metadata: { sequence: 19 } }, { metadata: { sequence: 20 } }],
+      })
+    }).pipe(
+      Effect.provide(
+        makeCoreEventHubLayer({
+          applicationInstanceId: ApplicationInstanceId.make("app-concurrent"),
+          processEpoch: epoch,
+          replayCapacity: 2,
+        }),
+      ),
+    ),
   )
 })
