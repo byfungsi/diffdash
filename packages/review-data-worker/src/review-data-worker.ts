@@ -1,6 +1,7 @@
 export {
   IncrementalDiffParseError,
   IncrementalUnifiedDiffParser,
+  isBoundedIncrementalDiffBatch,
   REVIEW_DIFF_MAX_BATCH_BYTES,
   REVIEW_DIFF_MAX_BATCH_ITEMS,
 } from "./incremental-diff-parser"

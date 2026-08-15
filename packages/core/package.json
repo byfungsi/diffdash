@@ -31,6 +31,7 @@
     "@diffdash/persistence": "workspace:*",
     "@diffdash/process": "workspace:*",
     "@diffdash/protocol": "workspace:*",
+    "@diffdash/review-data-worker": "workspace:*",
     "@diffdash/settings": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",

@@ -40,12 +40,13 @@ export interface ReviewDataWorkerRuntime {
 export class ReviewDataWorkerClient {
   readonly #handle: ReviewDataWorkerHandle
   readonly #pending = new Map<number, (response: ReviewDataWorkerResponse) => void>()
-  readonly #batchListeners = new Set<(batch: IncrementalDiffBatch) => void>()
+  readonly #batchListeners = new Set<(batch: IncrementalDiffBatch) => Promise<void> | void>()
   readonly #unsubscribe: () => void
   readonly #unsubscribeFailure: () => void
   #requestId = 0
   #disposed = false
   #chunkPending = false
+  #batchTail = Promise.resolve()
 
   /** Starts one disposable worker owned by this client. */
   constructor(runtime: ReviewDataWorkerRuntime, moduleUrl: URL) {
@@ -57,13 +58,23 @@ export class ReviewDataWorkerClient {
             this.#failPending("Review data worker emitted an invalid batch")
             return
           }
-          for (const listener of this.#batchListeners) listener(batch)
+          this.#batchTail = this.#batchTail.then(async () => {
+            await Promise.all([...this.#batchListeners].map((listener) => listener(batch)))
+          })
         }),
         Match.orElse((terminal) => {
           const resolve = this.#pending.get(terminal.requestId)
           if (resolve === undefined) return
           this.#pending.delete(terminal.requestId)
-          resolve(terminal)
+          void this.#batchTail.then(
+            () => resolve(terminal),
+            () =>
+              resolve({
+                _tag: "Failed",
+                requestId: terminal.requestId,
+                message: "Review data worker batch handling failed",
+              }),
+          )
         }),
       )
     })
@@ -90,7 +101,7 @@ export class ReviewDataWorkerClient {
   }
 
   /** Subscribes to independently bounded parser batches. */
-  onBatch(listener: (batch: IncrementalDiffBatch) => void): () => void {
+  onBatch(listener: (batch: IncrementalDiffBatch) => Promise<void> | void): () => void {
     this.#batchListeners.add(listener)
     return () => this.#batchListeners.delete(listener)
   }

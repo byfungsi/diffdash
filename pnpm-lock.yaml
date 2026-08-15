@@ -444,6 +444,9 @@ importers:
       '@diffdash/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@diffdash/review-data-worker':
+        specifier: workspace:*
+        version: link:../review-data-worker
       '@diffdash/settings':
         specifier: workspace:*
         version: link:../settings

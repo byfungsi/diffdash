@@ -87,6 +87,7 @@ const documentedPackageDependencies = new Map([
       "@diffdash/persistence",
       "@diffdash/process",
       "@diffdash/protocol",
+      "@diffdash/review-data-worker",
       "@diffdash/settings",
     ],
   ],
