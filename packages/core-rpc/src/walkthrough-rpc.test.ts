@@ -217,6 +217,15 @@ const getStoredAdmissionFailure = Schema.decodeUnknownSync(WalkthroughGetStoredA
   method: "Walkthroughs.getStored",
   operationId: null,
 })
+const getStoredResponseOverflowFailure = Schema.decodeUnknownSync(
+  WalkthroughGetStoredAdmissionFailure,
+)({
+  ...getStoredAdmissionFailure,
+  code: "RESPONSE_TOO_LARGE",
+  retryClass: "notRetryable",
+  remediation: "none",
+  safeMessage: "The walkthrough response exceeded its size limit.",
+})
 
 const passAdmissionLayer = Layer.mergeAll(
   Layer.succeed(WalkthroughStartAdmissionMiddleware, (effect) => effect),
@@ -469,6 +478,7 @@ describe("walkthrough RPC declarations", () => {
       [WalkthroughCancelRpc, Exit.die(cancelDefect)],
       [WalkthroughGetStoredRpc, Exit.fail(getStoredFailure)],
       [WalkthroughGetStoredRpc, Exit.fail(getStoredAdmissionFailure)],
+      [WalkthroughGetStoredRpc, Exit.fail(getStoredResponseOverflowFailure)],
       [WalkthroughGetStoredRpc, Exit.die(getStoredDefect)],
     ] as const
     const parser = RpcSerialization.makeMsgPack({ maxBufferSize: 512 * 1_024 }).makeUnsafe()

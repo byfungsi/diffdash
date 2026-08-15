@@ -4,8 +4,11 @@ import {
   CORE_RPC_MAX_CONCURRENCY,
 } from "@diffdash/core-rpc/transport"
 import {
+  CancelWalkthroughRequest,
   GetStoredWalkthroughRequest,
   GetWalkthroughOperationRequest,
+  StartWalkthroughRequest,
+  WalkthroughIdempotencyKey,
   WalkthroughReviewGeneration,
 } from "@diffdash/core-rpc/walkthrough"
 import {
@@ -41,6 +44,13 @@ const reviewGeneration = WalkthroughReviewGeneration.make({
   headRevision: ReviewRevision.make("head-transport-policy"),
 })
 const getOperationPayload = GetWalkthroughOperationRequest.make({ ...identity, operationId })
+const startPayload = StartWalkthroughRequest.make({
+  ...identity,
+  reviewGeneration,
+  regenerate: false,
+  idempotencyKey: WalkthroughIdempotencyKey.make("w:transport-policy"),
+})
+const cancelPayload = CancelWalkthroughRequest.make({ ...identity, operationId })
 const getStoredPayload = GetStoredWalkthroughRequest.make({
   ...identity,
   reviewGeneration,
@@ -50,8 +60,16 @@ const makeParser = () => RpcSerialization.makeMsgPack({ useRecords: true }).make
 
 const request = (
   id: string | number,
-  tag: "Walkthroughs.getOperation" | "Walkthroughs.getStored",
-  payload: typeof getOperationPayload | typeof getStoredPayload,
+  tag:
+    | "Walkthroughs.start"
+    | "Walkthroughs.getOperation"
+    | "Walkthroughs.cancel"
+    | "Walkthroughs.getStored",
+  payload:
+    | typeof startPayload
+    | typeof getOperationPayload
+    | typeof cancelPayload
+    | typeof getStoredPayload,
 ): RpcMessage.RequestEncoded => ({
   _tag: "Request",
   id,
@@ -80,8 +98,16 @@ const encodedResponseBytes = (value: RpcMessage.FromServerEncoded) => {
 
 const paddedRequest = (
   id: string,
-  tag: "Walkthroughs.getOperation" | "Walkthroughs.getStored",
-  payload: typeof getOperationPayload | typeof getStoredPayload,
+  tag:
+    | "Walkthroughs.start"
+    | "Walkthroughs.getOperation"
+    | "Walkthroughs.cancel"
+    | "Walkthroughs.getStored",
+  payload:
+    | typeof startPayload
+    | typeof getOperationPayload
+    | typeof cancelPayload
+    | typeof getStoredPayload,
   targetBytes: number,
 ) => {
   let lower = 0
@@ -211,7 +237,7 @@ describe("Walkthrough RPC transport policy", () => {
       )
       const overflow = yield* Queue.take(sent)
       expect(failureCode(overflow)).toBe("REQUEST_TOO_LARGE")
-      expect(encodedResponseBytes(overflow)).toBeLessThanOrEqual(64 * 1_024)
+      expect(encodedResponseBytes(overflow)).toBeLessThanOrEqual(384 * 1_024)
       expect(encodedResponseBytes(overflow)).toBeLessThanOrEqual(CORE_RPC_INCOMPLETE_BUFFER_BYTES)
       expect(yield* Ref.get(entered)).toBe(1)
 
@@ -221,6 +247,31 @@ describe("Walkthrough RPC transport policy", () => {
       )
       expect(isExit(yield* Queue.take(sent))).toBe(true)
       expect(yield* Ref.get(entered)).toBe(2)
+
+      yield* Queue.offer(
+        incoming,
+        paddedRequest("exact-start", "Walkthroughs.start", startPayload, 8 * 1_024),
+      )
+      expect(isExit(yield* Queue.take(sent))).toBe(true)
+
+      yield* Queue.offer(
+        incoming,
+        paddedRequest("oversized-start", "Walkthroughs.start", startPayload, 8 * 1_024 + 1),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe("REQUEST_TOO_LARGE")
+
+      yield* Queue.offer(
+        incoming,
+        paddedRequest("exact-cancel", "Walkthroughs.cancel", cancelPayload, 2 * 1_024),
+      )
+      expect(isExit(yield* Queue.take(sent))).toBe(true)
+
+      yield* Queue.offer(
+        incoming,
+        paddedRequest("oversized-cancel", "Walkthroughs.cancel", cancelPayload, 2 * 1_024 + 1),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe("REQUEST_TOO_LARGE")
+      expect(yield* Ref.get(entered)).toBe(4)
     }),
   )
 
@@ -228,6 +279,8 @@ describe("Walkthrough RPC transport policy", () => {
     Effect.gen(function* () {
       const { bounded, incoming, sent } = yield* makeProtocol
       const entered = yield* Ref.make(0)
+      const exactStartResponse = stringAtEncodedBytes(64 * 1_024)
+      const oversizedStartResponse = stringAtEncodedBytes(64 * 1_024 + 1)
       const exactResponse = stringAtEncodedBytes(384 * 1_024)
       const oversizedResponse = stringAtEncodedBytes(384 * 1_024 + 1)
       yield* bounded
@@ -238,7 +291,16 @@ describe("Walkthrough RPC transport policy", () => {
                 Effect.andThen(
                   bounded.send(
                     1,
-                    success(id, id === "exact-response" ? exactResponse : oversizedResponse),
+                    success(
+                      id,
+                      id === "exact-start-response"
+                        ? exactStartResponse
+                        : id === "oversized-start-response"
+                          ? oversizedStartResponse
+                          : id === "exact-response"
+                            ? exactResponse
+                            : oversizedResponse,
+                    ),
                   ),
                 ),
               ),
@@ -249,6 +311,20 @@ describe("Walkthrough RPC transport policy", () => {
           }),
         )
         .pipe(Effect.forkScoped)
+
+      yield* Queue.offer(
+        incoming,
+        request("exact-start-response", "Walkthroughs.start", startPayload),
+      )
+      expect(failureCode(yield* Queue.take(sent))).toBe(null)
+
+      yield* Queue.offer(
+        incoming,
+        request("oversized-start-response", "Walkthroughs.start", startPayload),
+      )
+      const startOverflow = yield* Queue.take(sent)
+      expect(failureCode(startOverflow)).toBe("RESPONSE_TOO_LARGE")
+      expect(encodedResponseBytes(startOverflow)).toBeLessThanOrEqual(64 * 1_024)
 
       yield* Queue.offer(
         incoming,
@@ -270,7 +346,7 @@ describe("Walkthrough RPC transport policy", () => {
         request("after-overflow", "Walkthroughs.getOperation", getOperationPayload),
       )
       yield* Queue.take(sent)
-      expect(yield* Ref.get(entered)).toBe(3)
+      expect(yield* Ref.get(entered)).toBe(5)
       expect(384 * 1_024 + 1).toBeLessThan(CORE_RPC_INCOMPLETE_BUFFER_BYTES)
     }),
   )
