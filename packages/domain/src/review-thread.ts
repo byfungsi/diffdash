@@ -2,7 +2,13 @@ import { Match, Schema } from "effect"
 import { AgentRunId } from "./agent-run-id"
 import { NonNegativeInteger, PositiveInteger, UtcIsoTimestamp } from "./domain-scalar"
 import { AgentProviderFailure } from "./provider-failure"
-import { CompletedAgentRun, FailedAgentRun, RunningAgentRun } from "./agent-run"
+import {
+  CancelledAgentRun,
+  CompletedAgentRun,
+  FailedAgentRun,
+  InterruptedAgentRun,
+  RunningAgentRun,
+} from "./agent-run"
 import { ReviewThreadId } from "./review-thread-id"
 
 import { LocalReviewTarget } from "./local-review"
@@ -248,12 +254,32 @@ export class FailedAgentReviewTurn extends Schema.TaggedClass<FailedAgentReviewT
   run: FailedAgentRun,
 }) {}
 
+/** A cancelled agent conversation entry with its linked terminal response. */
+export class CancelledAgentReviewTurn extends Schema.TaggedClass<CancelledAgentReviewTurn>()(
+  "Cancelled",
+  {
+    message: FailedAgentReviewThreadMessage,
+    run: CancelledAgentRun,
+  },
+) {}
+
+/** An interrupted agent conversation entry with its linked terminal response. */
+export class InterruptedAgentReviewTurn extends Schema.TaggedClass<InterruptedAgentReviewTurn>()(
+  "Interrupted",
+  {
+    message: FailedAgentReviewThreadMessage,
+    run: InterruptedAgentRun,
+  },
+) {}
+
 /** One authoritative conversation projection joining a message to its run when applicable. */
 export const ReviewTurn = Schema.Union([
   UserReviewTurn,
   PendingAgentReviewTurn,
   CompletedAgentReviewTurn,
   FailedAgentReviewTurn,
+  CancelledAgentReviewTurn,
+  InterruptedAgentReviewTurn,
 ])
 
 /** One authoritative conversation projection joining a message to its run when applicable. */

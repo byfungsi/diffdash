@@ -61,6 +61,47 @@ describe("review lifecycle row compatibility", () => {
     }),
   )
 
+  it.effect(
+    "preserves cancelled and interrupted terminal reasons in conversation projections",
+    () =>
+      Effect.gen(function* () {
+        for (const status of ["cancelled", "interrupted"] as const) {
+          const run = yield* decodeAgentRunRow({
+            id: `run-${status}`,
+            thread_id: "thread-1",
+            review_key: "review-1",
+            base_sha: "base",
+            head_sha: "head",
+            provider: "fixture",
+            model: "fixture-model",
+            prompt_version: "fixture-v1",
+            status,
+            provider_run_id: null,
+            usage_json: null,
+            error: null,
+            started_at: "2026-08-10T00:00:00.000Z",
+            completed_at: "2026-08-10T00:00:01.000Z",
+          })
+          const message = yield* decodeReviewThreadMessageRow({
+            id: `message-${status}`,
+            thread_id: "thread-1",
+            sequence: 1,
+            author: "agent",
+            body_markdown: `The run was ${status}.`,
+            status: "failed",
+            agent_run_id: run.id,
+            failure_json: null,
+            created_at: "2026-08-10T00:00:00.000Z",
+            updated_at: "2026-08-10T00:00:01.000Z",
+          })
+
+          expect(yield* projectReviewConversation([message], [run])).toMatchObject([
+            { _tag: status === "cancelled" ? "Cancelled" : "Interrupted" },
+          ])
+        }
+      }),
+  )
+
   it.effect("rejects one agent run reused by multiple response messages", () =>
     Effect.gen(function* () {
       const run = yield* decodeAgentRunRow({

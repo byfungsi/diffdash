@@ -395,7 +395,7 @@ const RunInspectionRows = Schema.Array(
   Schema.Struct({
     id: Schema.String,
     provider: Schema.String,
-    status: Schema.Literals(["running", "completed", "failed"]),
+    status: Schema.Literals(["running", "completed", "failed", "cancelled", "interrupted"]),
     usage_json: Schema.NullOr(Schema.fromJsonString(ReviewAgentUsage)),
     error: Schema.NullOr(Schema.String),
   }),
@@ -1500,11 +1500,9 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           bodyMarkdown: "Recovered response.",
         })
         expect(new Set(persistedRuns.map(({ status }) => status))).toEqual(
-          new Set(["completed", "failed"]),
+          new Set(["completed", "interrupted"]),
         )
-        expect(persistedRuns.find(({ id }) => id === interruptedTurn.run.id)?.error).toBe(
-          "The previous local agent run was interrupted. Retry to try again.",
-        )
+        expect(persistedRuns.find(({ id }) => id === interruptedTurn.run.id)?.error).toBeNull()
       }).pipe(Effect.provide(layer))
     }),
   )

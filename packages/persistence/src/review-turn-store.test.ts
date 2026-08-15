@@ -74,7 +74,7 @@ const CountsRow = Schema.Struct({
 })
 
 const RunInspectionRow = Schema.Struct({
-  status: Schema.Literals(["running", "completed", "failed"]),
+  status: Schema.Literals(["running", "completed", "failed", "cancelled", "interrupted"]),
   error: Schema.NullOr(Schema.String),
 })
 
@@ -602,6 +602,32 @@ describe("ReviewTurnStore", () => {
     }
   })
 
+  it.effect("atomically cancels the run and linked pending response", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const { repository, details } = yield* createHostedThread
+        const turns = yield* ReviewTurnStore
+        const mapping = yield* turns.validateTarget(validateInput(details.thread.id, repository.id))
+        const begun = yield* turns.beginTurn(beginInput(details.thread.id, repository.id, mapping))
+
+        const cancelled = yield* turns.requestCancellation(begun.run.id)
+        const repeated = yield* turns.requestCancellation(begun.run.id)
+        const stored = yield* turns.getOperation(begun.run.id)
+        const projected = yield* (yield* ReviewThreadStore).get(begun.run.threadId)
+
+        expect(cancelled).toMatchObject({ won: true, operation: { _tag: "Cancelled" } })
+        expect(repeated).toMatchObject({ won: false, operation: { _tag: "Cancelled" } })
+        expect(Option.getOrThrow(stored)._tag).toBe("Cancelled")
+        expect(projected.conversation.at(-1)).toMatchObject({
+          _tag: "Cancelled",
+          message: { id: begun.pendingMessage.id, _tag: "Failed" },
+          run: { id: begun.run.id, _tag: "Cancelled" },
+        })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it("recovers a committed begin after closing and reopening the database", async () => {
     const directory = mkdtempSync(join(tmpdir(), "diffdash-review-turn-reopen-"))
     const databasePath = join(directory, "test.sqlite")
@@ -622,7 +648,7 @@ describe("ReviewTurnStore", () => {
 
       expect(
         await afterCrash.runPromise(
-          Effect.flatMap(ReviewTurnStore, (turns) => turns.recoverInterruptedTurns),
+          Effect.flatMap(ReviewTurnStore, (turns) => turns.recoverInterruptedOperations),
         ),
       ).toBe(1)
       const recovered = await afterCrash.runPromise(
@@ -632,15 +658,18 @@ describe("ReviewTurnStore", () => {
           return { run, message: details.messages.at(-1) }
         }),
       )
-      expect(recovered.run.status).toBe("failed")
+      expect(recovered.run.status).toBe("interrupted")
       expect(recovered.message).toMatchObject({
         id: begun.pendingMessage.id,
         _tag: "Failed",
         agentRunId: begun.run.id,
       })
-      expect(recovered.run.error).toBe(
-        "The previous local agent run was interrupted. Retry to try again.",
-      )
+      expect(recovered.run.error).toBeNull()
+      expect(
+        await afterCrash.runPromise(
+          Effect.flatMap(ReviewTurnStore, (turns) => turns.getOperation(begun.run.id)),
+        ),
+      ).toMatchObject({ _tag: "Some", value: { _tag: "Interrupted" } })
     } finally {
       await beforeCrash.dispose()
       await afterCrash.dispose()
