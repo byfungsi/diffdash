@@ -128,6 +128,11 @@ export interface StoredHunkInput {
   readonly lineCount: number
 }
 
+/** Ordered canonical hunk metadata loaded without diff content bytes. */
+export interface StoredHunk extends StoredHunkInput {
+  readonly deltaId: FileDeltaId
+}
+
 /** Input for registering one exact file delta before blocks are written. */
 export interface RegisterFileDeltaInput {
   readonly identity: FileDeltaIdentity
@@ -217,6 +222,7 @@ const SnapshotBlockStoreOperation = Schema.Literals([
   "getSnapshotHeader",
   "listSnapshotFiles",
   "findSnapshotFile",
+  "findFileHunk",
   "visibleBlocks",
   "readManagedRange",
   "deleteSnapshot",
@@ -276,6 +282,10 @@ export class SnapshotBlockStore extends Context.Service<
       id: StoredSnapshotId,
       fileId: string,
     ) => Effect.Effect<SnapshotFilePlacement, SnapshotBlockStoreError>
+    readonly findFileHunk: (
+      deltaId: FileDeltaId,
+      hunkId: string,
+    ) => Effect.Effect<StoredHunk, SnapshotBlockStoreError>
     readonly visibleBlocks: (
       deltaId: FileDeltaId,
     ) => Effect.Effect<ReadonlyArray<VisibleDiffBlock>, SnapshotBlockStoreError>
@@ -785,6 +795,29 @@ export class SnapshotBlockStore extends Context.Service<
             return toSnapshotFilePlacement(file)
           }, mapError("findSnapshotFile")),
 
+          findFileHunk: Effect.fn("SnapshotBlockStore.findFileHunk")(function* (deltaId, hunkId) {
+            const row = yield* database.get(
+              "SELECT * FROM review_hunks WHERE delta_id = ? AND id = ?",
+              [deltaId, hunkId],
+            )
+            const hunk = yield* Effect.fromOption(
+              row,
+              () => new Error(`Missing file hunk ${hunkId}`),
+            ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(StoredHunkRow)))
+            return {
+              deltaId: hunk.delta_id,
+              id: hunk.id,
+              ordinal: hunk.ordinal,
+              fingerprint: hunk.fingerprint,
+              header: hunk.header,
+              oldStart: hunk.old_start,
+              oldLines: hunk.old_lines,
+              newStart: hunk.new_start,
+              newLines: hunk.new_lines,
+              lineCount: hunk.line_count,
+            }
+          }, mapError("findFileHunk")),
+
           visibleBlocks: Effect.fn("SnapshotBlockStore.visibleBlocks")(function* (deltaId) {
             return yield* Schema.decodeUnknownEffect(Schema.Array(VisibleDiffBlock))(
               yield* database.all(
@@ -969,6 +1002,19 @@ const SnapshotFileRow = Schema.Struct({
   old_path: Schema.NullOr(Schema.String),
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
+})
+
+const StoredHunkRow = Schema.Struct({
+  id: Schema.String,
+  delta_id: FileDeltaId,
+  ordinal: NonNegativeInt,
+  fingerprint: Schema.String,
+  header: Schema.String,
+  old_start: NonNegativeInt,
+  old_lines: NonNegativeInt,
+  new_start: NonNegativeInt,
+  new_lines: NonNegativeInt,
+  line_count: PositiveInt,
 })
 
 const ManagedResourceRow = Schema.Struct({

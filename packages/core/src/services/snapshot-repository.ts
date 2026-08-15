@@ -18,6 +18,7 @@ import {
   type FileDeltaId,
   type SnapshotFilePlacement,
   SnapshotBlockStore,
+  type StoredHunk,
   type StoredSnapshotHeader,
   StoredSnapshotId,
   type VisibleDiffBlock,
@@ -90,8 +91,10 @@ export class SnapshotProjectAuthority extends Context.Service<
 
 const SnapshotRepositoryOperation = Schema.Literals([
   "openSession",
+  "closeSession",
   "inventory",
   "findFile",
+  "findFileHunk",
   "resolveTarget",
   "waitForRange",
   "readRange",
@@ -180,6 +183,9 @@ export class SnapshotRepository extends Context.Service<
     readonly openSession: (
       identity: SnapshotRepositoryIdentity,
     ) => Effect.Effect<StoredSnapshotHeader, SnapshotRepositoryError>
+    readonly closeSession: (
+      identity: SnapshotRepositoryIdentity,
+    ) => Effect.Effect<boolean, SnapshotRepositoryError>
     readonly inventory: (
       identity: SnapshotRepositoryIdentity,
       offset: number,
@@ -189,6 +195,11 @@ export class SnapshotRepository extends Context.Service<
       identity: SnapshotRepositoryIdentity,
       fileId: ReviewFileId,
     ) => Effect.Effect<SnapshotFilePlacement, SnapshotRepositoryError>
+    readonly findFileHunk: (
+      identity: SnapshotRepositoryIdentity,
+      fileId: ReviewFileId,
+      hunkId: ReviewHunkId,
+    ) => Effect.Effect<StoredHunk, SnapshotRepositoryError>
     readonly resolveTarget: (
       identity: SnapshotRepositoryIdentity,
       fileId: ReviewFileId,
@@ -464,6 +475,21 @@ export const snapshotRepositoryLayer = (
           )
           return snapshot
         }),
+        closeSession: Effect.fn("SnapshotRepository.closeSession")(function* (identity) {
+          if (!Schema.is(SnapshotRepositoryIdentity)(identity))
+            return yield* reject(
+              "closeSession",
+              "identityRejected",
+              "Snapshot repository request identity is malformed",
+            )
+          return yield* sessionLock.withPermits(1)(
+            Ref.modify(active, (value) =>
+              Option.isSome(value) && sameSession(value.value.identity, identity)
+                ? [true, Option.none()]
+                : [false, value],
+            ),
+          )
+        }),
         inventory: Effect.fn("SnapshotRepository.inventory")(function* (identity, offset, limit) {
           yield* current("inventory", identity)
           if (
@@ -488,6 +514,20 @@ export const snapshotRepositoryLayer = (
         findFile: Effect.fn("SnapshotRepository.findFile")(function* (identity, fileId) {
           return (yield* loadFile("findFile", identity, fileId)).file
         }),
+        findFileHunk: Effect.fn("SnapshotRepository.findFileHunk")(
+          function* (identity, fileId, hunkId) {
+            const { file } = yield* loadFile("findFileHunk", identity, fileId)
+            const hunk = yield* store
+              .findFileHunk(file.deltaId, hunkId)
+              .pipe(
+                Effect.mapError(() =>
+                  reject("findFileHunk", "notFound", "Snapshot file hunk was not found"),
+                ),
+              )
+            yield* current("findFileHunk", identity)
+            return hunk
+          },
+        ),
         resolveTarget: Effect.fn("SnapshotRepository.resolveTarget")(
           function* (identity, fileId, hunkId, line) {
             const { file, session } = yield* loadFile("resolveTarget", identity, fileId)
