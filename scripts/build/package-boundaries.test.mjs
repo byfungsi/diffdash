@@ -106,6 +106,7 @@ const documentedPackageDependencies = new Map([
   ["@diffdash/demo", ["@diffdash/domain", "@diffdash/protocol"]],
   ["@diffdash/demo-video", ["@diffdash/app", "@diffdash/demo", "@diffdash/protocol"]],
   ["@diffdash/repository-scale", []],
+  ["@diffdash/review-data-worker", ["@diffdash/domain", "@diffdash/git-provider"]],
 ])
 const desktopErrorAdapterDependencies = new Map([
   [
