@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {},
   "scripts": {
+    "benchmark:generate": "node src/cli.mjs generate",
     "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs",
     "typecheck": "pnpm build",
     "benchmark:prepare": "node src/cli.mjs prepare",

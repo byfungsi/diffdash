@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { prepareGitFixture } from "./git-fixture.mjs"
+import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
 import {
   evaluateSwitchMemoryPlateau,
   measureProcessTree,
@@ -14,12 +15,14 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const defaultCacheDirectory = resolve(packageRoot, ".cache")
 
 const usage = `Usage:
+  pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
   pnpm repository-scale:measure -- --pid=<electron-pid> --fixture=<fixture-id> --session=<name> --switch=<1-10>
   pnpm repository-scale:evaluate -- --session=<name>
 `
 
 const commandOptions = {
+  generate: new Set(["name"]),
   prepare: new Set(["source", "base", "head", "name"]),
   measure: new Set([
     "pid",
@@ -152,6 +155,15 @@ const evaluate = async (options) => {
   process.stdout.write(`${output}\n`)
 }
 
+const generate = async (options) => {
+  const name = options.get("name") ?? "pathological"
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error("Invalid fixture name")
+  const result = await generateSyntheticFixture({
+    directory: resolve(defaultCacheDirectory, "synthetic", name, "repository"),
+  })
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
 const main = async () => {
   const [command, ...args] = process.argv.slice(2)
   if (command === undefined || command === "--help" || command === "-h") {
@@ -160,6 +172,7 @@ const main = async () => {
   }
   const options = parseOptions(args)
   validateOptions(command, options)
+  if (command === "generate") return generate(options)
   if (command === "prepare") return prepare(options)
   if (command === "measure") return measure(options)
   return evaluate(options)

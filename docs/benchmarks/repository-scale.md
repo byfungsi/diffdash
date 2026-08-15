@@ -5,8 +5,11 @@ process samples remain ignored under `tools/repository-scale/.cache/`.
 
 ## Method
 
-1. Prepare a pinned comparison from an existing local Linux checkout with
-   `pnpm repository-scale:prepare`.
+1. Generate the deterministic, auth-independent pathological suite with
+   `pnpm repository-scale:generate`. It produces exactly 61,000 files and 30,000,000 rows under the
+   ignored benchmark cache, including enormous-file, wrapped-line, annotation, broad-search, and
+   revision-change cases. Alternatively, prepare a pinned comparison from an existing local checkout
+   with `pnpm repository-scale:prepare`.
 2. Open the emitted repository and exact SHAs with `diffdash compare`.
 3. Exercise initial load, broad search, rapid scrolling, far-target navigation, annotations, and
    revision switching.
