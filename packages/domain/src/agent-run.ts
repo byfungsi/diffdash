@@ -54,11 +54,33 @@ export class FailedAgentRun extends Schema.TaggedClass<FailedAgentRun>()("Failed
   completedAt: UtcIsoTimestamp,
 }) {}
 
+/** A provider execution stopped by an explicit user cancellation. */
+export class CancelledAgentRun extends Schema.TaggedClass<CancelledAgentRun>()("Cancelled", {
+  ...AgentRunIdentity,
+  completedAt: UtcIsoTimestamp,
+}) {}
+
+/** A provider execution abandoned when its owning Core process stopped. */
+export class InterruptedAgentRun extends Schema.TaggedClass<InterruptedAgentRun>()("Interrupted", {
+  ...AgentRunIdentity,
+  completedAt: UtcIsoTimestamp,
+}) {}
+
 /** Persisted lifecycle record for one provider execution in a review thread. */
-export const AgentRun = Schema.Union([RunningAgentRun, CompletedAgentRun, FailedAgentRun])
+export const AgentRun = Schema.Union([
+  RunningAgentRun,
+  CompletedAgentRun,
+  FailedAgentRun,
+  CancelledAgentRun,
+  InterruptedAgentRun,
+])
 
 /** Persisted lifecycle record for one provider execution in a review thread. */
 export type AgentRun = typeof AgentRun.Type
+
+/** Returns whether a persisted run has reached a durable terminal state. */
+export const isTerminalAgentRun = (run: AgentRun): run is Exclude<AgentRun, RunningAgentRun> =>
+  !Schema.is(RunningAgentRun)(run)
 
 /** A normalized artifact together with its persistent run and thread ownership. */
 export class StoredAgentRunArtifact extends Schema.Class<StoredAgentRunArtifact>(

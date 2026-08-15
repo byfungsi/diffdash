@@ -7,6 +7,11 @@ import {
   WalkthroughGetStoredAdmissionFailure,
   WalkthroughStartAdmissionFailure,
 } from "./walkthrough"
+import {
+  ReviewAgentCancelFailure,
+  ReviewAgentGetOperationFailure,
+  ReviewAgentStartFailure,
+} from "./review-agent"
 
 /** Server-side authentication boundary shared by all Electron-to-Core RPCs. */
 export class CoreTransportAuthenticationMiddleware extends RpcMiddleware.Service<CoreTransportAuthenticationMiddleware>()(
@@ -42,4 +47,22 @@ export class WalkthroughCancelAdmissionMiddleware extends RpcMiddleware.Service<
 export class WalkthroughGetStoredAdmissionMiddleware extends RpcMiddleware.Service<WalkthroughGetStoredAdmissionMiddleware>()(
   "@diffdash/core-rpc/WalkthroughGetStoredAdmissionMiddleware",
   { error: WalkthroughGetStoredAdmissionFailure },
+) {}
+
+/** Server-side admission boundary for `ReviewAgents.start`. */
+export class ReviewAgentStartAdmissionMiddleware extends RpcMiddleware.Service<ReviewAgentStartAdmissionMiddleware>()(
+  "@diffdash/core-rpc/ReviewAgentStartAdmissionMiddleware",
+  { error: ReviewAgentStartFailure },
+) {}
+
+/** Server-side admission boundary for `ReviewAgents.getOperation`. */
+export class ReviewAgentGetOperationAdmissionMiddleware extends RpcMiddleware.Service<ReviewAgentGetOperationAdmissionMiddleware>()(
+  "@diffdash/core-rpc/ReviewAgentGetOperationAdmissionMiddleware",
+  { error: ReviewAgentGetOperationFailure },
+) {}
+
+/** Server-side admission boundary for `ReviewAgents.cancel`. */
+export class ReviewAgentCancelAdmissionMiddleware extends RpcMiddleware.Service<ReviewAgentCancelAdmissionMiddleware>()(
+  "@diffdash/core-rpc/ReviewAgentCancelAdmissionMiddleware",
+  { error: ReviewAgentCancelFailure },
 ) {}

@@ -15,6 +15,8 @@
     "./lifecycle": "./src/lifecycle.ts",
     "./method-policy": "./src/method-policy.ts",
     "./process-startup": "./src/process-startup.ts",
+    "./review-agent": "./src/review-agent.ts",
+    "./review-agent-rpc": "./src/review-agent-rpc.ts",
     "./transport": "./src/transport.ts",
     "./walkthrough": "./src/walkthrough.ts",
     "./walkthrough-rpc": "./src/walkthrough-rpc.ts"

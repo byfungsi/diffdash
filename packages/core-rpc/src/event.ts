@@ -175,6 +175,9 @@ export const CoreEventReplayRequest = Schema.Struct({
   afterSequence: Schema.NullOr(CoreEventSequence),
 }).annotate({ identifier: "CoreEventReplayRequest" })
 
+/** Last event observed by a reconnecting host, or null when this is its first connection. */
+export type CoreEventReplayRequest = typeof CoreEventReplayRequest.Type
+
 /** Bounded replay when retained, otherwise an explicit instruction to query authoritative state. */
 export const CoreEventReplayResult = Schema.Union([
   Schema.Struct({
@@ -189,8 +192,14 @@ export const CoreEventReplayResult = Schema.Union([
   }),
 ]).annotate({ identifier: "CoreEventReplayResult" })
 
+/** Bounded replay when retained, otherwise an explicit instruction to query authoritative state. */
+export type CoreEventReplayResult = typeof CoreEventReplayResult.Type
+
 /** Durable command lifecycle persisted before any corresponding event hint is published. */
 export const CoreCommandState = Schema.Literals(["accepted", "committed", "failed", "acknowledged"])
+
+/** Durable command lifecycle persisted before any corresponding event hint is published. */
+export type CoreCommandState = typeof CoreCommandState.Type
 
 /** Plain durable command receipt returned after the acceptance row commits. */
 export const CoreCommandReceipt = Schema.Struct({
@@ -201,9 +210,15 @@ export const CoreCommandReceipt = Schema.Struct({
   acceptedAt: UtcIsoTimestamp,
 }).annotate({ identifier: "CoreCommandReceipt" })
 
+/** Plain durable command receipt returned after the acceptance row commits. */
+export type CoreCommandReceipt = typeof CoreCommandReceipt.Type
+
 /** Host acknowledgement for a committed terminal command version. */
 export const CoreCommandAcknowledgement = Schema.Struct({
   context: HostRequestContext,
   commandId: CoreCommandId,
   stateVersion: CoreStateVersion,
 }).annotate({ identifier: "CoreCommandAcknowledgement" })
+
+/** Host acknowledgement for a committed terminal command version. */
+export type CoreCommandAcknowledgement = typeof CoreCommandAcknowledgement.Type
