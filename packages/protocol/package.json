@@ -19,6 +19,7 @@
     "./repository-link": "./src/repository-link.ts",
     "./review-threads": "./src/review-threads.ts",
     "./review-snapshot": "./src/review-snapshot.ts",
+    "./review-session": "./src/review-session.ts",
     "./testing": "./src/testing.ts",
     "./transport-error": "./src/transport-error.ts",
     "./viewed-files": "./src/viewed-files.ts",
