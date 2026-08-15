@@ -163,9 +163,9 @@ const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions
                   Chunk: () => undefined,
                   Exit: ({ requestId }) =>
                     reservations.delete(walkthroughReservationKey(clientId, requestId)),
-                  Defect: () => releaseClient(clientId),
+                  Defect: () => undefined,
                   Pong: () => undefined,
-                  ClientProtocolError: () => releaseClient(clientId),
+                  ClientProtocolError: () => undefined,
                 }),
               ),
             ),

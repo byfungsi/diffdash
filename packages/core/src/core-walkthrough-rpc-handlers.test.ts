@@ -15,6 +15,7 @@ import { AuthorizeDatabaseOwnershipRequest } from "@diffdash/core-rpc/lifecycle"
 import {
   AuthenticatedCoreWalkthroughServerRpcs,
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  CORE_RPC_MAX_CONCURRENCY,
   CORE_TRANSPORT_TOKEN_HEADER,
 } from "@diffdash/core-rpc/transport"
 import {
@@ -234,6 +235,18 @@ describe("Core walkthrough RPC handlers", () => {
       const active = yield* client["Walkthroughs.getOperation"](
         GetWalkthroughOperationRequest.make({ ...requestIdentity, operationId }),
       )
+      yield* Effect.forEach(
+        Array.from({ length: CORE_RPC_MAX_CONCURRENCY + 1 }, (_, index) => index),
+        (index) =>
+          client["Walkthroughs.getOperation"](
+            GetWalkthroughOperationRequest.make({
+              ...requestIdentity,
+              requestId: HostRequestId.make(`h:handler-release-${String(index)}`),
+              operationId,
+            }),
+          ),
+        { discard: true },
+      )
       const cancelled = yield* client["Walkthroughs.cancel"](
         CancelWalkthroughRequest.make({ ...requestIdentity, operationId }),
       )
@@ -364,14 +377,18 @@ describe("Core walkthrough RPC handlers", () => {
               Effect.gen(function* () {
                 const count = yield* Ref.updateAndGet(active, (value) => value + 1)
                 yield* Ref.update(maximumActive, (value) => Math.max(value, count))
-                if (count === 32) yield* Deferred.succeed(saturated, undefined)
+                if (count === CORE_RPC_MAX_CONCURRENCY) {
+                  yield* Deferred.succeed(saturated, undefined)
+                }
                 yield* Deferred.await(release)
                 return activeOperation
               }).pipe(
                 Effect.onInterrupt(() =>
                   Ref.updateAndGet(interruptedCount, (value) => value + 1).pipe(
                     Effect.flatMap((count) =>
-                      count === 32 ? Deferred.succeed(interrupted, undefined) : Effect.void,
+                      count === CORE_RPC_MAX_CONCURRENCY
+                        ? Deferred.succeed(interrupted, undefined)
+                        : Effect.void,
                     ),
                   ),
                 ),
@@ -418,7 +435,7 @@ describe("Core walkthrough RPC handlers", () => {
       yield* Context.get(serverContext, CoreLifecycle).completeRecovery
 
       const calls = yield* Effect.forEach(
-        Array.from({ length: 32 }, (_, index) => index),
+        Array.from({ length: CORE_RPC_MAX_CONCURRENCY }, (_, index) => index),
         (index) =>
           client["Walkthroughs.getOperation"](
             GetWalkthroughOperationRequest.make({
@@ -431,7 +448,7 @@ describe("Core walkthrough RPC handlers", () => {
       ).pipe(Effect.forkScoped)
       yield* Deferred.await(saturated)
 
-      expect(yield* Ref.get(maximumActive)).toBe(32)
+      expect(yield* Ref.get(maximumActive)).toBe(CORE_RPC_MAX_CONCURRENCY)
       const overflow = yield* client["Walkthroughs.getOperation"](
         GetWalkthroughOperationRequest.make({
           ...requestIdentity,
@@ -440,7 +457,7 @@ describe("Core walkthrough RPC handlers", () => {
         }),
       ).pipe(Effect.forkScoped)
       yield* Effect.yieldNow
-      expect(yield* Ref.get(maximumActive)).toBe(32)
+      expect(yield* Ref.get(maximumActive)).toBe(CORE_RPC_MAX_CONCURRENCY)
       const firstOverflowExit = yield* Fiber.await(overflow)
       expect(Exit.isFailure(firstOverflowExit)).toBe(true)
       const repeatedOverflow = yield* client["Walkthroughs.getOperation"](
@@ -451,7 +468,7 @@ describe("Core walkthrough RPC handlers", () => {
         }),
       ).pipe(Effect.forkScoped)
       yield* Effect.yieldNow
-      expect(yield* Ref.get(maximumActive)).toBe(32)
+      expect(yield* Ref.get(maximumActive)).toBe(CORE_RPC_MAX_CONCURRENCY)
       yield* Scope.close(clientScope, Exit.void)
       const repeatedOverflowExit = yield* Fiber.await(repeatedOverflow)
       expect(Exit.isFailure(repeatedOverflowExit)).toBe(true)
