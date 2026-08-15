@@ -168,11 +168,18 @@ const passThroughAdmissionLayer = Layer.mergeAll(
   Layer.succeed(WalkthroughGetStoredAdmissionMiddleware, (effect) => effect),
 )
 
+const unusedReviewAgents = {
+  start: () => Effect.die("Unexpected review-agent start"),
+  getOperation: () => Effect.die("Unexpected review-agent read"),
+  cancel: () => Effect.die("Unexpected review-agent cancellation"),
+}
+
 const operationsLayer = Layer.succeed(
   CoreOperationService,
   CoreOperationService.of({
     start: Effect.void,
     execute: () => Effect.die("Unexpected generic Core operation"),
+    reviewAgents: unusedReviewAgents,
     walkthroughs: {
       start: () => Effect.die("Unexpected legacy walkthrough start"),
       startGeneration: () =>
@@ -369,6 +376,7 @@ describe("Core walkthrough RPC handlers", () => {
           CoreOperationService.of({
             start: Effect.void,
             execute: () => Effect.die("Unexpected generic Core operation"),
+            reviewAgents: unusedReviewAgents,
             walkthroughs: {
               start: () => Effect.die("Unexpected legacy walkthrough start"),
               startGeneration: () => Effect.die("Unexpected walkthrough start"),
@@ -456,6 +464,7 @@ describe("Core walkthrough RPC handlers", () => {
         CoreOperationService.of({
           start: Effect.void,
           execute: () => Effect.die("Unexpected generic Core operation"),
+          reviewAgents: unusedReviewAgents,
           walkthroughs: {
             start: () => Effect.die("Unexpected legacy walkthrough start"),
             startGeneration: () =>
@@ -547,6 +556,7 @@ describe("Core walkthrough RPC handlers", () => {
           return CoreOperationService.of({
             start: Effect.void,
             execute: () => Effect.die("Unexpected generic Core operation"),
+            reviewAgents: unusedReviewAgents,
             walkthroughs: {
               start: () => Effect.die("Unexpected legacy walkthrough start"),
               startGeneration: () =>
@@ -649,6 +659,7 @@ describe("Core walkthrough RPC handlers", () => {
         CoreOperationService.of({
           start: Effect.void,
           execute: () => Effect.die("Unexpected generic Core operation"),
+          reviewAgents: unusedReviewAgents,
           walkthroughs: {
             start: () => Effect.die("Unexpected legacy walkthrough start"),
             startGeneration: () => Effect.die("Unexpected walkthrough start"),

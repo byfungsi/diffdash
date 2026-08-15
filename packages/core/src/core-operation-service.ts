@@ -1,14 +1,21 @@
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
-import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
+import {
+  WalkthroughStore,
+  type WalkthroughStoreError,
+} from "@diffdash/persistence/walkthrough-store"
+import type { AgentRun } from "@diffdash/domain/agent-run"
+import type { AgentRunId } from "@diffdash/domain/agent-run-id"
 import { Context, Effect, Layer, Option } from "effect"
 
 import {
+  CoreMethod,
   type CoreMethod as CoreMethodType,
   type CoreMethodInput,
   type CoreOperationFailure,
   type CoreOperationOptions,
   type CoreOperationOutput,
+  type CoreThreadResolutionFailure,
 } from "./core-contract"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
@@ -18,6 +25,10 @@ import {
   type OperationHandlers,
 } from "./operations/operation-handlers"
 import { makeRepositoryOperationHandlers } from "./operations/repository-operation-handlers"
+import {
+  ReviewAgentOperationsService,
+  type ReviewAgentOperationError,
+} from "./operations/review-agent-operations"
 import { makeReviewOperationHandlers } from "./operations/review-operation-handlers"
 import { makeReviewResolution } from "./operations/review-resolution"
 import { makeSettingsOperationHandlers } from "./operations/settings-operation-handlers"
@@ -28,6 +39,12 @@ import {
   type WalkthroughOperations,
 } from "./operations/walkthrough-operations"
 
+/** Expected failures while resolving and durably accepting one review-agent request. */
+export type CoreReviewAgentStartError =
+  | ReviewAgentOperationError
+  | CoreThreadResolutionFailure
+  | WalkthroughStoreError
+
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
   readonly execute: <Method extends CoreMethodType>(
@@ -36,6 +53,17 @@ interface CoreOperationServiceShape {
     options?: CoreOperationOptions,
   ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
   readonly walkthroughs: WalkthroughOperations
+  readonly reviewAgents: {
+    readonly start: (
+      input: CoreMethodInput<typeof CoreMethod.runReviewThreadAgent>,
+    ) => Effect.Effect<AgentRunId, CoreReviewAgentStartError>
+    readonly getOperation: (
+      runId: AgentRunId,
+    ) => Effect.Effect<Option.Option<AgentRun>, ReviewAgentOperationError>
+    readonly cancel: (
+      runId: AgentRunId,
+    ) => Effect.Effect<Option.Option<AgentRun>, ReviewAgentOperationError>
+  }
 }
 
 /** Internal authority that exposes only cohesive Core operations to the embedded runtime. */
@@ -49,6 +77,7 @@ export const coreOperationLayer = Layer.effect(
   CoreOperationService,
   Effect.gen(function* () {
     const turns = yield* ReviewTurnStore
+    const reviewAgentOperations = yield* ReviewAgentOperationsService
     const walkthroughOperationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
     const reviews = yield* makeReviewResolution
@@ -60,6 +89,29 @@ export const coreOperationLayer = Layer.effect(
     const settingsHandlers = yield* makeSettingsOperationHandlers
     const threadHandlers = yield* makeThreadOperationHandlers(reviews, walkthroughs)
     const viewedFileHandlers = yield* makeViewedFileOperationHandlers
+    const startReviewAgent = Effect.fn("Core.ReviewAgents.resolveAndStart")(function* (
+      request: CoreMethodInput<typeof CoreMethod.runReviewThreadAgent>,
+    ) {
+      const mapping = yield* turns.validateTarget({
+        threadId: request.threadId,
+        target: request.target,
+        repoId: request.repoId,
+        reviewKey: request.reviewKey,
+        baseRevision: request.expectedBaseRevision,
+        headRevision: request.expectedHeadRevision,
+      })
+      const { repo, snapshot } = yield* reviews.resolve(request.target)
+      const walkthrough = yield* walkthroughs.getCached(repo.id, snapshot)
+      return yield* reviewAgentOperations.start({
+        threadId: request.threadId,
+        repoId: repo.id,
+        target: request.target,
+        mapping,
+        snapshot,
+        cwd: repo.localPath,
+        walkthrough,
+      })
+    })
     const handlerCapabilities = [
       analyticsHandlers,
       applicationHandlers,
@@ -95,7 +147,7 @@ export const coreOperationLayer = Layer.effect(
 
     return CoreOperationService.of({
       start: Effect.gen(function* () {
-        yield* turns.recoverInterruptedTurns.pipe(
+        yield* reviewAgentOperations.recoverInterrupted.pipe(
           Effect.mapError((cause) =>
             CoreStartupError.make({
               operation: "recoverInterruptedReviewTurns",
@@ -162,6 +214,11 @@ export const coreOperationLayer = Layer.effect(
       }),
       execute,
       walkthroughs,
+      reviewAgents: {
+        start: startReviewAgent,
+        getOperation: reviewAgentOperations.getOperation,
+        cancel: reviewAgentOperations.cancel,
+      },
     })
   }),
 )

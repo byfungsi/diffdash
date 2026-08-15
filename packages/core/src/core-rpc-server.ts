@@ -2,6 +2,7 @@ import { AppStateBusinessRpcs } from "@diffdash/core-rpc/business"
 import { CoreControlRpcs } from "@diffdash/core-rpc/control"
 import {
   AuthenticatedCoreWalkthroughServerRpcs,
+  AuthenticatedCoreReviewAgentServerRpcs,
   AuthenticatedCoreServerRpcs,
 } from "@diffdash/core-rpc/transport"
 import { Layer } from "effect"
@@ -10,6 +11,7 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import { coreBusinessRpcHandlersLayer } from "./core-business-rpc-handlers"
 import { coreControlRpcHandlersLayer } from "./core-control-rpc-handlers"
 import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
+import { coreReviewAgentRpcHandlersLayer } from "./core-review-agent-rpc-handlers"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
   CoreAuthenticatedHostSession,
@@ -53,6 +55,23 @@ export const coreWalkthroughRpcServerLayer = (
       Layer.mergeAll(
         coreControlRpcHandlersLayer,
         coreWalkthroughRpcHandlersLayer,
+        coreRpcAdmissionLayer,
+        coreTransportAuthenticationLayer(authentication),
+      ),
+    ),
+    Layer.provideMerge(hostSessionLayer),
+  )
+
+/** Runs durable review-agent lifecycle RPCs when the Core operation runtime is available. */
+export const coreReviewAgentRpcServerLayer = (
+  authentication: CoreTransportAuthenticationOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession> = coreAuthenticatedHostSessionLayer,
+) =>
+  RpcServer.layer(AuthenticatedCoreReviewAgentServerRpcs).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        coreControlRpcHandlersLayer,
+        coreReviewAgentRpcHandlersLayer,
         coreRpcAdmissionLayer,
         coreTransportAuthenticationLayer(authentication),
       ),

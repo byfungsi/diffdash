@@ -1,5 +1,8 @@
 import {
   AppStateGetAdmissionMiddleware,
+  ReviewAgentCancelAdmissionMiddleware,
+  ReviewAgentGetOperationAdmissionMiddleware,
+  ReviewAgentStartAdmissionMiddleware,
   WalkthroughCancelAdmissionMiddleware,
   WalkthroughGetOperationAdmissionMiddleware,
   WalkthroughGetStoredAdmissionMiddleware,
@@ -33,6 +36,13 @@ import {
   WalkthroughGetStoredAdmissionFailure,
   WalkthroughStartAdmissionFailure,
 } from "@diffdash/core-rpc/walkthrough"
+import {
+  ReviewAgentCancelFailure,
+  ReviewAgentGetOperationFailure,
+  ReviewAgentOperationRequest,
+  ReviewAgentStartFailure,
+  StartReviewAgentOperationRequest,
+} from "@diffdash/core-rpc/review-agent"
 import { Effect, Fiber, FiberSet, Layer, Option, Predicate, Schema, Semaphore } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
@@ -402,6 +412,128 @@ const walkthroughGetStoredAdmissionLayer = Layer.effect(
   }),
 )
 
+const reviewAgentStartAdmissionLayer = Layer.effect(
+  ReviewAgentStartAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(StartReviewAgentOperationRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitReviewAgentRequest(lifecycle, request, options.rpc, effect).pipe(
+          Effect.catch((code) =>
+            Predicate.isString(code)
+              ? Effect.fail(
+                  ReviewAgentStartFailure.make({
+                    ...requestIdentity(request),
+                    method: "ReviewAgents.start",
+                    runId: null,
+                    code: reviewAgentAdmissionCode(code),
+                    safeMessage: reviewAgentAdmissionMessage(code),
+                  }),
+                )
+              : Effect.fail(code),
+          ),
+          Effect.catchDefect(() =>
+            Effect.die(
+              ReviewAgentStartFailure.make({
+                ...requestIdentity(request),
+                method: "ReviewAgents.start",
+                runId: null,
+                code: "REVIEW_AGENT_INTERNAL_ERROR",
+                safeMessage: "DiffDash Core encountered an internal review-agent error.",
+              }),
+            ),
+          ),
+        )
+      })
+  }),
+)
+
+const reviewAgentGetOperationAdmissionLayer = Layer.effect(
+  ReviewAgentGetOperationAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(ReviewAgentOperationRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitReviewAgentRequest(lifecycle, request, options.rpc, effect).pipe(
+          Effect.catch((code) =>
+            Predicate.isString(code)
+              ? Effect.fail(
+                  ReviewAgentGetOperationFailure.make({
+                    ...requestIdentity(request),
+                    method: "ReviewAgents.getOperation",
+                    runId: request.runId,
+                    code: reviewAgentAdmissionCode(code),
+                    safeMessage: reviewAgentAdmissionMessage(code),
+                  }),
+                )
+              : Effect.fail(code),
+          ),
+          Effect.catchDefect(() =>
+            Effect.die(
+              ReviewAgentGetOperationFailure.make({
+                ...requestIdentity(request),
+                method: "ReviewAgents.getOperation",
+                runId: request.runId,
+                code: "REVIEW_AGENT_INTERNAL_ERROR",
+                safeMessage: "DiffDash Core encountered an internal review-agent error.",
+              }),
+            ),
+          ),
+        )
+      })
+  }),
+)
+
+const reviewAgentCancelAdmissionLayer = Layer.effect(
+  ReviewAgentCancelAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(ReviewAgentOperationRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitReviewAgentRequest(
+          lifecycle,
+          request,
+          options.rpc,
+          Effect.uninterruptible(effect),
+        ).pipe(
+          Effect.catch((code) =>
+            Predicate.isString(code)
+              ? Effect.fail(
+                  ReviewAgentCancelFailure.make({
+                    ...requestIdentity(request),
+                    method: "ReviewAgents.cancel",
+                    runId: request.runId,
+                    code: reviewAgentAdmissionCode(code),
+                    safeMessage: reviewAgentAdmissionMessage(code),
+                  }),
+                )
+              : Effect.fail(code),
+          ),
+          Effect.catchDefect(() =>
+            Effect.die(
+              ReviewAgentCancelFailure.make({
+                ...requestIdentity(request),
+                method: "ReviewAgents.cancel",
+                runId: request.runId,
+                code: "REVIEW_AGENT_INTERNAL_ERROR",
+                safeMessage: "DiffDash Core encountered an internal review-agent error.",
+              }),
+            ),
+          ),
+        )
+      })
+  }),
+)
+
 /** Enforces identity, lifecycle, drain, and defect policy for active Core business RPCs. */
 export const coreRpcAdmissionLayer = Layer.mergeAll(
   appStateAdmissionLayer,
@@ -409,7 +541,45 @@ export const coreRpcAdmissionLayer = Layer.mergeAll(
   walkthroughGetOperationAdmissionLayer,
   walkthroughCancelAdmissionLayer,
   walkthroughGetStoredAdmissionLayer,
+  reviewAgentStartAdmissionLayer,
+  reviewAgentGetOperationAdmissionLayer,
+  reviewAgentCancelAdmissionLayer,
 )
+
+const admitReviewAgentRequest = Effect.fn("Core.ReviewAgents.admit")(function* <A, E, R>(
+  lifecycle: CoreLifecycle["Service"],
+  request: HostRequestContext,
+  rpc: Parameters<typeof getCoreRpcMethodPolicy>[0],
+  effect: Effect.Effect<A, E, R>,
+) {
+  const policy = yield* requireMethodPolicy(rpc)
+  yield* requireRequestBudget(request, policy).pipe(
+    Effect.mapError(() => "REVIEW_AGENT_INTERNAL_ERROR" as const),
+  )
+  yield* lifecycle
+    .admitBusinessRequest(request)
+    .pipe(Effect.mapError(() => "CORE_DRAINING" as const))
+  return yield* lifecycle.interruptOnDrain(effect).pipe(
+    Effect.timeoutOrElse({
+      duration: policy.deadlineMs,
+      orElse: () => Effect.fail("REVIEW_AGENT_INTERNAL_ERROR" as const),
+    }),
+  )
+})
+
+const reviewAgentAdmissionCode = (code: string) =>
+  code === "CORE_DRAINING" ? ("CORE_DRAINING" as const) : ("REVIEW_AGENT_INTERNAL_ERROR" as const)
+
+const reviewAgentAdmissionMessage = (code: string) =>
+  code === "CORE_DRAINING"
+    ? "DiffDash Core is draining."
+    : "DiffDash Core could not admit the review-agent request."
+
+const requestIdentity = (request: HostRequestContext) => ({
+  applicationInstanceId: request.applicationInstanceId,
+  processEpoch: request.processEpoch,
+  requestId: request.requestId,
+})
 
 const requireMethodPolicy = (rpc: Parameters<typeof getCoreRpcMethodPolicy>[0]) =>
   Option.match(getCoreRpcMethodPolicy(rpc), {

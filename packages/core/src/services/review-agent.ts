@@ -92,7 +92,7 @@ export class ReviewAgentRouting extends Context.Service<
 >()("@diffdash/ReviewAgentRouting") {}
 
 /** Immutable resources resolved by main before one local review-agent turn. */
-interface RunReviewAgentTurnInput {
+export interface RunReviewAgentTurnInput {
   readonly threadId: ReviewThreadId
   readonly repoId: ReviewProjectId
   readonly target: ReviewThreadTarget
@@ -101,6 +101,19 @@ interface RunReviewAgentTurnInput {
   readonly cwd: RepositoryLocalPath
   readonly walkthrough: Option.Option<StoredWalkthrough>
   readonly onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>
+}
+
+/** Durable review-turn reservation and the scoped provider work that owns it. */
+export interface AcceptedReviewAgentTurn {
+  readonly operation: BegunReviewTurn["run"]
+  readonly worker: Effect.Effect<
+    ReviewThreadDetails,
+    | ReviewAgentServiceError
+    | ReviewAgentFinalizeError
+    | ReviewAgentProviderFailureError
+    | ReviewTurnTargetError
+    | ReviewTurnRejectedError
+  >
 }
 
 /** A recoverable orchestration failure suitable for renderer error state. */
@@ -137,6 +150,15 @@ export class ReviewAgentProviderFailureError extends Schema.TaggedError<ReviewAg
 export class ReviewAgentService extends Context.Service<
   ReviewAgentService,
   {
+    readonly acceptThreadTurn: (
+      input: RunReviewAgentTurnInput,
+    ) => Effect.Effect<
+      AcceptedReviewAgentTurn,
+      | ReviewAgentServiceError
+      | ReviewAgentProviderFailureError
+      | ReviewTurnTargetError
+      | ReviewTurnRejectedError
+    >
     readonly runThreadTurn: (
       input: RunReviewAgentTurnInput,
     ) => Effect.Effect<
@@ -163,55 +185,54 @@ export class ReviewAgentService extends Context.Service<
       const workspaces = yield* HostedReviewWorkspacePool
       const gitProviders = yield* GitProviderRegistry
 
-      return ReviewAgentService.of({
-        runThreadTurn: (input) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              yield* validateReviewSnapshot(input)
-              const selection = yield* routing.get
-              const route = providerRoute(selection.selection)
-              const providerCandidates = yield* resolveReviewProviders(
-                providers,
-                selection.selection,
+      const acceptThreadTurnAt = Effect.fn("ReviewAgentService.acceptThreadTurnAt")(
+        (input: RunReviewAgentTurnInput, candidateOffset: number) =>
+          Effect.gen(function* () {
+            yield* validateReviewSnapshot(input)
+            const selection = yield* routing.get
+            const route = providerRoute(selection.selection)
+            const providerCandidates = yield* resolveReviewProviders(providers, selection.selection)
+            if (Schema.is(LocalReviewSnapshot)(input.snapshot) && input.cwd === null) {
+              return yield* serviceError(
+                "runThreadTurn.workingDirectory",
+                new Error("Local review execution requires a working directory"),
               )
-              if (Schema.is(LocalReviewSnapshot)(input.snapshot) && input.cwd === null) {
-                return yield* serviceError(
-                  "runThreadTurn.workingDirectory",
-                  new Error("Local review execution requires a working directory"),
-                )
-              }
-              const hostedExecution = yield* prepareHostedExecution(input.snapshot, gitProviders)
-              const comparisonExecution = yield* prepareComparisonExecution(
-                input.snapshot,
-                gitProviders,
-                input.cwd,
-              )
-              const publishingTools = (yield* gitProviders.list).flatMap(
-                (registration) => registration.publishingTools,
-              )
-              const runCandidate = Effect.fn("ReviewAgentService.runCandidate")(function* (
-                provider: ResolvedReviewProvider,
-              ) {
-                const providerId = provider.registration.manifest.descriptor.id
-                const persistedProviderId = ReviewAgentProviderId.make(providerId)
-                const model = provider.model
-                const begun = yield* turns.beginTurn({
-                  threadId: input.threadId,
-                  target: input.target,
-                  repoId: input.repoId,
-                  reviewKey: input.snapshot.reviewKey,
-                  baseRevision: input.snapshot.baseRevision,
-                  headRevision: input.snapshot.headRevision,
-                  mapping: input.mapping,
-                  provider: persistedProviderId,
-                  model,
-                  promptVersion: REVIEW_THREAD_PROMPT_VERSION,
-                })
-                const providerRunId =
-                  provider.registration.manifest.session.mode === "resume"
-                    ? begun.resumableProviderRunId
-                    : null
+            }
+            const hostedExecution = yield* prepareHostedExecution(input.snapshot, gitProviders)
+            const comparisonExecution = yield* prepareComparisonExecution(
+              input.snapshot,
+              gitProviders,
+              input.cwd,
+            )
+            const publishingTools = (yield* gitProviders.list).flatMap(
+              (registration) => registration.publishingTools,
+            )
+            const provider = yield* selectReviewProvider(
+              route,
+              providerCandidates.slice(candidateOffset),
+            )
+            const providerId = provider.registration.manifest.descriptor.id
+            const persistedProviderId = ReviewAgentProviderId.make(providerId)
+            const model = provider.model
+            const begun = yield* turns.beginTurn({
+              threadId: input.threadId,
+              target: input.target,
+              repoId: input.repoId,
+              reviewKey: input.snapshot.reviewKey,
+              baseRevision: input.snapshot.baseRevision,
+              headRevision: input.snapshot.headRevision,
+              mapping: input.mapping,
+              provider: persistedProviderId,
+              model,
+              promptVersion: REVIEW_THREAD_PROMPT_VERSION,
+            })
+            const providerRunId =
+              provider.registration.manifest.session.mode === "resume"
+                ? begun.resumableProviderRunId
+                : null
 
+            const worker = Effect.scoped(
+              Effect.gen(function* () {
                 const execute = Effect.gen(function* () {
                   const memoryWindow = selectThreadMemoryWindow({
                     threadId: input.threadId,
@@ -351,51 +372,65 @@ export class ReviewAgentService extends Context.Service<
                     memoryUpdate,
                   })
                   .pipe(Effect.mapError((cause) => finalizeErrorValue("completeTurn", cause)))
-              })
-
-              const runCandidates: (
-                remaining: readonly ResolvedReviewProvider[],
-              ) => Effect.Effect<ReviewThreadDetails, CoreExpectedCause> = Effect.fn(
-                "ReviewAgentService.runCandidates",
-              )(
-                (remaining): Effect.Effect<ReviewThreadDetails, CoreExpectedCause> =>
-                  Effect.gen(function* () {
-                    const [provider, ...rest] = remaining
-                    if (provider === undefined) {
-                      return yield* providerFailureError(
-                        AgentProviderId.make("unavailable"),
-                        "configuration",
-                        new Error("No review agent provider is available"),
-                      )
-                    }
-                    const readiness = yield* provider.ready.pipe(Effect.result)
-                    if (Result.isFailure(readiness)) {
-                      return route.mode === "auto" && rest.length > 0
-                        ? yield* runCandidates(rest)
-                        : yield* Effect.fail(readiness.failure)
-                    }
-                    return yield* runCandidate(provider).pipe(
-                      Effect.catch((cause) =>
-                        route.mode === "auto" &&
-                        rest.length > 0 &&
-                        Schema.is(ReviewAgentProviderFailureError)(cause)
-                          ? runCandidates(rest)
-                          : Effect.fail(cause),
-                      ),
-                    )
-                  }),
-              )
-
-              return yield* runCandidates(providerCandidates)
-            }).pipe(
+              }),
+            ).pipe(
               Effect.mapError((cause) =>
                 isReviewAgentTurnError(cause)
                   ? cause
                   : (publicPreflightFailure(cause) ??
-                    serviceErrorValue("runThreadTurn.preflight", cause)),
+                    serviceErrorValue("runThreadTurn.provider", cause)),
+              ),
+            )
+
+            return { operation: begun.run, worker }
+          }).pipe(
+            Effect.mapError((cause) =>
+              isReviewAgentAcceptanceError(cause)
+                ? cause
+                : (publicPreflightFailure(cause) ??
+                  serviceErrorValue("runThreadTurn.preflight", cause)),
+            ),
+          ),
+      )
+
+      const acceptThreadTurn: ReviewAgentService["Service"]["acceptThreadTurn"] = (input) =>
+        acceptThreadTurnAt(input, 0)
+
+      const runThreadTurn = Effect.fn("ReviewAgentService.runThreadTurn")(function* (
+        input: RunReviewAgentTurnInput,
+      ) {
+        const selection = (yield* routing.get).selection
+        const route = providerRoute(selection)
+        const candidateCount = (yield* resolveReviewProviders(providers, selection).pipe(
+          Effect.mapError(
+            (cause) =>
+              (isReviewAgentAcceptanceError(cause) ? cause : publicPreflightFailure(cause)) ??
+              serviceErrorValue("runThreadTurn.preflight", cause),
+          ),
+        )).length
+        const runAt: (candidateOffset: number) => AcceptedReviewAgentTurn["worker"] = Effect.fn(
+          "ReviewAgentService.runThreadTurnCandidate",
+        )((candidateOffset): AcceptedReviewAgentTurn["worker"] =>
+          acceptThreadTurnAt(input, candidateOffset).pipe(
+            Effect.flatMap(({ worker }) =>
+              worker.pipe(
+                Effect.catch((cause) =>
+                  route.mode === "auto" &&
+                  candidateOffset + 1 < candidateCount &&
+                  Schema.is(ReviewAgentProviderFailureError)(cause)
+                    ? runAt(candidateOffset + 1)
+                    : Effect.fail(cause),
+                ),
               ),
             ),
           ),
+        )
+        return yield* runAt(0)
+      })
+
+      return ReviewAgentService.of({
+        acceptThreadTurn,
+        runThreadTurn,
       })
     }),
   ).pipe(Layer.provide(ReviewThreadAgentEngine.layer))
@@ -504,6 +539,22 @@ interface ResolvedReviewProvider {
   readonly model: AgentModelId
   readonly ready: Effect.Effect<void, CoreExpectedCause>
 }
+
+const selectReviewProvider = Effect.fn("ReviewAgentService.selectProvider")(function* (
+  route: AgentProviderRoute,
+  candidates: readonly ResolvedReviewProvider[],
+) {
+  for (const candidate of candidates) {
+    const readiness = yield* candidate.ready.pipe(Effect.result)
+    if (Result.isSuccess(readiness)) return candidate
+    if (route.mode === "provider") return yield* Effect.fail(readiness.failure)
+  }
+  return yield* providerFailureError(
+    AgentProviderId.make("unavailable"),
+    "configuration",
+    new Error("No review agent provider is available"),
+  )
+})
 
 const resolveReviewProviders = (
   registry: ProviderRegistry,
@@ -719,6 +770,18 @@ const isReviewAgentTurnError = (
   | ReviewTurnRejectedError =>
   Schema.is(ReviewAgentServiceError)(cause) ||
   Schema.is(ReviewAgentFinalizeError)(cause) ||
+  Schema.is(ReviewAgentProviderFailureError)(cause) ||
+  Schema.is(ReviewTurnTargetError)(cause) ||
+  Schema.is(ReviewTurnRejectedError)(cause)
+
+const isReviewAgentAcceptanceError = (
+  cause: CoreExpectedCause,
+): cause is
+  | ReviewAgentServiceError
+  | ReviewAgentProviderFailureError
+  | ReviewTurnTargetError
+  | ReviewTurnRejectedError =>
+  Schema.is(ReviewAgentServiceError)(cause) ||
   Schema.is(ReviewAgentProviderFailureError)(cause) ||
   Schema.is(ReviewTurnTargetError)(cause) ||
   Schema.is(ReviewTurnRejectedError)(cause)

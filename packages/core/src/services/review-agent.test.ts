@@ -654,6 +654,56 @@ const testGitProvider = (): GitProviderRegistration => {
 }
 
 describe("ReviewAgentService", () => {
+  it.effect("durably accepts before starting scoped provider work", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      const providerStarted = yield* Deferred.make<void>()
+      const releaseProvider = yield* Deferred.make<void>()
+      const layer = makeLayer(
+        databasePath,
+        () =>
+          Deferred.succeed(providerStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseProvider)),
+            Effect.as(makeProviderResult({ bodyMarkdown: "Accepted then completed." })),
+          ),
+        { count: 0 },
+      )
+
+      yield* Effect.gen(function* () {
+        const repo = yield* (yield* RepositoryStore).upsertRepository(
+          hostedRepositoryInput("/workspace/user-checkout"),
+        )
+        const created = yield* (yield* ReviewThreadStore).create({
+          repoId: repo.id,
+          reviewKey: pullRequestSnapshot.reviewKey,
+          prNumber: 42,
+          baseRevision,
+          headRevision,
+          anchor: lineAnchor,
+          bodyMarkdown: MarkdownBody.make("Accept this operation."),
+        })
+        const service = yield* ReviewAgentService
+        const accepted = yield* service.acceptThreadTurn({
+          threadId: created.thread.id,
+          ...turnIdentity(created, pullRequestSnapshot),
+          snapshot: pullRequestSnapshot,
+          cwd: repo.localPath,
+          walkthrough: Option.none(),
+        })
+
+        expect(
+          Option.getOrThrow(yield* (yield* ReviewTurnStore).getOperation(accepted.operation.id)),
+        ).toMatchObject({ _tag: "Running", id: accepted.operation.id })
+        expect(yield* Deferred.isDone(providerStarted)).toBe(false)
+
+        const worker = yield* accepted.worker.pipe(Effect.forkChild)
+        yield* Deferred.await(providerStarted)
+        yield* Deferred.succeed(releaseProvider, undefined)
+        yield* Fiber.join(worker)
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   it.effect("leases an isolated PR worktree around MCP and provider execution", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath

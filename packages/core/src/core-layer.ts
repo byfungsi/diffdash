@@ -28,6 +28,7 @@ import { Cause, Effect, Layer } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
+import { reviewAgentOperationsWithoutEventsLayer } from "./operations/review-agent-operations"
 import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
 import type { CoreProviderComposition } from "./provider-composition"
 import { AgentProviders } from "./services/agent-providers"
@@ -172,6 +173,10 @@ export const createCoreLayer = (
     Layer.provideMerge(reviewTurnStoreLayer),
     Layer.provideMerge(hostedReviewWorkspacePoolLayer),
   )
+  const reviewAgentOperationsLayer = reviewAgentOperationsWithoutEventsLayer.pipe(
+    Layer.provideMerge(reviewAgentLayer),
+    Layer.provideMerge(reviewTurnStoreLayer),
+  )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
   )
@@ -216,6 +221,7 @@ export const createCoreLayer = (
     WalkthroughOperationStore.layer,
     WalkthroughStore.layer,
     reviewAgentLayer,
+    reviewAgentOperationsLayer,
     threadAnchorMapperLayer,
   ).pipe(
     Layer.provide(databaseLayer),
