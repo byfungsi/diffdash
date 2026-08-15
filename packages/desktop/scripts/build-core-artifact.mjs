@@ -7,6 +7,8 @@ import { build } from "esbuild"
 
 const desktopDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const workspaceDirectory = resolve(desktopDirectory, "../..")
+const desktopPackage = JSON.parse(await readFile(resolve(desktopDirectory, "package.json"), "utf8"))
+const minimumBunVersion = "1.2.0"
 
 /** @typedef {"production" | "e2e"} CoreArtifactMode */
 
@@ -50,10 +52,22 @@ export const buildCoreArtifact = async ({
     const entrypointSha256 = createHash("sha256").update(entrypoint).digest("hex")
     const manifest = {
       schemaVersion: 1,
-      buildId: `core-${normalizedMode}-${entrypointSha256.slice(0, 40)}`,
+      buildId: `core-${desktopPackage.version}-${normalizedMode}-${process.platform}-${process.arch}-${entrypointSha256.slice(0, 40)}`,
+      desktop: {
+        version: desktopPackage.version,
+        mode: normalizedMode,
+        platform: process.platform,
+        architecture: process.arch,
+      },
       entrypoint: "core.mjs",
       entrypointSha256,
-      runtime: { utility: true, bun: false },
+      runtime: {
+        utility: true,
+        bun: {
+          minimumVersion: minimumBunVersion,
+          architecture: process.arch,
+        },
+      },
     }
     await writeFile(
       resolve(stagingDirectory, "manifest.json"),

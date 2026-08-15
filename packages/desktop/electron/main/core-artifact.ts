@@ -15,11 +15,22 @@ const Sha256 = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-f0-9]{64}$/
 export const CoreArtifactManifest = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   buildId: CoreBuildId,
+  desktop: Schema.Struct({
+    version: Schema.String,
+    mode: Schema.Literals(["production", "e2e"]),
+    platform: Schema.String,
+    architecture: Schema.String,
+  }),
   entrypoint: Schema.Literal("core.mjs"),
   entrypointSha256: Sha256,
   runtime: Schema.Struct({
     utility: Schema.Literal(true),
-    bun: Schema.Boolean,
+    bun: Schema.Struct({
+      minimumVersion: Schema.String.pipe(
+        Schema.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u)),
+      ),
+      architecture: Schema.String,
+    }),
   }),
 }).annotate({ identifier: "CoreArtifactManifest" })
 
@@ -34,6 +45,7 @@ export class CoreArtifactVerificationError extends Schema.TaggedError<CoreArtifa
       "artifact-directory-invalid",
       "manifest-invalid",
       "build-identity-mismatch",
+      "runtime-requirements-mismatch",
       "entrypoint-invalid",
       "entrypoint-checksum-mismatch",
     ]),
@@ -58,6 +70,8 @@ export class VerifiedCoreArtifact extends Schema.Class<VerifiedCoreArtifact>(
 export interface VerifyCoreArtifactOptions {
   readonly artifactDirectory: string
   readonly expectedBuildId: string
+  readonly expectedArchitecture?: NodeJS.Architecture
+  readonly expectedPlatform?: NodeJS.Platform
 }
 
 const verificationFailure = (reason: CoreArtifactVerificationError["reason"]) =>
@@ -134,6 +148,15 @@ export const verifyCoreArtifact = (
         () => verificationFailure("build-identity-mismatch"),
       ),
     )
+    if (
+      (options.expectedArchitecture !== undefined &&
+        (manifest.desktop.architecture !== options.expectedArchitecture ||
+          manifest.runtime.bun.architecture !== options.expectedArchitecture)) ||
+      (options.expectedPlatform !== undefined &&
+        manifest.desktop.platform !== options.expectedPlatform)
+    ) {
+      return yield* verificationFailure("runtime-requirements-mismatch")
+    }
 
     const entrypointPath = path.join(artifactDirectory, manifest.entrypoint)
     const canonicalEntrypoint = yield* fileSystem
@@ -186,6 +209,8 @@ export const verifyPackagedCoreArtifact = (artifactDirectory: string) =>
   verifyCoreArtifact({
     artifactDirectory,
     expectedBuildId: EMBEDDED_CORE_BUILD_ID,
+    expectedArchitecture: process.arch,
+    expectedPlatform: process.platform,
   })
 
 /** Revalidates that the verified entrypoint has not been replaced before launch. */

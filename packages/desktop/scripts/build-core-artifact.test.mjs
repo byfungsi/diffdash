@@ -21,6 +21,7 @@ test("builds deterministic production and E2E Core artifacts with isolated provi
   const productionEntrypoint = await readFile(resolve(production.outputDirectory, "core.mjs"))
   const repeatedEntrypoint = await readFile(resolve(repeated.outputDirectory, "core.mjs"))
   const manifestText = await readFile(resolve(production.outputDirectory, "manifest.json"), "utf8")
+  const manifest = JSON.parse(manifestText)
   const e2eManifestText = await readFile(resolve(e2e.outputDirectory, "manifest.json"), "utf8")
   const productionInputs = Object.keys(production.metafile.inputs).join("\n")
   const e2eInputs = Object.keys(e2e.metafile.inputs).join("\n")
@@ -31,8 +32,30 @@ test("builds deterministic production and E2E Core artifacts with isolated provi
     manifestText,
     await readFile(resolve(repeated.outputDirectory, "manifest.json"), "utf8"),
   )
-  assert.match(manifestText, /"buildId": "core-production-[a-f0-9]{40}"/u)
-  assert.match(e2eManifestText, /"buildId": "core-e2e-[a-f0-9]{40}"/u)
+  assert.match(
+    manifestText,
+    new RegExp(
+      `"buildId": "core-0\\.8\\.1-production-${process.platform}-${process.arch}-[a-f0-9]{40}"`,
+      "u",
+    ),
+  )
+  assert.deepEqual(manifest.desktop, {
+    version: "0.8.1",
+    mode: "production",
+    platform: process.platform,
+    architecture: process.arch,
+  })
+  assert.deepEqual(manifest.runtime, {
+    utility: true,
+    bun: { minimumVersion: "1.2.0", architecture: process.arch },
+  })
+  assert.match(
+    e2eManifestText,
+    new RegExp(
+      `"buildId": "core-0\\.8\\.1-e2e-${process.platform}-${process.arch}-[a-f0-9]{40}"`,
+      "u",
+    ),
+  )
   assert.match(
     manifestText,
     new RegExp(createHash("sha256").update(productionEntrypoint).digest("hex"), "u"),

@@ -67,6 +67,13 @@ const waitForSocket = Effect.fn("waitForCoreSocket")(function* (socketPath: stri
 export const startCoreProcess = Effect.fn("startCoreProcess")(function* (
   options: StartCoreProcessOptions,
 ) {
+  yield* startCoreProcessManaged(options)
+})
+
+/** Launches one verified Core process and exposes its scoped lifetime handle to a supervisor. */
+export const startCoreProcessManaged = Effect.fn("startCoreProcessManaged")(function* (
+  options: StartCoreProcessOptions,
+) {
   const startupConfiguration = CoreProcessStartupConfiguration.make({
     schemaVersion: 1,
     applicationInstanceId: options.configuration.applicationInstanceId,
@@ -108,5 +115,5 @@ export const startCoreProcess = Effect.fn("startCoreProcess")(function* (
     Effect.flatMap(() => Effect.fail(launchFailure("exited-before-listening"))),
   )
   yield* Effect.raceFirst(listening, exited)
-  return undefined
+  return processHandle
 })

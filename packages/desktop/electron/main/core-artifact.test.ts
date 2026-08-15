@@ -24,9 +24,15 @@ const writeArtifact = (manifest: object, contents = entrypoint) => {
 const validManifest = {
   schemaVersion: 1,
   buildId,
+  desktop: {
+    version: "0.8.1",
+    mode: "production",
+    platform: process.platform,
+    architecture: process.arch,
+  },
   entrypoint: "core.mjs",
   entrypointSha256: checksum,
-  runtime: { utility: true, bun: true },
+  runtime: { utility: true, bun: { minimumVersion: "1.2.0", architecture: process.arch } },
 } as const
 
 describe("Core artifact verification", () => {
@@ -42,7 +48,10 @@ describe("Core artifact verification", () => {
         buildId,
         entrypointPath: realpathSync(join(directory, "core.mjs")),
         entrypointSha256: checksum,
-        runtime: { utility: true, bun: true },
+        runtime: {
+          utility: true,
+          bun: { minimumVersion: "1.2.0", architecture: process.arch },
+        },
       })
       yield* revalidateCoreArtifact(artifact)
     }).pipe(Effect.provide(platformLayer)),

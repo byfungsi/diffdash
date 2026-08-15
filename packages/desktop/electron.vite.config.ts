@@ -5,21 +5,30 @@ import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { loadEnv } from "vite"
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { desktopMainEntryForMode } from "./electron-build-configuration"
 
 const packageJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 )(readFileSync(resolve("package.json"), "utf8"))
-const packageVersion = packageJson._tag === "Some" ? packageJson.value.version : "0.0.0"
+const packageVersion = Option.getOrElse(packageJson, () => ({ version: "0.0.0" })).version
 const CoreArtifactBuildManifest = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   buildId: Schema.String,
+  desktop: Schema.Struct({
+    version: Schema.String,
+    mode: Schema.Literals(["production", "e2e"]),
+    platform: Schema.String,
+    architecture: Schema.String,
+  }),
   entrypoint: Schema.Literal("core.mjs"),
   entrypointSha256: Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-f0-9]{64}$/u))),
   runtime: Schema.Struct({
     utility: Schema.Literal(true),
-    bun: Schema.Literal(false),
+    bun: Schema.Struct({
+      minimumVersion: Schema.String,
+      architecture: Schema.String,
+    }),
   }),
 })
 
@@ -27,9 +36,19 @@ const coreArtifactBuildIdForMode = (mode: string): string => {
   const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactBuildManifest))(
     readFileSync(resolve(".generated/core/manifest.json"), "utf8"),
   )
-  const expectedPrefix = mode === "e2e" ? "core-e2e-" : "core-production-"
+  const artifactMode = mode === "e2e" ? "e2e" : "production"
+  const expectedPrefix = `core-${packageVersion}-${artifactMode}-${process.platform}-${process.arch}-`
   if (!manifest.buildId.startsWith(expectedPrefix)) {
     throw new Error(`Generated Core artifact does not match the ${mode} Desktop build mode.`)
+  }
+  if (
+    manifest.desktop.version !== packageVersion ||
+    manifest.desktop.mode !== artifactMode ||
+    manifest.desktop.platform !== process.platform ||
+    manifest.desktop.architecture !== process.arch ||
+    manifest.runtime.bun.architecture !== process.arch
+  ) {
+    throw new Error("Generated Core artifact runtime requirements do not match this Desktop build.")
   }
   return manifest.buildId
 }

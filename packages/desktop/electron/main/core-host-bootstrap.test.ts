@@ -49,7 +49,7 @@ const artifact = new VerifiedCoreArtifact({
   device: artifactInfo.dev,
   inode: Option.some(artifactInfo.ino),
   size: BigInt(artifactInfo.size),
-  runtime: { utility: true, bun: true },
+  runtime: { utility: true, bun: { minimumVersion: "1.2.0", architecture: process.arch } },
 })
 
 const options = {

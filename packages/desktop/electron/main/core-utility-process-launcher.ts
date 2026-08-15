@@ -4,6 +4,7 @@ import { utilityProcess } from "electron"
 
 import {
   startCoreProcess,
+  startCoreProcessManaged,
   type CoreProcessHandle,
   type CoreProcessSpawner,
 } from "./core-process-launcher"
@@ -37,3 +38,7 @@ export interface StartCoreUtilityProcessOptions {
 /** Launches the verified Core artifact through Electron's utility process runtime. */
 export const startCoreUtilityProcess = (options: StartCoreUtilityProcessOptions) =>
   startCoreProcess({ ...options, spawner: utilityProcessSpawner })
+
+/** Launches the utility-process Core while exposing its scoped handle for host supervision. */
+export const startCoreUtilityProcessManaged = (options: StartCoreUtilityProcessOptions) =>
+  startCoreProcessManaged({ ...options, spawner: utilityProcessSpawner })
