@@ -5,7 +5,10 @@
   "type": "module",
   "exports": {
     "./hosted-review-workspace-pool": "./src/hosted-review-workspace-pool.ts",
-    "./local-git": "./src/local-git.ts"
+    "./local-git": "./src/local-git.ts",
+    "./local-review-diff-source": "./src/local-review-diff-source.ts",
+    "./repository-reconciliation": "./src/repository-reconciliation.ts",
+    "./repository-watcher": "./src/repository-watcher.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",
