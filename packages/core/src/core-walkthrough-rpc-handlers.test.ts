@@ -50,7 +50,19 @@ import {
 } from "@diffdash/domain/walkthrough-operation"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
-import { Context, Effect, Exit, Layer, Option, Redacted, Schema, Scope } from "effect"
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Schema,
+  Scope,
+} from "effect"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
@@ -319,6 +331,135 @@ describe("Core walkthrough RPC handlers", () => {
       expect(stored).toMatchObject({ status: "found" })
 
       yield* Scope.close(clientScope, Exit.void)
+      yield* Scope.close(serverScope, Exit.void)
+    }).pipe(Effect.provide(tempResourcesLayer)),
+  )
+
+  it.effect("bounds queued socket work and interrupts it when the client disconnects", () =>
+    Effect.gen(function* () {
+      const tempResources = yield* TempResources
+      const runtimeDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-walkthrough-pressure-",
+      })
+      const socketPath = `${runtimeDirectory}/core.sock`
+      const serverScope = yield* Scope.make()
+      const clientScope = yield* Scope.make()
+      const saturated = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const drained = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const active = yield* Ref.make(0)
+      const maximumActive = yield* Ref.make(0)
+      const interruptedCount = yield* Ref.make(0)
+      const pressureOperationsLayer = Layer.succeed(
+        CoreOperationService,
+        CoreOperationService.of({
+          start: Effect.void,
+          execute: () => Effect.die("Unexpected generic Core operation"),
+          walkthroughs: {
+            start: () => Effect.die("Unexpected legacy walkthrough start"),
+            startGeneration: () => Effect.die("Unexpected walkthrough start"),
+            getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
+            getSnapshot: () =>
+              Effect.gen(function* () {
+                const count = yield* Ref.updateAndGet(active, (value) => value + 1)
+                yield* Ref.update(maximumActive, (value) => Math.max(value, count))
+                if (count === 32) yield* Deferred.succeed(saturated, undefined)
+                yield* Deferred.await(release)
+                return activeOperation
+              }).pipe(
+                Effect.onInterrupt(() =>
+                  Ref.updateAndGet(interruptedCount, (value) => value + 1).pipe(
+                    Effect.flatMap((count) =>
+                      count === 32 ? Deferred.succeed(interrupted, undefined) : Effect.void,
+                    ),
+                  ),
+                ),
+                Effect.ensuring(
+                  Ref.updateAndGet(active, (value) => value - 1).pipe(
+                    Effect.flatMap((count) =>
+                      count === 0 ? Deferred.succeed(drained, undefined) : Effect.void,
+                    ),
+                  ),
+                ),
+              ),
+            cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
+            cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
+            getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
+            getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
+            getCached: () => Effect.die("Unexpected walkthrough cache read"),
+          },
+        }),
+      )
+      const lifecycleLayer = coreLifecycleLayer(requestIdentity)
+      const hostLayer = coreWalkthroughRpcSocketHostLayer({
+        socketPath,
+        token: Redacted.make(transportToken),
+      }).pipe(
+        Layer.provideMerge(lifecycleLayer),
+        Layer.provideMerge(pressureOperationsLayer),
+        Layer.provideMerge(platformLayer),
+      )
+      const serverContext = yield* Layer.buildWithScope(hostLayer, serverScope)
+      const client = yield* makeSocketClient(socketPath, clientScope)
+      const healthRequest = HostRequestContext.make({
+        ...requestIdentity,
+        requestId: HostRequestId.make("h:walkthrough-pressure"),
+      })
+      yield* client["Core.health"](healthRequest).pipe(
+        RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: transportToken }),
+      )
+      yield* client["Core.authorizeDatabaseOwnership"](
+        AuthorizeDatabaseOwnershipRequest.make({
+          ...healthRequest,
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-pressure"),
+        }),
+      )
+      yield* Context.get(serverContext, CoreLifecycle).completeRecovery
+
+      const calls = yield* Effect.forEach(
+        Array.from({ length: 32 }, (_, index) => index),
+        (index) =>
+          client["Walkthroughs.getOperation"](
+            GetWalkthroughOperationRequest.make({
+              ...requestIdentity,
+              requestId: HostRequestId.make(`h:pressure-${String(index)}`),
+              operationId,
+            }),
+          ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkScoped)
+      yield* Deferred.await(saturated)
+
+      expect(yield* Ref.get(maximumActive)).toBe(32)
+      const overflow = yield* client["Walkthroughs.getOperation"](
+        GetWalkthroughOperationRequest.make({
+          ...requestIdentity,
+          requestId: HostRequestId.make("h:pressure-rejected"),
+          operationId,
+        }),
+      ).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(maximumActive)).toBe(32)
+      const firstOverflowExit = yield* Fiber.await(overflow)
+      expect(Exit.isFailure(firstOverflowExit)).toBe(true)
+      const repeatedOverflow = yield* client["Walkthroughs.getOperation"](
+        GetWalkthroughOperationRequest.make({
+          ...requestIdentity,
+          requestId: HostRequestId.make("h:pressure-rejected-again"),
+          operationId,
+        }),
+      ).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(maximumActive)).toBe(32)
+      yield* Scope.close(clientScope, Exit.void)
+      const repeatedOverflowExit = yield* Fiber.await(repeatedOverflow)
+      expect(Exit.isFailure(repeatedOverflowExit)).toBe(true)
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("1 second"))
+      yield* Deferred.await(drained).pipe(Effect.timeout("1 second"))
+      expect(yield* Ref.get(active)).toBe(0)
+
+      yield* Fiber.interrupt(calls)
       yield* Scope.close(serverScope, Exit.void)
     }).pipe(Effect.provide(tempResourcesLayer)),
   )

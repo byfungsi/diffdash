@@ -9,6 +9,18 @@ export const CORE_TRANSPORT_TOKEN_HEADER = "x-diffdash-core-token"
 /** Maximum native MessagePack input retained while waiting for a complete RPC frame. */
 export const CORE_RPC_INCOMPLETE_BUFFER_BYTES = 512 * 1_024
 
+/** Aggregate upper bound for native Core transport work retained in flight. */
+export const CORE_RPC_IN_FLIGHT_BYTES = 16 * 1_024 * 1_024
+
+/** Maximum concurrent native RPC requests selected by the M21 transport prototype. */
+export const CORE_RPC_MAX_CONCURRENCY = 32
+
+/** Walkthrough RPC is unary, so no application stream chunk may be emitted. */
+export const CORE_RPC_STREAM_CHUNK_BYTES = 0
+
+/** Walkthrough RPC is unary, so no application stream acknowledgement may remain outstanding. */
+export const CORE_RPC_STREAM_ACK_WINDOW = 0
+
 /** Electron-to-Core control declarations projected through transport authentication. */
 export const AuthenticatedCoreControlRpcs = CoreControlRpcs.middleware(
   CoreTransportAuthenticationMiddleware,

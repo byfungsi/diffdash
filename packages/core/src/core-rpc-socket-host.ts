@@ -1,6 +1,11 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
-import { CORE_RPC_INCOMPLETE_BUFFER_BYTES } from "@diffdash/core-rpc/transport"
-import { Effect, FileSystem, Layer, Path, Redacted, Schema } from "effect"
+import {
+  CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  CORE_RPC_IN_FLIGHT_BYTES,
+  CORE_RPC_MAX_CONCURRENCY,
+} from "@diffdash/core-rpc/transport"
+import { Effect, FileSystem, Layer, Match, Path, Predicate, Queue, Redacted, Schema } from "effect"
+import * as RpcMessage from "effect/unstable/rpc/RpcMessage"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import * as SocketServer from "effect/unstable/socket/SocketServer"
@@ -24,6 +29,15 @@ export class CoreRpcSocketSecurityError extends Schema.TaggedError<CoreRpcSocket
     ]),
   },
 ) {}
+
+const walkthroughReservationKey = (clientId: number, requestId: string | number) =>
+  `${String(clientId)}:${Predicate.isString(requestId) ? "string" : "number"}:${String(requestId)}`
+
+const encodedBytes = (parser: RpcSerialization.Parser, value: RpcMessage.FromServerEncoded) => {
+  const encoded = parser.encode(value)
+  if (encoded === undefined) return 0
+  return Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength
+}
 
 /** Runs Core RPC over one private native Unix domain socket. */
 const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
@@ -57,18 +71,110 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
       return server
     }),
   )
+  const serializationLayer = RpcSerialization.layerMsgPackWith({
+    useRecords: true,
+    maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  })
   const protocolLayer = RpcServer.layerProtocolSocketServer.pipe(
     Layer.provide(socketServerLayer),
-    Layer.provide(
-      RpcSerialization.layerMsgPackWith({
-        useRecords: true,
-        maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
-      }),
-    ),
+    Layer.provideMerge(serializationLayer),
   )
 
   return protocolLayer
 }
+
+const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions) =>
+  Layer.effect(
+    RpcServer.Protocol,
+    Effect.gen(function* () {
+      const protocol = yield* RpcServer.Protocol
+      const serialization = yield* RpcSerialization.RpcSerialization
+      const parser = serialization.makeUnsafe()
+      const reservations = new Set<string>()
+      const disconnects = yield* Queue.unbounded<number>()
+      const releaseClient = (clientId: number) => {
+        const prefix = `${String(clientId)}:`
+        for (const key of reservations) {
+          if (key.startsWith(prefix)) reservations.delete(key)
+        }
+      }
+      const frameFailure = (requestId: string | number, message: string) => {
+        const correlated = RpcMessage.ResponseExitDieEncoded({
+          requestId: RpcMessage.RequestId(requestId),
+          defect: message,
+        })
+        return encodedBytes(parser, correlated) <= CORE_RPC_INCOMPLETE_BUFFER_BYTES
+          ? correlated
+          : RpcMessage.ResponseDefectEncoded("Core RPC frame budget exceeded.")
+      }
+      yield* Effect.forever(
+        Queue.take(protocol.disconnects).pipe(
+          Effect.tap((clientId) => Effect.sync(() => releaseClient(clientId))),
+          Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
+        ),
+      ).pipe(Effect.forkScoped)
+
+      return RpcServer.Protocol.of({
+        ...protocol,
+        disconnects,
+        run: (handler) =>
+          protocol.run((clientId, message) =>
+            Match.valueTags(message, {
+              Request: (request) =>
+                Effect.suspend(() => {
+                  if (
+                    reservations.size >= CORE_RPC_MAX_CONCURRENCY ||
+                    (reservations.size + 1) * CORE_RPC_INCOMPLETE_BUFFER_BYTES >
+                      CORE_RPC_IN_FLIGHT_BYTES
+                  ) {
+                    return protocol.send(
+                      clientId,
+                      frameFailure(request.id, "Core RPC capacity exceeded."),
+                    )
+                  }
+                  reservations.add(walkthroughReservationKey(clientId, request.id))
+                  return handler(clientId, request)
+                }),
+              Ack: (acknowledgement) => handler(clientId, acknowledgement),
+              Interrupt: (interrupt) => handler(clientId, interrupt),
+              Ping: (ping) => handler(clientId, ping),
+              Eof: (eof) => handler(clientId, eof),
+            }),
+          ),
+        send: (clientId, response, transferables) =>
+          Effect.suspend(() => {
+            const boundedResponse =
+              encodedBytes(parser, response) <= CORE_RPC_INCOMPLETE_BUFFER_BYTES
+                ? response
+                : Match.valueTags(response, {
+                    Chunk: ({ requestId }) =>
+                      frameFailure(requestId, "Core RPC response exceeded its frame budget."),
+                    Exit: ({ requestId }) =>
+                      frameFailure(requestId, "Core RPC response exceeded its frame budget."),
+                    Defect: () => RpcMessage.ResponseDefectEncoded("Core RPC response exceeded."),
+                    Pong: () => response,
+                    ClientProtocolError: () => response,
+                  })
+            return protocol.send(clientId, boundedResponse, transferables)
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() =>
+                Match.valueTags(response, {
+                  Chunk: () => undefined,
+                  Exit: ({ requestId }) =>
+                    reservations.delete(walkthroughReservationKey(clientId, requestId)),
+                  Defect: () => releaseClient(clientId),
+                  Pong: () => undefined,
+                  ClientProtocolError: () => releaseClient(clientId),
+                }),
+              ),
+            ),
+          ),
+        end: (clientId) =>
+          Effect.sync(() => releaseClient(clientId)).pipe(Effect.andThen(protocol.end(clientId))),
+      })
+    }),
+  ).pipe(Layer.provide(coreRpcSocketProtocolLayer(options)))
 
 /** Runs the currently deployed control and AppState RPC audience over a private native socket. */
 export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
@@ -77,5 +183,5 @@ export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
 /** Runs the durable walkthrough RPC audience when its business runtime is composed. */
 export const coreWalkthroughRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
   coreWalkthroughRpcServerLayer(options).pipe(
-    Layer.provideMerge(coreRpcSocketProtocolLayer(options)),
+    Layer.provideMerge(boundedWalkthroughSocketProtocolLayer(options)),
   )
