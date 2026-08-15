@@ -26,6 +26,8 @@ const RESOURCE_CATALOG_CAPABILITY = "resource-catalog"
 const RESOURCE_CATALOG_CAPABILITY_VERSION = 1
 const SNAPSHOT_BLOCK_STORAGE_CAPABILITY = "snapshot-block-storage"
 const SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION = 1
+const CORE_DURABLE_COMMAND_CAPABILITY = "core-durable-command"
+const CORE_DURABLE_COMMAND_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -1008,7 +1010,9 @@ export const databaseRequiresMigration = Effect.fn("databaseRequiresMigration")(
     (yield* readCapabilityVersion(database, RESOURCE_CATALOG_CAPABILITY)) <
       RESOURCE_CATALOG_CAPABILITY_VERSION ||
     (yield* readCapabilityVersion(database, SNAPSHOT_BLOCK_STORAGE_CAPABILITY)) <
-      SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION
+      SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION ||
+    (yield* readCapabilityVersion(database, CORE_DURABLE_COMMAND_CAPABILITY)) <
+      CORE_DURABLE_COMMAND_CAPABILITY_VERSION
   )
 })
 
@@ -1016,6 +1020,55 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
   database: Database,
 ) {
   if (!(yield* tableExists(database, "repos"))) return
+  if (
+    (yield* readCapabilityVersion(database, CORE_DURABLE_COMMAND_CAPABILITY)) <
+    CORE_DURABLE_COMMAND_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* executeSqlScript(
+          database,
+          `
+          CREATE TABLE IF NOT EXISTS diffdash_capabilities (
+            name TEXT PRIMARY KEY,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            installed_at TEXT NOT NULL
+          );
+
+          CREATE TABLE core_commands (
+            id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 100),
+            process_epoch TEXT NOT NULL CHECK (length(process_epoch) BETWEEN 1 AND 100),
+            command_name TEXT NOT NULL CHECK (length(command_name) BETWEEN 1 AND 100),
+            scope_name TEXT CHECK (scope_name IS NULL OR length(scope_name) BETWEEN 1 AND 100),
+            scope_id TEXT CHECK (scope_id IS NULL OR length(scope_id) BETWEEN 1 AND 200),
+            state TEXT NOT NULL CHECK (state IN ('accepted', 'committed', 'failed', 'acknowledged')),
+            state_version INTEGER NOT NULL CHECK (state_version >= 1),
+            accepted_at TEXT NOT NULL,
+            terminal_at TEXT,
+            acknowledged_at TEXT,
+            CHECK ((scope_name IS NULL) = (scope_id IS NULL)),
+            CHECK (
+              (state = 'accepted' AND state_version = 1 AND terminal_at IS NULL AND acknowledged_at IS NULL) OR
+              (state IN ('committed', 'failed') AND state_version >= 2 AND terminal_at IS NOT NULL AND acknowledged_at IS NULL) OR
+              (state = 'acknowledged' AND state_version >= 3 AND terminal_at IS NOT NULL AND acknowledged_at IS NOT NULL)
+            )
+          );
+
+          CREATE INDEX core_commands_unacknowledged_terminal_idx
+            ON core_commands(state, terminal_at, id)
+            WHERE state IN ('committed', 'failed');
+          `,
+        )
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET version = excluded.version, installed_at = excluded.installed_at`,
+          [CORE_DURABLE_COMMAND_CAPABILITY, CORE_DURABLE_COMMAND_CAPABILITY_VERSION, now],
+        )
+      }),
+    )
+  }
   if (
     (yield* readCapabilityVersion(database, RESOURCE_CATALOG_CAPABILITY)) <
     RESOURCE_CATALOG_CAPABILITY_VERSION

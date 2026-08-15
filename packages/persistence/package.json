@@ -7,6 +7,7 @@
     "./agent-run-artifact-store": "./src/agent-run-artifact-store.ts",
     "./database": "./src/database.ts",
     "./database-ownership": "./src/database-ownership.ts",
+    "./core-command-store": "./src/core-command-store.ts",
     "./resource-catalog": "./src/resource-catalog.ts",
     "./snapshot-block-store": "./src/snapshot-block-store.ts",
     "./database-node": "./src/database-node.ts",

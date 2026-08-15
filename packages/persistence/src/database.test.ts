@@ -158,6 +158,7 @@ describe("database-node", () => {
         expect(tables.map(({ name }) => name)).toEqual([
           "agent_run_artifacts",
           "agent_runs",
+          "core_commands",
           "diffdash_capabilities",
           "hosted_viewed_files",
           "local_viewed_files",
