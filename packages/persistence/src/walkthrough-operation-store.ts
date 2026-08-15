@@ -121,6 +121,10 @@ export class WalkthroughOperationStore extends Context.Service<
     readonly get: (
       operationId: WalkthroughOperationIdType,
     ) => Effect.Effect<Option.Option<WalkthroughOperationType>, WalkthroughOperationStoreError>
+    readonly listActive: Effect.Effect<
+      readonly WalkthroughOperationType[],
+      WalkthroughOperationStoreError
+    >
     readonly markRunning: (
       input: WalkthroughOperationVersionGuard,
     ) => Effect.Effect<WalkthroughOperationTransition, WalkthroughOperationTransitionError>
@@ -283,6 +287,15 @@ export class WalkthroughOperationStore extends Context.Service<
             .pipe(Effect.mapError((cause) => storeError("acceptOrGet", cause)))
         }),
         get,
+        listActive: database
+          .all(
+            `${operationSelectSql}
+             WHERE o.state IN ('accepted', 'running') ORDER BY o.accepted_at, o.id`,
+          )
+          .pipe(
+            Effect.flatMap(decodeOperationRows),
+            Effect.mapError((cause) => storeError("listActive", cause)),
+          ),
         markRunning: Effect.fn("WalkthroughOperationStore.markRunning")(function* (input) {
           const now = timestamp(yield* DateTime.now)
           return yield* guardedTransition(

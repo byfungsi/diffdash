@@ -1,6 +1,7 @@
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
-import { Context, Effect, Layer } from "effect"
+import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
+import { Context, Effect, Layer, Option } from "effect"
 
 import {
   type CoreMethod as CoreMethodType,
@@ -49,6 +50,7 @@ export const coreOperationLayer = Layer.effect(
   Effect.gen(function* () {
     const turns = yield* ReviewTurnStore
     const walkthroughOperationStore = yield* WalkthroughOperationStore
+    const walkthroughStore = yield* WalkthroughStore
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
@@ -102,6 +104,52 @@ export const coreOperationLayer = Layer.effect(
             }),
           ),
         )
+        const activeWalkthroughs = yield* walkthroughOperationStore.listActive.pipe(
+          Effect.mapError((cause) =>
+            CoreStartupError.make({
+              operation: "inspectActiveWalkthroughOperations",
+              message: "DiffDash Core could not inspect active walkthrough operations.",
+              cause,
+            }),
+          ),
+        )
+        for (const operation of activeWalkthroughs) {
+          if (operation.state !== "running") continue
+          const artifact = yield* walkthroughStore
+            .get({
+              repoId: operation.identity.repoId,
+              reviewKey: operation.identity.reviewKey,
+              baseSha: operation.identity.baseRevision,
+              headSha: operation.identity.headRevision,
+              promptVersion: operation.identity.promptVersion,
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                CoreStartupError.make({
+                  operation: "reconcileWalkthroughArtifact",
+                  message: "DiffDash Core could not reconcile a saved walkthrough artifact.",
+                  cause,
+                }),
+              ),
+            )
+          if (Option.isSome(artifact)) {
+            yield* walkthroughOperationStore
+              .completeSuccess({
+                operationId: operation.id,
+                expectedStateVersion: operation.stateVersion,
+                artifact: operation.identity,
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  CoreStartupError.make({
+                    operation: "completeRecoveredWalkthroughOperation",
+                    message: "DiffDash Core could not finalize a recovered walkthrough operation.",
+                    cause,
+                  }),
+                ),
+              )
+          }
+        }
         yield* walkthroughOperationStore.recoverActiveAsInterrupted.pipe(
           Effect.mapError((cause) =>
             CoreStartupError.make({

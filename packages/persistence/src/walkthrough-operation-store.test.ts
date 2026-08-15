@@ -405,8 +405,14 @@ describe("WalkthroughOperationStore", () => {
           expectedStateVersion: runningAccepted.operation.stateVersion,
         })
 
+        const active = yield* store.listActive
         const recovered = yield* store.recoverActiveAsInterrupted
 
+        expect(active.map(({ id }) => id)).toEqual([
+          accepted.operation.id,
+          runningAccepted.operation.id,
+        ])
+        expect(active.map(({ state }) => state)).toEqual(["accepted", "running"])
         expect(recovered.map(({ id }) => id)).toEqual([
           accepted.operation.id,
           runningAccepted.operation.id,

@@ -8,6 +8,9 @@ const CoreStartupOperation = Schema.Literals([
   "acquireRuntime",
   "createTemporaryDirectory",
   "recoverInterruptedReviewTurns",
+  "inspectActiveWalkthroughOperations",
+  "reconcileWalkthroughArtifact",
+  "completeRecoveredWalkthroughOperation",
   "recoverInterruptedWalkthroughOperations",
 ])
 
