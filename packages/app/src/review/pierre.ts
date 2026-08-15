@@ -1,5 +1,9 @@
 import { registerDiffDashSyntax } from "./diffdash-syntax"
-import { type FileDiff as PierreFileDiff, VirtualizedFileDiff } from "@pierre/diffs"
+import {
+  FileDiff as PierreRangeFileDiff,
+  type FileDiff as PierreFileDiff,
+  VirtualizedFileDiff,
+} from "@pierre/diffs"
 import { Predicate } from "effect"
 
 registerDiffDashSyntax()
@@ -15,6 +19,7 @@ export {
   type VirtualFileMetrics,
 } from "@pierre/diffs"
 export { VirtualizedFileDiff }
+export { PierreRangeFileDiff }
 export {
   FileDiff,
   PatchDiff,

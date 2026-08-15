@@ -13,6 +13,7 @@ bounds and cannot be increased without an RFC amendment.
 | D-10 | Fixed-space literal search scan, acceleration, cursor, excerpt, and near-every-line match behavior | Pending search prototype |
 | D-11 | Bun/utility worker heartbeat, kill, cancellation, heap reclamation, and crash behavior | Pending worker prototype |
 | D-12 | Compact index, logical scroll page, mounted rows, independent text/highlight/AST/DOM/annotation/measurement budgets, viewport conflation, queue/concurrency/output reservation, inverse-sticky behavior, rebasing, and container reset | Pending virtualizer prototype and FUN-217 |
+| D-13 | Pierre public loaded-range API versus an isolated patch/fork, including coordinates, wrap measurement, deferred syntax, annotations, cancellation, and cleanup | Decided 2026-08-16 by [`m21-pierre-partial-range-2026-08-16.md`](m21-pierre-partial-range-2026-08-16.md) |
 
 ## Existing Upper Bounds
 
