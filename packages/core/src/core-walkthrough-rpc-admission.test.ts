@@ -34,9 +34,11 @@ import {
   WalkthroughReviewGeneration,
 } from "@diffdash/core-rpc/walkthrough"
 import { WalkthroughBusinessRpcs } from "@diffdash/core-rpc/walkthrough-rpc"
+import { CORE_RPC_MAX_CONCURRENCY } from "@diffdash/core-rpc/transport"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema } from "effect"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
+import { TestClock } from "effect/testing"
 
 import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
@@ -358,6 +360,156 @@ describe("Core walkthrough RPC admission", () => {
         yield* Deferred.succeed(release, undefined)
         yield* Deferred.await(completed)
         yield* Fiber.join(interruptFiber)
+      }).pipe(Effect.provide(makeTestLayer({ cancel })))
+    }),
+  )
+
+  it.effect("interrupts reads at their declared deadline", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const getStored = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      )
+
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const requestFiber = yield* client["Walkthroughs.getStored"](getStoredRequest).pipe(
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(started)
+        yield* TestClock.adjust("2 seconds")
+
+        const failure = yield* Fiber.join(requestFiber).pipe(Effect.flip)
+        expect(failure).toMatchObject({
+          code: "REQUEST_DEADLINE_EXCEEDED",
+          method: "Walkthroughs.getStored",
+          operationId: null,
+        })
+        yield* Deferred.await(interrupted)
+      }).pipe(Effect.provide(makeTestLayer({ getStored })))
+    }),
+  )
+
+  it.effect("interrupts start before durable acceptance at its declared deadline", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const start = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      )
+
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const requestFiber = yield* client["Walkthroughs.start"](startRequest).pipe(
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(started)
+        yield* TestClock.adjust("5 seconds")
+
+        const failure = yield* Fiber.join(requestFiber).pipe(Effect.flip)
+        expect(failure).toMatchObject({
+          code: "REQUEST_DEADLINE_EXCEEDED",
+          method: "Walkthroughs.start",
+          operationId: null,
+        })
+        yield* Deferred.await(interrupted)
+      }).pipe(Effect.provide(makeTestLayer({ start })))
+    }),
+  )
+
+  it.effect("returns at the cancellation deadline while the mutation completes", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const completed = yield* Deferred.make<void>()
+      const cancel = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(Deferred.succeed(completed, undefined)),
+        Effect.as(cancelledResult),
+      )
+
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const requestFiber = yield* client["Walkthroughs.cancel"](cancelRequest).pipe(
+          Effect.forkScoped,
+        )
+        yield* Deferred.await(started)
+        yield* TestClock.adjust("5 seconds")
+
+        const failure = yield* Fiber.join(requestFiber).pipe(Effect.flip)
+        expect(failure).toMatchObject({
+          code: "REQUEST_DEADLINE_EXCEEDED",
+          method: "Walkthroughs.cancel",
+          operationId,
+        })
+        expect(yield* Deferred.isDone(completed)).toBe(false)
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Deferred.await(completed)
+      }).pipe(Effect.provide(makeTestLayer({ cancel })))
+    }),
+  )
+
+  it.effect("bounds cancellation work that continues after request deadlines", () =>
+    Effect.gen(function* () {
+      const started = yield* Ref.make(0)
+      const completed = yield* Ref.make(0)
+      const atCapacity = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const cancel = Ref.updateAndGet(started, (count) => count + 1).pipe(
+        Effect.tap((count) =>
+          count === CORE_RPC_MAX_CONCURRENCY
+            ? Deferred.succeed(atCapacity, undefined)
+            : Effect.void,
+        ),
+        Effect.andThen(Deferred.await(release)),
+        Effect.andThen(Ref.update(completed, (count) => count + 1)),
+        Effect.as(cancelledResult),
+      )
+
+      return yield* Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(WalkthroughBusinessRpcs)
+        yield* becomeReady
+        const requestFibers = yield* Effect.forEach(
+          Array.from({ length: CORE_RPC_MAX_CONCURRENCY }, (_, index) => index),
+          (index) =>
+            client["Walkthroughs.cancel"](
+              CancelWalkthroughRequest.make({
+                ...cancelRequest,
+                requestId: HostRequestId.make(`h:bounded-cancel-${String(index)}`),
+              }),
+            ).pipe(Effect.forkScoped),
+        )
+        yield* Deferred.await(atCapacity)
+        yield* TestClock.adjust("5 seconds")
+        const failures = yield* Effect.forEach(requestFibers, (fiber) =>
+          Fiber.join(fiber).pipe(Effect.flip),
+        )
+        expect(failures).toHaveLength(CORE_RPC_MAX_CONCURRENCY)
+        expect(failures.every((failure) => failure.code === "REQUEST_DEADLINE_EXCEEDED")).toBe(true)
+
+        const overflow = yield* client["Walkthroughs.cancel"](
+          CancelWalkthroughRequest.make({
+            ...cancelRequest,
+            requestId: HostRequestId.make("h:bounded-cancel-overflow"),
+          }),
+        ).pipe(Effect.flip)
+        expect(overflow).toMatchObject({
+          code: "CORE_RPC_ERROR",
+          method: "Walkthroughs.cancel",
+          operationId,
+        })
+        expect(yield* Ref.get(started)).toBe(CORE_RPC_MAX_CONCURRENCY)
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(completed)).toBe(CORE_RPC_MAX_CONCURRENCY)
       }).pipe(Effect.provide(makeTestLayer({ cancel })))
     }),
   )

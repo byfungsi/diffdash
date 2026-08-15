@@ -12,7 +12,11 @@ import {
 } from "@diffdash/core-rpc/failure"
 import { HostRequestContext } from "@diffdash/core-rpc/identity"
 import type { CoreLifecycleState } from "@diffdash/core-rpc/lifecycle"
-import { getCoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
+import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
+import {
+  CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  CORE_RPC_MAX_CONCURRENCY,
+} from "@diffdash/core-rpc/transport"
 import {
   WalkthroughCancelDefect,
   WalkthroughGetOperationDefect,
@@ -29,9 +33,15 @@ import {
   WalkthroughGetStoredAdmissionFailure,
   WalkthroughStartAdmissionFailure,
 } from "@diffdash/core-rpc/walkthrough"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Fiber, FiberSet, Layer, Option, Predicate, Schema, Semaphore } from "effect"
+import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
 import { CoreLifecycle } from "./core-lifecycle"
+
+const methodPolicyParser = RpcSerialization.makeMsgPack({
+  useRecords: true,
+  maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+}).makeUnsafe()
 
 const appStateAdmissionLayer = Layer.effect(
   AppStateGetAdmissionMiddleware,
@@ -106,7 +116,16 @@ const walkthroughStartAdmissionLayer = Layer.effect(
           options.payload,
         ).pipe(Effect.orDie)
         return yield* Effect.gen(function* () {
-          yield* requireMethodPolicy(options.rpc)
+          const policy = yield* requireMethodPolicy(options.rpc)
+          yield* requireRequestBudget(request, policy).pipe(
+            Effect.mapError(() =>
+              WalkthroughStartAdmissionFailure.make({
+                ...walkthroughAdmissionDetail(request, "REQUEST_TOO_LARGE"),
+                method: "Walkthroughs.start",
+                operationId: null,
+              }),
+            ),
+          )
           yield* lifecycle.admitBusinessRequest(request).pipe(
             Effect.catchTags({
               CoreBusinessIdentityMismatchError: () =>
@@ -127,7 +146,19 @@ const walkthroughStartAdmissionLayer = Layer.effect(
                 ),
             }),
           )
-          return yield* effect
+          return yield* effect.pipe(
+            Effect.timeoutOrElse({
+              duration: policy.deadlineMs,
+              orElse: () =>
+                Effect.fail(
+                  WalkthroughStartAdmissionFailure.make({
+                    ...walkthroughAdmissionDetail(request, "REQUEST_DEADLINE_EXCEEDED"),
+                    method: "Walkthroughs.start",
+                    operationId: null,
+                  }),
+                ),
+            }),
+          )
         }).pipe(
           Effect.catchDefect(() =>
             Effect.die(
@@ -154,7 +185,16 @@ const walkthroughGetOperationAdmissionLayer = Layer.effect(
           options.payload,
         ).pipe(Effect.orDie)
         return yield* Effect.gen(function* () {
-          yield* requireMethodPolicy(options.rpc)
+          const policy = yield* requireMethodPolicy(options.rpc)
+          yield* requireRequestBudget(request, policy).pipe(
+            Effect.mapError(() =>
+              WalkthroughGetOperationAdmissionFailure.make({
+                ...walkthroughAdmissionDetail(request, "REQUEST_TOO_LARGE"),
+                method: "Walkthroughs.getOperation",
+                operationId: request.operationId,
+              }),
+            ),
+          )
           yield* lifecycle.admitBusinessRequest(request).pipe(
             Effect.catchTags({
               CoreBusinessIdentityMismatchError: () =>
@@ -175,7 +215,19 @@ const walkthroughGetOperationAdmissionLayer = Layer.effect(
                 ),
             }),
           )
-          return yield* lifecycle.interruptOnDrain(effect)
+          return yield* lifecycle.interruptOnDrain(effect).pipe(
+            Effect.timeoutOrElse({
+              duration: policy.deadlineMs,
+              orElse: () =>
+                Effect.fail(
+                  WalkthroughGetOperationAdmissionFailure.make({
+                    ...walkthroughAdmissionDetail(request, "REQUEST_DEADLINE_EXCEEDED"),
+                    method: "Walkthroughs.getOperation",
+                    operationId: request.operationId,
+                  }),
+                ),
+            }),
+          )
         }).pipe(
           Effect.catchDefect(() =>
             Effect.die(
@@ -195,6 +247,8 @@ const walkthroughCancelAdmissionLayer = Layer.effect(
   WalkthroughCancelAdmissionMiddleware,
   Effect.gen(function* () {
     const lifecycle = yield* CoreLifecycle
+    const cancellations = yield* FiberSet.make()
+    const cancellationCapacity = yield* Semaphore.make(CORE_RPC_MAX_CONCURRENCY)
 
     return (effect, options) =>
       Effect.gen(function* () {
@@ -202,7 +256,16 @@ const walkthroughCancelAdmissionLayer = Layer.effect(
           options.payload,
         ).pipe(Effect.orDie)
         return yield* Effect.gen(function* () {
-          yield* requireMethodPolicy(options.rpc)
+          const policy = yield* requireMethodPolicy(options.rpc)
+          yield* requireRequestBudget(request, policy).pipe(
+            Effect.mapError(() =>
+              WalkthroughCancelAdmissionFailure.make({
+                ...walkthroughAdmissionDetail(request, "REQUEST_TOO_LARGE"),
+                method: "Walkthroughs.cancel",
+                operationId: request.operationId,
+              }),
+            ),
+          )
           yield* lifecycle.admitBusinessRequest(request).pipe(
             Effect.catchTags({
               CoreBusinessIdentityMismatchError: () =>
@@ -223,7 +286,38 @@ const walkthroughCancelAdmissionLayer = Layer.effect(
                 ),
             }),
           )
-          return yield* Effect.uninterruptible(effect)
+          const cancellation = yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const acquired = yield* cancellationCapacity.takeIfAvailable(1)
+              if (!acquired)
+                return yield* Effect.fail(
+                  WalkthroughCancelAdmissionFailure.make({
+                    ...walkthroughAdmissionDetail(request, "CORE_RPC_ERROR"),
+                    method: "Walkthroughs.cancel",
+                    operationId: request.operationId,
+                  }),
+                )
+              return yield* FiberSet.run(
+                cancellations,
+                Effect.uninterruptible(effect).pipe(
+                  Effect.ensuring(cancellationCapacity.release(1)),
+                ),
+              )
+            }),
+          )
+          return yield* Fiber.join(cancellation).pipe(
+            Effect.timeoutOrElse({
+              duration: policy.deadlineMs,
+              orElse: () =>
+                Effect.fail(
+                  WalkthroughCancelAdmissionFailure.make({
+                    ...walkthroughAdmissionDetail(request, "REQUEST_DEADLINE_EXCEEDED"),
+                    method: "Walkthroughs.cancel",
+                    operationId: request.operationId,
+                  }),
+                ),
+            }),
+          )
         }).pipe(
           Effect.catchDefect(() =>
             Effect.die(
@@ -250,7 +344,16 @@ const walkthroughGetStoredAdmissionLayer = Layer.effect(
           options.payload,
         ).pipe(Effect.orDie)
         return yield* Effect.gen(function* () {
-          yield* requireMethodPolicy(options.rpc)
+          const policy = yield* requireMethodPolicy(options.rpc)
+          yield* requireRequestBudget(request, policy).pipe(
+            Effect.mapError(() =>
+              WalkthroughGetStoredAdmissionFailure.make({
+                ...walkthroughAdmissionDetail(request, "REQUEST_TOO_LARGE"),
+                method: "Walkthroughs.getStored",
+                operationId: null,
+              }),
+            ),
+          )
           yield* lifecycle.admitBusinessRequest(request).pipe(
             Effect.catchTags({
               CoreBusinessIdentityMismatchError: () =>
@@ -271,7 +374,19 @@ const walkthroughGetStoredAdmissionLayer = Layer.effect(
                 ),
             }),
           )
-          return yield* lifecycle.interruptOnDrain(effect)
+          return yield* lifecycle.interruptOnDrain(effect).pipe(
+            Effect.timeoutOrElse({
+              duration: policy.deadlineMs,
+              orElse: () =>
+                Effect.fail(
+                  WalkthroughGetStoredAdmissionFailure.make({
+                    ...walkthroughAdmissionDetail(request, "REQUEST_DEADLINE_EXCEEDED"),
+                    method: "Walkthroughs.getStored",
+                    operationId: null,
+                  }),
+                ),
+            }),
+          )
         }).pipe(
           Effect.catchDefect(() =>
             Effect.die(
@@ -299,8 +414,20 @@ export const coreRpcAdmissionLayer = Layer.mergeAll(
 const requireMethodPolicy = (rpc: Parameters<typeof getCoreRpcMethodPolicy>[0]) =>
   Option.match(getCoreRpcMethodPolicy(rpc), {
     onNone: () => Effect.die("Core business RPC is missing its method policy."),
-    onSome: () => Effect.void,
+    onSome: Effect.succeed,
   })
+
+const requireRequestBudget = (request: HostRequestContext, policy: CoreRpcMethodPolicy) =>
+  Effect.sync(() => methodPolicyParser.encode(request)).pipe(
+    Effect.filterOrFail(
+      (encoded) =>
+        encoded !== undefined &&
+        (Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength) <=
+          policy.maxRequestBytes,
+      () => undefined,
+    ),
+    Effect.asVoid,
+  )
 
 const lifecycleCodes = {
   starting: "CORE_UNAVAILABLE",
@@ -316,7 +443,13 @@ const lifecycleCode = (lifecycle: CoreLifecycleState) => lifecycleCodes[lifecycl
 
 const walkthroughAdmissionDetail = (
   request: HostRequestContext,
-  code: "CORE_UNAVAILABLE" | "CORE_RESTARTED" | "CORE_DRAINING",
+  code:
+    | "CORE_UNAVAILABLE"
+    | "CORE_RESTARTED"
+    | "CORE_DRAINING"
+    | "CORE_RPC_ERROR"
+    | "REQUEST_TOO_LARGE"
+    | "REQUEST_DEADLINE_EXCEEDED",
 ) => ({
   _tag: "WalkthroughPublicFailure" as const,
   applicationInstanceId: request.applicationInstanceId,
@@ -325,14 +458,20 @@ const walkthroughAdmissionDetail = (
   code,
   providerId: null,
   modelId: null,
-  retryClass: "automatic" as const,
-  remediation: "retry" as const,
+  retryClass: code === "REQUEST_TOO_LARGE" ? ("notRetryable" as const) : ("automatic" as const),
+  remediation: code === "REQUEST_TOO_LARGE" ? ("none" as const) : ("retry" as const),
   safeMessage:
     code === "CORE_DRAINING"
       ? "DiffDash Core is draining."
       : code === "CORE_RESTARTED"
         ? "DiffDash Core restarted before serving the walkthrough request."
-        : "DiffDash Core is not ready to serve walkthrough requests.",
+        : code === "CORE_RPC_ERROR"
+          ? "DiffDash Core has no capacity for another cancellation request."
+          : code === "REQUEST_TOO_LARGE"
+            ? "The walkthrough request exceeded its size limit."
+            : code === "REQUEST_DEADLINE_EXCEEDED"
+              ? "The walkthrough request exceeded its deadline."
+              : "DiffDash Core is not ready to serve walkthrough requests.",
   attempts: [],
   diagnostic: null,
 })

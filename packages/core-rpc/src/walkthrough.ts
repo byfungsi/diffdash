@@ -328,6 +328,7 @@ export const WalkthroughFailureCode = Schema.Literals([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
 ])
@@ -388,6 +389,7 @@ const WalkthroughAdmissionFailureCode = Schema.Literals([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
 ])

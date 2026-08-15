@@ -1,10 +1,23 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import {
+  AuthenticatedCoreWalkthroughServerRpcs,
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
   CORE_RPC_IN_FLIGHT_BYTES,
   CORE_RPC_MAX_CONCURRENCY,
 } from "@diffdash/core-rpc/transport"
+import { getCoreRpcMethodPolicy, type CoreRpcMethodPolicy } from "@diffdash/core-rpc/method-policy"
+import {
+  CancelWalkthroughRequest,
+  GetStoredWalkthroughRequest,
+  GetWalkthroughOperationRequest,
+  StartWalkthroughRequest,
+  WalkthroughCancelAdmissionFailure,
+  WalkthroughGetOperationAdmissionFailure,
+  WalkthroughGetStoredAdmissionFailure,
+  WalkthroughStartAdmissionFailure,
+} from "@diffdash/core-rpc/walkthrough"
 import { Effect, FileSystem, Layer, Match, Path, Predicate, Queue, Redacted, Schema } from "effect"
+import { Option, Result } from "effect"
 import * as RpcMessage from "effect/unstable/rpc/RpcMessage"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
@@ -37,6 +50,40 @@ const encodedBytes = (parser: RpcSerialization.Parser, value: RpcMessage.FromSer
   const encoded = parser.encode(value)
   if (encoded === undefined) return 0
   return Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength
+}
+
+const encodedRequestPayloadBytes = (
+  parser: RpcSerialization.Parser,
+  request: RpcMessage.RequestEncoded,
+) => {
+  const encoded = parser.encode(request.payload)
+  if (encoded === undefined) return 0
+  return Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength
+}
+
+const encodedSuccessBytes = (
+  parser: RpcSerialization.Parser,
+  response: RpcMessage.FromServerEncoded,
+) =>
+  Match.valueTags(response, {
+    Chunk: () => 0,
+    Exit: ({ exit }) =>
+      Match.valueTags(exit, {
+        Failure: () => 0,
+        Success: ({ value }) => {
+          const encoded = parser.encode(value)
+          if (encoded === undefined) return 0
+          return Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength
+        },
+      }),
+    Defect: () => 0,
+    Pong: () => 0,
+    ClientProtocolError: () => 0,
+  })
+
+interface WalkthroughRequestReservation {
+  readonly policy: CoreRpcMethodPolicy
+  readonly request: RpcMessage.RequestEncoded
 }
 
 /** Runs Core RPC over one private native Unix domain socket. */
@@ -83,68 +130,190 @@ const coreRpcSocketProtocolLayer = (options: CoreRpcSocketHostOptions) => {
   return protocolLayer
 }
 
-const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions) =>
-  Layer.effect(
-    RpcServer.Protocol,
-    Effect.gen(function* () {
-      const protocol = yield* RpcServer.Protocol
-      const serialization = yield* RpcSerialization.RpcSerialization
-      const parser = serialization.makeUnsafe()
-      const reservations = new Set<string>()
-      const disconnects = yield* Queue.unbounded<number>()
-      const releaseClient = (clientId: number) => {
-        const prefix = `${String(clientId)}:`
-        for (const key of reservations) {
-          if (key.startsWith(prefix)) reservations.delete(key)
-        }
+/** Applies walkthrough request, response, concurrency, and disconnect bounds to an RPC protocol. */
+export const makeBoundedWalkthroughProtocol = Effect.fn("CoreRpc.makeBoundedWalkthroughProtocol")(
+  function* () {
+    const protocol = yield* RpcServer.Protocol
+    const serialization = yield* RpcSerialization.RpcSerialization
+    const reservations = new Map<string, WalkthroughRequestReservation>()
+    const disconnects = yield* Queue.unbounded<number>()
+    const releaseClient = (clientId: number) => {
+      const prefix = `${String(clientId)}:`
+      for (const key of reservations.keys()) {
+        if (key.startsWith(prefix)) reservations.delete(key)
       }
-      const frameFailure = (requestId: string | number, message: string) => {
-        const correlated = RpcMessage.ResponseExitDieEncoded({
-          requestId: RpcMessage.RequestId(requestId),
-          defect: message,
-        })
-        return encodedBytes(parser, correlated) <= CORE_RPC_INCOMPLETE_BUFFER_BYTES
-          ? correlated
-          : RpcMessage.ResponseDefectEncoded("Core RPC frame budget exceeded.")
+    }
+    const frameFailure = (requestId: string | number, message: string) => {
+      const correlated = RpcMessage.ResponseExitDieEncoded({
+        requestId: RpcMessage.RequestId(requestId),
+        defect: message,
+      })
+      return encodedBytes(serialization.makeUnsafe(), correlated) <=
+        CORE_RPC_INCOMPLETE_BUFFER_BYTES
+        ? correlated
+        : RpcMessage.ResponseDefectEncoded("Core RPC frame budget exceeded.")
+    }
+    const admissionFailure = (
+      request: RpcMessage.RequestEncoded,
+      code: "REQUEST_TOO_LARGE" | "RESPONSE_TOO_LARGE",
+    ): RpcMessage.FromServerEncoded => {
+      const detail = {
+        _tag: "WalkthroughPublicFailure" as const,
+        code,
+        providerId: null,
+        modelId: null,
+        retryClass: "notRetryable" as const,
+        remediation: "none" as const,
+        safeMessage:
+          code === "REQUEST_TOO_LARGE"
+            ? "The walkthrough request exceeded its size limit."
+            : "The walkthrough response exceeded its size limit.",
+        attempts: [],
+        diagnostic: null,
       }
-      yield* Effect.forever(
-        Queue.take(protocol.disconnects).pipe(
-          Effect.tap((clientId) => Effect.sync(() => releaseClient(clientId))),
-          Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
-        ),
-      ).pipe(Effect.forkScoped)
-
-      return RpcServer.Protocol.of({
-        ...protocol,
-        disconnects,
-        run: (handler) =>
-          protocol.run((clientId, message) =>
-            Match.valueTags(message, {
-              Request: (request) =>
-                Effect.suspend(() => {
-                  if (
-                    reservations.size >= CORE_RPC_MAX_CONCURRENCY ||
-                    (reservations.size + 1) * CORE_RPC_INCOMPLETE_BUFFER_BYTES >
-                      CORE_RPC_IN_FLIGHT_BYTES
-                  ) {
-                    return protocol.send(
-                      clientId,
-                      frameFailure(request.id, "Core RPC capacity exceeded."),
-                    )
-                  }
-                  reservations.add(walkthroughReservationKey(clientId, request.id))
-                  return handler(clientId, request)
-                }),
-              Ack: (acknowledgement) => handler(clientId, acknowledgement),
-              Interrupt: (interrupt) => handler(clientId, interrupt),
-              Ping: (ping) => handler(clientId, ping),
-              Eof: (eof) => handler(clientId, eof),
-            }),
+      const decoded = Match.value(request.tag).pipe(
+        Match.when("Walkthroughs.start", () =>
+          Schema.decodeUnknownResult(StartWalkthroughRequest)(request.payload).pipe(
+            Result.map((payload) =>
+              WalkthroughStartAdmissionFailure.make({
+                ...detail,
+                applicationInstanceId: payload.applicationInstanceId,
+                processEpoch: payload.processEpoch,
+                requestId: payload.requestId,
+                method: "Walkthroughs.start",
+                operationId: null,
+              }),
+            ),
           ),
-        send: (clientId, response, transferables) =>
-          Effect.suspend(() => {
-            const boundedResponse =
-              encodedBytes(parser, response) <= CORE_RPC_INCOMPLETE_BUFFER_BYTES
+        ),
+        Match.when("Walkthroughs.getOperation", () =>
+          Schema.decodeUnknownResult(GetWalkthroughOperationRequest)(request.payload).pipe(
+            Result.map((payload) =>
+              WalkthroughGetOperationAdmissionFailure.make({
+                ...detail,
+                applicationInstanceId: payload.applicationInstanceId,
+                processEpoch: payload.processEpoch,
+                requestId: payload.requestId,
+                method: "Walkthroughs.getOperation",
+                operationId: payload.operationId,
+              }),
+            ),
+          ),
+        ),
+        Match.when("Walkthroughs.cancel", () =>
+          Schema.decodeUnknownResult(CancelWalkthroughRequest)(request.payload).pipe(
+            Result.map((payload) =>
+              WalkthroughCancelAdmissionFailure.make({
+                ...detail,
+                applicationInstanceId: payload.applicationInstanceId,
+                processEpoch: payload.processEpoch,
+                requestId: payload.requestId,
+                method: "Walkthroughs.cancel",
+                operationId: payload.operationId,
+              }),
+            ),
+          ),
+        ),
+        Match.when("Walkthroughs.getStored", () =>
+          Schema.decodeUnknownResult(GetStoredWalkthroughRequest)(request.payload).pipe(
+            Result.map((payload) =>
+              WalkthroughGetStoredAdmissionFailure.make({
+                ...detail,
+                applicationInstanceId: payload.applicationInstanceId,
+                processEpoch: payload.processEpoch,
+                requestId: payload.requestId,
+                method: "Walkthroughs.getStored",
+                operationId: null,
+              }),
+            ),
+          ),
+        ),
+        Match.orElse(() => Result.fail("Unsupported walkthrough request.")),
+      )
+      if (Result.isFailure(decoded)) {
+        return frameFailure(request.id, "Core RPC rejected an invalid bounded request.")
+      }
+      return {
+        _tag: "Exit",
+        requestId: request.id,
+        exit: {
+          _tag: "Failure",
+          cause: [{ _tag: "Fail", error: decoded.success }],
+        },
+      }
+    }
+    yield* Effect.forever(
+      Queue.take(protocol.disconnects).pipe(
+        Effect.tap((clientId) => Effect.sync(() => releaseClient(clientId))),
+        Effect.flatMap((clientId) => Queue.offer(disconnects, clientId)),
+      ),
+    ).pipe(Effect.forkScoped)
+
+    return RpcServer.Protocol.of({
+      ...protocol,
+      disconnects,
+      run: (handler) =>
+        protocol.run((clientId, message) =>
+          Match.valueTags(message, {
+            Request: (request) =>
+              Effect.suspend(() => {
+                const key = walkthroughReservationKey(clientId, request.id)
+                const declaration = AuthenticatedCoreWalkthroughServerRpcs.requests.get(request.tag)
+                const policy =
+                  declaration === undefined
+                    ? Option.none<CoreRpcMethodPolicy>()
+                    : getCoreRpcMethodPolicy(declaration)
+                if (reservations.has(key)) {
+                  return protocol.send(
+                    clientId,
+                    frameFailure(request.id, "Core RPC rejected a duplicate live request ID."),
+                  )
+                }
+                if (
+                  Option.isSome(policy) &&
+                  encodedRequestPayloadBytes(serialization.makeUnsafe(), request) >
+                    policy.value.maxRequestBytes
+                ) {
+                  return protocol.send(clientId, admissionFailure(request, "REQUEST_TOO_LARGE"))
+                }
+                if (
+                  reservations.size >= CORE_RPC_MAX_CONCURRENCY ||
+                  (reservations.size + 1) * CORE_RPC_INCOMPLETE_BUFFER_BYTES >
+                    CORE_RPC_IN_FLIGHT_BYTES
+                ) {
+                  return protocol.send(
+                    clientId,
+                    frameFailure(request.id, "Core RPC capacity exceeded."),
+                  )
+                }
+                if (Option.isSome(policy)) {
+                  reservations.set(key, { policy: policy.value, request })
+                }
+                return handler(clientId, request)
+              }),
+            Ack: (acknowledgement) => handler(clientId, acknowledgement),
+            Interrupt: (interrupt) => handler(clientId, interrupt),
+            Ping: (ping) => handler(clientId, ping),
+            Eof: (eof) => handler(clientId, eof),
+          }),
+        ),
+      send: (clientId, response, transferables) =>
+        Effect.suspend(() => {
+          const reservation = Match.valueTags(response, {
+            Chunk: () => undefined,
+            Exit: ({ requestId }) =>
+              reservations.get(walkthroughReservationKey(clientId, requestId)),
+            Defect: () => undefined,
+            Pong: () => undefined,
+            ClientProtocolError: () => undefined,
+          })
+          const boundedResponse =
+            reservation !== undefined &&
+            encodedSuccessBytes(serialization.makeUnsafe(), response) >
+              reservation.policy.maxResponseBytes
+              ? admissionFailure(reservation.request, "RESPONSE_TOO_LARGE")
+              : encodedBytes(serialization.makeUnsafe(), response) <=
+                  CORE_RPC_INCOMPLETE_BUFFER_BYTES
                 ? response
                 : Match.valueTags(response, {
                     Chunk: ({ requestId }) =>
@@ -155,26 +324,31 @@ const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions
                     Pong: () => response,
                     ClientProtocolError: () => response,
                   })
-            return protocol.send(clientId, boundedResponse, transferables)
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() =>
-                Match.valueTags(response, {
-                  Chunk: () => undefined,
-                  Exit: ({ requestId }) =>
-                    reservations.delete(walkthroughReservationKey(clientId, requestId)),
-                  Defect: () => undefined,
-                  Pong: () => undefined,
-                  ClientProtocolError: () => undefined,
-                }),
-              ),
+          return protocol.send(clientId, boundedResponse, transferables)
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() =>
+              Match.valueTags(response, {
+                Chunk: () => undefined,
+                Exit: ({ requestId }) =>
+                  reservations.delete(walkthroughReservationKey(clientId, requestId)),
+                Defect: () => undefined,
+                Pong: () => undefined,
+                ClientProtocolError: () => undefined,
+              }),
             ),
           ),
-        end: (clientId) =>
-          Effect.sync(() => releaseClient(clientId)).pipe(Effect.andThen(protocol.end(clientId))),
-      })
-    }),
-  ).pipe(Layer.provide(coreRpcSocketProtocolLayer(options)))
+        ),
+      end: (clientId) =>
+        Effect.sync(() => releaseClient(clientId)).pipe(Effect.andThen(protocol.end(clientId))),
+    })
+  },
+)
+
+const boundedWalkthroughSocketProtocolLayer = (options: CoreRpcSocketHostOptions) =>
+  Layer.effect(RpcServer.Protocol, makeBoundedWalkthroughProtocol()).pipe(
+    Layer.provide(coreRpcSocketProtocolLayer(options)),
+  )
 
 /** Runs the currently deployed control and AppState RPC audience over a private native socket. */
 export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) =>
