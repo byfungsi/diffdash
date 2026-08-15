@@ -48,6 +48,10 @@ describe("Core RPC method policy", () => {
     expect(CoreBusinessRpcs.requests.get("Walkthroughs.getStored")?.middlewares).toEqual(
       new Set([WalkthroughGetStoredAdmissionMiddleware]),
     )
+    expect([...CoreHostCapabilityRpcs.requests.keys()]).toEqual([
+      "Host.openExternal",
+      "Host.openPath",
+    ])
     expect(new Set(declarations.map(([tag]) => tag)).size).toBe(declarations.length)
     for (const [tag, declaration] of declarations) {
       const policy = getCoreRpcMethodPolicy(declaration)
@@ -66,6 +70,16 @@ describe("Core RPC method policy", () => {
       if (value.restartBehavior === "retryInNewEpoch") retryablePolicies.push([tag, value])
       if (value.restartBehavior === "retryByIdempotencyKey") {
         keyedRetryPolicies.push([tag, value])
+      }
+      if (tag.startsWith("Host.")) {
+        expect(
+          value.requiredHostCapabilities,
+          `${tag} must name exactly one native capability`,
+        ).toHaveLength(1)
+        expect(value.requiredScope).toBe("application")
+        expect(value.mutationClass).toBe("uncertainMutation")
+        expect(value.idempotency).toBe("nonIdempotent")
+        expect(value.restartBehavior).toBe("failOnRestart")
       }
     }
 
@@ -90,6 +104,9 @@ describe("Core RPC method policy", () => {
       "Walkthroughs.getOperation",
       "Walkthroughs.cancel",
       "Walkthroughs.getStored",
+      "ReviewAgents.start",
+      "ReviewAgents.getOperation",
+      "ReviewAgents.cancel",
     ])
     expect([...AuthenticatedCoreBusinessRpcs.requests.keys()]).toEqual([
       ...CoreBusinessRpcs.requests.keys(),
