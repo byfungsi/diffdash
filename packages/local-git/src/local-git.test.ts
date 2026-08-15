@@ -46,6 +46,7 @@ const makeProcessLayer = (run: FakeProcessRun) =>
     ProcessService,
     ProcessService.of({
       run: (request) => run(request.command, request.args, request),
+      streamBytes: () => Stream.empty,
       streamLines: () => Stream.empty,
     }),
   )

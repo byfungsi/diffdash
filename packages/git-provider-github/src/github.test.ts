@@ -58,6 +58,7 @@ const result = (stdout: string, request: ProcessRequest): ProcessResult =>
 
 const processRunner = (run: ProcessRunner["run"]): ProcessRunner => ({
   run,
+  streamBytes: () => Stream.empty,
   streamLines: () => Stream.empty,
 })
 

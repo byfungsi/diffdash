@@ -113,6 +113,7 @@ const makeHarness = (
             : (options.walkthroughOutput ?? "generated walkthrough"),
         )
       }),
+    streamBytes: () => Stream.empty,
     streamLines: (request) => {
       calls.push({
         command: request.command,
@@ -236,6 +237,7 @@ agentCancellationConformance("Claude", {
       tempResources,
       processes: {
         run: (request) => Effect.succeed(result(request, "2.1.205")),
+        streamBytes: () => Stream.empty,
         streamLines: () =>
           Stream.scoped(
             Stream.fromEffect(
@@ -286,6 +288,7 @@ describe("Claude provider", () => {
         tempResources,
         processes: {
           run: (request) => Effect.succeed(result(request, "2.1.205")),
+          streamBytes: () => Stream.empty,
           streamLines: () => Stream.empty,
         },
         permissionControls: {

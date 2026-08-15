@@ -1299,6 +1299,7 @@ const movingProcessLayer = (
       return ProcessService.of({
         run: (request) =>
           processes.run(request).pipe(Effect.tap(() => afterCompletion(request.args))),
+        streamBytes: (request) => processes.streamBytes(request),
         streamLines: (request) =>
           processes.streamLines(request).pipe(
             Stream.tap((event) => {

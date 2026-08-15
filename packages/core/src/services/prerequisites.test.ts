@@ -660,6 +660,7 @@ const fakeProcessLayer = (options: {
           ? Effect.succeed(processResult(request))
           : Effect.fail(processExitError(request))
       },
+      streamBytes: () => Stream.die(new Error("Unused test process stream")),
       streamLines: () => Stream.die(new Error("Unused test process stream")),
     }),
   )

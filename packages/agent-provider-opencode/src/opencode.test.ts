@@ -116,6 +116,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
             cause: cause instanceof Error ? cause : new Error(String(cause)),
           }),
       }),
+    streamBytes: () => Stream.empty,
     streamLines: (request) => {
       calls.push({ command: request.command, args: request.args, options: request, prompt: null })
       return Stream.scoped(
@@ -490,6 +491,7 @@ describe("OpenCode provider", () => {
       harnessDirectories.add(directory)
       const processes: ProcessRunner = {
         run: () => Effect.die(new Error("OpenCode process runner should not run when unresolved")),
+        streamBytes: () => Stream.empty,
         streamLines: () => Stream.empty,
       }
       const registration = makeOpenCodeProvider({

@@ -10,6 +10,7 @@ import {
 
 const processes = {
   run: () => Effect.die(new Error("probe is not evaluated during composition")),
+  streamBytes: () => Stream.die(new Error("execution is not evaluated during composition")),
   streamLines: () => Stream.die(new Error("execution is not evaluated during composition")),
 }
 

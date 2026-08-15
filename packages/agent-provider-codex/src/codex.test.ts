@@ -116,6 +116,7 @@ const makeHarness = (
         catch: (cause) =>
           processSpawnError(request, cause instanceof Error ? cause : new Error(String(cause))),
       }),
+    streamBytes: () => Stream.empty,
     streamLines: (request) => {
       calls.push({
         command: request.command,
@@ -272,6 +273,7 @@ agentCancellationConformance("Codex", {
           harness.registration.walkthrough === undefined
             ? () => Effect.die(new Error("unreachable"))
             : (request) => Effect.succeed(result(request, "codex-cli 1.2.3")),
+        streamBytes: () => Stream.empty,
         streamLines: () =>
           Stream.scoped(
             Stream.fromEffect(

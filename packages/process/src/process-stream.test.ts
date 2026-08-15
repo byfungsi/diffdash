@@ -37,6 +37,14 @@ const streamCli = (command: string, args: readonly string[], options?: ProcessRe
     ),
   )
 
+const streamBytes = (command: string, args: readonly string[], options?: ProcessRequestOptions) =>
+  Stream.unwrap(
+    ProcessService.pipe(
+      Effect.map((processes) => processes.streamBytes(processRequest(command, args, options))),
+      Effect.provide(ProcessService.layer),
+    ),
+  )
+
 const processIsRunning = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
@@ -354,6 +362,55 @@ describe("ProcessService line streaming", () => {
       expect(existsSync(marker)).toBe(true)
       expect(readFileSync(marker, "utf8")).toBe("SIGTERM")
       expect(processIsRunning(pid)).toBe(false)
+    }),
+  )
+})
+
+describe("ProcessService byte streaming", () => {
+  it.live("streams output larger than the legacy total cap with bounded chunks", () =>
+    Effect.gen(function* () {
+      const outputBytes = 20 * 1024 * 1024
+      const chunkBytes = 32 * 1024
+      let observedBytes = 0
+      let largestChunk = 0
+      yield* streamBytes(
+        process.execPath,
+        ["-e", `process.stdout.write(Buffer.alloc(${outputBytes}, 120))`],
+        {
+          maxBufferedBytes: 128 * 1024,
+          maxByteChunkBytes: chunkBytes,
+          stdout: { maxBytes: 0, overflow: "truncate" },
+        },
+      ).pipe(
+        Stream.runForEach((event) => {
+          const { _tag: tag } = event
+          if (tag === "ProcessExit") return Effect.void
+          observedBytes += event.bytes.length
+          largestChunk = Math.max(largestChunk, event.bytes.length)
+          return Effect.void
+        }),
+      )
+
+      expect(observedBytes).toBe(outputBytes)
+      expect(largestChunk).toBeLessThanOrEqual(chunkBytes)
+    }),
+  )
+
+  it.live("rejects a queue byte budget smaller than one chunk", () =>
+    Effect.gen(function* () {
+      const result = yield* Effect.result(
+        streamBytes(process.execPath, ["-e", "process.stdout.write('x')"], {
+          maxBufferedBytes: 1024,
+          maxByteChunkBytes: 2048,
+        }).pipe(Stream.runDrain),
+      )
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
+          _tag: "InvalidProcessOptionsError",
+          option: "maxBufferedBytes",
+        })
+      }
     }),
   )
 })

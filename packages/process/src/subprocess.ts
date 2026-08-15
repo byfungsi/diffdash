@@ -28,6 +28,8 @@ export interface ResolvedProcessOptions {
   readonly maxStreamBytes: number
   readonly maxStreamEvents: number
   readonly maxBufferedEvents: number
+  readonly maxByteChunkBytes: number
+  readonly maxBufferedBytes: number
 }
 
 /** Complete request passed to the private Node process adapter. */
@@ -323,6 +325,7 @@ function spawnNode(
       const output = yield* outputChunks(
         child,
         input.options.maxBufferedEvents,
+        input.options.maxByteChunkBytes,
         input.capture,
         (failure) => {
           runFork(Deferred.succeed(outputFailed, failure))
@@ -380,6 +383,7 @@ function spawnNode(
 const outputChunks = (
   child: ChildProcessWithoutNullStreams,
   bufferSize: number,
+  maxByteChunkBytes: number,
   capture: BoundedOutput,
   onLimit: (failure: ProcessLimitFailure) => void,
 ): Effect.Effect<Stream.Stream<NodeProcessChunk, NodeProcessIoFailure>, never, Scope.Scope> =>
@@ -408,15 +412,17 @@ const outputChunks = (
           .finally(resume)
       }
       const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
-        const copied = Buffer.from(bytes)
-        try {
-          capture.append(source, copied)
-        } catch (cause) {
-          if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
+        for (let offset = 0; offset < bytes.length; offset += maxByteChunkBytes) {
+          const copied = Buffer.from(bytes.subarray(offset, offset + maxByteChunkBytes))
+          try {
+            capture.append(source, copied)
+          } catch (cause) {
+            if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
+          }
+          enqueue(() =>
+            Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
+          )
         }
-        enqueue(() =>
-          Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
-        )
       }
       const onError = (source: ProcessOutputSource) => (cause: Error) =>
         enqueue(() =>
