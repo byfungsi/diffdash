@@ -15,6 +15,7 @@ import { join } from "node:path"
 
 import {
   ProcessOutputError,
+  ProcessCancellationError,
   ProcessService,
   ProcessSpawnError,
   ProcessStdinError,
@@ -22,6 +23,8 @@ import {
   processRequest,
   type ProcessEvent,
   type ProcessRequestOptions,
+  type ProcessByteStreamOptions,
+  type ProcessStreamMetrics,
 } from "./process"
 
 const makeTempDirectory = Effect.acquireRelease(
@@ -37,10 +40,17 @@ const streamCli = (command: string, args: readonly string[], options?: ProcessRe
     ),
   )
 
-const streamBytes = (command: string, args: readonly string[], options?: ProcessRequestOptions) =>
+const streamBytes = (
+  command: string,
+  args: readonly string[],
+  options?: ProcessRequestOptions,
+  streamOptions?: ProcessByteStreamOptions,
+) =>
   Stream.unwrap(
     ProcessService.pipe(
-      Effect.map((processes) => processes.streamBytes(processRequest(command, args, options))),
+      Effect.map((processes) =>
+        processes.streamBytes(processRequest(command, args, options), streamOptions),
+      ),
       Effect.provide(ProcessService.layer),
     ),
   )
@@ -59,6 +69,14 @@ const waitForProcessExit = (pid: number, attemptsRemaining = 200): Promise<void>
   if (attemptsRemaining === 0) return Promise.reject(new Error(`Timed out waiting for PID ${pid}`))
   return new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
     waitForProcessExit(pid, attemptsRemaining - 1),
+  )
+}
+
+const waitForFile = (path: string, attemptsRemaining = 200): Promise<void> => {
+  if (existsSync(path)) return Promise.resolve()
+  if (attemptsRemaining === 0) return Promise.reject(new Error(`Timed out waiting for ${path}`))
+  return new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
+    waitForFile(path, attemptsRemaining - 1),
   )
 }
 
@@ -411,6 +429,157 @@ describe("ProcessService byte streaming", () => {
           option: "maxBufferedBytes",
         })
       }
+    }),
+  )
+
+  it.live("keeps exact queue and reservation budgets under a slow consumer", () =>
+    Effect.gen(function* () {
+      const chunkBytes = 16 * 1024
+      const queueBytes = 2 * chunkBytes
+      const snapshots: ProcessStreamMetrics[] = []
+      let observedBytes = 0
+      let delayed = false
+      const script = `
+        const chunk = Buffer.alloc(${chunkBytes}, 120)
+        let remaining = 12 * 1024 * 1024
+        const write = () => {
+          while (remaining > 0) {
+            const next = Math.min(remaining, chunk.length)
+            remaining -= next
+            if (!process.stdout.write(chunk.subarray(0, next))) return process.stdout.once('drain', write)
+          }
+        }
+        write()
+      `
+
+      yield* streamBytes(
+        process.execPath,
+        ["-e", script],
+        {
+          maxBufferedBytes: queueBytes,
+          maxReservedBytes: chunkBytes,
+          maxByteChunkBytes: chunkBytes,
+          stdout: { maxBytes: 0, overflow: "truncate" },
+        },
+        { observer: (metrics) => snapshots.push(metrics) },
+      ).pipe(
+        Stream.runForEach((event) => {
+          if (event["_tag"] === "ProcessExit") return Effect.void
+          observedBytes += event.bytes.length
+          if (delayed) return Effect.void
+          delayed = true
+          return Effect.sleep(100)
+        }),
+      )
+
+      expect(observedBytes).toBe(12 * 1024 * 1024)
+      expect(Math.max(...snapshots.map((value) => value.queueBytes))).toBeLessThanOrEqual(
+        queueBytes,
+      )
+      expect(Math.max(...snapshots.map((value) => value.queueDepth))).toBeLessThanOrEqual(2)
+      expect(Math.max(...snapshots.map((value) => value.reservedBytes))).toBeLessThanOrEqual(
+        chunkBytes,
+      )
+      expect(Math.max(...snapshots.map((value) => value.reservationUtilization))).toBe(1)
+      expect(Math.max(...snapshots.map((value) => value.blockedDurationMs))).toBeGreaterThan(0)
+    }),
+  )
+
+  it.live("drains saturated stderr independently and types stderr overflow", () =>
+    Effect.gen(function* () {
+      const script = `
+        process.stderr.write(Buffer.alloc(4 * 1024 * 1024, 101))
+        process.stdout.end('ok')
+      `
+      const events = yield* streamBytes(process.execPath, ["-e", script], {
+        maxBufferedBytes: 64 * 1024,
+        maxReservedBytes: 64 * 1024,
+        maxByteChunkBytes: 16 * 1024,
+        stderr: { maxBytes: 1024, overflow: "truncate" },
+      }).pipe(Stream.runCollect)
+      const stdout = events.find((event) => event["_tag"] === "ProcessByteChunk")
+      expect(stdout?.["_tag"] === "ProcessByteChunk" ? Array.from(stdout.bytes) : []).toEqual([
+        111, 107,
+      ])
+      expect(events.at(-1)).toMatchObject({
+        _tag: "ProcessExit",
+        result: { stderrTruncated: true },
+      })
+
+      const overflow = yield* Effect.result(
+        streamBytes(process.execPath, ["-e", "process.stderr.write('overflow')"], {
+          stderr: { maxBytes: 4, overflow: "error" },
+          killAfterMs: 25,
+          forceKillAfterMs: 25,
+        }).pipe(Stream.runDrain),
+      )
+      expect(Result.isFailure(overflow)).toBe(true)
+      if (Result.isFailure(overflow)) {
+        expect(overflow.failure).toBeInstanceOf(ProcessOutputError)
+        expect(overflow.failure).toMatchObject({ source: "stderr", limit: "capture-bytes" })
+      }
+    }),
+  )
+
+  it.live("returns typed cancellation and kills the complete process group", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const descendantPath = join(directory, "byte-stream-descendant")
+      const cancellation = yield* Deferred.make<void>()
+      const snapshots: ProcessStreamMetrics[] = []
+      const script = `
+        const { spawn } = require('node:child_process')
+        const fs = require('node:fs')
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        })
+        fs.writeFileSync(process.env.DESCENDANT_PATH, String(child.pid))
+        process.on('SIGTERM', () => {})
+        process.stdout.write(String(process.pid))
+        setInterval(() => {}, 1000)
+      `
+      let parentPid = 0
+      const fiber = yield* streamBytes(
+        process.execPath,
+        ["-e", script],
+        {
+          env: { DESCENDANT_PATH: descendantPath },
+          killAfterMs: 100,
+          forceKillAfterMs: 100,
+        },
+        {
+          cancellation: Deferred.await(cancellation),
+          observer: (metrics) => snapshots.push(metrics),
+        },
+      ).pipe(
+        Stream.tap((event) =>
+          event["_tag"] === "ProcessByteChunk"
+            ? Effect.sync(() => {
+                parentPid = Number.parseInt(Buffer.from(event.bytes).toString("utf8"), 10)
+              })
+            : Effect.void,
+        ),
+        Stream.runDrain,
+        Effect.result,
+        Effect.forkChild,
+      )
+      yield* Effect.promise(() => waitForFile(descendantPath))
+      yield* Deferred.succeed(cancellation, undefined)
+      const result = yield* Fiber.join(fiber)
+      const descendantPid = Number.parseInt(readFileSync(descendantPath, "utf8"), 10)
+
+      expect(Result.isFailure(result)).toBe(true)
+      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(ProcessCancellationError)
+      yield* Effect.promise(() => waitForProcessExit(parentPid))
+      yield* Effect.promise(() => waitForProcessExit(descendantPid))
+      expect(processIsRunning(parentPid)).toBe(false)
+      expect(processIsRunning(descendantPid)).toBe(false)
+      expect(snapshots.at(-1)).toMatchObject({
+        queueBytes: 0,
+        queueDepth: 0,
+        reservedBytes: 0,
+      })
+      expect(snapshots.at(-1)?.cancellationAgeMs).toBeGreaterThanOrEqual(100)
     }),
   )
 })

@@ -3,6 +3,7 @@ import { delimiter, join, resolve } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import {
   Context,
+  Clock,
   Cause,
   Data,
   Deferred,
@@ -11,6 +12,7 @@ import {
   Match,
   Queue,
   Schema,
+  Semaphore,
   Stream,
   type Scope,
 } from "effect"
@@ -30,6 +32,8 @@ export interface ResolvedProcessOptions {
   readonly maxBufferedEvents: number
   readonly maxByteChunkBytes: number
   readonly maxBufferedBytes: number
+  readonly maxReservedBytes: number
+  readonly maxReservedEvents: number
 }
 
 /** Complete request passed to the private Node process adapter. */
@@ -42,6 +46,17 @@ export interface SpawnProcessInput {
   readonly unsetEnv: readonly string[]
   readonly options: ResolvedProcessOptions
   readonly capture: BoundedOutput
+  readonly metrics?: ProcessStreamMetricsTracker
+}
+
+/** Internal bridge used to publish byte ownership without exposing Node adapter details. */
+export interface ProcessStreamMetricsTracker {
+  readonly queued: (bytes: number, depth: number) => void
+  readonly blocked: (durationMs: number) => void
+  readonly reserve: Effect.Effect<void>
+  readonly release: Effect.Effect<void>
+  readonly cancel: (now: number) => void
+  readonly finish: (now: number) => void
 }
 
 /** One source-tagged byte chunk read from a child process. */
@@ -125,7 +140,7 @@ export class ProcessLimitFailure extends Schema.TaggedError<ProcessLimitFailure>
   },
 ) {}
 
-const toError = <A>(cause: A): Error =>
+const toError = (cause: unknown): Error =>
   Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))
 
 class BoundedByteOutput {
@@ -298,7 +313,7 @@ function spawnNode(
       const exited = yield* Deferred.make<void>()
       const stdinFailed = yield* Deferred.make<never, NodeProcessStdinFailure>()
       const outputFailed = yield* Deferred.make<ProcessLimitFailure>()
-      const context = yield* Effect.context<never>()
+      const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
       const child = yield* Effect.try({
         try: () => spawnChild(input),
@@ -327,6 +342,7 @@ function spawnNode(
         input.options.maxBufferedEvents,
         input.options.maxByteChunkBytes,
         input.capture,
+        input.metrics,
         (failure) => {
           runFork(Deferred.succeed(outputFailed, failure))
         },
@@ -385,15 +401,20 @@ const outputChunks = (
   bufferSize: number,
   maxByteChunkBytes: number,
   capture: BoundedOutput,
+  metrics: ProcessStreamMetricsTracker | undefined,
   onLimit: (failure: ProcessLimitFailure) => void,
 ): Effect.Effect<Stream.Stream<NodeProcessChunk, NodeProcessIoFailure>, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const queue = yield* Queue.bounded<NodeProcessChunk, Cause.Done<void> | NodeProcessIoFailure>(
+      const queue = yield* Queue.bounded<NodeProcessChunk, Cause.Done | NodeProcessIoFailure>(
         bufferSize,
       )
+      const byteSlots = Semaphore.makeUnsafe(bufferSize)
       let active = true
       let pending = Promise.resolve()
+      let pendingTasks = 0
+      let queuedBytes = 0
+      let queuedDepth = 0
       const ended = new Set<ProcessOutputSource>()
       const pause = () => {
         child.stdout.pause()
@@ -406,22 +427,41 @@ const outputChunks = (
       }
       const enqueue = (effect: () => Promise<void>) => {
         pause()
+        pendingTasks += 1
         pending = pending
           .then(effect, effect)
           .catch(() => undefined)
-          .finally(resume)
+          .finally(() => {
+            pendingTasks -= 1
+            if (pendingTasks === 0) resume()
+          })
       }
       const onData = (source: ProcessOutputSource) => (bytes: Buffer) => {
         for (let offset = 0; offset < bytes.length; offset += maxByteChunkBytes) {
-          const copied = Buffer.from(bytes.subarray(offset, offset + maxByteChunkBytes))
-          try {
-            capture.append(source, copied)
-          } catch (cause) {
-            if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
-          }
-          enqueue(() =>
-            Effect.runPromise(Queue.offer(queue, { source, bytes: copied }).pipe(Effect.asVoid)),
-          )
+          const start = offset
+          const end = Math.min(offset + maxByteChunkBytes, bytes.length)
+          enqueue(() => {
+            return Effect.runPromise(
+              Effect.gen(function* () {
+                const startedAt = yield* Clock.currentTimeMillis
+                yield* byteSlots.take(1)
+                const finishedAt = yield* Clock.currentTimeMillis
+                metrics?.blocked(finishedAt - startedAt)
+                const copied = Buffer.from(bytes.subarray(start, end))
+                try {
+                  capture.append(source, copied)
+                } catch (cause) {
+                  if (Schema.is(ProcessLimitFailure)(cause)) onLimit(cause)
+                }
+                yield* Effect.sync(() => {
+                  queuedBytes += copied.length
+                  queuedDepth += 1
+                  metrics?.queued(queuedBytes, queuedDepth)
+                })
+                yield* Queue.offer(queue, { source, bytes: copied })
+              }),
+            )
+          })
         }
       }
       const onError = (source: ProcessOutputSource) => (cause: Error) =>
@@ -452,7 +492,20 @@ const outputChunks = (
       if (child.stderr.readableEnded) onStderrEnd()
 
       return {
-        stream: Stream.fromQueue(queue),
+        stream: Stream.fromQueue(queue).pipe(
+          Stream.tap((chunk) =>
+            (chunk.source === "stdout" ? (metrics?.reserve ?? Effect.void) : Effect.void).pipe(
+              Effect.andThen(byteSlots.release(1)),
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  queuedBytes = Math.max(0, queuedBytes - chunk.bytes.length)
+                  queuedDepth = Math.max(0, queuedDepth - 1)
+                  metrics?.queued(queuedBytes, queuedDepth)
+                }),
+              ),
+            ),
+          ),
+        ),
         cleanup: () => {
           active = false
           child.stdout.off("data", onStdoutData)
