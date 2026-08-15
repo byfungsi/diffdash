@@ -222,3 +222,99 @@ export const CoreCommandAcknowledgement = Schema.Struct({
 
 /** Host acknowledgement for a committed terminal command version. */
 export type CoreCommandAcknowledgement = typeof CoreCommandAcknowledgement.Type
+
+/** Bounded privacy-safe metadata retained with an authoritative durable command. */
+export const CoreCommandMetadata = Schema.Struct({
+  name: BoundedEventToken,
+  scope: Schema.NullOr(
+    Schema.Struct({
+      name: BoundedEventToken,
+      id: BoundedEventReference,
+    }),
+  ),
+}).annotate({ identifier: "CoreCommandMetadata" })
+
+/** Bounded privacy-safe metadata retained with an authoritative durable command. */
+export type CoreCommandMetadata = typeof CoreCommandMetadata.Type
+
+/** Authoritative durable command state returned by query and acknowledgement RPCs. */
+export const CoreCommandSnapshot = Schema.Struct({
+  commandId: CoreCommandId,
+  processEpoch: CoreProcessEpoch,
+  metadata: CoreCommandMetadata,
+  state: CoreCommandState,
+  stateVersion: CoreStateVersion,
+  acceptedAt: UtcIsoTimestamp,
+  terminalAt: Schema.NullOr(UtcIsoTimestamp),
+  acknowledgedAt: Schema.NullOr(UtcIsoTimestamp),
+}).annotate({ identifier: "CoreCommandSnapshot" })
+
+/** Authoritative durable command state returned by query and acknowledgement RPCs. */
+export type CoreCommandSnapshot = typeof CoreCommandSnapshot.Type
+
+/** Query for one durable command by stable command identity. */
+export const CoreCommandQueryRequest = Schema.Struct({
+  context: HostRequestContext,
+  commandId: CoreCommandId,
+}).annotate({ identifier: "CoreCommandQueryRequest" })
+
+/** Query for one durable command by stable command identity. */
+export type CoreCommandQueryRequest = typeof CoreCommandQueryRequest.Type
+
+/** Authoritative command lookup result without treating absence as transport failure. */
+export const CoreCommandQueryResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("found"), command: CoreCommandSnapshot }),
+  Schema.Struct({ kind: Schema.Literal("notFound"), commandId: CoreCommandId }),
+]).annotate({ identifier: "CoreCommandQueryResult" })
+
+/** Authoritative command lookup result without treating absence as transport failure. */
+export type CoreCommandQueryResult = typeof CoreCommandQueryResult.Type
+
+/** Bounded query for terminal commands that still require host acknowledgement. */
+export const CoreCommandListRequest = Schema.Struct({
+  context: HostRequestContext,
+  limit: PositiveInteger.pipe(Schema.check(Schema.isLessThanOrEqualTo(256))),
+}).annotate({ identifier: "CoreCommandListRequest" })
+
+/** Bounded query for terminal commands that still require host acknowledgement. */
+export type CoreCommandListRequest = typeof CoreCommandListRequest.Type
+
+/** Bounded authoritative terminal command page used after reconnect or renderer reload. */
+export const CoreCommandListResult = Schema.Array(CoreCommandSnapshot).pipe(
+  Schema.check(Schema.isMaxLength(256)),
+)
+
+/** Bounded authoritative terminal command page used after reconnect or renderer reload. */
+export type CoreCommandListResult = typeof CoreCommandListResult.Type
+
+/** Stable source-safe failure returned by event replay and durable command RPCs. */
+export const CoreStateDeliveryFailure = Schema.TaggedStruct("CoreStateDeliveryFailure", {
+  method: Schema.Literals([
+    "CoreEvents.replay",
+    "CoreCommands.get",
+    "CoreCommands.listUnacknowledged",
+    "CoreCommands.acknowledge",
+  ]),
+  applicationInstanceId: ApplicationInstanceId,
+  processEpoch: CoreProcessEpoch,
+  requestId: HostRequestContext.fields.requestId,
+  commandId: Schema.NullOr(CoreCommandId),
+  code: Schema.Literals([
+    "CORE_REQUEST_IDENTITY_MISMATCH",
+    "CORE_LIFECYCLE_REJECTED",
+    "CORE_RPC_CAPACITY_EXCEEDED",
+    "REQUEST_TOO_LARGE",
+    "RESPONSE_TOO_LARGE",
+    "REQUEST_DEADLINE_EXCEEDED",
+    "CORE_COMMAND_ACKNOWLEDGEMENT_REJECTED",
+    "CORE_STATE_DELIVERY_FAILED",
+  ]),
+  retryClass: Schema.Literals(["automatic", "userAction", "notRetryable"]),
+  safeMessage: Schema.String.pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(240)),
+  ),
+}).annotate({ identifier: "CoreStateDeliveryFailure" })
+
+/** Stable source-safe failure returned by event replay and durable command RPCs. */
+export type CoreStateDeliveryFailure = typeof CoreStateDeliveryFailure.Type

@@ -4,6 +4,7 @@ import {
   AuthenticatedCoreWalkthroughServerRpcs,
   AuthenticatedCoreReviewAgentServerRpcs,
   AuthenticatedCoreServerRpcs,
+  AuthenticatedCoreStateDeliveryServerRpcs,
 } from "@diffdash/core-rpc/transport"
 import { Layer } from "effect"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
@@ -12,6 +13,7 @@ import { coreBusinessRpcHandlersLayer } from "./core-business-rpc-handlers"
 import { coreControlRpcHandlersLayer } from "./core-control-rpc-handlers"
 import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
 import { coreReviewAgentRpcHandlersLayer } from "./core-review-agent-rpc-handlers"
+import { coreStateDeliveryRpcHandlersLayer } from "./core-state-delivery-rpc-handlers"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
   CoreAuthenticatedHostSession,
@@ -72,6 +74,23 @@ export const coreReviewAgentRpcServerLayer = (
       Layer.mergeAll(
         coreControlRpcHandlersLayer,
         coreReviewAgentRpcHandlersLayer,
+        coreRpcAdmissionLayer,
+        coreTransportAuthenticationLayer(authentication),
+      ),
+    ),
+    Layer.provideMerge(hostSessionLayer),
+  )
+
+/** Runs event replay and durable command RPCs when their Core authorities are available. */
+export const coreStateDeliveryRpcServerLayer = (
+  authentication: CoreTransportAuthenticationOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession> = coreAuthenticatedHostSessionLayer,
+) =>
+  RpcServer.layer(AuthenticatedCoreStateDeliveryServerRpcs).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        coreControlRpcHandlersLayer,
+        coreStateDeliveryRpcHandlersLayer,
         coreRpcAdmissionLayer,
         coreTransportAuthenticationLayer(authentication),
       ),

@@ -9,6 +9,7 @@
     "./business": "./src/business.ts",
     "./control": "./src/control.ts",
     "./event": "./src/event.ts",
+    "./event-rpc": "./src/event-rpc.ts",
     "./failure": "./src/failure.ts",
     "./host-capability": "./src/host-capability.ts",
     "./identity": "./src/identity.ts",

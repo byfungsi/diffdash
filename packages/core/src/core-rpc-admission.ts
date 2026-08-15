@@ -1,5 +1,9 @@
 import {
   AppStateGetAdmissionMiddleware,
+  CoreCommandAcknowledgeAdmissionMiddleware,
+  CoreCommandGetAdmissionMiddleware,
+  CoreCommandListAdmissionMiddleware,
+  CoreEventReplayAdmissionMiddleware,
   ReviewAgentCancelAdmissionMiddleware,
   ReviewAgentGetOperationAdmissionMiddleware,
   ReviewAgentStartAdmissionMiddleware,
@@ -8,6 +12,14 @@ import {
   WalkthroughGetStoredAdmissionMiddleware,
   WalkthroughStartAdmissionMiddleware,
 } from "@diffdash/core-rpc/admission"
+import {
+  CoreCommandAcknowledgement,
+  CoreCommandListRequest,
+  CoreCommandQueryRequest,
+  CoreEventReplayRequest,
+  CoreStateDeliveryFailure,
+  type CoreStateDeliveryFailure as CoreStateDeliveryFailureType,
+} from "@diffdash/core-rpc/event"
 import {
   AppStateGetDefect,
   AppStateGetIdentityMismatchFailure,
@@ -43,15 +55,31 @@ import {
   ReviewAgentStartFailure,
   StartReviewAgentOperationRequest,
 } from "@diffdash/core-rpc/review-agent"
-import { Effect, Fiber, FiberSet, Layer, Option, Predicate, Schema, Semaphore } from "effect"
+import {
+  Context,
+  Effect,
+  Fiber,
+  FiberSet,
+  Layer,
+  Option,
+  Predicate,
+  Schema,
+  Semaphore,
+} from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
 import { CoreLifecycle } from "./core-lifecycle"
 
-const methodPolicyParser = RpcSerialization.makeMsgPack({
-  useRecords: true,
-  maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
-}).makeUnsafe()
+const makeMethodPolicyParser = () =>
+  RpcSerialization.makeMsgPack({
+    useRecords: true,
+    maxBufferSize: CORE_RPC_INCOMPLETE_BUFFER_BYTES,
+  }).makeUnsafe()
+
+class StateDeliveryAdmissionCapacity extends Context.Service<
+  StateDeliveryAdmissionCapacity,
+  { readonly semaphore: Semaphore.Semaphore }
+>()("@diffdash/core/StateDeliveryAdmissionCapacity") {}
 
 const appStateAdmissionLayer = Layer.effect(
   AppStateGetAdmissionMiddleware,
@@ -534,6 +562,113 @@ const reviewAgentCancelAdmissionLayer = Layer.effect(
   }),
 )
 
+const stateDeliveryAdmissionCapacityLayer = Layer.effect(
+  StateDeliveryAdmissionCapacity,
+  Semaphore.make(CORE_RPC_MAX_CONCURRENCY).pipe(
+    Effect.map((semaphore) => StateDeliveryAdmissionCapacity.of({ semaphore })),
+  ),
+)
+
+const coreEventReplayAdmissionLayer = Layer.effect(
+  CoreEventReplayAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    const capacity = yield* StateDeliveryAdmissionCapacity
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(CoreEventReplayRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitStateDelivery(
+          lifecycle,
+          capacity.semaphore,
+          options.rpc,
+          request.context,
+          request,
+          null,
+          "CoreEvents.replay",
+          effect,
+          false,
+        )
+      })
+  }),
+)
+
+const coreCommandGetAdmissionLayer = Layer.effect(
+  CoreCommandGetAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    const capacity = yield* StateDeliveryAdmissionCapacity
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(CoreCommandQueryRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitStateDelivery(
+          lifecycle,
+          capacity.semaphore,
+          options.rpc,
+          request.context,
+          request,
+          request.commandId,
+          "CoreCommands.get",
+          effect,
+          false,
+        )
+      })
+  }),
+)
+
+const coreCommandListAdmissionLayer = Layer.effect(
+  CoreCommandListAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    const capacity = yield* StateDeliveryAdmissionCapacity
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(CoreCommandListRequest)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitStateDelivery(
+          lifecycle,
+          capacity.semaphore,
+          options.rpc,
+          request.context,
+          request,
+          null,
+          "CoreCommands.listUnacknowledged",
+          effect,
+          false,
+        )
+      })
+  }),
+)
+
+const coreCommandAcknowledgeAdmissionLayer = Layer.effect(
+  CoreCommandAcknowledgeAdmissionMiddleware,
+  Effect.gen(function* () {
+    const lifecycle = yield* CoreLifecycle
+    const capacity = yield* StateDeliveryAdmissionCapacity
+    return (effect, options) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(CoreCommandAcknowledgement)(
+          options.payload,
+        ).pipe(Effect.orDie)
+        return yield* admitStateDelivery(
+          lifecycle,
+          capacity.semaphore,
+          options.rpc,
+          request.context,
+          request,
+          request.commandId,
+          "CoreCommands.acknowledge",
+          effect,
+          true,
+        )
+      })
+  }),
+)
+
 /** Enforces identity, lifecycle, drain, and defect policy for active Core business RPCs. */
 export const coreRpcAdmissionLayer = Layer.mergeAll(
   appStateAdmissionLayer,
@@ -544,7 +679,105 @@ export const coreRpcAdmissionLayer = Layer.mergeAll(
   reviewAgentStartAdmissionLayer,
   reviewAgentGetOperationAdmissionLayer,
   reviewAgentCancelAdmissionLayer,
-)
+  coreEventReplayAdmissionLayer,
+  coreCommandGetAdmissionLayer,
+  coreCommandListAdmissionLayer,
+  coreCommandAcknowledgeAdmissionLayer,
+).pipe(Layer.provide(stateDeliveryAdmissionCapacityLayer))
+
+type RpcEncodable = Parameters<ReturnType<typeof makeMethodPolicyParser>["encode"]>[0]
+
+const admitStateDelivery = Effect.fn("Core.StateDelivery.admit")(function* <A, E, R>(
+  lifecycle: CoreLifecycle["Service"],
+  capacity: Semaphore.Semaphore,
+  rpc: Parameters<typeof getCoreRpcMethodPolicy>[0],
+  request: HostRequestContext,
+  payload: RpcEncodable,
+  commandId: CoreStateDeliveryFailureType["commandId"],
+  method: CoreStateDeliveryFailureType["method"],
+  effect: Effect.Effect<A, E, R>,
+  uninterruptible: boolean,
+) {
+  const policy = yield* requireMethodPolicy(rpc)
+  const fail = (
+    code: CoreStateDeliveryFailureType["code"],
+    safeMessage: string,
+  ): Effect.Effect<never, CoreStateDeliveryFailureType> =>
+    Effect.fail(
+      CoreStateDeliveryFailure.make({
+        method,
+        applicationInstanceId: request.applicationInstanceId,
+        processEpoch: request.processEpoch,
+        requestId: request.requestId,
+        commandId,
+        code,
+        retryClass:
+          code === "CORE_COMMAND_ACKNOWLEDGEMENT_REJECTED"
+            ? "userAction"
+            : code === "REQUEST_TOO_LARGE" || code === "RESPONSE_TOO_LARGE"
+              ? "notRetryable"
+              : "automatic",
+        safeMessage,
+      }),
+    )
+
+  yield* requireEncodedBudget(payload, policy.maxRequestBytes).pipe(
+    Effect.catch(() =>
+      fail("REQUEST_TOO_LARGE", "The Core state request exceeded its size limit."),
+    ),
+  )
+  yield* lifecycle.admitBusinessRequest(request).pipe(
+    Effect.catchTags({
+      CoreBusinessIdentityMismatchError: () =>
+        fail(
+          "CORE_REQUEST_IDENTITY_MISMATCH",
+          "DiffDash Core rejected state delivery for a different process identity.",
+        ),
+      CoreBusinessLifecycleRejectedError: () =>
+        fail("CORE_LIFECYCLE_REJECTED", "DiffDash Core is not ready to deliver state."),
+    }),
+  )
+  const acquired = yield* capacity.takeIfAvailable(1)
+  if (!acquired)
+    return yield* fail(
+      "CORE_RPC_CAPACITY_EXCEEDED",
+      "DiffDash Core has no capacity for another state request.",
+    )
+
+  const admitted = lifecycle
+    .interruptOnDrain(uninterruptible ? Effect.uninterruptible(effect) : effect)
+    .pipe(
+      Effect.flatMap((result) =>
+        requireEncodedBudget(result, policy.maxResponseBytes).pipe(
+          Effect.catch(() =>
+            fail("RESPONSE_TOO_LARGE", "The Core state response exceeded its size limit."),
+          ),
+          Effect.as(result),
+        ),
+      ),
+      Effect.timeoutOrElse({
+        duration: policy.deadlineMs,
+        orElse: () =>
+          fail("REQUEST_DEADLINE_EXCEEDED", "The Core state request exceeded its deadline."),
+      }),
+      Effect.ensuring(capacity.release(1)),
+      Effect.catchDefect(() =>
+        Effect.die(
+          CoreStateDeliveryFailure.make({
+            method,
+            applicationInstanceId: request.applicationInstanceId,
+            processEpoch: request.processEpoch,
+            requestId: request.requestId,
+            commandId,
+            code: "CORE_STATE_DELIVERY_FAILED",
+            retryClass: "notRetryable",
+            safeMessage: "DiffDash Core encountered an internal state delivery error.",
+          }),
+        ),
+      ),
+    )
+  return yield* admitted
+})
 
 const admitReviewAgentRequest = Effect.fn("Core.ReviewAgents.admit")(function* <A, E, R>(
   lifecycle: CoreLifecycle["Service"],
@@ -588,12 +821,15 @@ const requireMethodPolicy = (rpc: Parameters<typeof getCoreRpcMethodPolicy>[0]) 
   })
 
 const requireRequestBudget = (request: HostRequestContext, policy: CoreRpcMethodPolicy) =>
-  Effect.sync(() => methodPolicyParser.encode(request)).pipe(
+  requireEncodedBudget(request, policy.maxRequestBytes)
+
+const requireEncodedBudget = (value: RpcEncodable, maximumBytes: number) =>
+  Effect.sync(() => makeMethodPolicyParser().encode(value)).pipe(
     Effect.filterOrFail(
       (encoded) =>
         encoded !== undefined &&
         (Predicate.isString(encoded) ? Buffer.byteLength(encoded) : encoded.byteLength) <=
-          policy.maxRequestBytes,
+          maximumBytes,
       () => undefined,
     ),
     Effect.asVoid,

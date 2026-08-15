@@ -12,6 +12,7 @@ import {
   ReviewAgentGetOperationFailure,
   ReviewAgentStartFailure,
 } from "./review-agent"
+import { CoreStateDeliveryFailure } from "./event"
 
 /** Server-side authentication boundary shared by all Electron-to-Core RPCs. */
 export class CoreTransportAuthenticationMiddleware extends RpcMiddleware.Service<CoreTransportAuthenticationMiddleware>()(
@@ -65,4 +66,28 @@ export class ReviewAgentGetOperationAdmissionMiddleware extends RpcMiddleware.Se
 export class ReviewAgentCancelAdmissionMiddleware extends RpcMiddleware.Service<ReviewAgentCancelAdmissionMiddleware>()(
   "@diffdash/core-rpc/ReviewAgentCancelAdmissionMiddleware",
   { error: ReviewAgentCancelFailure },
+) {}
+
+/** Server-side admission boundary for reconnect-safe Core event replay. */
+export class CoreEventReplayAdmissionMiddleware extends RpcMiddleware.Service<CoreEventReplayAdmissionMiddleware>()(
+  "@diffdash/core-rpc/CoreEventReplayAdmissionMiddleware",
+  { error: CoreStateDeliveryFailure },
+) {}
+
+/** Server-side admission boundary for one authoritative durable command query. */
+export class CoreCommandGetAdmissionMiddleware extends RpcMiddleware.Service<CoreCommandGetAdmissionMiddleware>()(
+  "@diffdash/core-rpc/CoreCommandGetAdmissionMiddleware",
+  { error: CoreStateDeliveryFailure },
+) {}
+
+/** Server-side admission boundary for the bounded unacknowledged command query. */
+export class CoreCommandListAdmissionMiddleware extends RpcMiddleware.Service<CoreCommandListAdmissionMiddleware>()(
+  "@diffdash/core-rpc/CoreCommandListAdmissionMiddleware",
+  { error: CoreStateDeliveryFailure },
+) {}
+
+/** Server-side admission boundary for guarded durable command acknowledgement. */
+export class CoreCommandAcknowledgeAdmissionMiddleware extends RpcMiddleware.Service<CoreCommandAcknowledgeAdmissionMiddleware>()(
+  "@diffdash/core-rpc/CoreCommandAcknowledgeAdmissionMiddleware",
+  { error: CoreStateDeliveryFailure },
 ) {}

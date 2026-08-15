@@ -4,6 +4,17 @@ import type {
   CoreHealthIdentityMismatchFailure,
   CoreTransportAuthenticationFailure,
 } from "@diffdash/core-rpc/failure"
+import type {
+  CoreCommandAcknowledgement,
+  CoreCommandListRequest,
+  CoreCommandListResult,
+  CoreCommandQueryRequest,
+  CoreCommandQueryResult,
+  CoreCommandSnapshot,
+  CoreEventReplayRequest,
+  CoreEventReplayResult,
+  CoreStateDeliveryFailure,
+} from "@diffdash/core-rpc/event"
 import {
   type AuthorizeDatabaseOwnershipRequest,
   CoreHealth,
@@ -15,7 +26,7 @@ import type {
   HostRequestContext,
 } from "@diffdash/core-rpc/identity"
 import {
-  AuthenticatedCoreControlRpcs,
+  AuthenticatedCoreHostClientRpcs,
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
   CORE_TRANSPORT_TOKEN_HEADER,
 } from "@diffdash/core-rpc/transport"
@@ -66,6 +77,41 @@ export class CoreRpcClient extends Context.Service<
   }
 >()("@diffdash/desktop/CoreRpcClient") {}
 
+/** Authenticated host client for reconnect-safe events and durable command state. */
+export class CoreStateDeliveryRpcClient extends Context.Service<
+  CoreStateDeliveryRpcClient,
+  {
+    /** Replays retained hints or explicitly requires authoritative resynchronization. */
+    readonly replayEvents: (
+      request: CoreEventReplayRequest,
+    ) => Effect.Effect<
+      CoreEventReplayResult,
+      CoreStateDeliveryFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+    /** Queries one durable command from authoritative Core storage. */
+    readonly getCommand: (
+      request: CoreCommandQueryRequest,
+    ) => Effect.Effect<
+      CoreCommandQueryResult,
+      CoreStateDeliveryFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+    /** Lists a bounded page of terminal commands awaiting acknowledgement. */
+    readonly listUnacknowledgedCommands: (
+      request: CoreCommandListRequest,
+    ) => Effect.Effect<
+      CoreCommandListResult,
+      CoreStateDeliveryFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+    /** Acknowledges exactly the current terminal version of one durable command. */
+    readonly acknowledgeCommand: (
+      request: CoreCommandAcknowledgement,
+    ) => Effect.Effect<
+      CoreCommandSnapshot,
+      CoreStateDeliveryFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+  }
+>()("@diffdash/desktop/CoreStateDeliveryRpcClient") {}
+
 /** Verifies that a health value belongs to the exact Core process Electron launched. */
 export const verifyCoreHealth = (
   options: Pick<CoreRpcClientOptions, "applicationInstanceId" | "processEpoch">,
@@ -97,29 +143,53 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
     ),
   )
 
-  return Layer.effect(
-    CoreRpcClient,
+  return Layer.effectContext(
     Effect.gen(function* () {
-      const client = yield* RpcClient.make(AuthenticatedCoreControlRpcs)
+      const client = yield* RpcClient.make(AuthenticatedCoreHostClientRpcs)
 
-      const health = Effect.fn("CoreRpcClient.health")(function* (request: HostRequestContext) {
-        const response = yield* client["Core.health"](request).pipe(
+      const authenticated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(
           RpcClient.withHeaders({
             [CORE_TRANSPORT_TOKEN_HEADER]: Redacted.value(options.token),
           }),
         )
+
+      const health = Effect.fn("CoreRpcClient.health")(function* (request: HostRequestContext) {
+        const response = yield* authenticated(client["Core.health"](request))
         return yield* verifyCoreHealth(options, response)
       })
       const authorizeDatabaseOwnership = Effect.fn("CoreRpcClient.authorizeDatabaseOwnership")(
         (request: AuthorizeDatabaseOwnershipRequest) =>
-          client["Core.authorizeDatabaseOwnership"](request).pipe(
-            RpcClient.withHeaders({
-              [CORE_TRANSPORT_TOKEN_HEADER]: Redacted.value(options.token),
-            }),
-          ),
+          authenticated(client["Core.authorizeDatabaseOwnership"](request)),
       )
 
-      return CoreRpcClient.of({ authorizeDatabaseOwnership, health })
+      const replayEvents = Effect.fn("CoreRpcClient.replayEvents")(
+        (request: CoreEventReplayRequest) => authenticated(client["CoreEvents.replay"](request)),
+      )
+      const getCommand = Effect.fn("CoreRpcClient.getCommand")((request: CoreCommandQueryRequest) =>
+        authenticated(client["CoreCommands.get"](request)),
+      )
+      const listUnacknowledgedCommands = Effect.fn("CoreRpcClient.listUnacknowledgedCommands")(
+        (request: CoreCommandListRequest) =>
+          authenticated(client["CoreCommands.listUnacknowledged"](request)),
+      )
+      const acknowledgeCommand = Effect.fn("CoreRpcClient.acknowledgeCommand")(
+        (request: CoreCommandAcknowledgement) =>
+          authenticated(client["CoreCommands.acknowledge"](request)),
+      )
+
+      return Context.empty().pipe(
+        Context.add(CoreRpcClient, CoreRpcClient.of({ authorizeDatabaseOwnership, health })),
+        Context.add(
+          CoreStateDeliveryRpcClient,
+          CoreStateDeliveryRpcClient.of({
+            acknowledgeCommand,
+            getCommand,
+            listUnacknowledgedCommands,
+            replayEvents,
+          }),
+        ),
+      )
     }),
   ).pipe(Layer.provide(protocolLayer))
 }

@@ -1,6 +1,7 @@
 import { CoreTransportAuthenticationMiddleware } from "./admission"
 import { AppStateBusinessRpcs, CoreBusinessRpcs } from "./business"
 import { CoreControlRpcs } from "./control"
+import { CoreStateDeliveryRpcs } from "./event-rpc"
 import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
 import { ReviewAgentBusinessRpcs } from "./review-agent-rpc"
 
@@ -60,3 +61,16 @@ export const AuthenticatedReviewAgentBusinessRpcs = ReviewAgentBusinessRpcs.midd
 export const AuthenticatedCoreReviewAgentServerRpcs = AuthenticatedCoreControlRpcs.merge(
   AuthenticatedReviewAgentBusinessRpcs,
 )
+
+/** Authenticated reconnect-safe event and durable command audience. */
+export const AuthenticatedCoreStateDeliveryRpcs = CoreStateDeliveryRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
+/** Standalone-capable server catalog for control, event replay, and durable commands. */
+export const AuthenticatedCoreStateDeliveryServerRpcs = AuthenticatedCoreControlRpcs.merge(
+  AuthenticatedCoreStateDeliveryRpcs,
+)
+
+/** Standalone-capable host client catalog matching the state-delivery server audience. */
+export const AuthenticatedCoreHostClientRpcs = AuthenticatedCoreStateDeliveryServerRpcs

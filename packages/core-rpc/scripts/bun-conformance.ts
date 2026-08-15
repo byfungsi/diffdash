@@ -8,6 +8,10 @@ import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import {
   AppStateGetAdmissionMiddleware,
+  CoreCommandAcknowledgeAdmissionMiddleware,
+  CoreCommandGetAdmissionMiddleware,
+  CoreCommandListAdmissionMiddleware,
+  CoreEventReplayAdmissionMiddleware,
   CoreTransportAuthenticationMiddleware,
   WalkthroughCancelAdmissionMiddleware,
   WalkthroughGetOperationAdmissionMiddleware,
@@ -18,6 +22,9 @@ import { AppStateBusinessRpcs, AppStateGetRpc } from "../src/business"
 import { CoreAuthorizeDatabaseOwnershipRpc, CoreHealthRpc, CoreShutdownRpc } from "../src/control"
 import {
   CoreEventGenerationId,
+  CoreCommandAcknowledgement,
+  CoreCommandListRequest,
+  CoreCommandSnapshot,
   CoreEventMetadata,
   CoreEventOperationId,
   CoreEventReason,
@@ -27,7 +34,9 @@ import {
   CoreEventSequence,
   CoreEventSource,
   CoreEventTopic,
+  CoreStateVersion,
 } from "../src/event"
+import { CoreStateDeliveryRpcs } from "../src/event-rpc"
 import {
   AppStateGetDefect,
   AppStateGetAdmissionFailure,
@@ -38,6 +47,7 @@ import {
 } from "../src/failure"
 import {
   ApplicationInstanceId,
+  CoreCommandId,
   CoreEventId,
   CoreProcessEpoch,
   CoreRequestContext,
@@ -766,6 +776,53 @@ const walkthroughNativeRpcConformance = Effect.gen(function* () {
 }).pipe(Effect.provide(passWalkthroughAdmissionLayer), Effect.scoped)
 
 await Effect.runPromise(walkthroughNativeRpcConformance)
+
+const bunCommand = Schema.decodeUnknownSync(CoreCommandSnapshot)({
+  commandId: "command-bun",
+  processEpoch: request.processEpoch,
+  metadata: { name: "refresh", scope: null },
+  state: "acknowledged",
+  stateVersion: 3,
+  acceptedAt: "2026-08-16T00:00:00.000Z",
+  terminalAt: "2026-08-16T00:00:01.000Z",
+  acknowledgedAt: "2026-08-16T00:00:02.000Z",
+})
+const passStateDeliveryAdmissionLayer = Layer.mergeAll(
+  Layer.succeed(CoreEventReplayAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(CoreCommandGetAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(CoreCommandListAdmissionMiddleware, (effect) => effect),
+  Layer.succeed(CoreCommandAcknowledgeAdmissionMiddleware, (effect) => effect),
+)
+const stateDeliveryConformance = Effect.gen(function* () {
+  const handlers = CoreStateDeliveryRpcs.toLayer({
+    "CoreEvents.replay": () =>
+      Effect.succeed({
+        kind: "resyncRequired",
+        processEpoch: request.processEpoch,
+        reason: "firstConnection",
+      }),
+    "CoreCommands.get": () => Effect.succeed({ kind: "found", command: bunCommand }),
+    "CoreCommands.listUnacknowledged": () => Effect.succeed([bunCommand]),
+    "CoreCommands.acknowledge": () => Effect.succeed(bunCommand),
+  })
+  const client = yield* RpcTest.makeClient(CoreStateDeliveryRpcs).pipe(Effect.provide(handlers))
+  const replay = yield* client["CoreEvents.replay"]({ context: request, afterSequence: null })
+  const listed = yield* client["CoreCommands.listUnacknowledged"](
+    CoreCommandListRequest.make({ context: request, limit: 10 }),
+  )
+  const acknowledged = yield* client["CoreCommands.acknowledge"](
+    CoreCommandAcknowledgement.make({
+      context: request,
+      commandId: CoreCommandId.make("command-bun"),
+      stateVersion: CoreStateVersion.make(2),
+    }),
+  )
+  assert(replay.kind === "resyncRequired", "Bun event replay RPC failed")
+  assert(listed.length === 1, "Bun command query RPC failed")
+  assert(acknowledged.state === "acknowledged", "Bun command acknowledgement RPC failed")
+}).pipe(Effect.provide(passStateDeliveryAdmissionLayer), Effect.scoped)
+
+await Effect.runPromise(stateDeliveryConformance)
 
 const walkthroughExits = [
   [WalkthroughStartRpc, Exit.fail(walkthroughStartFailure)],
