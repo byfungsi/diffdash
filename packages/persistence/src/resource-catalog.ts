@@ -57,6 +57,25 @@ export const CatalogPolicyClass = Schema.Literals([
 /** Collection policy class; durable user data cannot enter collectible states. */
 export type CatalogPolicyClass = typeof CatalogPolicyClass.Type
 
+/** Allowlisted resource class safe to expose in aggregate diagnostics. */
+export const CatalogResourceClass = Schema.Literals([
+  "agentTemp",
+  "bareRepository",
+  "cache",
+  "git-pack",
+  "localWorktreePool",
+  "migrationBackup",
+  "processTemp",
+  "remoteWorktreePool",
+  "reviewRef",
+  "reviewStaging",
+  "snapshot",
+  "snapshot-spool",
+  "updaterPartial",
+])
+/** Allowlisted resource class safe to expose in aggregate diagnostics. */
+export type CatalogResourceClass = typeof CatalogResourceClass.Type
+
 /** Registered-root-relative filesystem location. */
 export const FilesystemResourceLocation = Schema.Struct({
   kind: Schema.Literal("filesystem"),
@@ -147,7 +166,7 @@ export type CatalogResource = typeof CatalogResource.Type
 export interface RegisterResourceInput {
   readonly id: CatalogResourceId
   readonly parentId: CatalogResourceId | null
-  readonly kind: string
+  readonly kind: CatalogResourceClass
   readonly policyClass: CatalogPolicyClass
   readonly state: "writing" | "ready"
   readonly generation: number
@@ -223,8 +242,10 @@ const ResourceCatalogOperation = Schema.Literals([
   "commitReservation",
   "expireReservations",
   "acquireLease",
+  "acquireLeases",
   "renewLease",
   "releaseLease",
+  "releaseLeases",
   "expireOwnership",
   "rebindLease",
   "beginCollection",
@@ -267,6 +288,9 @@ export class ResourceCatalog extends Context.Service<
     readonly acquireLease: (
       lease: CatalogResourceLease,
     ) => Effect.Effect<void, ResourceCatalogError>
+    readonly acquireLeases: (
+      leases: readonly CatalogResourceLease[],
+    ) => Effect.Effect<void, ResourceCatalogError>
     readonly renewLease: (input: {
       readonly id: ResourceLeaseId
       readonly applicationInstanceId: string
@@ -276,6 +300,11 @@ export class ResourceCatalog extends Context.Service<
     }) => Effect.Effect<void, ResourceCatalogError>
     readonly releaseLease: (input: {
       readonly id: ResourceLeaseId
+      readonly applicationInstanceId: string
+      readonly processEpoch: string
+    }) => Effect.Effect<void, ResourceCatalogError>
+    readonly releaseLeases: (input: {
+      readonly ids: readonly ResourceLeaseId[]
       readonly applicationInstanceId: string
       readonly processEpoch: string
     }) => Effect.Effect<void, ResourceCatalogError>
@@ -521,6 +550,32 @@ export class ResourceCatalog extends Context.Service<
             )
             .pipe(Effect.mapError((cause) => catalogError("acquireLease", cause)))
         }),
+        acquireLeases: Effect.fn("ResourceCatalog.acquireLeases")(function (leases) {
+          return database
+            .transaction(
+              Effect.forEach(leases, (lease) =>
+                database.run(
+                  `INSERT INTO resource_leases (
+                    id, resource_id, owner_kind, owner_id, application_instance_id, process_epoch,
+                    acquired_at_ms, renewed_at_ms, expires_at_ms, purpose
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    lease.id,
+                    lease.resourceId,
+                    lease.ownerKind,
+                    lease.ownerId,
+                    lease.applicationInstanceId,
+                    lease.processEpoch,
+                    lease.acquiredAtMs,
+                    lease.renewedAtMs,
+                    lease.expiresAtMs,
+                    lease.purpose,
+                  ],
+                ),
+              ).pipe(Effect.asVoid),
+            )
+            .pipe(Effect.mapError((cause) => catalogError("acquireLeases", cause)))
+        }),
         renewLease: Effect.fn("ResourceCatalog.renewLease")(function (input) {
           return database
             .run(
@@ -544,6 +599,19 @@ export class ResourceCatalog extends Context.Service<
               [input.id, input.applicationInstanceId, input.processEpoch],
             )
             .pipe(Effect.mapError((cause) => catalogError("releaseLease", cause)))
+        }),
+        releaseLeases: Effect.fn("ResourceCatalog.releaseLeases")(function (input) {
+          return database
+            .transaction(
+              Effect.forEach(input.ids, (id) =>
+                database.run(
+                  `DELETE FROM resource_leases
+                   WHERE id = ? AND application_instance_id = ? AND process_epoch = ?`,
+                  [id, input.applicationInstanceId, input.processEpoch],
+                ),
+              ).pipe(Effect.asVoid),
+            )
+            .pipe(Effect.mapError((cause) => catalogError("releaseLeases", cause)))
         }),
         expireOwnership: Effect.fn("ResourceCatalog.expireOwnership")(function (input) {
           return database

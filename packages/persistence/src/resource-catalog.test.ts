@@ -111,6 +111,52 @@ describe("ResourceCatalog", () => {
     }),
   )
 
+  it.effect("shares one byte budget across local-source and remote-only pools", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const registerPool = (id: string, kind: "localWorktreePool" | "remoteWorktreePool") =>
+          catalog.register({
+            id: CatalogResourceId.make(id),
+            parentId: null,
+            kind,
+            policyClass: "cache",
+            state: "writing",
+            generation: 1,
+            location: { kind: "updaterPartial", identity: `${id}.partial` },
+            bytes: 100,
+            nowMs: 1,
+            checksum: null,
+            validation: null,
+          })
+        const local = yield* registerPool("local-pool", "localWorktreePool")
+        const remote = yield* registerPool("remote-pool", "remoteWorktreePool")
+
+        expect(
+          yield* catalog.reserve({
+            id: ResourceReservationId.make("local-reservation"),
+            resourceId: local.id,
+            bytes: 100,
+            nowMs: 2,
+            expiresAtMs: 100,
+            quotaBytes: 350,
+          }),
+        ).toMatchObject({ kind: "reserved" })
+        expect(
+          yield* catalog.reserve({
+            id: ResourceReservationId.make("remote-reservation"),
+            resourceId: remote.id,
+            bytes: 51,
+            nowMs: 2,
+            expiresAtMs: 100,
+            quotaBytes: 350,
+          }),
+        ).toEqual({ kind: "quotaExceeded", requiredBytes: 51, availableBytes: 50 })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.effect(
     "blocks parent collection for a live descendant lease and permits exact-owner expiry",
     () =>
@@ -188,6 +234,59 @@ describe("ResourceCatalog", () => {
             ),
           ),
         ).toBe(true)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("acquires paired agent leases atomically", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const repository = yield* register(catalog, "repository", 100)
+        const worktree = yield* register(catalog, "worktree", 50, repository.id)
+        const ownership = {
+          ownerKind: "agentRun",
+          ownerId: "run-1",
+          applicationInstanceId: "app-1",
+          processEpoch: "epoch-1",
+          acquiredAtMs: 1,
+          renewedAtMs: 1,
+          expiresAtMs: 100,
+          purpose: "agent workspace",
+        }
+
+        const failed = yield* Effect.result(
+          catalog.acquireLeases([
+            {
+              ...ownership,
+              id: ResourceLeaseId.make("repository-lease"),
+              resourceId: repository.id,
+            },
+            {
+              ...ownership,
+              id: ResourceLeaseId.make("missing-lease"),
+              resourceId: CatalogResourceId.make("missing"),
+            },
+          ]),
+        )
+        expect(Result.isFailure(failed)).toBe(true)
+        expect((yield* catalog.get(repository.id)).leases).toHaveLength(0)
+
+        yield* catalog.acquireLeases([
+          {
+            ...ownership,
+            id: ResourceLeaseId.make("repository-lease"),
+            resourceId: repository.id,
+          },
+          {
+            ...ownership,
+            id: ResourceLeaseId.make("worktree-lease"),
+            resourceId: worktree.id,
+          },
+        ])
+        expect((yield* catalog.get(repository.id)).leases).toHaveLength(1)
+        expect((yield* catalog.get(worktree.id)).leases).toHaveLength(1)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )
