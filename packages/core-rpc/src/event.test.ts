@@ -3,18 +3,29 @@ import { Result, Schema } from "effect"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 
 import {
+  CoreCommandAcknowledgement,
+  CoreCommandReceipt,
   CoreEventGenerationId,
+  CoreEventHint,
   CoreEventMetadata,
   CoreEventOperationId,
   CoreEventReason,
+  CoreEventReplayResult,
   CoreEventSchemaVersion,
   CoreEventScopeId,
   CoreEventScopeName,
   CoreEventSequence,
   CoreEventSource,
   CoreEventTopic,
+  CoreStateVersion,
 } from "./event"
-import { ApplicationInstanceId, CoreEventId, CoreProcessEpoch } from "./identity"
+import {
+  ApplicationInstanceId,
+  CoreCommandId,
+  CoreEventId,
+  CoreProcessEpoch,
+  HostRequestId,
+} from "./identity"
 
 const metadata = CoreEventMetadata.make({
   eventId: CoreEventId.make("event-1"),
@@ -143,5 +154,56 @@ describe("Core event metadata", () => {
     if (bytes === undefined) throw new Error("Expected Core event metadata MessagePack bytes")
     const [decoded] = parser.decode(bytes)
     expect(Schema.decodeUnknownSync(CoreEventMetadata)(decoded)).toEqual(metadata)
+  })
+})
+
+describe("Core event replay and durable commands", () => {
+  const hint = CoreEventHint.make({
+    metadata,
+    kind: "operationProgress",
+    stateVersion: CoreStateVersion.make(3),
+  })
+
+  it("keeps events hint-only and bounds reconnect replay", () => {
+    expect(Schema.decodeUnknownSync(CoreEventHint)(hint)).toEqual(hint)
+    expect(Object.keys(hint).sort()).toEqual(["kind", "metadata", "stateVersion"])
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(CoreEventReplayResult)({
+          kind: "replay",
+          processEpoch: "epoch-1",
+          events: Array.from({ length: 257 }, () => hint),
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      Schema.decodeUnknownSync(CoreEventReplayResult)({
+        kind: "resyncRequired",
+        processEpoch: "epoch-2",
+        reason: "epochChanged",
+      }),
+    ).toMatchObject({ kind: "resyncRequired", reason: "epochChanged" })
+  })
+
+  it("requires durable command identity and exact committed version acknowledgements", () => {
+    const receipt = CoreCommandReceipt.make({
+      commandId: CoreCommandId.make("command-1"),
+      processEpoch: CoreProcessEpoch.make("epoch-1"),
+      state: "committed",
+      stateVersion: CoreStateVersion.make(2),
+      acceptedAt: "2026-08-15T20:00:00.000Z",
+    })
+    expect(Schema.decodeUnknownSync(CoreCommandReceipt)(receipt)).toEqual(receipt)
+    expect(
+      Schema.decodeUnknownSync(CoreCommandAcknowledgement)({
+        context: {
+          applicationInstanceId: "app-1",
+          processEpoch: "epoch-1",
+          requestId: HostRequestId.make("h:ack-1"),
+        },
+        commandId: receipt.commandId,
+        stateVersion: receipt.stateVersion,
+      }),
+    ).toMatchObject({ commandId: "command-1", stateVersion: 2 })
   })
 })

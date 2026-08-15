@@ -1,7 +1,13 @@
 import { PositiveInteger, UtcIsoTimestamp } from "@diffdash/domain/domain-scalar"
 import { Schema } from "effect"
 
-import { ApplicationInstanceId, CoreEventId, CoreProcessEpoch } from "./identity"
+import {
+  ApplicationInstanceId,
+  CoreCommandId,
+  CoreEventId,
+  CoreProcessEpoch,
+  HostRequestContext,
+} from "./identity"
 
 const BoundedEventToken = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
@@ -141,3 +147,63 @@ export const CoreEventMetadata = Schema.Struct({
 
 /** Shared metadata for bounded Core event hints and state notifications. */
 export type CoreEventMetadata = typeof CoreEventMetadata.Type
+
+/** Monotonic committed state version referenced by hints without embedding authoritative state. */
+export const CoreStateVersion = PositiveInteger.pipe(Schema.brand("CoreStateVersion"))
+
+/** Monotonic committed state version referenced by hints without embedding authoritative state. */
+export type CoreStateVersion = typeof CoreStateVersion.Type
+
+/** Hint-only event envelope. Authoritative state and terminal artifacts are always queried. */
+export const CoreEventHint = Schema.Struct({
+  metadata: CoreEventMetadata,
+  kind: Schema.Literals([
+    "stateChanged",
+    "operationProgress",
+    "operationTerminal",
+    "commandCommitted",
+  ]),
+  stateVersion: CoreStateVersion,
+}).annotate({ identifier: "CoreEventHint" })
+
+/** Hint-only event envelope. Authoritative state and terminal artifacts are always queried. */
+export type CoreEventHint = typeof CoreEventHint.Type
+
+/** Last event observed by a reconnecting host, or null when this is its first connection. */
+export const CoreEventReplayRequest = Schema.Struct({
+  context: HostRequestContext,
+  afterSequence: Schema.NullOr(CoreEventSequence),
+}).annotate({ identifier: "CoreEventReplayRequest" })
+
+/** Bounded replay when retained, otherwise an explicit instruction to query authoritative state. */
+export const CoreEventReplayResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("replay"),
+    processEpoch: CoreProcessEpoch,
+    events: Schema.Array(CoreEventHint).pipe(Schema.check(Schema.isMaxLength(256))),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("resyncRequired"),
+    processEpoch: CoreProcessEpoch,
+    reason: Schema.Literals(["firstConnection", "epochChanged", "cursorExpired", "sequenceGap"]),
+  }),
+]).annotate({ identifier: "CoreEventReplayResult" })
+
+/** Durable command lifecycle persisted before any corresponding event hint is published. */
+export const CoreCommandState = Schema.Literals(["accepted", "committed", "failed", "acknowledged"])
+
+/** Plain durable command receipt returned after the acceptance row commits. */
+export const CoreCommandReceipt = Schema.Struct({
+  commandId: CoreCommandId,
+  processEpoch: CoreProcessEpoch,
+  state: CoreCommandState,
+  stateVersion: CoreStateVersion,
+  acceptedAt: UtcIsoTimestamp,
+}).annotate({ identifier: "CoreCommandReceipt" })
+
+/** Host acknowledgement for a committed terminal command version. */
+export const CoreCommandAcknowledgement = Schema.Struct({
+  context: HostRequestContext,
+  commandId: CoreCommandId,
+  stateVersion: CoreStateVersion,
+}).annotate({ identifier: "CoreCommandAcknowledgement" })

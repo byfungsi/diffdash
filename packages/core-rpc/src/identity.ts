@@ -54,6 +54,12 @@ export const CoreEventId = BoundedIdentity.pipe(Schema.brand("CoreEventId"))
 /** Identity allocated by Core for one published event. */
 export type CoreEventId = typeof CoreEventId.Type
 
+/** Durable identity allocated by Core before acknowledging a state-changing command. */
+export const CoreCommandId = BoundedIdentity.pipe(Schema.brand("CoreCommandId"))
+
+/** Durable identity allocated by Core before acknowledging a state-changing command. */
+export type CoreCommandId = typeof CoreCommandId.Type
+
 /** Identity metadata carried by every Electron-originated Core RPC payload. */
 export const HostRequestContext = Schema.Struct({
   applicationInstanceId: ApplicationInstanceId,
