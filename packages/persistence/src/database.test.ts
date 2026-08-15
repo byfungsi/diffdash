@@ -171,6 +171,7 @@ describe("database-node", () => {
           "review_thread_messages",
           "review_threads",
           "thread_memory",
+          "walkthrough_operation_acceptances",
           "walkthrough_operations",
           "walkthroughs",
         ])
@@ -242,6 +243,44 @@ describe("database-node", () => {
           ),
         )
         expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          13,
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("installs durable walkthrough acceptance evidence without bumping user_version", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run("DROP TABLE walkthrough_operation_acceptances")
+        yield* database.run(
+          "DELETE FROM diffdash_capabilities WHERE name = 'walkthrough-operation-acceptance'",
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const acceptanceTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'walkthrough_operation_acceptances'",
+          ),
+        )
+
+        expect(acceptanceTable.sql).toContain("idempotency_key TEXT NOT NULL UNIQUE")
+        expect(acceptanceTable.sql).toContain("CHECK (json_valid(evidence_json))")
+        expect(acceptanceTable.sql).toContain("ON DELETE CASCADE")
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT version FROM diffdash_capabilities WHERE name = 'walkthrough-operation-acceptance'",
+            ),
+          ),
+        ).toEqual({ version: 1 })
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
           13,
         )

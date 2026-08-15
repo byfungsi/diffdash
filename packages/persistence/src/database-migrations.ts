@@ -20,6 +20,8 @@ const REVIEW_PROVIDER_FAILURE_CAPABILITY = "review-provider-failure"
 const REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION = 1
 const REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY = "review-message-run-ownership"
 const REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY_VERSION = 1
+const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY = "walkthrough-operation-acceptance"
+const WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -847,7 +849,9 @@ export const databaseRequiresMigration = Effect.fn("databaseRequiresMigration")(
     (yield* readCapabilityVersion(database, REVIEW_PROVIDER_FAILURE_CAPABILITY)) <
       REVIEW_PROVIDER_FAILURE_CAPABILITY_VERSION ||
     (yield* readCapabilityVersion(database, REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY)) <
-      REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY_VERSION
+      REVIEW_MESSAGE_RUN_OWNERSHIP_CAPABILITY_VERSION ||
+    (yield* readCapabilityVersion(database, WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY)) <
+      WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION
   )
 })
 
@@ -971,6 +975,45 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
         )
       }),
     )
+
+  if (
+    (yield* tableExists(database, "walkthrough_operations")) &&
+    (yield* readCapabilityVersion(database, WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY)) <
+      WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* executeSqlScript(
+          database,
+          `
+          CREATE TABLE IF NOT EXISTS walkthrough_operation_acceptances (
+            operation_id TEXT PRIMARY KEY REFERENCES walkthrough_operations(id) ON DELETE CASCADE,
+            idempotency_key TEXT NOT NULL UNIQUE CHECK (
+              length(idempotency_key) BETWEEN 3 AND 128 AND
+              substr(idempotency_key, 1, 2) = 'w:' AND
+              substr(idempotency_key, 3, 1) GLOB '[A-Za-z0-9]' AND
+              substr(idempotency_key, 3) NOT GLOB '*[^A-Za-z0-9._-]*'
+            ),
+            evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json))
+          );
+          `,
+        )
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET
+             version = excluded.version,
+             installed_at = excluded.installed_at`,
+          [
+            WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY,
+            WALKTHROUGH_OPERATION_ACCEPTANCE_CAPABILITY_VERSION,
+            now,
+          ],
+        )
+      }),
+    )
+  }
 
   if (!(yield* tableExists(database, "review_thread_messages"))) return
 

@@ -373,6 +373,7 @@ export const makeWalkthroughOperations = (
                 operationId: WalkthroughOperationId.make(randomUUID()),
                 identity: operationIdentity(resolved.repo.id, resolved.snapshot),
                 regenerate: request.regenerate,
+                acceptanceEvidence: null,
               })
               if (acceptance.created) {
                 if (acceptance.operation.regenerationOfOperationId !== null) {
