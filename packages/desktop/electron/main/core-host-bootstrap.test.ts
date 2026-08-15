@@ -82,6 +82,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: (request) =>
                 Effect.succeed(
                   CoreHealth.make({
@@ -130,6 +132,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
                 CoreRpcHealthVerificationError.make({
                   expectedApplicationInstanceId: applicationInstanceId,
@@ -170,6 +174,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
                 Effect.succeed(
                   CoreHealth.make({
@@ -232,6 +238,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
                 Effect.succeed(
                   CoreHealth.make({
@@ -271,6 +279,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
                 Effect.succeed(
                   CoreHealth.make({
@@ -312,6 +322,8 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
                 Effect.succeed(
                   CoreHealth.make({

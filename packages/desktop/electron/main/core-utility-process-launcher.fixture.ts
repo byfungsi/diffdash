@@ -30,7 +30,12 @@ const probe = Effect.gen(function* () {
     artifact,
     applicationInstanceId: ApplicationInstanceId.make("app-electron-utility-probe"),
     temporaryDirectory,
-    startTransport: (configuration) => startCoreUtilityProcess({ configuration, statePath }),
+    startTransport: (configuration) =>
+      startCoreUtilityProcess({
+        configuration,
+        databasePath: `${statePath}.sqlite`,
+        statePath,
+      }),
   })
   console.info(`DIFFDASH_CORE_UTILITY_PROBE_READY:${session.health.lifecycle}`)
   return undefined

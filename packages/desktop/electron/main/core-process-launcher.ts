@@ -41,6 +41,7 @@ export interface CoreProcessSpawner {
 /** Inputs required to launch one verified Core process epoch. */
 export interface StartCoreProcessOptions {
   readonly configuration: CoreHostTransportConfiguration
+  readonly databasePath: string
   readonly statePath: string
   readonly spawner: CoreProcessSpawner
   readonly listenTimeout?: number
@@ -79,6 +80,7 @@ export const startCoreProcessManaged = Effect.fn("startCoreProcessManaged")(func
     applicationInstanceId: options.configuration.applicationInstanceId,
     processEpoch: options.configuration.processEpoch,
     socketPath: options.configuration.socketPath,
+    databasePath: options.databasePath,
     statePath: options.statePath,
     token: options.configuration.token,
   })

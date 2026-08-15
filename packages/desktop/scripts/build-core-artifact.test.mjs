@@ -12,7 +12,7 @@ const buildIn = async (parent, name, mode) => {
   return buildCoreArtifact({ mode, outputDirectory })
 }
 
-test("builds deterministic production and E2E Core artifacts with isolated provider graphs", async () => {
+test("builds deterministic runtime-neutral production and E2E Core artifacts", async () => {
   const directory = await mkdtemp(resolve(tmpdir(), "dd-core-build-"))
   const production = await buildIn(directory, "production", "production")
   const repeated = await buildIn(directory, "production-repeated", "production")
@@ -61,7 +61,7 @@ test("builds deterministic production and E2E Core artifacts with isolated provi
     new RegExp(createHash("sha256").update(productionEntrypoint).digest("hex"), "u"),
   )
   assert.doesNotMatch(productionInputs, /provider-composition\.e2e|provider-fixture/u)
-  assert.match(e2eInputs, /provider-composition\.e2e/u)
-  assert.match(e2eInputs, /agent-provider-fixture/u)
-  assert.match(e2eInputs, /git-provider-fixture/u)
+  assert.doesNotMatch(e2eInputs, /provider-composition\.e2e|provider-fixture/u)
+  assert.doesNotMatch(productionInputs, /database-node|node:sqlite/u)
+  assert.doesNotMatch(e2eInputs, /database-node|node:sqlite/u)
 })

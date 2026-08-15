@@ -1,18 +1,33 @@
 import { CORE_PROCESS_STARTUP_ENV } from "@diffdash/core-rpc/process-startup"
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
+import * as NodePath from "@effect/platform-node/NodePath"
+import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
+import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Effect, Layer, Redacted, Ref, Schema } from "effect"
+import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import { join, resolve } from "node:path"
 
+import { CoreArtifactManifest, verifyCoreArtifact } from "./core-artifact"
+import { bootstrapCoreHost } from "./core-host-bootstrap"
 import {
   BunRuntimeProbeError,
   discoverBunRuntimeCandidates,
   makeBunCoreCommand,
   qualifyBunRuntime,
+  startCoreBunProcess,
   type BunRuntimeQualificationHooks,
 } from "./core-bun-runtime"
 
 const candidate = { executablePath: "/home/test/.bun/bin/bun", source: "home" } as const
 const successfulProbe = () => Effect.void
 const probeFailure = BunRuntimeProbeError.make({ safeMessage: "A Bun runtime probe failed." })
+const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+const launchDependencies = Layer.merge(
+  TempResources.layer.pipe(Layer.provide(platformLayer)),
+  platformLayer,
+)
 
 describe("Bun Core runtime", () => {
   it("discovers PATH and Finder-safe Bun locations in deterministic order", () => {
@@ -125,4 +140,56 @@ describe("Bun Core runtime", () => {
       },
     })
   })
+
+  it.live("launches the generated Core artifact with the qualified Bun runtime", () =>
+    Effect.gen(function* () {
+      const tempResources = yield* TempResources
+      execFileSync(process.execPath, ["scripts/build-core-artifact.mjs"], {
+        cwd: resolve("."),
+        stdio: "ignore",
+      })
+      const artifactDirectory = resolve(".generated/core")
+      const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
+        readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
+      )
+      const artifact = yield* verifyCoreArtifact({
+        artifactDirectory,
+        expectedBuildId: manifest.buildId,
+      })
+      const bun = discoverBunRuntimeCandidates({
+        environment: process.env,
+        homeDirectory: process.env.HOME ?? null,
+        platform: process.platform,
+      }).find(({ executablePath }) => existsSync(executablePath))
+      expect(bun).toBeDefined()
+      if (bun === undefined) return
+
+      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-core-bun-parent-",
+      })
+      const session = yield* bootstrapCoreHost({
+        artifact,
+        applicationInstanceId: ApplicationInstanceId.make("app-real-bun"),
+        temporaryDirectory,
+        generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-bun"),
+        generateRequestId: () => HostRequestId.make("h:real-bun-health"),
+        generateToken: () => Redacted.make("real-bun-token-with-at-least-32-bytes"),
+        startTransport: (configuration) =>
+          startCoreBunProcess({
+            applicationCwd: resolve("."),
+            bunExecutablePath: bun.executablePath,
+            configuration,
+            databasePath: join(temporaryDirectory, "diffdash.sqlite"),
+            environment: process.env,
+            statePath: join(temporaryDirectory, "state.json"),
+          }).pipe(Effect.asVoid),
+      })
+
+      expect(session.health).toEqual({
+        applicationInstanceId: "app-real-bun",
+        processEpoch: "epoch-real-bun",
+        lifecycle: "awaitingOwnership",
+      })
+    }).pipe(Effect.provide(launchDependencies)),
+  )
 })

@@ -5,6 +5,7 @@ import { delimiter, dirname, join } from "node:path"
 
 import type { CoreHostTransportConfiguration } from "./core-host-bootstrap"
 import {
+  CoreProcessLaunchError,
   startCoreProcessManaged,
   type CoreProcessHandle,
   type CoreProcessSpawner,
@@ -85,6 +86,7 @@ export interface StartCoreBunProcessOptions {
   readonly applicationCwd: string
   readonly bunExecutablePath: string
   readonly configuration: CoreHostTransportConfiguration
+  readonly databasePath: string
   readonly environment: Readonly<Record<string, string | undefined>>
   readonly statePath: string
   readonly listenTimeout?: number
@@ -245,8 +247,15 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const configPath = join(dirname(options.configuration.socketPath), "bunfig.toml")
-  yield* fileSystem.writeFileString(configPath, "")
-  yield* fileSystem.chmod(configPath, 0o600)
+  yield* fileSystem.writeFileString(configPath, "").pipe(
+    Effect.andThen(fileSystem.chmod(configPath, 0o600)),
+    Effect.mapError(() =>
+      CoreProcessLaunchError.make({
+        reason: "spawn-failed",
+        safeMessage: "DiffDash could not launch its private Core process.",
+      }),
+    ),
+  )
 
   const spawner: CoreProcessSpawner = {
     spawn: ({ entrypointPath, encodedStartupConfiguration }) => {
@@ -275,12 +284,14 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
   if (options.listenTimeout === undefined) {
     return yield* startCoreProcessManaged({
       configuration: options.configuration,
+      databasePath: options.databasePath,
       statePath: options.statePath,
       spawner,
     })
   }
   return yield* startCoreProcessManaged({
     configuration: options.configuration,
+    databasePath: options.databasePath,
     statePath: options.statePath,
     spawner,
     listenTimeout: options.listenTimeout,

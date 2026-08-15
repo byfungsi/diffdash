@@ -1,5 +1,10 @@
-import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc/identity"
-import { CoreHealth } from "@diffdash/core-rpc/lifecycle"
+import {
+  ApplicationInstanceId,
+  CoreProcessEpoch,
+  DatabaseOwnershipAuthorizationId,
+  HostRequestId,
+} from "@diffdash/core-rpc/identity"
+import { AuthorizeDatabaseOwnershipRequest, CoreHealth } from "@diffdash/core-rpc/lifecycle"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Ref } from "effect"
 
@@ -18,6 +23,8 @@ const session = (host: "bun" | "utility") => ({
     processEpoch: CoreProcessEpoch.make(`epoch-${host}`),
     lifecycle: "awaitingOwnership",
   }),
+  authorizeDatabaseOwnership: (request: AuthorizeDatabaseOwnershipRequest) =>
+    Effect.succeed({ ...request, lifecycle: "recovering" as const }),
   state: Effect.succeed("awaitingOwnership" as const),
 })
 
@@ -99,7 +106,14 @@ describe("Core host selection", () => {
     Effect.gen(function* () {
       const { allowed, latch } = yield* makeLatch()
       const selected = yield* selectCoreHost("auto", [candidate("bun")], latch)
-      yield* selected.disableFallbackBeforeOwnershipAuthorization
+      yield* selected.authorizeDatabaseOwnership(
+        AuthorizeDatabaseOwnershipRequest.make({
+          applicationInstanceId: selected.session.applicationInstanceId,
+          processEpoch: selected.session.processEpoch,
+          requestId: HostRequestId.make("h:ownership-selection"),
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-selection"),
+        }),
+      )
       expect(yield* Ref.get(allowed)).toBe(false)
 
       const failure = yield* selectCoreHost(
@@ -108,6 +122,46 @@ describe("Core host selection", () => {
         latch,
       ).pipe(Effect.flip)
       expect(failure.reason).toBe("fallback-disabled")
+    }),
+  )
+
+  it.effect("persists the fallback boundary before sending ownership authorization", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<string>>([])
+      const selected = yield* selectCoreHost(
+        "utility",
+        [
+          candidate(
+            "utility",
+            Effect.void,
+            Effect.succeed({
+              ...session("utility"),
+              authorizeDatabaseOwnership: (request) =>
+                Ref.update(events, (current) => [...current, "authorize"]).pipe(
+                  Effect.as({ ...request, lifecycle: "recovering" as const }),
+                ),
+            }),
+          ),
+        ],
+        {
+          fallbackAllowed: Effect.succeed(true),
+          disableBeforeOwnershipAuthorization: Ref.update(events, (current) => [
+            ...current,
+            "latch",
+          ]),
+        },
+      )
+
+      yield* selected.authorizeDatabaseOwnership(
+        AuthorizeDatabaseOwnershipRequest.make({
+          applicationInstanceId: selected.session.applicationInstanceId,
+          processEpoch: selected.session.processEpoch,
+          requestId: HostRequestId.make("h:ownership-order"),
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-order"),
+        }),
+      )
+
+      expect(yield* Ref.get(events)).toEqual(["latch", "authorize"])
     }),
   )
 })

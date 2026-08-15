@@ -16,6 +16,7 @@ describe("Core process startup configuration", () => {
         applicationInstanceId: ApplicationInstanceId.make("app-process-startup"),
         processEpoch: CoreProcessEpoch.make("epoch-process-startup"),
         socketPath: "/tmp/dd-core/core.sock",
+        databasePath: "/tmp/dd-core/diffdash.sqlite",
         statePath: "/tmp/dd-core/state.json",
         token: Redacted.make(token),
       })
@@ -37,6 +38,7 @@ describe("Core process startup configuration", () => {
         applicationInstanceId: "app-process-startup",
         processEpoch: "epoch-process-startup",
         socketPath: "/tmp/dd-core/core.sock",
+        databasePath: "/tmp/dd-core/diffdash.sqlite",
         statePath: "/tmp/dd-core/state.json",
         token: "short",
       }),

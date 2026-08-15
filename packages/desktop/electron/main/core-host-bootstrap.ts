@@ -98,6 +98,7 @@ export interface CoreHostBootstrapSession {
   readonly applicationInstanceId: ApplicationInstanceId
   readonly processEpoch: CoreProcessEpoch
   readonly health: CoreHealth
+  readonly authorizeDatabaseOwnership: CoreRpcClient["Service"]["authorizeDatabaseOwnership"]
   readonly state: Effect.Effect<CoreHostBootstrapState>
 }
 
@@ -185,6 +186,7 @@ export const bootstrapCoreHost = (
         applicationInstanceId: options.applicationInstanceId,
         processEpoch,
         health,
+        authorizeDatabaseOwnership: client.authorizeDatabaseOwnership,
         state: Ref.get(stateRef),
       } satisfies CoreHostBootstrapSession
     })

@@ -1,12 +1,18 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
+import {
+  ApplicationInstanceId,
+  CoreProcessEpoch,
+  DatabaseOwnershipAuthorizationId,
+  HostRequestId,
+} from "@diffdash/core-rpc/identity"
+import { AuthorizeDatabaseOwnershipRequest } from "@diffdash/core-rpc/lifecycle"
 import { CORE_PROCESS_STARTUP_ENV } from "@diffdash/core-rpc/process-startup"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Redacted, Schema } from "effect"
 import { execFileSync, spawn } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 import { CoreArtifactManifest, verifyCoreArtifact } from "./core-artifact"
@@ -62,6 +68,7 @@ describe("Core process launcher", () => {
         prefix: "dd-core-process-parent-",
       })
       const statePath = join(temporaryDirectory, "state.json")
+      const databasePath = join(temporaryDirectory, "diffdash.sqlite")
 
       const session = yield* bootstrapCoreHost({
         artifact,
@@ -71,7 +78,7 @@ describe("Core process launcher", () => {
         generateRequestId: () => HostRequestId.make("h:real-process-health"),
         generateToken: () => Redacted.make("real-process-token-with-at-least-32-bytes"),
         startTransport: (configuration) =>
-          startCoreProcess({ configuration, statePath, spawner: nodeProcessSpawner }),
+          startCoreProcess({ configuration, databasePath, statePath, spawner: nodeProcessSpawner }),
       })
 
       expect(session.health).toEqual({
@@ -79,6 +86,19 @@ describe("Core process launcher", () => {
         processEpoch: "epoch-real-process",
         lifecycle: "awaitingOwnership",
       })
+      const authorized = yield* session.authorizeDatabaseOwnership(
+        AuthorizeDatabaseOwnershipRequest.make({
+          applicationInstanceId: session.applicationInstanceId,
+          processEpoch: session.processEpoch,
+          requestId: HostRequestId.make("h:real-process-ownership"),
+          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-real-process"),
+        }),
+      )
+      expect(authorized.lifecycle).toBe("recovering")
+      for (let attempt = 0; attempt < 100 && !existsSync(`${databasePath}.owner`); attempt += 1) {
+        yield* Effect.sleep("10 millis")
+      }
+      expect(existsSync(`${databasePath}.owner`)).toBe(true)
     }).pipe(Effect.provide(dependencies)),
   )
 
@@ -100,6 +120,7 @@ describe("Core process launcher", () => {
         spawn: () => ({ awaitExit: Effect.succeed(1), kill: () => false }),
       }
       const privateStatePath = join(temporaryDirectory, "private-state.json")
+      const privateDatabasePath = join(temporaryDirectory, "private.sqlite")
       const failure = yield* bootstrapCoreHost({
         artifact,
         applicationInstanceId: ApplicationInstanceId.make("app-failed-process"),
@@ -107,6 +128,7 @@ describe("Core process launcher", () => {
         startTransport: (configuration) =>
           startCoreProcess({
             configuration,
+            databasePath: privateDatabasePath,
             statePath: privateStatePath,
             spawner: immediateExitSpawner,
           }),

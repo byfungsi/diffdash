@@ -19,6 +19,10 @@ export const CoreProcessStartupConfiguration = Schema.Struct({
   applicationInstanceId: ApplicationInstanceId,
   processEpoch: CoreProcessEpoch,
   socketPath: Schema.String.pipe(Schema.check(Schema.isMinLength(1))),
+  databasePath: Schema.String.pipe(
+    Schema.check(Schema.isMinLength(1)),
+    Schema.check(Schema.isMaxLength(4_096)),
+  ),
   statePath: Schema.String.pipe(
     Schema.check(Schema.isMinLength(1)),
     Schema.check(Schema.isMaxLength(4_096)),

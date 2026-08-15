@@ -1,4 +1,13 @@
 import { Effect, Schema } from "effect"
+import type {
+  CoreAuthorizeDatabaseOwnershipFailure,
+  CoreTransportAuthenticationFailure,
+} from "@diffdash/core-rpc/failure"
+import type {
+  AuthorizeDatabaseOwnershipRequest,
+  DatabaseOwnershipAuthorized,
+} from "@diffdash/core-rpc/lifecycle"
+import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 
 import { BunQualificationCapability, type BunRuntimeQualificationError } from "./core-bun-runtime"
 import type { CoreHostBootstrapSession } from "./core-host-bootstrap"
@@ -72,7 +81,15 @@ export interface CoreHostCandidate {
 export interface SelectedCoreHost {
   readonly host: CoreHostKind
   readonly session: CoreHostBootstrapSession
-  readonly disableFallbackBeforeOwnershipAuthorization: Effect.Effect<void, CoreHostSelectionError>
+  readonly authorizeDatabaseOwnership: (
+    request: AuthorizeDatabaseOwnershipRequest,
+  ) => Effect.Effect<
+    DatabaseOwnershipAuthorized,
+    | CoreHostSelectionError
+    | CoreAuthorizeDatabaseOwnershipFailure
+    | CoreTransportAuthenticationFailure
+    | RpcClientError
+  >
 }
 
 /** Selects automatic or forced Core hosting without authorizing database ownership. */
@@ -117,7 +134,7 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
       return {
         host: candidate.host,
         session: session.value,
-        disableFallbackBeforeOwnershipAuthorization:
+        authorizeDatabaseOwnership: (request) =>
           fallbackLatch.disableBeforeOwnershipAuthorization.pipe(
             Effect.mapError(() =>
               CoreHostSelectionError.make({
@@ -128,6 +145,7 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
                 safeMessage: "DiffDash Core is unavailable.",
               }),
             ),
+            Effect.andThen(session.value.authorizeDatabaseOwnership(request)),
           ),
       } satisfies SelectedCoreHost
     }

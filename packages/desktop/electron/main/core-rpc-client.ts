@@ -1,9 +1,14 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import type {
+  CoreAuthorizeDatabaseOwnershipFailure,
   CoreHealthIdentityMismatchFailure,
   CoreTransportAuthenticationFailure,
 } from "@diffdash/core-rpc/failure"
-import { CoreHealth } from "@diffdash/core-rpc/lifecycle"
+import {
+  type AuthorizeDatabaseOwnershipRequest,
+  CoreHealth,
+  type DatabaseOwnershipAuthorized,
+} from "@diffdash/core-rpc/lifecycle"
 import type {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -52,6 +57,12 @@ export class CoreRpcClient extends Context.Service<
       | CoreTransportAuthenticationFailure
       | RpcClientError
     >
+    readonly authorizeDatabaseOwnership: (
+      request: AuthorizeDatabaseOwnershipRequest,
+    ) => Effect.Effect<
+      DatabaseOwnershipAuthorized,
+      CoreAuthorizeDatabaseOwnershipFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
   }
 >()("@diffdash/desktop/CoreRpcClient") {}
 
@@ -99,8 +110,16 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         )
         return yield* verifyCoreHealth(options, response)
       })
+      const authorizeDatabaseOwnership = Effect.fn("CoreRpcClient.authorizeDatabaseOwnership")(
+        (request: AuthorizeDatabaseOwnershipRequest) =>
+          client["Core.authorizeDatabaseOwnership"](request).pipe(
+            RpcClient.withHeaders({
+              [CORE_TRANSPORT_TOKEN_HEADER]: Redacted.value(options.token),
+            }),
+          ),
+      )
 
-      return CoreRpcClient.of({ health })
+      return CoreRpcClient.of({ authorizeDatabaseOwnership, health })
     }),
   ).pipe(Layer.provide(protocolLayer))
 }

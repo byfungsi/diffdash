@@ -13,11 +13,9 @@ import { isAbsolute } from "node:path"
 
 import { coreLifecycleLayer } from "./core-lifecycle"
 import { runCoreHostLifecycle } from "./core-host-lifecycle"
-import {
-  CoreOwnershipRecovery,
-  coreOwnershipRecoveryNotConfigured,
-} from "./core-ownership-recovery"
+import { CoreOwnershipRecovery, makeCoreOwnershipRecovery } from "./core-ownership-recovery"
 import { coreRpcSocketHostLayer } from "./core-rpc-socket-host"
+import { nodeDatabaseOwnerInspector, readProcessStartIdentity } from "./node-process-identity"
 
 /** Sanitized startup failure that cannot expose the transport credential or private paths. */
 export class StandaloneCoreProcessError extends Schema.TaggedError<StandaloneCoreProcessError>()(
@@ -36,7 +34,6 @@ const startupFailure = (reason: StandaloneCoreProcessError["reason"]) =>
 
 const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(function* (
   encodedConfiguration: Option.Option<string>,
-  ownershipRecovery: CoreOwnershipRecovery["Service"],
 ) {
   const configuration = yield* Effect.fromOption(encodedConfiguration).pipe(
     Effect.mapError(() => startupFailure("configuration-invalid")),
@@ -47,10 +44,22 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
     Effect.flatMap(decodeCoreProcessStartupConfiguration),
     Effect.mapError(() => startupFailure("configuration-invalid")),
     Effect.filterOrFail(
-      ({ socketPath, statePath }) => isAbsolute(socketPath) && isAbsolute(statePath),
+      ({ databasePath, socketPath, statePath }) =>
+        isAbsolute(databasePath) && isAbsolute(socketPath) && isAbsolute(statePath),
       () => startupFailure("configuration-invalid"),
     ),
   )
+
+  const processStartIdentity = yield* readProcessStartIdentity(process.pid).pipe(
+    Effect.mapError(() => startupFailure("host-start-failed")),
+  )
+  const ownershipRecovery = makeCoreOwnershipRecovery({
+    databasePath: configuration.databasePath,
+    pid: process.pid,
+    processStartIdentity,
+    inspector: nodeDatabaseOwnerInspector,
+    recover: Effect.void,
+  })
 
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
   const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
@@ -79,13 +88,11 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
   ).pipe(Effect.mapError(() => startupFailure("host-start-failed")))
 })
 
-/** Runs standalone Core with the selected persisted ownership and recovery implementation. */
-export const runStandaloneCoreProcess = (
-  ownershipRecovery: CoreOwnershipRecovery["Service"] = coreOwnershipRecoveryNotConfigured,
-): void => {
+/** Runs standalone Core with process-derived persisted ownership and recovery. */
+export const runStandaloneCoreProcess = (): void => {
   const encodedConfiguration = Option.fromNullishOr(process.env[CORE_PROCESS_STARTUP_ENV])
   delete process.env[CORE_PROCESS_STARTUP_ENV]
-  NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration, ownershipRecovery), {
+  NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration), {
     disableErrorReporting: true,
   })
 }

@@ -31,6 +31,7 @@ const utilityProcessSpawner: CoreProcessSpawner = {
 /** Inputs required by Electron's concrete Core utility-process launcher. */
 export interface StartCoreUtilityProcessOptions {
   readonly configuration: CoreHostTransportConfiguration
+  readonly databasePath: string
   readonly statePath: string
   readonly listenTimeout?: number
 }
