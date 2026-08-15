@@ -1,5 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Stream } from "effect"
+import { Effect, Fiber, Result, Schema, Stream } from "effect"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import {
   GitProviderId,
@@ -11,17 +14,26 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
   RepositoryRelativePath,
+  ReviewDiffAcquisition,
+  ReviewDiffByteCompletion,
+  ReviewDiffGeneration,
+  ReviewDiffGenerationReused,
+  ReviewDiffRevisionChanged,
   ReviewRevision,
 } from "@diffdash/git-provider"
-import { gitProviderConformance } from "@diffdash/git-provider/testing"
+import { gitProviderConformance, reviewDiffSourceConformance } from "@diffdash/git-provider/testing"
 import {
+  ProcessExit,
   ProcessResult,
+  ProcessService,
   type ProcessOutputPolicyInput,
   type ProcessRequest,
   type ProcessRunner,
+  type ProcessStreamMetrics,
 } from "@diffdash/process"
 import {
   createGitHubProvider,
+  createGitHubReviewDiffSource,
   inspectGitHubCli,
   parseGitHubCliVersion,
   parseGitHubRemote,
@@ -40,6 +52,7 @@ interface Call {
   readonly command: string
   readonly args: readonly string[]
   readonly stdout: ProcessOutputPolicyInput | undefined
+  readonly request: ProcessRequest
 }
 
 const result = (stdout: string, request: ProcessRequest): ProcessResult =>
@@ -56,17 +69,20 @@ const result = (stdout: string, request: ProcessRequest): ProcessResult =>
     signal: null,
   })
 
-const processRunner = (run: ProcessRunner["run"]): ProcessRunner => ({
+const processRunner = (
+  run: ProcessRunner["run"],
+  streamBytes: ProcessRunner["streamBytes"] = () => Stream.empty,
+): ProcessRunner => ({
   run,
-  streamBytes: () => Stream.empty,
+  streamBytes,
   streamLines: () => Stream.empty,
 })
 
-const fakeProcesses = (calls: Call[] = []): ProcessRunner =>
-  processRunner((request) =>
+const fakeProcesses = (calls: Call[] = []): ProcessRunner => {
+  const run: ProcessRunner["run"] = (request) =>
     Effect.sync(() => {
       const { args, command } = request
-      calls.push({ command, args, stdout: request.stdout ?? undefined })
+      calls.push({ command, args, stdout: request.stdout ?? undefined, request })
       if (args[0] === "--version") return result("gh version 2.74.0 (2026-07-01)", request)
       if (args[0] === "auth") return result("", request)
       if (args[0] === "search" && args.includes("--help")) return result("help", request)
@@ -83,7 +99,9 @@ const fakeProcesses = (calls: Call[] = []): ProcessRunner =>
       }
       if (args[0] === "repo") return result("", request)
       if (args[0] === "pr" && args[1] === "list") return result(pullRequestListJson, request)
-      if (args[0] === "pr" && args[1] === "diff") return result(pullRequestDiffText, request)
+      if (args[0] === "pr" && args[1] === "diff" && args.includes("--help")) {
+        return result("--color string  Use color: {always|never|auto}", request)
+      }
       if (args[0] === "pr" && args[1] === "review") return result("", request)
       if (args[0] === "pr" && args[1] === "view") {
         return result(
@@ -104,8 +122,20 @@ const fakeProcesses = (calls: Call[] = []): ProcessRunner =>
       if (query.includes("search(type: ISSUE")) return result(reviewRequestsJson, request)
       if (query.includes("repositories(")) return result(accessibleRepositoriesJson, request)
       throw new Error(`Unhandled gh command: ${args.join(" ")}`)
-    }),
-  )
+    })
+  return processRunner(run, (request) => {
+    calls.push({
+      command: request.command,
+      args: request.args,
+      stdout: request.stdout ?? undefined,
+      request,
+    })
+    return Stream.fromIterable([
+      { _tag: "ProcessByteChunk" as const, bytes: new TextEncoder().encode(pullRequestDiffText) },
+      ProcessExit.make({ result: result("", request) }),
+    ])
+  })
+}
 
 const repository = (providerId = "github") =>
   HostedRepositoryLocator.make({
@@ -120,12 +150,99 @@ const review = (providerId = "github") =>
     number: HostedReviewNumber.make(42),
   })
 
+const makeTempDirectory = Effect.acquireRelease(
+  Effect.tryPromise(() => mkdtemp(join(tmpdir(), "diffdash-gh-source-"))),
+  (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+)
+
+const writeFakeGh = (
+  directory: string,
+  behavior: "large" | "hang",
+): Effect.Effect<{ readonly executable: string; readonly pidFile: string }> =>
+  Effect.gen(function* () {
+    const executable = join(directory, "gh")
+    const pidFile = join(directory, "pid")
+    const script = `#!/usr/bin/env node
+const fs = require("node:fs")
+const args = process.argv.slice(2)
+if (args[0] === "--version") process.stdout.end("gh version 2.74.0 (fake)\\n")
+else if (args[0] === "pr" && args[1] === "diff" && args.includes("--help")) process.stdout.end("--color string  Use color\\n")
+else if (args[0] === "pr" && args[1] === "view") process.stdout.end(JSON.stringify({ headRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }))
+else if (args[0] === "pr" && args[1] === "diff") {
+  if (args.includes("--name-only") || args.includes("--exclude") || args[args.indexOf("--color") + 1] !== "never" || process.env.NO_COLOR !== "1") process.exit(91)
+  ${
+    behavior === "large"
+      ? `const chunk = Buffer.alloc(64 * 1024, 120)
+  let remaining = 9 * 1024 * 1024 + 123
+  const write = () => {
+    while (remaining > 0) {
+      const size = Math.min(remaining, chunk.length)
+      remaining -= size
+      if (!process.stdout.write(chunk.subarray(0, size))) return process.stdout.once("drain", write)
+    }
+  }
+  write()`
+      : `fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
+  process.on("SIGTERM", () => {})
+  process.stdout.write("started")
+  setInterval(() => {}, 1000)`
+  }
+} else process.exit(92)
+`
+    yield* Effect.promise(() => writeFile(executable, script))
+    yield* Effect.promise(() => chmod(executable, 0o755))
+    return { executable, pidFile }
+  })
+
+const waitForFile = (path: string, attempts = 200): Promise<string> =>
+  readFile(path, "utf8").catch((cause: unknown) => {
+    if (attempts <= 0) throw cause
+    return new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
+      waitForFile(path, attempts - 1),
+    )
+  })
+
+const processIsRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const waitForProcessExit = (pid: number, attempts = 200): Promise<void> =>
+  processIsRunning(pid)
+    ? attempts <= 0
+      ? Promise.reject(new Error(`Process ${pid} did not exit`))
+      : new Promise((resolve) => setTimeout(resolve, 10)).then(() =>
+          waitForProcessExit(pid, attempts - 1),
+        )
+    : Promise.resolve()
+
 gitProviderConformance("GitHub", {
   create: () => createGitHubProvider({}, fakeProcesses()),
   configuredRemote: "git@github.com:fungsi/diffdash.git",
   nestedNamespace: "fungsi",
   repositoryName: "diffdash",
   reviewNumber: 42,
+})
+
+reviewDiffSourceConformance("GitHub", {
+  create: () => Effect.runSync(createGitHubReviewDiffSource({}, fakeProcesses(), review())),
+  createCancellable: () => {
+    let closed = false
+    const processes = fakeProcesses()
+    const cancellable = processRunner(processes.run, () =>
+      Stream.never.pipe(Stream.ensuring(Effect.sync(() => void (closed = true)))),
+    )
+    return {
+      source: Effect.runSync(createGitHubReviewDiffSource({}, cancellable, review())),
+      closed: () => closed,
+    }
+  },
+  expectedBytes: new TextEncoder().encode(pullRequestDiffText),
+  expectedFiles: [],
 })
 
 describe("GitHub provider", () => {
@@ -255,13 +372,67 @@ describe("GitHub provider", () => {
     })
   })
 
-  it.effect("requires complete pull-request diff output within an explicit finite budget", () => {
+  it.effect("uses qualified raw output with color disabled and no buffering flags", () => {
     const calls: Call[] = []
     const provider = createGitHubProvider({}, fakeProcesses(calls))
     return Effect.gen(function* () {
       yield* provider.getReviewDiff(review())
-      const diffCall = calls.find((call) => call.args[0] === "pr" && call.args[1] === "diff")
-      expect(diffCall?.stdout).toEqual({ maxBytes: 8_000_000, overflow: "error" })
+      const diffCall = calls.find(
+        (call) => call.args[0] === "pr" && call.args[1] === "diff" && !call.args.includes("--help"),
+      )
+      expect(diffCall?.args).toEqual([
+        "pr",
+        "diff",
+        "42",
+        "--repo",
+        "fungsi/diffdash",
+        "--color",
+        "never",
+      ])
+      expect(diffCall?.args).not.toContain("--name-only")
+      expect(diffCall?.args).not.toContain("--exclude")
+      expect(diffCall?.request.stdout).toMatchObject({ maxBytes: 0, overflow: "truncate" })
+      expect(diffCall?.request.env).toMatchObject({ NO_COLOR: "1", CLICOLOR: "0", TERM: "dumb" })
+    })
+  })
+
+  it.effect("rejects revision changes and requires a fresh generation for retry", () => {
+    let metadataReads = 0
+    const base = fakeProcesses()
+    const processes = processRunner((request) => {
+      if (request.args[0] === "pr" && request.args[1] === "view") {
+        metadataReads += 1
+        const revision =
+          metadataReads === 3
+            ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        return Effect.succeed(result(JSON.stringify({ headRefOid: revision }), request))
+      }
+      return base.run(request)
+    }, base.streamBytes)
+    return Effect.gen(function* () {
+      const source = yield* createGitHubReviewDiffSource({}, processes, review())
+      const reused = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("revision-change"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      const changed = yield* source.unifiedBytes(reused).pipe(Stream.runDrain, Effect.result)
+      expect(Result.isFailure(changed)).toBe(true)
+      if (Result.isFailure(changed))
+        expect(changed.failure).toBeInstanceOf(ReviewDiffRevisionChanged)
+
+      const duplicate = yield* source.unifiedBytes(reused).pipe(Stream.runDrain, Effect.result)
+      expect(Result.isFailure(duplicate)).toBe(true)
+      if (Result.isFailure(duplicate))
+        expect(duplicate.failure).toBeInstanceOf(ReviewDiffGenerationReused)
+
+      const fresh = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("revision-retry-fresh"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      const events = yield* source.unifiedBytes(fresh).pipe(Stream.runCollect)
+      expect(Array.from(events).some(Schema.is(ReviewDiffByteCompletion))).toBe(true)
+      yield* source.close
     })
   })
 
@@ -308,5 +479,99 @@ describe("GitHub provider", () => {
       })
       expect(parseGitHubCliVersion("gh version 1.14.0")).toBe("1.14.0")
     }),
+  )
+
+  it.effect("rejects old versions and versions without raw color control", () =>
+    Effect.gen(function* () {
+      for (const [version, help] of [
+        ["gh version 2.6.0", "--color string"],
+        ["gh version 2.74.0", "no color option"],
+      ] as const) {
+        const processes = processRunner((request) =>
+          Effect.succeed(result(request.args[0] === "--version" ? version : help, request)),
+        )
+        const qualified = yield* Effect.result(
+          createGitHubReviewDiffSource({}, processes, review()),
+        )
+        expect(Result.isFailure(qualified)).toBe(true)
+        if (Result.isFailure(qualified)) {
+          expect(qualified.failure).toBeInstanceOf(GitProviderOperationError)
+          expect(qualified.failure.operation).toBe("getReviewDiff.qualify")
+        }
+      }
+    }),
+  )
+
+  it.live("streams more than 8 MiB from a slow fake gh consumer within fixed pressure bounds", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const fake = yield* writeFakeGh(directory, "large")
+      const processes = yield* ProcessService
+      const snapshots: ProcessStreamMetrics[] = []
+      const observed: ProcessRunner = {
+        ...processes,
+        streamBytes: (request, options) =>
+          processes.streamBytes(request, {
+            ...options,
+            observer: (value) => snapshots.push(value),
+          }),
+      }
+      const source = yield* createGitHubReviewDiffSource(
+        { executable: fake.executable },
+        observed,
+        review(),
+      )
+      const acquisition = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("large-slow-fake"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      let bytes = 0
+      let delayed = false
+      yield* source.unifiedBytes(acquisition).pipe(
+        Stream.runForEach((event) => {
+          if (Schema.is(ReviewDiffByteCompletion)(event)) return Effect.void
+          bytes += event.bytes.byteLength
+          if (delayed) return Effect.void
+          delayed = true
+          return Effect.sleep(100)
+        }),
+      )
+
+      expect(bytes).toBe(9 * 1024 * 1024 + 123)
+      expect(Math.max(...snapshots.map((value) => value.queueBytes))).toBeLessThanOrEqual(
+        1024 * 1024,
+      )
+      expect(Math.max(...snapshots.map((value) => value.reservedBytes))).toBeLessThanOrEqual(
+        1024 * 1024,
+      )
+      expect(Math.max(...snapshots.map((value) => value.blockedDurationMs))).toBeGreaterThan(0)
+      yield* source.close
+    }).pipe(Effect.provide(ProcessService.layer)),
+  )
+
+  it.live("kills an in-progress fake gh process when the source closes", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const fake = yield* writeFakeGh(directory, "hang")
+      const processes = yield* ProcessService
+      const source = yield* createGitHubReviewDiffSource(
+        { executable: fake.executable },
+        processes,
+        review(),
+      )
+      const acquisition = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("close-kills-gh"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      const fiber = yield* source
+        .unifiedBytes(acquisition)
+        .pipe(Stream.runDrain, Effect.result, Effect.forkChild)
+      const pid = Number.parseInt(yield* Effect.promise(() => waitForFile(fake.pidFile)), 10)
+      yield* source.close
+      const closed = yield* Fiber.join(fiber)
+      expect(Result.isFailure(closed)).toBe(true)
+      yield* Effect.promise(() => waitForProcessExit(pid))
+      expect(processIsRunning(pid)).toBe(false)
+    }).pipe(Effect.provide(ProcessService.layer)),
   )
 })
