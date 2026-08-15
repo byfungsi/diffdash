@@ -60,6 +60,7 @@ export { DiffFileStatus } from "@diffdash/domain/diff"
 export { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 export { WebUrl } from "@diffdash/domain/web-url"
 export { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+export * from "./review-diff-source"
 
 /** Provider-owned checkout instructions consumed by local workspace management. */
 export class HostedReviewCheckoutSpec extends Schema.Class<HostedReviewCheckoutSpec>(
