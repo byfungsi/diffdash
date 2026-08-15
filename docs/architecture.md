@@ -121,10 +121,14 @@ union. The Electron application-runtime adapter deliberately unwraps that result
 IPC error adapters; only defects reject directly from `EmbeddedCore`.
 
 The external-Core RPC path remains inactive until the atomic production cutover. Its native Effect
-RPC middleware now enforces process identity and ready-only business admission before invoking Core
-handlers. `CoreLifecycle` owns the authoritative decision and drain interruption; method-specific
-middleware maps that decision to exact wire failures without adding a custom dispatcher or transport
-envelope. Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
+RPC middleware enforces process identity, ready-only business admission, method deadlines, and
+cancellation policy before invoking Core handlers. The bounded walkthrough protocol enforces each
+method's logical MessagePack request and response limits before the 512 KiB native frame ceiling,
+rejects duplicate live request IDs, and retains at most 32 full-frame reservations. Timed-out
+uninterruptible cancellations remain owned by a scoped, 32-fiber Core set instead of escaping into a
+global runtime. `CoreLifecycle` owns the authoritative admission and drain decision; method-specific
+middleware maps it to exact wire failures without adding a custom dispatcher or transport envelope.
+Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
 Core privately merges the disjoint control and business audiences into one scoped, transport-neutral
 `RpcServer`. The first inactive external-host vertical supplies the native Unix socket protocol with
 bounded MessagePack input, a private `0700` runtime directory, and a `0600` socket. A one-time redacted
