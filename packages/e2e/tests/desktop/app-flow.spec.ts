@@ -448,7 +448,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await window.keyboard.press("Escape")
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeHidden()
 
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
@@ -599,7 +599,7 @@ test("runs an explicit Claude walkthrough successfully", async ({
     expect(accepted.created).toBe(true)
     const duplicate = await startLocalWalkthrough(window, localRepo, "w:explicit-claude")
     expect(duplicate).toMatchObject({ created: false, operationId: accepted.operationId })
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
@@ -654,7 +654,7 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-invalid-claude")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
@@ -716,7 +716,7 @@ test("skips unavailable Claude and falls back to Codex in Auto mode", async ({
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-unavailable-claude")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
@@ -779,13 +779,13 @@ test("recovers a running walkthrough after renderer reload", async ({
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:renderer-reload")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     await expect.poll(() => countLogLines(claudeRunLog)).toBe(1)
 
     await window.reload()
     await window.evaluate(installDiffDashE2eApi)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible({
       timeout: 20_000,
     })
@@ -935,7 +935,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       "w:dropped-terminal-hint",
       true,
     )
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(
       window
@@ -2007,6 +2007,11 @@ if (joined.includes("rev-parse --show-toplevel")) {
   process.exit(0)
 }
 
+if (joined.includes("rev-parse --path-format=absolute --show-toplevel --absolute-git-dir --git-common-dir")) {
+  console.log([repoRoot, repoRoot + "/.git", repoRoot + "/.git"].join("\\n"))
+  process.exit(0)
+}
+
 if (joined.includes("branch --show-current")) {
   console.log("feature/local-review")
   process.exit(0)
@@ -2043,6 +2048,44 @@ if (joined.includes("merge-base dddddddddddddddddddddddddddddddddddddddd HEAD"))
 
 if (joined.includes("rev-parse --verify HEAD")) {
   console.log("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+  process.exit(0)
+}
+
+if (joined.includes("symbolic-ref --quiet --short HEAD")) {
+  console.log("feature/local-review")
+  process.exit(0)
+}
+
+if (joined.includes("status --porcelain=v2 --branch --untracked-files=all")) {
+  console.log([
+    "# branch.oid bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "# branch.head feature/local-review",
+    "1 .M N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 src/local.ts",
+    "? notes.txt"
+  ].join("\\n"))
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff --no-color HEAD --")) {
+  console.log([
+    "diff --git a/src/local.ts b/src/local.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/local.ts",
+    "+++ b/src/local.ts",
+    "@@ -1,1 +1,1 @@",
+    "-old local",
+    "+new local"
+  ].join("\\n"))
+  process.exit(0)
+}
+
+if (joined.includes("diff --raw -z --full-index --no-abbrev --no-ext-diff --no-color HEAD --")) {
+  process.stdout.write(":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\\0src/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --numstat -z --no-ext-diff --no-color HEAD --")) {
+  process.stdout.write("1\\t1\\tsrc/local.ts\\0")
   process.exit(0)
 }
 
@@ -2331,6 +2374,16 @@ if (args[0] === "search" && args[1] === "repos") {
 
 if (args[0] === "auth" && args[1] === "status") {
   console.log("Logged in to github.com")
+  process.exit(0)
+}
+
+if (args[0] === "api" && args[1] === "user") {
+  console.log(JSON.stringify({ login: "hanipcode" }))
+  process.exit(0)
+}
+
+if (args[0] === "pr" && args[1] === "diff" && args[2] === "--help") {
+  console.log("--color string")
   process.exit(0)
 }
 
