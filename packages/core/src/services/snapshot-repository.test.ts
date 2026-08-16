@@ -274,6 +274,19 @@ describe("SnapshotRepository", () => {
               Schema.decodeSync(ReviewHunkId)("hunk:one"),
             )
             expect(new TextDecoder().decode(hunk.bytes)).toBe("-old\n+new\n")
+            expect(yield* operation.hunks(ReviewFileId.make("file:0"), 0, 1)).toMatchObject([
+              { id: "hunk:one", ordinal: 0 },
+            ])
+            const excessive = yield* Effect.result(
+              operation.hunks(ReviewFileId.make("file:0"), 0, 257),
+            )
+            expect(Result.isFailure(excessive)).toBe(true)
+            if (Result.isFailure(excessive)) {
+              expect(excessive.failure).toMatchObject({
+                operation: "hunks",
+                reason: "rangeLimit",
+              })
+            }
             const spool = yield* resources.get(CatalogResourceId.make(`spool:${snapshotOne}`))
             expect(spool.leases).toMatchObject([
               { ownerKind: "durableOperation", ownerId: "walkthrough:one" },

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -42,6 +43,7 @@ import {
 } from "@diffdash/persistence/snapshot-block-store"
 import {
   IncrementalUnifiedDiffParser,
+  REVIEW_DIFF_MAX_BATCH_BYTES,
   type IncrementalDiffBatch,
 } from "@diffdash/review-data-worker"
 import { Deferred, Effect, Fiber, Layer, Result, Stream } from "effect"
@@ -156,6 +158,8 @@ const makeLayer = (
   bytes: Uint8Array,
   options: CoreSnapshotIngestionOptions = defaultOptions,
   afterBatches: Effect.Effect<void> = Effect.void,
+  metrics: { maximumBatchBytes: number } = { maximumBatchBytes: 0 },
+  transformBatch: (batch: IncrementalDiffBatch) => IncrementalDiffBatch = (batch) => batch,
 ) => {
   const rootPath = join(directory, "managed")
   const database = DatabaseNode.layer(join(directory, "database.sqlite"))
@@ -166,7 +170,7 @@ const makeLayer = (
   const worker = Layer.succeed(CoreReviewDataWorker, {
     process: (_source, _acquisition, onBatch) =>
       Effect.gen(function* () {
-        for (const batch of oneEventBatches(bytes)) yield* onBatch(batch)
+        yield* relayParserBatches(bytes, onBatch, metrics, transformBatch)
         yield* afterBatches
       }),
   })
@@ -222,7 +226,72 @@ describe("CoreSnapshotIngestion", () => {
     }),
   )
 
-  it.effect("rejects an oversized complete hunk without publishing a snapshot", () =>
+  it.effect(
+    "streams one multi-megabyte hunk into bounded range-readable blocks",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* tempDirectory
+        const lineCount = 24_000
+        const patch = largeSingleHunk(lineCount, 131)
+        const maximumBlockBytes = 128 * 1024
+        const metrics = { maximumBatchBytes: 0 }
+        const harness = makeLayer(
+          directory,
+          patch,
+          { ...defaultOptions, maximumBlockBytes },
+          Effect.void,
+          metrics,
+        )
+        const closed = { count: 0 }
+
+        yield* Effect.gen(function* () {
+          const resources = yield* ResourceCatalog
+          const ingestion = yield* CoreSnapshotIngestion
+          const store = yield* SnapshotBlockStore
+          yield* Effect.promise(() => mkdir(harness.rootPath, { recursive: true }))
+          yield* resources.registerRoot({ id: rootId, path: harness.rootPath, createdAtMs: 0 })
+
+          const result = yield* ingestion.ingest(input(source(patch, closed)))
+          expect(result.files[0]).toMatchObject({ additions: lineCount, hunkCount: 1 })
+
+          const deltaId = makeFileDeltaId(exactIdentity)
+          const snapshot = yield* store.getSnapshot(StoredSnapshotId.make(snapshotId))
+          const blocks = yield* store.visibleBlocks(deltaId)
+          const hunkId = blocks.find(({ hunk_id }) => hunk_id !== null)?.hunk_id
+          if (hunkId === null || hunkId === undefined)
+            throw new Error("Expected final hunk identity on durable blocks")
+          const hunk = yield* store.findFileHunk(deltaId, hunkId)
+          expect(patch.byteLength).toBeGreaterThan(3 * 1024 * 1024)
+          expect(blocks.length).toBeGreaterThan(20)
+          expect(snapshot.blockIds).toEqual(blocks.map(({ id }) => id))
+          expect(snapshot.checkpoints.map(({ blockId }) => blockId)).toEqual(snapshot.blockIds)
+          expect(hunk.lineCount).toBe(lineCount)
+          expect(blocks.every(({ byte_count }) => byte_count <= maximumBlockBytes)).toBe(true)
+          expect(blocks.every(({ hunk_id }, index) => index === 0 || hunk_id === hunk.id)).toBe(
+            true,
+          )
+          expect(metrics.maximumBatchBytes).toBeLessThanOrEqual(REVIEW_DIFF_MAX_BATCH_BYTES)
+
+          const reconstructed = createHash("sha256")
+          let reconstructedBytes = 0
+          for (const block of blocks) {
+            for (let offset = 0; offset < block.byte_count; offset += 31 * 1024) {
+              const range = yield* store.readManagedRange(block.resource_id, offset, 31 * 1024)
+              expect(range.bytes.byteLength).toBeLessThanOrEqual(31 * 1024)
+              reconstructed.update(range.bytes)
+              reconstructedBytes += range.bytes.byteLength
+            }
+          }
+          expect(reconstructedBytes).toBe(patch.byteLength)
+          expect(reconstructed.digest("hex")).toBe(createHash("sha256").update(patch).digest("hex"))
+        }).pipe(Effect.provide(harness.layer))
+
+        expect(closed.count).toBe(1)
+      }),
+    30_000,
+  )
+
+  it.effect("rejects one indivisible line above the configured block bound", () =>
     Effect.gen(function* () {
       const directory = yield* tempDirectory
       const patch = encoder.encode(
@@ -247,6 +316,38 @@ describe("CoreSnapshotIngestion", () => {
           ),
         ).toBe(true)
         expect(yield* store.visibleBlocks(makeFileDeltaId(exactIdentity))).toHaveLength(0)
+      }).pipe(Effect.provide(harness.layer))
+
+      expect(closed.count).toBe(1)
+    }),
+  )
+
+  it.effect("validates worker batches again at the ingestion boundary", () =>
+    Effect.gen(function* () {
+      const directory = yield* tempDirectory
+      const patch = encoder.encode(
+        "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      )
+      const harness = makeLayer(
+        directory,
+        patch,
+        defaultOptions,
+        Effect.void,
+        { maximumBatchBytes: 0 },
+        (batch) => ({ ...batch, byteCount: batch.byteCount + 1 }),
+      )
+      const closed = { count: 0 }
+
+      yield* Effect.gen(function* () {
+        const resources = yield* ResourceCatalog
+        const ingestion = yield* CoreSnapshotIngestion
+        yield* Effect.promise(() => mkdir(harness.rootPath, { recursive: true }))
+        yield* resources.registerRoot({ id: rootId, path: harness.rootPath, createdAtMs: 0 })
+
+        const result = yield* Effect.result(ingestion.ingest(input(source(patch, closed))))
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result))
+          expect(result.failure._tag).toBe("CoreReviewDataWorkerBatchError")
       }).pipe(Effect.provide(harness.layer))
 
       expect(closed.count).toBe(1)
@@ -292,16 +393,38 @@ describe("CoreSnapshotIngestion", () => {
   )
 })
 
-const oneEventBatches = (bytes: Uint8Array): ReadonlyArray<IncrementalDiffBatch> => {
+const relayParserBatches = Effect.fn("CoreSnapshotIngestionTest.relayParserBatches")(function* (
+  bytes: Uint8Array,
+  onBatch: (batch: IncrementalDiffBatch) => Effect.Effect<void>,
+  metrics: { maximumBatchBytes: number },
+  transformBatch: (batch: IncrementalDiffBatch) => IncrementalDiffBatch,
+) {
   const parser = new IncrementalUnifiedDiffParser()
-  const accepted = parser.accept(bytes)
-  if (accepted._tag === "Failure") throw accepted.error
+  for (let offset = 0; offset < bytes.byteLength; offset += 17 * 1024) {
+    const accepted = parser.accept(bytes.slice(offset, offset + 17 * 1024))
+    if (accepted._tag === "Failure") return yield* Effect.die(accepted.error)
+    for (const batch of accepted.batches) {
+      metrics.maximumBatchBytes = Math.max(metrics.maximumBatchBytes, batch.byteCount)
+      yield* onBatch(transformBatch(batch))
+    }
+  }
   const finished = parser.finish()
-  if (finished._tag === "Failure") throw finished.error
-  return [...accepted.batches, ...finished.batches]
-    .flatMap(({ events }) => events)
-    .map((event) => ({
-      events: [event],
-      byteCount: encoder.encode(JSON.stringify(event)).byteLength,
-    }))
+  if (finished._tag === "Failure") return yield* Effect.die(finished.error)
+  for (const batch of finished.batches) {
+    metrics.maximumBatchBytes = Math.max(metrics.maximumBatchBytes, batch.byteCount)
+    yield* onBatch(transformBatch(batch))
+  }
+  return undefined
+})
+
+const largeSingleHunk = (lineCount: number, contentBytes: number): Uint8Array => {
+  const prefix = encoder.encode(
+    `diff --git a/src/large.ts b/src/large.ts\n--- a/src/large.ts\n+++ b/src/large.ts\n@@ -0,0 +1,${lineCount} @@\n`,
+  )
+  const line = encoder.encode(`+${"x".repeat(contentBytes)}\n`)
+  const bytes = new Uint8Array(prefix.byteLength + line.byteLength * lineCount)
+  bytes.set(prefix)
+  for (let offset = prefix.byteLength; offset < bytes.byteLength; offset += line.byteLength)
+    bytes.set(line, offset)
+  return bytes
 }

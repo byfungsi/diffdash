@@ -27,6 +27,9 @@ import { Clock, Context, Effect, Layer, Schema, type Scope } from "effect"
 /** Maximum files returned by one operation-owned inventory read. */
 export const OPERATION_SNAPSHOT_INVENTORY_LIMIT = 256
 
+/** Maximum hunk metadata rows returned by one operation-owned read. */
+export const OPERATION_SNAPSHOT_HUNK_LIMIT = 256
+
 /** Durable operation identity and immutable snapshot authority. */
 export const OperationSnapshotIdentity = Schema.Struct({
   applicationInstanceId: ApplicationInstanceId,
@@ -48,6 +51,7 @@ const OperationSnapshotReaderOperation = Schema.Literals([
   "inventory",
   "findFile",
   "findHunk",
+  "hunks",
   "readFile",
   "readHunk",
 ])
@@ -90,6 +94,11 @@ export interface OperationSnapshotHandle {
     fileId: ReviewFileId,
     hunkId: ReviewHunkId,
   ) => Effect.Effect<StoredHunk, OperationSnapshotReaderError>
+  readonly hunks: (
+    fileId: ReviewFileId,
+    offset: number,
+    limit: number,
+  ) => Effect.Effect<ReadonlyArray<StoredHunk>, OperationSnapshotReaderError>
   readonly readFile: (
     fileId: ReviewFileId,
   ) => Effect.Effect<OperationSnapshotFile, OperationSnapshotReaderError>
@@ -213,6 +222,24 @@ export const operationSnapshotReaderLayer = (
           }),
           findFile,
           findHunk,
+          hunks: Effect.fn("OperationSnapshotReader.hunks")(function* (fileId, offset, limit) {
+            if (
+              !Number.isSafeInteger(offset) ||
+              offset < 0 ||
+              !Number.isSafeInteger(limit) ||
+              limit <= 0 ||
+              limit > OPERATION_SNAPSHOT_HUNK_LIMIT
+            )
+              return yield* reject("hunks", "rangeLimit", "Hunk query is outside its bound")
+            const file = yield* findFile(fileId)
+            return yield* store
+              .listFileHunks(file.deltaId, offset, limit)
+              .pipe(
+                Effect.mapError(() =>
+                  reject("hunks", "sourceUnavailable", "Could not query snapshot hunks"),
+                ),
+              )
+          }),
           readFile: Effect.fn("OperationSnapshotReader.readFile")(function* (fileId) {
             const file = yield* findFile(fileId)
             const blocks = yield* store

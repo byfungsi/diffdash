@@ -25,6 +25,7 @@ import {
   type ClosedDiffFile,
   type IncrementalDiffBatch,
   type IncrementalDiffEvent,
+  isBoundedIncrementalDiffBatch,
   type ReviewDataWorkerFailure,
 } from "@diffdash/review-data-worker"
 import {
@@ -40,7 +41,7 @@ import { Clock, Context, Effect, Exit, Layer, Match, Schema } from "effect"
 
 import {
   CoreReviewDataWorker,
-  type CoreReviewDataWorkerBatchError,
+  CoreReviewDataWorkerBatchError,
 } from "./review-data-worker-coordinator"
 
 const encoder = new TextEncoder()
@@ -95,7 +96,7 @@ export interface CoreSnapshotIngestionResult {
   readonly files: ReadonlyArray<CoreSnapshotIngestedFile>
 }
 
-/** Invalid stream state, inconsistent exact identity, oversized hunk, or exhausted quota. */
+/** Invalid stream state, inconsistent exact identity, oversized indivisible content, or quota. */
 export class CoreSnapshotIngestionError extends Schema.TaggedError<CoreSnapshotIngestionError>()(
   "CoreSnapshotIngestionError",
   {
@@ -124,7 +125,7 @@ export interface CoreSnapshotIngestionOptions {
   readonly managedQuotaBytes: number
   /** Time allowed for one block reservation before startup recovery may reclaim it. */
   readonly reservationLifetimeMs: number
-  /** Optional tighter hunk block bound; values above the hard limit are clamped. */
+  /** Optional tighter durable block bound; values above the hard limit are clamped. */
   readonly maximumBlockBytes?: number
 }
 
@@ -157,7 +158,11 @@ export const coreSnapshotIngestionLayer = (
         input: CoreSnapshotIngestionInput,
       ) {
         const state = new IngestionState(input.manifest.reviewKey, maximumBlockBytes)
-        let batchFailure: CoreSnapshotIngestionError | SnapshotBlockStoreError | null = null
+        let batchFailure:
+          | CoreSnapshotIngestionError
+          | CoreReviewDataWorkerBatchError
+          | SnapshotBlockStoreError
+          | null = null
 
         const processing = worker
           .process(input.source, input.acquisition, (batch) =>
@@ -224,19 +229,28 @@ interface ActiveFile {
   hunk: ActiveHunk | null
   hunkCount: number
   lineOffset: number
+  nextBlockOrdinal: number
 }
 
 interface ActiveHunk {
   readonly started: Extract<IncrementalDiffEvent, { readonly _tag: "HunkStarted" }>
-  readonly parts: Uint8Array[]
+  /** Encoded content for only the current not-yet-durable block. */
+  parts: Uint8Array[]
   byteCount: number
+  blockFirstLine: number
+  blockLineCount: number
+  nextPartOrdinal: number
+  totalLineCount: number
+  readonly provisionalBlockIds: DiffBlockId[]
 }
 
 interface ExpectedBlock {
   readonly id: DiffBlockId
   readonly deltaId: FileDeltaId
-  readonly hunkId: string | null
+  hunkId: string | null
   readonly ordinal: number
+  readonly fileOrdinal: number
+  readonly hunkOrdinal: number
   readonly firstLine: number
   readonly lineCount: number
   readonly byteCount: number
@@ -282,6 +296,7 @@ class IngestionState {
       hunk: null,
       hunkCount: 0,
       lineOffset: 0,
+      nextBlockOrdinal: 0,
     }
     return Effect.void
   }
@@ -302,14 +317,28 @@ class IngestionState {
     if (header.byteLength > this.#maximumBlockBytes)
       return hunkTooLarge(this.#maximumBlockBytes, header.byteLength)
     hashPart(file.patchHash, event.header)
-    file.hunk = { started: event, parts: [header], byteCount: header.byteLength }
+    file.hunk = {
+      started: event,
+      parts: [header],
+      byteCount: header.byteLength,
+      blockFirstLine: file.lineOffset,
+      blockLineCount: 0,
+      nextPartOrdinal: 0,
+      totalLineCount: 0,
+      provisionalBlockIds: [],
+    }
     return Effect.void
   }
 
   recordPrelude(
     event: Extract<IncrementalDiffEvent, { readonly _tag: "FilePrelude" }>,
   ): Effect.Effect<
-    { readonly file: ActiveFile; readonly bytes: Uint8Array; readonly lineCount: number },
+    {
+      readonly file: ActiveFile
+      readonly bytes: Uint8Array
+      readonly lineCount: number
+      readonly ordinal: number
+    },
     CoreSnapshotIngestionError
   > {
     const file = this.#file
@@ -326,16 +355,19 @@ class IngestionState {
     const byteCount = parts.reduce((total, part) => total + part.byteLength, 0)
     if (byteCount > this.#maximumBlockBytes) return hunkTooLarge(this.#maximumBlockBytes, byteCount)
     file.lineOffset = event.lines.length
+    const ordinal = file.nextBlockOrdinal
+    file.nextBlockOrdinal += 1
     return Effect.succeed({
       file,
       bytes: concatBytes(parts, byteCount),
       lineCount: event.lines.length,
+      ordinal,
     })
   }
 
   addHunkLine(
     event: Extract<IncrementalDiffEvent, { readonly _tag: "HunkLine" }>,
-  ): Effect.Effect<void, CoreSnapshotIngestionError> {
+  ): Effect.Effect<PendingHunkBlock | null, CoreSnapshotIngestionError> {
     const file = this.#file
     if (file === null || file.hunk === null)
       return invalidOrder("A hunk line arrived without its active hunk")
@@ -343,20 +375,31 @@ class IngestionState {
     if (event.fileOrdinal !== file.ordinal || event.hunkOrdinal !== hunk.started.hunkOrdinal)
       return invalidOrder("A hunk line arrived without its active hunk")
     const bytes = lineBytes(event.line)
-    const nextSize = hunk.byteCount + bytes.byteLength
-    if (nextSize > this.#maximumBlockBytes) return hunkTooLarge(this.#maximumBlockBytes, nextSize)
+    if (bytes.byteLength > this.#maximumBlockBytes)
+      return hunkTooLarge(this.#maximumBlockBytes, bytes.byteLength)
+    let completed: PendingHunkBlock | null = null
+    if (hunk.byteCount + bytes.byteLength > this.#maximumBlockBytes) {
+      if (hunk.blockLineCount === 0)
+        return hunkTooLarge(this.#maximumBlockBytes, hunk.byteCount + bytes.byteLength)
+      completed = this.#takeHunkBlock(file, hunk)
+      hunk.parts = []
+      hunk.byteCount = 0
+      hunk.blockFirstLine += hunk.blockLineCount
+      hunk.blockLineCount = 0
+    }
     hunk.parts.push(bytes)
-    hunk.byteCount = nextSize
+    hunk.byteCount += bytes.byteLength
+    hunk.blockLineCount += 1
+    hunk.totalLineCount += 1
     hashPart(file.patchHash, event.line)
-    return Effect.void
+    return Effect.succeed(completed)
   }
 
   closeHunk(event: Extract<IncrementalDiffEvent, { readonly _tag: "HunkClosed" }>): Effect.Effect<
     {
       readonly file: ActiveFile
       readonly hunk: ActiveHunk
-      readonly bytes: Uint8Array
-      readonly firstLine: number
+      readonly block: PendingHunkBlock
     },
     CoreSnapshotIngestionError
   > {
@@ -367,24 +410,48 @@ class IngestionState {
     if (
       event.fileOrdinal !== file.ordinal ||
       event.hunkOrdinal !== hunk.started.hunkOrdinal ||
-      event.lineCount !== hunk.parts.length - 1 ||
+      event.lineCount !== hunk.totalLineCount ||
       event.lineCount < 1
     )
       return invalidOrder("A hunk closed without matching its complete provisional content")
-    const bytes = concatBytes(hunk.parts, hunk.byteCount)
-    const firstLine = file.lineOffset
+    const block = this.#takeHunkBlock(file, hunk)
+    hunk.parts = []
+    hunk.byteCount = 0
     file.lineOffset += event.lineCount
     file.hunk = null
     file.hunkCount += 1
-    return Effect.succeed({ file, hunk, bytes, firstLine })
+    return Effect.succeed({ file, hunk, block })
+  }
+
+  recordProvisionalHunkBlock(
+    fileOrdinal: number,
+    hunkOrdinal: number,
+    block: ExpectedBlock,
+  ): Effect.Effect<void, CoreSnapshotIngestionError> {
+    const file = this.#file
+    if (
+      file === null ||
+      file.hunk === null ||
+      file.ordinal !== fileOrdinal ||
+      file.hunk.started.hunkOrdinal !== hunkOrdinal
+    )
+      return invalidOrder("A provisional block did not match its active hunk")
+    file.hunk.provisionalBlockIds.push(block.id)
+    this.recordBlock(block)
+    return Effect.void
+  }
+
+  bindProvisionalHunkBlocks(blockIds: ReadonlyArray<DiffBlockId>, hunkId: string): void {
+    const ids = new Set(blockIds)
+    for (const block of this.#blocks) if (ids.has(block.id)) block.hunkId = hunkId
   }
 
   recordBlock(block: ExpectedBlock): void {
     this.#blocks.push(block)
     this.#checkpoints.push({
       ordinal: this.#checkpoints.length,
-      fileOrdinal: this.#file?.ordinal ?? 0,
-      hunkOrdinal: block.ordinal,
+      fileOrdinal: block.fileOrdinal,
+      hunkOrdinal: block.hunkOrdinal,
       blockId: block.id,
       byteOffset: this.#byteOffset,
       lineOffset: this.#lineOffset,
@@ -461,6 +528,27 @@ class IngestionState {
       checkpoints: this.#checkpoints,
     })
   }
+
+  #takeHunkBlock(file: ActiveFile, hunk: ActiveHunk): PendingHunkBlock {
+    const block = {
+      bytes: concatBytes(hunk.parts, hunk.byteCount),
+      firstLine: hunk.blockFirstLine,
+      lineCount: hunk.blockLineCount,
+      ordinal: file.nextBlockOrdinal,
+      partOrdinal: hunk.nextPartOrdinal,
+    }
+    file.nextBlockOrdinal += 1
+    hunk.nextPartOrdinal += 1
+    return block
+  }
+}
+
+interface PendingHunkBlock {
+  readonly bytes: Uint8Array
+  readonly firstLine: number
+  readonly lineCount: number
+  readonly ordinal: number
+  readonly partOrdinal: number
 }
 
 const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
@@ -470,6 +558,10 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
   batch: IncrementalDiffBatch,
   options: CoreSnapshotIngestionOptions,
 ) {
+  if (!isBoundedIncrementalDiffBatch(batch))
+    return yield* CoreReviewDataWorkerBatchError.make({
+      safeMessage: "DiffDash rejected invalid incremental review data.",
+    })
   for (const item of batch.events) {
     yield* Match.value(item).pipe(
       Match.tagsExhaustive({
@@ -490,7 +582,7 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
                   message: "File delta policy did not match the exact Git snapshot source",
                 }),
               )
-            yield* state.startFile(event, identity)
+            return yield* state.startFile(event, identity)
           }),
         FilePrelude: (event) =>
           Effect.gen(function* () {
@@ -504,42 +596,46 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
               id,
               deltaId: prelude.file.deltaId,
               hunkId: null,
-              ordinal: 0,
+              ordinal: prelude.ordinal,
+              fileOrdinal: prelude.file.ordinal,
+              hunkOrdinal: 0,
               firstLine: 0,
               lineCount: prelude.lineCount,
               byteCount: prelude.bytes.byteLength,
               checksum,
             }
-            const visible = yield* store.visibleBlocks(block.deltaId)
-            const existing = visible.find((candidate) => candidate.id === id)
-            if (existing === undefined) {
-              const nowMs = yield* Clock.currentTimeMillis
-              const prepared = yield* store.prepareBlock({
-                ...block,
-                reservationId: ResourceReservationId.make(`ingest:${digest(id)}`),
-                nowMs,
-                expiresAtMs: nowMs + options.reservationLifetimeMs,
-                quotaBytes: options.managedQuotaBytes,
-              })
-              if (prepared.kind === "quotaExceeded")
-                return yield* Effect.fail(
-                  CoreSnapshotIngestionError.make({
-                    reason: "quotaExceeded",
-                    message: `Snapshot block needs ${prepared.requiredBytes} bytes but only ${prepared.availableBytes} are available`,
-                  }),
-                )
-              yield* store.stageBlock(id, prelude.bytes)
-              yield* store.promoteBlock(id)
-              yield* store.finalizeBlock(id)
-            } else if (!sameBlock(existing, block)) {
-              return yield* verificationFailed(
-                "An existing content-addressed block had different metadata",
-              )
-            }
+            yield* persistBlock(store, block, prelude.bytes, options)
             state.recordBlock(block)
           }),
         HunkStarted: (event) => state.startHunk(event),
-        HunkLine: (event) => state.addHunkLine(event),
+        HunkLine: (event) =>
+          Effect.gen(function* () {
+            const pending = yield* state.addHunkLine(event)
+            if (pending === null) return
+            const file = yield* state.identityFor(event.fileOrdinal)
+            const deltaId = makeFileDeltaId(file)
+            const checksum = checksumBytes(pending.bytes)
+            const id = provisionalHunkBlockId(
+              deltaId,
+              event.hunkOrdinal,
+              pending.partOrdinal,
+              checksum,
+            )
+            const block: ExpectedBlock = {
+              id,
+              deltaId,
+              hunkId: null,
+              ordinal: pending.ordinal,
+              fileOrdinal: event.fileOrdinal,
+              hunkOrdinal: event.hunkOrdinal,
+              firstLine: pending.firstLine,
+              lineCount: pending.lineCount,
+              byteCount: pending.bytes.byteLength,
+              checksum,
+            }
+            yield* persistBlock(store, block, pending.bytes, options, true)
+            yield* state.recordProvisionalHunkBlock(event.fileOrdinal, event.hunkOrdinal, block)
+          }),
         HunkClosed: (event) =>
           Effect.gen(function* () {
             const closed = yield* state.closeHunk(event)
@@ -559,45 +655,38 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
                 },
               ],
             })
-            const checksum = checksumBytes(closed.bytes)
-            const id = DiffBlockId.make(
-              `block:v1:${digest(`${closed.file.deltaId}:${event.id}:${checksum}`)}`,
-            )
-            const block = {
+            const checksum = checksumBytes(closed.block.bytes)
+            const split = closed.hunk.provisionalBlockIds.length > 0
+            const id = split
+              ? provisionalHunkBlockId(
+                  closed.file.deltaId,
+                  event.hunkOrdinal,
+                  closed.block.partOrdinal,
+                  checksum,
+                )
+              : DiffBlockId.make(
+                  `block:v1:${digest(`${closed.file.deltaId}:${event.id}:${checksum}`)}`,
+                )
+            const block: ExpectedBlock = {
               id,
               deltaId: closed.file.deltaId,
               hunkId: event.id,
-              ordinal: event.hunkOrdinal + 1,
-              firstLine: closed.firstLine,
-              lineCount: event.lineCount,
-              byteCount: closed.bytes.byteLength,
+              ordinal: closed.block.ordinal,
+              fileOrdinal: event.fileOrdinal,
+              hunkOrdinal: event.hunkOrdinal,
+              firstLine: closed.block.firstLine,
+              lineCount: closed.block.lineCount,
+              byteCount: closed.block.bytes.byteLength,
               checksum,
             }
-            const visible = yield* store.visibleBlocks(block.deltaId)
-            const existing = visible.find((candidate) => candidate.id === id)
-            if (existing === undefined) {
-              const nowMs = yield* Clock.currentTimeMillis
-              const prepared = yield* store.prepareBlock({
-                ...block,
-                reservationId: ResourceReservationId.make(`ingest:${digest(id)}`),
-                nowMs,
-                expiresAtMs: nowMs + options.reservationLifetimeMs,
-                quotaBytes: options.managedQuotaBytes,
+            yield* persistBlock(store, block, closed.block.bytes, options)
+            if (split) {
+              yield* store.bindBlocksToHunk({
+                deltaId: closed.file.deltaId,
+                hunkId: event.id,
+                blockIds: closed.hunk.provisionalBlockIds,
               })
-              if (prepared.kind === "quotaExceeded")
-                return yield* Effect.fail(
-                  CoreSnapshotIngestionError.make({
-                    reason: "quotaExceeded",
-                    message: `Snapshot block needs ${prepared.requiredBytes} bytes but only ${prepared.availableBytes} are available`,
-                  }),
-                )
-              yield* store.stageBlock(id, closed.bytes)
-              yield* store.promoteBlock(id)
-              yield* store.finalizeBlock(id)
-            } else if (!sameBlock(existing, block)) {
-              return yield* verificationFailed(
-                "An existing content-addressed block had different metadata",
-              )
+              state.bindProvisionalHunkBlocks(closed.hunk.provisionalBlockIds, event.id)
             }
             state.recordBlock(block)
           }),
@@ -612,7 +701,55 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
       }),
     )
   }
+  return undefined
 })
+
+const persistBlock = Effect.fn("CoreSnapshotIngestion.persistBlock")(function* (
+  store: SnapshotBlockStore["Service"],
+  block: ExpectedBlock,
+  bytes: Uint8Array,
+  options: CoreSnapshotIngestionOptions,
+  allowAlreadyBoundHunk = false,
+) {
+  const visible = yield* store.visibleBlocks(block.deltaId)
+  const existing = visible.find((candidate) => candidate.id === block.id)
+  if (existing === undefined) {
+    const nowMs = yield* Clock.currentTimeMillis
+    const prepared = yield* store.prepareBlock({
+      ...block,
+      reservationId: ResourceReservationId.make(`ingest:${digest(block.id)}`),
+      nowMs,
+      expiresAtMs: nowMs + options.reservationLifetimeMs,
+      quotaBytes: options.managedQuotaBytes,
+    })
+    if (prepared.kind === "quotaExceeded")
+      return yield* Effect.fail(
+        CoreSnapshotIngestionError.make({
+          reason: "quotaExceeded",
+          message: `Snapshot block needs ${prepared.requiredBytes} bytes but only ${prepared.availableBytes} are available`,
+        }),
+      )
+    yield* store.stageBlock(block.id, bytes)
+    yield* store.promoteBlock(block.id)
+    yield* store.finalizeBlock(block.id)
+  } else if (
+    !sameBlock(existing, block) &&
+    !(allowAlreadyBoundHunk && block.hunkId === null && sameBlockContent(existing, block))
+  ) {
+    return yield* verificationFailed("An existing content-addressed block had different metadata")
+  }
+  return undefined
+})
+
+const provisionalHunkBlockId = (
+  deltaId: FileDeltaId,
+  hunkOrdinal: number,
+  partOrdinal: number,
+  checksum: string,
+): DiffBlockId =>
+  DiffBlockId.make(
+    `block:v2:${digest(`${deltaId}:hunk:${hunkOrdinal}:part:${partOrdinal}:${checksum}`)}`,
+  )
 
 const validateManifestIdentity = Effect.fn("CoreSnapshotIngestion.validateManifestIdentity")(
   function* (input: CoreSnapshotIngestionInput) {
@@ -639,6 +776,7 @@ const validateManifestIdentity = Effect.fn("CoreSnapshotIngestion.validateManife
           message: "Snapshot identity did not match the committed review source acquisition",
         }),
       )
+    return undefined
   },
 )
 
@@ -662,6 +800,7 @@ const verifyReadyBlocks = Effect.fn("CoreSnapshotIngestion.verifyReadyBlocks")(f
         )
     }
   }
+  return undefined
 })
 
 const sameBlock = (
@@ -678,6 +817,17 @@ const sameBlock = (
 ): boolean =>
   actual.delta_id === expected.deltaId &&
   actual.hunk_id === expected.hunkId &&
+  actual.ordinal === expected.ordinal &&
+  actual.first_line === expected.firstLine &&
+  actual.line_count === expected.lineCount &&
+  actual.byte_count === expected.byteCount &&
+  actual.checksum === expected.checksum
+
+const sameBlockContent = (
+  actual: Parameters<typeof sameBlock>[0],
+  expected: ExpectedBlock,
+): boolean =>
+  actual.delta_id === expected.deltaId &&
   actual.ordinal === expected.ordinal &&
   actual.first_line === expected.firstLine &&
   actual.line_count === expected.lineCount &&

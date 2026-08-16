@@ -151,6 +151,13 @@ export interface RegisterFileDeltaInput {
   readonly hunks: ReadonlyArray<StoredHunkInput>
 }
 
+/** Final hunk identity assigned to blocks written while that hunk was still provisional. */
+export interface BindDiffBlocksToHunkInput {
+  readonly deltaId: FileDeltaId
+  readonly hunkId: string
+  readonly blockIds: ReadonlyArray<DiffBlockId>
+}
+
 /** Reserve-ahead input for one independently checksummed block file. */
 export interface PrepareDiffBlockInput {
   readonly id: DiffBlockId
@@ -226,6 +233,7 @@ export interface ManagedRangeRead {
 
 const SnapshotBlockStoreOperation = Schema.Literals([
   "registerFileDelta",
+  "bindBlocksToHunk",
   "prepareBlock",
   "stageBlock",
   "promoteBlock",
@@ -237,6 +245,7 @@ const SnapshotBlockStoreOperation = Schema.Literals([
   "listSnapshotFiles",
   "findSnapshotFile",
   "findFileHunk",
+  "listFileHunks",
   "visibleBlocks",
   "readManagedRange",
   "deleteSnapshot",
@@ -268,6 +277,9 @@ export class SnapshotBlockStore extends Context.Service<
     readonly registerFileDelta: (
       input: RegisterFileDeltaInput,
     ) => Effect.Effect<FileDeltaId, SnapshotBlockStoreError>
+    readonly bindBlocksToHunk: (
+      input: BindDiffBlocksToHunkInput,
+    ) => Effect.Effect<void, SnapshotBlockStoreError>
     readonly prepareBlock: (
       input: PrepareDiffBlockInput,
     ) => Effect.Effect<PrepareDiffBlockResult, SnapshotBlockStoreError>
@@ -300,6 +312,11 @@ export class SnapshotBlockStore extends Context.Service<
       deltaId: FileDeltaId,
       hunkId: string,
     ) => Effect.Effect<StoredHunk, SnapshotBlockStoreError>
+    readonly listFileHunks: (
+      deltaId: FileDeltaId,
+      offset: number,
+      limit: number,
+    ) => Effect.Effect<ReadonlyArray<StoredHunk>, SnapshotBlockStoreError>
     readonly visibleBlocks: (
       deltaId: FileDeltaId,
     ) => Effect.Effect<ReadonlyArray<VisibleDiffBlock>, SnapshotBlockStoreError>
@@ -507,6 +524,32 @@ export class SnapshotBlockStore extends Context.Service<
             )
             return id
           }, mapError("registerFileDelta")),
+
+          bindBlocksToHunk: Effect.fn("SnapshotBlockStore.bindBlocksToHunk")(function* (input) {
+            yield* database.transaction(
+              Effect.gen(function* () {
+                for (const blockId of input.blockIds) {
+                  const row = yield* database.get(
+                    "SELECT hunk_id FROM review_diff_blocks WHERE id = ? AND delta_id = ? AND state = 'ready'",
+                    [blockId, input.deltaId],
+                  )
+                  const block = yield* Effect.fromOption(
+                    row,
+                    () => new Error(`Missing ready provisional block ${blockId}`),
+                  ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ProvisionalBlockBindingRow)))
+                  if (block.hunk_id !== null && block.hunk_id !== input.hunkId)
+                    return yield* Effect.fail(
+                      new Error("Provisional block is already bound to another hunk"),
+                    )
+                  yield* database.run(
+                    "UPDATE review_diff_blocks SET hunk_id = ? WHERE id = ? AND delta_id = ?",
+                    [input.hunkId, blockId, input.deltaId],
+                  )
+                }
+                return undefined
+              }),
+            )
+          }, mapError("bindBlocksToHunk")),
 
           prepareBlock: Effect.fn("SnapshotBlockStore.prepareBlock")(function* (input) {
             const resourceId = blockResourceId(input.id)
@@ -843,6 +886,30 @@ export class SnapshotBlockStore extends Context.Service<
             }
           }, mapError("findFileHunk")),
 
+          listFileHunks: Effect.fn("SnapshotBlockStore.listFileHunks")(function* (
+            deltaId,
+            offset,
+            limit,
+          ) {
+            const rows = yield* database.all(
+              "SELECT * FROM review_hunks WHERE delta_id = ? ORDER BY ordinal LIMIT ? OFFSET ?",
+              [deltaId, limit, offset],
+            )
+            const hunks = yield* Schema.decodeUnknownEffect(Schema.Array(StoredHunkRow))(rows)
+            return hunks.map((hunk) => ({
+              deltaId: hunk.delta_id,
+              id: hunk.id,
+              ordinal: hunk.ordinal,
+              fingerprint: hunk.fingerprint,
+              header: hunk.header,
+              oldStart: hunk.old_start,
+              oldLines: hunk.old_lines,
+              newStart: hunk.new_start,
+              newLines: hunk.new_lines,
+              lineCount: hunk.line_count,
+            }))
+          }, mapError("listFileHunks")),
+
           visibleBlocks: Effect.fn("SnapshotBlockStore.visibleBlocks")(function* (deltaId) {
             return yield* Schema.decodeUnknownEffect(Schema.Array(VisibleDiffBlock))(
               yield* database.all(
@@ -1073,6 +1140,8 @@ const ManagedResourceRow = Schema.Struct({
   location_value: Schema.String,
   root_id: Schema.NullOr(ResourceRootId),
 })
+
+const ProvisionalBlockBindingRow = Schema.Struct({ hunk_id: Schema.NullOr(Schema.String) })
 
 const BlockPlacementRow = Schema.Struct({ block_id: DiffBlockId })
 
