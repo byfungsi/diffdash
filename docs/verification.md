@@ -148,7 +148,7 @@ record migration-sensitive invariants added during M8.
 | `REPOSITORY-DISCOVERY-001` | `[B]` | `github.test.ts` covers authenticated scopes, owner-scoped search, review requests, and provider failures; `app.browser.test.tsx` covers debounce and actionable search errors. |
 | `REPOSITORY-FAVORITES-001` | `[B]` | `repository-store.test.ts` covers favorite state, search, touch, and hosted-to-local identity-preserving upgrade. |
 | `REPOSITORY-LINK-001` | `[B]` | `repository-linker.test.ts` covers canonical matching checkouts, mismatched remotes, unsupported origins, and no-persist failure behavior. |
-| `REVIEW-CAPTURE-001` | `[B]` | `review-context.test.ts` covers stable hosted snapshots, retry after movement, and rejection of continued inconsistency; `git.test.ts` covers coherent local snapshots. |
+| `REVIEW-CAPTURE-001` | `[B]` | Acquisition suites cover stable metadata-only hosted/local/comparison manifests, retry after revision movement, and rejection of continued inconsistency; complete content remains behind paged inventory and bounded range readers. |
 | `REVIEW-CACHE-001` | `[B]` | Viewed files, walkthroughs, and threads are keyed by immutable review revisions in their store suites and restart E2E. |
 | `CLI-PARSE-001` | `[B]` | `cli-navigation.test.ts` covers public working-tree, repository, PR, and branch commands, relative paths, legacy envelopes, and invalid syntax. |
 | `CLI-FORWARD-001` | `[B]` | `diffdash-cli.test.ts` and `prerequisites.test.ts` cover source, macOS, Linux, and AppImage launcher forwarding without launcher-side parsing. |
@@ -195,7 +195,7 @@ record migration-sensitive invariants added during M8.
 | `GAP-WALKTHROUGH-001` | `[G]` | Cached walkthrough without an installed agent, provider/model provenance, stale-generation cancellation, and viewed-state preservation on regeneration are incomplete. |
 | `GAP-THREAD-001` | `[G]` | Persisted thread creation is line-only; review/file/hunk creation and an explicit carried-forward state are not implemented. |
 | `GAP-WORKTREE-001` | `[G]` | PID reuse, malformed-but-valid lock owners, pre-existing symlink containment, and validation before reserving malicious manifest paths remain incomplete. |
-| `GAP-REVIEW-001` | `[G]` | Visible hosted PR rendering fetches detail and diff separately rather than through the coherent snapshot service. |
+| `GAP-REVIEW-001` | `[G]` | Hosted metadata and streamed patch production still originate from separate provider calls, while Core verifies one immutable revision before publishing the progressive session. |
 | `GAP-REVIEW-002` | `[G]` | Recent reviews and navigation history are process-local and do not restore after restart. |
 | `GAP-CLI-001` | `[G]` | Branch comparison intentionally uses merge-base semantics, not exact target-tip comparison. |
 

@@ -189,10 +189,16 @@ thread-progress, window, and navigation events use one checked best-effort sende
 payload violations remain visible, while a renderer destroyed during delivery cannot fail the
 owning workflow.
 
+Review acquisition returns immutable identity, source detail, and a file count only. It never sends
+raw patches, parsed diffs, or complete file inventories across the host boundary. The renderer opens
+that identity as a progressive session, pages file metadata through `Reviews.inventory`, and reads
+content only through bounded legal ranges. Durable review operations open independent bounded
+readers, so neither operation correctness nor snapshot reachability depends on renderer residency.
+
 | Ownership | Current boundary |
 | --- | --- |
 | Repositories, project workspace, settings, prerequisites, analytics | Named Core operations |
-| Review acquisition, paging, search, viewed state, navigation resolution | Named Core operations |
+| Review metadata acquisition, paged inventory/ranges, search, viewed state, navigation resolution | Named Core operations |
 | Review agents and threads | Named Core operations with host progress callbacks |
 | Walkthrough execution and persistence | `start`, `getOperation`, `cancel`, and `getStored` |
 
