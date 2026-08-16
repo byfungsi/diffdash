@@ -326,6 +326,7 @@ describe("EmbeddedCore", () => {
           core.execute(CoreMethod.appOpenLocalRepositoryFile, {
             rootPath: RepositoryCheckoutPath.make(repositoryPath),
             filePath: RepositoryRelativePath.make("src/local.ts"),
+            target: null,
           }),
         ),
       )
@@ -567,6 +568,19 @@ describe("EmbeddedCore", () => {
         ),
       )
       expect(manifest.detail.files.map((file) => file.path)).toEqual(["feature.txt"])
+
+      writeFileSync(join(repositoryPath, "dirty.txt"), "dirty\n")
+      const openResult = yield* Effect.promise(() =>
+        core.execute(CoreMethod.appOpenLocalRepositoryFile, {
+          rootPath: RepositoryCheckoutPath.make(repositoryPath),
+          filePath: RepositoryRelativePath.make("feature.txt"),
+          target,
+        }),
+      )
+      expect(openResult).toMatchObject({
+        ok: false,
+        error: { _tag: "LocalReviewChangedError" },
+      })
     }),
   )
 

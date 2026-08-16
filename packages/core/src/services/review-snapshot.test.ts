@@ -93,6 +93,8 @@ const layerFor = (
           resolveRevisionRangeComparison: () =>
             Effect.die(new Error("Revision range comparison is unused")),
           resolveLastCommit: () => Effect.die(new Error("Last commit resolution is unused")),
+          validateLocalReviewTarget: () =>
+            Effect.die(new Error("Local review validation is unused")),
           getLocalReviewSnapshot: acquireLocal,
         }),
       ),

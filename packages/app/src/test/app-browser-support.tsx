@@ -6601,7 +6601,11 @@ scenario("localReview", async () => {
   localOpenButton?.click()
 
   await vi.waitFor(() => {
-    expect(calls.openLocalRepositoryFile).toHaveBeenCalledWith(localReview.rootPath, "src/local.ts")
+    expect(calls.openLocalRepositoryFile).toHaveBeenCalledWith(
+      localReview.rootPath,
+      "src/local.ts",
+      expect.objectContaining({ rootPath: localReview.rootPath }),
+    )
   })
 })
 
@@ -7343,9 +7347,7 @@ const installDiffDashApi = (
     searchRepositories: vi.fn<DiffDashApi["hostedRepositories"]["searchRepositories"]>(async () => [
       remoteSearchResult,
     ]),
-    openLocalRepositoryFile: vi.fn<(rootPath: string, filePath: string) => Promise<void>>(
-      async () => undefined,
-    ),
+    openLocalRepositoryFile: vi.fn<DiffDashApi["openLocalRepositoryFile"]>(async () => undefined),
     openRepositoryFile: vi.fn<DiffDashApi["openRepositoryFile"]>(async () => undefined),
     openRepositoryComparisonFile: vi.fn<DiffDashApi["repositoryComparisons"]["openFile"]>(
       async () => undefined,

@@ -42,10 +42,11 @@ const api: DiffDashBridgeApi = {
   installDiffDashCli: () => transport.invoke(InvokeChannel.appInstallDiffDashCli, {}),
   openExternalUrl: (url) => transport.invoke(InvokeChannel.appOpenExternalUrl, { url }),
   openRepositoryFile: (request) => transport.invoke(InvokeChannel.appOpenRepositoryFile, request),
-  openLocalRepositoryFile: (rootPath, filePath) =>
+  openLocalRepositoryFile: (rootPath, filePath, target) =>
     transport.invoke(InvokeChannel.appOpenLocalRepositoryFile, {
       rootPath,
       filePath,
+      target,
     }),
   repositories: {
     list: (query) => transport.invoke(InvokeChannel.listRepositories, { query: query ?? null }),

@@ -101,6 +101,9 @@ export class GitService extends Context.Service<
     readonly resolveLastCommit: (
       localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
+    readonly validateLocalReviewTarget: (
+      target: LocalReviewTarget,
+    ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewChangedError>
     readonly getLocalReviewSnapshot: (
       target: LocalReviewInput,
     ) => Effect.Effect<
@@ -340,19 +343,28 @@ export class GitService extends Context.Service<
           })
         })
 
+        const validateLocalReviewTarget = Effect.fn("GitService.validateLocalReviewTarget")(
+          function* (input: LocalReviewTarget) {
+            const target = yield* canonicalTarget(input)
+            if (Schema.is(RevisionRangeComparison)(target.comparison)) {
+              yield* ensureRevisionRangeCheckout(target.rootPath, target.comparison.headSha).pipe(
+                Effect.catchTag("LocalReviewTargetError", () =>
+                  LocalReviewChangedError.make({ rootPath: target.rootPath }),
+                ),
+                Effect.provideService(ProcessService, processes),
+              )
+            }
+            return target
+          },
+        )
+
         const getLocalReviewDiff = Effect.fn("GitService.getLocalReviewDiff")(function* (
           input: LocalReviewInput,
         ) {
-          const target = yield* canonicalTarget(input)
+          const target = Schema.is(RepositoryCheckoutPath)(input)
+            ? yield* canonicalTarget(input)
+            : yield* validateLocalReviewTarget(input)
           const rootPath = target.rootPath
-          if (Schema.is(RevisionRangeComparison)(target.comparison)) {
-            yield* ensureRevisionRangeCheckout(rootPath, target.comparison.headSha).pipe(
-              Effect.catchTag("LocalReviewTargetError", () =>
-                LocalReviewChangedError.make({ rootPath }),
-              ),
-              Effect.provideService(ProcessService, processes),
-            )
-          }
           const baseSha = yield* localReviewBaseSha(target).pipe(
             Effect.provideService(ProcessService, processes),
           )
@@ -453,6 +465,7 @@ export class GitService extends Context.Service<
           resolveBranchComparison,
           resolveRevisionRangeComparison,
           resolveLastCommit,
+          validateLocalReviewTarget,
           getLocalReviewSnapshot,
         })
       }),
