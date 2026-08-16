@@ -484,7 +484,10 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
   const bunEntrypointPath = join(coreDirectory, manifest.bunEntrypoint)
   await assertFile(bunEntrypointPath)
   const bunEntrypoint = await readFile(bunEntrypointPath)
-  expect(manifest.buildId).toMatch(/^core-e2e-[a-f0-9]{40}$/u)
+  const version = await desktopPackageVersion()
+  expect(manifest.buildId).toBe(
+    `core-${version}-e2e-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 40)}`,
+  )
   expect(manifest.entrypoint).toBe("core.mjs")
   expect(manifest.entrypointSha256).toBe(createHash("sha256").update(entrypoint).digest("hex"))
   expect(manifest.bunEntrypointSha256).toBe(
@@ -499,6 +502,22 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
   expect(updateConfig).toMatch(/^provider:\s*generic\s*$/m)
   expect(updateConfig).toMatch(/^url:\s*https:\/\/download\.usediffdash\.com\/updates\/stable\s*$/m)
   expect(updateConfig).toMatch(/^updaterCacheDirName:\s*\S+\s*$/m)
+}
+
+const desktopPackageVersion = async (): Promise<string> => {
+  const value: unknown = JSON.parse(
+    await readFile(join(process.cwd(), "../desktop/package.json"), "utf8"),
+  )
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("version" in value) ||
+    typeof value.version !== "string" ||
+    value.version.length === 0
+  ) {
+    throw new Error("Desktop package version is invalid")
+  }
+  return value.version
 }
 
 const parseCoreArtifactManifest = (text: string) => {
