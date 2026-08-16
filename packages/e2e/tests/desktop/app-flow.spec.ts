@@ -1113,11 +1113,12 @@ for (const fixture of [
       const window = await app.firstWindow()
       await dismissOnboardingIfPresent(window)
       await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-      const gutterNumber = window
-        .locator("diffs-container [data-column-number]:visible")
-        .filter({ hasText: "1" })
-        .first()
-      const composer = await openGutterThreadComposer(window, gutterNumber)
+      const diffCard = window.locator('[data-diff-card-path="src/local.ts"]')
+      await expect(diffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
+      const gutterNumber = diffCard
+        .locator('diffs-container [data-line-type="change-addition"][data-column-number]:visible')
+        .last()
+      const composer = await openGutterThreadComposer(window, gutterNumber, diffCard)
       await composer.fill("Review this line")
       await window.getByRole("button", { name: "Comment" }).click()
       await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
@@ -1512,8 +1513,12 @@ const dismissOnboardingIfPresent = async (
   }
 }
 
-const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
-  const utility = window.locator("diffs-container [data-utility-button]").first()
+const openGutterThreadComposer = async (
+  window: Page,
+  gutterNumber: Locator,
+  utilityScope = window.locator("body"),
+) => {
+  const utility = utilityScope.locator("diffs-container [data-utility-button]").first()
   const composer = window.getByRole("textbox", { name: "Thread message" })
   await expect
     .poll(
@@ -2042,7 +2047,17 @@ if (joined.includes("diff --numstat -z --no-ext-diff --no-color HEAD --")) {
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+if (joined.includes("diff --raw -z --full-index --no-abbrev --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
+  process.stdout.write(":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\\0src/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --numstat -z --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
+  process.stdout.write("1\\t1\\tsrc/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff --no-color bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
@@ -2055,7 +2070,7 @@ if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff cccccccccccccccccccccccccccccccccccccccc --")) {
+if (joined.includes("diff --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",

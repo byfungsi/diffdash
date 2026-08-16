@@ -223,7 +223,9 @@ export function AppShell() {
   const remoteSearchAtom = remoteRepositorySearchAtom(remoteSearchKey)
   const selectedRepoPullRequestsAtom = pullRequestsAtom(selectedRepoKey)
   const selectedWorkingTreeKey =
-    selectedRepo?.localPath === null || selectedRepo?.localPath === undefined
+    selectedReview !== null ||
+    selectedRepo?.localPath === null ||
+    selectedRepo?.localPath === undefined
       ? ""
       : serializeLocalReviewAtomKey(workingTreeReviewTarget(selectedRepo.localPath))
   const selectedWorkingTreeAtom = localReviewManifestAtom(selectedWorkingTreeKey)
