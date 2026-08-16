@@ -8,15 +8,7 @@ import type { AgentRun } from "@diffdash/domain/agent-run"
 import type { AgentRunId } from "@diffdash/domain/agent-run-id"
 import { Context, Effect, Layer, Option } from "effect"
 
-import {
-  CoreMethod,
-  type CoreMethod as CoreMethodType,
-  type CoreMethodInput,
-  type CoreOperationFailure,
-  type CoreOperationOptions,
-  type CoreOperationOutput,
-  type CoreThreadResolutionFailure,
-} from "./core-contract"
+import { CoreMethod, type CoreMethodInput, type CoreThreadResolutionFailure } from "./core-contract"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
@@ -48,11 +40,7 @@ export type CoreReviewAgentStartError =
 
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
-  readonly execute: <Method extends CoreMethodType>(
-    method: Method,
-    input: CoreMethodInput<Method>,
-    options?: CoreOperationOptions,
-  ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
+  readonly methods: OperationHandlers
   readonly walkthroughs: WalkthroughOperations
   readonly reviewAgents: {
     readonly start: (
@@ -138,17 +126,6 @@ export const coreOperationLayer = Layer.effect(
       ...viewedFileHandlers,
     } satisfies OperationHandlers
 
-    const execute: CoreOperationServiceShape["execute"] = (method, input, options = {}) => {
-      const handler = handlers[method]
-      // SAFETY: OperationHandlers preserves the method/input/output correlation; indexed access
-      // widens that relationship before TypeScript can invoke the selected generic member.
-      // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: The indexed handler retains the method correlation that TypeScript loses during generic lookup.
-      return handler(input as never, options) as Effect.Effect<
-        CoreOperationOutput<typeof method>,
-        CoreOperationFailure<typeof method>
-      >
-    }
-
     return CoreOperationService.of({
       start: Effect.gen(function* () {
         yield* reviewAgentOperations.recoverInterrupted.pipe(
@@ -216,7 +193,7 @@ export const coreOperationLayer = Layer.effect(
           ),
         )
       }),
-      execute,
+      methods: handlers,
       walkthroughs,
       reviewAgents: {
         start: startReviewAgent,

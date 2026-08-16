@@ -4,7 +4,6 @@ import { AppStateReadFailure } from "@diffdash/core-rpc/failure"
 import { AppState } from "@diffdash/settings/app-state"
 import { Effect } from "effect"
 
-import { CoreMethod } from "./core-contract"
 import { CoreRuntimeServices } from "./core-runtime-services"
 
 /** Native Effect RPC handlers for business operations already owned by Core. */
@@ -37,7 +36,7 @@ export const coreBusinessRpcHandlersWithRuntimeLayer = AppStateBusinessRpcs.toLa
     return {
       "AppState.get": (request) =>
         runtime.operations.pipe(
-          Effect.flatMap((operations) => operations.execute(CoreMethod.appStateGet, {})),
+          Effect.flatMap((operations) => operations.methods["AppState.get"]({}, {})),
           Effect.mapError(() =>
             AppStateReadFailure.make({
               code: "APP_STATE_READ_FAILED",
@@ -62,7 +61,7 @@ export const coreAppStateUpdateRpcHandlersWithRuntimeLayer = AppStateUpdateRpcs.
       "AppState.update": (request) =>
         runtime.operations.pipe(
           Effect.flatMap((operations) =>
-            operations.execute(CoreMethod.appStateUpdate, { state: request.state }),
+            operations.methods["AppState.update"]({ state: request.state }, {}),
           ),
           Effect.mapError(() => ({
             _tag: "CoreApplicationFailure" as const,

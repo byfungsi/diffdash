@@ -74,6 +74,7 @@ import { CoreLifecycle, coreLifecycleLayer } from "./core-lifecycle"
 import { CoreOperationService } from "./core-operation-service"
 import { coreWalkthroughRpcSocketHostLayer } from "./core-rpc-socket-host"
 import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
+import type { OperationHandlers } from "./operations/operation-handlers"
 
 const requestIdentity = {
   applicationInstanceId: ApplicationInstanceId.make("app-handler"),
@@ -174,11 +175,61 @@ const unusedReviewAgents = {
   cancel: () => Effect.die("Unexpected review-agent cancellation"),
 }
 
+const unavailableMethod = () => Effect.die("Unexpected named Core operation")
+const unavailableMethods = {
+  "Analytics.capture": unavailableMethod,
+  "Analytics.start": unavailableMethod,
+  "AgentProviders.getCatalog": unavailableMethod,
+  "Prerequisites.get": unavailableMethod,
+  "Prerequisites.installDiffDashCli": unavailableMethod,
+  "FileNavigation.resolveLocalRepositoryFile": unavailableMethod,
+  "FileNavigation.resolveRepositoryComparisonFile": unavailableMethod,
+  "FileNavigation.resolveHostedReviewFile": unavailableMethod,
+  "AppState.get": unavailableMethod,
+  "AppState.update": unavailableMethod,
+  "GitProviders.list": unavailableMethod,
+  "HostedReviews.submitDecision": unavailableMethod,
+  "HostedReviews.getDecision": unavailableMethod,
+  "HostedReviews.list": unavailableMethod,
+  "HostedReviews.listAssigned": unavailableMethod,
+  "GitProviders.listSearchScopes": unavailableMethod,
+  "GitProviders.searchRepositories": unavailableMethod,
+  "LocalReviews.resolveBranch": unavailableMethod,
+  "LocalReviews.resolveLastCommit": unavailableMethod,
+  "RepositoryComparisons.resolve": unavailableMethod,
+  "ReviewSnapshots.acquireHosted": unavailableMethod,
+  "ReviewSnapshots.acquireLocal": unavailableMethod,
+  "ReviewSnapshots.acquireRepositoryComparison": unavailableMethod,
+  "Repositories.favoriteRemote": unavailableMethod,
+  "Repositories.forget": unavailableMethod,
+  "Repositories.install": unavailableMethod,
+  "Repositories.link": unavailableMethod,
+  "Repositories.list": unavailableMethod,
+  "Repositories.openProject": unavailableMethod,
+  "Repositories.repairIdentities": unavailableMethod,
+  "Repositories.setFavorite": unavailableMethod,
+  "ProjectWorkspace.get": unavailableMethod,
+  "ProjectWorkspace.save": unavailableMethod,
+  "ReviewThreads.addUserMessage": unavailableMethod,
+  "ReviewThreads.create": unavailableMethod,
+  "ReviewThreads.get": unavailableMethod,
+  "ReviewThreads.list": unavailableMethod,
+  "ReviewThreads.runAgent": unavailableMethod,
+  "Settings.get": unavailableMethod,
+  "Settings.update": unavailableMethod,
+  "ViewedFiles.listHosted": unavailableMethod,
+  "ViewedFiles.listLocal": unavailableMethod,
+  "ViewedFiles.setHosted": unavailableMethod,
+  "ViewedFiles.setLocal": unavailableMethod,
+  "ViewedFiles.listRepositoryComparison": unavailableMethod,
+  "ViewedFiles.setRepositoryComparison": unavailableMethod,
+} satisfies OperationHandlers
+
 const operationsLayer = Layer.succeed(
   CoreOperationService,
   CoreOperationService.of({
     start: Effect.void,
-    execute: () => Effect.die("Unexpected generic Core operation"),
+    methods: unavailableMethods,
     reviewAgents: unusedReviewAgents,
     walkthroughs: {
       start: () => Effect.die("Unexpected legacy walkthrough start"),
@@ -375,7 +426,7 @@ describe("Core walkthrough RPC handlers", () => {
           CoreOperationService,
           CoreOperationService.of({
             start: Effect.void,
-            execute: () => Effect.die("Unexpected generic Core operation"),
+            methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
               start: () => Effect.die("Unexpected legacy walkthrough start"),
@@ -463,7 +514,7 @@ describe("Core walkthrough RPC handlers", () => {
         CoreOperationService,
         CoreOperationService.of({
           start: Effect.void,
-          execute: () => Effect.die("Unexpected generic Core operation"),
+          methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
             start: () => Effect.die("Unexpected legacy walkthrough start"),
@@ -555,7 +606,7 @@ describe("Core walkthrough RPC handlers", () => {
           const workers = yield* FiberSet.make<void, never>()
           return CoreOperationService.of({
             start: Effect.void,
-            execute: () => Effect.die("Unexpected generic Core operation"),
+            methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
               start: () => Effect.die("Unexpected legacy walkthrough start"),
@@ -658,7 +709,7 @@ describe("Core walkthrough RPC handlers", () => {
         CoreOperationService,
         CoreOperationService.of({
           start: Effect.void,
-          execute: () => Effect.die("Unexpected generic Core operation"),
+          methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
             start: () => Effect.die("Unexpected legacy walkthrough start"),
