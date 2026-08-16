@@ -306,8 +306,6 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
         Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.acquireLocal, undefined, [
           null,
         ]),
-        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.getPage, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.search, undefined, [null]),
         Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.get, undefined, [null]),
         Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.generate, undefined, [
           null,
@@ -337,8 +335,6 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       "hostedRepositories:search",
       "reviewSnapshots:acquireHosted",
       "reviewSnapshots:acquireLocal",
-      "reviewSnapshots:getPage",
-      "reviewSnapshots:search",
       "localWalkthroughs:get",
       "localWalkthroughs:generate",
     ]

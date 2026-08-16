@@ -8,7 +8,6 @@ import {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
 } from "@diffdash/domain/review-thread"
-import { ReviewSnapshotSearchResultTooLargeError } from "@diffdash/core"
 import { Match, Option, Schema } from "effect"
 
 type TransportFailure = Schema.Json | object | bigint | symbol | undefined
@@ -28,13 +27,6 @@ export const toPublicIpcError = <A>(error: A, operation: string) => {
       transportError(
         "INVALID_REVIEW_ANCHOR",
         "Review thread anchor does not exist in the expected review revision.",
-        operation,
-      ),
-    ),
-    Match.when(Schema.is(ReviewSnapshotSearchResultTooLargeError), () =>
-      transportError(
-        "PAYLOAD_TOO_LARGE",
-        "One review search result exceeds the bounded response size.",
         operation,
       ),
     ),

@@ -27,8 +27,6 @@ export const defineReviewHandlers = (
   handlers.defineCore(CoreMethod.acquireHostedReviewSnapshot, runtime.execute)
   handlers.defineCore(CoreMethod.acquireLocalReviewSnapshot, runtime.execute)
   handlers.defineCore(CoreMethod.acquireRepositoryComparisonSnapshot, runtime.execute)
-  handlers.defineCore(CoreMethod.getReviewSnapshotPage, runtime.execute)
-  handlers.defineCore(CoreMethod.searchReviewSnapshot, runtime.execute)
   handlers.defineCore(CoreMethod.listViewedFiles, runtime.execute)
   handlers.defineCore(CoreMethod.setViewedFile, runtime.execute)
   handlers.defineCore(CoreMethod.listLocalViewedFiles, runtime.execute)

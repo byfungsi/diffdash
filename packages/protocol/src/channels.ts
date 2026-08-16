@@ -25,8 +25,6 @@ export const InvokeChannel = {
   acquireHostedReviewSnapshot: "reviewSnapshots:acquireHosted",
   acquireLocalReviewSnapshot: "reviewSnapshots:acquireLocal",
   acquireRepositoryComparisonSnapshot: "reviewSnapshots:acquireRepositoryComparison",
-  getReviewSnapshotPage: "reviewSnapshots:getPage",
-  searchReviewSnapshot: "reviewSnapshots:search",
   openProgressiveReviewSession: "progressiveReviews:openSession",
   getProgressiveReviewSession: "progressiveReviews:currentSession",
   closeProgressiveReviewSession: "progressiveReviews:closeSession",

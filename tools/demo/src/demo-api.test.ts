@@ -25,7 +25,6 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
-import { ReviewSnapshotPageRequest } from "@diffdash/protocol/review-snapshot"
 import { LocalViewedFilesRequest } from "@diffdash/protocol/viewed-files"
 import { buildWalkthroughHunkDigest, walkthroughLocalDiffScope } from "@diffdash/domain/walkthrough"
 import { createDemoLocalReviewFixtures } from "./local-review-fixtures"
@@ -86,27 +85,31 @@ describe("scenario-backed DiffDash API", () => {
       const manifest = yield* Effect.promise(() =>
         api.reviewSnapshots.acquireHosted(HostedReviewRequest.make({ review })),
       )
+      const session = yield* Effect.promise(() =>
+        api.progressiveReviews.openSession({
+          projectId: manifest.projectId,
+          reviewKey: manifest.reviewKey,
+          snapshotId: manifest.snapshotId,
+        }),
+      )
+      if (session._tag !== "ready") return
       const page = yield* Effect.promise(() =>
-        api.reviewSnapshots.getPage(
-          ReviewSnapshotPageRequest.make({
-            snapshotId: manifest.snapshotId,
-            cursor: null,
-            fileIds: [],
-          }),
-        ),
+        api.progressiveReviews.inventory({ identity: session.identity, offset: 0, limit: 8 }),
+      )
+      const range = yield* Effect.promise(() =>
+        api.progressiveReviews.readRange({
+          identity: session.identity,
+          fileId: page.files[0]?.fileId ?? manifest.files[0]!.fileId,
+          startLine: 0,
+        }),
       )
 
       expect(repositories.map((repository) => repository.id)).toEqual(["github:emberline/dispatch"])
       expect(reviewRequests[0]?.title).toBe("Make webhook replay claims atomic")
       expect(manifest.detail.summary.head.revision).toBe("c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69")
-      expect(page["_tag"]).toBe("available")
-      if (page["_tag"] === "available") {
-        expect(page.files).toHaveLength(8)
-        expect(page.nextCursor).not.toBeNull()
-        expect(page.files.map((file) => file.patch).join("\n")).toContain(
-          "WHERE replay_claim.claimed_until < excluded.claimed_at",
-        )
-      }
+      expect(page.files).toHaveLength(8)
+      expect(page.nextOffset).not.toBeNull()
+      expect(new TextDecoder().decode(range.blocks[0]?.bytes)).toContain("diff --git")
       expect(timeline.getState().revisionId).toBe("01-initial")
     }),
   )

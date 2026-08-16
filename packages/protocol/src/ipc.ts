@@ -59,12 +59,6 @@ import {
   AcquireLocalReviewSnapshotRequest,
   AcquireRepositoryComparisonSnapshotRequest,
   OpenRepositoryComparisonFileRequest,
-  REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
-  REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
   ResolvedRepositoryComparison,
   ResolveRepositoryComparisonRequest,
   RepositoryComparisonWalkthroughRequest,
@@ -295,24 +289,6 @@ export const InvokeContract = {
     AcquireRepositoryComparisonSnapshotRequest,
     RepositoryComparisonSnapshotManifest,
     { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
-  ),
-  [InvokeChannel.getReviewSnapshotPage]: defineInvoke(
-    InvokeChannel.getReviewSnapshotPage,
-    ReviewSnapshotPageRequest,
-    ReviewSnapshotPageResponse,
-    {
-      maxRequestBytes: 64 * KIB,
-      maxResponseBytes: REVIEW_SNAPSHOT_PAGE_MAX_BYTES + KIB,
-    },
-  ),
-  [InvokeChannel.searchReviewSnapshot]: defineInvoke(
-    InvokeChannel.searchReviewSnapshot,
-    ReviewSnapshotSearchRequest,
-    ReviewSnapshotSearchResponse,
-    {
-      maxRequestBytes: 64 * KIB,
-      maxResponseBytes: REVIEW_SNAPSHOT_SEARCH_MAX_BYTES + KIB,
-    },
   ),
   [InvokeChannel.openProgressiveReviewSession]: defineInvoke(
     InvokeChannel.openProgressiveReviewSession,

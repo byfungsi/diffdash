@@ -10,7 +10,6 @@ import {
   ReviewPaneSettings,
 } from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
-import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -93,15 +92,6 @@ import {
   DiffDashCliInstallResult,
 } from "@diffdash/protocol/prerequisites"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
-import {
-  REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
-  ReviewSnapshotExpired,
-  ReviewSnapshotPageAvailable,
-  ReviewSnapshotPageCursor,
-  ReviewSnapshotSearchAvailable,
-  ReviewSnapshotSearchMatch,
-  ReviewSnapshotSearchMatchId,
-} from "@diffdash/protocol/review-snapshot"
 import {
   DisposedReviewSession,
   ReadyReviewSession,
@@ -911,70 +901,6 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       acquireRepositoryComparison: async () => {
         throw new Error("Repository comparisons are unavailable in the demo runtime")
       },
-      getPage: async (request) => {
-        const snapshot = snapshotCache.get(request.snapshotId)
-        if (snapshot === undefined) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "evicted",
-          })
-        }
-        const files =
-          request.fileIds.length === 0
-            ? snapshot.parsedDiff.files
-            : request.fileIds.flatMap((fileId) => {
-                const file = snapshot.parsedDiff.files.find(
-                  (candidate) => candidate.fileId === fileId,
-                )
-                return file === undefined ? [] : [file]
-              })
-        if (request.fileIds.length > 0 && files.length !== request.fileIds.length) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
-        }
-        const cursorMatch =
-          request.cursor === null ? null : /^page:v1:([0-9]+):00000000$/.exec(request.cursor)
-        if (request.cursor !== null && cursorMatch === null) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
-        }
-        const offset = cursorMatch === null ? 0 : Number(cursorMatch[1])
-        if (!Number.isSafeInteger(offset) || offset < 0 || offset > files.length) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
-        }
-        const nextOffset = Math.min(files.length, offset + REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)
-        return ReviewSnapshotPageAvailable.make({
-          snapshotId: request.snapshotId,
-          files: files.slice(offset, nextOffset),
-          nextCursor:
-            nextOffset < files.length
-              ? ReviewSnapshotPageCursor.make(`page:v1:${nextOffset}:00000000`)
-              : null,
-        })
-      },
-      search: async (request) => {
-        const snapshot = snapshotCache.get(request.snapshotId)
-        if (snapshot === undefined || request.cursor !== null) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: snapshot === undefined ? "evicted" : "mismatched",
-          })
-        }
-        const matches = searchSnapshot(snapshot, request.query)
-        return ReviewSnapshotSearchAvailable.make({
-          snapshotId: request.snapshotId,
-          matches: matches.slice(0, request.limit),
-          totalMatches: matches.length,
-          nextCursor: null,
-        })
-      },
     },
     progressiveReviews: {
       openSession: async (request) =>
@@ -1052,7 +978,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         const page = await api.progressiveReviews.inventory({
           identity: request.identity,
           offset: 0,
-          limit: REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
+          limit: 8,
         })
         const file = page.files.find(({ fileId }) => fileId === request.fileId)
         if (file === undefined) throw new Error("Demo review target is unavailable")
@@ -1247,47 +1173,3 @@ const cloneSettings = (settings: AISettings) =>
     }),
     selections: { ...settings.selections },
   })
-
-const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
-  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
-  const matches: ReviewSnapshotSearchMatch[] = []
-  for (const file of snapshot.parsedDiff.files) {
-    for (const hunk of file.hunks) {
-      for (const line of projectDiffHunkLines(hunk)) {
-        if (line.kind === "metadata") continue
-        expression.lastIndex = 0
-        for (
-          let match = expression.exec(line.content);
-          match !== null;
-          match = expression.exec(line.content)
-        ) {
-          matches.push(
-            ReviewSnapshotSearchMatch.make({
-              id: ReviewSnapshotSearchMatchId.make(
-                `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
-              ),
-              fileId: file.fileId,
-              filePath: file.path,
-              reviewKey: file.reviewKey,
-              hunkId: hunk.id,
-              hunkFingerprint: hunk.fingerprint,
-              hunkLineIndex: line.index,
-              newLineNumber: line.newLineNumber,
-              oldLineNumber: line.oldLineNumber,
-              side:
-                line.kind === "context"
-                  ? "context"
-                  : line.kind === "deletion"
-                    ? "deletions"
-                    : "additions",
-              text: line.content,
-              start: match.index,
-              end: match.index + match[0].length,
-            }),
-          )
-        }
-      }
-    }
-  }
-  return matches
-}

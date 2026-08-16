@@ -61,7 +61,6 @@ import type { PrerequisiteInstallError } from "./services/prerequisites"
 import { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 import { RepositoryLinkError } from "./services/repository-linker"
 import { ReviewContextError } from "./services/git-provider"
-import type { ReviewSnapshotSearchResultTooLargeError } from "./services/review-snapshot-pagination"
 
 /** Closed business-operation catalog implemented by DiffDash Core. */
 export const CoreMethod = {
@@ -88,8 +87,6 @@ export const CoreMethod = {
   acquireHostedReviewSnapshot: "ReviewSnapshots.acquireHosted",
   acquireLocalReviewSnapshot: "ReviewSnapshots.acquireLocal",
   acquireRepositoryComparisonSnapshot: "ReviewSnapshots.acquireRepositoryComparison",
-  getReviewSnapshotPage: "ReviewSnapshots.getPage",
-  searchReviewSnapshot: "ReviewSnapshots.search",
   favoriteRemoteRepository: "Repositories.favoriteRemote",
   forgetRepository: "Repositories.forget",
   installRepository: "Repositories.install",
@@ -144,8 +141,6 @@ export const CoreMethodChannel = {
   [CoreMethod.acquireLocalReviewSnapshot]: InvokeChannel.acquireLocalReviewSnapshot,
   [CoreMethod.acquireRepositoryComparisonSnapshot]:
     InvokeChannel.acquireRepositoryComparisonSnapshot,
-  [CoreMethod.getReviewSnapshotPage]: InvokeChannel.getReviewSnapshotPage,
-  [CoreMethod.searchReviewSnapshot]: InvokeChannel.searchReviewSnapshot,
   [CoreMethod.favoriteRemoteRepository]: InvokeChannel.favoriteRemoteRepository,
   [CoreMethod.forgetRepository]: InvokeChannel.forgetRepository,
   [CoreMethod.installRepository]: InvokeChannel.installRepository,
@@ -285,8 +280,6 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
   readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError
   readonly [CoreMethod.acquireRepositoryComparisonSnapshot]: RepositoryComparisonSourceError
-  readonly [CoreMethod.getReviewSnapshotPage]: never
-  readonly [CoreMethod.searchReviewSnapshot]: ReviewSnapshotSearchResultTooLargeError
   readonly [CoreMethod.favoriteRemoteRepository]: RepositoryLinkError
   readonly [CoreMethod.forgetRepository]: RepositoryLinkError
   readonly [CoreMethod.installRepository]: RepositoryLinkError

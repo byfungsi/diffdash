@@ -89,10 +89,6 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
       "ReviewSnapshots.acquireRepositoryComparison": (
         request: ApplicationRpcRequest<"ReviewSnapshots.acquireRepositoryComparison">,
       ) => execute("ReviewSnapshots.acquireRepositoryComparison", request),
-      "ReviewSnapshots.getPage": (request: ApplicationRpcRequest<"ReviewSnapshots.getPage">) =>
-        execute("ReviewSnapshots.getPage", request),
-      "ReviewSnapshots.search": (request: ApplicationRpcRequest<"ReviewSnapshots.search">) =>
-        execute("ReviewSnapshots.search", request),
       "Repositories.favoriteRemote": (
         request: ApplicationRpcRequest<"Repositories.favoriteRemote">,
       ) => execute("Repositories.favoriteRemote", request),

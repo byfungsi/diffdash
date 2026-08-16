@@ -1,6 +1,5 @@
 import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AgentCapability, AgentModelQuality, AISettings } from "@diffdash/domain/ai-settings"
-import { ParsedDiffFile } from "@diffdash/domain/diff"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
   GitFileRevision,
@@ -36,17 +35,12 @@ import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
   RepositoryComparisonSnapshotManifest,
-  ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
-  ReviewFileId,
   ReviewFilePatchHash,
-  ReviewHunkFingerprint,
-  ReviewHunkId,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
-  ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
 import {
   ReviewThread,
@@ -57,7 +51,7 @@ import {
   MarkdownBody,
 } from "@diffdash/domain/review-thread"
 import { WebUrl } from "@diffdash/domain/web-url"
-import { Effect, Schema } from "effect"
+import { Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
@@ -221,60 +215,6 @@ const ResolvedRepositoryComparison = Schema.Struct({
   repo: Repo,
   target: RepositoryComparisonTarget,
 })
-const ReviewSnapshotPageCursor = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^page:v1:[0-9]+:[0-9a-f]{8}$/u)),
-  Schema.brand("ReviewSnapshotPageCursor"),
-)
-const ReviewSnapshotSearchCursor = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^search:v1:[0-9]+:[0-9a-f]{8}$/u)),
-  Schema.brand("ReviewSnapshotSearchCursor"),
-)
-const ReviewSnapshotExpired = Schema.TaggedStruct("expired", {
-  snapshotId: ReviewSnapshotId,
-  reason: Schema.Literals(["expired", "evicted", "mismatched"]),
-})
-const ReviewSnapshotPageResponse = Schema.Union([
-  Schema.TaggedStruct("available", {
-    snapshotId: ReviewSnapshotId,
-    files: Schema.Array(ParsedDiffFile).pipe(Schema.check(Schema.isMaxLength(8))),
-    nextCursor: Schema.NullOr(ReviewSnapshotPageCursor),
-  }),
-  Schema.TaggedStruct("fileTooLarge", {
-    snapshotId: ReviewSnapshotId,
-    file: ReviewSnapshotFileInventory,
-    maxResponseBytes: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
-  }),
-  ReviewSnapshotExpired,
-])
-const ReviewSnapshotSearchMatchId = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(1)),
-  Schema.brand("ReviewSnapshotSearchMatchId"),
-)
-const ReviewSnapshotSearchResponse = Schema.Union([
-  Schema.TaggedStruct("available", {
-    snapshotId: ReviewSnapshotId,
-    matches: Schema.Array(
-      Schema.Struct({
-        id: ReviewSnapshotSearchMatchId,
-        fileId: ReviewFileId,
-        filePath: RepositoryRelativePath,
-        reviewKey: ReviewKey,
-        hunkId: ReviewHunkId,
-        hunkFingerprint: ReviewHunkFingerprint,
-        hunkLineIndex: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-        newLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
-        oldLineNumber: Schema.NullOr(Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))),
-        side: Schema.Literals(["additions", "context", "deletions"]),
-        text: Schema.String,
-        start: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-        end: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-      }),
-    ).pipe(Schema.check(Schema.isMaxLength(200))),
-    totalMatches: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-    nextCursor: Schema.NullOr(ReviewSnapshotSearchCursor),
-  }),
-  ReviewSnapshotExpired,
-])
 const ViewedFileRecord = Schema.Struct({ reviewKey: ReviewKey, patchHash: ReviewFilePatchHash })
 
 /** Stable public failure code emitted by an application RPC adapter. */
@@ -508,34 +448,6 @@ export const ReviewSnapshotsAcquireRepositoryComparisonRpc = applicationRpc(
   RepositoryComparisonSnapshotManifest,
   read(60_000, 8 * MIB),
 )
-export const ReviewSnapshotsGetPageRpc = applicationRpc(
-  "ReviewSnapshots.getPage",
-  withContext({
-    snapshotId: ReviewSnapshotId,
-    cursor: Schema.NullOr(ReviewSnapshotPageCursor),
-    fileIds: Schema.Array(ReviewFileId).pipe(Schema.check(Schema.isMaxLength(8))),
-  }),
-  ReviewSnapshotPageResponse,
-  read(10_000, 513 * KIB),
-)
-export const ReviewSnapshotsSearchRpc = applicationRpc(
-  "ReviewSnapshots.search",
-  withContext({
-    snapshotId: ReviewSnapshotId,
-    query: Schema.String.pipe(
-      Schema.check(Schema.isMinLength(1)),
-      Schema.check(Schema.isMaxLength(512)),
-    ),
-    cursor: Schema.NullOr(ReviewSnapshotSearchCursor),
-    limit: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
-    anchor: Schema.NullOr(Schema.TaggedStruct("file", { fileId: ReviewFileId })).pipe(
-      Schema.withConstructorDefault(Effect.succeed(null)),
-      Schema.withDecodingDefault(Effect.succeed(null)),
-    ),
-  }),
-  ReviewSnapshotSearchResponse,
-  read(10_000, 257 * KIB),
-)
 export const RepositoriesFavoriteRemoteRpc = applicationRpc(
   "Repositories.favoriteRemote",
   withContext({ repository: HostedRepository }),
@@ -713,8 +625,6 @@ export const CoreApplicationRpcs = RpcGroup.make(
   ReviewSnapshotsAcquireHostedRpc,
   ReviewSnapshotsAcquireLocalRpc,
   ReviewSnapshotsAcquireRepositoryComparisonRpc,
-  ReviewSnapshotsGetPageRpc,
-  ReviewSnapshotsSearchRpc,
   RepositoriesFavoriteRemoteRpc,
   RepositoriesForgetRpc,
   RepositoriesInstallRpc,

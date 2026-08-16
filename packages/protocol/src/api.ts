@@ -60,10 +60,6 @@ import type {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import type {
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
   ResolvedRepositoryComparison,
   OpenRepositoryComparisonFileRequest,
 } from "./review-snapshot"
@@ -184,8 +180,6 @@ export interface DiffDashApi {
     readonly acquireRepositoryComparison: (
       target: RepositoryComparisonTarget,
     ) => Promise<RepositoryComparisonSnapshotManifest>
-    readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
-    readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
   }
   readonly progressiveReviews: ProgressiveReviewApi
   readonly viewedFiles: {

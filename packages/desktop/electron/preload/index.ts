@@ -124,8 +124,6 @@ const api: DiffDashBridgeApi = {
       transport.invoke(InvokeChannel.acquireLocalReviewSnapshot, { target }),
     acquireRepositoryComparison: (target) =>
       transport.invoke(InvokeChannel.acquireRepositoryComparisonSnapshot, { target }),
-    getPage: (request) => transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
-    search: (request) => transport.invoke(InvokeChannel.searchReviewSnapshot, request),
   },
   progressiveReviews: {
     openSession: (request) => transport.invoke(InvokeChannel.openProgressiveReviewSession, request),

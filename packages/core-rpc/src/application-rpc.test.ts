@@ -30,8 +30,6 @@ const coreMethods = [
   "ReviewSnapshots.acquireHosted",
   "ReviewSnapshots.acquireLocal",
   "ReviewSnapshots.acquireRepositoryComparison",
-  "ReviewSnapshots.getPage",
-  "ReviewSnapshots.search",
   "Repositories.favoriteRemote",
   "Repositories.forget",
   "Repositories.install",
@@ -64,8 +62,8 @@ describe("Core application RPC catalog", () => {
       .merge(ReviewAgentBusinessRpcs)
     const coreDeclarations = coreMethods.map((method) => declarations.requests.get(method))
 
-    expect(coreMethods).toHaveLength(48)
-    expect(new Set(coreMethods)).toHaveLength(48)
+    expect(coreMethods).toHaveLength(46)
+    expect(new Set(coreMethods)).toHaveLength(46)
     expect(coreDeclarations.every((declaration) => declaration !== undefined)).toBe(true)
     expect(
       coreDeclarations.every(
