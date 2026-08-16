@@ -11,17 +11,21 @@ import {
   ReviewTurnRejectedError,
   ReviewTurnTargetError,
 } from "@diffdash/persistence/review-turn-store"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 
-import { CoreOperationService, type CoreReviewAgentStartError } from "./core-operation-service"
+import type { CoreReviewAgentStartError } from "./core-operation-service"
+import { CoreRuntimeServices } from "./core-runtime-services"
+import { coreRuntimeOperationsLayer } from "./core-runtime-services"
 
 /** Core-backed handlers for durable review-agent acceptance, state, and cancellation. */
-export const coreReviewAgentRpcHandlersLayer = ReviewAgentBusinessRpcs.toLayer(
+export const coreReviewAgentRpcHandlersWithRuntimeLayer = ReviewAgentBusinessRpcs.toLayer(
   Effect.gen(function* () {
-    const core = yield* CoreOperationService
+    const runtime = yield* CoreRuntimeServices
+    const core = runtime.operations
     return {
-      "ReviewAgents.start": (request) =>
-        core.reviewAgents.start(request).pipe(
+      "ReviewThreads.runAgent": (request) =>
+        core.pipe(
+          Effect.flatMap((operations) => operations.reviewAgents.start(request)),
           Effect.map((runId) =>
             ReviewAgentOperationAccepted.make({
               applicationInstanceId: request.applicationInstanceId,
@@ -33,7 +37,8 @@ export const coreReviewAgentRpcHandlersLayer = ReviewAgentBusinessRpcs.toLayer(
           Effect.mapError((error) => startFailure(request, error)),
         ),
       "ReviewAgents.getOperation": (request) =>
-        core.reviewAgents.getOperation(request.runId).pipe(
+        core.pipe(
+          Effect.flatMap((operations) => operations.reviewAgents.getOperation(request.runId)),
           Effect.mapError(() => getOperationFailure(request, false)),
           Effect.flatMap(
             Option.match({
@@ -43,7 +48,8 @@ export const coreReviewAgentRpcHandlersLayer = ReviewAgentBusinessRpcs.toLayer(
           ),
         ),
       "ReviewAgents.cancel": (request) =>
-        core.reviewAgents.cancel(request.runId).pipe(
+        core.pipe(
+          Effect.flatMap((operations) => operations.reviewAgents.cancel(request.runId)),
           Effect.mapError(() => cancelFailure(request, false)),
           Effect.flatMap(
             Option.match({
@@ -56,13 +62,18 @@ export const coreReviewAgentRpcHandlersLayer = ReviewAgentBusinessRpcs.toLayer(
   }),
 )
 
+/** Review-agent handlers backed directly by an already-composed operation service. */
+export const coreReviewAgentRpcHandlersLayer = coreReviewAgentRpcHandlersWithRuntimeLayer.pipe(
+  Layer.provide(coreRuntimeOperationsLayer),
+)
+
 const startFailure = (
   request: StartReviewAgentOperationRequest,
   error: CoreReviewAgentStartError,
 ) =>
   ReviewAgentStartFailure.make({
     ...requestIdentity(request),
-    method: "ReviewAgents.start",
+    method: "ReviewThreads.runAgent",
     runId: null,
     code:
       Schema.is(ReviewTurnTargetError)(error) || Schema.is(ReviewTurnRejectedError)(error)

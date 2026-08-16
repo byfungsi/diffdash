@@ -18,6 +18,12 @@ export const coreArtifactEntryForMode = (mode) =>
     ? resolve(workspaceDirectory, "packages/core/src/standalone.e2e.ts")
     : resolve(workspaceDirectory, "packages/core/src/standalone.ts")
 
+/** Selects the Bun-native fail-closed Core entrypoint for a Desktop build mode. */
+export const bunCoreArtifactEntryForMode = (mode) =>
+  mode === "e2e"
+    ? resolve(workspaceDirectory, "packages/core/src/standalone-bun.e2e.ts")
+    : resolve(workspaceDirectory, "packages/core/src/standalone-bun.ts")
+
 /** Builds and atomically promotes one exact standalone Core artifact. */
 export const buildCoreArtifact = async ({
   mode,
@@ -48,6 +54,7 @@ export const buildCoreArtifact = async ({
       })
     const nodeWorkerPath = resolve(stagingDirectory, "review-worker-node.mjs")
     const bunWorkerPath = resolve(stagingDirectory, "review-worker-bun.mjs")
+    const bunEntrypointPath = resolve(stagingDirectory, "core-bun.mjs")
     const nodeWorkerBuild = await workerBuild(
       resolve(workspaceDirectory, "packages/review-data-worker/src/node-worker-entrypoint.ts"),
       nodeWorkerPath,
@@ -65,30 +72,46 @@ export const buildCoreArtifact = async ({
       .update(await readFile(bunWorkerPath))
       .digest("hex")
     const reviewWorkerBuildId = `review-worker-v1-${nodeWorkerSha256.slice(0, 20)}-${bunWorkerSha256.slice(0, 20)}`
-    const buildResult = await build({
-      absWorkingDir: workspaceDirectory,
-      banner: {
-        js: 'import { createRequire as __diffdashCreateRequire } from "node:module"; const require = __diffdashCreateRequire(import.meta.url);',
-      },
-      bundle: true,
-      entryPoints: [coreArtifactEntryForMode(normalizedMode)],
-      define: {
-        DIFFDASH_REVIEW_WORKER_BUILD_ID: JSON.stringify(reviewWorkerBuildId),
-        DIFFDASH_REVIEW_WORKER_NODE_SHA256: JSON.stringify(nodeWorkerSha256),
-        DIFFDASH_REVIEW_WORKER_BUN_SHA256: JSON.stringify(bunWorkerSha256),
-      },
-      format: "esm",
-      legalComments: "none",
-      logLevel: "silent",
-      metafile: true,
-      outfile: entrypointPath,
-      platform: "node",
-      sourcemap: false,
-      target: "node22",
-      treeShaking: true,
-    })
+    const buildCore = (entryPoint, outfile, target, external = []) =>
+      build({
+        absWorkingDir: workspaceDirectory,
+        banner: {
+          js: 'import { createRequire as __diffdashCreateRequire } from "node:module"; const require = __diffdashCreateRequire(import.meta.url);',
+        },
+        bundle: true,
+        entryPoints: [entryPoint],
+        external,
+        define: {
+          DIFFDASH_REVIEW_WORKER_BUILD_ID: JSON.stringify(reviewWorkerBuildId),
+          DIFFDASH_REVIEW_WORKER_NODE_SHA256: JSON.stringify(nodeWorkerSha256),
+          DIFFDASH_REVIEW_WORKER_BUN_SHA256: JSON.stringify(bunWorkerSha256),
+        },
+        format: "esm",
+        legalComments: "none",
+        logLevel: "silent",
+        metafile: true,
+        outfile,
+        platform: "node",
+        sourcemap: false,
+        target,
+        treeShaking: true,
+      })
+    const buildResult = await buildCore(
+      coreArtifactEntryForMode(normalizedMode),
+      entrypointPath,
+      "node22",
+    )
+    const bunBuildResult = await buildCore(
+      bunCoreArtifactEntryForMode(normalizedMode),
+      bunEntrypointPath,
+      "es2022",
+      ["bun:sqlite"],
+    )
     const entrypoint = await readFile(entrypointPath)
     const entrypointSha256 = createHash("sha256").update(entrypoint).digest("hex")
+    const bunEntrypointSha256 = createHash("sha256")
+      .update(await readFile(bunEntrypointPath))
+      .digest("hex")
     const manifest = {
       schemaVersion: 1,
       buildId: `core-${desktopPackage.version}-${normalizedMode}-${process.platform}-${process.arch}-${entrypointSha256.slice(0, 40)}`,
@@ -110,6 +133,8 @@ export const buildCoreArtifact = async ({
         bun: {
           minimumVersion: minimumBunVersion,
           architecture: process.arch,
+          entrypoint: "core-bun.mjs",
+          entrypointSha256: bunEntrypointSha256,
         },
       },
     }
@@ -132,6 +157,7 @@ export const buildCoreArtifact = async ({
       metafile: {
         inputs: {
           ...buildResult.metafile.inputs,
+          ...bunBuildResult.metafile.inputs,
           ...nodeWorkerBuild.metafile.inputs,
           ...bunWorkerBuild.metafile.inputs,
         },
@@ -149,6 +175,13 @@ export const buildCoreArtifact = async ({
 }
 
 const requestedMode = process.argv.includes("--mode=e2e") ? "e2e" : "production"
+const outputDirectoryArgument = process.argv.find((argument) =>
+  argument.startsWith("--output-directory="),
+)
+const requestedOutputDirectory =
+  outputDirectoryArgument === undefined
+    ? undefined
+    : resolve(outputDirectoryArgument.slice("--output-directory=".length))
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await buildCoreArtifact({ mode: requestedMode })
+  await buildCoreArtifact({ mode: requestedMode, outputDirectory: requestedOutputDirectory })
 }

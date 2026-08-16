@@ -4,6 +4,7 @@ import {
   encodeCoreProcessStartupConfiguration,
 } from "@diffdash/core-rpc/process-startup"
 import { Effect, FileSystem, Schema } from "effect"
+import { CoreConfiguration } from "@diffdash/core"
 
 import type { CoreHostTransportConfiguration } from "./core-host-bootstrap"
 
@@ -43,7 +44,9 @@ export interface StartCoreProcessOptions {
   readonly configuration: CoreHostTransportConfiguration
   readonly databasePath: string
   readonly statePath: string
+  readonly coreConfiguration: CoreConfiguration
   readonly spawner: CoreProcessSpawner
+  readonly entrypointPath?: string
   readonly listenTimeout?: number
 }
 
@@ -75,6 +78,9 @@ export const startCoreProcess = Effect.fn("startCoreProcess")(function* (
 export const startCoreProcessManaged = Effect.fn("startCoreProcessManaged")(function* (
   options: StartCoreProcessOptions,
 ) {
+  const encodedCoreConfiguration = yield* Schema.encodeEffect(CoreConfiguration)(
+    options.coreConfiguration,
+  ).pipe(Effect.mapError(() => launchFailure("configuration-invalid")))
   const startupConfiguration = CoreProcessStartupConfiguration.make({
     schemaVersion: 1,
     applicationInstanceId: options.configuration.applicationInstanceId,
@@ -82,6 +88,7 @@ export const startCoreProcessManaged = Effect.fn("startCoreProcessManaged")(func
     socketPath: options.configuration.socketPath,
     databasePath: options.databasePath,
     statePath: options.statePath,
+    coreConfiguration: encodedCoreConfiguration,
     token: options.configuration.token,
   })
   const encodedStartupConfiguration = yield* encodeCoreProcessStartupConfiguration(
@@ -94,7 +101,7 @@ export const startCoreProcessManaged = Effect.fn("startCoreProcessManaged")(func
   const processHandle = yield* Effect.try({
     try: () =>
       options.spawner.spawn({
-        entrypointPath: options.configuration.artifact.entrypointPath,
+        entrypointPath: options.entrypointPath ?? options.configuration.artifact.entrypointPath,
         encodedStartupConfiguration,
       }),
     catch: () => launchFailure("spawn-failed"),

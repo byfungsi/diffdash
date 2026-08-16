@@ -1,4 +1,6 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
+import type { CoreMethod, CoreMethodInput, CoreOperationOutput } from "@diffdash/core"
+import type { CoreApplicationFailure } from "@diffdash/core-rpc/application-rpc"
 import type {
   CoreAuthorizeDatabaseOwnershipFailure,
   CoreHealthIdentityMismatchFailure,
@@ -19,7 +21,34 @@ import {
   type AuthorizeDatabaseOwnershipRequest,
   CoreHealth,
   type DatabaseOwnershipAuthorized,
+  type CoreShutdownAcknowledged,
 } from "@diffdash/core-rpc/lifecycle"
+import type { CoreShutdownFailure } from "@diffdash/core-rpc/failure"
+import type {
+  ReviewAgentOperationAccepted,
+  ReviewAgentOperationRequest,
+  ReviewAgentOperationSnapshot,
+  ReviewAgentStartFailure,
+  ReviewAgentGetOperationFailure,
+} from "@diffdash/core-rpc/review-agent"
+import type {
+  CancelWalkthroughRequest,
+  GetStoredWalkthroughRequest,
+  GetStoredWalkthroughResult,
+  GetWalkthroughOperationRequest,
+  StartWalkthroughRequest,
+  WalkthroughCancelFailure,
+  WalkthroughCancelAdmissionFailure,
+  WalkthroughCancelResult,
+  WalkthroughGetOperationFailure,
+  WalkthroughGetOperationAdmissionFailure,
+  WalkthroughGetStoredFailure,
+  WalkthroughGetStoredAdmissionFailure,
+  WalkthroughOperationAccepted,
+  WalkthroughOperationSnapshot,
+  WalkthroughStartFailure,
+  WalkthroughStartAdmissionFailure,
+} from "@diffdash/core-rpc/walkthrough"
 import type {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -35,6 +64,19 @@ import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Socket from "effect/unstable/socket/Socket"
+
+type CoreRpcApplicationRequest<Method extends CoreMethod> = HostRequestContext &
+  CoreMethodInput<Method>
+
+type CoreRpcApplicationOutput<Method extends CoreMethod> = Method extends "ReviewThreads.runAgent"
+  ? ReviewAgentOperationAccepted
+  : CoreOperationOutput<Method>
+
+type CoreRpcApplicationFailure =
+  | CoreApplicationFailure
+  | ReviewAgentStartFailure
+  | CoreTransportAuthenticationFailure
+  | RpcClientError
 
 /** Host-side rejection when health does not identify the exact launched Core epoch. */
 export class CoreRpcHealthVerificationError extends Schema.TaggedError<CoreRpcHealthVerificationError>()(
@@ -73,6 +115,58 @@ export class CoreRpcClient extends Context.Service<
     ) => Effect.Effect<
       DatabaseOwnershipAuthorized,
       CoreAuthorizeDatabaseOwnershipFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+    readonly execute: <Method extends CoreMethod>(
+      method: Method,
+      request: CoreRpcApplicationRequest<Method>,
+    ) => Effect.Effect<CoreRpcApplicationOutput<Method>, CoreRpcApplicationFailure>
+    readonly getReviewAgentOperation: (
+      request: ReviewAgentOperationRequest,
+    ) => Effect.Effect<
+      ReviewAgentOperationSnapshot,
+      ReviewAgentGetOperationFailure | CoreTransportAuthenticationFailure | RpcClientError
+    >
+    readonly startWalkthrough: (
+      request: StartWalkthroughRequest,
+    ) => Effect.Effect<
+      WalkthroughOperationAccepted,
+      | WalkthroughStartFailure
+      | WalkthroughStartAdmissionFailure
+      | CoreTransportAuthenticationFailure
+      | RpcClientError
+    >
+    readonly getWalkthroughOperation: (
+      request: GetWalkthroughOperationRequest,
+    ) => Effect.Effect<
+      WalkthroughOperationSnapshot,
+      | WalkthroughGetOperationFailure
+      | WalkthroughGetOperationAdmissionFailure
+      | CoreTransportAuthenticationFailure
+      | RpcClientError
+    >
+    readonly cancelWalkthrough: (
+      request: CancelWalkthroughRequest,
+    ) => Effect.Effect<
+      WalkthroughCancelResult,
+      | WalkthroughCancelFailure
+      | WalkthroughCancelAdmissionFailure
+      | CoreTransportAuthenticationFailure
+      | RpcClientError
+    >
+    readonly getStoredWalkthrough: (
+      request: GetStoredWalkthroughRequest,
+    ) => Effect.Effect<
+      GetStoredWalkthroughResult,
+      | WalkthroughGetStoredFailure
+      | WalkthroughGetStoredAdmissionFailure
+      | CoreTransportAuthenticationFailure
+      | RpcClientError
+    >
+    readonly shutdown: (
+      request: HostRequestContext,
+    ) => Effect.Effect<
+      CoreShutdownAcknowledged,
+      CoreShutdownFailure | CoreTransportAuthenticationFailure | RpcClientError
     >
   }
 >()("@diffdash/desktop/CoreRpcClient") {}
@@ -145,7 +239,7 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
 
   return Layer.effectContext(
     Effect.gen(function* () {
-      const client = yield* RpcClient.make(AuthenticatedCoreHostClientRpcs)
+      const client = yield* RpcClient.make(AuthenticatedCoreHostClientRpcs, { flatten: true })
 
       const authenticated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
@@ -155,31 +249,72 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         )
 
       const health = Effect.fn("CoreRpcClient.health")(function* (request: HostRequestContext) {
-        const response = yield* authenticated(client["Core.health"](request))
+        const response = yield* authenticated(client("Core.health", request))
         return yield* verifyCoreHealth(options, response)
       })
       const authorizeDatabaseOwnership = Effect.fn("CoreRpcClient.authorizeDatabaseOwnership")(
         (request: AuthorizeDatabaseOwnershipRequest) =>
-          authenticated(client["Core.authorizeDatabaseOwnership"](request)),
+          authenticated(client("Core.authorizeDatabaseOwnership", request)),
+      )
+      // SAFETY: The authenticated catalog contains every CoreMethod with the same request/output
+      // correlation. Effect's flattened client loses that correlation for a generic tag subset.
+      // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion
+      const applicationClient = client as CoreRpcClient["Service"]["execute"]
+      const execute: CoreRpcClient["Service"]["execute"] = (method, request) =>
+        authenticated(applicationClient(method, request))
+      const getReviewAgentOperation = Effect.fn("CoreRpcClient.getReviewAgentOperation")(
+        (request: ReviewAgentOperationRequest) =>
+          authenticated(client("ReviewAgents.getOperation", request)),
+      )
+      const startWalkthrough = Effect.fn("CoreRpcClient.startWalkthrough")(
+        (request: StartWalkthroughRequest) => authenticated(client("Walkthroughs.start", request)),
+      )
+      const getWalkthroughOperation = Effect.fn("CoreRpcClient.getWalkthroughOperation")(
+        (request: GetWalkthroughOperationRequest) =>
+          authenticated(client("Walkthroughs.getOperation", request)),
+      )
+      const cancelWalkthrough = Effect.fn("CoreRpcClient.cancelWalkthrough")(
+        (request: CancelWalkthroughRequest) =>
+          authenticated(client("Walkthroughs.cancel", request)),
+      )
+      const getStoredWalkthrough = Effect.fn("CoreRpcClient.getStoredWalkthrough")(
+        (request: GetStoredWalkthroughRequest) =>
+          authenticated(client("Walkthroughs.getStored", request)),
+      )
+      const shutdown = Effect.fn("CoreRpcClient.shutdown")((request: HostRequestContext) =>
+        authenticated(client("Core.shutdown", request)),
       )
 
       const replayEvents = Effect.fn("CoreRpcClient.replayEvents")(
-        (request: CoreEventReplayRequest) => authenticated(client["CoreEvents.replay"](request)),
+        (request: CoreEventReplayRequest) => authenticated(client("CoreEvents.replay", request)),
       )
       const getCommand = Effect.fn("CoreRpcClient.getCommand")((request: CoreCommandQueryRequest) =>
-        authenticated(client["CoreCommands.get"](request)),
+        authenticated(client("CoreCommands.get", request)),
       )
       const listUnacknowledgedCommands = Effect.fn("CoreRpcClient.listUnacknowledgedCommands")(
         (request: CoreCommandListRequest) =>
-          authenticated(client["CoreCommands.listUnacknowledged"](request)),
+          authenticated(client("CoreCommands.listUnacknowledged", request)),
       )
       const acknowledgeCommand = Effect.fn("CoreRpcClient.acknowledgeCommand")(
         (request: CoreCommandAcknowledgement) =>
-          authenticated(client["CoreCommands.acknowledge"](request)),
+          authenticated(client("CoreCommands.acknowledge", request)),
       )
 
       return Context.empty().pipe(
-        Context.add(CoreRpcClient, CoreRpcClient.of({ authorizeDatabaseOwnership, health })),
+        Context.add(
+          CoreRpcClient,
+          CoreRpcClient.of({
+            authorizeDatabaseOwnership,
+            cancelWalkthrough,
+            execute,
+            getReviewAgentOperation,
+            getStoredWalkthrough,
+            getWalkthroughOperation,
+            health,
+            shutdown,
+            startWalkthrough,
+          }),
+        ),
         Context.add(
           CoreStateDeliveryRpcClient,
           CoreStateDeliveryRpcClient.of({

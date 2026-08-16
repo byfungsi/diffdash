@@ -19,6 +19,7 @@ import {
   startCoreBunProcess,
   type BunRuntimeQualificationHooks,
 } from "./core-bun-runtime"
+import { makeCoreProcessFixtureConfiguration } from "./core-process-configuration.fixture"
 
 const candidate = { executablePath: "/home/test/.bun/bin/bun", source: "home" } as const
 const successfulProbe = () => Effect.void
@@ -144,11 +145,18 @@ describe("Bun Core runtime", () => {
   it.live("launches the generated Core artifact with the qualified Bun runtime", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources
-      execFileSync(process.execPath, ["scripts/build-core-artifact.mjs"], {
-        cwd: resolve("."),
-        stdio: "ignore",
+      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-core-bun-parent-",
       })
-      const artifactDirectory = resolve(".generated/core")
+      const artifactDirectory = join(temporaryDirectory, "artifact")
+      execFileSync(
+        process.execPath,
+        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+        {
+          cwd: resolve("."),
+          stdio: "ignore",
+        },
+      )
       const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
         readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
       )
@@ -164,9 +172,6 @@ describe("Bun Core runtime", () => {
       expect(bun).toBeDefined()
       if (bun === undefined) return
 
-      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
-        prefix: "dd-core-bun-parent-",
-      })
       const session = yield* bootstrapCoreHost({
         artifact,
         applicationInstanceId: ApplicationInstanceId.make("app-real-bun"),
@@ -174,15 +179,19 @@ describe("Bun Core runtime", () => {
         generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-bun"),
         generateRequestId: () => HostRequestId.make("h:real-bun-health"),
         generateToken: () => Redacted.make("real-bun-token-with-at-least-32-bytes"),
-        startTransport: (configuration) =>
-          startCoreBunProcess({
+        startTransport: (configuration) => {
+          const databasePath = join(temporaryDirectory, "diffdash.sqlite")
+          const statePath = join(temporaryDirectory, "state.json")
+          return startCoreBunProcess({
             applicationCwd: resolve("."),
             bunExecutablePath: bun.executablePath,
             configuration,
-            databasePath: join(temporaryDirectory, "diffdash.sqlite"),
+            databasePath,
             environment: process.env,
-            statePath: join(temporaryDirectory, "state.json"),
-          }).pipe(Effect.asVoid),
+            statePath,
+            coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
+          }).pipe(Effect.asVoid)
+        },
       })
 
       expect(session.health).toEqual({

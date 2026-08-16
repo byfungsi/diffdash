@@ -41,6 +41,8 @@ export const CoreArtifactManifest = Schema.Struct({
         Schema.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u)),
       ),
       architecture: Schema.String,
+      entrypoint: Schema.Literal("core-bun.mjs"),
+      entrypointSha256: Sha256,
     }),
   }),
 }).annotate({ identifier: "CoreArtifactManifest" })
@@ -74,6 +76,11 @@ export class VerifiedCoreArtifact extends Schema.Class<VerifiedCoreArtifact>(
   device: Schema.Number,
   inode: Schema.Option(Schema.Number),
   size: Schema.BigInt,
+  bunEntrypointPath: Schema.String,
+  bunEntrypointSha256: Sha256,
+  bunDevice: Schema.Number,
+  bunInode: Schema.Option(Schema.Number),
+  bunSize: Schema.BigInt,
   runtime: CoreArtifactManifest.fields.runtime,
 }) {}
 
@@ -238,6 +245,11 @@ export const verifyCoreArtifact = (
       manifest.reviewWorker.bun.entrypoint,
       manifest.reviewWorker.bun.entrypointSha256,
     )
+    const bunEntrypointPath = path.join(artifactDirectory, manifest.runtime.bun.entrypoint)
+    const bunInfo = yield* verifyWorker(
+      manifest.runtime.bun.entrypoint,
+      manifest.runtime.bun.entrypointSha256,
+    )
     const expectedWorkerBuildId = `review-worker-v1-${manifest.reviewWorker.node.entrypointSha256.slice(0, 20)}-${manifest.reviewWorker.bun.entrypointSha256.slice(0, 20)}`
     if (manifest.reviewWorker.buildId !== expectedWorkerBuildId)
       return yield* verificationFailure("build-identity-mismatch")
@@ -249,6 +261,11 @@ export const verifyCoreArtifact = (
       device: after.dev,
       inode: after.ino,
       size: after.size,
+      bunEntrypointPath,
+      bunEntrypointSha256: manifest.runtime.bun.entrypointSha256,
+      bunDevice: bunInfo.dev,
+      bunInode: bunInfo.ino,
+      bunSize: bunInfo.size,
       runtime: manifest.runtime,
     })
   })
@@ -265,27 +282,44 @@ export const verifyPackagedCoreArtifact = (artifactDirectory: string) =>
 /** Revalidates that the verified entrypoint has not been replaced before launch. */
 export const revalidateCoreArtifact = (
   artifact: VerifiedCoreArtifact,
+  runtime: "utility" | "bun" = "utility",
 ): Effect.Effect<void, CoreArtifactVerificationError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
-    const info = yield* fileSystem.stat(artifact.entrypointPath).pipe(
+    const entrypoint =
+      runtime === "bun"
+        ? {
+            path: artifact.bunEntrypointPath,
+            checksum: artifact.bunEntrypointSha256,
+            device: artifact.bunDevice,
+            inode: artifact.bunInode,
+            size: artifact.bunSize,
+          }
+        : {
+            path: artifact.entrypointPath,
+            checksum: artifact.entrypointSha256,
+            device: artifact.device,
+            inode: artifact.inode,
+            size: artifact.size,
+          }
+    const info = yield* fileSystem.stat(entrypoint.path).pipe(
       Effect.filterOrFail(
         (value) =>
           value.type === "File" &&
-          value.dev === artifact.device &&
-          sameInode(value.ino, artifact.inode) &&
-          value.size === artifact.size,
+          value.dev === entrypoint.device &&
+          sameInode(value.ino, entrypoint.inode) &&
+          value.size === entrypoint.size,
         () => verificationFailure("entrypoint-invalid"),
       ),
     )
-    const bytes = yield* fileSystem.readFile(artifact.entrypointPath)
+    const bytes = yield* fileSystem.readFile(entrypoint.path)
     yield* Effect.succeed(createHash("sha256").update(bytes).digest("hex")).pipe(
       Effect.filterOrFail(
-        (checksum) => checksum === artifact.entrypointSha256,
+        (checksum) => checksum === entrypoint.checksum,
         () => verificationFailure("entrypoint-checksum-mismatch"),
       ),
     )
-    const after = yield* fileSystem.stat(artifact.entrypointPath)
+    const after = yield* fileSystem.stat(entrypoint.path)
     yield* Effect.succeed(after).pipe(
       Effect.filterOrFail(
         (value) =>

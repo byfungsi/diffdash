@@ -4,6 +4,8 @@ import { spawn } from "node:child_process"
 import { delimiter, dirname, join } from "node:path"
 
 import type { CoreHostTransportConfiguration } from "./core-host-bootstrap"
+import type { CoreConfiguration } from "@diffdash/core"
+import { revalidateCoreArtifact } from "./core-artifact"
 import {
   CoreProcessLaunchError,
   startCoreProcessManaged,
@@ -89,6 +91,7 @@ export interface StartCoreBunProcessOptions {
   readonly databasePath: string
   readonly environment: Readonly<Record<string, string | undefined>>
   readonly statePath: string
+  readonly coreConfiguration: CoreConfiguration
   readonly listenTimeout?: number
 }
 
@@ -246,6 +249,14 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
   options: StartCoreBunProcessOptions,
 ) {
   const fileSystem = yield* FileSystem.FileSystem
+  yield* revalidateCoreArtifact(options.configuration.artifact, "bun").pipe(
+    Effect.mapError(() =>
+      CoreProcessLaunchError.make({
+        reason: "spawn-failed",
+        safeMessage: "DiffDash could not launch its private Core process.",
+      }),
+    ),
+  )
   const configPath = join(dirname(options.configuration.socketPath), "bunfig.toml")
   yield* fileSystem.writeFileString(configPath, "").pipe(
     Effect.andThen(fileSystem.chmod(configPath, 0o600)),
@@ -286,6 +297,8 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
       configuration: options.configuration,
       databasePath: options.databasePath,
       statePath: options.statePath,
+      coreConfiguration: options.coreConfiguration,
+      entrypointPath: options.configuration.artifact.bunEntrypointPath,
       spawner,
     })
   }
@@ -293,6 +306,8 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
     configuration: options.configuration,
     databasePath: options.databasePath,
     statePath: options.statePath,
+    coreConfiguration: options.coreConfiguration,
+    entrypointPath: options.configuration.artifact.bunEntrypointPath,
     spawner,
     listenTimeout: options.listenTimeout,
   })

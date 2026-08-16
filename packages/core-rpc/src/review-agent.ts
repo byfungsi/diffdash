@@ -6,6 +6,14 @@ import { Schema } from "effect"
 
 import { HostRequestContext } from "./identity"
 
+export {
+  CancelledAgentRun,
+  CompletedAgentRun,
+  FailedAgentRun,
+  InterruptedAgentRun,
+  RunningAgentRun,
+} from "@diffdash/domain/agent-run"
+
 const RequestIdentity = HostRequestContext.fields
 
 /** Durable request that accepts one long-running review-agent response. */
@@ -58,14 +66,14 @@ const FailureDetail = {
   ),
 } as const
 
-/** Plain expected failure from `ReviewAgents.start`. */
+/** Plain expected failure from `ReviewThreads.runAgent`. */
 export const ReviewAgentStartFailure = Schema.TaggedStruct("ReviewAgentOperationFailure", {
   ...FailureDetail,
-  method: Schema.Literal("ReviewAgents.start"),
+  method: Schema.Literal("ReviewThreads.runAgent"),
   runId: Schema.NullOr(AgentRunId),
 }).annotate({ identifier: "ReviewAgentStartFailure" })
 
-/** Plain expected failure from `ReviewAgents.start`. */
+/** Plain expected failure from `ReviewThreads.runAgent`. */
 export type ReviewAgentStartFailure = typeof ReviewAgentStartFailure.Type
 
 /** Plain expected failure from `ReviewAgents.getOperation`. */

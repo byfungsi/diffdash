@@ -34,7 +34,7 @@ export interface ApplicationRuntime {
     /** Nullable only at the existing Core-to-IPC transport boundary. */
     readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
   }
-  readonly dispose: EmbeddedCore["dispose"]
+  readonly dispose: () => Promise<void>
 }
 
 /** Adapts the build-selected embedded Core runtime to Electron's IPC boundary. */

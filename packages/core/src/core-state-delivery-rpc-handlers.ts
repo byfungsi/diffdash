@@ -9,23 +9,32 @@ import {
   CoreCommandStoreError,
   type StoredCoreCommand,
 } from "@diffdash/persistence/core-command-store"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 
-import { CoreDurableCommandService } from "./core-durable-command-coordinator"
-import { CoreEventHub } from "./core-event-hub"
+import { CoreRuntimeServices } from "./core-runtime-services"
+import { coreRuntimeStateDeliveryLayer } from "./core-runtime-services"
 
 /** Native handlers backed by the Core event hub and durable command authority. */
-export const coreStateDeliveryRpcHandlersLayer = CoreStateDeliveryRpcs.toLayer(
+export const coreStateDeliveryRpcHandlersWithRuntimeLayer = CoreStateDeliveryRpcs.toLayer(
   Effect.gen(function* () {
-    const events = yield* CoreEventHub
-    const commands = yield* CoreDurableCommandService
+    const runtime = yield* CoreRuntimeServices
+    const commands = runtime.commands
+    const events = runtime.events
 
     return {
       "CoreEvents.replay": (request) =>
-        events.replay(request.context.processEpoch, request.afterSequence),
+        events.pipe(
+          Effect.flatMap((hub) =>
+            hub.replay(
+              request.cursor?.processEpoch ?? request.context.processEpoch,
+              request.cursor?.sequence ?? null,
+            ),
+          ),
+        ),
       "CoreCommands.get": (request) =>
         Effect.gen(function* () {
-          const command = yield* commands.get(request.commandId)
+          const store = yield* commands
+          const command = yield* store.get(request.commandId)
           if (Option.isNone(command)) {
             const result: CoreCommandQueryResult = {
               kind: "notFound",
@@ -52,7 +61,8 @@ export const coreStateDeliveryRpcHandlersLayer = CoreStateDeliveryRpcs.toLayer(
           ),
         ),
       "CoreCommands.listUnacknowledged": (request) =>
-        commands.queryUnacknowledgedTerminal(request.limit).pipe(
+        commands.pipe(
+          Effect.flatMap((store) => store.queryUnacknowledgedTerminal(request.limit)),
           Effect.flatMap((stored) =>
             Effect.forEach(stored, (command) =>
               parseCommandSnapshot(command, request.context, "CoreCommands.listUnacknowledged"),
@@ -69,22 +79,26 @@ export const coreStateDeliveryRpcHandlersLayer = CoreStateDeliveryRpcs.toLayer(
           ),
         ),
       "CoreCommands.acknowledge": (request) =>
-        commands.acknowledge(request.commandId, request.stateVersion).pipe(
-          Effect.catchTag("CoreCommandAcknowledgementRejectedError", (error) =>
-            error.reason === "alreadyAcknowledged" &&
-            error.currentStateVersion === error.acknowledgedVersion + 1
-              ? commands.get(request.commandId).pipe(
-                  Effect.flatMap((command) =>
-                    Option.match(command, {
-                      onNone: () => Effect.fail(error),
-                      onSome: (current) =>
-                        current.state === "acknowledged"
-                          ? Effect.succeed(current)
-                          : Effect.fail(error),
-                    }),
-                  ),
-                )
-              : Effect.fail(error),
+        commands.pipe(
+          Effect.flatMap((store) =>
+            store.acknowledge(request.commandId, request.stateVersion).pipe(
+              Effect.catchTag("CoreCommandAcknowledgementRejectedError", (error) =>
+                error.reason === "alreadyAcknowledged" &&
+                error.currentStateVersion === error.acknowledgedVersion + 1
+                  ? store.get(request.commandId).pipe(
+                      Effect.flatMap((command) =>
+                        Option.match(command, {
+                          onNone: () => Effect.fail(error),
+                          onSome: (current) =>
+                            current.state === "acknowledged"
+                              ? Effect.succeed(current)
+                              : Effect.fail(error),
+                        }),
+                      ),
+                    )
+                  : Effect.fail(error),
+              ),
+            ),
           ),
           Effect.flatMap((command) =>
             parseCommandSnapshot(command, request.context, "CoreCommands.acknowledge"),
@@ -105,6 +119,11 @@ export const coreStateDeliveryRpcHandlersLayer = CoreStateDeliveryRpcs.toLayer(
         ),
     }
   }),
+)
+
+/** State-delivery handlers backed directly by already-composed event and command services. */
+export const coreStateDeliveryRpcHandlersLayer = coreStateDeliveryRpcHandlersWithRuntimeLayer.pipe(
+  Layer.provide(coreRuntimeStateDeliveryLayer),
 )
 
 const parseCommandSnapshot = (

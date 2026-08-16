@@ -34,7 +34,11 @@ const HostExternalUrl = Schema.String.pipe(
 const HostAbsolutePath = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
   Schema.check(Schema.isMaxLength(4_096)),
-  Schema.check(Schema.isPattern(/^\/(?!.*\0).*$/u)),
+  Schema.check(
+    Schema.makeFilter((value) => value.startsWith("/") && !value.includes("\0"), {
+      message: "Expected an absolute path without null bytes",
+    }),
+  ),
 )
 
 /** Core request to open an HTTP(S) URL with the operating system. */

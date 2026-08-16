@@ -15,7 +15,7 @@ import { createCoreLayer } from "./core-layer"
 import { CoreOperationService } from "./core-operation-service"
 import type { CoreStartupFailure } from "./core-startup-error"
 import { captureCoreDefect, type CapturedCoreDefect } from "./core-defect-boundary"
-import { productionProviderComposition, type CoreProviderComposition } from "./provider-composition"
+import type { CoreProviderComposition } from "./provider-composition"
 
 // Binding preserves the service key while avoiding React hook lint treating Effect's use as React.use.
 const withCoreOperations = CoreOperationService.use.bind(CoreOperationService)
@@ -182,10 +182,6 @@ export const createEmbeddedCoreWithProviderComposition = (
       ),
     ),
   )
-
-/** Creates the production embedded DiffDash Core runtime. */
-export const createEmbeddedCore = (configuration: CoreConfiguration): EmbeddedCore =>
-  createEmbeddedCoreWithProviderComposition(configuration, productionProviderComposition)
 
 /** Converts expected Effect failures to CoreResult while preserving defects as rejected promises. */
 export const coreResultFromExit = <Value, Failure>(

@@ -5,15 +5,30 @@ import {
   AuthenticatedCoreReviewAgentServerRpcs,
   AuthenticatedCoreServerRpcs,
   AuthenticatedCoreStateDeliveryServerRpcs,
+  AuthenticatedCoreApplicationRpcs,
 } from "@diffdash/core-rpc/transport"
 import { Layer } from "effect"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 
-import { coreBusinessRpcHandlersLayer } from "./core-business-rpc-handlers"
+import {
+  coreAppStateUpdateRpcHandlersWithRuntimeLayer,
+  coreBusinessRpcHandlersLayer,
+  coreBusinessRpcHandlersWithRuntimeLayer,
+} from "./core-business-rpc-handlers"
 import { coreControlRpcHandlersLayer } from "./core-control-rpc-handlers"
-import { coreWalkthroughRpcHandlersLayer } from "./core-walkthrough-rpc-handlers"
-import { coreReviewAgentRpcHandlersLayer } from "./core-review-agent-rpc-handlers"
-import { coreStateDeliveryRpcHandlersLayer } from "./core-state-delivery-rpc-handlers"
+import {
+  coreWalkthroughRpcHandlersLayer,
+  coreWalkthroughRpcHandlersWithRuntimeLayer,
+} from "./core-walkthrough-rpc-handlers"
+import {
+  coreReviewAgentRpcHandlersLayer,
+  coreReviewAgentRpcHandlersWithRuntimeLayer,
+} from "./core-review-agent-rpc-handlers"
+import {
+  coreStateDeliveryRpcHandlersLayer,
+  coreStateDeliveryRpcHandlersWithRuntimeLayer,
+} from "./core-state-delivery-rpc-handlers"
+import { coreApplicationRpcHandlersLayer } from "./core-application-rpc-handlers"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
   CoreAuthenticatedHostSession,
@@ -29,6 +44,28 @@ if (new Set(inboundTags).size !== inboundTags.length) {
 }
 
 const CoreServerRpcs = AuthenticatedCoreServerRpcs
+
+/** Runs the complete authenticated production catalog through one native server. */
+export const coreApplicationRpcServerLayer = (
+  authentication: CoreTransportAuthenticationOptions,
+  hostSessionLayer: Layer.Layer<CoreAuthenticatedHostSession> = coreAuthenticatedHostSessionLayer,
+) =>
+  RpcServer.layer(AuthenticatedCoreApplicationRpcs).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        coreControlRpcHandlersLayer,
+        coreApplicationRpcHandlersLayer,
+        coreBusinessRpcHandlersWithRuntimeLayer,
+        coreAppStateUpdateRpcHandlersWithRuntimeLayer,
+        coreWalkthroughRpcHandlersWithRuntimeLayer,
+        coreReviewAgentRpcHandlersWithRuntimeLayer,
+        coreStateDeliveryRpcHandlersWithRuntimeLayer,
+        coreRpcAdmissionLayer,
+        coreTransportAuthenticationLayer(authentication),
+      ),
+    ),
+    Layer.provideMerge(hostSessionLayer),
+  )
 
 /** Runs the privileged Core RPC groups through one transport-neutral native server. */
 export const coreRpcServerLayer = (

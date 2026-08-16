@@ -198,16 +198,10 @@ describe("Core RPC Unix socket host", () => {
 
       const secondClientScope = yield* Scope.make()
       const secondClient = yield* makeClient(socketPath, secondClientScope)
-      const rejected = yield* secondClient["Core.health"](request).pipe(
+      const reconnected = yield* secondClient["Core.health"](request).pipe(
         RpcClient.withHeaders({ [CORE_TRANSPORT_TOKEN_HEADER]: token }),
-        Effect.flip,
       )
-      expect(rejected).toMatchObject({
-        _tag: "CoreTransportAuthenticationFailure",
-        code: "CORE_TRANSPORT_AUTHENTICATION_FAILED",
-      })
-      expect(JSON.stringify(rejected)).not.toContain(token)
-      expect(JSON.stringify(rejected)).not.toContain(socketPath)
+      expect(reconnected).toEqual({ ...identity, lifecycle: "ready" })
 
       yield* Scope.close(secondClientScope, Exit.void)
       yield* Scope.close(serverScope, Exit.void)

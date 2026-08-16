@@ -24,6 +24,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   const e2e = await buildIn(directory, "e2e", "e2e")
 
   const productionEntrypoint = await readFile(resolve(production.outputDirectory, "core.mjs"))
+  const bunEntrypoint = await readFile(resolve(production.outputDirectory, "core-bun.mjs"))
   const repeatedEntrypoint = await readFile(resolve(repeated.outputDirectory, "core.mjs"))
   const manifestText = await readFile(resolve(production.outputDirectory, "manifest.json"), "utf8")
   const manifest = JSON.parse(manifestText)
@@ -32,6 +33,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   const e2eInputs = Object.keys(e2e.metafile.inputs).join("\n")
 
   assert.deepEqual(await readdir(production.outputDirectory), [
+    "core-bun.mjs",
     "core.mjs",
     "manifest.json",
     "review-worker-bun.mjs",
@@ -57,7 +59,12 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   })
   assert.deepEqual(manifest.runtime, {
     utility: true,
-    bun: { minimumVersion: "1.2.0", architecture: process.arch },
+    bun: {
+      minimumVersion: "1.2.0",
+      architecture: process.arch,
+      entrypoint: "core-bun.mjs",
+      entrypointSha256: createHash("sha256").update(bunEntrypoint).digest("hex"),
+    },
   })
   assert.match(manifest.reviewWorker.buildId, /^review-worker-v1-[a-f0-9]{20}-[a-f0-9]{20}$/u)
   await Promise.all(
@@ -84,9 +91,11 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
     new RegExp(createHash("sha256").update(productionEntrypoint).digest("hex"), "u"),
   )
   assert.doesNotMatch(productionInputs, /provider-composition\.e2e|provider-fixture/u)
-  assert.doesNotMatch(e2eInputs, /provider-composition\.e2e|provider-fixture/u)
-  assert.doesNotMatch(productionInputs, /database-node|node:sqlite/u)
-  assert.doesNotMatch(e2eInputs, /database-node|node:sqlite/u)
+  assert.match(e2eInputs, /provider-composition\.e2e|provider-fixture/u)
+  assert.match(productionEntrypoint.toString("utf8"), /node:sqlite/u)
+  assert.doesNotMatch(productionEntrypoint.toString("utf8"), /bun:sqlite/u)
+  assert.match(bunEntrypoint.toString("utf8"), /bun:sqlite/u)
+  assert.doesNotMatch(bunEntrypoint.toString("utf8"), /node:sqlite/u)
 })
 
 test("runs the generated parser protocol in a real Node worker", async () => {

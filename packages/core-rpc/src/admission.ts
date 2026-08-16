@@ -50,7 +50,7 @@ export class WalkthroughGetStoredAdmissionMiddleware extends RpcMiddleware.Servi
   { error: WalkthroughGetStoredAdmissionFailure },
 ) {}
 
-/** Server-side admission boundary for `ReviewAgents.start`. */
+/** Server-side admission boundary for `ReviewThreads.runAgent`. */
 export class ReviewAgentStartAdmissionMiddleware extends RpcMiddleware.Service<ReviewAgentStartAdmissionMiddleware>()(
   "@diffdash/core-rpc/ReviewAgentStartAdmissionMiddleware",
   { error: ReviewAgentStartFailure },

@@ -4,9 +4,13 @@ import {
   ApplicationInstanceId,
   CoreProcessEpoch,
   DatabaseOwnershipAuthorizationId,
+  HostRequestContext,
   HostRequestId,
 } from "@diffdash/core-rpc/identity"
-import { AuthorizeDatabaseOwnershipRequest } from "@diffdash/core-rpc/lifecycle"
+import {
+  AuthorizeDatabaseOwnershipRequest,
+  type CoreLifecycleState,
+} from "@diffdash/core-rpc/lifecycle"
 import { CORE_PROCESS_STARTUP_ENV } from "@diffdash/core-rpc/process-startup"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
@@ -22,6 +26,7 @@ import {
   type CoreProcessHandle,
   type CoreProcessSpawner,
 } from "./core-process-launcher"
+import { makeCoreProcessFixtureConfiguration } from "./core-process-configuration.fixture"
 
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const dependencies = Layer.merge(
@@ -52,20 +57,24 @@ describe("Core process launcher", () => {
   it.live("launches the generated Core artifact to authenticated health", () =>
     Effect.gen(function* () {
       const tempResources = yield* TempResources
-      execFileSync(process.execPath, ["scripts/build-core-artifact.mjs"], {
-        cwd: resolve("."),
-        stdio: "ignore",
+      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+        prefix: "dd-core-process-parent-",
       })
-      const artifactDirectory = resolve(".generated/core")
+      const artifactDirectory = join(temporaryDirectory, "artifact")
+      execFileSync(
+        process.execPath,
+        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+        {
+          cwd: resolve("."),
+          stdio: "ignore",
+        },
+      )
       const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
         readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
       )
       const artifact = yield* verifyCoreArtifact({
         artifactDirectory,
         expectedBuildId: manifest.buildId,
-      })
-      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
-        prefix: "dd-core-process-parent-",
       })
       const statePath = join(temporaryDirectory, "state.json")
       const databasePath = join(temporaryDirectory, "diffdash.sqlite")
@@ -78,7 +87,13 @@ describe("Core process launcher", () => {
         generateRequestId: () => HostRequestId.make("h:real-process-health"),
         generateToken: () => Redacted.make("real-process-token-with-at-least-32-bytes"),
         startTransport: (configuration) =>
-          startCoreProcess({ configuration, databasePath, statePath, spawner: nodeProcessSpawner }),
+          startCoreProcess({
+            configuration,
+            databasePath,
+            statePath,
+            coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
+            spawner: nodeProcessSpawner,
+          }),
       })
 
       expect(session.health).toEqual({
@@ -99,6 +114,30 @@ describe("Core process launcher", () => {
         yield* Effect.sleep("10 millis")
       }
       expect(existsSync(`${databasePath}.owner`)).toBe(true)
+      const client = session.client
+      expect(client).toBeDefined()
+      if (client === undefined) return
+      let lifecycle: CoreLifecycleState = authorized.lifecycle
+      for (let attempt = 0; attempt < 500 && lifecycle !== "ready"; attempt += 1) {
+        yield* Effect.sleep("10 millis")
+        lifecycle = (yield* client.health(
+          HostRequestContext.make({
+            applicationInstanceId: session.applicationInstanceId,
+            processEpoch: session.processEpoch,
+            requestId: HostRequestId.make(`h:ready-${String(attempt)}`),
+          }),
+        )).lifecycle
+      }
+      expect(lifecycle).toBe("ready")
+      const state = yield* client.execute(
+        "AppState.get",
+        HostRequestContext.make({
+          applicationInstanceId: session.applicationInstanceId,
+          processEpoch: session.processEpoch,
+          requestId: HostRequestId.make("h:app-state"),
+        }),
+      )
+      expect(state).toMatchObject({ onboardingCompleted: false })
     }).pipe(Effect.provide(dependencies)),
   )
 
@@ -108,7 +147,15 @@ describe("Core process launcher", () => {
       const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
         prefix: "dd-core-process-parent-",
       })
-      const artifactDirectory = resolve(".generated/core")
+      const artifactDirectory = join(temporaryDirectory, "artifact")
+      execFileSync(
+        process.execPath,
+        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+        {
+          cwd: resolve("."),
+          stdio: "ignore",
+        },
+      )
       const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
         readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
       )
@@ -130,6 +177,10 @@ describe("Core process launcher", () => {
             configuration,
             databasePath: privateDatabasePath,
             statePath: privateStatePath,
+            coreConfiguration: makeCoreProcessFixtureConfiguration(
+              privateDatabasePath,
+              privateStatePath,
+            ),
             spawner: immediateExitSpawner,
           }),
       }).pipe(Effect.flip)

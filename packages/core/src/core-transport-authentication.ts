@@ -1,16 +1,11 @@
 import { CoreTransportAuthenticationMiddleware } from "@diffdash/core-rpc/admission"
 import { CoreTransportAuthenticationFailure } from "@diffdash/core-rpc/failure"
 import { CORE_TRANSPORT_TOKEN_HEADER } from "@diffdash/core-rpc/transport"
-import { Context, Deferred, Effect, Layer, Match, Option, Redacted, Ref, Semaphore } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Redacted, Ref } from "effect"
 import * as Headers from "effect/unstable/http/Headers"
 import { timingSafeEqual } from "node:crypto"
 
 import { CoreLifecycle } from "./core-lifecycle"
-
-interface BoundClient {
-  readonly clientId: number
-  readonly healthCompleted: boolean
-}
 
 interface AuthenticatedHostState {
   readonly clientId: Option.Option<number>
@@ -20,7 +15,10 @@ interface AuthenticatedHostState {
 /** Process-local signal for the lifetime of the one authenticated host connection. */
 export interface CoreAuthenticatedHostSessionOperations {
   /** Records the native RPC client accepted by transport authentication. */
-  readonly authenticated: (clientId: number) => Effect.Effect<void>
+  readonly authenticated: (clientId: number) => Effect.Effect<boolean>
+
+  /** Returns whether this client currently owns the authenticated host slot. */
+  readonly isAuthenticated: (clientId: number) => Effect.Effect<boolean>
 
   /** Records a native RPC disconnect without exposing socket details. */
   readonly disconnected: (clientId: number) => Effect.Effect<void>
@@ -47,30 +45,41 @@ export const coreAuthenticatedHostSessionLayer = Layer.effect(
     const authenticated = Effect.fn("CoreAuthenticatedHostSession.authenticated")(function* (
       clientId: number,
     ) {
-      const alreadyDisconnected = yield* Ref.modify(state, (current) => [
-        clientId <= current.lastDisconnectedClientId,
-        { ...current, clientId: Option.some(clientId) },
-      ])
-      if (alreadyDisconnected) yield* Deferred.succeed(death, undefined)
+      return yield* Ref.modify(state, (current) => {
+        const accepted =
+          clientId > current.lastDisconnectedClientId &&
+          Option.match(current.clientId, {
+            onNone: () => true,
+            onSome: (authenticatedClientId) => authenticatedClientId === clientId,
+          })
+        return [accepted, accepted ? { ...current, clientId: Option.some(clientId) } : current]
+      })
     })
     const disconnected = Effect.fn("CoreAuthenticatedHostSession.disconnected")(function* (
       clientId: number,
     ) {
-      const authenticatedClientDied = yield* Ref.modify(state, (current) => [
-        Option.exists(
-          current.clientId,
-          (authenticatedClientId) => authenticatedClientId === clientId,
-        ),
-        {
-          ...current,
-          lastDisconnectedClientId: Math.max(current.lastDisconnectedClientId, clientId),
+      const authenticatedClientDied = yield* Ref.modify(
+        state,
+        (current): readonly [boolean, AuthenticatedHostState] => {
+          const died = Option.contains(current.clientId, clientId)
+          return [
+            died,
+            {
+              clientId: died ? Option.none() : current.clientId,
+              lastDisconnectedClientId: Math.max(current.lastDisconnectedClientId, clientId),
+            },
+          ]
         },
-      ])
+      )
       if (authenticatedClientDied) yield* Deferred.succeed(death, undefined)
     })
     return CoreAuthenticatedHostSession.of({
       authenticated,
       disconnected,
+      isAuthenticated: (clientId) =>
+        Ref.get(state).pipe(
+          Effect.map((current) => Option.contains(current.clientId, clientId)),
+        ),
       awaitDeath: Deferred.await(death),
     })
   }),
@@ -107,49 +116,36 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
     Effect.gen(function* () {
       const lifecycle = yield* CoreLifecycle
       const hostSession = yield* CoreAuthenticatedHostSession
-      const boundClient = yield* Ref.make<Option.Option<BoundClient>>(Option.none())
-      const authenticationLock = yield* Semaphore.make(1)
+      const healthCompleted = yield* Ref.make<ReadonlySet<number>>(new Set())
 
       return (effect, request) => {
-        const isHealth = Match.valueTags(request.rpc, {
-          "Core.health": () => true,
-          "Core.authorizeDatabaseOwnership": () => false,
-          "Core.shutdown": () => false,
-          "AppState.get": () => false,
-          "Walkthroughs.start": () => false,
-          "Walkthroughs.getOperation": () => false,
-          "Walkthroughs.cancel": () => false,
-          "Walkthroughs.getStored": () => false,
+        const isHealth = request.rpc._tag === "Core.health"
+        const authenticate = Effect.gen(function* () {
+          if (!isHealth) {
+            const bound = yield* hostSession.isAuthenticated(request.client.id)
+            const completed = yield* Ref.get(healthCompleted)
+            return bound && completed.has(request.client.id)
+          }
+
+          const alreadyAuthenticated = yield* hostSession.isAuthenticated(request.client.id)
+          const presentedToken = Headers.get(request.headers, CORE_TRANSPORT_TOKEN_HEADER)
+          if (
+            !alreadyAuthenticated &&
+            !tokensEqual(Redacted.value(options.token), presentedToken)
+          ) {
+            return false
+          }
+          const accepted = yield* hostSession.authenticated(request.client.id)
+          if (!accepted) return false
+          yield* lifecycle.awaitOwnershipAuthorization.pipe(
+            Effect.catchTag("CoreLifecycleTransitionError", (error) =>
+              error.from === "recovering" || error.from === "ready" || error.from === "failed"
+                ? Effect.void
+                : Effect.die(error),
+            ),
+          )
+          return true
         })
-        const authenticate = authenticationLock.withPermits(1)(
-          Effect.gen(function* () {
-            const currentClient = yield* Ref.get(boundClient)
-            if (Option.isSome(currentClient)) {
-              return currentClient.value.clientId === request.client.id
-                ? currentClient.value.healthCompleted || isHealth
-                : false
-            }
-            if (!isHealth) return false
-
-            const presentedToken = Headers.get(request.headers, CORE_TRANSPORT_TOKEN_HEADER)
-            if (!tokensEqual(Redacted.value(options.token), presentedToken)) return false
-
-            yield* lifecycle.awaitOwnershipAuthorization.pipe(
-              Effect.catchTag("CoreLifecycleTransitionError", (error) =>
-                error.from === "failed" ? Effect.void : Effect.die(error),
-              ),
-            )
-            yield* Ref.set(
-              boundClient,
-              Option.some({
-                clientId: request.client.id,
-                healthCompleted: false,
-              }),
-            )
-            yield* hostSession.authenticated(request.client.id)
-            return true
-          }),
-        )
 
         const admitted = authenticate.pipe(
           Effect.flatMap((authenticated) =>
@@ -159,13 +155,7 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
         return isHealth
           ? admitted.pipe(
               Effect.tap(() =>
-                Ref.update(boundClient, (current) =>
-                  Option.map(current, (client) =>
-                    client.clientId === request.client.id
-                      ? { ...client, healthCompleted: true }
-                      : client,
-                  ),
-                ),
+                Ref.update(healthCompleted, (current) => new Set(current).add(request.client.id)),
               ),
             )
           : admitted

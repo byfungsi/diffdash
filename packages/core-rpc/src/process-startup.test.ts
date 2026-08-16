@@ -18,6 +18,7 @@ describe("Core process startup configuration", () => {
         socketPath: "/tmp/dd-core/core.sock",
         databasePath: "/tmp/dd-core/diffdash.sqlite",
         statePath: "/tmp/dd-core/state.json",
+        coreConfiguration: {},
         token: Redacted.make(token),
       })
 

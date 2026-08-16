@@ -25,7 +25,7 @@ import {
 } from "@diffdash/core-rpc/walkthrough"
 import { WalkthroughBusinessRpcs } from "@diffdash/core-rpc/walkthrough-rpc"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
-import { Effect, Match, Option, Schema } from "effect"
+import { Effect, Layer, Match, Option, Schema } from "effect"
 import {
   ApplicationInstanceId,
   CoreProcessEpoch,
@@ -35,21 +35,28 @@ import {
 
 import { CoreOperationService } from "./core-operation-service"
 import type { CoreWalkthroughOperationFailure } from "./core-contract"
+import { CoreRuntimeServices } from "./core-runtime-services"
+import { coreRuntimeOperationsLayer } from "./core-runtime-services"
 
 /** Core-backed handlers for durable walkthrough acceptance, state, cancellation, and artifacts. */
-export const coreWalkthroughRpcHandlersLayer = WalkthroughBusinessRpcs.toLayer(
+export const coreWalkthroughRpcHandlersWithRuntimeLayer = WalkthroughBusinessRpcs.toLayer(
   Effect.gen(function* () {
-    const core = yield* CoreOperationService
+    const runtime = yield* CoreRuntimeServices
+    const core = runtime.operations
 
     return {
       "Walkthroughs.start": (request) =>
-        core.walkthroughs
-          .startGeneration({
-            acceptedRequest: request,
-            idempotencyKey: WalkthroughOperationIdempotencyKey.make(request.idempotencyKey),
-            reviewGeneration: domainGeneration(request.reviewGeneration),
-            regenerate: request.regenerate,
-          })
+        core
+          .pipe(
+            Effect.flatMap((operations) =>
+              operations.walkthroughs.startGeneration({
+                acceptedRequest: request,
+                idempotencyKey: WalkthroughOperationIdempotencyKey.make(request.idempotencyKey),
+                reviewGeneration: domainGeneration(request.reviewGeneration),
+                regenerate: request.regenerate,
+              }),
+            ),
+          )
           .pipe(
             Effect.map((acceptance) =>
               WalkthroughOperationAccepted.make({
@@ -75,15 +82,25 @@ export const coreWalkthroughRpcHandlersLayer = WalkthroughBusinessRpcs.toLayer(
             ),
           ),
       "Walkthroughs.getOperation": (request) =>
-        core.walkthroughs.getSnapshot(DomainWalkthroughOperationId.make(request.operationId)).pipe(
-          Effect.flatMap((operation) => operationSnapshot(core, operation)),
+        core.pipe(
+          Effect.flatMap((operations) =>
+            operations.walkthroughs
+              .getSnapshot(DomainWalkthroughOperationId.make(request.operationId))
+              .pipe(Effect.flatMap((operation) => operationSnapshot(operations, operation))),
+          ),
           Effect.mapError((error) => operationFailure(request, error)),
         ),
       "Walkthroughs.cancel": (request) =>
-        core.walkthroughs
-          .cancelSnapshot(DomainWalkthroughOperationId.make(request.operationId))
+        core
           .pipe(
-            Effect.flatMap((operation) => operationSnapshot(core, operation)),
+            Effect.flatMap((operations) =>
+              operations.walkthroughs
+                .cancelSnapshot(DomainWalkthroughOperationId.make(request.operationId))
+                .pipe(Effect.map((operation) => ({ operation, operations }))),
+            ),
+          )
+          .pipe(
+            Effect.flatMap(({ operation, operations }) => operationSnapshot(operations, operation)),
             Effect.map((operation) =>
               Schema.decodeUnknownSync(WalkthroughCancelResult)({
                 status: operation.state === "cancelled" ? "cancelled" : "alreadyCompleted",
@@ -93,8 +110,15 @@ export const coreWalkthroughRpcHandlersLayer = WalkthroughBusinessRpcs.toLayer(
             Effect.mapError((error) => cancelFailure(request, error)),
           ),
       "Walkthroughs.getStored": (request) =>
-        core.walkthroughs
-          .getStoredGeneration(domainGeneration(request.reviewGeneration), request.promptVersion)
+        core
+          .pipe(
+            Effect.flatMap((operations) =>
+              operations.walkthroughs.getStoredGeneration(
+                domainGeneration(request.reviewGeneration),
+                request.promptVersion,
+              ),
+            ),
+          )
           .pipe(
             Effect.map((stored) =>
               Option.match(stored, {
@@ -115,6 +139,11 @@ export const coreWalkthroughRpcHandlersLayer = WalkthroughBusinessRpcs.toLayer(
           ),
     }
   }),
+)
+
+/** Walkthrough handlers backed directly by an already-composed operation service. */
+export const coreWalkthroughRpcHandlersLayer = coreWalkthroughRpcHandlersWithRuntimeLayer.pipe(
+  Layer.provide(coreRuntimeOperationsLayer),
 )
 
 const domainGeneration = (generation: WalkthroughReviewGeneration) =>

@@ -122,11 +122,12 @@ describe("Core RPC method policy", () => {
   it("publishes the complete business audience without activating unimplemented handlers", () => {
     expect([...CoreBusinessRpcs.requests.keys()]).toEqual([
       "AppState.get",
+      "AppState.update",
       "Walkthroughs.start",
       "Walkthroughs.getOperation",
       "Walkthroughs.cancel",
       "Walkthroughs.getStored",
-      "ReviewAgents.start",
+      "ReviewThreads.runAgent",
       "ReviewAgents.getOperation",
       "ReviewAgents.cancel",
     ])

@@ -29,7 +29,8 @@ const authorization = AuthorizeDatabaseOwnershipRequest.make({
 
 const makeHostSession = (death: Deferred.Deferred<void>): CoreAuthenticatedHostSessionOperations =>
   CoreAuthenticatedHostSession.of({
-    authenticated: () => Effect.void,
+    authenticated: () => Effect.succeed(true),
+    isAuthenticated: () => Effect.succeed(true),
     disconnected: () => Effect.void,
     awaitDeath: Deferred.await(death),
   })

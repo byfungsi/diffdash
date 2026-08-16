@@ -27,6 +27,7 @@ export const CoreProcessStartupConfiguration = Schema.Struct({
     Schema.check(Schema.isMinLength(1)),
     Schema.check(Schema.isMaxLength(4_096)),
   ),
+  coreConfiguration: Schema.Json,
   token: Schema.RedactedFromValue(TransportToken),
 }).annotate({ identifier: "CoreProcessStartupConfiguration" })
 

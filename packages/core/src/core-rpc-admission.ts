@@ -455,7 +455,7 @@ const reviewAgentStartAdmissionLayer = Layer.effect(
               ? Effect.fail(
                   ReviewAgentStartFailure.make({
                     ...requestIdentity(request),
-                    method: "ReviewAgents.start",
+            method: "ReviewThreads.runAgent",
                     runId: null,
                     code: reviewAgentAdmissionCode(code),
                     safeMessage: reviewAgentAdmissionMessage(code),
@@ -467,7 +467,7 @@ const reviewAgentStartAdmissionLayer = Layer.effect(
             Effect.die(
               ReviewAgentStartFailure.make({
                 ...requestIdentity(request),
-                method: "ReviewAgents.start",
+        method: "ReviewThreads.runAgent",
                 runId: null,
                 code: "REVIEW_AGENT_INTERNAL_ERROR",
                 safeMessage: "DiffDash Core encountered an internal review-agent error.",

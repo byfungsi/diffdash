@@ -806,7 +806,7 @@ const stateDeliveryConformance = Effect.gen(function* () {
     "CoreCommands.acknowledge": () => Effect.succeed(bunCommand),
   })
   const client = yield* RpcTest.makeClient(CoreStateDeliveryRpcs).pipe(Effect.provide(handlers))
-  const replay = yield* client["CoreEvents.replay"]({ context: request, afterSequence: null })
+  const replay = yield* client["CoreEvents.replay"]({ context: request, cursor: null })
   const listed = yield* client["CoreCommands.listUnacknowledged"](
     CoreCommandListRequest.make({ context: request, limit: 10 }),
   )

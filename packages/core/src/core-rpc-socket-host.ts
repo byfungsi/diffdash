@@ -23,7 +23,11 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 import * as SocketServer from "effect/unstable/socket/SocketServer"
 
-import { coreRpcServerLayer, coreWalkthroughRpcServerLayer } from "./core-rpc-server"
+import {
+  coreApplicationRpcServerLayer,
+  coreRpcServerLayer,
+  coreWalkthroughRpcServerLayer,
+} from "./core-rpc-server"
 import {
   CoreAuthenticatedHostSession,
   coreAuthenticatedHostSessionLayer,
@@ -386,6 +390,14 @@ const boundedWalkthroughSocketProtocolLayer = (
 export const coreRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
   const hostSessionLayer = coreAuthenticatedHostSessionLayer
   return coreRpcServerLayer(options, hostSessionLayer).pipe(
+    Layer.provideMerge(hostDeathAwareProtocolLayer(options, hostSessionLayer)),
+  )
+}
+
+/** Runs the aggregate authenticated production catalog over one private native socket. */
+export const coreApplicationRpcSocketHostLayer = (options: CoreRpcSocketHostOptions) => {
+  const hostSessionLayer = coreAuthenticatedHostSessionLayer
+  return coreApplicationRpcServerLayer(options, hostSessionLayer).pipe(
     Layer.provideMerge(hostDeathAwareProtocolLayer(options, hostSessionLayer)),
   )
 }

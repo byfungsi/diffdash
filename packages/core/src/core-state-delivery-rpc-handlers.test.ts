@@ -147,7 +147,13 @@ describe("Core state delivery RPC handlers", () => {
         })
 
         const replay = yield* client["CoreEvents.replay"](
-          CoreEventReplayRequest.make({ context, afterSequence: CoreEventSequence.make(1) }),
+          CoreEventReplayRequest.make({
+            context,
+            cursor: {
+              processEpoch: context.processEpoch,
+              sequence: CoreEventSequence.make(1),
+            },
+          }),
         )
         expect(replay).toMatchObject({ kind: "replay", events: [{ kind: "operationTerminal" }] })
 
@@ -181,13 +187,23 @@ describe("Core state delivery RPC handlers", () => {
       return yield* Effect.gen(function* () {
         yield* ready
         const client = yield* RpcTest.makeClient(CoreStateDeliveryRpcs)
+        const restarted = yield* client["CoreEvents.replay"](
+          CoreEventReplayRequest.make({
+            context,
+            cursor: {
+              processEpoch: CoreProcessEpoch.make("epoch-before-restart"),
+              sequence: CoreEventSequence.make(1),
+            },
+          }),
+        )
+        expect(restarted).toMatchObject({ kind: "resyncRequired", reason: "epochChanged" })
         const stale = yield* client["CoreEvents.replay"](
           CoreEventReplayRequest.make({
             context: HostRequestContext.make({
               ...context,
               processEpoch: CoreProcessEpoch.make("epoch-stale"),
             }),
-            afterSequence: null,
+            cursor: null,
           }),
         ).pipe(Effect.flip)
         expect(stale).toMatchObject({ code: "CORE_REQUEST_IDENTITY_MISMATCH" })

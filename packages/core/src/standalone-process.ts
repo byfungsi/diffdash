@@ -6,16 +6,28 @@ import {
   CORE_PROCESS_STARTUP_MAX_BYTES,
   decodeCoreProcessStartupConfiguration,
 } from "@diffdash/core-rpc/process-startup"
-import { FileStorage } from "@diffdash/settings/file-storage"
-import { AppState } from "@diffdash/settings/app-state"
-import { Effect, Layer, Option, Schema } from "effect"
+import { CoreCommandStore } from "@diffdash/persistence/core-command-store"
+import type { DatabaseError } from "@diffdash/persistence/database"
+import { Context, Effect, Exit, Layer, Option, Schema } from "effect"
+import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { isAbsolute } from "node:path"
 
 import { coreLifecycleLayer } from "./core-lifecycle"
-import { runCoreHostLifecycle } from "./core-host-lifecycle"
 import { CoreOwnershipRecovery, makeCoreOwnershipRecovery } from "./core-ownership-recovery"
-import { coreRpcSocketHostLayer } from "./core-rpc-socket-host"
+import { coreApplicationRpcSocketHostLayer } from "./core-rpc-socket-host"
 import { nodeDatabaseOwnerInspector, readProcessStartIdentity } from "./node-process-identity"
+import { CoreConfiguration } from "./core-configuration"
+import { createCoreLayer } from "./core-layer"
+import { type CoreProviderComposition, productionProviderComposition } from "./provider-composition"
+import { CoreLifecycle } from "./core-lifecycle"
+import { coreRuntimeServicesLayer, CoreRuntimeServices } from "./core-runtime-services"
+import { makeCoreEventHubLayer, CoreEventHub } from "./core-event-hub"
+import {
+  coreDurableCommandLayer,
+  CoreDurableCommandService,
+} from "./core-durable-command-coordinator"
+import { CoreOperationService } from "./core-operation-service"
+import { toCoreStartupError } from "./core-startup-error"
 
 /** Sanitized startup failure that cannot expose the transport credential or private paths. */
 export class StandaloneCoreProcessError extends Schema.TaggedError<StandaloneCoreProcessError>()(
@@ -34,6 +46,8 @@ const startupFailure = (reason: StandaloneCoreProcessError["reason"]) =>
 
 const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(function* (
   encodedConfiguration: Option.Option<string>,
+  databaseLayerForPath: (path: string) => Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
 ) {
   const configuration = yield* Effect.fromOption(encodedConfiguration).pipe(
     Effect.mapError(() => startupFailure("configuration-invalid")),
@@ -53,6 +67,17 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
   const processStartIdentity = yield* readProcessStartIdentity(process.pid).pipe(
     Effect.mapError(() => startupFailure("host-start-failed")),
   )
+  const coreConfiguration = yield* Schema.decodeUnknownEffect(CoreConfiguration)(
+    configuration.coreConfiguration,
+  ).pipe(
+    Effect.mapError(() => startupFailure("configuration-invalid")),
+    Effect.filterOrFail(
+      (decoded) =>
+        decoded.paths.database === configuration.databasePath &&
+        decoded.paths.state === configuration.statePath,
+      () => startupFailure("configuration-invalid"),
+    ),
+  )
   const ownershipRecovery = makeCoreOwnershipRecovery({
     databasePath: configuration.databasePath,
     pid: process.pid,
@@ -62,37 +87,89 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
   })
 
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
-  const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
-  const appStateLayer = AppState.layer(configuration.statePath).pipe(
-    Layer.provide(fileStorageLayer),
-  )
   const identity = {
     applicationInstanceId: configuration.applicationInstanceId,
     processEpoch: configuration.processEpoch,
   } as const
-  const hostLayer = coreRpcSocketHostLayer({
+  const runtimeServicesLayer = coreRuntimeServicesLayer
+  const hostLayer = coreApplicationRpcSocketHostLayer({
     socketPath: configuration.socketPath,
     token: configuration.token,
   }).pipe(
     Layer.provideMerge(coreLifecycleLayer(identity)),
     Layer.provideMerge(Layer.succeed(CoreOwnershipRecovery, ownershipRecovery)),
-    Layer.provideMerge(appStateLayer),
+    Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(platformLayer),
   )
 
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const context = yield* Layer.build(hostLayer)
-      yield* runCoreHostLifecycle(identity).pipe(Effect.provide(context))
+      const lifecycle = Context.get(context, CoreLifecycle)
+      const runtimeServices = Context.get(context, CoreRuntimeServices)
+      const ownership = Context.get(context, CoreOwnershipRecovery)
+
+      const ownAndRun = Effect.scoped(
+        lifecycle.ownershipAuthorization.pipe(
+          Effect.flatMap((authorizationId) =>
+            lifecycle.interruptOnDrain(
+              Effect.acquireRelease(
+                ownership.acquireAndRecover({ ...identity, authorizationId }),
+                (lease) => lease.release,
+              ),
+            ),
+          ),
+          Effect.andThen(
+            Effect.gen(function* () {
+              const databaseLayer = databaseLayerForPath(coreConfiguration.paths.database)
+              const eventLayer = makeCoreEventHubLayer(identity)
+              const commandLayer = coreDurableCommandLayer.pipe(
+                Layer.provide(CoreCommandStore.layer),
+                Layer.provide(eventLayer),
+                Layer.provide(databaseLayer),
+              )
+              const operationLayer = createCoreLayer(
+                coreConfiguration,
+                databaseLayer,
+                providerComposition,
+              )
+              const runtimeContext = yield* Layer.build(
+                Layer.mergeAll(operationLayer, commandLayer, eventLayer),
+              )
+              const operations = Context.get(runtimeContext, CoreOperationService)
+              yield* operations.start
+              yield* runtimeServices.install({
+                operations,
+                commands: Context.get(runtimeContext, CoreDurableCommandService),
+                events: Context.get(runtimeContext, CoreEventHub),
+              })
+              yield* lifecycle.completeRecovery
+              return yield* Effect.never
+            }),
+          ),
+          Effect.tapError((error) =>
+            runtimeServices
+              .fail(toCoreStartupError(error))
+              .pipe(Effect.andThen(lifecycle.fail), Effect.ignore),
+          ),
+        ),
+      )
+      const exit = yield* Effect.exit(ownAndRun)
+      yield* lifecycle.completeShutdown
+      if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
     }),
   ).pipe(Effect.mapError(() => startupFailure("host-start-failed")))
 })
 
 /** Runs standalone Core with process-derived persisted ownership and recovery. */
-export const runStandaloneCoreProcess = (): void => {
+export const runStandaloneCoreProcess = (
+  databaseLayerForPath: (path: string) => Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition = productionProviderComposition,
+): void => {
   const encodedConfiguration = Option.fromNullishOr(process.env[CORE_PROCESS_STARTUP_ENV])
   delete process.env[CORE_PROCESS_STARTUP_ENV]
-  NodeRuntime.runMain(launchStandaloneCoreProcess(encodedConfiguration), {
-    disableErrorReporting: true,
-  })
+  NodeRuntime.runMain(
+    launchStandaloneCoreProcess(encodedConfiguration, databaseLayerForPath, providerComposition),
+    { disableErrorReporting: true },
+  )
 }

@@ -9,6 +9,7 @@ import {
   type CoreProcessSpawner,
 } from "./core-process-launcher"
 import type { CoreHostTransportConfiguration } from "./core-host-bootstrap"
+import type { CoreConfiguration } from "@diffdash/core"
 
 const utilityProcessSpawner: CoreProcessSpawner = {
   spawn: ({ entrypointPath, encodedStartupConfiguration }) => {
@@ -33,6 +34,7 @@ export interface StartCoreUtilityProcessOptions {
   readonly configuration: CoreHostTransportConfiguration
   readonly databasePath: string
   readonly statePath: string
+  readonly coreConfiguration: CoreConfiguration
   readonly listenTimeout?: number
 }
 

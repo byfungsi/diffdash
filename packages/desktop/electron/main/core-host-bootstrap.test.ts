@@ -26,6 +26,16 @@ import {
   type CoreHostBootstrapState,
 } from "./core-host-bootstrap"
 import { CoreRpcClient, CoreRpcHealthVerificationError } from "./core-rpc-client"
+
+const unusedApplicationMethods = {
+  cancelWalkthrough: () => Effect.die("Not used by bootstrap tests."),
+  execute: () => Effect.die("Not used by bootstrap tests."),
+  getReviewAgentOperation: () => Effect.die("Not used by bootstrap tests."),
+  getStoredWalkthrough: () => Effect.die("Not used by bootstrap tests."),
+  getWalkthroughOperation: () => Effect.die("Not used by bootstrap tests."),
+  shutdown: () => Effect.die("Not used by bootstrap tests."),
+  startWalkthrough: () => Effect.die("Not used by bootstrap tests."),
+}
 import { VerifiedCoreArtifact } from "./core-artifact"
 
 const applicationInstanceId = ApplicationInstanceId.make("app-bootstrap")
@@ -49,7 +59,20 @@ const artifact = new VerifiedCoreArtifact({
   device: artifactInfo.dev,
   inode: Option.some(artifactInfo.ino),
   size: BigInt(artifactInfo.size),
-  runtime: { utility: true, bun: { minimumVersion: "1.2.0", architecture: process.arch } },
+  bunEntrypointPath: realpathSync(artifactEntrypoint),
+  bunEntrypointSha256: createHash("sha256").update(artifactContents).digest("hex"),
+  bunDevice: artifactInfo.dev,
+  bunInode: Option.some(artifactInfo.ino),
+  bunSize: BigInt(artifactInfo.size),
+  runtime: {
+    utility: true,
+    bun: {
+      minimumVersion: "1.2.0",
+      architecture: process.arch,
+      entrypoint: "core-bun.mjs",
+      entrypointSha256: createHash("sha256").update(artifactContents).digest("hex"),
+    },
+  },
 })
 
 const options = {
@@ -82,6 +105,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: (request) =>
@@ -132,6 +156,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
@@ -174,6 +199,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
@@ -238,6 +264,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
@@ -279,6 +306,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>
@@ -322,6 +350,7 @@ describe("Core host bootstrap", () => {
           Layer.succeed(
             CoreRpcClient,
             CoreRpcClient.of({
+              ...unusedApplicationMethods,
               authorizeDatabaseOwnership: (request) =>
                 Effect.succeed({ ...request, lifecycle: "recovering" as const }),
               health: () =>

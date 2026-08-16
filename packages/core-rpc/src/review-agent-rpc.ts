@@ -41,7 +41,7 @@ export const ReviewAgentCancelDefectSchema = ReviewAgentCancelFailure.pipe(
 )
 
 /** Business RPC that durably accepts and detaches one review-agent response. */
-export const ReviewAgentStartRpc = Rpc.make("ReviewAgents.start", {
+export const ReviewAgentStartRpc = Rpc.make("ReviewThreads.runAgent", {
   payload: StartReviewAgentOperationRequest,
   success: ReviewAgentOperationAccepted,
   error: ReviewAgentStartFailure,

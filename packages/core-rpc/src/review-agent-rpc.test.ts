@@ -80,14 +80,14 @@ const passAdmissionLayer = Layer.mergeAll(
 describe("review-agent RPC declarations", () => {
   it.effect("runs short start, state, and cancellation through native Effect RPC", () => {
     const handlers = ReviewAgentBusinessRpcs.toLayer({
-      "ReviewAgents.start": () => Effect.succeed(accepted),
+      "ReviewThreads.runAgent": () => Effect.succeed(accepted),
       "ReviewAgents.getOperation": () => Effect.succeed(running),
       "ReviewAgents.cancel": () => Effect.succeed(cancelled),
     })
 
     return Effect.gen(function* () {
       const client = yield* RpcTest.makeClient(ReviewAgentBusinessRpcs)
-      expect(yield* client["ReviewAgents.start"](startRequest)).toEqual(accepted)
+      expect(yield* client["ReviewThreads.runAgent"](startRequest)).toEqual(accepted)
       expect(yield* client["ReviewAgents.getOperation"](operationRequest)).toEqual(running)
       expect(yield* client["ReviewAgents.cancel"](operationRequest)).toEqual(cancelled)
     }).pipe(Effect.provide(handlers), Effect.provide(passAdmissionLayer))
@@ -97,20 +97,20 @@ describe("review-agent RPC declarations", () => {
     const failure = ReviewAgentStartFailure.make({
       _tag: "ReviewAgentOperationFailure",
       ...identity,
-      method: "ReviewAgents.start",
+      method: "ReviewThreads.runAgent",
       runId,
       code: "REVIEW_AGENT_OPERATION_REJECTED",
       safeMessage: "This thread already has an active review-agent response.",
     })
     const handlers = ReviewAgentBusinessRpcs.toLayer({
-      "ReviewAgents.start": () => Effect.fail(failure),
+      "ReviewThreads.runAgent": () => Effect.fail(failure),
       "ReviewAgents.getOperation": () => Effect.succeed(running),
       "ReviewAgents.cancel": () => Effect.succeed(cancelled),
     })
 
     return Effect.gen(function* () {
       const client = yield* RpcTest.makeClient(ReviewAgentBusinessRpcs)
-      const received = yield* client["ReviewAgents.start"](startRequest).pipe(Effect.flip)
+      const received = yield* client["ReviewThreads.runAgent"](startRequest).pipe(Effect.flip)
       expect(received).toEqual(failure)
       expect(received).not.toBeInstanceOf(Error)
       expect(received.runId).toBe(runId)

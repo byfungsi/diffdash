@@ -1,4 +1,4 @@
-import { CoreMethod, type CoreConfiguration } from "@diffdash/core"
+import { CoreMethod } from "@diffdash/core"
 import { Effect, Predicate } from "effect"
 import {
   app,
@@ -106,7 +106,7 @@ const start = async (
     openExternal: (url) => shell.openExternal(url),
     rendererEntry: configuration.renderer,
   })
-  const applicationRuntime = composition.createApplicationRuntime(configuration.core)
+  const applicationRuntime = composition.createApplicationRuntime(configuration)
   const updater = createApplicationUpdater(configuration)
   const shutdown = createShutdown({
     dispose: () => disposeApplicationResources(updater, applicationRuntime),
@@ -146,7 +146,7 @@ const start = async (
 
 /** Required runtime wiring selected by the concrete production or E2E entrypoint. */
 export interface DesktopApplicationComposition {
-  readonly createApplicationRuntime: (configuration: CoreConfiguration) => ApplicationRuntime
+  readonly createApplicationRuntime: (configuration: DesktopHostConfiguration) => ApplicationRuntime
   readonly resolveHostConfiguration: (
     identity: ApplicationIdentity,
   ) => Effect.Effect<DesktopHostConfiguration, DesktopHostConfigurationError>

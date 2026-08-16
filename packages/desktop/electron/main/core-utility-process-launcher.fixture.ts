@@ -8,6 +8,7 @@ import { app } from "electron"
 import { verifyCoreArtifact } from "./core-artifact"
 import { bootstrapCoreHost } from "./core-host-bootstrap"
 import { startCoreUtilityProcess } from "./core-utility-process-launcher"
+import { makeCoreProcessFixtureConfiguration } from "./core-process-configuration.fixture"
 
 const [artifactDirectory, temporaryDirectory, statePath, expectedBuildId] = process.argv.slice(2)
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
@@ -35,6 +36,7 @@ const probe = Effect.gen(function* () {
         configuration,
         databasePath: `${statePath}.sqlite`,
         statePath,
+        coreConfiguration: makeCoreProcessFixtureConfiguration(`${statePath}.sqlite`, statePath),
       }),
   })
   console.info(`DIFFDASH_CORE_UTILITY_PROBE_READY:${session.health.lifecycle}`)

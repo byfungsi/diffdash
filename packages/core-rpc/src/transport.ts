@@ -1,9 +1,11 @@
 import { CoreTransportAuthenticationMiddleware } from "./admission"
-import { AppStateBusinessRpcs, CoreBusinessRpcs } from "./business"
+import { AppStateBusinessRpcs, AppStateUpdateRpcs, CoreBusinessRpcs } from "./business"
 import { CoreControlRpcs } from "./control"
 import { CoreStateDeliveryRpcs } from "./event-rpc"
 import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
-import { ReviewAgentBusinessRpcs } from "./review-agent-rpc"
+import { ReviewAgentBusinessRpcs, ReviewAgentStartRpc } from "./review-agent-rpc"
+import { CoreApplicationRpcs } from "./application-rpc"
+import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
 /** Private native RPC header carrying the one-time Core transport credential. */
 export const CORE_TRANSPORT_TOKEN_HEADER = "x-diffdash-core-token"
@@ -33,9 +35,29 @@ export const AuthenticatedCoreBusinessRpcs = CoreBusinessRpcs.middleware(
   CoreTransportAuthenticationMiddleware,
 )
 
+/** Authenticated application methods not owned by a specialized native group. */
+export const AuthenticatedCoreApplicationMethodRpcs = CoreApplicationRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
 const AuthenticatedAppStateBusinessRpcs = AppStateBusinessRpcs.middleware(
   CoreTransportAuthenticationMiddleware,
 )
+
+const AuthenticatedAppStateUpdateRpcs = AppStateUpdateRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
+const AuthenticatedReviewAgentStartRpcs = RpcGroup.make(
+  ReviewAgentStartRpc.middleware(CoreTransportAuthenticationMiddleware),
+)
+
+/** One authenticated native declaration for every closed Core business method. */
+export const AuthenticatedCoreMethodRpcs = AuthenticatedCoreApplicationMethodRpcs.merge(
+  AuthenticatedAppStateBusinessRpcs,
+)
+  .merge(AuthenticatedAppStateUpdateRpcs)
+  .merge(AuthenticatedReviewAgentStartRpcs)
 
 /** Authenticated server group for methods backed by concrete handlers in the current Core. */
 export const AuthenticatedCoreServerRpcs = AuthenticatedCoreControlRpcs.merge(
@@ -67,10 +89,20 @@ export const AuthenticatedCoreStateDeliveryRpcs = CoreStateDeliveryRpcs.middlewa
   CoreTransportAuthenticationMiddleware,
 )
 
+/** One authenticated production catalog for control and every application operation family. */
+export const AuthenticatedCoreApplicationRpcs = AuthenticatedCoreControlRpcs.merge(
+  AuthenticatedCoreApplicationMethodRpcs,
+)
+  .merge(AuthenticatedAppStateBusinessRpcs)
+  .merge(AuthenticatedAppStateUpdateRpcs)
+  .merge(AuthenticatedWalkthroughBusinessRpcs)
+  .merge(AuthenticatedReviewAgentBusinessRpcs)
+  .merge(AuthenticatedCoreStateDeliveryRpcs)
+
 /** Standalone-capable server catalog for control, event replay, and durable commands. */
 export const AuthenticatedCoreStateDeliveryServerRpcs = AuthenticatedCoreControlRpcs.merge(
   AuthenticatedCoreStateDeliveryRpcs,
 )
 
 /** Standalone-capable host client catalog matching the state-delivery server audience. */
-export const AuthenticatedCoreHostClientRpcs = AuthenticatedCoreStateDeliveryServerRpcs
+export const AuthenticatedCoreHostClientRpcs = AuthenticatedCoreApplicationRpcs

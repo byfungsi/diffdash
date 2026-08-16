@@ -8,6 +8,7 @@ import {
 } from "@diffdash/domain/review-identity"
 import { utf8ByteLength } from "@diffdash/domain/utf8"
 import {
+  WALKTHROUGH_PROMPT_VERSION,
   WalkthroughChapterId,
   WalkthroughGenerationMode,
   WalkthroughHunkId,
@@ -22,6 +23,9 @@ import {
   WalkthroughOperationTimestamp,
 } from "@diffdash/domain/walkthrough-operation"
 import { Schema } from "effect"
+
+/** Current walkthrough prompt identity used for exact stored-artifact lookups. */
+export const CurrentWalkthroughPromptVersion = WALKTHROUGH_PROMPT_VERSION
 
 import { CoreRpcRetryClass, CoreRpcSafeMessage } from "./failure"
 import {

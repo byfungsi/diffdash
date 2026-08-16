@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./admission": "./src/admission.ts",
+    "./application-rpc": "./src/application-rpc.ts",
     "./business": "./src/business.ts",
     "./control": "./src/control.ts",
     "./event": "./src/event.ts",
@@ -18,6 +19,9 @@
     "./process-startup": "./src/process-startup.ts",
     "./review-agent": "./src/review-agent.ts",
     "./review-agent-rpc": "./src/review-agent-rpc.ts",
+    "./review-session": "./src/review-session.ts",
+    "./review-session-rpc": "./src/review-session-rpc.ts",
+    "./review-session-rpc-admission": "./src/review-session-rpc-admission.ts",
     "./transport": "./src/transport.ts",
     "./walkthrough": "./src/walkthrough.ts",
     "./walkthrough-rpc": "./src/walkthrough-rpc.ts"

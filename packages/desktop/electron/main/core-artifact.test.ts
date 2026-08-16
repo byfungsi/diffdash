@@ -20,6 +20,7 @@ const workerBuildId = `review-worker-v1-${workerChecksum.slice(0, 20)}-${workerC
 const writeArtifact = (manifest: object, contents = entrypoint) => {
   const directory = mkdtempSync(join(tmpdir(), "dd-core-artifact-"))
   writeFileSync(join(directory, "core.mjs"), contents)
+  writeFileSync(join(directory, "core-bun.mjs"), contents)
   writeFileSync(join(directory, "review-worker-node.mjs"), workerEntrypoint)
   writeFileSync(join(directory, "review-worker-bun.mjs"), workerEntrypoint)
   writeFileSync(join(directory, "manifest.json"), JSON.stringify(manifest))
@@ -42,7 +43,15 @@ const validManifest = {
     node: { entrypoint: "review-worker-node.mjs", entrypointSha256: workerChecksum },
     bun: { entrypoint: "review-worker-bun.mjs", entrypointSha256: workerChecksum },
   },
-  runtime: { utility: true, bun: { minimumVersion: "1.2.0", architecture: process.arch } },
+  runtime: {
+    utility: true,
+    bun: {
+      minimumVersion: "1.2.0",
+      architecture: process.arch,
+      entrypoint: "core-bun.mjs",
+      entrypointSha256: checksum,
+    },
+  },
 } as const
 
 describe("Core artifact verification", () => {
@@ -60,7 +69,12 @@ describe("Core artifact verification", () => {
         entrypointSha256: checksum,
         runtime: {
           utility: true,
-          bun: { minimumVersion: "1.2.0", architecture: process.arch },
+          bun: {
+            minimumVersion: "1.2.0",
+            architecture: process.arch,
+            entrypoint: "core-bun.mjs",
+            entrypointSha256: checksum,
+          },
         },
       })
       yield* revalidateCoreArtifact(artifact)
