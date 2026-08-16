@@ -18,6 +18,12 @@ import type {
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
+import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
+import type { ReviewSessionGateway } from "../review/progressive-review-session"
+import {
+  createProgressiveReviewApi,
+  createProgressiveReviewSessionGateway,
+} from "./progressive-review"
 
 /** Renderer review discovery and immutable snapshot page/search capabilities. */
 export class ReviewContent extends Context.Service<
@@ -45,6 +51,8 @@ export class ReviewContent extends Context.Service<
         request: ReviewSnapshotSearchRequest,
       ) => Effect.Effect<ReviewSnapshotSearchResponse, RendererApiError>
     }
+    readonly progressive: ProgressiveReviewApi
+    readonly progressiveSessions: ReviewSessionGateway
   }
 >()("@diffdash/app/ReviewContent") {}
 
@@ -53,6 +61,7 @@ export const reviewContentLayer = Layer.effect(
   ReviewContent,
   Effect.gen(function* () {
     const api = yield* PreloadClient
+    const progressive = createProgressiveReviewApi(api.progressiveReviews)
     return ReviewContent.of({
       hostedReviews: {
         list: (request) =>
@@ -80,6 +89,8 @@ export const reviewContentLayer = Layer.effect(
             api.reviewSnapshots.search(request),
           ),
       },
+      progressive,
+      progressiveSessions: createProgressiveReviewSessionGateway(progressive),
     })
   }),
 )

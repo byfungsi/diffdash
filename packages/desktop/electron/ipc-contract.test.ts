@@ -8,6 +8,9 @@ import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/r
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
+import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
 import { ProcessExitError } from "@diffdash/process"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
@@ -532,6 +535,56 @@ describe("IPC contract", () => {
     })
   })
 
+  it("maps typed progressive review failures to safe renderer diagnostics", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const baseRuntime = testRuntime("Progressive failure test must not invoke other handlers")
+    const failure = CoreReviewSessionFailure.make({
+      applicationInstanceId: ApplicationInstanceId.make("app"),
+      processEpoch: CoreProcessEpoch.make("epoch"),
+      requestId: HostRequestId.make("h:request"),
+      method: "Reviews.openSession",
+      code: "REVIEW_SNAPSHOT_NOT_FOUND",
+      retryClass: "userAction",
+      safeMessage: "The requested review snapshot no longer exists.",
+    })
+    const runtime: ApplicationRuntime = {
+      ...baseRuntime,
+      progressiveReviews: {
+        ...baseRuntime.progressiveReviews,
+        openSession: async () => Promise.reject(failure),
+      },
+    }
+    const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
+    defineIpcHandlers(
+      runtime,
+      testUpdater(),
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      shutdown,
+      testHostConfiguration(),
+    )
+    registry.install()
+
+    const response = await host.installed.get(InvokeChannel.openProgressiveReviewSession)?.(
+      trustedEvent(),
+      {
+        projectId: ReviewProjectId.make("project"),
+        reviewKey: ReviewKey.make("review"),
+        snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000001"),
+      },
+    )
+    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
+
+    expect(envelope.error).toMatchObject({
+      code: "REVIEW_SNAPSHOT_NOT_FOUND",
+      message: "The requested review snapshot no longer exists.",
+      operation: InvokeChannel.openProgressiveReviewSession,
+    })
+  })
+
   it("redacts unknown controller errors before encoding the failure envelope", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
@@ -940,5 +993,15 @@ const testRuntime = (message: string): ApplicationRuntime => ({
     getStored: async () => {
       throw new Error(message)
     },
+  },
+  progressiveReviews: {
+    openSession: async () => Promise.reject(new Error(message)),
+    currentSession: async () => Promise.reject(new Error(message)),
+    closeSession: async () => Promise.reject(new Error(message)),
+    inventory: async () => Promise.reject(new Error(message)),
+    readRange: async () => Promise.reject(new Error(message)),
+    waitForRange: async () => Promise.reject(new Error(message)),
+    resolveTarget: async () => Promise.reject(new Error(message)),
+    search: async () => Promise.reject(new Error(message)),
   },
 })

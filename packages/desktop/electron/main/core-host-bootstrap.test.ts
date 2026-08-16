@@ -4,7 +4,7 @@ import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdas
 import { CoreHealth } from "@diffdash/core-rpc/lifecycle"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { describe, expect, it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Option, Redacted, Ref } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Redacted, Ref, Stream } from "effect"
 import { createHash } from "node:crypto"
 import {
   existsSync,
@@ -35,6 +35,14 @@ const unusedApplicationMethods = {
   getWalkthroughOperation: () => Effect.die("Not used by bootstrap tests."),
   shutdown: () => Effect.die("Not used by bootstrap tests."),
   startWalkthrough: () => Effect.die("Not used by bootstrap tests."),
+  openReviewSession: () => Effect.die("Not used by bootstrap tests."),
+  currentReviewSession: () => Effect.die("Not used by bootstrap tests."),
+  closeReviewSession: () => Effect.die("Not used by bootstrap tests."),
+  reviewInventory: () => Effect.die("Not used by bootstrap tests."),
+  readReviewRange: () => Effect.die("Not used by bootstrap tests."),
+  waitForReviewRange: () => Effect.die("Not used by bootstrap tests."),
+  resolveReviewTarget: () => Effect.die("Not used by bootstrap tests."),
+  searchReview: () => Stream.die("Not used by bootstrap tests."),
 }
 import { VerifiedCoreArtifact } from "./core-artifact"
 

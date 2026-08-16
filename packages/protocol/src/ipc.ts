@@ -70,6 +70,20 @@ import {
   RepositoryComparisonWalkthroughRequest,
 } from "./review-snapshot"
 import {
+  CloseReviewSessionRequest,
+  CurrentReviewSessionRequest,
+  OpenReviewSessionRequest,
+  ResolvedReviewSessionTarget,
+  ReviewSessionInventoryPage,
+  ReviewSessionInventoryRequest,
+  ReviewSessionRange,
+  ReviewSessionRangeRequest,
+  ReviewSessionSearchPublication,
+  ReviewSessionSearchRequest,
+  ReviewSessionState,
+  ReviewSessionTargetRequest,
+} from "./review-session"
+import {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
   ReviewThreadIdRequest,
@@ -299,6 +313,54 @@ export const InvokeContract = {
       maxRequestBytes: 64 * KIB,
       maxResponseBytes: REVIEW_SNAPSHOT_SEARCH_MAX_BYTES + KIB,
     },
+  ),
+  [InvokeChannel.openProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.openProgressiveReviewSession,
+    OpenReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.getProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.getProgressiveReviewSession,
+    CurrentReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.closeProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.closeProgressiveReviewSession,
+    CloseReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.getProgressiveReviewInventory]: defineInvoke(
+    InvokeChannel.getProgressiveReviewInventory,
+    ReviewSessionInventoryRequest,
+    ReviewSessionInventoryPage,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
+  ),
+  [InvokeChannel.readProgressiveReviewRange]: defineInvoke(
+    InvokeChannel.readProgressiveReviewRange,
+    ReviewSessionRangeRequest,
+    ReviewSessionRange,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.waitForProgressiveReviewRange]: defineInvoke(
+    InvokeChannel.waitForProgressiveReviewRange,
+    ReviewSessionRangeRequest,
+    ReviewSessionRange,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.resolveProgressiveReviewTarget]: defineInvoke(
+    InvokeChannel.resolveProgressiveReviewTarget,
+    ReviewSessionTargetRequest,
+    ResolvedReviewSessionTarget,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.searchProgressiveReview]: defineInvoke(
+    InvokeChannel.searchProgressiveReview,
+    ReviewSessionSearchRequest,
+    Schema.Array(ReviewSessionSearchPublication).pipe(Schema.check(Schema.isMaxLength(256))),
+    { maxRequestBytes: 16 * KIB, maxResponseBytes: 384 * KIB },
   ),
   [InvokeChannel.generateLocalWalkthrough]: defineInvoke(
     InvokeChannel.generateLocalWalkthrough,

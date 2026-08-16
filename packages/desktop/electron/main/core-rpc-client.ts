@@ -59,7 +59,22 @@ import {
   CORE_RPC_INCOMPLETE_BUFFER_BYTES,
   CORE_TRANSPORT_TOKEN_HEADER,
 } from "@diffdash/core-rpc/transport"
-import { Context, Effect, Layer, Redacted, Schema } from "effect"
+import type {
+  CoreResolvedReviewTarget,
+  CoreReviewInventoryPage,
+  CoreReviewInventoryRequest,
+  CoreReviewRange,
+  CoreReviewRangeRequest,
+  CoreReviewSearchPublication,
+  CoreReviewSearchRequest,
+  CoreReviewSessionFailure,
+  CoreReviewSessionRequest,
+  CoreReviewSessionState,
+  CoreReviewTargetRequest,
+  OpenCoreReviewSessionRequest,
+} from "@diffdash/core-rpc/review-session"
+import { Context, Effect, Layer, Redacted, Schema, Stream } from "effect"
+import * as Headers from "effect/unstable/http/Headers"
 import * as RpcClient from "effect/unstable/rpc/RpcClient"
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
@@ -75,6 +90,11 @@ type CoreRpcApplicationOutput<Method extends CoreMethod> = Method extends "Revie
 type CoreRpcApplicationFailure =
   | CoreApplicationFailure
   | ReviewAgentStartFailure
+  | CoreTransportAuthenticationFailure
+  | RpcClientError
+
+type CoreProgressiveReviewFailure =
+  | CoreReviewSessionFailure
   | CoreTransportAuthenticationFailure
   | RpcClientError
 
@@ -162,6 +182,30 @@ export class CoreRpcClient extends Context.Service<
       | CoreTransportAuthenticationFailure
       | RpcClientError
     >
+    readonly openReviewSession: (
+      request: OpenCoreReviewSessionRequest,
+    ) => Effect.Effect<CoreReviewSessionState, CoreProgressiveReviewFailure>
+    readonly currentReviewSession: (
+      request: CoreReviewSessionRequest,
+    ) => Effect.Effect<CoreReviewSessionState, CoreProgressiveReviewFailure>
+    readonly closeReviewSession: (
+      request: CoreReviewSessionRequest,
+    ) => Effect.Effect<CoreReviewSessionState, CoreProgressiveReviewFailure>
+    readonly reviewInventory: (
+      request: CoreReviewInventoryRequest,
+    ) => Effect.Effect<CoreReviewInventoryPage, CoreProgressiveReviewFailure>
+    readonly readReviewRange: (
+      request: CoreReviewRangeRequest,
+    ) => Effect.Effect<CoreReviewRange, CoreProgressiveReviewFailure>
+    readonly waitForReviewRange: (
+      request: CoreReviewRangeRequest,
+    ) => Effect.Effect<CoreReviewRange, CoreProgressiveReviewFailure>
+    readonly resolveReviewTarget: (
+      request: CoreReviewTargetRequest,
+    ) => Effect.Effect<CoreResolvedReviewTarget, CoreProgressiveReviewFailure>
+    readonly searchReview: (
+      request: CoreReviewSearchRequest,
+    ) => Stream.Stream<CoreReviewSearchPublication, CoreProgressiveReviewFailure>
     readonly shutdown: (
       request: HostRequestContext,
     ) => Effect.Effect<
@@ -240,6 +284,9 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
   return Layer.effectContext(
     Effect.gen(function* () {
       const client = yield* RpcClient.make(AuthenticatedCoreHostClientRpcs, { flatten: true })
+      const authenticationHeaders = Headers.fromInput({
+        [CORE_TRANSPORT_TOKEN_HEADER]: Redacted.value(options.token),
+      })
 
       const authenticated = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
@@ -284,6 +331,36 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
       const shutdown = Effect.fn("CoreRpcClient.shutdown")((request: HostRequestContext) =>
         authenticated(client("Core.shutdown", request)),
       )
+      const openReviewSession = Effect.fn("CoreRpcClient.openReviewSession")(
+        (request: OpenCoreReviewSessionRequest) =>
+          authenticated(client("Reviews.openSession", request)),
+      )
+      const currentReviewSession = Effect.fn("CoreRpcClient.currentReviewSession")(
+        (request: CoreReviewSessionRequest) =>
+          authenticated(client("Reviews.currentSession", request)),
+      )
+      const closeReviewSession = Effect.fn("CoreRpcClient.closeReviewSession")(
+        (request: CoreReviewSessionRequest) =>
+          authenticated(client("Reviews.closeSession", request)),
+      )
+      const reviewInventory = Effect.fn("CoreRpcClient.reviewInventory")(
+        (request: CoreReviewInventoryRequest) =>
+          authenticated(client("Reviews.inventory", request)),
+      )
+      const readReviewRange = Effect.fn("CoreRpcClient.readReviewRange")(
+        (request: CoreReviewRangeRequest) => authenticated(client("Ranges.read", request)),
+      )
+      const waitForReviewRange = Effect.fn("CoreRpcClient.waitForReviewRange")(
+        (request: CoreReviewRangeRequest) => authenticated(client("Ranges.wait", request)),
+      )
+      const resolveReviewTarget = Effect.fn("CoreRpcClient.resolveReviewTarget")(
+        (request: CoreReviewTargetRequest) =>
+          authenticated(client("Navigation.resolveTarget", request)),
+      )
+      const searchReview = (request: CoreReviewSearchRequest) =>
+        client("Search.scan", request).pipe(
+          Stream.provideService(RpcClient.CurrentHeaders, authenticationHeaders),
+        )
 
       const replayEvents = Effect.fn("CoreRpcClient.replayEvents")(
         (request: CoreEventReplayRequest) => authenticated(client("CoreEvents.replay", request)),
@@ -311,6 +388,14 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
             getStoredWalkthrough,
             getWalkthroughOperation,
             health,
+            openReviewSession,
+            currentReviewSession,
+            closeReviewSession,
+            reviewInventory,
+            readReviewRange,
+            waitForReviewRange,
+            resolveReviewTarget,
+            searchReview,
             shutdown,
             startWalkthrough,
           }),

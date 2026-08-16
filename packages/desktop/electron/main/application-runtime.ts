@@ -11,6 +11,7 @@ import {
   type WalkthroughOperationId,
   type WalkthroughOperationResult,
 } from "@diffdash/core"
+import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
 
 type StoredWalkthrough = Extract<
   WalkthroughOperationResult,
@@ -34,6 +35,7 @@ export interface ApplicationRuntime {
     /** Nullable only at the existing Core-to-IPC transport boundary. */
     readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
   }
+  readonly progressiveReviews: ProgressiveReviewApi
   readonly dispose: () => Promise<void>
 }
 
@@ -51,8 +53,20 @@ export const createApplicationRuntime = (core: EmbeddedCore): ApplicationRuntime
       cancel: async (operationId) => unwrapCoreResult(await core.walkthroughs.cancel(operationId)),
       getStored: async (request) => unwrapCoreResult(await core.walkthroughs.getStored(request)),
     },
+    progressiveReviews: unavailableProgressiveReviewApi,
     dispose: core.dispose,
   }
+}
+
+const unavailableProgressiveReviewApi: ProgressiveReviewApi = {
+  openSession: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  currentSession: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  closeSession: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  inventory: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  readRange: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  waitForRange: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  resolveTarget: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
+  search: async () => Promise.reject(new Error("Progressive review RPC is unavailable.")),
 }
 
 /** Projects an explicit Core result into Electron's exception-based IPC adapter boundary. */

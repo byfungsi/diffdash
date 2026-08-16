@@ -38,9 +38,9 @@ import {
   type WalkthroughOperationSnapshot,
 } from "@diffdash/core-rpc/walkthrough"
 import { TempResources } from "@diffdash/process/temp-resource"
-import { Effect, Exit, Layer, Schema, Scope } from "effect"
+import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { randomUUID } from "node:crypto"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -64,6 +64,7 @@ import { makeCoreHostCrashCircuit, superviseReadyCoreHost } from "./core-host-su
 import type { CoreProcessHandle } from "./core-process-launcher"
 import { startCoreUtilityProcessManaged } from "./core-utility-process-launcher"
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
+import { createProgressiveReviewApiGateway } from "./progressive-review-api-gateway"
 
 type ReviewThreadTarget = StartWalkthroughOperation["target"]
 type StoredWalkthrough = Extract<
@@ -257,13 +258,14 @@ export const createExternalApplicationRuntime = (
           : resolve(moduleDirectory, "../../.generated/core")
         const artifact = yield* verifyPackagedCoreArtifact(artifactDirectory)
         const applicationInstanceId = ApplicationInstanceId.make(randomUUID())
+        const privateRuntimeDirectory = tmpdir()
         const bootstrap = (
           startTransport: Parameters<typeof bootstrapCoreHost>[0]["startTransport"],
         ): CoreHostCandidate["start"] =>
           bootstrapCoreHost({
             artifact,
             applicationInstanceId,
-            temporaryDirectory: configuration.core.paths.temporaryDirectory,
+            temporaryDirectory: privateRuntimeDirectory,
             startTransport,
           }).pipe(
             Effect.provideService(Scope.Scope, scope),
@@ -294,7 +296,7 @@ export const createExternalApplicationRuntime = (
           artifact,
           coreConfiguration: configuration.core,
           environment: process.env,
-          temporaryDirectory: configuration.core.paths.temporaryDirectory,
+          temporaryDirectory: privateRuntimeDirectory,
         })
         const bunCandidates = discoverBunRuntimeCandidates({
           environment: process.env,
@@ -414,6 +416,38 @@ export const createExternalApplicationRuntime = (
     }
   }
 
+  const progressiveReviews = createProgressiveReviewApiGateway(
+    {
+      openSession: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.openReviewSession(request))),
+      currentSession: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.currentReviewSession(request))),
+      closeSession: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.closeReviewSession(request))),
+      inventory: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.reviewInventory(request))),
+      readRange: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.readReviewRange(request))),
+      waitForRange: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.waitForReviewRange(request))),
+      resolveTarget: (request) =>
+        requireClient().then((client) => runtime.runPromise(client.resolveReviewTarget(request))),
+      search: (request) => ({
+        async *[Symbol.asyncIterator]() {
+          const client = await requireClient()
+          yield* Stream.toAsyncIterable(client.searchReview(request))
+        },
+      }),
+    },
+    requestContext,
+  )
+
+  const requireClient = async () => {
+    const client = session?.client
+    if (client === undefined) throw new Error("DiffDash Core is not started.")
+    return client
+  }
+
   return {
     start,
     execute,
@@ -479,6 +513,7 @@ export const createExternalApplicationRuntime = (
         }
       },
     },
+    progressiveReviews,
     dispose,
   }
 }

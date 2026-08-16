@@ -77,6 +77,7 @@ import type {
   ViewedFileRecord,
 } from "./viewed-files"
 import type { BridgeResult } from "./ipc"
+import type { ProgressiveReviewApi } from "./review-session"
 
 type EventSubscription<Value> = (listener: (value: Value) => void) => () => void
 
@@ -186,6 +187,7 @@ export interface DiffDashApi {
     readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
     readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
   }
+  readonly progressiveReviews: ProgressiveReviewApi
   readonly viewedFiles: {
     readonly list: (request: HostedViewedFilesRequest) => Promise<readonly ViewedFileRecord[]>
     readonly set: (request: SetHostedViewedFileRequest) => Promise<void>

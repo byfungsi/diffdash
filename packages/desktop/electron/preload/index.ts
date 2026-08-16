@@ -127,6 +127,29 @@ const api: DiffDashBridgeApi = {
     getPage: (request) => transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
     search: (request) => transport.invoke(InvokeChannel.searchReviewSnapshot, request),
   },
+  progressiveReviews: {
+    openSession: (request) => transport.invoke(InvokeChannel.openProgressiveReviewSession, request),
+    currentSession: (request) =>
+      transport.invoke(InvokeChannel.getProgressiveReviewSession, request),
+    closeSession: (request) =>
+      transport.invoke(InvokeChannel.closeProgressiveReviewSession, request),
+    inventory: (request) => transport.invoke(InvokeChannel.getProgressiveReviewInventory, request),
+    readRange: (request) => transport.invoke(InvokeChannel.readProgressiveReviewRange, request),
+    waitForRange: (request) =>
+      transport.invoke(InvokeChannel.waitForProgressiveReviewRange, request),
+    resolveTarget: (request) =>
+      transport.invoke(InvokeChannel.resolveProgressiveReviewTarget, request),
+    search: async (request, onPublication) => {
+      const result = await transport.invoke(InvokeChannel.searchProgressiveReview, request)
+      return Match.valueTags(result, {
+        Failure: (failure) => failure,
+        Success: (success) => {
+          for (const publication of success.value) onPublication(publication)
+          return { _tag: "Success" as const, value: undefined }
+        },
+      })
+    },
+  },
   viewedFiles: {
     list: (request) => transport.invoke(InvokeChannel.listViewedFiles, request),
     set: (request) => transport.invoke(InvokeChannel.setViewedFile, request),

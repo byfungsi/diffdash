@@ -9,14 +9,66 @@ import {
   ReviewSessionState as ReviewSessionStateSchema,
 } from "@diffdash/protocol/review-session"
 import { Schema } from "effect"
+import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
+import { InvokeChannel } from "@diffdash/protocol/channels"
 
 import type {
   ReviewSessionConnection,
   ReviewSessionGateway,
 } from "../review/progressive-review-session"
+import { runRendererPromise } from "./renderer-effect"
+import { invokePreload, invokePreloadVoid } from "./renderer-api-error"
 
 /** Poll interval for authoritative session state while event replay is not yet connected. */
 export const PROGRESSIVE_REVIEW_STATE_POLL_MS = 250
+
+/** Restores typed progressive review values from the context-bridged preload surface. */
+export const createProgressiveReviewApi = (
+  bridge: DiffDashBridgeApi["progressiveReviews"],
+): ProgressiveReviewApi => ({
+  openSession: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.openProgressiveReviewSession, () => bridge.openSession(request)),
+    ),
+  currentSession: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.getProgressiveReviewSession, () =>
+        bridge.currentSession(request),
+      ),
+    ),
+  closeSession: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.closeProgressiveReviewSession, () =>
+        bridge.closeSession(request),
+      ),
+    ),
+  inventory: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.getProgressiveReviewInventory, () => bridge.inventory(request)),
+    ),
+  readRange: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.readProgressiveReviewRange, () => bridge.readRange(request)),
+    ),
+  waitForRange: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.waitForProgressiveReviewRange, () =>
+        bridge.waitForRange(request),
+      ),
+    ),
+  resolveTarget: (request) =>
+    runRendererPromise(
+      invokePreload(InvokeChannel.resolveProgressiveReviewTarget, () =>
+        bridge.resolveTarget(request),
+      ),
+    ),
+  search: (request, onPublication) =>
+    runRendererPromise(
+      invokePreloadVoid(InvokeChannel.searchProgressiveReview, () =>
+        bridge.search(request, onPublication),
+      ),
+    ),
+})
 
 /** Creates the renderer session gateway over the browser-safe preload contract. */
 export const createProgressiveReviewSessionGateway = (

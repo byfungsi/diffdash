@@ -7529,6 +7529,32 @@ const installDiffDashApi = (
       getPage: getReviewSnapshotPage,
       search: searchReviewSnapshot,
     },
+    progressiveReviews: {
+      openSession: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      currentSession: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      closeSession: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      inventory: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      readRange: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      waitForRange: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      resolveTarget: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+      search: async () => {
+        throw new Error("Progressive review fixture is not configured")
+      },
+    },
     repositories: {
       install: calls.installRepository,
       link: calls.linkRepository,
