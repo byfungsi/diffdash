@@ -28,7 +28,7 @@ export const captureMachineProfile = () => ({
 /** Captures path-free disk ownership and capacity for one repository-scale sample. */
 export const measureManagedStorage = async ({ databasePath, managedRoot }) => {
   const [databaseBytes, managedBytes, filesystem] = await Promise.all([
-    entryBytes(databasePath),
+    databaseFamilyBytes(databasePath),
     treeBytes(managedRoot),
     statfs(managedRoot, { bigint: true }),
   ])
@@ -39,6 +39,22 @@ export const measureManagedStorage = async ({ databasePath, managedRoot }) => {
     filesystemTotalBytes: safeBytes(filesystem.blocks * filesystem.bsize),
   }
 }
+
+const databaseFamilyBytes = async (databasePath) => {
+  const sizes = await Promise.all([
+    entryBytes(databasePath),
+    optionalEntryBytes(`${databasePath}-wal`),
+    optionalEntryBytes(`${databasePath}-shm`),
+    optionalEntryBytes(`${databasePath}-journal`),
+  ])
+  return sizes.reduce((total, size) => total + size, 0)
+}
+
+const optionalEntryBytes = (path) =>
+  entryBytes(path).catch((error) => {
+    if (error?.code === "ENOENT") return 0
+    throw error
+  })
 
 const entryBytes = async (path) => {
   const metadata = await lstat(path)

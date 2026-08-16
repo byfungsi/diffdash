@@ -26,12 +26,14 @@ test("reports database, managed, and free-space bytes without paths", async () =
     await mkdir(nested, { recursive: true })
     await Promise.all([
       writeFile(databasePath, Buffer.alloc(17)),
+      writeFile(`${databasePath}-wal`, Buffer.alloc(19)),
+      writeFile(`${databasePath}-shm`, Buffer.alloc(29)),
       writeFile(join(managedRoot, "block"), Buffer.alloc(23)),
       writeFile(join(nested, "spool"), Buffer.alloc(31)),
     ])
 
     const measured = await measureManagedStorage({ databasePath, managedRoot })
-    assert.equal(measured.databaseBytes, 17)
+    assert.equal(measured.databaseBytes, 65)
     assert.equal(measured.managedBytes, 54)
     assert.ok(measured.filesystemFreeBytes > 0)
     assert.ok(measured.filesystemTotalBytes >= measured.filesystemFreeBytes)
