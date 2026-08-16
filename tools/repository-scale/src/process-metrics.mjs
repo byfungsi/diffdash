@@ -246,6 +246,8 @@ export const validateSwitchReports = (reports, session) => {
   const platform = reports[0]?.platform
   const diffdashCommit = reports[0]?.diffdashCommit
   const machineProfile = reports[0]?.machineProfile
+  const appVersion = reports[0]?.appVersion
+  const coreHost = reports[0]?.coreHost
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(fixtureId))) {
     throw new Error("Switch reports must contain a valid fixture identity")
   }
@@ -255,6 +257,12 @@ export const validateSwitchReports = (reports, session) => {
   if (platform !== "linux") throw new Error("Promoted switch reports must be captured on Linux")
   if (!/^[a-f0-9]{40}$/u.test(String(diffdashCommit))) {
     throw new Error("Switch reports must contain an exact DiffDash commit")
+  }
+  if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u.test(String(appVersion))) {
+    throw new Error("Switch reports must contain the packaged app version")
+  }
+  if (coreHost !== "bun" && coreHost !== "utility") {
+    throw new Error("Switch reports must identify the selected Core host")
   }
   if (
     machineProfile?.platform !== "linux" ||
@@ -282,6 +290,18 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error("All switch reports must use the same platform")
     if (report.diffdashCommit !== diffdashCommit)
       throw new Error("All switch reports must use the same DiffDash commit")
+    if (report.appVersion !== appVersion)
+      throw new Error("All switch reports must use the same app version")
+    if (report.coreHost !== coreHost)
+      throw new Error("All switch reports must use the same Core host")
+    if (report.packaged !== true)
+      throw new Error(`Switch ${index + 1} did not use a packaged application`)
+    if (report.disposalComplete !== true)
+      throw new Error(`Switch ${index + 1} was captured before disposal completed`)
+    if (report.scenario !== "pathological" && report.scenario !== "small")
+      throw new Error(`Switch ${index + 1} has no recognized scenario`)
+    if (index > 0 && report.scenario === reports[index - 1]?.scenario)
+      throw new Error(`Switch ${index + 1} did not alternate review scenarios`)
     if (JSON.stringify(report.machineProfile) !== encodedMachineProfile) {
       throw new Error("All switch reports must use the same machine profile")
     }
@@ -307,7 +327,7 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error(`Switch ${index + 1} has invalid final memory`)
     }
   })
-  return { diffdashCommit, fixtureId, machineProfile, platform }
+  return { appVersion, coreHost, diffdashCommit, fixtureId, machineProfile, platform }
 }
 
 /** Samples one process tree and evaluates its final-window memory plateau. */

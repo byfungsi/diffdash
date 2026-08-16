@@ -23,7 +23,7 @@ const execFilePromise = promisify(execFile)
 const usage = `Usage:
   pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
-  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --session=<name> --switch=<1-10>
+  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --packaged=true --disposal-complete=true
   pnpm repository-scale:evaluate -- --session=<name>
 `
 
@@ -35,6 +35,11 @@ const commandOptions = {
     "manifest",
     "session",
     "switch",
+    "host",
+    "scenario",
+    "app-version",
+    "packaged",
+    "disposal-complete",
     "duration-ms",
     "interval-ms",
     "plateau-window-ms",
@@ -90,6 +95,17 @@ const safeName = (options, name) => {
   return value
 }
 
+const choice = (options, name, choices) => {
+  const value = required(options, name)
+  if (!choices.includes(value)) throw new Error(`--${name} must be one of ${choices.join(", ")}`)
+  return value
+}
+
+const requiredTrue = (options, name) => {
+  if (required(options, name) !== "true") throw new Error(`--${name} must be true`)
+  return true
+}
+
 const isString = (value) => Object.prototype.toString.call(value) === "[object String]"
 
 const isRecord = (value) => value !== null && Object.getPrototypeOf(value) === Object.prototype
@@ -139,6 +155,14 @@ const measure = async (options) => {
   }
   const fixture = await readFixtureManifest(options)
   const session = safeName(options, "session")
+  const coreHost = choice(options, "host", ["bun", "utility"])
+  const scenario = choice(options, "scenario", ["pathological", "small"])
+  const appVersion = required(options, "app-version")
+  if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u.test(appVersion)) {
+    throw new Error("--app-version must be a semantic version")
+  }
+  const packaged = requiredTrue(options, "packaged")
+  const disposalComplete = requiredTrue(options, "disposal-complete")
   const { stdout: commitOutput } = await execFilePromise("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: workspaceRoot,
   })
@@ -171,10 +195,15 @@ const measure = async (options) => {
   })
   const report = {
     ...measurement,
+    appVersion,
+    coreHost,
     diffdashCommit,
+    disposalComplete,
     fixtureId: fixture.id,
     fixtureManifest: fixture,
     machineProfile: captureMachineProfile(),
+    packaged,
+    scenario,
     session,
     switchIndex,
   }

@@ -177,7 +177,10 @@ test("evaluates ten switches with warm-up, absolute tolerance, and growth detect
 test("rejects stale, incomplete, and mixed switch reports", () => {
   const reports = Array.from({ length: 10 }, (_, index) => ({
     version: 2,
+    appVersion: "0.8.1",
+    coreHost: "utility",
     diffdashCommit: "c".repeat(40),
+    disposalComplete: true,
     fixtureId: "linux-test",
     fixtureManifest: {
       id: "linux-test",
@@ -187,6 +190,8 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
     session: "baseline",
     switchIndex: index + 1,
     platform: "linux",
+    packaged: true,
+    scenario: index % 2 === 0 ? "pathological" : "small",
     machineProfile: {
       platform: "linux",
       architecture: "x64",
@@ -205,6 +210,8 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
     },
   }))
   assert.deepEqual(validateSwitchReports(reports, "baseline"), {
+    appVersion: "0.8.1",
+    coreHost: "utility",
     diffdashCommit: "c".repeat(40),
     fixtureId: "linux-test",
     machineProfile: reports[0].machineProfile,
@@ -248,5 +255,21 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
         "baseline",
       ),
     /same machine profile/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(5, { ...reports[5], scenario: reports[4].scenario }),
+        "baseline",
+      ),
+    /did not alternate/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(9, { ...reports[9], disposalComplete: false }),
+        "baseline",
+      ),
+    /before disposal completed/,
   )
 })
