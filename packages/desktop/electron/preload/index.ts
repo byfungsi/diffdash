@@ -166,38 +166,12 @@ const api: DiffDashBridgeApi = {
     setRepositoryComparison: (request) =>
       transport.invoke(InvokeChannel.setRepositoryComparisonViewedFile, request),
   },
-  walkthroughs: {
-    get: (request) => transport.invoke(InvokeChannel.getWalkthrough, request),
-    generate: (request) => transport.invoke(InvokeChannel.generateWalkthrough, request),
-  },
-  localWalkthroughs: {
-    get: (target, baseSha, headSha) =>
-      transport.invoke(InvokeChannel.getLocalWalkthrough, {
-        target,
-        baseSha,
-        headSha,
-      }),
-    generate: (target) =>
-      transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: false }),
-    regenerate: (target) =>
-      transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: true }),
-  },
-  repositoryComparisonWalkthroughs: {
-    get: (target) =>
-      transport.invoke(InvokeChannel.getRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: false,
-      }),
-    generate: (target) =>
-      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: false,
-      }),
-    regenerate: (target) =>
-      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: true,
-      }),
+  walkthroughOperations: {
+    start: (request) => transport.invoke(InvokeChannel.startWalkthroughOperation, request),
+    getOperation: (request) => transport.invoke(InvokeChannel.getWalkthroughOperation, request),
+    cancel: (request) => transport.invoke(InvokeChannel.cancelWalkthroughOperation, request),
+    getStored: (request) => transport.invoke(InvokeChannel.getStoredWalkthrough, request),
+    onHint: (listener) => transport.subscribe(EventChannel.walkthroughOperationHint, listener),
   },
 }
 

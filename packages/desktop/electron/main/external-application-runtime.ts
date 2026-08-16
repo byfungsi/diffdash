@@ -1,12 +1,6 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import {
-  type GetStoredWalkthrough,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationAccepted,
-  WalkthroughOperationId,
-  WalkthroughOperationResult,
-} from "@diffdash/core"
+import { CoreEventReplayCursor, CoreEventSequence } from "@diffdash/core-rpc/event"
 import {
   ApplicationInstanceId,
   DatabaseOwnershipAuthorizationId,
@@ -30,8 +24,21 @@ import {
   CurrentWalkthroughPromptVersion,
   WalkthroughIdempotencyKey,
   WalkthroughReviewGeneration,
-  type WalkthroughOperationSnapshot,
 } from "@diffdash/core-rpc/walkthrough"
+import {
+  WalkthroughStartBridgeFailure,
+  WalkthroughStartBridgeResult,
+  type WalkthroughBridgeStartRequest,
+} from "@diffdash/protocol/walkthrough-operation"
+import {
+  WalkthroughCancelBridgeFailure,
+  WalkthroughCancelBridgeResult,
+  WalkthroughGetStoredBridgeFailure,
+  WalkthroughGetStoredBridgeResult,
+  WalkthroughGetOperationBridgeFailure,
+  WalkthroughGetOperationBridgeResult,
+  WalkthroughOperationBridgeHint,
+} from "@diffdash/protocol/walkthrough-operation-state"
 import { TempResources } from "@diffdash/process/temp-resource"
 import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect"
 import { randomUUID } from "node:crypto"
@@ -61,12 +68,6 @@ import type { CoreRpcClient } from "./core-rpc-client"
 import { startCoreUtilityProcessManaged } from "./core-utility-process-launcher"
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 import { createProgressiveReviewApiGateway } from "./progressive-review-api-gateway"
-
-type ReviewThreadTarget = StartWalkthroughOperation["target"]
-type StoredWalkthrough = Extract<
-  WalkthroughOperationResult,
-  { readonly _tag: "completed" }
->["walkthrough"]
 
 const platformLayer = Layer.mergeAll(
   NodeFileSystem.layer,
@@ -255,7 +256,7 @@ export const createExternalApplicationRuntime = (
   }
 
   const walkthroughGeneration = async (
-    target: ReviewThreadTarget,
+    target: WalkthroughBridgeStartRequest["target"],
   ): Promise<WalkthroughReviewGeneration> => {
     const current = session
     if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
@@ -291,61 +292,60 @@ export const createExternalApplicationRuntime = (
     })
   }
 
-  const storedWalkthrough = (
-    snapshot: Extract<WalkthroughOperationSnapshot, { readonly state: "completed" }>,
-    target?: ReviewThreadTarget,
-  ): StoredWalkthrough => ({
-    repoId: snapshot.reviewGeneration.projectId,
-    prNumber: target?.kind === "hosted" ? target.review.number : null,
-    reviewKey: snapshot.reviewGeneration.reviewKey,
-    baseSha: snapshot.reviewGeneration.baseRevision,
-    headSha: snapshot.reviewGeneration.headRevision,
-    promptVersion: snapshot.promptVersion,
-    walkthrough: snapshot.stored.walkthrough,
-    createdAt: snapshot.stored.createdAt,
-  })
+  let eventCursor: CoreEventReplayCursor | null = null
 
-  const walkthroughResult = (
-    snapshot: WalkthroughOperationSnapshot,
-    target?: ReviewThreadTarget,
-  ): WalkthroughOperationResult => {
-    switch (snapshot.state) {
-      case "completed":
-        return { _tag: "completed", walkthrough: storedWalkthrough(snapshot, target) }
-      case "cancelled":
-        return { _tag: "cancelled" }
-      case "superseded":
-        return {
-          _tag: "superseded",
-          supersededByOperationId: snapshot.supersededByOperationId,
-        }
-      case "interrupted":
-        return { _tag: "interrupted" }
-      case "failed":
-        throw new Error(snapshot.failure.safeMessage)
-      case "active":
-        throw new Error("Walkthrough operation is still active.")
-    }
-  }
-
-  const operationTargets = new Map<WalkthroughOperationId, ReviewThreadTarget>()
-
-  const readWalkthroughResult = async (
-    operationId: WalkthroughOperationId,
-  ): Promise<WalkthroughOperationResult> => {
+  const readReplayedWalkthroughHints = async (): Promise<
+    readonly WalkthroughOperationBridgeHint[]
+  > => {
     const current = session
-    if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-    for (;;) {
-      const snapshot = await runtime.runPromise(
-        current.client.getWalkthroughOperation(
-          GetWalkthroughOperationRequest.make({ ...requestContext(), operationId }),
-        ),
-      )
-      if (snapshot.state !== "active") {
-        return walkthroughResult(snapshot, operationTargets.get(operationId))
-      }
-      await runtime.runPromise(Effect.sleep("100 millis"))
+    if (current?.stateDeliveryClient === undefined) return []
+    const cursor =
+      eventCursor?.processEpoch === current.processEpoch
+        ? eventCursor
+        : CoreEventReplayCursor.make({
+            processEpoch: current.processEpoch,
+            sequence: CoreEventSequence.make(0),
+          })
+    const replay = await runtime.runPromise(
+      current.stateDeliveryClient.replayEvents({ context: requestContext(), cursor }),
+    )
+    if (replay.kind === "resyncRequired") {
+      eventCursor = CoreEventReplayCursor.make({
+        processEpoch: replay.processEpoch,
+        sequence: CoreEventSequence.make(0),
+      })
+      return []
     }
+    const latest = replay.events.at(-1)?.metadata.sequence ?? cursor.sequence
+    eventCursor = CoreEventReplayCursor.make({
+      processEpoch: replay.processEpoch,
+      sequence: latest,
+    })
+    return replay.events.flatMap((hint) => {
+      const subject = hint.metadata.subject
+      if (
+        (subject.kind !== "operation" && subject.kind !== "generationOperation") ||
+        hint.kind === "commandCommitted"
+      ) {
+        return []
+      }
+      return [
+        Schema.decodeUnknownSync(WalkthroughOperationBridgeHint)({
+          applicationInstanceId: hint.metadata.applicationInstanceId,
+          processEpoch: hint.metadata.processEpoch,
+          sequence: hint.metadata.sequence,
+          operationId: subject.operationId,
+          stateVersion: hint.stateVersion,
+          kind: hint.kind,
+        }),
+      ]
+    })
+  }
+  let replayPromise: Promise<readonly WalkthroughOperationBridgeHint[]> = Promise.resolve([])
+  const replayWalkthroughHints = () => {
+    const next = replayPromise.then(readReplayedWalkthroughHints, readReplayedWalkthroughHints)
+    replayPromise = next
+    return next
   }
 
   const start = (): Promise<void> => {
@@ -555,67 +555,100 @@ export const createExternalApplicationRuntime = (
   return {
     start,
     core,
-    walkthroughs: {
-      start: async (input: StartWalkthroughOperation): Promise<WalkthroughOperationAccepted> => {
+    walkthroughOperations: {
+      start: async (input: WalkthroughBridgeStartRequest) => {
         const current = session
         if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-        const accepted = await runtime.runPromise(
-          current.client.startWalkthrough(
-            StartWalkthroughRequest.make({
-              ...requestContext(),
-              reviewGeneration: await walkthroughGeneration(input.target),
-              regenerate: input.regenerate,
-              idempotencyKey: WalkthroughIdempotencyKey.make(`w:${randomUUID()}`),
-            }),
-          ),
-        )
-        operationTargets.set(accepted.operationId, input.target)
-        return { operationId: accepted.operationId }
-      },
-      getOperation: readWalkthroughResult,
-      cancel: async (operationId) => {
-        const current = session
-        if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-        const result = await runtime.runPromise(
-          current.client.cancelWalkthrough(
-            CancelWalkthroughRequest.make({ ...requestContext(), operationId }),
-          ),
-        )
-        return walkthroughResult(result.operation, operationTargets.get(operationId))
-      },
-      getStored: async (input: GetStoredWalkthrough) => {
-        const current = session
-        if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-        const generation = await walkthroughGeneration(input.target)
-        if (
-          (input.expectedBaseRevision !== null &&
-            generation.baseRevision !== input.expectedBaseRevision) ||
-          (input.expectedHeadRevision !== null &&
-            generation.headRevision !== input.expectedHeadRevision)
-        ) {
-          return null
-        }
-        const result = await runtime.runPromise(
-          current.client.getStoredWalkthrough(
-            GetStoredWalkthroughRequest.make({
-              ...requestContext(),
-              reviewGeneration: generation,
-              promptVersion: CurrentWalkthroughPromptVersion,
-            }),
-          ),
-        )
-        if (result.status === "notFound") return null
-        return {
-          repoId: result.stored.reviewGeneration.projectId,
-          prNumber: input.target.kind === "hosted" ? input.target.review.number : null,
-          reviewKey: result.stored.reviewGeneration.reviewKey,
-          baseSha: result.stored.reviewGeneration.baseRevision,
-          headSha: result.stored.reviewGeneration.headRevision,
-          promptVersion: result.stored.promptVersion,
-          walkthrough: result.stored.walkthrough,
-          createdAt: result.stored.createdAt,
+        try {
+          const accepted = await runtime.runPromise(
+            current.client.startWalkthrough(
+              StartWalkthroughRequest.make({
+                ...requestContext(),
+                reviewGeneration: await walkthroughGeneration(input.target),
+                regenerate: input.regenerate,
+                idempotencyKey: WalkthroughIdempotencyKey.make(input.idempotencyKey),
+              }),
+            ),
+          )
+          return Schema.decodeUnknownSync(WalkthroughStartBridgeResult)({
+            _tag: "Success",
+            value: accepted,
+          })
+        } catch (error) {
+          return {
+            _tag: "Failure" as const,
+            error: Schema.decodeUnknownSync(WalkthroughStartBridgeFailure)(error),
+          }
         }
       },
+      getOperation: async ({ operationId }) => {
+        const current = session
+        if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
+        const context = requestContext()
+        try {
+          const operation = await runtime.runPromise(
+            current.client.getWalkthroughOperation(
+              GetWalkthroughOperationRequest.make({ ...context, operationId }),
+            ),
+          )
+          return Schema.decodeUnknownSync(WalkthroughGetOperationBridgeResult)({
+            _tag: "Success",
+            value: { ...context, operationId, operation },
+          })
+        } catch (error) {
+          return {
+            _tag: "Failure" as const,
+            error: Schema.decodeUnknownSync(WalkthroughGetOperationBridgeFailure)(error),
+          }
+        }
+      },
+      cancel: async ({ operationId }) => {
+        const current = session
+        if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
+        const context = requestContext()
+        try {
+          const result = await runtime.runPromise(
+            current.client.cancelWalkthrough(
+              CancelWalkthroughRequest.make({ ...context, operationId }),
+            ),
+          )
+          return Schema.decodeUnknownSync(WalkthroughCancelBridgeResult)({
+            _tag: "Success",
+            value: { ...context, operationId, status: result.status, operation: result.operation },
+          })
+        } catch (error) {
+          return {
+            _tag: "Failure" as const,
+            error: Schema.decodeUnknownSync(WalkthroughCancelBridgeFailure)(error),
+          }
+        }
+      },
+      getStored: async ({ target }) => {
+        const current = session
+        if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
+        try {
+          const result = await runtime.runPromise(
+            current.client.getStoredWalkthrough(
+              GetStoredWalkthroughRequest.make({
+                ...requestContext(),
+                reviewGeneration: await walkthroughGeneration(target),
+                promptVersion: CurrentWalkthroughPromptVersion,
+              }),
+            ),
+          )
+          return Schema.decodeUnknownSync(WalkthroughGetStoredBridgeResult)(
+            result.status === "found"
+              ? { _tag: "Success", value: { status: "found", stored: result.stored } }
+              : { _tag: "Success", value: { status: "notFound" } },
+          )
+        } catch (error) {
+          return {
+            _tag: "Failure" as const,
+            error: Schema.decodeUnknownSync(WalkthroughGetStoredBridgeFailure)(error),
+          }
+        }
+      },
+      replayHints: replayWalkthroughHints,
     },
     progressiveReviews,
     dispose,

@@ -32,8 +32,7 @@ import {
   ReviewThreadDetails,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { Schema, SchemaTransformation } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
@@ -43,12 +42,10 @@ import { EventChannel, InvokeChannel } from "./channels"
 import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
-  GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
@@ -63,7 +60,6 @@ import {
   OpenRepositoryComparisonFileRequest,
   ResolvedRepositoryComparison,
   ResolveRepositoryComparisonRequest,
-  RepositoryComparisonWalkthroughRequest,
 } from "./review-snapshot"
 import {
   CloseReviewSessionRequest,
@@ -86,6 +82,18 @@ import {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import { TransportErrorPayload, transportError, type TransportError } from "./transport-error"
+import {
+  WalkthroughBridgeStartRequest,
+  WalkthroughStartBridgeResult,
+} from "./walkthrough-operation"
+import {
+  WalkthroughBridgeGetStoredRequest,
+  WalkthroughBridgeOperationRequest,
+  WalkthroughCancelBridgeResult,
+  WalkthroughGetOperationBridgeResult,
+  WalkthroughGetStoredBridgeResult,
+  WalkthroughOperationBridgeHint,
+} from "./walkthrough-operation-state"
 import {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
@@ -351,25 +359,29 @@ export const InvokeContract = {
     Schema.Array(ReviewSessionSearchPublication).pipe(Schema.check(Schema.isMaxLength(256))),
     { maxRequestBytes: 16 * KIB, maxResponseBytes: 384 * KIB },
   ),
-  [InvokeChannel.generateLocalWalkthrough]: defineInvoke(
-    InvokeChannel.generateLocalWalkthrough,
-    Schema.Struct({ target: LocalReviewTarget, regenerate: Schema.Boolean }),
-    StoredWalkthrough,
+  [InvokeChannel.startWalkthroughOperation]: defineInvoke(
+    InvokeChannel.startWalkthroughOperation,
+    WalkthroughBridgeStartRequest,
+    WalkthroughStartBridgeResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 64 * KIB },
   ),
-  [InvokeChannel.getLocalWalkthrough]: defineInvoke(
-    InvokeChannel.getLocalWalkthrough,
-    Schema.Struct({ target: LocalReviewTarget, baseSha: ReviewRevision, headSha: ReviewRevision }),
-    Schema.NullOr(StoredWalkthrough),
+  [InvokeChannel.getWalkthroughOperation]: defineInvoke(
+    InvokeChannel.getWalkthroughOperation,
+    WalkthroughBridgeOperationRequest,
+    WalkthroughGetOperationBridgeResult,
+    { maxRequestBytes: 2 * KIB, maxResponseBytes: 384 * KIB },
   ),
-  [InvokeChannel.generateRepositoryComparisonWalkthrough]: defineInvoke(
-    InvokeChannel.generateRepositoryComparisonWalkthrough,
-    RepositoryComparisonWalkthroughRequest,
-    StoredWalkthrough,
+  [InvokeChannel.cancelWalkthroughOperation]: defineInvoke(
+    InvokeChannel.cancelWalkthroughOperation,
+    WalkthroughBridgeOperationRequest,
+    WalkthroughCancelBridgeResult,
+    { maxRequestBytes: 2 * KIB, maxResponseBytes: 384 * KIB },
   ),
-  [InvokeChannel.getRepositoryComparisonWalkthrough]: defineInvoke(
-    InvokeChannel.getRepositoryComparisonWalkthrough,
-    RepositoryComparisonWalkthroughRequest,
-    Schema.NullOr(StoredWalkthrough),
+  [InvokeChannel.getStoredWalkthrough]: defineInvoke(
+    InvokeChannel.getStoredWalkthrough,
+    WalkthroughBridgeGetStoredRequest,
+    WalkthroughGetStoredBridgeResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
   ),
   [InvokeChannel.drainNavigationCommands]: defineInvoke(
     InvokeChannel.drainNavigationCommands,
@@ -529,16 +541,6 @@ export const InvokeContract = {
     SetRepositoryComparisonViewedFileRequest,
     EmptyResponse,
   ),
-  [InvokeChannel.generateWalkthrough]: defineInvoke(
-    InvokeChannel.generateWalkthrough,
-    GenerateHostedWalkthroughRequest,
-    StoredWalkthrough,
-  ),
-  [InvokeChannel.getWalkthrough]: defineInvoke(
-    InvokeChannel.getWalkthrough,
-    HostedWalkthroughRequest,
-    Schema.NullOr(StoredWalkthrough),
-  ),
 } as const
 
 const defineEvent = <Channel extends EventChannel, Payload extends BoundarySchema>(
@@ -560,6 +562,11 @@ export const EventContract = {
   [EventChannel.reviewThreadAgentProgress]: defineEvent(
     EventChannel.reviewThreadAgentProgress,
     ReviewAgentProgress,
+  ),
+  [EventChannel.walkthroughOperationHint]: defineEvent(
+    EventChannel.walkthroughOperationHint,
+    WalkthroughOperationBridgeHint,
+    8 * KIB,
   ),
   [EventChannel.updateStateChanged]: defineEvent(EventChannel.updateStateChanged, AppUpdateState),
 } as const

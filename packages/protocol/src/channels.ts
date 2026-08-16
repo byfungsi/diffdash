@@ -35,10 +35,10 @@ export const InvokeChannel = {
   waitForProgressiveReviewRange: "progressiveReviews:waitForRange",
   resolveProgressiveReviewTarget: "progressiveReviews:resolveTarget",
   searchProgressiveReview: "progressiveReviews:search",
-  generateLocalWalkthrough: "localWalkthroughs:generate",
-  getLocalWalkthrough: "localWalkthroughs:get",
-  generateRepositoryComparisonWalkthrough: "repositoryComparisonWalkthroughs:generate",
-  getRepositoryComparisonWalkthrough: "repositoryComparisonWalkthroughs:get",
+  startWalkthroughOperation: "walkthroughOperations:start",
+  getWalkthroughOperation: "walkthroughOperations:getOperation",
+  cancelWalkthroughOperation: "walkthroughOperations:cancel",
+  getStoredWalkthrough: "walkthroughOperations:getStored",
   drainNavigationCommands: "navigation:drainCommands",
   favoriteRemoteRepository: "repositories:favoriteRemote",
   forgetRepository: "repositories:forget",
@@ -70,8 +70,6 @@ export const InvokeChannel = {
   setLocalViewedFile: "viewedFiles:setLocal",
   listRepositoryComparisonViewedFiles: "viewedFiles:listRepositoryComparison",
   setRepositoryComparisonViewedFile: "viewedFiles:setRepositoryComparison",
-  generateWalkthrough: "walkthroughs:generate",
-  getWalkthrough: "walkthroughs:get",
 } as const
 
 /** One valid renderer-to-host invoke channel. */
@@ -81,6 +79,7 @@ export type InvokeChannel = (typeof InvokeChannel)[keyof typeof InvokeChannel]
 export const EventChannel = {
   navigationCommandsAvailable: "navigation:commandsAvailable",
   reviewThreadAgentProgress: "reviewThreads:agentProgress",
+  walkthroughOperationHint: "walkthroughOperations:hint",
   updateStateChanged: "updates:stateChanged",
 } as const
 

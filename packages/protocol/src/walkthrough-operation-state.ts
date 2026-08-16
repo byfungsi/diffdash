@@ -25,11 +25,13 @@ import { Schema } from "effect"
 
 import {
   WalkthroughApplicationInstanceId,
+  WalkthroughBridgeIdempotencyKey,
   WalkthroughBridgeAttemptSummary,
   WalkthroughBridgeSafeDiagnostic,
   WalkthroughProcessEpoch,
   WalkthroughRequestId,
 } from "./walkthrough-operation"
+import { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 
 const BoundedReviewProjectId = ReviewProjectId.pipe(Schema.check(Schema.isMaxLength(100)))
 const BoundedReviewKey = ReviewKey.pipe(Schema.check(Schema.isMaxLength(512)))
@@ -44,11 +46,6 @@ const BoundedModelId = AgentModelId.pipe(
 )
 const BoundedPromptVersion = WalkthroughOperationPromptVersion.pipe(
   Schema.check(Schema.isMaxLength(100)),
-)
-const WalkthroughBridgeIdempotencyKey = Schema.String.pipe(
-  Schema.check(Schema.isMinLength(3)),
-  Schema.check(Schema.isMaxLength(128)),
-  Schema.check(Schema.isPattern(/^w:[A-Za-z0-9][A-Za-z0-9._-]*$/u)),
 )
 const WalkthroughBridgeCandidatePlanFingerprint = Schema.String.pipe(
   Schema.check(Schema.isPattern(/^walkthrough-plan:v1:[0-9a-f]{64}$/u)),
@@ -176,7 +173,8 @@ const PublicArtifact = PublicArtifactValue.pipe(
     ),
   ),
 )
-const StoredArtifact = Schema.Struct({
+/** Exact persisted walkthrough artifact returned by operation and stored-artifact queries. */
+export const WalkthroughBridgeStoredArtifact = Schema.Struct({
   reviewGeneration: WalkthroughBridgeReviewGeneration,
   promptVersion: BoundedPromptVersion,
   walkthrough: PublicArtifact,
@@ -258,6 +256,7 @@ export const WalkthroughOperationBridgeFailureCode = Schema.Literals([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
 ])
@@ -337,7 +336,7 @@ const OperationCommonFields = {
 const hasMatchingStoredGeneration = (operation: {
   readonly reviewGeneration: typeof WalkthroughBridgeReviewGeneration.Type
   readonly promptVersion: WalkthroughOperationPromptVersion
-  readonly stored: typeof StoredArtifact.Type
+  readonly stored: typeof WalkthroughBridgeStoredArtifact.Type
 }) => {
   const accepted = operation.reviewGeneration
   const stored = operation.stored.reviewGeneration
@@ -370,7 +369,7 @@ export const WalkthroughBridgeOperationSnapshot = Schema.Union([
   Schema.Struct({
     ...OperationCommonFields,
     state: Schema.Literal("completed"),
-    stored: StoredArtifact,
+    stored: WalkthroughBridgeStoredArtifact,
     terminalAt: WalkthroughOperationTimestamp,
   }).pipe(
     Schema.check(
@@ -424,6 +423,7 @@ const GetOperationFailureCode = Schema.Literals([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
   "WALKTHROUGH_TRANSPORT_ERROR",
@@ -516,3 +516,105 @@ export const WalkthroughGetOperationBridgeResult = Schema.Union([
 
 /** Final plain success or classified failure value for an operation-state query. */
 export type WalkthroughGetOperationBridgeResult = typeof WalkthroughGetOperationBridgeResult.Type
+
+/** Request for one authoritative walkthrough operation snapshot. */
+export const WalkthroughBridgeOperationRequest = Schema.Struct({
+  operationId: WalkthroughOperationId,
+}).annotate({ identifier: "WalkthroughBridgeOperationRequest" })
+
+/** Request for one authoritative walkthrough operation snapshot. */
+export type WalkthroughBridgeOperationRequest = typeof WalkthroughBridgeOperationRequest.Type
+
+/** Request for the exact stored artifact associated with the target's current generation. */
+export const WalkthroughBridgeGetStoredRequest = Schema.Struct({
+  target: ReviewThreadTarget,
+}).annotate({ identifier: "WalkthroughBridgeGetStoredRequest" })
+
+/** Request for the exact stored artifact associated with the target's current generation. */
+export type WalkthroughBridgeGetStoredRequest = typeof WalkthroughBridgeGetStoredRequest.Type
+
+const operationMutationFailure = (method: "Walkthroughs.cancel") =>
+  Schema.TaggedStruct("WalkthroughPublicFailure", {
+    applicationInstanceId: WalkthroughApplicationInstanceId,
+    processEpoch: WalkthroughProcessEpoch,
+    requestId: WalkthroughRequestId,
+    method: Schema.Literal(method),
+    operationId: WalkthroughOperationId,
+    code: GetOperationFailureCode,
+    providerId: Schema.NullOr(BoundedProviderId),
+    modelId: Schema.NullOr(BoundedModelId),
+    retryClass: Schema.Literals(["automatic", "userAction", "notRetryable"]),
+    remediation: FailureDetail.fields.remediation,
+    safeMessage: SafeMessage,
+    attempts: Schema.Array(WalkthroughBridgeAttemptSummary).pipe(
+      Schema.check(Schema.isMaxLength(32)),
+    ),
+    diagnostic: Schema.NullOr(WalkthroughBridgeSafeDiagnostic),
+  })
+
+/** Classified plain cancellation failure returned through contextBridge. */
+export const WalkthroughCancelBridgeFailure = operationMutationFailure("Walkthroughs.cancel")
+
+/** Plain cancellation result; the embedded snapshot remains authoritative. */
+export const WalkthroughCancelBridgeResult = Schema.Union([
+  Schema.TaggedStruct("Success", {
+    value: Schema.Struct({
+      applicationInstanceId: WalkthroughApplicationInstanceId,
+      processEpoch: WalkthroughProcessEpoch,
+      requestId: WalkthroughRequestId,
+      operationId: WalkthroughOperationId,
+      status: Schema.Literals(["cancelled", "alreadyCompleted"]),
+      operation: WalkthroughBridgeOperationSnapshot,
+    }),
+  }),
+  Schema.TaggedStruct("Failure", { error: WalkthroughCancelBridgeFailure }),
+]).annotate({ identifier: "WalkthroughCancelBridgeResult" })
+
+/** Plain cancellation result; the embedded snapshot remains authoritative. */
+export type WalkthroughCancelBridgeResult = typeof WalkthroughCancelBridgeResult.Type
+
+/** Classified plain stored-artifact lookup failure returned through contextBridge. */
+export const WalkthroughGetStoredBridgeFailure = Schema.TaggedStruct("WalkthroughPublicFailure", {
+  applicationInstanceId: WalkthroughApplicationInstanceId,
+  processEpoch: WalkthroughProcessEpoch,
+  requestId: WalkthroughRequestId,
+  method: Schema.Literal("Walkthroughs.getStored"),
+  operationId: Schema.Null,
+  code: WalkthroughOperationBridgeFailureCode,
+  providerId: Schema.NullOr(BoundedProviderId),
+  modelId: Schema.NullOr(BoundedModelId),
+  retryClass: Schema.Literals(["automatic", "userAction", "notRetryable"]),
+  remediation: FailureDetail.fields.remediation,
+  safeMessage: SafeMessage,
+  attempts: Schema.Array(WalkthroughBridgeAttemptSummary).pipe(
+    Schema.check(Schema.isMaxLength(32)),
+  ),
+  diagnostic: Schema.NullOr(WalkthroughBridgeSafeDiagnostic),
+})
+
+/** Plain exact-generation stored-artifact lookup result. */
+export const WalkthroughGetStoredBridgeResult = Schema.Union([
+  Schema.TaggedStruct("Success", {
+    value: Schema.Union([
+      Schema.Struct({ status: Schema.Literal("found"), stored: WalkthroughBridgeStoredArtifact }),
+      Schema.Struct({ status: Schema.Literal("notFound") }),
+    ]),
+  }),
+  Schema.TaggedStruct("Failure", { error: WalkthroughGetStoredBridgeFailure }),
+]).annotate({ identifier: "WalkthroughGetStoredBridgeResult" })
+
+/** Plain exact-generation stored-artifact lookup result. */
+export type WalkthroughGetStoredBridgeResult = typeof WalkthroughGetStoredBridgeResult.Type
+
+/** Bounded, non-authoritative Core hint correlated to one walkthrough operation. */
+export const WalkthroughOperationBridgeHint = Schema.Struct({
+  applicationInstanceId: WalkthroughApplicationInstanceId,
+  processEpoch: WalkthroughProcessEpoch,
+  sequence: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+  operationId: WalkthroughOperationId,
+  stateVersion: WalkthroughOperationStateVersion,
+  kind: Schema.Literals(["stateChanged", "operationProgress", "operationTerminal"]),
+}).annotate({ identifier: "WalkthroughOperationBridgeHint" })
+
+/** Bounded, non-authoritative Core hint correlated to one walkthrough operation. */
+export type WalkthroughOperationBridgeHint = typeof WalkthroughOperationBridgeHint.Type

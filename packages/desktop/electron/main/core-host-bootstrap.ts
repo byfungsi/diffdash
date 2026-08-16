@@ -15,6 +15,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
   Redacted,
   Ref,
@@ -23,7 +24,12 @@ import {
   Semaphore,
 } from "effect"
 
-import { CoreRpcClient, coreRpcClientLayer, type CoreRpcClientOptions } from "./core-rpc-client"
+import {
+  CoreRpcClient,
+  CoreStateDeliveryRpcClient,
+  coreRpcClientLayer,
+  type CoreRpcClientOptions,
+} from "./core-rpc-client"
 import type {
   CoreHealthIdentityMismatchFailure,
   CoreTransportAuthenticationFailure,
@@ -100,6 +106,7 @@ export interface CoreHostBootstrapSession {
   readonly health: CoreHealth
   readonly authorizeDatabaseOwnership: CoreRpcClient["Service"]["authorizeDatabaseOwnership"]
   readonly client?: CoreRpcClient["Service"]
+  readonly stateDeliveryClient?: CoreStateDeliveryRpcClient["Service"]
   readonly state: Effect.Effect<CoreHostBootstrapState>
 }
 
@@ -171,6 +178,7 @@ export const bootstrapCoreHost = (
         (options.makeClientLayer ?? coreRpcClientLayer)(configuration),
       )
       const client = Context.get(clientContext, CoreRpcClient)
+      const stateDeliveryClient = Context.getOption(clientContext, CoreStateDeliveryRpcClient)
       const request = HostRequestContext.make({
         applicationInstanceId: options.applicationInstanceId,
         processEpoch,
@@ -183,7 +191,7 @@ export const bootstrapCoreHost = (
       yield* transition("epochVerified")
       yield* transition("awaitingOwnership")
 
-      return {
+      const establishedSession = {
         applicationInstanceId: options.applicationInstanceId,
         processEpoch,
         health,
@@ -191,6 +199,13 @@ export const bootstrapCoreHost = (
         client,
         state: Ref.get(stateRef),
       } satisfies CoreHostBootstrapSession
+      return Option.match(stateDeliveryClient, {
+        onNone: () => establishedSession,
+        onSome: (deliveryClient) => ({
+          ...establishedSession,
+          stateDeliveryClient: deliveryClient,
+        }),
+      })
     })
 
     return yield* bootstrap.pipe(

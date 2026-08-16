@@ -3,6 +3,7 @@ import {
   WalkthroughOperationId,
   WalkthroughOperationStateVersion,
 } from "@diffdash/domain/walkthrough-operation"
+import { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { Schema } from "effect"
 
 const BoundedIdentity = Schema.String.pipe(
@@ -43,6 +44,27 @@ export const WalkthroughRequestId = Schema.String.pipe(
 
 /** Host request identity retained across the Electron walkthrough bridge. */
 export type WalkthroughRequestId = typeof WalkthroughRequestId.Type
+
+/** Renderer-owned identity that must be retained when retrying the same start intent. */
+export const WalkthroughBridgeIdempotencyKey = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(3)),
+  Schema.check(Schema.isMaxLength(128)),
+  Schema.check(Schema.isPattern(/^w:[A-Za-z0-9][A-Za-z0-9._-]*$/u)),
+  Schema.brand("WalkthroughBridgeIdempotencyKey"),
+)
+
+/** Renderer-owned identity that must be retained when retrying the same start intent. */
+export type WalkthroughBridgeIdempotencyKey = typeof WalkthroughBridgeIdempotencyKey.Type
+
+/** Source-neutral request to durably accept one walkthrough operation. */
+export const WalkthroughBridgeStartRequest = Schema.Struct({
+  target: ReviewThreadTarget,
+  regenerate: Schema.Boolean,
+  idempotencyKey: WalkthroughBridgeIdempotencyKey,
+}).annotate({ identifier: "WalkthroughBridgeStartRequest" })
+
+/** Source-neutral request to durably accept one walkthrough operation. */
+export type WalkthroughBridgeStartRequest = typeof WalkthroughBridgeStartRequest.Type
 
 const AttemptIdentity = {
   providerId: BoundedProviderId,
@@ -206,6 +228,7 @@ export const WalkthroughStartBridgeFailureCode = Schema.Literals([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
   "WALKTHROUGH_TRANSPORT_ERROR",
@@ -221,6 +244,7 @@ const admissionCodes = new Set<WalkthroughStartBridgeFailureCode>([
   "CORE_DRAINING",
   "CORE_RPC_ERROR",
   "REQUEST_TOO_LARGE",
+  "RESPONSE_TOO_LARGE",
   "REQUEST_DEADLINE_EXCEEDED",
   "REQUEST_CANCELLED",
 ])

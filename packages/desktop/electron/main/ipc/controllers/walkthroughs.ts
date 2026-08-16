@@ -1,85 +1,44 @@
-import {
-  CoreHostedReviewTarget,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationResult,
-} from "@diffdash/core"
-import { InvokeChannel } from "@diffdash/protocol/channels"
-import { Match } from "effect"
+import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
+
 import type { ApplicationRuntime } from "../../application-runtime"
-import { toPublicWalkthroughError } from "../walkthrough-public-error"
+import { sendProtocolEvent } from "../transport"
 import { IpcControllerRegistry } from "./controller-registry"
 
-const generateWalkthrough = async (
-  runtime: ApplicationRuntime,
-  target: StartWalkthroughOperation["target"],
-  regenerate: boolean,
-): Promise<Extract<WalkthroughOperationResult, { readonly _tag: "completed" }>["walkthrough"]> => {
-  const accepted = await runtime.walkthroughs.start({ target, regenerate })
-  const result = await runtime.walkthroughs.getOperation(accepted.operationId)
-  return Match.valueTags(result, {
-    completed: ({ walkthrough }) => walkthrough,
-    failed: ({ error }) => {
-      throw error
-    },
-    defect: ({ defect }) => {
-      throw defect
-    },
-    cancelled: (terminal) => {
-      throw terminal
-    },
-    superseded: (terminal) => {
-      throw terminal
-    },
-    interrupted: (terminal) => {
-      throw terminal
-    },
-  })
-}
-
-/** Defines walkthrough IPC handlers over the Core-owned operation boundary. */
+/** Defines source-neutral durable walkthrough operation IPC handlers. */
 export const defineWalkthroughHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.define(InvokeChannel.getWalkthrough, async (_event, request) =>
-    runtime.walkthroughs.getStored({
-      target: CoreHostedReviewTarget.make({ kind: "hosted", review: request.review }),
-      expectedBaseRevision: request.baseRevision,
-      expectedHeadRevision: request.headRevision,
-    }),
-  )
-  handlers.define(InvokeChannel.getLocalWalkthrough, async (_event, request) =>
-    runtime.walkthroughs.getStored({
-      target: request.target,
-      expectedBaseRevision: request.baseSha,
-      expectedHeadRevision: request.headSha,
-    }),
-  )
-  handlers.define(
-    InvokeChannel.generateWalkthrough,
-    async (_event, request) =>
-      generateWalkthrough(
-        runtime,
-        CoreHostedReviewTarget.make({ kind: "hosted", review: request.review }),
-        request.regenerate,
-      ),
-    toPublicWalkthroughError,
-  )
-  handlers.define(
-    InvokeChannel.generateLocalWalkthrough,
-    async (_event, request) => generateWalkthrough(runtime, request.target, request.regenerate),
-    toPublicWalkthroughError,
-  )
-  handlers.define(InvokeChannel.getRepositoryComparisonWalkthrough, async (_event, request) =>
-    runtime.walkthroughs.getStored({
-      target: request.target,
-      expectedBaseRevision: null,
-      expectedHeadRevision: null,
-    }),
-  )
-  handlers.define(
-    InvokeChannel.generateRepositoryComparisonWalkthrough,
-    async (_event, request) => generateWalkthrough(runtime, request.target, request.regenerate),
-    toPublicWalkthroughError,
-  )
+  const relayHints = (target: Parameters<typeof sendProtocolEvent>[0]) => {
+    void runtime.walkthroughOperations
+      .replayHints()
+      .then((hints) => {
+        for (const hint of hints) {
+          sendProtocolEvent(target, EventChannel.walkthroughOperationHint, hint)
+        }
+        return undefined
+      })
+      .catch(() => undefined)
+  }
+
+  handlers.define(InvokeChannel.startWalkthroughOperation, async (event, request) => {
+    const result = await runtime.walkthroughOperations.start(request)
+    relayHints(event.sender)
+    return result
+  })
+  handlers.define(InvokeChannel.getWalkthroughOperation, async (event, request) => {
+    const result = await runtime.walkthroughOperations.getOperation(request)
+    relayHints(event.sender)
+    return result
+  })
+  handlers.define(InvokeChannel.cancelWalkthroughOperation, async (event, request) => {
+    const result = await runtime.walkthroughOperations.cancel(request)
+    relayHints(event.sender)
+    return result
+  })
+  handlers.define(InvokeChannel.getStoredWalkthrough, async (event, request) => {
+    const result = await runtime.walkthroughOperations.getStored(request)
+    relayHints(event.sender)
+    return result
+  })
 }

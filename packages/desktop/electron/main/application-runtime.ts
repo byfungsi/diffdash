@@ -4,18 +4,10 @@ import {
   type CoreMethodInput,
   type CoreOperationOptions,
   type CoreOperationOutput,
-  type GetStoredWalkthrough,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationAccepted,
-  type WalkthroughOperationId,
-  type WalkthroughOperationResult,
 } from "@diffdash/core"
+import type { DiffDashApi } from "@diffdash/protocol/api"
 import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
-
-type StoredWalkthrough = Extract<
-  WalkthroughOperationResult,
-  { readonly _tag: "completed" }
->["walkthrough"]
+import type { WalkthroughOperationBridgeHint } from "@diffdash/protocol/walkthrough-operation-state"
 
 type ApplicationCoreOperation<Method extends CoreMethodType> = (
   input: CoreMethodInput<Method>,
@@ -115,18 +107,15 @@ interface ApplicationCoreRuntime {
   >
 }
 
-/** Electron adapter that projects typed Core failures into the existing IPC error boundary. */
+/** Electron adapter that projects Core operations into schema-encoded IPC values. */
 export interface ApplicationRuntime {
   readonly start: () => Promise<void>
   readonly core: ApplicationCoreRuntime
-  readonly walkthroughs: {
-    readonly start: (request: StartWalkthroughOperation) => Promise<WalkthroughOperationAccepted>
-    readonly getOperation: (
-      operationId: WalkthroughOperationId,
-    ) => Promise<WalkthroughOperationResult>
-    readonly cancel: (operationId: WalkthroughOperationId) => Promise<WalkthroughOperationResult>
-    /** Nullable only at the existing Core-to-IPC transport boundary. */
-    readonly getStored: (request: GetStoredWalkthrough) => Promise<StoredWalkthrough | null>
+  readonly walkthroughOperations: Pick<
+    DiffDashApi["walkthroughOperations"],
+    "start" | "getOperation" | "cancel" | "getStored"
+  > & {
+    readonly replayHints: () => Promise<readonly WalkthroughOperationBridgeHint[]>
   }
   readonly progressiveReviews: ProgressiveReviewApi
   readonly dispose: () => Promise<void>

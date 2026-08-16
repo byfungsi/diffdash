@@ -1,4 +1,8 @@
-import { PositiveInteger, UtcIsoTimestamp } from "@diffdash/domain/domain-scalar"
+import {
+  NonNegativeInteger,
+  PositiveInteger,
+  UtcIsoTimestamp,
+} from "@diffdash/domain/domain-scalar"
 import { Schema } from "effect"
 
 import {
@@ -47,6 +51,8 @@ export const CoreEventSequence = PositiveInteger.pipe(Schema.brand("CoreEventSeq
 
 /** Monotonic event cursor within one Core process epoch. */
 export type CoreEventSequence = typeof CoreEventSequence.Type
+
+const CoreEventReplaySequence = NonNegativeInteger.pipe(Schema.brand("CoreEventSequence"))
 
 /** Name of one bounded event scope dimension. */
 export const CoreEventScopeName = BoundedEventToken.pipe(Schema.brand("CoreEventScopeName"))
@@ -172,7 +178,7 @@ export type CoreEventHint = typeof CoreEventHint.Type
 /** Epoch-bound last event observed by a reconnecting host. */
 export const CoreEventReplayCursor = Schema.Struct({
   processEpoch: CoreProcessEpoch,
-  sequence: CoreEventSequence,
+  sequence: CoreEventReplaySequence,
 }).annotate({ identifier: "CoreEventReplayCursor" })
 
 /** Epoch-bound last event observed by a reconnecting host. */

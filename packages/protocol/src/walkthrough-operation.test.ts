@@ -10,6 +10,7 @@ import {
   WalkthroughApplicationInstanceId,
   WalkthroughBridgeOperationAccepted,
   WalkthroughBridgeSafeDiagnostic,
+  WalkthroughBridgeStartRequest,
   WalkthroughProcessEpoch,
   WalkthroughRequestId,
   WalkthroughStartBridgeFailure,
@@ -61,6 +62,25 @@ const failure = Schema.decodeUnknownSync(WalkthroughStartBridgeFailure)({
 })
 
 describe("walkthrough operation bridge", () => {
+  it("requires a renderer-owned idempotency key on source-neutral starts", () => {
+    const request = {
+      target: { kind: "local", rootPath: "/workspace/repo", comparison: { _tag: "workingTree" } },
+      regenerate: false,
+      idempotencyKey: "w:renderer-retained",
+    }
+
+    expect(Schema.decodeUnknownSync(WalkthroughBridgeStartRequest)(request).idempotencyKey).toBe(
+      "w:renderer-retained",
+    )
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(WalkthroughBridgeStartRequest)({
+          ...request,
+          idempotencyKey: "generated elsewhere",
+        }),
+      ),
+    ).toBe(true)
+  })
   it("roundtrips accepted and classified failure values as plain envelopes", () => {
     const results = [
       { _tag: "Success", value: accepted },

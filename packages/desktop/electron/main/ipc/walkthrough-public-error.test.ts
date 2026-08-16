@@ -29,7 +29,7 @@ import {
 } from "@diffdash/domain/walkthrough-operation"
 import { toPublicWalkthroughError } from "./walkthrough-public-error"
 
-const operation = InvokeChannel.generateLocalWalkthrough
+const operation = InvokeChannel.startWalkthroughOperation
 const failure = (
   providerId: string,
   category: AgentProviderFailureCategory,

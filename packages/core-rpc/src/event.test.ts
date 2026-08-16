@@ -10,6 +10,7 @@ import {
   CoreEventMetadata,
   CoreEventOperationId,
   CoreEventReason,
+  CoreEventReplayCursor,
   CoreEventReplayResult,
   CoreEventSchemaVersion,
   CoreEventScopeId,
@@ -57,6 +58,9 @@ const metadata = CoreEventMetadata.make({
 describe("Core event metadata", () => {
   it("preserves bounded event identity, cursor, scopes, and durable subject correlation", () => {
     expect(Schema.decodeUnknownSync(CoreEventMetadata)(metadata)).toEqual(metadata)
+    expect(
+      Schema.decodeUnknownSync(CoreEventReplayCursor)({ processEpoch: "epoch-1", sequence: 0 }),
+    ).toMatchObject({ sequence: 0 })
   })
 
   it("rejects invalid cursors, timestamps, duplicate scopes, and incomplete subjects", () => {
