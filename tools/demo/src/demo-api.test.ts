@@ -246,22 +246,20 @@ describe("scenario-backed DiffDash API", () => {
 
       expect(branch.target.comparison["_tag"]).toBe("branch")
       if (branch.target.comparison["_tag"] === "branch") {
-        expect(branch.target.comparison.baseSha).toBe(branch.snapshot.baseRevision)
+        expect(branch.target.comparison.baseSha).toBe(branch.manifest.baseRevision)
         expect(branch.target.comparison.baseSha).not.toBe(branch.comparisonTargetSha)
       }
       expect(branch.excludedTargetOnlyPaths).toEqual(["docs/dev-release-notes.md"])
       expect(
-        branch.snapshot.parsedDiff.files.some((file) =>
-          branch.excludedTargetOnlyPaths.includes(file.path),
-        ),
+        branch.parsedDiff.files.some((file) => branch.excludedTargetOnlyPaths.includes(file.path)),
       ).toBe(false)
-      expect(working.snapshot.diff.diff).not.toBe(branch.snapshot.diff.diff)
-      expect(working.snapshot.reviewKey).not.toBe(branch.snapshot.reviewKey)
-      expect(working.snapshot.snapshotId).not.toBe(branch.snapshot.snapshotId)
+      expect(working.diff.diff).not.toBe(branch.diff.diff)
+      expect(working.manifest.reviewKey).not.toBe(branch.manifest.reviewKey)
+      expect(working.manifest.snapshotId).not.toBe(branch.manifest.snapshotId)
       expect(workingManifest.snapshotId).not.toBe(branchManifest.snapshotId)
       expect(workingThreads.map(({ id }) => id)).not.toEqual(branchThreads.map(({ id }) => id))
-      expect(workingThreads[0]?.reviewKey).toBe(working.snapshot.reviewKey)
-      expect(branchThreads[0]?.reviewKey).toBe(branch.snapshot.reviewKey)
+      expect(workingThreads[0]?.reviewKey).toBe(working.manifest.reviewKey)
+      expect(branchThreads[0]?.reviewKey).toBe(branch.manifest.reviewKey)
       expect(workingViewed.map(({ reviewKey }) => reviewKey)).not.toEqual(
         branchViewed.map(({ reviewKey }) => reviewKey),
       )
@@ -269,8 +267,8 @@ describe("scenario-backed DiffDash API", () => {
       for (const fixture of [working, branch]) {
         const localHunkIds = new Set(
           buildWalkthroughHunkDigest(
-            fixture.snapshot.parsedDiff.files,
-            walkthroughLocalDiffScope(fixture.snapshot.headRevision),
+            fixture.parsedDiff.files,
+            walkthroughLocalDiffScope(fixture.manifest.headRevision),
           ).map(({ id }) => id),
         )
         const walkthroughHunkIds = [

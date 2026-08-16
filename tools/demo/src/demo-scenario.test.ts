@@ -80,8 +80,8 @@ describe("atomic webhook replay demo scenario", () => {
       const first = yield* loadAtomicWebhookReplayScenario
       const second = yield* loadAtomicWebhookReplayScenario
 
-      expect(second.currentRevision.snapshot.headRevision).toBe(
-        first.currentRevision.snapshot.headRevision,
+      expect(second.currentRevision.manifest.headRevision).toBe(
+        first.currentRevision.manifest.headRevision,
       )
       expect(second.threads[0]?.thread.id).toBe(first.threads[0]?.thread.id)
       expect(second.threads[0]?.thread.createdAt).toBe(first.threads[0]?.thread.createdAt)

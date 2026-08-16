@@ -16,10 +16,13 @@ import { RemoteOnly, Repo, RepositorySearchScope } from "@diffdash/domain/reposi
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { WebUrl } from "@diffdash/domain/web-url"
-import type { ParsedDiff } from "@diffdash/domain/diff"
+import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { HostedReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshotManifest,
+  ReviewSnapshotFileInventory,
+} from "@diffdash/domain/review-context"
 import {
   makeReviewDiffIdentity,
   makeReviewKey,
@@ -247,7 +250,7 @@ export interface MaterializedDemoRevision {
   readonly detail: HostedReviewDetail
   readonly diff: HostedReviewDiff
   readonly parsedDiff: ParsedDiff
-  readonly snapshot: HostedReviewSnapshot
+  readonly manifest: HostedReviewSnapshotManifest
   readonly walkthrough: StoredWalkthrough
 }
 
@@ -505,22 +508,45 @@ const materializeRevision = (
     })
     const baseRevision = ReviewRevision.make(revision.baseSha)
     const headRevision = ReviewRevision.make(revision.headSha)
-    const snapshot = HostedReviewSnapshot.make({
-      snapshotId: makeReviewSnapshotId({
-        reviewKey,
-        baseRevision,
-        headRevision,
-        diffIdentity: makeReviewDiffIdentity(diff.diff),
-      }),
+    const snapshotId = makeReviewSnapshotId({
+      reviewKey,
+      baseRevision,
+      headRevision,
+      diffIdentity: makeReviewDiffIdentity(diff.diff),
+    })
+    const snapshotManifest = HostedReviewSnapshotManifest.make({
+      projectId: repository.id,
+      snapshotId,
       reviewKey,
       baseRevision,
       headRevision,
       detail,
-      diff,
-      parsedDiff,
+      files: parsedDiff.files.map(makeDemoReviewSnapshotFileInventory),
     })
 
-    return { id: revision.id, detail, diff, parsedDiff, snapshot, walkthrough: storedWalkthrough }
+    return {
+      id: revision.id,
+      detail,
+      diff,
+      parsedDiff,
+      manifest: snapshotManifest,
+      walkthrough: storedWalkthrough,
+    }
+  })
+
+/** Projects demo-owned parsed file data into bounded renderer inventory metadata. */
+export const makeDemoReviewSnapshotFileInventory = (file: ParsedDiffFile) =>
+  ReviewSnapshotFileInventory.make({
+    fileId: file.fileId,
+    patchHash: file.patchHash,
+    reviewKey: file.reviewKey,
+    path: file.path,
+    oldPath: file.oldPath,
+    status: file.status,
+    visibility: file.visibility,
+    additions: file.additions,
+    deletions: file.deletions,
+    hunkCount: file.hunks.length,
   })
 
 const materializeWalkthrough = (
@@ -621,10 +647,10 @@ const materializeThread = (
       repoId: ReviewProjectId.make(manifest.repository.id),
       reviewKey,
       prNumber: manifest.pullRequest.number,
-      baseRevision: originalRevision.snapshot.baseRevision,
-      headRevision: originalRevision.snapshot.headRevision,
-      currentBaseRevision: currentRevision.snapshot.baseRevision,
-      currentHeadRevision: currentRevision.snapshot.headRevision,
+      baseRevision: originalRevision.manifest.baseRevision,
+      headRevision: originalRevision.manifest.headRevision,
+      currentBaseRevision: currentRevision.manifest.baseRevision,
+      currentHeadRevision: currentRevision.manifest.headRevision,
       originalAnchor,
       currentAnchor:
         activeAnchor !== null

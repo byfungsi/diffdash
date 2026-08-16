@@ -1,4 +1,5 @@
 import { ChangedFile } from "@diffdash/domain/git-provider"
+import type { ParsedDiff } from "@diffdash/domain/diff"
 import {
   BranchComparison,
   LocalReviewDetail,
@@ -9,7 +10,7 @@ import {
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
-import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
+import { LocalReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import {
   makeReviewDiffIdentity,
   makeReviewSnapshotId,
@@ -36,7 +37,11 @@ import {
   WalkthroughStop,
   WalkthroughSupportItem,
 } from "@diffdash/domain/walkthrough"
-import type { MaterializedDemoRevision, MaterializedDemoScenario } from "./demo-scenario"
+import {
+  makeDemoReviewSnapshotFileInventory,
+  type MaterializedDemoRevision,
+  type MaterializedDemoScenario,
+} from "./demo-scenario"
 
 const rootPath = RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch")
 const workingTreeBaseSha = "4b7c939f526dce56d26f4383a832e23186c24684"
@@ -48,7 +53,9 @@ const branchTargetOnlyPath = "docs/dev-release-notes.md"
 export interface DemoLocalReviewFixture {
   readonly id: "working-tree" | "branch"
   readonly target: LocalReviewTarget
-  readonly snapshot: LocalReviewSnapshot
+  readonly manifest: LocalReviewSnapshotManifest
+  readonly diff: LocalReviewDiff
+  readonly parsedDiff: ParsedDiff
   readonly walkthrough: StoredWalkthrough
   readonly threads: readonly ReviewThreadDetails[]
   readonly initiallyViewedFileKeys: readonly string[]
@@ -145,7 +152,8 @@ const makeFixture = (input: {
     diff: input.revision.diff.diff,
     fetchedAt: input.revision.diff.fetchedAt,
   })
-  const snapshot = LocalReviewSnapshot.make({
+  const manifest = LocalReviewSnapshotManifest.make({
+    projectId: input.scenario.repository.id,
     snapshotId: makeReviewSnapshotId({
       reviewKey: input.reviewKey,
       baseRevision,
@@ -156,17 +164,24 @@ const makeFixture = (input: {
     baseRevision,
     headRevision,
     detail,
-    diff,
-    parsedDiff: input.revision.parsedDiff,
+    files: input.revision.parsedDiff.files.map(makeDemoReviewSnapshotFileInventory),
   })
-  const walkthrough = localWalkthrough(input.revision, snapshot)
-  const thread = localThread(input.id, input.scenario.repository.id, snapshot, input.threadPath)
+  const walkthrough = localWalkthrough(input.revision, manifest)
+  const thread = localThread(
+    input.id,
+    input.scenario.repository.id,
+    manifest,
+    input.revision.parsedDiff,
+    input.threadPath,
+  )
   const viewedFile = input.revision.parsedDiff.files.find((file) => file.path === input.viewedPath)
   if (viewedFile === undefined) throw new Error(`Local fixture cannot view ${input.viewedPath}`)
   return {
     id: input.id,
     target: input.target,
-    snapshot,
+    manifest,
+    diff,
+    parsedDiff: input.revision.parsedDiff,
     walkthrough,
     threads: [thread],
     initiallyViewedFileKeys: [viewedFile.reviewKey],
@@ -175,9 +190,12 @@ const makeFixture = (input: {
   }
 }
 
-const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalReviewSnapshot) => {
+const localWalkthrough = (
+  revision: MaterializedDemoRevision,
+  manifest: LocalReviewSnapshotManifest,
+) => {
   const hostedScope = walkthroughHostedReviewScope(revision.detail.summary.locator)
-  const localScope = walkthroughLocalDiffScope(snapshot.headRevision)
+  const localScope = walkthroughLocalDiffScope(manifest.headRevision)
   const hostedDigest = buildWalkthroughHunkDigest(revision.parsedDiff.files, hostedScope)
   const localDigest = buildWalkthroughHunkDigest(revision.parsedDiff.files, localScope)
   const localIdByHostedId = new Map(
@@ -196,9 +214,9 @@ const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalRev
   return StoredWalkthrough.make({
     repoId: ReviewProjectId.make(`local:${revision.detail.summary.locator.repository.name}`),
     prNumber: null,
-    reviewKey: snapshot.reviewKey,
-    baseSha: snapshot.baseRevision,
-    headSha: snapshot.headRevision,
+    reviewKey: manifest.reviewKey,
+    baseSha: manifest.baseRevision,
+    headSha: manifest.headRevision,
     promptVersion: revision.walkthrough.promptVersion,
     walkthrough: Walkthrough.make({
       ...source,
@@ -221,10 +239,11 @@ const localWalkthrough = (revision: MaterializedDemoRevision, snapshot: LocalRev
 const localThread = (
   fixtureId: DemoLocalReviewFixture["id"],
   repoId: ReviewProjectId,
-  snapshot: LocalReviewSnapshot,
+  manifest: LocalReviewSnapshotManifest,
+  parsedDiff: ParsedDiff,
   path: string,
 ) => {
-  const file = snapshot.parsedDiff.files.find((candidate) => candidate.path === path)
+  const file = parsedDiff.files.find((candidate) => candidate.path === path)
   const hunk = file?.hunks[0]
   const line =
     hunk === undefined
@@ -256,12 +275,12 @@ const localThread = (
   const thread = ReviewThread.make({
     id: threadId,
     repoId,
-    reviewKey: snapshot.reviewKey,
+    reviewKey: manifest.reviewKey,
     prNumber: null,
-    baseRevision: snapshot.baseRevision,
-    headRevision: snapshot.headRevision,
-    currentBaseRevision: snapshot.baseRevision,
-    currentHeadRevision: snapshot.headRevision,
+    baseRevision: manifest.baseRevision,
+    headRevision: manifest.headRevision,
+    currentBaseRevision: manifest.baseRevision,
+    currentHeadRevision: manifest.headRevision,
     originalAnchor: anchor,
     currentAnchor: CurrentReviewAnchor.cases.Active.make({ anchor }),
     createdAt,

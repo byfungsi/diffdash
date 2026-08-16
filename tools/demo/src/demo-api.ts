@@ -41,7 +41,7 @@ import {
   ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
 import { AgentPromptVersion, CompletedAgentRun, RunningAgentRun } from "@diffdash/domain/agent-run"
-import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import {
   ReviewProjectId,
   type ReviewFilePatchHash,
@@ -156,7 +156,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const navigationListeners = new Set<() => void>()
   const actions: DemoAction[] = []
   const pendingRuns = new Map<string, PendingAgentRun>()
-  const snapshotCache = new Map<string, ReviewSnapshot>()
+  const manifestCache = new Map<string, ReviewSnapshotManifest>()
   const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
   let repositories: Repo[] = []
   let currentRevision = firstRevision
@@ -208,9 +208,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     }
     pendingRuns.clear()
     currentRevision = firstRevision
-    snapshotCache.clear()
+    manifestCache.clear()
     projectWorkspaceStates.clear()
-    snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
+    manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
     repositories = [scenario.repository]
     approved = false
     settings = cloneSettings(DEFAULT_AI_SETTINGS)
@@ -228,7 +228,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       localReviewFixtures.map((fixture) => [
         localReviewTargetKey(fixture.target),
         new Map(
-          fixture.snapshot.parsedDiff.files
+          fixture.parsedDiff.files
             .filter((file) => fixture.initiallyViewedFileKeys.includes(file.reviewKey))
             .map((file) => [file.reviewKey, file.patchHash]),
         ),
@@ -244,8 +244,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           ReviewThreadDetails.make({
             thread: ReviewThread.make({
               ...details.thread,
-              currentBaseRevision: firstRevision.snapshot.baseRevision,
-              currentHeadRevision: firstRevision.snapshot.headRevision,
+              currentBaseRevision: firstRevision.manifest.baseRevision,
+              currentHeadRevision: firstRevision.manifest.headRevision,
               currentAnchor: CurrentReviewAnchor.cases.Active.make({
                 anchor: details.thread.originalAnchor,
               }),
@@ -307,7 +307,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     target.kind === "hosted"
       ? scenario.reviewKey
       : target.kind === "local"
-        ? requireLocalFixture(target).snapshot.reviewKey
+        ? requireLocalFixture(target).manifest.reviewKey
         : (() => {
             throw new Error("Repository comparisons are unavailable in the demo runtime")
           })()
@@ -335,7 +335,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       record("timeline.release", { checkpointId })
       if (checkpointId === "revision-updated") {
         currentRevision = scenario.currentRevision
-        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
+        manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
         for (const sourceDetails of scenario.threads) {
           const current = threadDetails.get(sourceDetails.thread.id)
           if (current === undefined) continue
@@ -887,16 +887,13 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
-        return makeReviewSnapshotManifest(
-          currentRevision.snapshot,
-          ReviewProjectId.make(scenario.repository.id),
-        )
+        manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
+        return currentRevision.manifest
       },
       acquireLocal: async (target) => {
-        const snapshot = requireLocalFixture(target).snapshot
-        snapshotCache.set(snapshot.snapshotId, snapshot)
-        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(scenario.repository.id))
+        const manifest = requireLocalFixture(target).manifest
+        manifestCache.set(manifest.snapshotId, manifest)
+        return manifest
       },
       acquireRepositoryComparison: async () => {
         throw new Error("Repository comparisons are unavailable in the demo runtime")
@@ -916,12 +913,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       closeSession: async (request) =>
         DisposedReviewSession.make({ identity: request.identity, reason: "closed" }),
       inventory: async (request) => {
-        const snapshot = snapshotCache.get(request.identity.snapshotId)
-        if (snapshot === undefined) throw new Error("Demo review snapshot is unavailable")
-        const files = snapshot.parsedDiff.files.slice(
-          request.offset,
-          request.offset + request.limit,
-        )
+        const manifest = manifestCache.get(request.identity.snapshotId)
+        if (manifest === undefined) throw new Error("Demo review snapshot is unavailable")
+        const files = manifest.files.slice(request.offset, request.offset + request.limit)
         const nextOffset = request.offset + files.length
         return {
           identity: request.identity,
@@ -935,20 +929,29 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
             status: file.status,
             visibility: file.visibility,
             patchHash: file.patchHash,
-            hunkCount: file.hunks.length,
+            hunkCount: file.hunkCount,
           })),
-          nextOffset: nextOffset < snapshot.parsedDiff.files.length ? nextOffset : null,
+          nextOffset: nextOffset < manifest.files.length ? nextOffset : null,
         }
       },
       readRange: async (request) => {
-        const snapshot = snapshotCache.get(request.identity.snapshotId)
-        const file = snapshot?.parsedDiff.files.find(({ fileId }) => fileId === request.fileId)
-        if (file === undefined) throw new Error("Demo review file is unavailable")
+        const manifest = manifestCache.get(request.identity.snapshotId)
+        if (manifest === undefined) throw new Error("Demo review snapshot is unavailable")
+        const hostedRevision = scenario.revisions.find(
+          (revision) => revision.manifest.snapshotId === request.identity.snapshotId,
+        )
+        const localFixture = localReviewFixtures.find(
+          (fixture) => fixture.manifest.snapshotId === request.identity.snapshotId,
+        )
+        const parsedDiff = hostedRevision?.parsedDiff ?? localFixture?.parsedDiff
+        const file = parsedDiff?.files.find(({ fileId }) => fileId === request.fileId)
+        const ordinal = manifest.files.findIndex(({ fileId }) => fileId === request.fileId)
+        if (file === undefined || ordinal < 0) throw new Error("Demo review file is unavailable")
         const bytes = new TextEncoder().encode(file.patch)
         return {
           identity: request.identity,
           file: {
-            ordinal: snapshot?.parsedDiff.files.indexOf(file) ?? 0,
+            ordinal,
             fileId: file.fileId,
             path: file.path,
             oldPath: file.oldPath,
@@ -1053,8 +1056,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        return request.baseRevision === currentRevision.snapshot.baseRevision &&
-          request.headRevision === currentRevision.snapshot.headRevision
+        return request.baseRevision === currentRevision.manifest.baseRevision &&
+          request.headRevision === currentRevision.manifest.headRevision
           ? currentRevision.walkthrough
           : null
       },
@@ -1068,8 +1071,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     localWalkthroughs: {
       get: async (target, baseSha, headSha) => {
         const fixture = requireLocalFixture(target)
-        return baseSha === fixture.snapshot.baseRevision &&
-          headSha === fixture.snapshot.headRevision
+        return baseSha === fixture.manifest.baseRevision &&
+          headSha === fixture.manifest.headRevision
           ? fixture.walkthrough
           : null
       },
