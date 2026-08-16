@@ -265,16 +265,28 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       .first()
     await expect(addedLine).toBeVisible()
     const gutterNumber = fixtureDiffCard
-      .locator("diffs-container [data-column-number]:visible")
-      .filter({ hasText: "1" })
+      .locator('diffs-container [data-line-type="change-addition"][data-column-number]:visible')
       .last()
     const composer = window.getByRole("textbox", { name: "Thread message" })
     await expect
       .poll(
         async () => {
           if (await composer.isVisible()) return true
-          await gutterNumber.hover({ force: true })
-          const utility = fixtureDiffCard.locator("diffs-container [data-utility-button]").first()
+          await gutterNumber.evaluate((element) => {
+            element
+              .closest("pre")
+              ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
+            element.dispatchEvent(
+              new PointerEvent("pointermove", {
+                bubbles: true,
+                composed: true,
+                pointerType: "mouse",
+              }),
+            )
+          })
+          const utility = fixtureDiffCard
+            .locator("diffs-container [data-utility-button]:visible")
+            .first()
           if (!(await utility.isVisible())) return false
           await utility.evaluate((button) => {
             const init = {
