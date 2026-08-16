@@ -226,6 +226,15 @@ export class WalkthroughService extends Context.Service<
           input: WalkthroughGenerationInput,
           route: WalkthroughPreparedRoute,
         ) {
+          if (!Schema.is(WalkthroughGenerationInput)(input)) {
+            return Effect.fail(
+              WalkthroughGenerationError.make({
+                operation: "validateGenerationInput",
+                output: "",
+                cause: new Error("Walkthrough prompt context exceeds its bounded input contract"),
+              }),
+            )
+          }
           const promptContext = buildWalkthroughPromptContext(input)
           return executeWalkthroughRoute(
             registry,

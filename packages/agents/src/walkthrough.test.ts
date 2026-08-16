@@ -58,6 +58,7 @@ import {
   WALKTHROUGH_PROMPT_CONTEXT_LIMITS,
   ReviewPromptFile,
   ReviewPromptIdentity,
+  WalkthroughGenerationError,
   WalkthroughReviewContext,
   WalkthroughRouting,
   WalkthroughService,
@@ -494,6 +495,23 @@ describe("WalkthroughService", () => {
       }),
     ).toThrow(/Expected/u)
   })
+
+  it.effect("rejects an unbounded direct service input before provider execution", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = makeLayer([validOutput])
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate({
+          ...generationInput,
+          diff: "x".repeat(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxDiffChars + 1),
+        })
+      }).pipe(Effect.provide(layer), Effect.flip)
+
+      expect(error).toBeInstanceOf(WalkthroughGenerationError)
+      expect(error).toMatchObject({ operation: "validateGenerationInput", output: "" })
+      expect(calls).toHaveLength(0)
+    }),
+  )
 
   it.effect("FUN-48 AC: returns validated walkthrough data from valid generation", () =>
     Effect.gen(function* () {

@@ -366,6 +366,22 @@ describe("ReviewThreadPrompt", () => {
           makeInput({ fileInventory: { totalFiles: tooManyFiles.length, files: tooManyFiles } }),
         ),
       )
+      const oversizedInventoryFile = ReviewPromptFile.make({
+        fileId: ReviewFileId.make("file-oversized"),
+        path: RepositoryRelativePath.make(
+          `src/${"segment".repeat(REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryBytes)}.ts`,
+        ),
+        oldPath: null,
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        hunkCount: 1,
+      })
+      const inventoryBytesResult = yield* Effect.result(
+        buildReviewThreadPrompt(
+          makeInput({ fileInventory: { totalFiles: 1, files: [oversizedInventoryFile] } }),
+        ),
+      )
       const hunkResult = yield* Effect.result(
         buildReviewThreadPrompt(
           makeInput({
@@ -380,9 +396,22 @@ describe("ReviewThreadPrompt", () => {
           }),
         ),
       )
+      const hunkBytesResult = yield* Effect.result(
+        buildReviewThreadPrompt(
+          makeInput({
+            anchorHunk: {
+              ...anchorHunk,
+              lines: [`+${"x".repeat(REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxAnchorHunkBytes)}`],
+              anchorLineIndex: 0,
+            },
+          }),
+        ),
+      )
 
       expect(Result.isFailure(inventoryResult)).toBe(true)
+      expect(Result.isFailure(inventoryBytesResult)).toBe(true)
       expect(Result.isFailure(hunkResult)).toBe(true)
+      expect(Result.isFailure(hunkBytesResult)).toBe(true)
     }),
   )
 
