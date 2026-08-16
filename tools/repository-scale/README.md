@@ -73,3 +73,32 @@ pnpm repository-scale:evaluate -- --session=linux-baseline
 The seven post-warm-up samples must stay within the greater of five percent or 32 MiB, the final
 sample must not exceed the first by that tolerance, and monotonic growth always fails. Keep raw
 reports ignored and promote only reviewed, path-free summaries into `docs/benchmarks/`.
+
+## Packaged orchestration
+
+Run a reduced deterministic fixture through the existing packaged E2E build with either forced Core
+host:
+
+```sh
+pnpm --filter @diffdash/repository-scale smoke -- --host=bun
+pnpm --filter @diffdash/repository-scale smoke -- --host=utility
+```
+
+The full run requires the exact generated 61,000-file/30,000,000-row manifest. Generate it first, then
+name the evidence session:
+
+```sh
+pnpm repository-scale:generate
+pnpm --filter @diffdash/repository-scale run -- --host=utility --session=linux-baseline
+```
+
+Both commands open the pinned local comparison without network or authentication, verify the actual
+Core host process, exercise progressive first/far ranges, diff search, reload, rapid comparison
+switches, Core restart, and process teardown. Full runs directly use the fixed process/storage
+measurement policy for ten alternating pathological/small switches. Objective gate failures exit
+nonzero. Raw Playwright and measurement artifacts remain ignored under `.cache/orchestration`; the
+adjacent `summary.json` is path-free but remains local until reviewed.
+
+The current preload bridge does not expose foreground comparison-session disposal completion or
+progressive queue cancellation counters. Reports list these scenarios as blocked and do not claim
+that they were measured.

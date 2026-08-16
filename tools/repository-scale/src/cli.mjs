@@ -7,6 +7,7 @@ import { promisify } from "node:util"
 
 import { prepareGitFixture } from "./git-fixture.mjs"
 import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
+import { parseOrchestrationOptions, runRepositoryScaleOrchestration } from "./orchestration.mjs"
 import {
   captureMachineProfile,
   evaluateSwitchMemoryPlateau,
@@ -26,6 +27,8 @@ const usage = `Usage:
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
   pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --database=<diffdash.sqlite> --managed-root=<managed-directory> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --packaged=true --disposal-complete=true
   pnpm repository-scale:evaluate -- --session=<name>
+  pnpm --filter @diffdash/repository-scale smoke -- --host=<bun|utility>
+  pnpm --filter @diffdash/repository-scale run -- --host=<bun|utility> --session=<name> [--manifest=<path>]
 `
 
 const commandOptions = {
@@ -49,6 +52,8 @@ const commandOptions = {
     "plateau-threshold",
   ]),
   evaluate: new Set(["session"]),
+  smoke: new Set(["host"]),
+  run: new Set(["host", "session", "manifest"]),
 }
 
 const parseOptions = (args) => {
@@ -265,6 +270,17 @@ const generate = async (options) => {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
 }
 
+const orchestrate = async (command, args) => {
+  const profile = command === "smoke" ? "smoke" : "full"
+  const options = parseOrchestrationOptions(args, profile)
+  const result = await runRepositoryScaleOrchestration({
+    ...options,
+    cacheDirectory: defaultCacheDirectory,
+    e2eDirectory: resolve(workspaceRoot, "packages/e2e"),
+  })
+  process.stdout.write(`${result.summaryPath}\n`)
+}
+
 const main = async () => {
   const [command, ...args] = process.argv.slice(2)
   if (command === undefined || command === "--help" || command === "-h") {
@@ -276,6 +292,7 @@ const main = async () => {
   if (command === "generate") return generate(options)
   if (command === "prepare") return prepare(options)
   if (command === "measure") return measure(options)
+  if (command === "smoke" || command === "run") return orchestrate(command, args)
   return evaluate(options)
 }
 
