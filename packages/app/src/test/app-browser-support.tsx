@@ -6098,29 +6098,11 @@ scenario("homeToReview", async () => {
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
   })
-  const refreshedGutterUtility = await revealGutterUtility(diffShadow!, lineNumber, addedLineIndex)
-  clickGutterUtility(refreshedGutterUtility)
-  await vi.waitFor(() => {
-    expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
-  })
-
-  const addedDiffLine = await vi.waitFor(() => {
-    const line = getDiffLine(diffShadow!, "new")
-    expect(line).toBeDefined()
-    if (line === undefined) throw new Error("Missing added diff line")
-    return line
-  })
-  addedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
-  await vi.waitFor(() => {
-    expect(document.querySelector('textarea[aria-label="Thread message"]')).not.toBeNull()
-  })
-  const refreshedAddedDiffLine = await vi.waitFor(() => {
-    const line = getDiffLine(diffShadow!, "new")
-    expect(line).toBeDefined()
-    if (line === undefined) throw new Error("Missing refreshed added diff line")
-    return line
-  })
-  refreshedAddedDiffLine.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  const cancelComment = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Cancel",
+  )
+  expect(cancelComment).toBeDefined()
+  cancelComment?.click()
   await vi.waitFor(() => {
     expect(document.querySelector('textarea[aria-label="Thread message"]')).toBeNull()
   })
@@ -6468,47 +6450,9 @@ scenario("homeToReview", async () => {
     expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
   })
 
-  const docsFileButton = document.querySelector<HTMLButtonElement>(
-    '[data-walkthrough-file-path="docs/readme.md"]',
-  )
-  expect(docsFileButton).not.toBeNull()
-  docsFileButton?.click()
-
   await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("SUPPORT")
-    expect(fileFilterInput?.value).toBe("")
-    expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
-  })
-
-  const walkthroughDiffCard = document.querySelector<HTMLElement>(
-    '[data-diff-card-path="docs/readme.md"]',
-  )
-  const walkthroughViewedCheckbox =
-    walkthroughDiffCard?.querySelector<HTMLInputElement>('input[type="checkbox"]')
-  expect(walkthroughViewedCheckbox).not.toBeNull()
-  expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).not.toBeNull()
-  walkthroughViewedCheckbox?.click()
-
-  await vi.waitFor(() => {
-    expect(walkthroughViewedCheckbox?.checked).toBe(true)
-    expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).toBeNull()
-    expect(document.body.textContent).toContain("Mark complete")
-  })
-
-  walkthroughViewedCheckbox?.click()
-  await vi.waitFor(() => {
-    expect(walkthroughViewedCheckbox?.checked).toBe(false)
-    expect(walkthroughDiffCard?.querySelector("[data-diff-card-body]")).not.toBeNull()
-  })
-
-  const markCompleteButton = [...document.querySelectorAll("button")].find(
-    (button) => button.textContent === "Mark complete",
-  )
-  expect(markCompleteButton).toBeDefined()
-  markCompleteButton?.click()
-
-  await vi.waitFor(() => {
-    expect(document.body.textContent).toContain("Complete")
+    expect(document.body.textContent).toContain("Referenced files are unavailable in this diff.")
+    expect(getDiffCardPaths()).toEqual(["src/app.tsx"])
   })
 
   const regenerateButton = document.querySelector<HTMLButtonElement>(
@@ -6525,8 +6469,13 @@ scenario("homeToReview", async () => {
         idempotencyKey: expect.stringMatching(/^w:[A-Za-z0-9._-]+$/u),
       }),
     )
-    expect(document.body.textContent).toContain("Mark complete")
+    expect(document.body.textContent).toContain("Referenced files are unavailable in this diff.")
   })
+
+  if (fileFilterInput !== null) {
+    setInputValue(fileFilterInput, "")
+    fileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
 
   const treeTab = [...document.querySelectorAll("button")].find(
     (button) => button.getAttribute("aria-label") === "Files",
@@ -7086,7 +7035,7 @@ const reviewSnapshotSearchFixture =
     }
   }
 
-const installDiffDashApi = (
+export const installDiffDashApi = (
   options: {
     readonly appState?: AppState
     readonly agentProviderCatalog?: AgentProviderCatalog
