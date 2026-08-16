@@ -305,9 +305,6 @@ importers:
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain
-      '@diffdash/protocol':
-        specifier: workspace:*
-        version: link:../protocol
       '@effect/atom-react':
         specifier: 'catalog:'
         version: 4.0.0-beta.105(effect@4.0.0-beta.105)(react@19.2.7)(scheduler@0.27.0)
@@ -481,6 +478,9 @@ importers:
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain
+      '@diffdash/protocol':
+        specifier: workspace:*
+        version: link:../protocol
       effect:
         specifier: 'catalog:'
         version: 4.0.0-beta.105

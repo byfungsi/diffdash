@@ -1,4 +1,3 @@
-import { CoreCommandId, CoreProcessEpoch, CoreStateVersion } from "@diffdash/core-rpc"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Result, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
@@ -8,7 +7,13 @@ import { join } from "node:path"
 
 import * as DatabaseNode from "./database-node"
 import { makeDatabase } from "./database"
-import { CoreCommandConflictError, CoreCommandStore } from "./core-command-store"
+import {
+  CoreCommandConflictError,
+  CoreCommandId,
+  CoreCommandStore,
+  CoreProcessEpoch,
+  CoreStateVersion,
+} from "./core-command-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-core-command-"))),

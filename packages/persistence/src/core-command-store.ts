@@ -18,11 +18,14 @@ const BoundedIdentity = Schema.String.pipe(
   Schema.check(Schema.isMaxLength(100)),
   Schema.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)),
 )
-const CoreCommandId = BoundedIdentity.pipe(Schema.brand("CoreCommandId"))
+/** Durable command identity stored without depending on the Core RPC package. */
+export const CoreCommandId = BoundedIdentity.pipe(Schema.brand("CoreCommandId"))
 type CoreCommandIdType = typeof CoreCommandId.Type
-const CoreProcessEpoch = BoundedIdentity.pipe(Schema.brand("CoreProcessEpoch"))
+/** Core process epoch persisted with a command acceptance record. */
+export const CoreProcessEpoch = BoundedIdentity.pipe(Schema.brand("CoreProcessEpoch"))
 type CoreProcessEpochType = typeof CoreProcessEpoch.Type
-const CoreStateVersion = PositiveInteger.pipe(Schema.brand("CoreStateVersion"))
+/** Monotonic durable command state version. */
+export const CoreStateVersion = PositiveInteger.pipe(Schema.brand("CoreStateVersion"))
 type CoreStateVersionType = typeof CoreStateVersion.Type
 const CoreCommandState = Schema.Literals(["accepted", "committed", "failed", "acknowledged"])
 type CoreCommandStateType = typeof CoreCommandState.Type

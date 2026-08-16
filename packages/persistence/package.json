@@ -11,6 +11,7 @@
     "./resource-catalog": "./src/resource-catalog.ts",
     "./snapshot-block-store": "./src/snapshot-block-store.ts",
     "./database-node": "./src/database-node.ts",
+    "./database-bun": "./src/database-bun.ts",
     "./project-workspace-store": "./src/project-workspace-store.ts",
     "./repository-store": "./src/repository-store.ts",
     "./review-thread-store": "./src/review-thread-store.ts",
