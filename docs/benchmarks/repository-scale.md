@@ -13,10 +13,11 @@ process samples remain ignored under `tools/repository-scale/.cache/`.
 2. Open the emitted repository and exact SHAs with `diffdash compare`.
 3. Exercise initial load, broad search, rapid scrolling, far-target navigation, annotations, and
    revision switching.
-4. Alternate the pathological and small review ten times. Record switches one through ten with
-   `pnpm repository-scale:measure -- --manifest=<manifest.json>` on Linux; the first three are warm-up
-   and each report uses the fixed 60-second duration, 500 ms interval, 10-second steady window, and
-   five-percent steady-window threshold after foreground disposal settles.
+4. Alternate the pathological and small review ten times. Run `pnpm repository-scale:measure` on
+   Linux with the pinned manifest, selected Bun or utility host, active scenario, app version,
+   packaged confirmation, and foreground-disposal confirmation; the first three are warm-up and each
+   report uses the fixed 60-second duration, 500 ms interval, 10-second steady window, and five-percent
+   steady-window threshold.
 5. Run `pnpm repository-scale:evaluate` for the session. The seven evaluated samples must vary by no
    more than the greater of five percent or 32 MiB, the final sample cannot exceed the first by that
    tolerance, and monotonic growth fails regardless.
