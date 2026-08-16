@@ -63,6 +63,7 @@ import { ReviewSnapshotService } from "./services/review-snapshot"
 import { AgentArtifactNormalizer } from "./services/agent-artifact-normalizer"
 import { ReviewAgentRouting, ReviewAgentService } from "./services/review-agent"
 import { ReviewMcpHandlers } from "./services/review-mcp-handlers"
+import { operationSnapshotReaderLayer } from "./services/operation-snapshot-reader"
 import { ReviewThreadAnchorMapper } from "./services/review-thread-anchor-mapper"
 import {
   snapshotGitRangeSourceLayer,
@@ -326,6 +327,11 @@ function createCoreLayerInternal(
     rootPath: snapshotRootPath,
   })
   const snapshotPersistenceLayer = Layer.merge(ResourceCatalog.layer, snapshotBlockStoreLayer)
+  const operationSnapshotReaderServiceLayer = operationSnapshotReaderLayer({
+    leaseLifetimeMs: SNAPSHOT_LEASE_LIFETIME_MS,
+    maximumHunkBytes: CORE_SNAPSHOT_MAX_LAZY_BYTES,
+    maximumFileBytes: CORE_SNAPSHOT_MAX_LAZY_BYTES,
+  }).pipe(Layer.provideMerge(snapshotPersistenceLayer), Layer.provide(databaseLayer))
   const resourceRoots = new Map([
     [SNAPSHOT_RESOURCE_ROOT_ID, snapshotRootPath],
     [PROCESS_TEMP_RESOURCE_ROOT_ID, agentWorkingDirectory],
@@ -485,6 +491,7 @@ function createCoreLayerInternal(
 
   const operationLayer = coreOperationLayer.pipe(
     Layer.provide(businessServicesLayer),
+    Layer.provide(operationSnapshotReaderServiceLayer),
     Layer.catchCause((cause) =>
       Layer.effect(CoreOperationService, Effect.failCause(Cause.map(cause, toCoreStartupError))),
     ),
