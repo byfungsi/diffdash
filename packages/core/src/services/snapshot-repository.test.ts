@@ -358,11 +358,13 @@ describe("SnapshotRepository", () => {
         const target = yield* repository.resolveTarget(
           address,
           ReviewFileId.make("file:0"),
-          null,
+          ReviewHunkId.make("hunk:one"),
           198,
         )
         const range = yield* repository.readRange(address, ReviewFileId.make("file:0"), 198)
         expect(target.blockOrdinal).toBe(99)
+        expect(target.blockFirstLine).toBe(198)
+        expect(target.targetLineOffset).toBe(0)
         expect(range.blocks.map(({ ordinal }) => ordinal)).toEqual([99])
         expect(range.byteCount).toBeLessThanOrEqual(options.maximumResponseBytes)
       }).pipe(Effect.provide(makeLayer(directory)))

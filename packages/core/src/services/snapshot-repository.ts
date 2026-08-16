@@ -28,7 +28,7 @@ import {
   ResourceLeaseId,
   ResourceReservationId,
 } from "@diffdash/persistence/resource-catalog"
-import { Clock, Context, Effect, Layer, Option, Ref, Schema, Semaphore } from "effect"
+import { Clock, Context, Effect, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 
 /** Maximum changed files returned by one progressive inventory query. */
 export const SNAPSHOT_INVENTORY_QUERY_LIMIT = 256
@@ -69,13 +69,22 @@ export interface LazySnapshotBlock {
 /** Adapter for bounded canonical output from exact immutable Git objects. */
 export class SnapshotGitRangeSource extends Context.Service<
   SnapshotGitRangeSource,
-  {
-    readonly generateFile: (input: {
-      readonly snapshot: StoredSnapshotHeader
-      readonly file: SnapshotFilePlacement
-      readonly maximumBlockBytes: number
-    }) => Effect.Effect<ReadonlyArray<LazySnapshotBlock>, SnapshotRepositorySourceError>
-  }
+  | {
+      readonly generateFile: (input: {
+        readonly snapshot: StoredSnapshotHeader
+        readonly file: SnapshotFilePlacement
+        readonly maximumBlockBytes: number
+      }) => Effect.Effect<ReadonlyArray<LazySnapshotBlock>, SnapshotRepositorySourceError>
+      readonly generateFileBlocks?: never
+    }
+  | {
+      readonly generateFile?: never
+      readonly generateFileBlocks: (input: {
+        readonly snapshot: StoredSnapshotHeader
+        readonly file: SnapshotFilePlacement
+        readonly maximumBlockBytes: number
+      }) => Stream.Stream<LazySnapshotBlock, SnapshotRepositorySourceError>
+    }
 >()("@diffdash/core/SnapshotGitRangeSource") {}
 
 /** Project authority used before a manifest may enter a foreground session. */
@@ -154,7 +163,9 @@ export interface SnapshotRange {
 export interface ResolvedSnapshotTarget {
   readonly file: SnapshotFilePlacement
   readonly blockOrdinal: number
+  readonly blockFirstLine: number
   readonly line: number
+  readonly targetLineOffset: number
 }
 
 /** Repository limits sourced from Core RPC and managed-resource policy. */
@@ -287,94 +298,112 @@ export const snapshotRepositoryLayer = (
         if (session.snapshot.source.kind !== "exactGit") return []
         return yield* lazyCapacity.withPermits(1)(
           Effect.gen(function* () {
-            const generated = yield* git
-              .generateFile({
-                snapshot: session.snapshot,
-                file,
-                maximumBlockBytes: options.maximumBlockBytes,
-              })
-              .pipe(
-                Effect.mapError((error) => reject(operation, "sourceUnavailable", error.message)),
-              )
-            if (generated.length > options.maximumLazyBlocks)
-              return yield* reject(
-                operation,
-                "rangeLimit",
-                "Exact-Git output exceeded the bounded block count",
-              )
+            const input = {
+              snapshot: session.snapshot,
+              file,
+              maximumBlockBytes: options.maximumBlockBytes,
+            }
+            const generated =
+              git.generateFileBlocks !== undefined
+                ? git.generateFileBlocks(input)
+                : Stream.fromEffect(git.generateFile(input)).pipe(
+                    Stream.flatMap((blocks) => Stream.fromIterable(blocks)),
+                  )
             let nextLine = 0
-            for (const [index, block] of generated.entries()) {
-              if (
-                block.ordinal !== index ||
-                block.firstLine !== nextLine ||
-                block.bytes.byteLength === 0 ||
-                block.bytes.byteLength > options.maximumBlockBytes ||
-                block.lineCount <= 0
-              )
-                return yield* reject(
-                  operation,
-                  "rangeLimit",
-                  "Exact-Git output crossed a block protocol limit",
-                )
-              nextLine += block.lineCount
-              yield* current(operation, identity)
-              const blockId = makeLazyBlockId(file.deltaId, block)
-              const nowMs = yield* Clock.currentTimeMillis
-              const prepared = yield* store
-                .prepareBlock({
-                  id: blockId,
-                  deltaId: file.deltaId,
-                  hunkId: block.hunkId,
-                  ordinal: block.ordinal,
-                  firstLine: block.firstLine,
-                  lineCount: block.lineCount,
-                  byteCount: block.bytes.byteLength,
-                  checksum: checksum(block.bytes),
-                  reservationId: ResourceReservationId.make(`lazy:${hash(blockId)}`),
-                  nowMs,
-                  expiresAtMs: nowMs + options.reservationLifetimeMs,
-                  quotaBytes: options.managedQuotaBytes,
-                })
-                .pipe(
-                  Effect.mapError(() =>
-                    reject(operation, "sourceUnavailable", "Could not reserve lazy output"),
-                  ),
-                )
-              if (prepared.kind === "quotaExceeded")
-                return yield* reject(
-                  operation,
-                  "quotaExceeded",
-                  "Managed snapshot quota cannot reserve exact-Git output",
-                )
-              yield* store
-                .stageBlock(blockId, block.bytes)
-                .pipe(
-                  Effect.mapError(() =>
-                    reject(operation, "sourceUnavailable", "Could not stage lazy output"),
-                  ),
-                )
-              yield* current(operation, identity)
-              yield* store
-                .promoteBlock(blockId)
-                .pipe(
-                  Effect.mapError(() =>
-                    reject(operation, "sourceUnavailable", "Could not promote lazy output"),
-                  ),
-                )
-              yield* sessionLock.withPermits(1)(
-                current(operation, identity).pipe(
-                  Effect.andThen(
-                    store
-                      .finalizeBlock(blockId)
-                      .pipe(
-                        Effect.mapError(() =>
-                          reject(operation, "sourceUnavailable", "Could not publish lazy output"),
-                        ),
+            let blockCount = 0
+            const promoted: DiffBlockId[] = []
+            yield* generated.pipe(
+              Stream.mapError((error) => reject(operation, "sourceUnavailable", error.message)),
+              Stream.runForEach((block) =>
+                Effect.gen(function* () {
+                  const index = blockCount
+                  blockCount += 1
+                  if (blockCount > options.maximumLazyBlocks)
+                    return yield* reject(
+                      operation,
+                      "rangeLimit",
+                      "Exact-Git output exceeded the bounded block count",
+                    )
+                  if (
+                    block.ordinal !== index ||
+                    block.firstLine !== nextLine ||
+                    block.bytes.byteLength === 0 ||
+                    block.bytes.byteLength > options.maximumBlockBytes ||
+                    block.lineCount <= 0
+                  )
+                    return yield* reject(
+                      operation,
+                      "rangeLimit",
+                      "Exact-Git output crossed a block protocol limit",
+                    )
+                  nextLine += block.lineCount
+                  yield* current(operation, identity)
+                  const blockId = makeLazyBlockId(file.deltaId, block)
+                  const nowMs = yield* Clock.currentTimeMillis
+                  const prepared = yield* store
+                    .prepareBlock({
+                      id: blockId,
+                      deltaId: file.deltaId,
+                      hunkId: block.hunkId,
+                      ordinal: block.ordinal,
+                      firstLine: block.firstLine,
+                      lineCount: block.lineCount,
+                      byteCount: block.bytes.byteLength,
+                      checksum: checksum(block.bytes),
+                      reservationId: ResourceReservationId.make(`lazy:${hash(blockId)}`),
+                      nowMs,
+                      expiresAtMs: nowMs + options.reservationLifetimeMs,
+                      quotaBytes: options.managedQuotaBytes,
+                    })
+                    .pipe(
+                      Effect.mapError(() =>
+                        reject(operation, "sourceUnavailable", "Could not reserve lazy output"),
                       ),
+                    )
+                  if (prepared.kind === "quotaExceeded")
+                    return yield* reject(
+                      operation,
+                      "quotaExceeded",
+                      "Managed snapshot quota cannot reserve exact-Git output",
+                    )
+                  yield* store
+                    .stageBlock(blockId, block.bytes)
+                    .pipe(
+                      Effect.mapError(() =>
+                        reject(operation, "sourceUnavailable", "Could not stage lazy output"),
+                      ),
+                    )
+                  yield* current(operation, identity)
+                  yield* store
+                    .promoteBlock(blockId)
+                    .pipe(
+                      Effect.mapError(() =>
+                        reject(operation, "sourceUnavailable", "Could not promote lazy output"),
+                      ),
+                    )
+                  promoted.push(blockId)
+                  return undefined
+                }),
+              ),
+            )
+            yield* sessionLock.withPermits(1)(
+              current(operation, identity).pipe(
+                Effect.andThen(
+                  Effect.forEach(
+                    promoted,
+                    (blockId) =>
+                      store
+                        .finalizeBlock(blockId)
+                        .pipe(
+                          Effect.mapError(() =>
+                            reject(operation, "sourceUnavailable", "Could not publish lazy output"),
+                          ),
+                        ),
+                    { discard: true },
                   ),
                 ),
-              )
-            }
+              ),
+            )
             return yield* store
               .visibleBlocks(file.deltaId)
               .pipe(
@@ -540,16 +569,35 @@ export const snapshotRepositoryLayer = (
               )
             if (blocks.length === 0)
               blocks = yield* materialize("resolveTarget", identity, session, file)
-            const target = blocks.find(
-              (block) =>
-                (hunkId === null || block.hunk_id === hunkId) &&
-                line >= block.first_line &&
-                line < block.first_line + block.line_count,
-            )
+            let target: VisibleDiffBlock | undefined
+            let targetLineOffset = 0
+            if (hunkId === null) {
+              target = blocks.find(
+                (block) => line >= block.first_line && line < block.first_line + block.line_count,
+              )
+              if (target !== undefined) targetLineOffset = line - target.first_line
+            } else {
+              let remaining = line
+              for (const block of blocks) {
+                if (block.hunk_id !== hunkId) continue
+                if (remaining < block.line_count) {
+                  target = block
+                  targetLineOffset = remaining
+                  break
+                }
+                remaining -= block.line_count
+              }
+            }
             if (target === undefined)
               return yield* reject("resolveTarget", "notFound", "Snapshot target was not found")
             yield* current("resolveTarget", identity)
-            return { file, blockOrdinal: target.ordinal, line }
+            return {
+              file,
+              blockOrdinal: target.ordinal,
+              blockFirstLine: target.first_line,
+              line,
+              targetLineOffset,
+            }
           },
         ),
         waitForRange: (identity, fileId, startLine) =>
