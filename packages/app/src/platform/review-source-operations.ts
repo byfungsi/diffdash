@@ -7,13 +7,10 @@ import {
   type ReviewFilePatchHash,
   type ReviewKey,
 } from "@diffdash/domain/review-identity"
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
-  GenerateHostedWalkthroughRequest,
   HostedReviewRequest,
-  HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "@diffdash/protocol/hosted-git"
@@ -27,7 +24,7 @@ import {
   SetRepositoryComparisonViewedFileRequest,
   type ViewedFileRecord,
 } from "@diffdash/protocol/viewed-files"
-import { Context, Effect, Layer, Match, Option } from "effect"
+import { Context, Effect, Layer, Match } from "effect"
 
 import type { RendererReview } from "@/review/review-subject"
 import { PreloadClient } from "./preload-client"
@@ -36,13 +33,10 @@ import { runRendererPromise } from "./renderer-effect"
 
 type ReviewSourcePreloadApi = {
   readonly hostedReviews: Pick<DiffDashBridgeApi["hostedReviews"], "getDecision" | "submitDecision">
-  readonly localWalkthroughs: DiffDashBridgeApi["localWalkthroughs"]
   readonly openLocalRepositoryFile: DiffDashBridgeApi["openLocalRepositoryFile"]
   readonly openRepositoryFile: DiffDashBridgeApi["openRepositoryFile"]
   readonly repositoryComparisons: Pick<DiffDashBridgeApi["repositoryComparisons"], "openFile">
-  readonly repositoryComparisonWalkthroughs: DiffDashBridgeApi["repositoryComparisonWalkthroughs"]
   readonly viewedFiles: DiffDashBridgeApi["viewedFiles"]
-  readonly walkthroughs: DiffDashBridgeApi["walkthroughs"]
 }
 
 type HostedRendererReview = Extract<RendererReview, { readonly _tag: "hosted" }>
@@ -70,11 +64,8 @@ type ReviewDecisionOperations =
 
 /** Source-owned operations consumed by review UI without protocol or source branching. */
 export type ReviewSourceOperationSet = {
-  readonly source: "hosted" | "local" | "repositoryComparison"
   readonly listViewedFiles: () => Promise<readonly ViewedFileRecord[]>
   readonly setViewedFile: (write: ReviewViewedFileWrite) => Promise<void>
-  readonly getWalkthrough: () => Promise<StoredWalkthrough | null>
-  readonly generateWalkthrough: (regenerate: boolean) => Promise<StoredWalkthrough>
   readonly openFile: (path: string) => Promise<void>
   readonly decision: ReviewDecisionOperations
 }
@@ -94,7 +85,6 @@ export const makeReviewSourceOperations = (
     hosted: (review: HostedRendererReview) => {
       const summary = review.manifest.detail.summary
       return {
-        source: "hosted" as const,
         listViewedFiles: () =>
           runRendererPromise(
             invokePreload(InvokeChannel.listViewedFiles, () =>
@@ -115,26 +105,6 @@ export const makeReviewSourceOperations = (
                   baseRefName: summary.base.name,
                   ...write,
                 }),
-              ),
-            ),
-          ),
-        getWalkthrough: () =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.getWalkthrough, () =>
-              api.walkthroughs.get(
-                HostedWalkthroughRequest.make({
-                  review: summary.locator,
-                  baseRevision: review.baseRevision,
-                  headRevision: review.headRevision,
-                }),
-              ),
-            ).pipe(Effect.map(Option.fromNullishOr), Effect.map(Option.getOrNull)),
-          ),
-        generateWalkthrough: (regenerate: boolean) =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.generateWalkthrough, () =>
-              api.walkthroughs.generate(
-                GenerateHostedWalkthroughRequest.make({ review: summary.locator, regenerate }),
               ),
             ),
           ),
@@ -185,7 +155,6 @@ export const makeReviewSourceOperations = (
     repositoryComparison: (review: RepositoryComparisonRendererReview) => {
       const target = review.target
       return {
-        source: "repositoryComparison" as const,
         listViewedFiles: () =>
           runRendererPromise(
             invokePreload(InvokeChannel.listRepositoryComparisonViewedFiles, () =>
@@ -200,20 +169,6 @@ export const makeReviewSourceOperations = (
               api.viewedFiles.setRepositoryComparison(
                 SetRepositoryComparisonViewedFileRequest.make({ target, ...write }),
               ),
-            ),
-          ),
-        getWalkthrough: () =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.getRepositoryComparisonWalkthrough, () =>
-              api.repositoryComparisonWalkthroughs.get(target),
-            ).pipe(Effect.map(Option.fromNullishOr), Effect.map(Option.getOrNull)),
-          ),
-        generateWalkthrough: (regenerate: boolean) =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.generateRepositoryComparisonWalkthrough, () =>
-              regenerate
-                ? api.repositoryComparisonWalkthroughs.regenerate(target)
-                : api.repositoryComparisonWalkthroughs.generate(target),
             ),
           ),
         openFile: (filePath: string) =>
@@ -235,7 +190,6 @@ export const makeReviewSourceOperations = (
       const detail = review.manifest.detail
       const target = review.target
       return {
-        source: "local" as const,
         listViewedFiles: () =>
           runRendererPromise(
             invokePreload(InvokeChannel.listLocalViewedFiles, () =>
@@ -254,20 +208,6 @@ export const makeReviewSourceOperations = (
                   ...write,
                 }),
               ),
-            ),
-          ),
-        getWalkthrough: () =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.getLocalWalkthrough, () =>
-              api.localWalkthroughs.get(target, review.baseRevision, review.headRevision),
-            ).pipe(Effect.map(Option.fromNullishOr), Effect.map(Option.getOrNull)),
-          ),
-        generateWalkthrough: (regenerate: boolean) =>
-          runRendererPromise(
-            invokePreload(InvokeChannel.generateLocalWalkthrough, () =>
-              regenerate
-                ? api.localWalkthroughs.regenerate(target)
-                : api.localWalkthroughs.generate(target),
             ),
           ),
         openFile: (path: string) =>

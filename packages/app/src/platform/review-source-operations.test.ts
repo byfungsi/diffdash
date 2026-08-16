@@ -8,10 +8,6 @@ import { makeReviewSourceOperations } from "./review-source-operations"
 
 const { hostedManifest, localManifest, locator, provider } = makeReviewSelectionFixtures()
 
-const unavailable = async (): Promise<never> => {
-  throw new Error("Not used by this test")
-}
-
 const success = <Value>(value: Value) => Promise.resolve({ _tag: "Success" as const, value })
 
 const makeApi = () => {
@@ -19,32 +15,14 @@ const makeApi = () => {
   const setLocal = vi.fn<DiffDashBridgeApi["viewedFiles"]["setLocal"]>(() => success(undefined))
   const openHosted = vi.fn<DiffDashBridgeApi["openRepositoryFile"]>(() => success(undefined))
   const openLocal = vi.fn<DiffDashBridgeApi["openLocalRepositoryFile"]>(() => success(undefined))
-  const getHostedWalkthrough = vi.fn<DiffDashBridgeApi["walkthroughs"]["get"]>(unavailable)
-  const generateHostedWalkthrough =
-    vi.fn<DiffDashBridgeApi["walkthroughs"]["generate"]>(unavailable)
-  const getLocalWalkthrough = vi.fn<DiffDashBridgeApi["localWalkthroughs"]["get"]>(unavailable)
-  const generateLocalWalkthrough =
-    vi.fn<DiffDashBridgeApi["localWalkthroughs"]["generate"]>(unavailable)
-  const regenerateLocalWalkthrough =
-    vi.fn<DiffDashBridgeApi["localWalkthroughs"]["regenerate"]>(unavailable)
   const api = {
     hostedReviews: {
       getDecision: () => success("none" as const),
       submitDecision: () => success(undefined),
     },
-    localWalkthroughs: {
-      get: getLocalWalkthrough,
-      generate: generateLocalWalkthrough,
-      regenerate: regenerateLocalWalkthrough,
-    },
     openLocalRepositoryFile: openLocal,
     openRepositoryFile: openHosted,
     repositoryComparisons: { openFile: () => success(undefined) },
-    repositoryComparisonWalkthroughs: {
-      get: () => success(null),
-      generate: unavailable,
-      regenerate: unavailable,
-    },
     viewedFiles: {
       list: () => success([]),
       listLocal: () => success([]),
@@ -53,17 +31,11 @@ const makeApi = () => {
       setLocal,
       setRepositoryComparison: () => success(undefined),
     },
-    walkthroughs: { get: getHostedWalkthrough, generate: generateHostedWalkthrough },
   } satisfies Parameters<typeof makeReviewSourceOperations>[0]
   return {
     api,
-    generateHostedWalkthrough,
-    generateLocalWalkthrough,
-    getHostedWalkthrough,
-    getLocalWalkthrough,
     openHosted,
     openLocal,
-    regenerateLocalWalkthrough,
     setHosted,
     setLocal,
   }
@@ -110,21 +82,11 @@ describe("review source operations", () => {
       viewed: true,
     })
     await operations.openFile("src/app.ts")
-    await expect(operations.getWalkthrough()).rejects.toThrow(
-      "DiffDash could not complete the request",
-    )
-    await expect(operations.generateWalkthrough(true)).rejects.toThrow(
-      "DiffDash could not complete the request",
-    )
 
-    expect(operations.source).toBe("hosted")
     expect(operations.decision._tag).toBe("supported")
     expect(fixture.setHosted).toHaveBeenCalledOnce()
     expect(fixture.setLocal).not.toHaveBeenCalled()
     expect(fixture.openHosted).toHaveBeenCalledOnce()
-    expect(fixture.getHostedWalkthrough).toHaveBeenCalledOnce()
-    expect(fixture.generateHostedWalkthrough).toHaveBeenCalledOnce()
-    expect(fixture.getLocalWalkthrough).not.toHaveBeenCalled()
   })
 
   it("maps local operations without exposing review decisions", async () => {
@@ -137,20 +99,10 @@ describe("review source operations", () => {
       viewed: false,
     })
     await operations.openFile("src/app.ts")
-    await expect(operations.getWalkthrough()).rejects.toThrow(
-      "DiffDash could not complete the request",
-    )
-    await expect(operations.generateWalkthrough(true)).rejects.toThrow(
-      "DiffDash could not complete the request",
-    )
 
-    expect(operations.source).toBe("local")
     expect(operations.decision).toEqual({ _tag: "unsupported" })
     expect(fixture.setLocal).toHaveBeenCalledOnce()
     expect(fixture.setHosted).not.toHaveBeenCalled()
     expect(fixture.openLocal).toHaveBeenCalledWith("/workspace/diffdash", "src/app.ts")
-    expect(fixture.getLocalWalkthrough).toHaveBeenCalledOnce()
-    expect(fixture.regenerateLocalWalkthrough).toHaveBeenCalledOnce()
-    expect(fixture.generateLocalWalkthrough).not.toHaveBeenCalled()
   })
 })

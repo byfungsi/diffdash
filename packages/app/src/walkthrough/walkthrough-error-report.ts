@@ -1,9 +1,16 @@
 import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import {
+  type WalkthroughBridgeAttemptSummary,
+  type WalkthroughBridgeSafeDiagnostic,
   WalkthroughStartBridgeFailure,
-  type WalkthroughStartBridgeFailure as WalkthroughStartBridgeFailureType,
 } from "@diffdash/protocol/walkthrough-operation"
+import {
+  WalkthroughBridgeOperationSnapshot,
+  WalkthroughCancelBridgeFailure,
+  WalkthroughGetOperationBridgeFailure,
+  WalkthroughGetStoredBridgeFailure,
+} from "@diffdash/protocol/walkthrough-operation-state"
 import {
   decodeTransportError,
   hasBridgeTransportErrorEncoding,
@@ -38,7 +45,23 @@ export const walkthroughErrorPresentation = <Value>(
   error: Value,
   context: WalkthroughErrorReportContext,
 ): WalkthroughErrorPresentation => {
-  const publicFailure = Schema.decodeUnknownResult(WalkthroughStartBridgeFailure)(error)
+  const terminal = Schema.decodeUnknownResult(WalkthroughBridgeOperationSnapshot)(error)
+  if (
+    Result.isSuccess(terminal) &&
+    terminal.success.state !== "active" &&
+    terminal.success.state !== "completed"
+  ) {
+    return walkthroughTerminalPresentation(terminal.success, context)
+  }
+
+  const publicFailure = Schema.decodeUnknownResult(
+    Schema.Union([
+      WalkthroughStartBridgeFailure,
+      WalkthroughGetOperationBridgeFailure,
+      WalkthroughCancelBridgeFailure,
+      WalkthroughGetStoredBridgeFailure,
+    ]),
+  )(error)
   if (Result.isSuccess(publicFailure)) {
     return walkthroughPublicFailurePresentation(publicFailure.success, context)
   }
@@ -55,7 +78,7 @@ export const walkthroughErrorPresentation = <Value>(
   const details = sanitizeTransportErrorMessage(
     transport?.message ?? UNKNOWN_TRANSPORT_ERROR_MESSAGE,
   )
-  const operation = transport?.operation ?? walkthroughGenerationOperation(context.reviewSource)
+  const operation = transport?.operation ?? InvokeChannel.startWalkthroughOperation
   const diagnostic = transport?.diagnostic
   const providerFailure = transport?.providerFailure
   const errorSource = transport === null ? "Renderer" : "Main process"
@@ -104,7 +127,21 @@ export const walkthroughErrorPresentation = <Value>(
 }
 
 const walkthroughPublicFailurePresentation = (
-  failure: WalkthroughStartBridgeFailureType,
+  failure: {
+    readonly applicationInstanceId: string
+    readonly processEpoch: string
+    readonly requestId: string
+    readonly method: string
+    readonly operationId: string | null
+    readonly code: string
+    readonly providerId: string | null
+    readonly modelId: string | null
+    readonly retryClass: string
+    readonly remediation: string
+    readonly safeMessage: string
+    readonly attempts: readonly WalkthroughBridgeAttemptSummary[]
+    readonly diagnostic: WalkthroughBridgeSafeDiagnostic | null
+  },
   context: WalkthroughErrorReportContext,
 ): WalkthroughErrorPresentation => ({
   message:
@@ -167,10 +204,46 @@ const walkthroughPublicFailurePresentation = (
   ].join("\n"),
 })
 
-const walkthroughGenerationOperation = (source: WalkthroughErrorReviewSource): string => {
-  if (source === "hosted") return InvokeChannel.generateWalkthrough
-  if (source === "local") return InvokeChannel.generateLocalWalkthrough
-  return InvokeChannel.generateRepositoryComparisonWalkthrough
+const walkthroughTerminalPresentation = (
+  operation: Exclude<
+    typeof WalkthroughBridgeOperationSnapshot.Type,
+    { readonly state: "active" } | { readonly state: "completed" }
+  >,
+  context: WalkthroughErrorReportContext,
+): WalkthroughErrorPresentation => {
+  const detail =
+    operation.state === "failed"
+      ? operation.failure
+      : {
+          code:
+            operation.state === "cancelled"
+              ? "WALKTHROUGH_CANCELLED"
+              : operation.state === "superseded"
+                ? "WALKTHROUGH_SUPERSEDED"
+                : "WALKTHROUGH_INTERRUPTED",
+          providerId: null,
+          modelId: null,
+          retryClass: "userAction" as const,
+          remediation:
+            operation.state === "cancelled" ? ("retry" as const) : ("regenerate" as const),
+          safeMessage:
+            operation.state === "cancelled"
+              ? "Walkthrough generation was cancelled."
+              : operation.state === "superseded"
+                ? "This walkthrough operation was replaced by a newer request."
+                : "Walkthrough generation was interrupted.",
+          diagnostic: null,
+        }
+  return walkthroughPublicFailurePresentation(
+    {
+      ...operation.acceptedRequest,
+      method: "Walkthroughs.getOperation",
+      operationId: operation.operationId,
+      ...detail,
+      attempts: operation.attempts,
+    },
+    context,
+  )
 }
 
 const walkthroughReviewType = (source: WalkthroughErrorReviewSource): string => {
@@ -230,6 +303,13 @@ const walkthroughUserMessage = (
   }
   if (code === "IPC_FAILURE" || code === "WALKTHROUGH_TRANSPORT_ERROR") {
     return "DiffDash lost contact with its main process. Retry the walkthrough."
+  }
+  if (code === "WALKTHROUGH_CANCELLED") return "Walkthrough generation was cancelled."
+  if (code === "WALKTHROUGH_SUPERSEDED") {
+    return "A newer walkthrough request replaced this one."
+  }
+  if (code === "WALKTHROUGH_INTERRUPTED") {
+    return "Walkthrough generation was interrupted. Retry the walkthrough."
   }
   if (code === "WALKTHROUGH_INTERNAL_ERROR" || code === "WALKTHROUGH_RENDERER_ERROR") {
     return "DiffDash hit an unexpected walkthrough error. Retry, then copy the error details if it continues."

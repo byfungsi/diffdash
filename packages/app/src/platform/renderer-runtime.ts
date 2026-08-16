@@ -11,6 +11,7 @@ import { Repositories, repositoriesLayer } from "./repositories"
 import { ReviewAutomation, reviewAutomationLayer } from "./review-automation"
 import { ReviewContent, reviewContentLayer } from "./review-content"
 import { ReviewSourceOperations, reviewSourceOperationsLayer } from "./review-source-operations"
+import { WalkthroughOperations, walkthroughOperationsLayer } from "./walkthrough-operations"
 export { runRendererPromise } from "./renderer-effect"
 
 /** All renderer capabilities built once for one atom registry. */
@@ -22,6 +23,7 @@ export type RendererServices =
   | ReviewAutomation
   | ReviewContent
   | ReviewSourceOperations
+  | WalkthroughOperations
 
 const capabilityLayers = Layer.mergeAll(
   desktopRuntimeLayer,
@@ -31,6 +33,7 @@ const capabilityLayers = Layer.mergeAll(
   reviewAutomationLayer,
   reviewContentLayer,
   reviewSourceOperationsLayer,
+  walkthroughOperationsLayer,
 )
 
 /** Production renderer service graph with the raw preload client hidden after composition. */
@@ -64,6 +67,10 @@ export const useReviewContent = () => Context.get(useRendererContext(), ReviewCo
 /** Returns the factory for source-specific operations of an authoritative ready review. */
 export const useReviewSourceOperationsFactory = () =>
   Context.get(useRendererContext(), ReviewSourceOperations)
+
+/** Returns the factory for source-neutral durable walkthrough operation sessions. */
+export const useWalkthroughOperationsFactory = () =>
+  Context.get(useRendererContext(), WalkthroughOperations)
 
 /** Consumes a renderer stream, reports typed failures, and reconnects after a bounded delay. */
 export const consumeRendererStream = <A, E, R, R2, R3>(
