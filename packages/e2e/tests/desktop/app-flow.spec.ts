@@ -34,7 +34,6 @@ test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window wi
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
-
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
@@ -134,7 +133,6 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
-
   try {
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
@@ -674,6 +672,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
+  let forcedCoreProcessIds: ReadonlyArray<number> = []
 
   try {
     const window = await app.firstWindow()
@@ -681,8 +680,14 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       const coreParentPid = app.process().pid
       if (coreParentPid === undefined) throw new Error("Electron main process PID is unavailable")
       await expect
-        .poll(() => hasCoreHostProcess(coreParentPid, forcedCoreHost), { timeout: 15_000 })
-        .toBe(true)
+        .poll(
+          () => {
+            forcedCoreProcessIds = coreHostProcessIds(coreParentPid, forcedCoreHost)
+            return forcedCoreProcessIds.length
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0)
     }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
@@ -735,6 +740,11 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
   } finally {
     await app.close()
   }
+  if (forcedCoreHost !== null) {
+    await expect
+      .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+      .toBe(false)
+  }
 })
 
 const readForcedCoreHost = (): "bun" | "utility" | null => {
@@ -744,7 +754,7 @@ const readForcedCoreHost = (): "bun" | "utility" | null => {
   throw new Error("The forced Core host gate requires DIFFDASH_E2E_CORE_HOST=bun or utility")
 }
 
-const hasCoreHostProcess = (rootPid: number, host: "bun" | "utility"): boolean => {
+const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyArray<number> => {
   if (process.platform === "win32") {
     throw new Error("Forced Core host process verification is not implemented on Windows")
   }
@@ -767,12 +777,23 @@ const hasCoreHostProcess = (rootPid: number, host: "bun" | "utility"): boolean =
       }
     }
   }
-  return rows.some((row) => {
-    if (!descendants.has(row.pid) || row.pid === rootPid) return false
-    return host === "bun"
-      ? row.command.includes("core-bun.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
-      : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
+  return rows.flatMap((row) => {
+    if (!descendants.has(row.pid) || row.pid === rootPid) return []
+    const matches =
+      host === "bun"
+        ? row.command.includes("core-bun.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+        : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
+    return matches ? [row.pid] : []
   })
+}
+
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
 }
 
 test("opens the current project Reviews ribbon from the versioned CLI command", async ({
