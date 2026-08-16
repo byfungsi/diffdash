@@ -814,6 +814,24 @@ describe("IPC contract", () => {
     expect(envelope.value).toEqual(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
   })
 
+  it("normalizes class responses decoded by the external Core bundle", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.updatesGetState,
+    ])
+    registry.define(InvokeChannel.updatesGetState, async () =>
+      structuredClone(AppUpdateIdle.make({ currentVersion: "0.3.1" })),
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {})
+
+    expect(response).toEqual({
+      _tag: "Success",
+      value: { _tag: "idle", currentVersion: "0.3.1" },
+    })
+  })
+
   it("encodes successful void responses as JSON null", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [

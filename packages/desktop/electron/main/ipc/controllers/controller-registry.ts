@@ -142,12 +142,19 @@ export class IpcControllerRegistry {
       }
 
       try {
-        const encoded = Schema.encodeUnknownSync(successEnvelope(InvokeContract[channel].response))(
-          {
+        const envelope = successEnvelope(InvokeContract[channel].response)
+        let encoded
+        try {
+          encoded = Schema.encodeUnknownSync(envelope)({
             _tag: "Success",
             value: prepared.response,
-          },
-        )
+          })
+        } catch {
+          const response = Schema.decodeUnknownSync(InvokeContract[channel].response)(
+            prepared.response,
+          )
+          encoded = Schema.encodeUnknownSync(envelope)({ _tag: "Success", value: response })
+        }
         assertJsonPayloadWithinBudget(encoded, InvokeContract[channel].maxResponseBytes, channel)
         prepared.commit?.()
         return encoded
