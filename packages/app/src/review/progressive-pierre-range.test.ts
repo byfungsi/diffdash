@@ -1,5 +1,8 @@
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
+  makeReviewFileId,
+  makeReviewHunkFingerprint,
+  makeReviewHunkId,
   ReviewFileId,
   ReviewFilePatchHash,
   ReviewKey,
@@ -15,7 +18,7 @@ import {
 } from "@diffdash/protocol/review-session"
 import { describe, expect, it } from "vitest"
 
-import { loadProgressivePierreRange } from "./progressive-pierre-range"
+import { loadProgressivePierreRange, parseProgressiveRangeFile } from "./progressive-pierre-range"
 import type { PierreRangeIdentity } from "./pierre-loaded-range-adapter"
 
 describe("loadProgressivePierreRange", () => {
@@ -85,5 +88,13 @@ describe("loadProgressivePierreRange", () => {
     expect(loaded.fileDiff.name).toBe("src/file.ts")
     expect(loaded.fileDiff.hunks).toHaveLength(1)
     expect(loaded.renderRange.totalLines).toBeGreaterThan(0)
+
+    const parsed = parseProgressiveRangeFile(range)
+    const fileId = makeReviewFileId(RepositoryRelativePath.make("src/file.ts"), null)
+    expect(parsed.hunks[0]).toMatchObject({
+      id: makeReviewHunkId(fileId, "@@ -0,0 +1 @@", ["+value"]),
+      fingerprint: makeReviewHunkFingerprint(["+value"]),
+      lines: ["+value"],
+    })
   })
 })

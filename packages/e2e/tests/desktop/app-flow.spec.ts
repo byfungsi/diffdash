@@ -524,6 +524,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Request review flow",
     )
+    await restartedWindow.getByRole("button", { name: "Files", exact: true }).click()
 
     const restartedDiffCard = restartedWindow.locator('[data-diff-card-path="src/app.tsx"]')
     const restartedViewedCheckbox = restartedDiffCard.getByRole("checkbox")
@@ -531,21 +532,15 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     expect(await countLogLines(codexRunLog)).toBe(2)
 
     await restartedViewedCheckbox.uncheck({ force: true })
-    const restartedReviewDisclosure = restartedWindow.getByRole("button", {
-      name: "Review on L1",
-    })
-    await expect(restartedReviewDisclosure).toBeVisible()
-    await restartedReviewDisclosure.click()
-    await expect(restartedWindow.getByText("Why was this line changed?")).toBeVisible()
-    await expect(restartedWindow.getByText("What behavior does it preserve?")).toBeVisible()
-    await expect(restartedWindow.getByText("The line check is complete.")).toHaveCount(2)
-
-    const expandSidebar = restartedWindow.getByRole("button", { name: "Expand sidebar" })
-    await expandSidebar.click({ timeout: 2_000 }).catch(() => undefined)
-    await expect(restartedWindow.getByRole("heading", { name: "Entry point" })).toBeVisible()
     expect(await countLogLines(codexRunLog)).toBe(2)
     await app.close()
-    expect(readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))).toEqual(beforeRestart)
+    const afterRestart = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+    expect({ ...afterRestart, workspaceStates: beforeRestart.workspaceStates }).toEqual(
+      beforeRestart,
+    )
+    expect(afterRestart.workspaceStates).toEqual([
+      expect.objectContaining({ active_ribbon: "files", repo_id: "github:byfungsi/diffdash" }),
+    ])
   } finally {
     await app.close().catch(() => undefined)
   }

@@ -30,10 +30,11 @@ export const progressivePierreRange = <Annotation>(
 ): PierreLoadedRange<Annotation> => {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const content = range.blocks.map((block) => decoder.decode(block.bytes)).join("")
+  const normalizedContent = content.endsWith("\n") ? content.slice(0, -1) : content
   const path = range.file.path
-  const patch = content.startsWith("diff --git ")
-    ? content
-    : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${content}`
+  const patch = normalizedContent.startsWith("diff --git ")
+    ? normalizedContent
+    : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${normalizedContent}`
   const fileDiff = {
     ...getSingularPatch(patch),
     cacheKey: `${identity.snapshotGeneration}:${identity.rangeKey}`,
@@ -57,10 +58,11 @@ export const progressivePierreRange = <Annotation>(
 export const parseProgressiveRangeFile = (range: ReviewSessionRange): ParsedDiffFile => {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const content = range.blocks.map((block) => decoder.decode(block.bytes)).join("")
+  const normalizedContent = content.endsWith("\n") ? content.slice(0, -1) : content
   const path = range.file.path
-  const patch = content.startsWith("diff --git ")
-    ? content
-    : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${content}`
+  const patch = normalizedContent.startsWith("diff --git ")
+    ? normalizedContent
+    : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${normalizedContent}`
   const file = parseUnifiedDiff(patch).files[0]
   if (file === undefined) throw new Error(`Bounded range for ${path} did not contain a diff file`)
   return file
