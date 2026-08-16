@@ -16,6 +16,7 @@ export const REVIEW_DIFF_MAX_BATCH_ITEMS = 128
 /** Maximum UTF-8 payload bytes in one parser batch returned to the worker boundary. */
 export const REVIEW_DIFF_MAX_BATCH_BYTES = 512 * 1024
 
+const REVIEW_DIFF_MAX_FILE_PRELUDE_BYTES = 128 * 1024
 const REVIEW_DIFF_MAX_FILE_METADATA_BYTES = 128 * 1024
 const REVIEW_DIFF_MAX_FILE_HUNKS = 16 * 1024
 
@@ -59,6 +60,11 @@ export type IncrementalDiffEvent =
       readonly gitOldPath: string
       readonly gitNewPath: string
       readonly line: string
+    }
+  | {
+      readonly _tag: "FilePrelude"
+      readonly fileOrdinal: number
+      readonly lines: ReadonlyArray<string>
     }
   | {
       readonly _tag: "HunkStarted"
@@ -107,6 +113,9 @@ interface DraftFile {
   hunkLineCounts: number[]
   metadata: string[]
   metadataBytes: number
+  prelude: string[]
+  preludeBytes: number
+  preludeEmitted: boolean
   newPath: string | null
   oldPath: string | null
   renameFrom: string | null
@@ -228,6 +237,9 @@ export class IncrementalUnifiedDiffParser {
         hunkLineCounts: [],
         metadata: [],
         metadataBytes: 0,
+        prelude: [line],
+        preludeBytes: lineBytes,
+        preludeEmitted: false,
         newPath: null,
         oldPath: null,
         renameFrom: null,
@@ -246,6 +258,18 @@ export class IncrementalUnifiedDiffParser {
     }
     const file = this.#file
     if (file === null) return null
+    const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
+    if (hunkMatch === null && this.#hunk === null && !file.preludeEmitted) {
+      const nextPreludeBytes = file.preludeBytes + lineBytes
+      if (nextPreludeBytes > REVIEW_DIFF_MAX_FILE_PRELUDE_BYTES)
+        return this.#failure(
+          "parserStateTooLarge",
+          REVIEW_DIFF_MAX_FILE_PRELUDE_BYTES,
+          nextPreludeBytes,
+        )
+      file.prelude.push(line)
+      file.preludeBytes = nextPreludeBytes
+    }
     if (
       line.startsWith("old mode ") ||
       line.startsWith("new mode ") ||
@@ -286,9 +310,9 @@ export class IncrementalUnifiedDiffParser {
     } else if (line.startsWith("--- ")) file.oldPath = normalizeDiffPath(line.slice(4))
     else if (line.startsWith("+++ ")) file.newPath = normalizeDiffPath(line.slice(4))
 
-    const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
     if (hunkMatch !== null) {
       this.#closeHunk()
+      this.#emitPrelude(file)
       if (file.hunkLineCounts.length >= REVIEW_DIFF_MAX_FILE_HUNKS)
         return this.#failure(
           "parserStateTooLarge",
@@ -358,6 +382,7 @@ export class IncrementalUnifiedDiffParser {
     const file = this.#file
     if (file === null) return
     this.#closeHunk()
+    this.#emitPrelude(file)
     const paths = parsedFilePaths(file)
     const metadata = canonicalMetadata(file)
     this.#emit({
@@ -378,6 +403,14 @@ export class IncrementalUnifiedDiffParser {
             },
     })
     this.#file = null
+  }
+
+  #emitPrelude(file: DraftFile): void {
+    if (file.preludeEmitted) return
+    file.preludeEmitted = true
+    this.#emit({ _tag: "FilePrelude", fileOrdinal: file.ordinal, lines: file.prelude })
+    file.prelude = []
+    file.preludeBytes = 0
   }
 
   #emit(event: IncrementalDiffEvent): void {

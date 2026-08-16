@@ -157,20 +157,18 @@ describe("IncrementalUnifiedDiffParser", () => {
     )
   })
 
-  it("rejects a single terminal event above the batch byte limit", () => {
+  it("rejects file prelude retention above its fixed parser-state limit", () => {
     const path = "x".repeat(200 * 1024)
     const metadata = "old mode 100644\n".repeat(7_500)
     const diff = `diff --git a/a b/b\nrename from ${path}\nrename to ${path}\n${metadata}`
     const parser = new IncrementalUnifiedDiffParser()
     const bytes = new TextEncoder().encode(diff)
-    for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
-      const result = parser.accept(bytes.slice(offset, offset + 64 * 1024))
-      expect(result._tag).toBe("Success")
-    }
-    const result = parser.finish()
+    let result = parser.accept(bytes.slice(0, 1024))
+    for (let offset = 1024; offset < bytes.byteLength && result._tag === "Success"; offset += 1024)
+      result = parser.accept(bytes.slice(offset, offset + 1024))
     expect(result).toMatchObject({
       _tag: "Failure",
-      error: { reason: "parserStateTooLarge", limit: REVIEW_DIFF_MAX_BATCH_BYTES },
+      error: { reason: "parserStateTooLarge" },
     })
   })
 

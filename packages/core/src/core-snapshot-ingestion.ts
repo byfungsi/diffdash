@@ -232,7 +232,7 @@ interface ActiveHunk {
 interface ExpectedBlock {
   readonly id: DiffBlockId
   readonly deltaId: FileDeltaId
-  readonly hunkId: string
+  readonly hunkId: string | null
   readonly ordinal: number
   readonly firstLine: number
   readonly lineCount: number
@@ -301,6 +301,33 @@ class IngestionState {
     hashPart(file.patchHash, event.header)
     file.hunk = { started: event, parts: [header], byteCount: header.byteLength }
     return Effect.void
+  }
+
+  recordPrelude(
+    event: Extract<IncrementalDiffEvent, { readonly _tag: "FilePrelude" }>,
+  ): Effect.Effect<
+    { readonly file: ActiveFile; readonly bytes: Uint8Array; readonly lineCount: number },
+    CoreSnapshotIngestionError
+  > {
+    const file = this.#file
+    if (
+      file === null ||
+      file.hunk !== null ||
+      file.hunkCount !== 0 ||
+      file.lineOffset !== 0 ||
+      event.fileOrdinal !== file.ordinal ||
+      event.lines.length === 0
+    )
+      return invalidOrder("A file prelude arrived outside its expected file position")
+    const parts = event.lines.map(lineBytes)
+    const byteCount = parts.reduce((total, part) => total + part.byteLength, 0)
+    if (byteCount > this.#maximumBlockBytes) return hunkTooLarge(this.#maximumBlockBytes, byteCount)
+    file.lineOffset = event.lines.length
+    return Effect.succeed({
+      file,
+      bytes: concatBytes(parts, byteCount),
+      lineCount: event.lines.length,
+    })
   }
 
   addHunkLine(
@@ -462,6 +489,52 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
               )
             yield* state.startFile(event, identity)
           }),
+        FilePrelude: (event) =>
+          Effect.gen(function* () {
+            const prelude = yield* state.recordPrelude(event)
+            yield* store.registerFileDelta({ identity: prelude.file.identity, hunks: [] })
+            const checksum = checksumBytes(prelude.bytes)
+            const id = DiffBlockId.make(
+              `block:v1:${digest(`${prelude.file.deltaId}:prelude:${checksum}`)}`,
+            )
+            const block = {
+              id,
+              deltaId: prelude.file.deltaId,
+              hunkId: null,
+              ordinal: 0,
+              firstLine: 0,
+              lineCount: prelude.lineCount,
+              byteCount: prelude.bytes.byteLength,
+              checksum,
+            }
+            const visible = yield* store.visibleBlocks(block.deltaId)
+            const existing = visible.find((candidate) => candidate.id === id)
+            if (existing === undefined) {
+              const nowMs = yield* Clock.currentTimeMillis
+              const prepared = yield* store.prepareBlock({
+                ...block,
+                reservationId: ResourceReservationId.make(`ingest:${digest(id)}`),
+                nowMs,
+                expiresAtMs: nowMs + options.reservationLifetimeMs,
+                quotaBytes: options.managedQuotaBytes,
+              })
+              if (prepared.kind === "quotaExceeded")
+                return yield* Effect.fail(
+                  CoreSnapshotIngestionError.make({
+                    reason: "quotaExceeded",
+                    message: `Snapshot block needs ${prepared.requiredBytes} bytes but only ${prepared.availableBytes} are available`,
+                  }),
+                )
+              yield* store.stageBlock(id, prelude.bytes)
+              yield* store.promoteBlock(id)
+              yield* store.finalizeBlock(id)
+            } else if (!sameBlock(existing, block)) {
+              return yield* verificationFailed(
+                "An existing content-addressed block had different metadata",
+              )
+            }
+            state.recordBlock(block)
+          }),
         HunkStarted: (event) => state.startHunk(event),
         HunkLine: (event) => state.addHunkLine(event),
         HunkClosed: (event) =>
@@ -491,7 +564,7 @@ const consumeBatch = Effect.fn("CoreSnapshotIngestion.consumeBatch")(function* (
               id,
               deltaId: closed.file.deltaId,
               hunkId: event.id,
-              ordinal: event.hunkOrdinal,
+              ordinal: event.hunkOrdinal + 1,
               firstLine: closed.firstLine,
               lineCount: event.lineCount,
               byteCount: closed.bytes.byteLength,

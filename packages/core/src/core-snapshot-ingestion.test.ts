@@ -189,14 +189,18 @@ describe("CoreSnapshotIngestion", () => {
 
         const snapshot = yield* store.getSnapshot(StoredSnapshotId.make(snapshotId))
         expect(snapshot.files).toHaveLength(1)
-        expect(snapshot.blockIds).toHaveLength(1)
-        expect(snapshot.checkpoints).toHaveLength(1)
+        expect(snapshot.blockIds).toHaveLength(2)
+        expect(snapshot.checkpoints).toHaveLength(2)
         const blocks = yield* store.visibleBlocks(makeFileDeltaId(exactIdentity))
-        expect(blocks).toHaveLength(1)
-        const block = blocks[0]
-        if (block === undefined) return yield* Effect.die("Expected one visible block")
-        const range = yield* store.readManagedRange(block.resource_id, 0, block.byte_count)
-        expect(new TextDecoder().decode(range.bytes)).toBe("@@ -1 +1 @@\n-old\n+new\n")
+        expect(blocks).toHaveLength(2)
+        const contents = yield* Effect.forEach(blocks, (block) =>
+          store
+            .readManagedRange(block.resource_id, 0, block.byte_count)
+            .pipe(Effect.map((range) => new TextDecoder().decode(range.bytes))),
+        )
+        expect(contents.join("")).toBe(
+          "diff --git a/src/a.ts b/src/a.ts\nindex 111..222 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        )
       }).pipe(Effect.provide(harness.layer))
 
       expect(closed.count).toBe(1)
@@ -265,7 +269,7 @@ describe("CoreSnapshotIngestion", () => {
             yield* Effect.result(store.getSnapshot(StoredSnapshotId.make(snapshotId))),
           ),
         ).toBe(true)
-        expect(yield* store.visibleBlocks(makeFileDeltaId(exactIdentity))).toHaveLength(1)
+        expect(yield* store.visibleBlocks(makeFileDeltaId(exactIdentity))).toHaveLength(2)
       }).pipe(Effect.provide(harness.layer), Effect.scoped)
 
       expect(closed.count).toBe(1)
