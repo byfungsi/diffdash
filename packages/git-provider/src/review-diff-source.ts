@@ -2,10 +2,13 @@ import { Effect, Match, Schema, Stream } from "effect"
 
 import { DiffFileStatus } from "@diffdash/domain/diff"
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
+import { LocalReviewTarget } from "@diffdash/domain/local-review"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewDiffIdentity,
   ReviewFilePatchHash,
+  ReviewKey,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 
@@ -63,6 +66,43 @@ export const ReviewDiffStorageRequirement = Schema.Literals([
 /** Backend eligibility derived only from source mutability and reproducibility facts. */
 export type ReviewDiffStorageRequirement = typeof ReviewDiffStorageRequirement.Type
 
+/** Hosted provider target and immutable review identity for one source. */
+export class HostedReviewDiffSourceTarget extends Schema.TaggedClass<HostedReviewDiffSourceTarget>()(
+  "hosted",
+  {
+    reviewKey: ReviewKey,
+    review: HostedReviewLocator,
+  },
+) {}
+
+/** Local checkout target and immutable review identity for one source. */
+export class LocalReviewDiffSourceTarget extends Schema.TaggedClass<LocalReviewDiffSourceTarget>()(
+  "local",
+  {
+    reviewKey: ReviewKey,
+    target: LocalReviewTarget,
+  },
+) {}
+
+/** Exact repository comparison target and immutable review identity for one source. */
+export class RepositoryComparisonDiffSourceTarget extends Schema.TaggedClass<RepositoryComparisonDiffSourceTarget>()(
+  "repositoryComparison",
+  {
+    reviewKey: ReviewKey,
+    target: RepositoryComparisonTarget,
+  },
+) {}
+
+/** Browser- and runtime-neutral target identity for bounded review acquisition. */
+export const ReviewDiffSourceTarget = Schema.Union([
+  HostedReviewDiffSourceTarget,
+  LocalReviewDiffSourceTarget,
+  RepositoryComparisonDiffSourceTarget,
+])
+
+/** Browser- and runtime-neutral target identity for bounded review acquisition. */
+export type ReviewDiffSourceTarget = typeof ReviewDiffSourceTarget.Type
+
 /** Selects safe storage eligibility independently from source method negotiation. */
 export const reviewDiffStorageRequirement = (
   facts: ReviewDiffSourceFacts,
@@ -115,7 +155,7 @@ export type ReviewDiffSourceMethod = typeof ReviewDiffSourceMethod.Type
 export class ReviewDiffSourceOffer extends Schema.Class<ReviewDiffSourceOffer>(
   "ReviewDiffSourceOffer",
 )({
-  review: HostedReviewLocator,
+  target: ReviewDiffSourceTarget,
   expectedRevision: ReviewRevision,
   semanticIdentity: ReviewDiffSemanticIdentity,
   methods: Schema.Array(ReviewDiffSourceMethod),

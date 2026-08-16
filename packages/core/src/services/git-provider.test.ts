@@ -7,16 +7,26 @@ import {
   GitProviderKind,
   GitProviderTerminology,
   makeHostedRepositoryLocator,
+  makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import {
   DiagnosticOperation,
   GitProviderOperationError,
   type GitProviderRegistration,
   GitProviderRegistry,
+  HostedReviewDiffSourceTarget,
+  REVIEW_DIFF_MAX_CHUNK_BYTES,
+  ReviewDiffSemanticIdentity,
+  ReviewDiffSourceFacts,
+  ReviewDiffSourceOffer,
+  ReviewKey,
+  ReviewRevision,
+  UnifiedBytesMethod,
+  type ReviewDiffSource,
 } from "@diffdash/git-provider"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Result } from "effect"
+import { Effect, Layer, Result, Stream } from "effect"
 
 import { GitProvider } from "./git-provider"
 
@@ -24,7 +34,9 @@ const unexpectedProviderOperation = () => Effect.die(new Error("Unexpected provi
 const providerId = GitProviderId.make("test")
 
 const makeProvider = (
-  overrides: Partial<Pick<GitProviderRegistration, "fileUrl" | "repositoryUrl">> = {},
+  overrides: Partial<
+    Pick<GitProviderRegistration, "fileUrl" | "getReviewDiffSource" | "repositoryUrl">
+  > = {},
 ): GitProviderRegistration => ({
   descriptor: GitProviderDescriptor.make({
     id: providerId,
@@ -59,6 +71,7 @@ const makeProvider = (
   searchRepositories: unexpectedProviderOperation,
   listReviews: unexpectedProviderOperation,
   getReview: unexpectedProviderOperation,
+  getReviewDiffSource: overrides.getReviewDiffSource ?? unexpectedProviderOperation,
   getReviewDiff: unexpectedProviderOperation,
   getReviewDecision: unexpectedProviderOperation,
   submitReviewDecision: unexpectedProviderOperation,
@@ -116,6 +129,42 @@ describe("GitProvider", () => {
       if (Result.isFailure(fileResult)) {
         expect(fileResult.failure).toBe(expected)
       }
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("exposes bounded review-source acquisition through the Core facade", () => {
+    const review = makeHostedReviewLocator("test", "team", "repository", 42)
+    const source: ReviewDiffSource = {
+      offer: ReviewDiffSourceOffer.make({
+        target: HostedReviewDiffSourceTarget.make({
+          review,
+          reviewKey: ReviewKey.make("test:team/repository#42"),
+        }),
+        expectedRevision: ReviewRevision.make("head"),
+        semanticIdentity: ReviewDiffSemanticIdentity.make("bounded-source"),
+        methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
+        facts: ReviewDiffSourceFacts.make({
+          origin: "remote",
+          revisionKind: "mutable",
+          reproducible: false,
+          complete: true,
+          declaredBytes: null,
+        }),
+      }),
+      unifiedBytes: () => Stream.die(new Error("Unused source method")),
+      filePage: () => Effect.die(new Error("Unused source method")),
+      materializedGit: () => Effect.die(new Error("Unused source method")),
+      bufferedBytes: () => Effect.die(new Error("Unused source method")),
+      close: Effect.void,
+    }
+    const provider = makeProvider({
+      getReviewDiffSource: () => Effect.succeed(source),
+    })
+    const layer = GitProvider.layer.pipe(Layer.provide(GitProviderRegistry.layer([provider])))
+
+    return Effect.gen(function* () {
+      const providers = yield* GitProvider
+      expect(yield* providers.getReviewDiffSource(review)).toBe(source)
     }).pipe(Effect.provide(layer))
   })
 })

@@ -13,11 +13,13 @@ import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewDiffIdentity,
   ReviewFilePatchHash,
+  ReviewKey,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
 import {
   BufferedBytesMethod,
   FilePagesMethod,
+  HostedReviewDiffSourceTarget,
   InvalidReviewDiffPage,
   MaterializedGitMethod,
   REVIEW_DIFF_MAX_BUFFERED_BYTES,
@@ -106,7 +108,10 @@ const makePage = (
   })
 
 const offer = ReviewDiffSourceOffer.make({
-  review,
+  target: HostedReviewDiffSourceTarget.make({
+    review,
+    reviewKey: ReviewKey.make("fixture:platform/service#42"),
+  }),
   expectedRevision: revision,
   semanticIdentity: identity,
   methods: [

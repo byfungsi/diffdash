@@ -115,6 +115,7 @@ const makeRegistration = (): GitProviderRegistration => ({
   searchRepositories: () => Effect.succeed([]),
   listReviews: () => Effect.succeed([]),
   getReview: unavailable,
+  getReviewDiffSource: unavailable,
   getReviewDiff: unavailable,
   getReviewDecision: unavailable,
   submitReviewDecision: unavailable,

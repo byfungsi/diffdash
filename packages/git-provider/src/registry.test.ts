@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result } from "effect"
+import { Effect, Result, Stream } from "effect"
 
 import {
   BranchRevision,
@@ -33,6 +33,13 @@ import {
   GitProviderRegistry,
   GitProviderTerminology,
   HostedReviewCheckoutSpec,
+  HostedReviewDiffSourceTarget,
+  ReviewDiffSemanticIdentity,
+  ReviewDiffSourceFacts,
+  ReviewDiffSourceOffer,
+  ReviewKey,
+  UnifiedBytesMethod,
+  REVIEW_DIFF_MAX_CHUNK_BYTES,
   UnknownGitProviderError,
   type GitProviderRegistration,
 } from "./git-provider"
@@ -117,6 +124,7 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       ]),
     listReviews: () => Effect.succeed([summary]),
     getReview: () => Effect.succeed(HostedReviewDetail.make({ summary, files: [], commits: [] })),
+    getReviewDiffSource: () => Effect.die(new Error("Review diff source is unused")),
     getReviewDiff: () =>
       Effect.succeed(
         HostedReviewDiff.make({
@@ -256,6 +264,50 @@ describe("GitProviderRegistry", () => {
         expect(result.failure.message).toBe("Provider returned malformed data")
         expect(result.failure.message.length).toBeLessThanOrEqual(500)
       }
+    }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
+  })
+
+  it.effect("preserves a validated bounded review source through registry wrapping", () => {
+    const registration = makeProvider("fake")
+    const review = HostedReviewLocator.make({
+      repository: HostedRepositoryLocator.make({
+        providerId: GitProviderId.make("fake"),
+        namespace: RepositoryNamespace.make("platform/backend"),
+        name: HostedRepositoryName.make("service"),
+      }),
+      number: HostedReviewNumber.make(42),
+    })
+    const source = {
+      offer: ReviewDiffSourceOffer.make({
+        target: HostedReviewDiffSourceTarget.make({
+          review,
+          reviewKey: ReviewKey.make("fake:platform/backend/service#42"),
+        }),
+        expectedRevision: ReviewRevision.make("head"),
+        semanticIdentity: ReviewDiffSemanticIdentity.make("fixture-source"),
+        methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
+        facts: ReviewDiffSourceFacts.make({
+          origin: "remote",
+          revisionKind: "mutable",
+          reproducible: false,
+          complete: true,
+          declaredBytes: null,
+        }),
+      }),
+      unifiedBytes: () => Stream.die(new Error("Unused source method")),
+      filePage: () => Effect.die(new Error("Unused source method")),
+      materializedGit: () => Effect.die(new Error("Unused source method")),
+      bufferedBytes: () => Effect.die(new Error("Unused source method")),
+      close: Effect.void,
+    }
+    Object.defineProperty(registration, "getReviewDiffSource", {
+      value: () => Effect.succeed(source),
+    })
+
+    return Effect.gen(function* () {
+      const registry = yield* GitProviderRegistry
+      const provider = yield* registry.get(GitProviderId.make("fake"))
+      expect(yield* provider.getReviewDiffSource(review)).toBe(source)
     }).pipe(Effect.provide(GitProviderRegistry.layer([registration])))
   })
 

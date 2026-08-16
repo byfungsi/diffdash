@@ -5,10 +5,10 @@ import { dirname, join } from "node:path"
 
 import { Effect, Exit, Match, Option, Schema, Stream } from "effect"
 
-import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
-import { ReviewDiffIdentity, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewDiffIdentity, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
+  LocalReviewDiffSourceTarget,
   MaterializedGitMethod,
   REVIEW_DIFF_MAX_CHUNK_BYTES,
   ReviewDiffAcquisition,
@@ -35,7 +35,7 @@ const MAX_PATH_BYTES = 16 * 1024
 
 /** Inputs needed to create one coherent local review source. */
 export interface LocalReviewDiffSourceInput {
-  readonly review: HostedReviewLocator
+  readonly reviewKey: ReviewKey
   readonly target: LocalReviewTarget
 }
 
@@ -363,7 +363,10 @@ const makeSource = (state: {
   ]
   if (state.exactObjects !== null) methods.push(MaterializedGitMethod.make({}))
   const offer = ReviewDiffSourceOffer.make({
-    review: state.input.review,
+    target: LocalReviewDiffSourceTarget.make({
+      reviewKey: state.input.reviewKey,
+      target: state.input.target,
+    }),
     expectedRevision: state.revision,
     semanticIdentity: state.semanticIdentity,
     methods,

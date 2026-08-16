@@ -292,6 +292,7 @@ const testLayer = (options: TestOptions) =>
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
             acquireHostedReviewSnapshot: () => unavailable(),
+            getReviewDiffSource: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),

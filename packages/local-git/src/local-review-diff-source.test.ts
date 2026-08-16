@@ -6,7 +6,6 @@ import { join } from "node:path"
 
 import { Deferred, Effect, Fiber, Layer, Result, Stream } from "effect"
 
-import { makeHostedReviewLocator } from "@diffdash/domain/git-provider"
 import {
   BranchComparison,
   LastCommitComparison,
@@ -14,7 +13,7 @@ import {
 } from "@diffdash/domain/local-review"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
-import { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   ReviewDiffAcquisition,
   ReviewDiffByteCompletion,
@@ -27,7 +26,7 @@ import { ProcessExit, ProcessResult, ProcessService, type ProcessRequest } from 
 import { makeLocalReviewDiffSource } from "./local-review-diff-source"
 import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
-const review = makeHostedReviewLocator("github", "fungsi", "stream-fixture", 231)
+const reviewKey = ReviewKey.make("local:stream-fixture")
 const encoder = new TextEncoder()
 const fixtureRoot = mkdtempSync(join(tmpdir(), "diffdash-local-source-"))
 git(fixtureRoot, "init", "-b", "main")
@@ -47,7 +46,7 @@ beforeAll(async () => {
   for (let index = 0; index < 6; index += 1) {
     exactSources.push(
       await Effect.runPromise(
-        makeLocalReviewDiffSource({ review, target }).pipe(Effect.provide(ProcessService.layer)),
+        makeLocalReviewDiffSource({ reviewKey, target }).pipe(Effect.provide(ProcessService.layer)),
       ),
     )
   }
@@ -106,7 +105,9 @@ describe("local review diff source", () => {
         acceptedDiffBytes(root, "untracked-a.txt"),
         acceptedDiffBytes(root, "untracked-b.txt"),
       ])
-      const source = yield* makeLocalReviewDiffSource({ review, target })
+      const source = yield* makeLocalReviewDiffSource({ reviewKey, target })
+
+      expect(source.offer.target).toMatchObject({ _tag: "local", reviewKey, target })
 
       expect(source.offer.facts).toMatchObject({
         origin: "local",
@@ -144,7 +145,7 @@ describe("local review diff source", () => {
         }),
       )
       const result = yield* makeLocalReviewDiffSource({
-        review,
+        reviewKey,
         target: branchTarget("/workspace/repo", "a".repeat(40)),
       }).pipe(Effect.provide(processLayer), Effect.result)
 
@@ -170,7 +171,7 @@ describe("local review diff source", () => {
         }),
       )
       const fiber = yield* makeLocalReviewDiffSource({
-        review,
+        reviewKey,
         target: branchTarget("/workspace/repo", "a".repeat(40)),
       }).pipe(Effect.provide(processLayer), Effect.forkChild)
       yield* Deferred.await(started)

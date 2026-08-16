@@ -18,6 +18,7 @@ import {
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
+  HostedReviewDiffSourceTarget,
   ProviderActor,
   ProviderRepositoryId,
   REVIEW_DIFF_MAX_BUFFERED_BYTES,
@@ -29,6 +30,7 @@ import {
   ChangedFile,
   DiagnosticOperation,
   ReviewCommit,
+  makeReviewKey,
   ReviewDiffAcquisition,
   ReviewDiffByteCompletion,
   ReviewDiffByteStreamValidator,
@@ -129,10 +131,6 @@ export interface GitHubProviderRegistration extends GitProviderRegistration {
     readonly HostedReviewSummary[],
     GitProviderOperationError
   >
-  /** Opens the bounded source used by new review ingestion. */
-  readonly getReviewDiffSource: (
-    review: HostedReviewLocator,
-  ) => Effect.Effect<ReviewDiffSource, GitProviderOperationError>
 }
 
 /** A typed failure for malformed GitHub CLI JSON output. */
@@ -591,7 +589,7 @@ export const createGitHubReviewDiffSource = Effect.fn("GitHub.createReviewDiffSo
     `github:gh-pr-diff:v1:${host}/${review.repository.namespace}/${review.repository.name}#${review.number}@${expectedRevision}`,
   )
   const offer = ReviewDiffSourceOffer.make({
-    review,
+    target: HostedReviewDiffSourceTarget.make({ review, reviewKey: makeReviewKey(review) }),
     expectedRevision,
     semanticIdentity,
     methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],

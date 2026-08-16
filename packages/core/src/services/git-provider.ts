@@ -24,6 +24,7 @@ import {
   DiagnosticOperation,
   GitProviderRegistry,
   type HostedReviewCheckoutSpec,
+  type ReviewDiffSource,
   type UnknownGitProviderError,
 } from "@diffdash/git-provider"
 import { RepositorySearchScope, type RepositorySearchRequest } from "@diffdash/domain/repository"
@@ -100,6 +101,9 @@ export class GitProvider extends Context.Service<
     readonly acquireHostedReviewSnapshot: (
       review: HostedReviewLocator,
     ) => Effect.Effect<HostedReviewSnapshot, ReviewContextError>
+    readonly getReviewDiffSource: (
+      review: HostedReviewLocator,
+    ) => Effect.Effect<ReviewDiffSource, GitProviderCallError>
     readonly getReviewDecision: (
       review: HostedReviewLocator,
     ) => Effect.Effect<import("@diffdash/domain/git-provider").ReviewDecision, GitProviderCallError>
@@ -270,6 +274,10 @@ export class GitProvider extends Context.Service<
               ),
             ),
           acquireHostedReviewSnapshot,
+          getReviewDiffSource: (review) =>
+            provider(review.repository.providerId).pipe(
+              Effect.flatMap((registration) => registration.getReviewDiffSource(review)),
+            ),
           getReviewDecision: (review) =>
             provider(review.repository.providerId).pipe(
               Effect.flatMap((registration) => registration.getReviewDecision(review)),

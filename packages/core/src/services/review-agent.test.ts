@@ -634,6 +634,7 @@ const testGitProvider = (): GitProviderRegistration => {
     searchRepositories: () => unavailableGitOperation(),
     listReviews: () => unavailableGitOperation(),
     getReview: () => unavailableGitOperation(),
+    getReviewDiffSource: () => unavailableGitOperation(),
     getReviewDiff: () => unavailableGitOperation(),
     getReviewDecision: () => unavailableGitOperation(),
     submitReviewDecision: () => unavailableGitOperation(),

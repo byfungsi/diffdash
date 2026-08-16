@@ -21,6 +21,13 @@ import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { makeReviewKey } from "@diffdash/domain/review-identity"
+import {
+  HostedReviewDiffSourceTarget,
+  ReviewDiffSourceOffer,
+  validateReviewDiffSourceOffer,
+  type ReviewDiffSource,
+} from "./review-diff-source"
 
 export {
   BranchRevision,
@@ -60,6 +67,7 @@ export { DiffFileStatus } from "@diffdash/domain/diff"
 export { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 export { WebUrl } from "@diffdash/domain/web-url"
 export { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+export { makeReviewKey, ReviewKey } from "@diffdash/domain/review-identity"
 export * from "./review-diff-source"
 
 /** Provider-owned checkout instructions consumed by local workspace management. */
@@ -154,6 +162,11 @@ export interface GitProviderRegistration {
   readonly getReview: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewDetail, GitProviderOperationError>
+  /** Opens the bounded source for one hosted review without materializing a complete diff string. */
+  readonly getReviewDiffSource: (
+    review: HostedReviewLocator,
+  ) => Effect.Effect<ReviewDiffSource, GitProviderOperationError>
+  /** @deprecated Use `getReviewDiffSource` for production review ingestion. */
   readonly getReviewDiff: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewDiff, GitProviderOperationError>
@@ -419,6 +432,36 @@ const validateRegistration = (registration: GitProviderRegistration) =>
             sameHostedReview(result.summary.locator, review)
               ? Effect.succeed(result)
               : wrongTargetResult(providerId, "getReview"),
+          ),
+        ),
+      getReviewDiffSource: (review) =>
+        requireReviewProvider(providerId, "getReviewDiffSource", review).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "getReviewDiffSource", () =>
+              registration.getReviewDiffSource(review),
+            ),
+          ),
+          Effect.flatMap((source) =>
+            decodeResult(
+              providerId,
+              "getReviewDiffSource.offer",
+              ReviewDiffSourceOffer,
+              source.offer,
+            ).pipe(
+              Effect.flatMap((offer) =>
+                validateReviewDiffSourceOffer(offer).pipe(
+                  Effect.mapError(() => malformedResult(providerId, "getReviewDiffSource.offer")),
+                ),
+              ),
+              Effect.flatMap((offer) =>
+                Schema.is(HostedReviewDiffSourceTarget)(offer.target) &&
+                offer.target.reviewKey === makeReviewKey(review) &&
+                sameHostedReview(offer.target.review, review)
+                  ? Effect.succeed(source)
+                  : wrongTargetResult(providerId, "getReviewDiffSource"),
+              ),
+              Effect.onError(() => source.close.pipe(Effect.ignore)),
+            ),
           ),
         ),
       getReviewDiff: (review) =>
