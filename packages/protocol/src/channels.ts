@@ -2,6 +2,8 @@
 export const InvokeChannel = {
   analyticsCapture: "analytics:capture",
   analyticsStart: "analytics:start",
+  e2eReviewLifecycleDiagnostics: "e2e:reviewLifecycleDiagnostics",
+  e2eHoldNextReviewAcquisition: "e2e:holdNextReviewAcquisition",
   agentProvidersGetCatalog: "agentProviders:getCatalog",
   appDiagnostics: "app:diagnostics",
   appInstallDiffDashCli: "app:installDiffDashCli",

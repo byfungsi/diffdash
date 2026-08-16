@@ -41,6 +41,6 @@ describe("resource diagnostics", () => {
         ...decoded,
         classes: [{ ...decoded.classes[0], resourceClass: "repository:private" }],
       }),
-    ).toThrow("Expected resourceClass")
+    ).toThrow('at ["classes"][0]["resourceClass"]')
   })
 })

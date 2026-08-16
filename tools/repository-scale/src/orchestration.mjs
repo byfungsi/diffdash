@@ -46,6 +46,10 @@ export const parseOrchestrationOptions = (args, profile) => {
 }
 
 const isRecord = (value) => value !== null && Object.getPrototypeOf(value) === Object.prototype
+const isLifecycleIdentity = (value) =>
+  Object.prototype.toString.call(value) === "[object String]" &&
+  value.length > 0 &&
+  value.length <= 200
 
 /** Rejects unpinned or incorrectly-sized manifests before a full evidence run starts. */
 export const validateFullFixtureManifest = (manifest) => {
@@ -127,6 +131,27 @@ export const summarizeOrchestrationReport = (report) => {
     "rescanCancellation",
   ]
   const failedGates = requiredGates.filter((gate) => report.gates?.[gate] !== true)
+  if (!Array.isArray(report.blocked) || report.blocked.length > 0) {
+    failedGates.push("blockedScenarios")
+  }
+  const lifecycle = report.observations ?? {}
+  if (
+    !isLifecycleIdentity(lifecycle.disposedSessionId) ||
+    !isLifecycleIdentity(lifecycle.replacementSessionId) ||
+    lifecycle.replacementSessionId === lifecycle.disposedSessionId
+  ) {
+    failedGates.push("disposalIdentityEvidence")
+  }
+  if (
+    !isLifecycleIdentity(lifecycle.supersededOperationId) ||
+    lifecycle.drainedOperationId !== lifecycle.supersededOperationId ||
+    !Number.isSafeInteger(lifecycle.acquisitionCounters?.superseded) ||
+    lifecycle.acquisitionCounters.superseded < 1 ||
+    !Number.isSafeInteger(lifecycle.acquisitionCounters?.drained) ||
+    lifecycle.acquisitionCounters.drained < 1
+  ) {
+    failedGates.push("rescanIdentityEvidence")
+  }
   let memory = null
   if (report.profile === "full") {
     if (!Array.isArray(report.switchReports) || report.switchReports.length !== 10) {
@@ -155,6 +180,11 @@ export const summarizeOrchestrationReport = (report) => {
     observations: {
       maximumMountedRows: report.observations?.maximumMountedRows ?? null,
       switchCount: report.observations?.switchCount ?? 0,
+      disposedSessionId: report.observations?.disposedSessionId ?? null,
+      replacementSessionId: report.observations?.replacementSessionId ?? null,
+      supersededOperationId: report.observations?.supersededOperationId ?? null,
+      drainedOperationId: report.observations?.drainedOperationId ?? null,
+      acquisitionCounters: report.observations?.acquisitionCounters ?? null,
     },
     blocked: Array.isArray(report.blocked) ? report.blocked : [],
     memory,

@@ -224,6 +224,15 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("Resources.clearDisposable", request, (methods) =>
           methods["Resources.clearDisposable"](request, {}),
         ),
+      "E2E.reviewLifecycleDiagnostics": (_request: HostRequestContext) =>
+        runtime.reviewLifecycleDiagnostics.pipe(
+          Effect.flatMap((diagnostics) => diagnostics.snapshot),
+        ),
+      "E2E.holdNextReviewAcquisition": (_request: HostRequestContext) =>
+        runtime.reviewLifecycleDiagnostics.pipe(
+          Effect.flatMap((diagnostics) => diagnostics.holdNextAcquisition),
+          Effect.map((armed) => ({ armed })),
+        ),
       "ViewedFiles.listHosted": (request: ApplicationRpcRequest<"ViewedFiles.listHosted">) =>
         handle("ViewedFiles.listHosted", request, (methods) =>
           methods["ViewedFiles.listHosted"](request, {}),

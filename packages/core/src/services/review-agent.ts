@@ -94,6 +94,7 @@ import {
   reviewPromptIdentity,
   reviewThreadHunkExcerpt,
 } from "./operation-snapshot-projection"
+import { AgentWorkspaceResources } from "../agent-workspace-resources"
 
 const REVIEW_THREAD_PROMPT_VERSION = AgentPromptVersion.make("review-thread-v3")
 const PROVIDER_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgorithm.make("provider-summary")
@@ -206,6 +207,7 @@ export class ReviewAgentService extends Context.Service<
       const workspaces = yield* HostedReviewWorkspacePool
       const gitProviders = yield* GitProviderRegistry
       const snapshotReader = yield* OperationSnapshotReader
+      const workspaceResources = yield* AgentWorkspaceResources
 
       const acceptThreadTurnAt = Effect.fn("ReviewAgentService.acceptThreadTurnAt")(
         (input: RunReviewAgentTurnInput, candidateOffset: number) =>
@@ -341,8 +343,28 @@ export class ReviewAgentService extends Context.Service<
                       }),
                     )
 
+                  const runManagedProvider = (cwd: RepositoryCheckoutPath) =>
+                    workspaceResources
+                      .protect(
+                        {
+                          localPath: cwd,
+                          agentRunId: begun.run.id,
+                          applicationInstanceId: input.applicationInstanceId,
+                          processEpoch: input.processEpoch,
+                        },
+                        runProvider(cwd),
+                      )
+                      .pipe(
+                        Effect.catchTags({
+                          AgentWorkspaceResourceError: (cause) =>
+                            serviceError("runThreadTurn.workspaceResource", cause),
+                          ResourceCatalogError: (cause) =>
+                            serviceError("runThreadTurn.workspaceResource", cause),
+                        }),
+                      )
+
                   if (comparisonExecution !== null) {
-                    return yield* workspaces.useComparison(comparisonExecution, runProvider)
+                    return yield* workspaces.useComparison(comparisonExecution, runManagedProvider)
                   }
                   if (hostedExecution === null) return yield* runProvider(input.cwd)
                   return yield* workspaces.use(
@@ -353,7 +375,7 @@ export class ReviewAgentService extends Context.Service<
                       sourcePath: input.cwd,
                       bootstrapBareRepository: hostedExecution.bootstrapBareRepository,
                     },
-                    (lease) => runProvider(lease.localPath),
+                    (lease) => runManagedProvider(lease.localPath),
                     input.onProgress,
                   )
                 })

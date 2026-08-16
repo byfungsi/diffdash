@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@diffdash/desktop": "workspace:*",
+    "@diffdash/protocol": "workspace:*",
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "electron": "catalog:",

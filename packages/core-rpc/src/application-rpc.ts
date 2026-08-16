@@ -51,6 +51,7 @@ import {
   MarkdownBody,
 } from "@diffdash/domain/review-thread"
 import { WebUrl } from "@diffdash/domain/web-url"
+import { NonNegativeInteger } from "@diffdash/domain/domain-scalar"
 import { Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
@@ -70,6 +71,36 @@ const MIB = 1_024 * KIB
 const RequestIdentity = HostRequestContext.fields
 const EmptyRequest = Schema.Struct({ ...RequestIdentity })
 const NullableString = Schema.NullOr(Schema.String)
+const E2eLifecycleIdentity = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(Schema.isMaxLength(200)),
+)
+/** Core RPC payload for packaged-E2E review lifecycle evidence. */
+export const E2eReviewLifecycleDiagnostics = Schema.Struct({
+  acquisitions: Schema.Struct({
+    activeOperationIds: Schema.Array(E2eLifecycleIdentity),
+    started: NonNegativeInteger,
+    completed: NonNegativeInteger,
+    superseded: NonNegativeInteger,
+    drained: NonNegativeInteger,
+    failed: NonNegativeInteger,
+    lastStartedOperationId: Schema.NullOr(E2eLifecycleIdentity),
+    lastSupersededOperationId: Schema.NullOr(E2eLifecycleIdentity),
+    lastDrainedOperationId: Schema.NullOr(E2eLifecycleIdentity),
+  }),
+  sessions: Schema.Struct({
+    activeSessionId: Schema.NullOr(E2eLifecycleIdentity),
+    opened: NonNegativeInteger,
+    disposed: NonNegativeInteger,
+    lastDisposedSessionId: Schema.NullOr(E2eLifecycleIdentity),
+  }),
+})
+/** Core RPC payload for packaged-E2E review lifecycle evidence. */
+export type E2eReviewLifecycleDiagnostics = typeof E2eReviewLifecycleDiagnostics.Type
+/** Core RPC result for arming the next-acquisition supersession hold. */
+export const E2eReviewLifecycleHold = Schema.Struct({ armed: Schema.Boolean })
+/** Core RPC result for arming the next-acquisition supersession hold. */
+export type E2eReviewLifecycleHold = typeof E2eReviewLifecycleHold.Type
 const CoreAbsolutePath = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
   Schema.check(
@@ -555,6 +586,18 @@ export const ResourceDiagnosticsRpc = applicationRpc(
   CoreResourceDiagnostics,
   read(5_000, 16 * KIB),
 )
+export const E2eReviewLifecycleDiagnosticsRpc = applicationRpc(
+  "E2E.reviewLifecycleDiagnostics",
+  EmptyRequest,
+  E2eReviewLifecycleDiagnostics,
+  read(5_000, 16 * KIB),
+)
+export const E2eHoldNextReviewAcquisitionRpc = applicationRpc(
+  "E2E.holdNextReviewAcquisition",
+  EmptyRequest,
+  E2eReviewLifecycleHold,
+  idempotentMutation(5_000, 8 * KIB),
+)
 export const ClearDisposableResourcesRpc = applicationRpc(
   "Resources.clearDisposable",
   EmptyRequest,
@@ -655,6 +698,8 @@ export const CoreApplicationRpcs = RpcGroup.make(
   SettingsGetRpc,
   SettingsUpdateRpc,
   ResourceDiagnosticsRpc,
+  E2eReviewLifecycleDiagnosticsRpc,
+  E2eHoldNextReviewAcquisitionRpc,
   ClearDisposableResourcesRpc,
   ViewedFilesListHostedRpc,
   ViewedFilesListLocalRpc,

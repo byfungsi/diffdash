@@ -42,6 +42,12 @@ export const defineReviewHandlers = (
     CoreMethod.acquireRepositoryComparisonSnapshot,
     runtime.core.acquireRepositoryComparisonSnapshot,
   )
+  handlers.define(InvokeChannel.e2eReviewLifecycleDiagnostics, () =>
+    runtime.core.e2eReviewLifecycleDiagnostics(),
+  )
+  handlers.define(InvokeChannel.e2eHoldNextReviewAcquisition, () =>
+    runtime.core.e2eHoldNextReviewAcquisition(),
+  )
   handlers.defineCore(CoreMethod.listViewedFiles, runtime.core.listViewedFiles)
   handlers.defineCore(CoreMethod.setViewedFile, runtime.core.setViewedFile)
   handlers.defineCore(CoreMethod.listLocalViewedFiles, runtime.core.listLocalViewedFiles)

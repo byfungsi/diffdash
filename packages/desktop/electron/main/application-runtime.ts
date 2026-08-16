@@ -85,6 +85,12 @@ interface ApplicationCoreRuntime {
   readonly clearDisposableResources: ApplicationCoreOperation<
     typeof CoreMethod.clearDisposableResources
   >
+  readonly e2eReviewLifecycleDiagnostics: () => Promise<
+    import("@diffdash/protocol/e2e-review-lifecycle").E2eReviewLifecycleDiagnostics
+  >
+  readonly e2eHoldNextReviewAcquisition: () => Promise<
+    import("@diffdash/protocol/e2e-review-lifecycle").E2eReviewLifecycleHold
+  >
   readonly setRepositoryFavorite: ApplicationCoreOperation<typeof CoreMethod.setRepositoryFavorite>
   readonly projectWorkspaceGet: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceGet>
   readonly projectWorkspaceSave: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceSave>

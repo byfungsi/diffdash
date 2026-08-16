@@ -19,6 +19,7 @@ import { coreApplicationRpcSocketHostLayer } from "./core-rpc-socket-host"
 import { nodeDatabaseOwnerInspector, readProcessStartIdentity } from "./node-process-identity"
 import { CoreConfiguration } from "./core-configuration"
 import { createStandaloneCoreLayer } from "./core-layer"
+import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
 import { type CoreProviderComposition, productionProviderComposition } from "./provider-composition"
 import { CoreLifecycle } from "./core-lifecycle"
 import { coreRuntimeServicesLayer, CoreRuntimeServices } from "./core-runtime-services"
@@ -157,6 +158,7 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
                 operations,
                 commands: Context.get(runtimeContext, CoreDurableCommandService),
                 events: Context.get(runtimeContext, CoreEventHub),
+                reviewLifecycleDiagnostics: Context.get(runtimeContext, ReviewLifecycleDiagnostics),
                 progressiveReviews: {
                   sessions: Context.get(runtimeContext, CoreProgressiveReviewService),
                   repository: Context.get(runtimeContext, SnapshotRepository),

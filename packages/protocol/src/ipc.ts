@@ -40,6 +40,7 @@ import { AgentProviderCatalog } from "./agent-providers"
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
+import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
   GenerateHostedWalkthroughRequest,
@@ -172,6 +173,17 @@ export const InvokeContract = {
     InvokeChannel.analyticsStart,
     EmptyRequest,
     EmptyResponse,
+  ),
+  [InvokeChannel.e2eReviewLifecycleDiagnostics]: defineInvoke(
+    InvokeChannel.e2eReviewLifecycleDiagnostics,
+    EmptyRequest,
+    E2eReviewLifecycleDiagnostics,
+    { maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.e2eHoldNextReviewAcquisition]: defineInvoke(
+    InvokeChannel.e2eHoldNextReviewAcquisition,
+    EmptyRequest,
+    E2eReviewLifecycleHold,
   ),
   [InvokeChannel.agentProvidersGetCatalog]: defineInvoke(
     InvokeChannel.agentProvidersGetCatalog,

@@ -157,6 +157,29 @@ describe("ResourceCatalog", () => {
     }),
   )
 
+  it.effect("refreshes producer-owned usage and revives the same generated identity", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const resource = yield* register(catalog, "producer-resource", 10)
+
+        expect(
+          yield* catalog.recordUsage({ resourceId: resource.id, bytes: 25, nowMs: 2 }),
+        ).toMatchObject({ state: "ready", bytes: 25, lastUsedAtMs: 2 })
+
+        const token = ResourceRecoveryToken.make("producer-token")
+        yield* catalog.beginCollection({ resourceId: resource.id, recoveryToken: token, nowMs: 3 })
+        yield* catalog.quarantine({ resourceId: resource.id, recoveryToken: token, nowMs: 3 })
+        yield* catalog.completeDeletion({ resourceId: resource.id, recoveryToken: token, nowMs: 3 })
+
+        expect(
+          yield* catalog.recordUsage({ resourceId: resource.id, bytes: 30, nowMs: 4 }),
+        ).toMatchObject({ state: "ready", bytes: 30, lastUsedAtMs: 4 })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.effect(
     "blocks parent collection for a live descendant lease and permits exact-owner expiry",
     () =>

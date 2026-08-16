@@ -42,6 +42,8 @@ const unusedApplicationMethods: Omit<
   appOpenRepositoryFile: unused,
   appStateGet: unused,
   appStateUpdate: unused,
+  e2eReviewLifecycleDiagnostics: unused,
+  e2eHoldNextReviewAcquisition: unused,
   listProviders: unused,
   submitHostedReviewDecision: unused,
   getHostedReviewDecision: unused,

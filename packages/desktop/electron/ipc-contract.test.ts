@@ -108,6 +108,65 @@ describe("IPC contract", () => {
     expect(host.handle).toHaveBeenCalledTimes(Object.values(InvokeChannel).length)
   })
 
+  it("forwards E2E lifecycle diagnostics through dedicated desktop channels", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const baseRuntime = testRuntime("E2E lifecycle test must not invoke other handlers")
+    const lifecycle = {
+      acquisitions: {
+        activeOperationIds: [],
+        started: 1,
+        completed: 0,
+        superseded: 1,
+        drained: 1,
+        failed: 0,
+        lastStartedOperationId: "core:prior",
+        lastSupersededOperationId: "core:prior",
+        lastDrainedOperationId: "core:prior",
+      },
+      sessions: {
+        activeSessionId: "session:replacement",
+        opened: 2,
+        disposed: 1,
+        lastDisposedSessionId: "session:prior",
+      },
+    } as const
+    const runtime: ApplicationRuntime = {
+      ...baseRuntime,
+      core: {
+        ...baseRuntime.core,
+        e2eReviewLifecycleDiagnostics: async () => lifecycle,
+        e2eHoldNextReviewAcquisition: async () => ({ armed: true }),
+      },
+    }
+    const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
+    defineIpcHandlers(
+      runtime,
+      testUpdater(),
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      shutdown,
+      testHostConfiguration(),
+    )
+    registry.install()
+
+    const diagnosticsHandler = host.installed.get(InvokeChannel.e2eReviewLifecycleDiagnostics)
+    const holdHandler = host.installed.get(InvokeChannel.e2eHoldNextReviewAcquisition)
+    if (diagnosticsHandler === undefined || holdHandler === undefined) {
+      throw new Error("E2E lifecycle IPC handlers were not installed")
+    }
+    await expect(diagnosticsHandler(trustedEvent(), {})).resolves.toEqual({
+      _tag: "Success",
+      value: lifecycle,
+    })
+    await expect(holdHandler(trustedEvent(), {})).resolves.toEqual({
+      _tag: "Success",
+      value: { armed: true },
+    })
+  })
+
   it("exposes no unknown or prototype-named channels through the installed Electron router", () => {
     const host = hostIpc()
     const rendererSecurityPolicy = testRendererSecurityPolicy()
@@ -1001,6 +1060,8 @@ const testRuntime = (message: string): ApplicationRuntime => {
       appOpenRepositoryFile: reject,
       appStateGet: reject,
       appStateUpdate: reject,
+      e2eReviewLifecycleDiagnostics: reject,
+      e2eHoldNextReviewAcquisition: reject,
       listProviders: reject,
       submitHostedReviewDecision: reject,
       getHostedReviewDecision: reject,

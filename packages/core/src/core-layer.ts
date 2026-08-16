@@ -46,6 +46,10 @@ import {
   coreProgressiveReviewServiceLayer,
 } from "./core-review-session-rpc-handlers"
 import { generatedCoreReviewDataWorkerLayer } from "./generated-review-data-worker"
+import {
+  ReviewLifecycleDiagnostics,
+  reviewLifecycleDiagnosticsLayer,
+} from "./review-lifecycle-diagnostics"
 import { reviewAgentOperationsLayer } from "./operations/review-agent-operations"
 import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
 import type { CoreProviderComposition } from "./provider-composition"
@@ -78,6 +82,7 @@ import {
   DisposableResourceLifecycle,
   makeDisposableResourceLifecycle,
 } from "./disposable-resource-lifecycle"
+import { agentWorkspaceResourcesLayer } from "./agent-workspace-resources"
 
 /** Maximum aggregate exact-Git output reserved by one lazy file regeneration. */
 export const CORE_SNAPSHOT_MAX_LAZY_BYTES = 16 * 1_024 * 1_024
@@ -108,6 +113,7 @@ type StandaloneCoreServices =
   | CoreOperationService
   | CoreSnapshotIngestion
   | CoreProgressiveReviewService
+  | ReviewLifecycleDiagnostics
   | DisposableResourceLifecycle
   | ResourceCollection
   | SnapshotRepository
@@ -233,20 +239,6 @@ export const createStandaloneCoreLayer = (
     remoteWorktreePoolPath: RepositoryCheckoutPath.make(remoteWorktreePoolPath),
     worktreePoolPath: RepositoryCheckoutPath.make(worktreePoolPath),
   })
-  const reviewAgentLayer = ReviewAgentService.layer.pipe(
-    Layer.provideMerge(reviewAgentRoutingLayer),
-    Layer.provideMerge(agentProviderRegistryLayer),
-    Layer.provideMerge(gitProviderRegistryLayer),
-    Layer.provideMerge(mcpLayer),
-    Layer.provideMerge(mcpHandlersLayer),
-    Layer.provideMerge(AgentArtifactNormalizer.layer),
-    Layer.provideMerge(reviewTurnStoreLayer),
-    Layer.provideMerge(hostedReviewWorkspacePoolLayer),
-  )
-  const reviewAgentOperationServiceLayer = reviewAgentOperationsLayer.pipe(
-    Layer.provideMerge(reviewAgentLayer),
-    Layer.provideMerge(reviewTurnStoreLayer),
-  )
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
   )
@@ -313,6 +305,25 @@ export const createStandaloneCoreLayer = (
     disposableResourceLifecycleLayer,
     resourceLifecycleStartupLayer,
   )
+  const agentWorkspaceResourceLayer = agentWorkspaceResourcesLayer({
+    local: { rootId: LOCAL_WORKTREE_RESOURCE_ROOT_ID, rootPath: worktreePoolPath },
+    remote: { rootId: REMOTE_WORKTREE_RESOURCE_ROOT_ID, rootPath: remoteWorktreePoolPath },
+  }).pipe(Layer.provideMerge(resourceLifecycleLayer))
+  const reviewAgentLayer = ReviewAgentService.layer.pipe(
+    Layer.provideMerge(reviewAgentRoutingLayer),
+    Layer.provideMerge(agentProviderRegistryLayer),
+    Layer.provideMerge(gitProviderRegistryLayer),
+    Layer.provideMerge(mcpLayer),
+    Layer.provideMerge(mcpHandlersLayer),
+    Layer.provideMerge(AgentArtifactNormalizer.layer),
+    Layer.provideMerge(reviewTurnStoreLayer),
+    Layer.provideMerge(hostedReviewWorkspacePoolLayer),
+    Layer.provideMerge(agentWorkspaceResourceLayer),
+  )
+  const reviewAgentOperationServiceLayer = reviewAgentOperationsLayer.pipe(
+    Layer.provideMerge(reviewAgentLayer),
+    Layer.provideMerge(reviewTurnStoreLayer),
+  )
   const projectAuthorityLayer = snapshotProjectAuthorityLayer
   const gitRangeSourceLayer = snapshotGitRangeSourceLayer.pipe(
     Layer.provide(RepositoryStore.layer),
@@ -335,8 +346,10 @@ export const createStandaloneCoreLayer = (
     maximumPageMatches: 200,
     maximumExcerptBytes: 8 * 1_024,
   }).pipe(Layer.provideMerge(snapshotRepositoryServiceLayer))
+  const reviewDiagnosticsLayer = reviewLifecycleDiagnosticsLayer
   const progressiveReviewServiceLayer = coreProgressiveReviewServiceLayer.pipe(
     Layer.provideMerge(snapshotSearchServiceLayer),
+    Layer.provide(reviewDiagnosticsLayer),
   )
   const snapshotIngestionServiceLayer = coreSnapshotIngestionLayer({
     managedQuotaBytes: SNAPSHOT_MANAGED_QUOTA_BYTES,
@@ -344,7 +357,7 @@ export const createStandaloneCoreLayer = (
     maximumBlockBytes: CORE_SNAPSHOT_MAX_BLOCK_BYTES,
   }).pipe(
     Layer.provideMerge(snapshotPersistenceLayer),
-    Layer.provide(generatedCoreReviewDataWorkerLayer),
+    Layer.provide(generatedCoreReviewDataWorkerLayer.pipe(Layer.provide(reviewDiagnosticsLayer))),
   )
   const snapshotStorageStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {
@@ -432,6 +445,7 @@ export const createStandaloneCoreLayer = (
     ),
   )
   const exposedProgressiveReviewLayer = progressiveReviewLayer.pipe(
+    Layer.provideMerge(reviewDiagnosticsLayer),
     Layer.provide(databaseLayer),
     Layer.provide(processLayer),
     Layer.provide(ProcessFileSystem.layer),
@@ -444,6 +458,7 @@ export const createStandaloneCoreLayer = (
         Layer.effect(CoreOperationService, failure),
         Layer.effect(CoreSnapshotIngestion, failure),
         Layer.effect(CoreProgressiveReviewService, failure),
+        Layer.effect(ReviewLifecycleDiagnostics, failure),
         Layer.effect(DisposableResourceLifecycle, failure),
         Layer.effect(ResourceCollection, failure),
         Layer.effect(SnapshotRepository, failure),

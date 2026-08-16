@@ -40,6 +40,7 @@ import {
   type SnapshotSearchProvisional,
 } from "./services/snapshot-search"
 import { CoreRuntimeServices } from "./core-runtime-services"
+import { ReviewLifecycleDiagnostics } from "./review-lifecycle-diagnostics"
 
 type ProgressiveMethod = CoreReviewSessionFailureType["method"]
 
@@ -64,6 +65,7 @@ export const coreProgressiveReviewServiceLayer = Layer.effect(
   CoreProgressiveReviewService,
   Effect.gen(function* () {
     const repository = yield* SnapshotRepository
+    const diagnostics = yield* ReviewLifecycleDiagnostics
     const lock = yield* Semaphore.make(1)
     const active = yield* Ref.make<Option.Option<typeof CoreReviewSessionState.Type>>(Option.none())
 
@@ -74,9 +76,12 @@ export const coreProgressiveReviewServiceLayer = Layer.effect(
         Effect.gen(function* () {
           const previous = yield* Ref.get(active)
           if (Option.isSome(previous)) {
-            yield* repository
+            const closed = yield* repository
               .closeSession(repositoryIdentity(request, previous.value.identity))
-              .pipe(Effect.ignore)
+              .pipe(Effect.catch(() => Effect.succeed(false)))
+            if (closed && !Schema.is(CoreReviewSessionState.cases.Disposed)(previous.value)) {
+              yield* diagnostics.sessionDisposed(previous.value.identity.sessionId)
+            }
           }
           yield* Ref.set(active, Option.none())
           const identity: CoreReviewSessionIdentity = {
@@ -95,6 +100,7 @@ export const coreProgressiveReviewServiceLayer = Layer.effect(
             )
           const state = CoreReviewSessionState.cases.Ready.make({ identity })
           yield* Ref.set(active, Option.some(state))
+          yield* diagnostics.sessionOpened(identity.sessionId)
           return state
         }),
       )
@@ -152,6 +158,7 @@ export const coreProgressiveReviewServiceLayer = Layer.effect(
             reason: "closed",
           })
           yield* Ref.set(active, Option.some(disposed))
+          yield* diagnostics.sessionDisposed(state.identity.sessionId)
           return disposed
         }),
       )

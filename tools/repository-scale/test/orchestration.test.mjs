@@ -39,7 +39,15 @@ const passingReport = () => ({
     disposalComplete: true,
     rescanCancellation: true,
   },
-  observations: { maximumMountedRows: 180, switchCount: 4 },
+  observations: {
+    maximumMountedRows: 180,
+    switchCount: 4,
+    disposedSessionId: "session:prior",
+    replacementSessionId: "session:replacement",
+    supersededOperationId: "core:operation-prior",
+    drainedOperationId: "core:operation-prior",
+    acquisitionCounters: { started: 2, superseded: 1, drained: 1 },
+  },
   blocked: [],
   switchReports: [],
 })
@@ -125,7 +133,21 @@ test("rejects reports that only describe missing lifecycle evidence", () => {
     (error) =>
       error instanceof OrchestrationGateError &&
       error.summary.failedGates.includes("disposalComplete") &&
-      error.summary.failedGates.includes("rescanCancellation"),
+      error.summary.failedGates.includes("rescanCancellation") &&
+      error.summary.failedGates.includes("blockedScenarios"),
+  )
+})
+
+test("rejects lifecycle gates without matching stable session and operation identities", () => {
+  const report = passingReport()
+  report.observations.replacementSessionId = report.observations.disposedSessionId
+  report.observations.drainedOperationId = "core:another-operation"
+  assert.throws(
+    () => summarizeOrchestrationReport(report),
+    (error) =>
+      error instanceof OrchestrationGateError &&
+      error.summary.failedGates.includes("disposalIdentityEvidence") &&
+      error.summary.failedGates.includes("rescanIdentityEvidence"),
   )
 })
 

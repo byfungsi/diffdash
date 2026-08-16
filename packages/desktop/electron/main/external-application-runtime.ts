@@ -77,6 +77,7 @@ const platformLayer = Layer.mergeAll(
 /** Creates the production Electron adapter backed exclusively by standalone Core RPC. */
 export const createExternalApplicationRuntime = (
   configuration: DesktopHostConfiguration,
+  e2eCoreEnvironmentNames: ReadonlyArray<string> = [],
 ): ApplicationRuntime => {
   const runtime = { runPromise: Effect.runPromise }
   let session: CoreHostBootstrapSession | null = null
@@ -212,6 +213,10 @@ export const createExternalApplicationRuntime = (
       invoke((client) => client.resourceDiagnostics({ ...requestContext(), ...input })),
     clearDisposableResources: (input) =>
       invoke((client) => client.clearDisposableResources({ ...requestContext(), ...input })),
+    e2eReviewLifecycleDiagnostics: () =>
+      invoke((client) => client.e2eReviewLifecycleDiagnostics(requestContext())),
+    e2eHoldNextReviewAcquisition: () =>
+      invoke((client) => client.e2eHoldNextReviewAcquisition(requestContext())),
     setRepositoryFavorite: (input) =>
       invoke((client) => client.setRepositoryFavorite({ ...requestContext(), ...input })),
     projectWorkspaceGet: (input) =>
@@ -418,6 +423,7 @@ export const createExternalApplicationRuntime = (
                 configuration: transport,
                 databasePath: configuration.core.paths.database,
                 environment: process.env,
+                additionalAllowedEnvironmentNames: e2eCoreEnvironmentNames,
                 statePath: configuration.core.paths.state,
                 coreConfiguration: configuration.core,
               }).pipe(

@@ -2,6 +2,10 @@ import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { Match } from "effect"
 import { contextBridge, ipcRenderer } from "electron"
+import {
+  createDiffDashE2eDiagnosticsBridgeApi,
+  type DiffDashE2eDiagnosticsBridgeApi,
+} from "./e2e-review-lifecycle"
 import { createRendererTransport } from "./transport"
 
 const transport = createRendererTransport({
@@ -198,3 +202,10 @@ const api: DiffDashBridgeApi = {
 }
 
 contextBridge.exposeInMainWorld("diffDash", api)
+
+export type { DiffDashE2eDiagnosticsBridgeApi }
+
+if (process.env.DIFFDASH_E2E_BUILD === "1") {
+  const e2eApi = createDiffDashE2eDiagnosticsBridgeApi(transport)
+  contextBridge.exposeInMainWorld("diffDashE2eDiagnostics", e2eApi)
+}

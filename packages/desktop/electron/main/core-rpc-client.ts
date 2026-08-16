@@ -5,7 +5,11 @@ import {
   type CoreMethodInput,
   type CoreOperationOutput,
 } from "@diffdash/core"
-import type { CoreApplicationFailure } from "@diffdash/core-rpc/application-rpc"
+import type {
+  CoreApplicationFailure,
+  E2eReviewLifecycleDiagnostics,
+  E2eReviewLifecycleHold,
+} from "@diffdash/core-rpc/application-rpc"
 import type {
   AppStateReadFailure,
   AppStateGetAdmissionFailure,
@@ -137,6 +141,12 @@ export interface CoreRpcClientOptions {
 export class CoreRpcClient extends Context.Service<
   CoreRpcClient,
   CoreRpcApplicationClient & {
+    readonly e2eReviewLifecycleDiagnostics: (
+      request: HostRequestContext,
+    ) => Effect.Effect<E2eReviewLifecycleDiagnostics, CoreRpcApplicationFailure>
+    readonly e2eHoldNextReviewAcquisition: (
+      request: HostRequestContext,
+    ) => Effect.Effect<E2eReviewLifecycleHold, CoreRpcApplicationFailure>
     readonly health: (
       request: HostRequestContext,
     ) => Effect.Effect<
@@ -468,6 +478,15 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         (request: ReviewAgentOperationRequest) =>
           authenticated(client("ReviewAgents.getOperation", request)),
       )
+      const e2eReviewLifecycleDiagnostics = Effect.fn(
+        "CoreRpcClient.e2eReviewLifecycleDiagnostics",
+      )((request: HostRequestContext) =>
+        authenticated(client("E2E.reviewLifecycleDiagnostics", request)),
+      )
+      const e2eHoldNextReviewAcquisition = Effect.fn("CoreRpcClient.e2eHoldNextReviewAcquisition")(
+        (request: HostRequestContext) =>
+          authenticated(client("E2E.holdNextReviewAcquisition", request)),
+      )
       const startWalkthrough = Effect.fn("CoreRpcClient.startWalkthrough")(
         (request: StartWalkthroughRequest) => authenticated(client("Walkthroughs.start", request)),
       )
@@ -539,6 +558,8 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
             ...applicationClient,
             authorizeDatabaseOwnership,
             cancelWalkthrough,
+            e2eHoldNextReviewAcquisition,
+            e2eReviewLifecycleDiagnostics,
             getReviewAgentOperation,
             getStoredWalkthrough,
             getWalkthroughOperation,

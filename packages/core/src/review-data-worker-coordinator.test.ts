@@ -27,14 +27,20 @@ import {
   type ReviewDataWorkerRuntime,
 } from "@diffdash/review-data-worker"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Layer, Stream } from "effect"
 
 import { CoreReviewDataWorker, coreReviewDataWorkerLayer } from "./review-data-worker-coordinator"
+import { reviewLifecycleDiagnosticsLayer } from "./review-lifecycle-diagnostics"
 
 const revision = ReviewRevision.make("worker-revision")
 const identity = ReviewDiffIdentity.make("diff:v1:worker")
 const generation = ReviewDiffGeneration.make("worker-generation")
 const acquisition = ReviewDiffAcquisition.make({ generation, expectedRevision: revision })
+const replacementGeneration = ReviewDiffGeneration.make("worker-generation-replacement")
+const replacementAcquisition = ReviewDiffAcquisition.make({
+  generation: replacementGeneration,
+  expectedRevision: revision,
+})
 const bytes = new TextEncoder().encode(
   "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
 )
@@ -62,20 +68,21 @@ const offer = ReviewDiffSourceOffer.make({
   }),
 })
 
-const completeSource: ReviewDiffSource = {
+const completeSourceFor = (sourceGeneration: ReviewDiffGeneration): ReviewDiffSource => ({
   offer,
   unifiedBytes: () =>
     Stream.fromIterable([
       { bytes },
       ReviewDiffByteCompletion.make({
-        generation,
+        generation: sourceGeneration,
         revision,
         semanticIdentity: identity,
         totalBytes: bytes.byteLength,
       }),
     ]),
   close: Effect.void,
-}
+})
+const completeSource = completeSourceFor(generation)
 
 describe("CoreReviewDataWorker", () => {
   it.effect("validates and consumes worker batches before acknowledging source chunks", () =>
@@ -94,7 +101,7 @@ describe("CoreReviewDataWorker", () => {
           coreReviewDataWorkerLayer({
             runtime,
             moduleUrl: new URL("file:///in-process-worker.mjs"),
-          }),
+          }).pipe(Layer.provide(reviewLifecycleDiagnosticsLayer)),
         ),
       )
 
@@ -109,7 +116,7 @@ describe("CoreReviewDataWorker", () => {
       const layer = coreReviewDataWorkerLayer({
         runtime,
         moduleUrl: new URL("file:///in-process-worker.mjs"),
-      })
+      }).pipe(Layer.provide(reviewLifecycleDiagnosticsLayer))
       yield* Effect.gen(function* () {
         const coordinator = yield* CoreReviewDataWorker
         const first = yield* coordinator
@@ -120,7 +127,11 @@ describe("CoreReviewDataWorker", () => {
           )
           .pipe(Effect.forkScoped)
         yield* Effect.yieldNow
-        yield* coordinator.process(completeSource, acquisition, () => Effect.void)
+        yield* coordinator.process(
+          completeSourceFor(replacementGeneration),
+          replacementAcquisition,
+          () => Effect.void,
+        )
         yield* Fiber.interrupt(first)
 
         expect(runtime.started).toBe(2)

@@ -236,6 +236,7 @@ const ReservationRow = Schema.Struct({
 const ResourceCatalogOperation = Schema.Literals([
   "registerRoot",
   "register",
+  "recordUsage",
   "get",
   "list",
   "reserve",
@@ -272,6 +273,11 @@ export class ResourceCatalog extends Context.Service<
     ) => Effect.Effect<CatalogResource, ResourceCatalogError>
     readonly get: (id: CatalogResourceId) => Effect.Effect<CatalogResource, ResourceCatalogError>
     readonly list: () => Effect.Effect<readonly CatalogResource[], ResourceCatalogError>
+    readonly recordUsage: (input: {
+      readonly resourceId: CatalogResourceId
+      readonly bytes: number
+      readonly nowMs: number
+    }) => Effect.Effect<CatalogResource, ResourceCatalogError>
     readonly reserve: (input: {
       readonly id: ResourceReservationId
       readonly resourceId: CatalogResourceId
@@ -444,6 +450,33 @@ export class ResourceCatalog extends Context.Service<
           return loadResources(database).pipe(
             Effect.mapError((cause) => catalogError("list", cause)),
           )
+        }),
+        recordUsage: Effect.fn("ResourceCatalog.recordUsage")(function (input) {
+          return database
+            .transaction(
+              Effect.gen(function* () {
+                if (!Number.isSafeInteger(input.bytes) || input.bytes < 0) {
+                  return yield* Effect.fail(
+                    new Error("Resource bytes must be a non-negative integer"),
+                  )
+                }
+                yield* database.run(
+                  `UPDATE resources SET bytes = ?, state = 'ready', updated_at_ms = ?,
+                     last_used_at_ms = ?, recovery_token = NULL, failure = NULL, retry_at_ms = NULL
+                   WHERE id = ? AND policy_class <> 'durableUserData'
+                     AND state IN ('writing', 'ready', 'deleted')`,
+                  [input.bytes, input.nowMs, input.nowMs, input.resourceId],
+                )
+                const resource = yield* get(input.resourceId)
+                if (resource.state !== "ready" || resource.bytes !== input.bytes) {
+                  return yield* Effect.fail(
+                    new Error("Resource usage cannot be recorded in its current state"),
+                  )
+                }
+                return resource
+              }),
+            )
+            .pipe(Effect.mapError((cause) => catalogError("recordUsage", cause)))
         }),
         reserve: Effect.fn("ResourceCatalog.reserve")(function (input) {
           return database

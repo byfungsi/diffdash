@@ -85,16 +85,27 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       disposalComplete: false,
       rescanCancellation: false,
     },
-    observations: { maximumMountedRows: 0, switchCount: 0 },
+    observations: {
+      maximumMountedRows: 0,
+      switchCount: 0,
+      disposedSessionId: null as string | null,
+      replacementSessionId: null as string | null,
+      supersededOperationId: null as string | null,
+      drainedOperationId: null as string | null,
+      acquisitionCounters: null as null | {
+        readonly started: number
+        readonly superseded: number
+        readonly drained: number
+      },
+    },
     blocked: [
       {
         scenario: "foreground disposal completion",
-        reason: "No preload API exposes repository-comparison session disposal completion.",
+        reason: "Packaged Core session-disposal identity has not been observed.",
       },
       {
         scenario: "rescan cancellation counters",
-        reason:
-          "No preload API exposes progressive queue cancellation or rescan lifecycle counters.",
+        reason: "Packaged Core supersession and drain identities have not been observed.",
       },
     ],
     switchReports: [] as Array<
@@ -176,6 +187,81 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       { timeout: 90_000 },
     )
     await expect(window.locator("[data-review-global-canvas]")).toBeVisible()
+
+    const lifecycleBefore = await reviewLifecycle(window)
+    const priorSessionId = lifecycleBefore.sessions.activeSessionId
+    expect(priorSessionId).not.toBeNull()
+    const hold = await window.evaluate(async () =>
+      globalThis.window.diffDashDiagnosticsForE2e.holdNextReviewAcquisition(),
+    )
+    expect(hold.armed).toBe(true)
+    await window.keyboard.press("ControlOrMeta+r")
+    await expect
+      .poll(async () => (await reviewLifecycle(window)).acquisitions.activeOperationIds.length)
+      .toBeGreaterThan(0)
+    forwardComparison(executable, launchArguments, environment, {
+      manifest: configuration.smallFixture,
+      repository: configuration.smallFixtureRepository,
+    })
+    await waitForComparison(window, configuration.smallFixture)
+    await expect
+      .poll(async () => {
+        const lifecycle = await reviewLifecycle(window)
+        return {
+          superseded: lifecycle.acquisitions.superseded,
+          drained: lifecycle.acquisitions.drained,
+          active: lifecycle.acquisitions.activeOperationIds.length,
+        }
+      })
+      .toEqual({
+        superseded: lifecycleBefore.acquisitions.superseded + 1,
+        drained: lifecycleBefore.acquisitions.drained + 1,
+        active: 0,
+      })
+    const lifecycleAfterSupersession = await reviewLifecycle(window)
+    report.observations.supersededOperationId =
+      lifecycleAfterSupersession.acquisitions.lastSupersededOperationId
+    report.observations.drainedOperationId =
+      lifecycleAfterSupersession.acquisitions.lastDrainedOperationId
+    report.observations.acquisitionCounters = {
+      started: lifecycleAfterSupersession.acquisitions.started,
+      superseded: lifecycleAfterSupersession.acquisitions.superseded,
+      drained: lifecycleAfterSupersession.acquisitions.drained,
+    }
+    report.gates.rescanCancellation =
+      lifecycleAfterSupersession.acquisitions.lastSupersededOperationId !== null &&
+      lifecycleAfterSupersession.acquisitions.lastDrainedOperationId ===
+        lifecycleAfterSupersession.acquisitions.lastSupersededOperationId
+    if (report.gates.rescanCancellation) {
+      report.blocked = report.blocked.filter(
+        ({ scenario }) => scenario !== "rescan cancellation counters",
+      )
+    }
+
+    await expect
+      .poll(async () => {
+        const sessions = (await reviewLifecycle(window)).sessions
+        return {
+          activeChanged:
+            sessions.activeSessionId !== null && sessions.activeSessionId !== priorSessionId,
+          disposedSessionId: sessions.lastDisposedSessionId,
+        }
+      })
+      .toEqual({ activeChanged: true, disposedSessionId: priorSessionId })
+    report.observations.disposedSessionId = priorSessionId
+    report.observations.replacementSessionId = (
+      await reviewLifecycle(window)
+    ).sessions.activeSessionId
+    report.gates.disposalComplete = true
+    report.blocked = report.blocked.filter(
+      ({ scenario }) => scenario !== "foreground disposal completion",
+    )
+
+    forwardComparison(executable, launchArguments, environment, {
+      manifest: configuration.fixture,
+      repository: configuration.fixtureRepository,
+    })
+    await waitForComparison(window, configuration.fixture)
 
     const switches = configuration.profile === "full" ? 10 : 4
     const exerciseSwitch = async (index: number): Promise<void> => {
@@ -266,8 +352,8 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     rapidSwitches: true,
     coreRestart: true,
     processTeardown: true,
-    disposalComplete: false,
-    rescanCancellation: false,
+    disposalComplete: true,
+    rescanCancellation: true,
   })
 })
 
@@ -318,6 +404,9 @@ const waitForComparison = async (window: Page, fixture: FixtureManifest): Promis
     "idle",
   )
 }
+
+const reviewLifecycle = (window: Page) =>
+  window.evaluate(async () => globalThis.window.diffDashDiagnosticsForE2e.reviewLifecycle())
 
 const forwardComparison = (
   executable: string,

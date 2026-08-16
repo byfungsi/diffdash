@@ -127,6 +127,7 @@ import {
   ReviewAgentService,
 } from "./review-agent"
 import { ReviewMcpHandlers } from "./review-mcp-handlers"
+import { AgentWorkspaceResources } from "../agent-workspace-resources"
 import { OperationSnapshotReader } from "./operation-snapshot-reader"
 
 const reviewKey = ReviewKey.make(
@@ -684,6 +685,10 @@ const makeLayer = (
       },
     }),
   )
+  const workspaceResources = Layer.succeed(
+    AgentWorkspaceResources,
+    AgentWorkspaceResources.of({ protect: (_input, use) => use }),
+  )
   return ReviewAgentService.layer.pipe(
     Layer.provideMerge(persistence),
     Layer.provideMerge(registry),
@@ -693,6 +698,7 @@ const makeLayer = (
     Layer.provideMerge(mcpHandlers),
     Layer.provideMerge(worktrees),
     Layer.provideMerge(snapshotReader),
+    Layer.provideMerge(workspaceResources),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
   )
 }
