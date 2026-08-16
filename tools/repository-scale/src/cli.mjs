@@ -25,7 +25,7 @@ const execFilePromise = promisify(execFile)
 const usage = `Usage:
   pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
-  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --database=<diffdash.sqlite> --managed-root=<managed-directory> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --packaged=true --disposal-complete=true
+  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --database=<diffdash.sqlite> --snapshot-root=<diffdash.sqlite.snapshot-blocks> --spool-root=<snapshot-spools> --worktree-root=<worktree-pool> --remote-worktree-root=<remote-worktree-pool> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --artifact-digest=<sha256> --review-session-id=<id> [--bun-version=<version>] --packaged=true --disposal-complete=true
   pnpm repository-scale:evaluate -- --session=<name>
   pnpm --filter @diffdash/repository-scale smoke -- --host=<bun|utility>
   pnpm --filter @diffdash/repository-scale run -- --host=<bun|utility> --session=<name> [--manifest=<path>]
@@ -45,7 +45,13 @@ const commandOptions = {
     "packaged",
     "disposal-complete",
     "database",
-    "managed-root",
+    "snapshot-root",
+    "spool-root",
+    "worktree-root",
+    "remote-worktree-root",
+    "artifact-digest",
+    "bun-version",
+    "review-session-id",
     "duration-ms",
     "interval-ms",
     "plateau-window-ms",
@@ -171,9 +177,24 @@ const measure = async (options) => {
   }
   const packaged = requiredTrue(options, "packaged")
   const disposalComplete = requiredTrue(options, "disposal-complete")
+  const packagedArtifactDigest = required(options, "artifact-digest")
+  if (!/^[a-f0-9]{64}$/u.test(packagedArtifactDigest)) {
+    throw new Error("--artifact-digest must be a SHA-256 digest")
+  }
+  const bunVersion = options.get("bun-version") ?? null
+  if (coreHost === "bun" && !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(String(bunVersion))) {
+    throw new Error("--bun-version is required for Bun measurements")
+  }
+  if (coreHost === "utility" && bunVersion !== null) {
+    throw new Error("--bun-version applies only to Bun measurements")
+  }
+  const reviewSessionId = required(options, "review-session-id")
   const storagePaths = {
     databasePath: resolve(required(options, "database")),
-    managedRoot: resolve(required(options, "managed-root")),
+    snapshotBlocksRoot: resolve(required(options, "snapshot-root")),
+    snapshotSpoolsRoot: resolve(required(options, "spool-root")),
+    worktreePoolRoot: resolve(required(options, "worktree-root")),
+    remoteWorktreePoolRoot: resolve(required(options, "remote-worktree-root")),
   }
   const { stdout: commitOutput } = await execFilePromise("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: workspaceRoot,
@@ -210,13 +231,16 @@ const measure = async (options) => {
   const report = {
     ...measurement,
     appVersion,
+    bunVersion,
     coreHost,
+    coreIdentity: { host: coreHost, session, switchIndex, reviewSessionId },
     diffdashCommit,
     disposalComplete,
     fixtureId: fixture.id,
     fixtureManifest: fixture,
     machineProfile: captureMachineProfile(),
     packaged,
+    packagedArtifactDigest,
     scenario,
     session,
     storage: {

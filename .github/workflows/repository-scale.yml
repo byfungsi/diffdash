@@ -59,22 +59,23 @@ jobs:
           --host=${{ matrix.host }}
           --session=ubuntu-x64-${{ matrix.host }}-${{ github.run_id }}
 
-      - name: Upload path-free summary
+      - name: Upload raw and aggregate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: repository-scale-${{ matrix.host }}-summary
-          path: tools/repository-scale/.cache/orchestration/*/summary.json
+          name: repository-scale-${{ matrix.host }}-evidence
+          path: |
+            tools/repository-scale/.cache/orchestration/*/raw.json
+            tools/repository-scale/.cache/orchestration/*/summary.json
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload private raw evidence
+      - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: repository-scale-${{ matrix.host }}-failure-evidence
+          name: repository-scale-${{ matrix.host }}-failure-diagnostics
           path: |
-            tools/repository-scale/.cache/orchestration/*/raw.json
             packages/e2e/test-results
             packages/e2e/playwright-report
           if-no-files-found: ignore

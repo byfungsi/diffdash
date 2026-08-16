@@ -20,21 +20,41 @@ import {
 test("reports database, managed, and free-space bytes without paths", async () => {
   const root = await mkdtemp(join(tmpdir(), "diffdash-scale-storage-"))
   try {
-    const managedRoot = join(root, "managed")
-    const nested = join(managedRoot, "nested")
+    const snapshotBlocksRoot = join(root, "diffdash.sqlite.snapshot-blocks")
+    const snapshotSpoolsRoot = join(snapshotBlocksRoot, "spools")
+    const worktreePoolRoot = join(root, "worktree-pool")
+    const remoteWorktreePoolRoot = join(root, "remote-worktree-pool")
     const databasePath = join(root, "diffdash.sqlite")
-    await mkdir(nested, { recursive: true })
+    await Promise.all([
+      mkdir(snapshotSpoolsRoot, { recursive: true }),
+      mkdir(worktreePoolRoot, { recursive: true }),
+      mkdir(remoteWorktreePoolRoot, { recursive: true }),
+    ])
     await Promise.all([
       writeFile(databasePath, Buffer.alloc(17)),
       writeFile(`${databasePath}-wal`, Buffer.alloc(19)),
       writeFile(`${databasePath}-shm`, Buffer.alloc(29)),
-      writeFile(join(managedRoot, "block"), Buffer.alloc(23)),
-      writeFile(join(nested, "spool"), Buffer.alloc(31)),
+      writeFile(join(snapshotBlocksRoot, "block"), Buffer.alloc(23)),
+      writeFile(join(snapshotSpoolsRoot, "spool"), Buffer.alloc(31)),
+      writeFile(join(worktreePoolRoot, "checkout"), Buffer.alloc(37)),
+      writeFile(join(remoteWorktreePoolRoot, "checkout"), Buffer.alloc(41)),
     ])
 
-    const measured = await measureManagedStorage({ databasePath, managedRoot })
+    const measured = await measureManagedStorage({
+      databasePath,
+      snapshotBlocksRoot,
+      snapshotSpoolsRoot,
+      worktreePoolRoot,
+      remoteWorktreePoolRoot,
+    })
     assert.equal(measured.databaseBytes, 65)
-    assert.equal(measured.managedBytes, 54)
+    assert.equal(measured.managedBytes, 132)
+    assert.deepEqual(measured.managedRoots, {
+      snapshotBlockBytes: 23,
+      snapshotSpoolBytes: 31,
+      worktreePoolBytes: 37,
+      remoteWorktreePoolBytes: 41,
+    })
     assert.ok(measured.filesystemFreeBytes > 0)
     assert.ok(measured.filesystemTotalBytes >= measured.filesystemFreeBytes)
     assert.equal(JSON.stringify(measured).includes(root), false)
@@ -208,7 +228,14 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   const reports = Array.from({ length: 10 }, (_, index) => ({
     version: 2,
     appVersion: "0.8.1",
+    bunVersion: null,
     coreHost: "utility",
+    coreIdentity: {
+      host: "utility",
+      session: "baseline",
+      switchIndex: index + 1,
+      reviewSessionId: `review:${index + 1}`,
+    },
     diffdashCommit: "c".repeat(40),
     disposalComplete: true,
     fixtureId: "linux-test",
@@ -216,22 +243,38 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
       id: "linux-test",
       baseSha: "a".repeat(40),
       headSha: "b".repeat(40),
+      revisionSha: "d".repeat(40),
+      version: 2,
+      kind: "synthetic-repository-scale",
     },
     session: "baseline",
     switchIndex: index + 1,
     platform: "linux",
     packaged: true,
+    packagedArtifactDigest: "e".repeat(64),
     scenario: index % 2 === 0 ? "pathological" : "small",
     storage: {
       before: {
         databaseBytes: 1_000,
         managedBytes: 2_000,
+        managedRoots: {
+          snapshotBlockBytes: 500,
+          snapshotSpoolBytes: 500,
+          worktreePoolBytes: 500,
+          remoteWorktreePoolBytes: 500,
+        },
         filesystemFreeBytes: 10_000,
         filesystemTotalBytes: 20_000,
       },
       after: {
         databaseBytes: 1_010,
         managedBytes: 2_020,
+        managedRoots: {
+          snapshotBlockBytes: 510,
+          snapshotSpoolBytes: 500,
+          worktreePoolBytes: 500,
+          remoteWorktreePoolBytes: 510,
+        },
         filesystemFreeBytes: 9_970,
         filesystemTotalBytes: 20_000,
       },
@@ -248,6 +291,29 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
       nodeVersion: "v22.20.0",
     },
     totalFinalRssBytes: 500 * 1024 * 1024,
+    final: Object.fromEntries(
+      ["electron", "renderer", "coreWorker", "child"].map((role) => [
+        role,
+        {
+          processCount: role === "child" ? 0 : 1,
+          rssBytes: role === "child" ? 0 : 100,
+          privateBytes: role === "child" ? null : 80,
+          swapBytes: role === "child" ? null : 0,
+        },
+      ]),
+    ),
+    peaks: Object.fromEntries(
+      ["electron", "renderer", "coreWorker", "child"].map((role) => [
+        role,
+        {
+          rssBytes: role === "child" ? null : 100,
+          privateBytes: role === "child" ? null : 80,
+          swapBytes: role === "child" ? null : 0,
+          readBytes: role === "child" ? null : 10,
+          writeBytes: role === "child" ? null : 20,
+        },
+      ]),
+    ),
     durationMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
     intervalMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
     steadyWindow: {
@@ -258,10 +324,13 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   }))
   assert.deepEqual(validateSwitchReports(reports, "baseline"), {
     appVersion: "0.8.1",
+    bunVersion: null,
     coreHost: "utility",
     diffdashCommit: "c".repeat(40),
     fixtureId: "linux-test",
     machineProfile: reports[0].machineProfile,
+    packagedArtifactDigest: "e".repeat(64),
+    fixtureManifest: reports[0].fixtureManifest,
     platform: "linux",
   })
   assert.throws(
@@ -322,5 +391,33 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   assert.throws(
     () => validateSwitchReports(reports.with(3, { ...reports[3], storage: null }), "baseline"),
     /incomplete managed storage/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(6, {
+          ...reports[6],
+          final: {
+            ...reports[6].final,
+            renderer: { ...reports[6].final.renderer, privateBytes: null },
+          },
+        }),
+        "baseline",
+      ),
+    /incomplete Linux renderer process evidence/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(1, {
+          ...reports[1],
+          peaks: {
+            ...reports[1].peaks,
+            coreWorker: { ...reports[1].peaks.coreWorker, readBytes: null },
+          },
+        }),
+        "baseline",
+      ),
+    /incomplete Linux coreWorker process evidence/,
   )
 })

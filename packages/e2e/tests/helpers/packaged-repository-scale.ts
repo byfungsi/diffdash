@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
 /** Supported standalone Core hosts for packaged repository-scale runs. */
 export type RepositoryScaleCoreHost = "bun" | "utility"
@@ -20,6 +20,15 @@ export const packagedE2eExecutable = (): string => {
     return join(dist, output, "DiffDash.exe")
   }
   throw new Error(`Unsupported packaged E2E platform: ${process.platform}`)
+}
+
+/** Resolves the immutable ASAR payload used to identify one packaged evidence run. */
+export const packagedE2eArtifact = (): string => {
+  const executable = packagedE2eExecutable()
+  if (process.platform === "darwin") {
+    return join(resolve(dirname(executable), "../.."), "Resources", "app.asar")
+  }
+  return join(dirname(executable), "resources", "app.asar")
 }
 
 type ProcessRow = {

@@ -15,18 +15,21 @@ process samples remain ignored under `tools/repository-scale/.cache/`.
    revision switching.
 4. Alternate the pathological and small review ten times. Run `pnpm repository-scale:measure` on
    Linux with the pinned manifest, selected Bun or utility host, active scenario, app version,
-   packaged confirmation, and foreground-disposal confirmation; the first three are warm-up and each
-   report uses the fixed 60-second duration, 500 ms interval, 10-second steady window, and five-percent
-   steady-window threshold.
+   packaged confirmation, packaged artifact digest, Core review-session identity, and
+   foreground-disposal confirmation; Bun runs also record its runtime version. The first three are
+   warm-up and each report uses the fixed 60-second duration, 500 ms interval, 10-second steady window,
+   and five-percent steady-window threshold.
 5. Run `pnpm repository-scale:evaluate` for the session. The seven evaluated samples must vary by no
    more than the greater of five percent or 32 MiB, the final sample cannot exceed the first by that
    tolerance, and monotonic growth fails regardless.
 6. Copy only reviewed aggregate values into a dated section below. Record the DiffDash commit,
    fixture ID, operating system, architecture, physical memory, scenario, and pass/fail guardrails.
 
-Linux `/proc` measurements include RSS, anonymous/private RSS, swap, and disk I/O. Every platform
-also records SQLite bytes, managed-resource bytes, and filesystem free-space deltas without retaining
-their paths. macOS process measurements provide RSS only. Renderer-owned DOM, frame, highlight, and
+Promoted Linux `/proc` measurements require RSS, private RSS, swap, and disk I/O for the Electron,
+renderer, and Core/worker roles. Every platform also records SQLite bytes, snapshot block and spool
+bytes, local and remote worktree-pool bytes, and filesystem free-space deltas without retaining their
+paths. macOS process measurements provide RSS only and cannot be promoted as the full Linux run.
+Renderer-owned DOM, frame, highlight, and
 reconciliation observations come from browser instrumentation; Core queue, reservation, cache, and
 worker counters must use the same dated evidence section rather than entering telemetry.
 

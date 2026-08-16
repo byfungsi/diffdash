@@ -5,6 +5,17 @@ export const REPOSITORY_SCALE_MEASUREMENT_POLICY: {
   readonly plateauThreshold: number
 }
 
+export type MachineProfile = {
+  readonly platform: NodeJS.Platform
+  readonly architecture: string
+  readonly operatingSystemRelease: string
+  readonly logicalCpuCount: number
+  readonly physicalMemoryBytes: number
+  readonly nodeVersion: string
+}
+
+export const captureMachineProfile: () => MachineProfile
+
 export type ProcessRoleMeasurement = {
   readonly processCount: number
   readonly rssBytes: number
@@ -57,6 +68,7 @@ export type ProcessTreeMeasurement = {
   }
   readonly final: {
     readonly [Role in keyof ProcessRoleTotals]: {
+      readonly processCount: number
       readonly rssBytes: number
       readonly privateBytes: number | null
       readonly swapBytes: number | null
@@ -75,10 +87,19 @@ export type ProcessTreeMeasurement = {
 export const captureProcessTree: (rootPid: number) => Promise<ProcessTreeCapture>
 export const measureManagedStorage: (paths: {
   readonly databasePath: string
-  readonly managedRoot: string
+  readonly snapshotBlocksRoot: string
+  readonly snapshotSpoolsRoot: string
+  readonly worktreePoolRoot: string
+  readonly remoteWorktreePoolRoot: string
 }) => Promise<{
   readonly databaseBytes: number
   readonly managedBytes: number
+  readonly managedRoots: {
+    readonly snapshotBlockBytes: number
+    readonly snapshotSpoolBytes: number
+    readonly worktreePoolBytes: number
+    readonly remoteWorktreePoolBytes: number
+  }
   readonly filesystemFreeBytes: number
   readonly filesystemTotalBytes: number
 }>

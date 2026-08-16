@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { lstat, readFile, readdir, statfs } from "node:fs/promises"
 import { arch, cpus, platform as osPlatform, release, totalmem } from "node:os"
+import { dirname } from "node:path"
 import { promisify } from "node:util"
 
 const execFilePromise = promisify(execFile)
@@ -26,19 +27,51 @@ export const captureMachineProfile = () => ({
 })
 
 /** Captures path-free disk ownership and capacity for one repository-scale sample. */
-export const measureManagedStorage = async ({ databasePath, managedRoot }) => {
-  const [databaseBytes, managedBytes, filesystem] = await Promise.all([
+export const measureManagedStorage = async ({
+  databasePath,
+  snapshotBlocksRoot,
+  snapshotSpoolsRoot,
+  worktreePoolRoot,
+  remoteWorktreePoolRoot,
+}) => {
+  const [
+    databaseBytes,
+    snapshotTreeBytes,
+    snapshotSpoolBytes,
+    worktreePoolBytes,
+    remoteWorktreePoolBytes,
+    filesystem,
+  ] = await Promise.all([
     databaseFamilyBytes(databasePath),
-    treeBytes(managedRoot),
-    statfs(managedRoot, { bigint: true }),
+    optionalTreeBytes(snapshotBlocksRoot),
+    optionalTreeBytes(snapshotSpoolsRoot),
+    optionalTreeBytes(worktreePoolRoot),
+    optionalTreeBytes(remoteWorktreePoolRoot),
+    statfs(dirname(databasePath), { bigint: true }),
   ])
+  if (snapshotSpoolBytes > snapshotTreeBytes) {
+    throw new Error("Snapshot spool bytes exceed the owning snapshot root")
+  }
+  const snapshotBlockBytes = snapshotTreeBytes - snapshotSpoolBytes
   return {
     databaseBytes,
-    managedBytes,
+    managedBytes: snapshotTreeBytes + worktreePoolBytes + remoteWorktreePoolBytes,
+    managedRoots: {
+      snapshotBlockBytes,
+      snapshotSpoolBytes,
+      worktreePoolBytes,
+      remoteWorktreePoolBytes,
+    },
     filesystemFreeBytes: safeBytes(filesystem.bavail * filesystem.bsize),
     filesystemTotalBytes: safeBytes(filesystem.blocks * filesystem.bsize),
   }
 }
+
+const optionalTreeBytes = (path) =>
+  treeBytes(path).catch((error) => {
+    if (error?.code === "ENOENT") return 0
+    throw error
+  })
 
 const databaseFamilyBytes = async (databasePath) => {
   const sizes = await Promise.all([
@@ -93,6 +126,8 @@ const safeBytes = (value) => {
 
 const isNonEmptyString = (value) =>
   Object.prototype.toString.call(value) === "[object String]" && value.length > 0
+
+const isLifecycleIdentity = (value) => isNonEmptyString(value) && value.length <= 200
 
 const kilobytes = (value) => (value === null ? null : value * 1024)
 
@@ -314,6 +349,9 @@ export const validateSwitchReports = (reports, session) => {
   const machineProfile = reports[0]?.machineProfile
   const appVersion = reports[0]?.appVersion
   const coreHost = reports[0]?.coreHost
+  const fixtureManifest = reports[0]?.fixtureManifest
+  const packagedArtifactDigest = reports[0]?.packagedArtifactDigest
+  const bunVersion = reports[0]?.bunVersion
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(fixtureId))) {
     throw new Error("Switch reports must contain a valid fixture identity")
   }
@@ -330,6 +368,15 @@ export const validateSwitchReports = (reports, session) => {
   if (coreHost !== "bun" && coreHost !== "utility") {
     throw new Error("Switch reports must identify the selected Core host")
   }
+  if (!/^[a-f0-9]{64}$/u.test(String(packagedArtifactDigest))) {
+    throw new Error("Switch reports must identify the packaged artifact digest")
+  }
+  if (coreHost === "bun" && !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(String(bunVersion))) {
+    throw new Error("Bun switch reports must contain the selected runtime version")
+  }
+  if (coreHost === "utility" && bunVersion !== null) {
+    throw new Error("Utility switch reports must not claim a Bun runtime version")
+  }
   if (
     machineProfile?.platform !== "linux" ||
     !isNonEmptyString(machineProfile.architecture) ||
@@ -343,6 +390,7 @@ export const validateSwitchReports = (reports, session) => {
     throw new Error("Switch reports must contain a complete Linux machine profile")
   }
   const encodedMachineProfile = JSON.stringify(machineProfile)
+  const encodedFixtureManifest = JSON.stringify(fixtureManifest)
   reports.forEach((report, index) => {
     if (report.version !== 2)
       throw new Error(`Switch ${index + 1} has an unsupported report version`)
@@ -360,6 +408,10 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error("All switch reports must use the same app version")
     if (report.coreHost !== coreHost)
       throw new Error("All switch reports must use the same Core host")
+    if (report.packagedArtifactDigest !== packagedArtifactDigest)
+      throw new Error("All switch reports must use the same packaged artifact")
+    if (report.bunVersion !== bunVersion)
+      throw new Error("All switch reports must use the same runtime version")
     if (report.packaged !== true)
       throw new Error(`Switch ${index + 1} did not use a packaged application`)
     if (report.disposalComplete !== true)
@@ -373,10 +425,16 @@ export const validateSwitchReports = (reports, session) => {
     if (JSON.stringify(report.machineProfile) !== encodedMachineProfile) {
       throw new Error("All switch reports must use the same machine profile")
     }
+    if (JSON.stringify(report.fixtureManifest) !== encodedFixtureManifest) {
+      throw new Error("All switch reports must use the same fixture manifest")
+    }
     if (
       report.fixtureManifest?.id !== fixtureId ||
       !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.baseSha)) ||
-      !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.headSha))
+      !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.headSha)) ||
+      !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.revisionSha)) ||
+      report.fixtureManifest?.version !== 2 ||
+      report.fixtureManifest?.kind !== "synthetic-repository-scale"
     ) {
       throw new Error(`Switch ${index + 1} is not pinned to its fixture manifest`)
     }
@@ -394,8 +452,46 @@ export const validateSwitchReports = (reports, session) => {
     if (!Number.isFinite(report.totalFinalRssBytes) || report.totalFinalRssBytes <= 0) {
       throw new Error(`Switch ${index + 1} has invalid final memory`)
     }
+    if (
+      report.coreIdentity?.host !== coreHost ||
+      report.coreIdentity?.session !== session ||
+      report.coreIdentity?.switchIndex !== index + 1 ||
+      !isLifecycleIdentity(report.coreIdentity?.reviewSessionId)
+    ) {
+      throw new Error(`Switch ${index + 1} has incomplete Core host/session/switch identity`)
+    }
+    for (const role of ["electron", "renderer", "coreWorker"]) {
+      const sample = report.final?.[role]
+      const peak = report.peaks?.[role]
+      if (
+        !Number.isSafeInteger(sample?.processCount) ||
+        sample.processCount < 1 ||
+        !Number.isSafeInteger(sample.rssBytes) ||
+        sample.rssBytes <= 0 ||
+        !Number.isSafeInteger(sample.privateBytes) ||
+        sample.privateBytes < 0 ||
+        !Number.isSafeInteger(sample.swapBytes) ||
+        sample.swapBytes < 0 ||
+        !Number.isSafeInteger(peak?.readBytes) ||
+        peak.readBytes < 0 ||
+        !Number.isSafeInteger(peak?.writeBytes) ||
+        peak.writeBytes < 0
+      ) {
+        throw new Error(`Switch ${index + 1} has incomplete Linux ${role} process evidence`)
+      }
+    }
   })
-  return { appVersion, coreHost, diffdashCommit, fixtureId, machineProfile, platform }
+  return {
+    appVersion,
+    bunVersion,
+    coreHost,
+    diffdashCommit,
+    fixtureId,
+    fixtureManifest,
+    machineProfile,
+    packagedArtifactDigest,
+    platform,
+  }
 }
 
 const validStorageMeasurement = (storage) => {
@@ -407,6 +503,17 @@ const validStorageMeasurement = (storage) => {
         snapshot.databaseBytes >= 0 &&
         Number.isSafeInteger(snapshot.managedBytes) &&
         snapshot.managedBytes >= 0 &&
+        [
+          snapshot?.managedRoots?.snapshotBlockBytes,
+          snapshot?.managedRoots?.snapshotSpoolBytes,
+          snapshot?.managedRoots?.worktreePoolBytes,
+          snapshot?.managedRoots?.remoteWorktreePoolBytes,
+        ].every((value) => Number.isSafeInteger(value) && value >= 0) &&
+        snapshot.managedBytes ===
+          snapshot.managedRoots.snapshotBlockBytes +
+            snapshot.managedRoots.snapshotSpoolBytes +
+            snapshot.managedRoots.worktreePoolBytes +
+            snapshot.managedRoots.remoteWorktreePoolBytes &&
         Number.isSafeInteger(snapshot.filesystemFreeBytes) &&
         snapshot.filesystemFreeBytes >= 0 &&
         Number.isSafeInteger(snapshot.filesystemTotalBytes) &&
@@ -481,6 +588,7 @@ export const measureProcessTree = async ({
       roles.map((role) => [
         role,
         {
+          processCount: finalSample.byRole[role].processCount,
           rssBytes: finalSample.byRole[role].rssBytes,
           privateBytes: finalSample.byRole[role].privateBytes,
           swapBytes: finalSample.byRole[role].swapBytes,

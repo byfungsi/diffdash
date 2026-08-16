@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import { evaluateSwitchMemoryPlateau } from "./process-metrics.mjs"
+import { evaluateSwitchMemoryPlateau, validateSwitchReports } from "./process-metrics.mjs"
 import { generateSyntheticFixture, repositoryScaleProfile } from "./synthetic-fixture.mjs"
 
 const HOSTS = new Set(["bun", "utility"])
@@ -50,6 +50,37 @@ const isLifecycleIdentity = (value) =>
   Object.prototype.toString.call(value) === "[object String]" &&
   value.length > 0 &&
   value.length <= 200
+
+const validateProvenance = (report) => {
+  const provenance = report.provenance
+  if (
+    !isRecord(provenance) ||
+    !SHA.test(String(provenance.diffdashCommit)) ||
+    !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(String(provenance.appVersion)) ||
+    provenance.packaged !== true ||
+    !/^[a-f0-9]{64}$/u.test(String(provenance.packagedArtifactDigest)) ||
+    provenance.core?.host !== report.host ||
+    provenance.core?.session !== report.session ||
+    (report.host === "bun"
+      ? !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(String(provenance.core?.bunVersion))
+      : provenance.core?.bunVersion !== null) ||
+    provenance.fixtureManifest?.id !== report.fixture?.id ||
+    provenance.fixtureManifest?.baseSha !== report.fixture?.baseSha ||
+    provenance.fixtureManifest?.headSha !== report.fixture?.headSha ||
+    !isRecord(provenance.machineProfile) ||
+    !isLifecycleIdentity(provenance.machineProfile.platform) ||
+    !isLifecycleIdentity(provenance.machineProfile.architecture) ||
+    !isLifecycleIdentity(provenance.machineProfile.operatingSystemRelease) ||
+    !Number.isSafeInteger(provenance.machineProfile.logicalCpuCount) ||
+    provenance.machineProfile.logicalCpuCount <= 0 ||
+    !Number.isSafeInteger(provenance.machineProfile.physicalMemoryBytes) ||
+    provenance.machineProfile.physicalMemoryBytes <= 0 ||
+    !/^v\d+/u.test(String(provenance.machineProfile.nodeVersion))
+  ) {
+    throw new Error("Orchestration report has incomplete or inconsistent provenance")
+  }
+  return provenance
+}
 
 /** Rejects unpinned or incorrectly-sized manifests before a full evidence run starts. */
 export const validateFullFixtureManifest = (manifest) => {
@@ -116,6 +147,7 @@ const privacyKeys = new Set([
 /** Produces a path-free aggregate and fails objective scenario gates. */
 export const summarizeOrchestrationReport = (report) => {
   if (!isRecord(report) || report.version !== 1) throw new Error("Unsupported orchestration report")
+  const provenance = validateProvenance(report)
   const requiredGates = [
     "packaged",
     "hostSelected",
@@ -154,9 +186,24 @@ export const summarizeOrchestrationReport = (report) => {
   }
   let memory = null
   if (report.profile === "full") {
+    validateFullFixtureManifest(provenance.fixtureManifest)
     if (!Array.isArray(report.switchReports) || report.switchReports.length !== 10) {
       failedGates.push("tenSwitchMeasurements")
     } else {
+      const switchProvenance = validateSwitchReports(report.switchReports, report.session)
+      if (
+        switchProvenance.appVersion !== provenance.appVersion ||
+        switchProvenance.bunVersion !== provenance.core.bunVersion ||
+        switchProvenance.coreHost !== provenance.core.host ||
+        switchProvenance.diffdashCommit !== provenance.diffdashCommit ||
+        switchProvenance.packagedArtifactDigest !== provenance.packagedArtifactDigest ||
+        JSON.stringify(switchProvenance.fixtureManifest) !==
+          JSON.stringify(provenance.fixtureManifest) ||
+        JSON.stringify(switchProvenance.machineProfile) !==
+          JSON.stringify(provenance.machineProfile)
+      ) {
+        throw new Error("Switch measurements do not match orchestration provenance")
+      }
       memory = evaluateSwitchMemoryPlateau(report.switchReports)
       if (!memory.passed) failedGates.push("memoryPlateau")
       if (report.switchReports.some((entry) => entry.steadyWindow?.reached !== true)) {
@@ -176,6 +223,7 @@ export const summarizeOrchestrationReport = (report) => {
       changedFiles: report.fixture?.changedFiles,
       addedRows: report.fixture?.addedRows,
     },
+    provenance,
     gates: Object.fromEntries(requiredGates.map((gate) => [gate, report.gates?.[gate] === true])),
     observations: {
       maximumMountedRows: report.observations?.maximumMountedRows ?? null,
@@ -187,6 +235,18 @@ export const summarizeOrchestrationReport = (report) => {
       acquisitionCounters: report.observations?.acquisitionCounters ?? null,
     },
     blocked: Array.isArray(report.blocked) ? report.blocked : [],
+    switchMeasurements: Array.isArray(report.switchReports)
+      ? report.switchReports.map((entry) => ({
+          coreIdentity: entry.coreIdentity,
+          scenario: entry.scenario,
+          peaks: entry.peaks,
+          final: entry.final,
+          totalPeakRssBytes: entry.totalPeakRssBytes,
+          totalFinalRssBytes: entry.totalFinalRssBytes,
+          steadyWindow: entry.steadyWindow,
+          storage: entry.storage,
+        }))
+      : [],
     memory,
     passed: failedGates.length === 0,
     failedGates,
@@ -239,7 +299,7 @@ const ensureFixture = async ({ cacheDirectory, manifest, profile }) => {
   })
 }
 
-/** Builds and runs the packaged deterministic scenario, then writes only a path-free summary. */
+/** Builds and runs the packaged deterministic scenario, then writes raw and path-free evidence. */
 export const runRepositoryScaleOrchestration = async ({
   cacheDirectory,
   e2eDirectory,
@@ -257,6 +317,11 @@ export const runRepositoryScaleOrchestration = async ({
   const rawReportPath = resolve(reportDirectory, "raw.json")
   const summaryPath = resolve(reportDirectory, "summary.json")
   await mkdir(reportDirectory, { recursive: true })
+  const diffdashCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+    cwd: resolve(e2eDirectory, "../.."),
+    encoding: "utf8",
+  }).trim()
+  if (!SHA.test(diffdashCommit)) throw new Error("Unable to resolve the exact DiffDash commit")
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
   await runOwnedCommand(pnpm, ["package:e2e"], { cwd: e2eDirectory })
   let executionError = null
@@ -275,6 +340,7 @@ export const runRepositoryScaleOrchestration = async ({
         env: {
           ...process.env,
           DIFFDASH_REPOSITORY_SCALE_HOST: host,
+          DIFFDASH_REPOSITORY_SCALE_COMMIT: diffdashCommit,
           DIFFDASH_REPOSITORY_SCALE_MANIFEST: fixture.manifestPath,
           DIFFDASH_REPOSITORY_SCALE_PROFILE: profile,
           DIFFDASH_REPOSITORY_SCALE_RAW_REPORT: rawReportPath,

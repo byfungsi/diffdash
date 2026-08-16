@@ -25,6 +25,29 @@ const passingReport = () => ({
     changedFiles: 64,
     addedRows: 20_000,
   },
+  provenance: {
+    diffdashCommit: "c".repeat(40),
+    appVersion: "0.8.1",
+    machineProfile: {
+      platform: process.platform,
+      architecture: process.arch,
+      operatingSystemRelease: "test-release",
+      logicalCpuCount: 8,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      nodeVersion: process.version,
+    },
+    fixtureManifest: {
+      version: 2,
+      kind: "synthetic-repository-scale",
+      id: "pathological-safe",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      revisionSha: "d".repeat(40),
+    },
+    packaged: true,
+    packagedArtifactDigest: "e".repeat(64),
+    core: { host: "utility", session: "smoke-utility", bunVersion: null },
+  },
   gates: {
     packaged: true,
     hostSelected: true,
@@ -96,6 +119,7 @@ test("accepts only the exact generated full fixture profile", () => {
 test("emits path-free summaries and rejects path-bearing summary data", () => {
   const summary = summarizeOrchestrationReport(passingReport())
   assert.equal(summary.passed, true)
+  assert.equal(summary.provenance.packagedArtifactDigest, "e".repeat(64))
   assert.equal(JSON.stringify(summary).includes(process.cwd()), false)
   assert.throws(
     () => assertPathFreeSummary({ ...summary, rawReportPath: "/private/results/raw.json" }),
@@ -105,6 +129,63 @@ test("emits path-free summaries and rejects path-bearing summary data", () => {
     () => assertPathFreeSummary({ ...summary, blocked: [{ scenario: "/private/repo" }] }),
     /absolute path/,
   )
+})
+
+test("rejects incomplete packaged provenance", () => {
+  const report = passingReport()
+  report.provenance.packagedArtifactDigest = null
+  assert.throws(() => summarizeOrchestrationReport(report), /incomplete or inconsistent provenance/)
+})
+
+test("preserves path-free per-role process and managed-root observations", () => {
+  const report = passingReport()
+  const measurement = {
+    coreIdentity: {
+      host: "utility",
+      session: "smoke-utility",
+      switchIndex: 1,
+      reviewSessionId: "review:one",
+    },
+    scenario: "pathological",
+    peaks: {
+      electron: {
+        rssBytes: 100,
+        privateBytes: 80,
+        swapBytes: 0,
+        readBytes: 20,
+        writeBytes: 30,
+      },
+    },
+    final: { electron: { processCount: 1, rssBytes: 90, privateBytes: 70, swapBytes: 0 } },
+    totalPeakRssBytes: 100,
+    totalFinalRssBytes: 90,
+    steadyWindow: { reached: true },
+    storage: {
+      before: {
+        databaseBytes: 10,
+        managedBytes: 20,
+        managedRoots: {
+          snapshotBlockBytes: 5,
+          snapshotSpoolBytes: 5,
+          worktreePoolBytes: 5,
+          remoteWorktreePoolBytes: 5,
+        },
+      },
+      after: {
+        databaseBytes: 11,
+        managedBytes: 21,
+        managedRoots: {
+          snapshotBlockBytes: 6,
+          snapshotSpoolBytes: 5,
+          worktreePoolBytes: 5,
+          remoteWorktreePoolBytes: 5,
+        },
+      },
+    },
+  }
+  report.switchReports = [measurement]
+
+  assert.deepEqual(summarizeOrchestrationReport(report).switchMeasurements, [measurement])
 })
 
 test("fails nonzero-worthy objective gates without inventing measurements", () => {

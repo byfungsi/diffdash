@@ -46,23 +46,31 @@ pnpm repository-scale:measure -- \
   --pid=<pid> \
   --manifest=tools/repository-scale/.cache/fixtures/<fixture-id>/manifest.json \
   --database=/path/to/user-data/diffdash.sqlite \
-  --managed-root=/path/to/user-data/managed \
+  --snapshot-root=/path/to/user-data/diffdash.sqlite.snapshot-blocks \
+  --spool-root=/path/to/user-data/diffdash.sqlite.snapshot-blocks/spools \
+  --worktree-root=/path/to/home/.diffdash/worktree-pool \
+  --remote-worktree-root=/path/to/home/.diffdash/remote-worktree-pool \
   --session=linux-baseline \
   --switch=1 \
   --host=utility \
   --scenario=pathological \
   --app-version=0.8.1 \
+  --artifact-digest=<packaged-app-asar-sha256> \
+  --review-session-id=<active-core-review-session-id> \
   --packaged=true \
   --disposal-complete=true
 ```
 
 The manifest pins every report to the exact fixture ID and base/head revisions. Reports also record
 the exact DiffDash commit and a source-safe machine profile; all ten switches must use identical
-provenance. Reports must alternate pathological and small reviews and are rejected unless the
-packaged app has completed foreground disposal. The JSON report contains no command lines or
-repository paths. It records peak RSS by Electron, renderer, Core/worker, and child ownership. Linux
-also reports exact private RSS, swap, and benchmark I/O deltas from `/proc`; SQLite bytes,
-managed-resource bytes, and filesystem free-space deltas are recorded before and after every sample.
+provenance, packaged artifact digest, and Core host/session/switch identity. Bun reports additionally
+record the selected Bun version. Reports must alternate pathological and small reviews and are
+rejected unless the packaged app has completed foreground disposal. The JSON report contains no
+command lines or repository paths. It records peak RSS by Electron, renderer, Core/worker, and child
+ownership. Linux
+also requires exact private RSS, swap, and benchmark I/O deltas from `/proc` for Electron, renderer,
+and Core/worker roles. SQLite bytes, snapshot block bytes, spool bytes, local and remote worktree-pool
+bytes, and filesystem free-space deltas are recorded before and after every sample.
 Unsupported macOS process fields remain `null`. Each sample records a final ten-second steady window,
 but the switch gate is authoritative. After switch ten, evaluate the session:
 
@@ -97,8 +105,6 @@ Core host process, exercise progressive first/far ranges, diff search, reload, r
 switches, Core restart, and process teardown. Full runs directly use the fixed process/storage
 measurement policy for ten alternating pathological/small switches. Objective gate failures exit
 nonzero. Raw Playwright and measurement artifacts remain ignored under `.cache/orchestration`; the
-adjacent `summary.json` is path-free but remains local until reviewed.
-
-The current preload bridge does not expose foreground comparison-session disposal completion or
-progressive queue cancellation counters. Reports list these scenarios as blocked and do not claim
-that they were measured.
+adjacent path-free `summary.json` retains per-switch process-role and storage aggregates. The evidence
+workflow uploads both files on successful and failed runs, while failure-only Playwright diagnostics
+use a shorter retention period.

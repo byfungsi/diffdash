@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import {
@@ -10,6 +11,7 @@ import {
 } from "@playwright/test"
 import {
   REPOSITORY_SCALE_MEASUREMENT_POLICY,
+  captureMachineProfile,
   captureProcessTree,
   measureManagedStorage,
   measureProcessTree,
@@ -18,6 +20,7 @@ import {
 import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
 import {
   coreHostProcessIds,
+  packagedE2eArtifact,
   packagedE2eExecutable,
   processIsAlive,
   type RepositoryScaleCoreHost,
@@ -27,6 +30,9 @@ type FixtureManifest = {
   readonly id: string
   readonly baseSha: string
   readonly headSha: string
+  readonly revisionSha: string
+  readonly version: number
+  readonly kind: string
   readonly profile: { readonly fileCount: number }
   readonly scale: { readonly changedFiles: number; readonly addedRows: number }
   readonly scenarios: { readonly broadSearch: string }
@@ -36,11 +42,16 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
   const configuration = await readConfiguration()
   test.setTimeout(configuration.profile === "full" ? 20 * 60_000 : 3 * 60_000)
   const userData = join(dirname(configuration.rawReport), "user-data")
+  const homeDirectory = join(dirname(configuration.rawReport), "home")
   const xdgConfigHome = join(dirname(configuration.rawReport), "xdg-config")
-  const managedRoot = join(userData, "managed")
+  const databasePath = join(userData, "diffdash.sqlite")
+  const snapshotBlocksRoot = `${databasePath}.snapshot-blocks`
+  const snapshotSpoolsRoot = join(snapshotBlocksRoot, "spools")
+  const worktreePoolRoot = join(homeDirectory, ".diffdash", "worktree-pool")
+  const remoteWorktreePoolRoot = join(homeDirectory, ".diffdash", "remote-worktree-pool")
   await Promise.all([
     mkdir(userData, { recursive: true }),
-    mkdir(managedRoot, { recursive: true }),
+    mkdir(homeDirectory, { recursive: true }),
     mkdir(join(xdgConfigHome, "diffdash"), { recursive: true }),
   ])
   await writeFile(
@@ -56,6 +67,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     DIFFDASH_E2E_DISABLE_UPDATES: "1",
     DIFFDASH_E2E_FAKE_AGENT_PROVIDER: "1",
     DIFFDASH_E2E_HIDDEN: "1",
+    HOME: homeDirectory,
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const launchArguments = [`--user-data-dir=${userData}`]
@@ -70,6 +82,24 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       headSha: configuration.fixture.headSha,
       changedFiles: configuration.fixture.scale.changedFiles,
       addedRows: configuration.fixture.scale.addedRows,
+    },
+    provenance: {
+      diffdashCommit: configuration.diffdashCommit,
+      appVersion: "",
+      machineProfile: captureMachineProfile(),
+      fixtureManifest: configuration.fixture,
+      packaged: false,
+      packagedArtifactDigest: createHash("sha256")
+        .update(await readFile(packagedE2eArtifact()))
+        .digest("hex"),
+      core: {
+        host: configuration.host,
+        session: configuration.session,
+        bunVersion:
+          configuration.host === "bun"
+            ? execFileSync("bun", ["--version"], { encoding: "utf8" }).trim()
+            : null,
+      },
     },
     gates: {
       packaged: false,
@@ -111,6 +141,24 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     switchReports: [] as Array<
       ProcessTreeMeasurement & {
         readonly scenario: "pathological" | "small"
+        readonly appVersion: string
+        readonly bunVersion: string | null
+        readonly coreHost: RepositoryScaleCoreHost
+        readonly coreIdentity: {
+          readonly host: RepositoryScaleCoreHost
+          readonly session: string
+          readonly switchIndex: number
+          readonly reviewSessionId: string
+        }
+        readonly diffdashCommit: string
+        readonly disposalComplete: true
+        readonly fixtureId: string
+        readonly fixtureManifest: FixtureManifest
+        readonly machineProfile: ReturnType<typeof captureMachineProfile>
+        readonly packaged: true
+        readonly packagedArtifactDigest: string
+        readonly session: string
+        readonly switchIndex: number
         readonly storage: {
           readonly before: Awaited<ReturnType<typeof measureManagedStorage>>
           readonly after: Awaited<ReturnType<typeof measureManagedStorage>>
@@ -138,6 +186,10 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       env: environment,
     })
     report.gates.packaged = await app.evaluate(({ app: runtimeApp }) => runtimeApp.isPackaged)
+    report.provenance.packaged = report.gates.packaged
+    report.provenance.appVersion = await app.evaluate(({ app: runtimeApp }) =>
+      runtimeApp.getVersion(),
+    )
     const rootPid = app.process().pid
     if (rootPid === undefined) throw new Error("Packaged Electron process has no PID")
     await expect
@@ -257,11 +309,23 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       ({ scenario }) => scenario !== "foreground disposal completion",
     )
 
+    const smallSessionId = (await reviewLifecycle(window)).sessions.activeSessionId
+    if (smallSessionId === null) throw new Error("Replacement comparison has no active session")
     forwardComparison(executable, launchArguments, environment, {
       manifest: configuration.fixture,
       repository: configuration.fixtureRepository,
     })
     await waitForComparison(window, configuration.fixture)
+    await expect
+      .poll(async () => {
+        const sessions = (await reviewLifecycle(window)).sessions
+        return {
+          activeChanged:
+            sessions.activeSessionId !== null && sessions.activeSessionId !== smallSessionId,
+          disposedSessionId: sessions.lastDisposedSessionId,
+        }
+      })
+      .toEqual({ activeChanged: true, disposedSessionId: smallSessionId })
 
     const switches = configuration.profile === "full" ? 10 : 4
     const exerciseSwitch = async (index: number): Promise<void> => {
@@ -273,28 +337,78 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
               manifest: configuration.smallFixture,
               repository: configuration.smallFixtureRepository,
             }
+      let activeReviewSessionId = (await reviewLifecycle(window)).sessions.activeSessionId
+      if (activeReviewSessionId === null) {
+        throw new Error("Measured switch has no active Core review session")
+      }
+      const disposalCompleteForSwitch = true
       if (index > 0) {
+        const previousSessionId = activeReviewSessionId
         forwardComparison(executable, launchArguments, environment, selected)
         await waitForComparison(window, selected.manifest)
         await expect(window.locator("[data-review-global-canvas]")).toBeVisible({ timeout: 90_000 })
+        await expect
+          .poll(async () => {
+            const sessions = (await reviewLifecycle(window)).sessions
+            return {
+              activeChanged:
+                sessions.activeSessionId !== null && sessions.activeSessionId !== previousSessionId,
+              disposedSessionId: sessions.lastDisposedSessionId,
+            }
+          })
+          .toEqual({ activeChanged: true, disposedSessionId: previousSessionId })
+        const sessions = (await reviewLifecycle(window)).sessions
+        activeReviewSessionId = sessions.activeSessionId
+        if (
+          activeReviewSessionId === null ||
+          sessions.lastDisposedSessionId !== previousSessionId
+        ) {
+          throw new Error("Core did not dispose the prior measured review session")
+        }
       }
       report.observations.switchCount = index + 1
       if (configuration.profile === "full") {
         const storageBefore = await measureManagedStorage({
-          databasePath: join(userData, "diffdash.sqlite"),
-          managedRoot,
+          databasePath,
+          snapshotBlocksRoot,
+          snapshotSpoolsRoot,
+          worktreePoolRoot,
+          remoteWorktreePoolRoot,
         })
         const measurement = await measureProcessTree({
           rootPid,
           ...REPOSITORY_SCALE_MEASUREMENT_POLICY,
         })
         const storageAfter = await measureManagedStorage({
-          databasePath: join(userData, "diffdash.sqlite"),
-          managedRoot,
+          databasePath,
+          snapshotBlocksRoot,
+          snapshotSpoolsRoot,
+          worktreePoolRoot,
+          remoteWorktreePoolRoot,
         })
+        if (activeReviewSessionId === null) {
+          throw new Error("Measured switch has no active Core review session")
+        }
         report.switchReports.push({
           ...measurement,
+          appVersion: report.provenance.appVersion,
+          bunVersion: report.provenance.core.bunVersion,
+          coreHost: configuration.host,
+          coreIdentity: {
+            host: configuration.host,
+            session: configuration.session,
+            switchIndex: index + 1,
+            reviewSessionId: activeReviewSessionId,
+          },
+          diffdashCommit: configuration.diffdashCommit,
+          disposalComplete: disposalCompleteForSwitch,
+          fixtureId: configuration.fixture.id,
+          fixtureManifest: configuration.fixture,
+          machineProfile: report.provenance.machineProfile,
+          packaged: true,
+          packagedArtifactDigest: report.provenance.packagedArtifactDigest,
           scenario: index % 2 === 0 ? "pathological" : "small",
+          session: configuration.session,
           storage: {
             before: storageBefore,
             after: storageAfter,
@@ -303,6 +417,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
             freeSpaceDeltaBytes:
               storageAfter.filesystemFreeBytes - storageBefore.filesystemFreeBytes,
           },
+          switchIndex: index + 1,
         })
       } else if (index === switches - 1) {
         await captureProcessTree(rootPid)
@@ -362,6 +477,7 @@ type RepositoryScaleConfiguration = {
   readonly profile: "smoke" | "full"
   readonly session: string
   readonly rawReport: string
+  readonly diffdashCommit: string
   readonly fixture: FixtureManifest
   readonly fixtureRepository: string
   readonly smallFixture: FixtureManifest
@@ -381,6 +497,7 @@ const readConfiguration = async (): Promise<RepositoryScaleConfiguration> => {
     profile,
     session: requiredEnvironment("DIFFDASH_REPOSITORY_SCALE_SESSION"),
     rawReport: requiredEnvironment("DIFFDASH_REPOSITORY_SCALE_RAW_REPORT"),
+    diffdashCommit: requiredEnvironment("DIFFDASH_REPOSITORY_SCALE_COMMIT"),
     fixture: JSON.parse(await readFile(manifestPath, "utf8")) as FixtureManifest,
     fixtureRepository: join(dirname(manifestPath), "repository"),
     smallFixture: JSON.parse(await readFile(smallManifestPath, "utf8")) as FixtureManifest,
