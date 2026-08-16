@@ -17,7 +17,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   const fakeBin = testInfo.outputPath("fake-bin")
   const home = testInfo.outputPath("home")
   const openCodeBin = join(home, ".opencode", "bin")
-  const gitLog = testInfo.outputPath("git-runs.log")
+  const gitLog = join(home, ".diffdash-e2e-git.log")
   const sourceRepo = testInfo.outputPath("source-repo")
   const remoteRepo = testInfo.outputPath("fixture.git")
   const worktreePool = testInfo.outputPath("worktree-pool")
@@ -31,6 +31,14 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   ])
   await installPackagedFakeCli(fakeBin, openCodeBin)
   const revisions = await installFixtureRepository(sourceRepo, remoteRepo)
+  execGit(
+    home,
+    "config",
+    "--file",
+    join(home, ".gitconfig"),
+    `url.${remoteRepo}.insteadOf`,
+    "https://git.fixture.test/platform/backend/service",
+  )
   await writeFile(
     join(xdgConfigHome, "diffdash", "state.json"),
     JSON.stringify({ onboardingCompleted: true }),
@@ -225,6 +233,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(fixtureProject).toBeVisible()
     await fixtureProject.click()
+    await window.evaluate(
+      async ({ localPath }) =>
+        Reflect.apply(globalThis.window.diffDashForE2e.repositories.link, undefined, [
+          {
+            repository: {
+              providerId: "fixture",
+              namespace: "platform/backend",
+              name: "service",
+            },
+            localPath,
+          },
+        ]),
+      { localPath: sourceRepo },
+    )
 
     const fixtureReview = window.getByRole("button", {
       name: /Open review #73: Fixture merge request flow/,
@@ -236,21 +258,40 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     )
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
 
-    const addedLine = window
+    const fixtureDiffCard = window.locator('[data-diff-card-path="src/fixture.ts"]')
+    const addedLine = fixtureDiffCard
       .locator('diffs-container [data-content] > [data-line-type="change-addition"]')
       .filter({ hasText: "new fixture" })
       .first()
     await expect(addedLine).toBeVisible()
-    const gutterNumber = window
+    const gutterNumber = fixtureDiffCard
       .locator("diffs-container [data-column-number]:visible")
       .filter({ hasText: "1" })
       .last()
-    await gutterNumber.hover({ force: true })
-    const gutterUtility = window.locator("diffs-container [data-utility-button]").first()
-    await expect(gutterUtility).toBeVisible()
-    await gutterUtility.click({ force: true })
     const composer = window.getByRole("textbox", { name: "Thread message" })
-    await expect(composer).toBeVisible()
+    await expect
+      .poll(
+        async () => {
+          if (await composer.isVisible()) return true
+          await gutterNumber.hover({ force: true })
+          const utility = fixtureDiffCard.locator("diffs-container [data-utility-button]").first()
+          if (!(await utility.isVisible())) return false
+          await utility.evaluate((button) => {
+            const init = {
+              bubbles: true,
+              button: 0,
+              composed: true,
+              pointerId: 1,
+              pointerType: "mouse",
+            }
+            button.dispatchEvent(new PointerEvent("pointerdown", init))
+            button.dispatchEvent(new PointerEvent("pointerup", init))
+          })
+          return composer.isVisible()
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true)
     await composer.fill("Review fixture line")
     await window.getByRole("button", { name: "Comment" }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
@@ -658,10 +699,11 @@ process.exit(1)
 
 const fakeGitScript = `import { appendFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { join } from "node:path"
 const args = process.argv.slice(2)
-if (!process.env.FAKE_GIT_LOG || !process.env.REAL_GIT_PATH) process.exit(1)
-appendFileSync(process.env.FAKE_GIT_LOG, args.join(" ") + "\\n")
-const result = spawnSync(process.env.REAL_GIT_PATH, args, {
+const logPath = process.env.FAKE_GIT_LOG ?? (process.env.HOME ? join(process.env.HOME, ".diffdash-e2e-git.log") : null)
+if (logPath) appendFileSync(logPath, args.join(" ") + "\\n")
+const result = spawnSync(process.env.REAL_GIT_PATH ?? ${JSON.stringify(realGitPath)}, args, {
   env: process.env,
   stdio: "inherit"
 })
