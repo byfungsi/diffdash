@@ -262,11 +262,76 @@ export const coreProgressiveReviewRpcHandlersWithRuntimeLayer =
       Layer.effectContext(
         Effect.gen(function* () {
           const runtime = yield* CoreRuntimeServices
-          const progressive = yield* runtime.progressiveReviews
+          const sessions = CoreProgressiveReviewService.of({
+            open: (request) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.sessions.open(request)),
+              ),
+            current: (request) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.sessions.current(request)),
+              ),
+            close: (request) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.sessions.close(request)),
+              ),
+          })
+          const repository = SnapshotRepository.of({
+            openSession: (identity) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.repository.openSession(identity)),
+              ),
+            closeSession: (identity) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.repository.closeSession(identity)),
+              ),
+            inventory: (identity, offset, limit) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.inventory(identity, offset, limit),
+                ),
+              ),
+            findFile: (identity, fileId) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.findFile(identity, fileId),
+                ),
+              ),
+            findFileHunk: (identity, fileId, hunkId) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.findFileHunk(identity, fileId, hunkId),
+                ),
+              ),
+            resolveTarget: (identity, fileId, hunkId, line) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.resolveTarget(identity, fileId, hunkId, line),
+                ),
+              ),
+            waitForRange: (identity, fileId, startLine) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.waitForRange(identity, fileId, startLine),
+                ),
+              ),
+            readRange: (identity, fileId, startLine) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) =>
+                  progressive.repository.readRange(identity, fileId, startLine),
+                ),
+              ),
+          })
+          const search = SnapshotSearch.of({
+            scan: (input, onProgress) =>
+              runtime.progressiveReviews.pipe(
+                Effect.flatMap((progressive) => progressive.search.scan(input, onProgress)),
+              ),
+          })
           return Context.empty().pipe(
-            Context.add(CoreProgressiveReviewService, progressive.sessions),
-            Context.add(SnapshotRepository, progressive.repository),
-            Context.add(SnapshotSearch, progressive.search),
+            Context.add(CoreProgressiveReviewService, sessions),
+            Context.add(SnapshotRepository, repository),
+            Context.add(SnapshotSearch, search),
           )
         }),
       ),
