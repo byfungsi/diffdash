@@ -191,9 +191,11 @@ const hasRequiredProviderIdentity = (failure: {
   readonly modelId: string | null
   readonly providerId: string | null
 }) => {
-  const providerFailure = providerFailureCodes.some((code) =>
-    code.endsWith("_") ? failure.code.startsWith(code) : failure.code === code,
-  )
+  const providerFailure =
+    failure.code !== "AGENT_PROVIDER_FAILURE" &&
+    providerFailureCodes.some((code) =>
+      code.endsWith("_") ? failure.code.startsWith(code) : failure.code === code,
+    )
   return (
     (!providerFailure || failure.providerId !== null) &&
     (failure.modelId === null || failure.providerId !== null)

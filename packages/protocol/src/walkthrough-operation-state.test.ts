@@ -142,6 +142,20 @@ describe("walkthrough operation-state bridge", () => {
           diagnostic: null,
         },
       },
+      {
+        ...activeOperation,
+        state: "failed",
+        terminalAt,
+        failure: {
+          code: "AGENT_PROVIDER_FAILURE",
+          providerId: null,
+          modelId: null,
+          retryClass: "userAction",
+          remediation: "retry",
+          safeMessage: "DiffDash could not complete the walkthrough operation.",
+          diagnostic: null,
+        },
+      },
       { ...activeOperation, state: "cancelled", terminalAt },
       {
         ...activeOperation,
@@ -157,7 +171,7 @@ describe("walkthrough operation-state bridge", () => {
         (operation) =>
           Schema.decodeUnknownSync(WalkthroughBridgeOperationSnapshot)(operation).state,
       ),
-    ).toEqual(["completed", "failed", "cancelled", "superseded", "interrupted"])
+    ).toEqual(["completed", "failed", "failed", "cancelled", "superseded", "interrupted"])
   })
 
   it("keeps admission failures identity-complete and detail-free", () => {

@@ -298,6 +298,24 @@ describe("walkthrough RPC values", () => {
 
   it("rejects lifecycle variants without their required terminal data", () => {
     expect(
+      Result.isSuccess(
+        Schema.decodeUnknownResult(WalkthroughOperationSnapshot)({
+          ...operationCommon,
+          state: "failed",
+          failure: {
+            code: "AGENT_PROVIDER_FAILURE",
+            providerId: null,
+            modelId: null,
+            retryClass: "userAction",
+            remediation: "retry",
+            safeMessage: "DiffDash could not complete this walkthrough operation.",
+            diagnostic: null,
+          },
+          terminalAt: timestamp,
+        }),
+      ),
+    ).toBe(true)
+    expect(
       Result.isFailure(
         Schema.decodeUnknownResult(WalkthroughOperationSnapshot)({
           ...operationCommon,

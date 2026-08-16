@@ -499,7 +499,7 @@ const hasRequiredProviderIdentity = (failure: {
   readonly providerId: string | null
 }) => {
   const providerFailure =
-    failure.code.startsWith("AGENT_PROVIDER_") ||
+    (failure.code !== "AGENT_PROVIDER_FAILURE" && failure.code.startsWith("AGENT_PROVIDER_")) ||
     failure.code === "WALKTHROUGH_MODEL_UNAVAILABLE" ||
     failure.code === "WALKTHROUGH_INVALID_JSON" ||
     failure.code === "WALKTHROUGH_VALIDATION"
