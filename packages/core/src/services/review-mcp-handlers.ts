@@ -1,14 +1,8 @@
-import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { type AgentRunId, type ReviewAgentArtifactId } from "@diffdash/domain/review-agent"
 import type { RepositoryLocalPath } from "@diffdash/domain/repository"
-import {
-  HostedReviewSnapshot,
-  RepositoryComparisonSnapshot,
-  type ReviewSnapshot,
-} from "@diffdash/domain/review-context"
-import type { ReviewFileId, ReviewProjectId } from "@diffdash/domain/review-identity"
+import type { ReviewPromptIdentity } from "@diffdash/agents/review-thread"
+import { ReviewFileId, ReviewHunkId, type ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
-import { orderedReviewFiles, orderedReviewHunks } from "@diffdash/domain/review-ordering"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import {
   DiffDashReviewMcpTool,
@@ -27,13 +21,25 @@ import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { type ProcessRunner, ProcessService, processRequest } from "@diffdash/process"
 import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 import { paginateByOffset } from "./offset-pagination"
+import {
+  OPERATION_SNAPSHOT_HUNK_LIMIT,
+  OPERATION_SNAPSHOT_INVENTORY_LIMIT,
+  type OperationSnapshotHandle,
+} from "./operation-snapshot-reader"
+import {
+  decodeSnapshotHunkLines,
+  projectSnapshotHunk,
+  reviewPromptFile,
+} from "./operation-snapshot-projection"
+import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 
 /** Immutable resources captured by the Core handlers for one review-agent run. */
 export interface ReviewMcpHandlerContext {
   readonly runId: AgentRunId
   readonly threadId: ReviewThreadId
   readonly repoId: ReviewProjectId
-  readonly snapshot: ReviewSnapshot
+  readonly review: ReviewPromptIdentity
+  readonly snapshot: OperationSnapshotHandle
   readonly localPath: RepositoryLocalPath
   readonly walkthrough: Option.Option<StoredWalkthrough>
 }
@@ -72,10 +78,10 @@ const makeHandlers = (
   processes: ProcessRunner,
 ): DiffDashMcpToolHandlers => ({
   execute: (request: DiffDashMcpToolRequest) => {
-    const effect = (() => {
+    const effect: Effect.Effect<DiffDashMcpToolResponse, Error> = (() => {
       switch (request.tool) {
         case DiffDashReviewMcpTool.getReviewContext:
-          return Effect.succeed(available(reviewContext(context.snapshot)))
+          return Effect.succeed(reviewContext(context.review))
         case DiffDashReviewMcpTool.getChangedFiles:
           return getChangedFiles(context.snapshot, request)
         case DiffDashReviewMcpTool.searchReviewDiff:
@@ -113,108 +119,139 @@ const makeHandlers = (
   },
 })
 
-const getChangedFiles = (snapshot: ReviewSnapshot, input: typeof GetChangedFilesRequest.Type) => {
-  const allFiles = orderedReviewFiles(snapshot)
-  const page = paginateByOffset(allFiles, input.offset, input.limit)
-  return Effect.succeed(
-    available({
-      files: page.items.map((file) => ({
-        fileId: file.fileId,
-        path: file.path,
-        oldPath: file.oldPath,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-        hunkIds: file.hunks.map((hunk) => hunk.id),
-      })),
-      offset: page.offset,
-      limit: page.limit,
-      totalFiles: page.total,
-      hasMore: page.hasMore,
-      nextOffset: page.nextOffset,
-    }),
+const getChangedFiles = (
+  snapshot: OperationSnapshotHandle,
+  input: typeof GetChangedFilesRequest.Type,
+) =>
+  Effect.gen(function* () {
+    const limit = Math.min(input.limit, OPERATION_SNAPSHOT_INVENTORY_LIMIT)
+    const files = yield* snapshot.inventory(input.offset, limit)
+    const totalFiles = yield* inventoryCount(snapshot)
+    return available({
+      files: yield* Effect.forEach(files, (file) =>
+        Effect.gen(function* () {
+          const hunks = yield* snapshot.hunks(
+            ReviewFileId.make(file.fileId),
+            0,
+            OPERATION_SNAPSHOT_HUNK_LIMIT,
+          )
+          return { ...reviewPromptFile(file), hunkIds: hunks.map((hunk) => hunk.id) }
+        }),
+      ),
+      offset: input.offset,
+      limit,
+      totalFiles,
+      hasMore: input.offset + files.length < totalFiles,
+      nextOffset: input.offset + files.length < totalFiles ? input.offset + files.length : null,
+    })
+  })
+
+const getDiffHunk = (snapshot: OperationSnapshotHandle, input: typeof GetDiffHunkRequest.Type) =>
+  snapshot.readHunk(input.fileId, input.hunkId).pipe(
+    Effect.flatMap(({ file, hunk, bytes }) =>
+      Effect.gen(function* () {
+        const lines = yield* decodeSnapshotHunkLines(bytes)
+        const page = paginateByOffset(lines, input.startLine, input.lineCount)
+        return available({
+          fileId: file.fileId,
+          path: file.path,
+          hunkId: hunk.id,
+          fingerprint: hunk.fingerprint,
+          header: hunk.header,
+          startLine: page.offset,
+          lines: page.items,
+          totalLines: page.total,
+          nextStartLine: page.nextOffset,
+        })
+      }),
+    ),
+    Effect.catchTag("OperationSnapshotReaderError", () =>
+      Effect.succeed(unavailable("Diff hunk is unavailable for this review run")),
+    ),
   )
-}
 
-const getDiffHunk = (snapshot: ReviewSnapshot, input: typeof GetDiffHunkRequest.Type) => {
-  const file = snapshot.parsedDiff.files.find((entry) => entry.fileId === input.fileId)
-  const hunk = file?.hunks.find((entry) => entry.id === input.hunkId)
-  if (file === undefined || hunk === undefined) {
-    return Effect.succeed(unavailable("Diff hunk is unavailable for this review run"))
-  }
-
-  const page = paginateByOffset(hunk.lines, input.startLine, input.lineCount)
-  return Effect.succeed(
-    available({
-      fileId: file.fileId,
-      path: file.path,
-      hunkId: hunk.id,
-      fingerprint: hunk.fingerprint,
-      header: hunk.header,
-      startLine: page.offset,
-      lines: page.items,
-      totalLines: page.total,
-      nextStartLine: page.nextOffset,
-    }),
-  )
-}
-
-const getDiffFile = (snapshot: ReviewSnapshot, fileId: ReviewFileId) => {
-  const file = snapshot.parsedDiff.files.find((entry) => entry.fileId === fileId)
-  return Effect.succeed(
-    file === undefined
-      ? unavailable("Diff file is unavailable for this review run")
-      : available({
+const getDiffFile = (snapshot: OperationSnapshotHandle, fileId: ReviewFileId) =>
+  snapshot.readFile(fileId).pipe(
+    Effect.flatMap(({ file, bytes }) =>
+      Effect.gen(function* () {
+        const patch = yield* decodeSnapshotHunkLines(bytes)
+        return available({
           fileId: file.fileId,
           path: file.path,
           oldPath: file.oldPath,
           status: file.status,
-          patch: file.patch,
-        }),
+          patch: patch.join("\n"),
+        })
+      }),
+    ),
+    Effect.catchTag("OperationSnapshotReaderError", () =>
+      Effect.succeed(unavailable("Diff file is unavailable for this review run")),
+    ),
   )
-}
 
-type SearchDiffFile = ReviewSnapshot["parsedDiff"]["files"][number]
-type SearchDiffHunk = SearchDiffFile["hunks"][number]
+const searchReviewDiff = (
+  snapshot: OperationSnapshotHandle,
+  input: typeof SearchReviewDiffRequest.Type,
+) =>
+  Effect.gen(function* () {
+    const needle = input.caseSensitive ? input.query : input.query.toLowerCase()
+    const matches: Array<{
+      readonly fileId: string
+      readonly path: string
+      readonly hunkId: string
+      readonly header: string
+      readonly patchLine: string
+      readonly oldLineNumber: number | null
+      readonly newLineNumber: number | null
+    }> = []
+    let total = 0
 
-const searchReviewDiff = (snapshot: ReviewSnapshot, input: typeof SearchReviewDiffRequest.Type) => {
-  const needle = input.caseSensitive ? input.query : input.query.toLowerCase()
-  const matches: Array<{
-    readonly fileId: SearchDiffFile["fileId"]
-    readonly path: string
-    readonly hunkId: SearchDiffHunk["id"]
-    readonly header: string
-    readonly patchLine: string
-    readonly oldLineNumber: number | null
-    readonly newLineNumber: number | null
-  }> = []
-  let total = 0
-
-  for (const file of orderedReviewFiles(snapshot)) {
-    if (input.path !== undefined && file.path !== input.path && file.oldPath !== input.path)
-      continue
-    for (const hunk of orderedReviewHunks(file.hunks)) {
-      for (const line of projectDiffHunkLines(hunk)) {
-        const haystack = input.caseSensitive ? line.patchLine : line.patchLine.toLowerCase()
-        if (!haystack.includes(needle)) continue
-        total += 1
-        if (matches.length < input.maxResults) {
-          matches.push({
-            fileId: file.fileId,
-            path: file.path,
-            hunkId: hunk.id,
-            header: hunk.header,
-            patchLine: line.patchLine,
-            oldLineNumber: line.oldLineNumber,
-            newLineNumber: line.newLineNumber,
-          })
+    let offset = 0
+    for (;;) {
+      const files = yield* snapshot.inventory(offset, OPERATION_SNAPSHOT_INVENTORY_LIMIT)
+      for (const file of files) {
+        if (input.path !== undefined && file.path !== input.path && file.oldPath !== input.path)
+          continue
+        let hunkOffset = 0
+        for (;;) {
+          const hunks = yield* snapshot.hunks(
+            ReviewFileId.make(file.fileId),
+            hunkOffset,
+            OPERATION_SNAPSHOT_HUNK_LIMIT,
+          )
+          for (const hunk of hunks) {
+            const read = yield* snapshot.readHunk(
+              ReviewFileId.make(file.fileId),
+              ReviewHunkId.make(hunk.id),
+            )
+            const lines = yield* decodeSnapshotHunkLines(read.bytes)
+            for (const line of projectDiffHunkLines(projectSnapshotHunk(hunk, lines))) {
+              const haystack = input.caseSensitive ? line.patchLine : line.patchLine.toLowerCase()
+              if (!haystack.includes(needle)) continue
+              total += 1
+              if (matches.length < input.maxResults) {
+                matches.push({
+                  fileId: file.fileId,
+                  path: file.path,
+                  hunkId: hunk.id,
+                  header: hunk.header,
+                  patchLine: line.patchLine,
+                  oldLineNumber: line.oldLineNumber,
+                  newLineNumber: line.newLineNumber,
+                })
+              }
+            }
+          }
+          if (hunks.length < OPERATION_SNAPSHOT_HUNK_LIMIT) break
+          hunkOffset += hunks.length
         }
       }
+      if (files.length < OPERATION_SNAPSHOT_INVENTORY_LIMIT) break
+      offset += files.length
     }
-  }
 
-  return Effect.succeed(available({ matches, total, truncated: total > matches.length }))
-}
+    return available({ matches, total, truncated: total > matches.length })
+  })
 
 const getOlderThreadMessages = (
   threadId: ReviewThreadId,
@@ -259,7 +296,7 @@ const searchLinkedRepository = (
   processes: ProcessRunner,
   input: typeof SearchRepositoryRequest.Type,
 ): Effect.Effect<DiffDashMcpToolResponse> => {
-  if (!hasExactRepositoryWorkspace(context.snapshot)) {
+  if (!hasExactRepositoryWorkspace(context.review)) {
     return Effect.succeed(
       unavailable("Exact repository search is available for immutable repository reviews"),
     )
@@ -274,7 +311,7 @@ const searchLinkedRepository = (
   if (safePath === null) {
     return Effect.succeed(unavailable("Repository search path must stay inside the checkout"))
   }
-  const revision = context.snapshot.headRevision
+  const revision = context.review.headRevision
 
   return Effect.gen(function* () {
     yield* processes.run(
@@ -333,7 +370,7 @@ const readLinkedRepositoryFile = (
   processes: ProcessRunner,
   input: typeof ReadRepositoryFileRequest.Type,
 ): Effect.Effect<DiffDashMcpToolResponse> => {
-  if (!hasExactRepositoryWorkspace(context.snapshot)) {
+  if (!hasExactRepositoryWorkspace(context.review)) {
     return Effect.succeed(
       unavailable("Exact repository reads are available for immutable repository reviews"),
     )
@@ -348,7 +385,7 @@ const readLinkedRepositoryFile = (
   if (safePath === null) {
     return Effect.succeed(unavailable("Repository file path must stay inside the checkout"))
   }
-  const revision = context.snapshot.headRevision
+  const revision = context.review.headRevision
 
   return processes
     .run(
@@ -398,40 +435,52 @@ const parseGitGrepMatches = (output: string, revision: string, maxResults: numbe
     .slice(0, maxResults)
 }
 
-const reviewContext = (snapshot: ReviewSnapshot): DiffDashMcpToolResponse => {
-  return Match.value(snapshot).pipe(
+const reviewContext = (review: ReviewPromptIdentity): DiffDashMcpToolResponse => {
+  const identity = {
+    reviewKey: review.reviewKey,
+    baseRevision: review.baseRevision,
+    headRevision: review.headRevision,
+  }
+  return Match.value(review.descriptor).pipe(
     Match.tag("hosted", (hosted) =>
       available({
+        ...identity,
         kind: "hosted",
-        reviewKey: hosted.reviewKey,
-        baseRevision: hosted.baseRevision,
-        headRevision: hosted.headRevision,
-        title: hosted.detail.summary.title,
+        title: hosted.title,
       }),
     ),
     Match.tag("repositoryComparison", (comparison) =>
       available({
+        ...identity,
         kind: "repositoryComparison",
-        reviewKey: comparison.reviewKey,
-        baseRevision: comparison.baseRevision,
-        headRevision: comparison.headRevision,
-        title: comparison.detail.title,
+        title: comparison.title,
       }),
     ),
     Match.tag("local", (local) =>
       available({
+        ...identity,
         kind: "local",
-        reviewKey: local.reviewKey,
-        baseRevision: local.baseRevision,
-        headRevision: local.headRevision,
-        title: local.detail.title,
+        title: local.title,
       }),
     ),
     Match.exhaustive,
   )
 }
 
-const hasExactRepositoryWorkspace = (
-  snapshot: ReviewSnapshot,
-): snapshot is HostedReviewSnapshot | RepositoryComparisonSnapshot =>
-  Schema.is(HostedReviewSnapshot)(snapshot) || Schema.is(RepositoryComparisonSnapshot)(snapshot)
+const hasExactRepositoryWorkspace = (review: ReviewPromptIdentity): boolean =>
+  Match.valueTags(review.descriptor, {
+    hosted: () => true,
+    local: () => false,
+    repositoryComparison: () => true,
+  })
+
+const inventoryCount = Effect.fn("ReviewMcpHandlers.inventoryCount")(function* (
+  snapshot: OperationSnapshotHandle,
+) {
+  let total = 0
+  for (;;) {
+    const page = yield* snapshot.inventory(total, OPERATION_SNAPSHOT_INVENTORY_LIMIT)
+    total += page.length
+    if (page.length < OPERATION_SNAPSHOT_INVENTORY_LIMIT) return total
+  }
+})

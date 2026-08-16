@@ -1,14 +1,23 @@
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
-import type {
-  HostedReviewSnapshot,
-  LocalReviewSnapshot,
-  RepositoryComparisonSnapshot,
-  ReviewSnapshot,
-} from "@diffdash/domain/review-context"
-import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
-import type { ReviewProjectId as ReviewProjectIdType } from "@diffdash/domain/review-identity"
+import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
+import type { ParsedDiffFile } from "@diffdash/domain/diff"
 import {
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
+  RepositoryComparisonReviewDescriptor,
+  type ReviewDescriptor,
+} from "@diffdash/domain/review-context"
+import {
+  ReviewFileId,
+  ReviewHunkId,
+  type ReviewKey,
+  type ReviewProjectId as ReviewProjectIdType,
+  type ReviewRevision,
+  type ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
+import {
+  DEFAULT_WALKTHROUGH_PROMPT_BUDGET,
   prepareWalkthroughPromptInput,
   type StoredWalkthrough,
   type WalkthroughCacheKey,
@@ -42,6 +51,7 @@ import {
   type WalkthroughStoreError,
 } from "@diffdash/persistence/walkthrough-store"
 import {
+  WALKTHROUGH_PROMPT_CONTEXT_LIMITS,
   WalkthroughGenerationInput,
   type WalkthroughPreparedRoute,
   WalkthroughReviewContext,
@@ -56,6 +66,7 @@ import {
   Match,
   Option,
   Result,
+  Schema,
   Semaphore,
   type Scope,
 } from "effect"
@@ -81,41 +92,46 @@ import {
   WalkthroughOperationStateUnavailable,
   WalkthroughOperationSuperseded,
   WalkthroughOperationTerminalFailure,
-  WalkthroughReviewGenerationChangedError,
 } from "../core-contract"
-import { ReviewSnapshotService } from "../services/review-snapshot"
+import { ReviewContextError } from "../services/git-provider"
 import { captureCoreDefect } from "../core-defect-boundary"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
+import {
+  OPERATION_SNAPSHOT_HUNK_LIMIT,
+  OPERATION_SNAPSHOT_INVENTORY_LIMIT,
+  OperationSnapshotReader,
+  type OperationSnapshotHandle,
+  type OperationSnapshotIdentity,
+} from "../services/operation-snapshot-reader"
+import {
+  decodeSnapshotHunkLines,
+  projectSnapshotFile,
+  projectSnapshotHunk,
+  reviewPromptFile,
+  reviewPromptIdentity,
+} from "../services/operation-snapshot-projection"
 import type { ReviewResolution } from "./review-resolution"
 
-type HostedReviewTarget = Extract<ReviewThreadTarget, { readonly kind: "hosted" }>
-type LocalReviewTarget = Extract<ReviewThreadTarget, { readonly kind: "local" }>
-type RepositoryComparisonTarget = Extract<
-  ReviewThreadTarget,
-  { readonly kind: "repositoryComparison" }
->
-
-interface ResolvedWalkthroughBase<Snapshot extends ReviewSnapshot> {
+interface ResolvedWalkthroughBase {
   readonly regenerate: boolean
   readonly repoId: ReviewProjectIdType
-  readonly snapshot: Snapshot
+  readonly snapshotId: ReviewSnapshotId
+  readonly reviewKey: ReviewKey
+  readonly baseRevision: ReviewRevision
+  readonly headRevision: ReviewRevision
   readonly prNumber: number | null
 }
 
-interface ResolvedHostedWalkthrough extends ResolvedWalkthroughBase<HostedReviewSnapshot> {
+interface ResolvedHostedWalkthrough extends ResolvedWalkthroughBase {
   readonly kind: "hosted"
-  readonly target: HostedReviewTarget
 }
 
-interface ResolvedLocalWalkthrough extends ResolvedWalkthroughBase<LocalReviewSnapshot> {
+interface ResolvedLocalWalkthrough extends ResolvedWalkthroughBase {
   readonly kind: "local"
-  readonly target: LocalReviewTarget
 }
 
-interface ResolvedRepositoryComparisonWalkthrough
-  extends ResolvedWalkthroughBase<RepositoryComparisonSnapshot> {
+interface ResolvedRepositoryComparisonWalkthrough extends ResolvedWalkthroughBase {
   readonly kind: "repositoryComparison"
-  readonly target: RepositoryComparisonTarget
 }
 
 type ResolvedWalkthrough =
@@ -194,7 +210,11 @@ export interface WalkthroughOperations extends WalkthroughLifecycle {
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
   readonly getCached: (
     repoId: ReviewProjectIdType,
-    snapshot: ReviewSnapshot,
+    snapshot: {
+      readonly reviewKey: ReviewKey
+      readonly baseRevision: ReviewRevision
+      readonly headRevision: ReviewRevision
+    },
   ) => Effect.Effect<Option.Option<StoredWalkthrough>, WalkthroughStoreError>
 }
 
@@ -214,7 +234,7 @@ export const makeWalkthroughOperations = (
   never,
   | RepositoryComparisonSource
   | Scope.Scope
-  | ReviewSnapshotService
+  | OperationSnapshotReader
   | WalkthroughOperationStore
   | WalkthroughService
   | WalkthroughStore
@@ -224,7 +244,7 @@ export const makeWalkthroughOperations = (
     const walkthroughService = yield* WalkthroughService
     const operationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
-    const reviewSnapshots = yield* ReviewSnapshotService
+    const snapshotReader = yield* OperationSnapshotReader
     const activeWorkers = yield* makeWalkthroughActiveWorkers
     const startSemaphore = yield* Semaphore.make(1)
 
@@ -271,7 +291,11 @@ export const makeWalkthroughOperations = (
               target,
               regenerate: request.regenerate,
               repoId: resolved.repo.id,
-              ...resolved,
+              snapshotId: resolved.snapshot.snapshotId,
+              reviewKey: resolved.snapshot.reviewKey,
+              baseRevision: resolved.snapshot.baseRevision,
+              headRevision: resolved.snapshot.headRevision,
+              prNumber: resolved.prNumber,
             })),
           )
         case "repositoryComparison":
@@ -281,7 +305,11 @@ export const makeWalkthroughOperations = (
               target,
               regenerate: request.regenerate,
               repoId: resolved.repo.id,
-              ...resolved,
+              snapshotId: resolved.snapshot.snapshotId,
+              reviewKey: resolved.snapshot.reviewKey,
+              baseRevision: resolved.snapshot.baseRevision,
+              headRevision: resolved.snapshot.headRevision,
+              prNumber: null,
             })),
           )
         case "local":
@@ -291,7 +319,11 @@ export const makeWalkthroughOperations = (
               target,
               regenerate: request.regenerate,
               repoId: resolved.repo.id,
-              ...resolved,
+              snapshotId: resolved.snapshot.snapshotId,
+              reviewKey: resolved.snapshot.reviewKey,
+              baseRevision: resolved.snapshot.baseRevision,
+              headRevision: resolved.snapshot.headRevision,
+              prNumber: null,
             })),
           )
       }
@@ -301,7 +333,7 @@ export const makeWalkthroughOperations = (
       resolved: ResolvedWalkthrough,
       generate: Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure>,
     ) {
-      const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
+      const cacheKey = walkthroughCacheKey(resolved.repoId, resolved)
       if (resolved.regenerate) return yield* generate
       const cached = yield* walkthroughStore.get(cacheKey)
       return yield* Option.match(cached, {
@@ -310,109 +342,77 @@ export const makeWalkthroughOperations = (
       })
     })
 
-    const generateResolved = Effect.fn("Core.Walkthroughs.generateResolved")(function (
+    const generateResolved = Effect.fn("Core.Walkthroughs.generateResolved")(function* (
       resolved: ResolvedWalkthrough,
       route: WalkthroughPreparedRoute,
-    ): Effect.Effect<StoredWalkthrough, CoreWalkthroughFailure> {
-      switch (resolved.kind) {
-        case "hosted":
-          return loadOrGenerate(
-            resolved,
-            Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
-              const promptInput = yield* prepareWalkthroughPromptInput(
-                resolved.snapshot.parsedDiff.files,
-                walkthroughHostedReviewScope(resolved.target.review),
+      identity: OperationSnapshotIdentity,
+    ) {
+      return yield* loadOrGenerate(
+        resolved,
+        Effect.scoped(
+          Effect.gen(function* () {
+            const handle = yield* snapshotReader
+              .open(identity)
+              .pipe(Effect.mapError(snapshotReviewError))
+            if (
+              handle.snapshot.baseRevision !== resolved.baseRevision ||
+              handle.snapshot.headRevision !== resolved.headRevision ||
+              !descriptorMatchesKind(handle.snapshot.descriptor, resolved.kind)
+            ) {
+              return yield* snapshotReviewError(
+                new Error(
+                  "The durable snapshot does not match the accepted walkthrough generation",
+                ),
               )
-              const walkthrough = yield* walkthroughService.generatePrepared(
-                WalkthroughGenerationInput.make({
-                  review: WalkthroughReviewContext.make({
-                    kind: "hosted",
-                    hostedReview: resolved.snapshot.detail,
-                  }),
-                  diff: promptInput.diff,
-                  hunkDigest: promptInput.hunkDigest,
-                  changedFileTree: promptInput.changedFileTree,
-                  generation: promptInput.generation,
-                  promptStats: Option.some(promptInput.stats),
-                  workingDirectory: Option.none(),
+            }
+            const bounded = yield* prepareBoundedWalkthrough(handle).pipe(
+              Effect.mapError(snapshotReviewError),
+            )
+            const descriptor = handle.snapshot.descriptor
+            const promptReview = reviewPromptIdentity(handle.snapshot)
+            const scope = walkthroughScope(
+              descriptor,
+              promptReview.reviewKey,
+              promptReview.headRevision,
+            )
+            const promptInput = yield* prepareWalkthroughPromptInput(bounded.files, scope)
+            const input = (workingDirectory: Option.Option<string>) =>
+              WalkthroughGenerationInput.make({
+                review: WalkthroughReviewContext.make({
+                  review: promptReview,
+                  files: bounded.inventory,
                 }),
-                route,
-              )
-              return yield* walkthroughStore.save({
-                ...cacheKey,
-                prNumber: resolved.prNumber,
-                walkthrough,
-              })
-            }),
-          )
-        case "repositoryComparison":
-          return loadOrGenerate(
-            resolved,
-            Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
-              const promptInput = yield* prepareWalkthroughPromptInput(
-                resolved.snapshot.parsedDiff.files,
-                walkthroughRepositoryComparisonScope(resolved.snapshot.reviewKey),
-              )
-              const walkthrough = yield* comparisons.useWorkspace(
-                resolved.target,
-                (workingDirectory) =>
-                  walkthroughService.generatePrepared(
-                    WalkthroughGenerationInput.make({
-                      review: WalkthroughReviewContext.make({
-                        kind: "repositoryComparison",
-                        comparison: resolved.snapshot.detail,
-                      }),
-                      diff: promptInput.diff,
-                      hunkDigest: promptInput.hunkDigest,
-                      changedFileTree: promptInput.changedFileTree,
-                      generation: promptInput.generation,
-                      promptStats: Option.some(promptInput.stats),
-                      workingDirectory: Option.some(workingDirectory),
-                    }),
-                    route,
-                  ),
-              )
-              return yield* walkthroughStore.save({
-                ...cacheKey,
-                prNumber: null,
-                walkthrough,
-              })
-            }),
-          )
-        case "local":
-          return loadOrGenerate(
-            resolved,
-            Effect.gen(function* () {
-              const cacheKey = walkthroughCacheKey(resolved.repoId, resolved.snapshot)
-              const promptInput = yield* prepareWalkthroughPromptInput(
-                resolved.snapshot.parsedDiff.files,
-                walkthroughLocalDiffScope(resolved.snapshot.headRevision),
-              )
-              const walkthrough = yield* walkthroughService.generatePrepared(
-                WalkthroughGenerationInput.make({
-                  review: WalkthroughReviewContext.make({
-                    kind: "localDiff",
-                    localReview: resolved.snapshot.detail,
-                  }),
-                  diff: promptInput.diff,
-                  hunkDigest: promptInput.hunkDigest,
-                  changedFileTree: promptInput.changedFileTree,
-                  generation: promptInput.generation,
-                  promptStats: Option.some(promptInput.stats),
-                  workingDirectory: Option.none(),
+                diff: promptInput.diff,
+                hunkDigest: promptInput.hunkDigest,
+                changedFileTree: promptInput.changedFileTree,
+                generation: {
+                  ...promptInput.generation,
+                  totalFiles: bounded.totalFiles,
+                },
+                promptStats: Option.some({
+                  ...promptInput.stats,
+                  totalFiles: bounded.totalFiles,
+                  totalHunks: bounded.totalHunks,
+                  omittedFiles: Math.max(0, bounded.totalFiles - promptInput.stats.selectedFiles),
+                  omittedHunks: Math.max(0, bounded.totalHunks - promptInput.stats.selectedHunks),
                 }),
-                route,
-              )
-              return yield* walkthroughStore.save({
-                ...cacheKey,
-                prNumber: null,
-                walkthrough,
+                workingDirectory,
               })
-            }),
-          )
-      }
+            const walkthrough = Schema.is(RepositoryComparisonReviewDescriptor)(descriptor)
+              ? yield* comparisons.useWorkspace(descriptor.target, (workingDirectory) =>
+                  walkthroughService.generatePrepared(input(Option.some(workingDirectory)), route),
+                )
+              : yield* walkthroughService.generatePrepared(input(Option.none()), route)
+            return yield* walkthroughStore.save({
+              ...walkthroughCacheKey(resolved.repoId, resolved),
+              prNumber: Schema.is(HostedReviewDescriptor)(descriptor)
+                ? descriptor.review.number
+                : resolved.prNumber,
+              walkthrough,
+            })
+          }),
+        ),
+      )
     })
 
     const runOperation = Effect.fn("Core.Walkthroughs.runOperation")(
@@ -429,7 +429,9 @@ export const makeWalkthroughOperations = (
           return Option.none()
         }
 
-        const exit = yield* Effect.exit(generateResolved(resolved, route))
+        const exit = yield* Effect.exit(
+          generateResolved(resolved, route, operationSnapshotIdentity(operation, resolved)),
+        )
         yield* persistTerminalExit(operationStore, running.operation, exit)
         return Exit.match(exit, {
           onSuccess: () => Option.none(),
@@ -460,7 +462,7 @@ export const makeWalkthroughOperations = (
           Effect.gen(function* () {
             const acceptance = yield* operationStore.acceptOrGet({
               operationId: WalkthroughOperationId.make(randomUUID()),
-              identity: operationIdentity(resolved.repoId, resolved.snapshot),
+              identity: operationIdentity(resolved.repoId, resolved),
               regenerate: resolved.regenerate,
               acceptanceEvidence,
             })
@@ -491,28 +493,8 @@ export const makeWalkthroughOperations = (
     const startGeneration: WalkthroughOperations["startGeneration"] = Effect.fn(
       "Core.Walkthroughs.startGeneration",
     )(function* (request) {
-      const snapshot = yield* reviewSnapshots
-        .getForProject(request.reviewGeneration.snapshotId, request.reviewGeneration.projectId)
-        .pipe(
-          Effect.mapError(() =>
-            WalkthroughReviewGenerationChangedError.make({
-              snapshotId: request.reviewGeneration.snapshotId,
-              reason: "unavailable",
-            }),
-          ),
-        )
-      if (!matchesReviewGeneration(snapshot, request.reviewGeneration)) {
-        return yield* WalkthroughReviewGenerationChangedError.make({
-          snapshotId: request.reviewGeneration.snapshotId,
-          reason: "mismatched",
-        })
-      }
       const route = yield* walkthroughService.prepareRoute
-      const resolved = resolvedFromGeneration(
-        snapshot,
-        request.reviewGeneration.projectId,
-        request.regenerate,
-      )
+      const resolved = resolvedFromGeneration(request.reviewGeneration, request.regenerate)
       return yield* acceptAndRun(
         resolved,
         route,
@@ -716,6 +698,13 @@ const expectedFailure = (category: WalkthroughExpectedFailureCategory, code: str
     code: WalkthroughOperationFailureCode.make(code),
   })
 
+const snapshotReviewError = (cause: Error) =>
+  ReviewContextError.make({
+    operation: "local.snapshot",
+    reason: "The durable review snapshot is unavailable to the walkthrough operation.",
+    cause,
+  })
+
 const classifyExpectedFailure = Match.typeTags<
   CoreWalkthroughFailure,
   WalkthroughExpectedFailure
@@ -792,9 +781,118 @@ const isActiveOperation = (
 ): operation is Extract<WalkthroughOperation, { readonly state: "accepted" | "running" }> =>
   operation.state === "accepted" || operation.state === "running"
 
+const operationSnapshotIdentity = (
+  operation: WalkthroughOperation,
+  resolved: ResolvedWalkthrough,
+): OperationSnapshotIdentity => {
+  const accepted = operation.acceptanceEvidence?.acceptedRequest
+  return {
+    applicationInstanceId: ApplicationInstanceId.make(
+      accepted?.applicationInstanceId ?? "embedded-core",
+    ),
+    processEpoch: CoreProcessEpoch.make(accepted?.processEpoch ?? "embedded-epoch"),
+    operationId: operation.id,
+    projectId: resolved.repoId,
+    reviewKey: resolved.reviewKey,
+    snapshotId: resolved.snapshotId,
+  }
+}
+
+const prepareBoundedWalkthrough = Effect.fn("Core.Walkthroughs.prepareBoundedSnapshot")(function* (
+  handle: OperationSnapshotHandle,
+) {
+  const selected: Parameters<typeof reviewPromptFile>[0][] = []
+  let totalFiles = 0
+  let totalHunks = 0
+  for (;;) {
+    const page = yield* handle.inventory(totalFiles, OPERATION_SNAPSHOT_INVENTORY_LIMIT)
+    totalFiles += page.length
+    totalHunks += page.reduce((total, file) => total + file.hunkCount, 0)
+    for (const file of page) {
+      if (selected.length < WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxFiles) selected.push(file)
+    }
+    if (page.length < OPERATION_SNAPSHOT_INVENTORY_LIMIT) break
+  }
+
+  const files: ParsedDiffFile[] = []
+  let selectedHunks = 0
+  let selectedChars = 0
+  for (const file of selected) {
+    const hunks = []
+    let offset = 0
+    while (
+      selectedHunks < DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxHunks &&
+      selectedChars < DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxDiffChars
+    ) {
+      const page = yield* handle.hunks(
+        ReviewFileId.make(file.fileId),
+        offset,
+        Math.min(
+          OPERATION_SNAPSHOT_HUNK_LIMIT,
+          DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxHunks - selectedHunks,
+        ),
+      )
+      for (const hunk of page) {
+        const read = yield* handle.readHunk(
+          ReviewFileId.make(file.fileId),
+          ReviewHunkId.make(hunk.id),
+        )
+        const decoded = yield* decodeSnapshotHunkLines(read.bytes)
+        const remaining = DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxDiffChars - selectedChars
+        const lines: string[] = []
+        for (const line of decoded.slice(0, DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxLinesPerHunk)) {
+          if (lines.join("\n").length + line.length + hunk.header.length + 1 > remaining) break
+          lines.push(line)
+        }
+        if (lines.length === 0) break
+        hunks.push(projectSnapshotHunk(hunk, lines))
+        selectedHunks += 1
+        selectedChars += hunk.header.length + lines.join("\n").length + 1
+      }
+      if (
+        page.length < OPERATION_SNAPSHOT_HUNK_LIMIT ||
+        selectedChars >= DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxDiffChars
+      )
+        break
+      offset += page.length
+    }
+    files.push(projectSnapshotFile(file, handle.snapshot.reviewKey, hunks))
+    if (selectedHunks >= DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxHunks) break
+  }
+  return {
+    files,
+    inventory: selected.map(reviewPromptFile),
+    totalFiles,
+    totalHunks,
+  }
+})
+
+const walkthroughScope = (
+  descriptor: ReviewDescriptor,
+  reviewKey: ReviewKey,
+  headRevision: ReviewRevision,
+) => {
+  if (Schema.is(HostedReviewDescriptor)(descriptor))
+    return walkthroughHostedReviewScope(descriptor.review)
+  if (Schema.is(RepositoryComparisonReviewDescriptor)(descriptor))
+    return walkthroughRepositoryComparisonScope(reviewKey)
+  if (Schema.is(LocalReviewDescriptor)(descriptor)) return walkthroughLocalDiffScope(headRevision)
+  return descriptor satisfies never
+}
+
+const descriptorMatchesKind = (
+  descriptor: ReviewDescriptor,
+  kind: ResolvedWalkthrough["kind"],
+): boolean =>
+  Match.valueTags(descriptor, {
+    hosted: () => kind === "hosted",
+    local: () => kind === "local",
+    repositoryComparison: () => kind === "repositoryComparison",
+  })
+
 const operationIdentity = (
   repoId: ReviewProjectIdType,
-  snapshot: ReviewSnapshot,
+  snapshot: Pick<ResolvedWalkthroughBase, "reviewKey" | "baseRevision" | "headRevision">,
 ): WalkthroughOperationIdentityType =>
   WalkthroughOperationIdentity.make({
     repoId,
@@ -804,55 +902,19 @@ const operationIdentity = (
     promptVersion: WALKTHROUGH_PROMPT_VERSION,
   })
 
-const matchesReviewGeneration = (
-  snapshot: ReviewSnapshot,
-  generation: WalkthroughOperationReviewGeneration,
-) =>
-  Match.valueTags(snapshot, {
-    hosted: () => generation.kind === "hosted",
-    local: () => generation.kind === "local",
-    repositoryComparison: () => generation.kind === "repositoryComparison",
-  }) &&
-  snapshot.snapshotId === generation.snapshotId &&
-  snapshot.reviewKey === generation.reviewKey &&
-  snapshot.baseRevision === generation.baseRevision &&
-  snapshot.headRevision === generation.headRevision
-
 const resolvedFromGeneration = (
-  snapshot: ReviewSnapshot,
-  repoId: ReviewProjectIdType,
+  generation: WalkthroughOperationReviewGeneration,
   regenerate: boolean,
-): ResolvedWalkthrough =>
-  Match.valueTags(snapshot, {
-    hosted: (hosted) => ({
-      kind: "hosted" as const,
-      target: { kind: "hosted" as const, review: hosted.detail.summary.locator },
-      regenerate,
-      repoId,
-      snapshot: hosted,
-      prNumber: hosted.detail.summary.locator.number,
-    }),
-    local: (local) => ({
-      kind: "local" as const,
-      target: {
-        kind: "local" as const,
-        rootPath: local.detail.rootPath,
-        comparison: local.detail.comparison,
-      },
-      regenerate,
-      repoId,
-      snapshot: local,
-      prNumber: null,
-    }),
-    repositoryComparison: (comparison) => ({
-      kind: "repositoryComparison" as const,
-      target: comparison.detail.target,
-      regenerate,
-      repoId,
-      snapshot: comparison,
-      prNumber: null,
-    }),
-  })
+): ResolvedWalkthrough => ({
+  kind: generation.kind,
+  regenerate,
+  repoId: generation.projectId,
+  snapshotId: generation.snapshotId,
+  reviewKey: generation.reviewKey,
+  baseRevision: generation.baseRevision,
+  headRevision: generation.headRevision,
+  prNumber: null,
+})
 
 const configuredRoute = (route: WalkthroughPreparedRoute) =>
   Match.valueTags(route.selection, {
@@ -885,7 +947,7 @@ const artifactCacheKey = (artifact: WalkthroughArtifactReference): WalkthroughCa
 
 const walkthroughCacheKey = (
   repoId: ReviewProjectIdType,
-  snapshot: ReviewSnapshot,
+  snapshot: Pick<ResolvedWalkthroughBase, "reviewKey" | "baseRevision" | "headRevision">,
 ): WalkthroughCacheKey => ({
   repoId,
   reviewKey: snapshot.reviewKey,

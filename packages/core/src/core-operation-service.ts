@@ -6,9 +6,10 @@ import {
 } from "@diffdash/persistence/walkthrough-store"
 import type { AgentRun } from "@diffdash/domain/agent-run"
 import type { AgentRunId } from "@diffdash/domain/agent-run-id"
+import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
 import { Context, Effect, Layer, Option } from "effect"
 
-import { CoreMethod, type CoreMethodInput, type CoreThreadResolutionFailure } from "./core-contract"
+import type { CoreThreadResolutionFailure } from "./core-contract"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
@@ -44,7 +45,7 @@ interface CoreOperationServiceShape {
   readonly walkthroughs: WalkthroughOperations
   readonly reviewAgents: {
     readonly start: (
-      input: CoreMethodInput<typeof CoreMethod.runReviewThreadAgent>,
+      input: StartReviewAgentOperationRequest,
     ) => Effect.Effect<AgentRunId, CoreReviewAgentStartError>
     readonly getOperation: (
       runId: AgentRunId,
@@ -80,7 +81,7 @@ export const coreOperationLayer = Layer.effect(
     const threadHandlers = yield* makeThreadOperationHandlers(reviews, walkthroughs)
     const viewedFileHandlers = yield* makeViewedFileOperationHandlers
     const startReviewAgent = Effect.fn("Core.ReviewAgents.resolveAndStart")(function* (
-      request: CoreMethodInput<typeof CoreMethod.runReviewThreadAgent>,
+      request: StartReviewAgentOperationRequest,
     ) {
       const mapping = yield* turns.validateTarget({
         threadId: request.threadId,
@@ -97,7 +98,9 @@ export const coreOperationLayer = Layer.effect(
         repoId: repo.id,
         target: request.target,
         mapping,
-        snapshot,
+        snapshotId: snapshot.snapshotId,
+        applicationInstanceId: request.applicationInstanceId,
+        processEpoch: request.processEpoch,
         cwd: repo.localPath,
         walkthrough,
       })

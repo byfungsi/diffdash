@@ -11,12 +11,15 @@ import {
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
 import { RemoteOnly, UpsertRepositoryInput } from "@diffdash/domain/repository"
-import { makeReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
+import { makeReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { LineReviewAnchor, MarkdownBody } from "@diffdash/domain/review-thread"
 import * as DatabaseNode from "@diffdash/persistence/database-node"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadAnchorMapper } from "./review-thread-anchor-mapper"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
+import type { OperationSnapshotHandle } from "./operation-snapshot-reader"
+import { testReviewDescriptor } from "../test-review-descriptor"
+import { FileDeltaId, StoredSnapshotId } from "@diffdash/persistence/snapshot-block-store"
 
 const makeTempDatabasePath = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-anchor-mapper-test-"))),
@@ -137,6 +140,89 @@ index 1111111..2222222 100644
 -export const renamed = false
 +export const renamed = true`)
 
+const currentHandle: OperationSnapshotHandle = {
+  snapshot: {
+    id: StoredSnapshotId.make("snapshot:v1:00000000000000000000000000000066"),
+    projectId: ReviewProjectId.make("project:anchor-mapper"),
+    reviewKey,
+    baseRevision: currentBaseRevision,
+    headRevision: currentHeadRevision,
+    semanticIdentity: "anchor-mapper",
+    descriptor: testReviewDescriptor,
+    source: {
+      kind: "exactGit",
+      repositoryIdentity: "anchor-mapper",
+      baseObject: currentBaseRevision,
+      headObject: currentHeadRevision,
+      diffPolicyIdentity: "canonical:v1",
+    },
+    createdAtMs: 0,
+  },
+  inventory: (offset, limit) =>
+    Effect.succeed(
+      currentDiff.files.slice(offset, offset + limit).map((file, ordinal) => ({
+        ordinal: offset + ordinal,
+        deltaId: FileDeltaId.make(`delta:${file.fileId}`),
+        fileId: file.fileId,
+        path: file.path,
+        oldPath: file.oldPath,
+        additions: file.additions,
+        deletions: file.deletions,
+        status: file.status,
+        visibility: file.visibility,
+        patchHash: file.patchHash,
+        hunkCount: file.hunks.length,
+      })),
+    ),
+  findFile: (fileId) => {
+    const file = currentDiff.files.find((candidate) => candidate.fileId === fileId)
+    if (file === undefined) return Effect.die(new Error("Missing current file"))
+    return currentHandle
+      .inventory(currentDiff.files.indexOf(file), 1)
+      .pipe(
+        Effect.flatMap((files) =>
+          files[0] === undefined
+            ? Effect.die(new Error("Missing placement"))
+            : Effect.succeed(files[0]),
+        ),
+      )
+  },
+  findHunk: (fileId, hunkId) =>
+    currentHandle.hunks(fileId, 0, 256).pipe(
+      Effect.flatMap((hunks) => {
+        const hunk = hunks.find((candidate) => candidate.id === hunkId)
+        return hunk === undefined ? Effect.die(new Error("Missing hunk")) : Effect.succeed(hunk)
+      }),
+    ),
+  hunks: (fileId, offset, limit) => {
+    const file = currentDiff.files.find((candidate) => candidate.fileId === fileId)
+    return Effect.succeed(
+      (file?.hunks ?? []).slice(offset, offset + limit).map((hunk, ordinal) => ({
+        deltaId: FileDeltaId.make(`delta:${fileId}`),
+        id: hunk.id,
+        ordinal: offset + ordinal,
+        fingerprint: hunk.fingerprint,
+        header: hunk.header,
+        oldStart: hunk.oldStart,
+        oldLines: hunk.oldLines,
+        newStart: hunk.newStart,
+        newLines: hunk.newLines,
+        lineCount: hunk.lines.length,
+      })),
+    )
+  },
+  readFile: () => Effect.die(new Error("Unused file read")),
+  readHunk: (fileId, hunkId) =>
+    Effect.gen(function* () {
+      const file = yield* currentHandle.findFile(fileId)
+      const hunk = yield* currentHandle.findHunk(fileId, hunkId)
+      const parsedFile = currentDiff.files.find((candidate) => candidate.fileId === fileId)
+      const parsedHunk = parsedFile?.hunks.find((candidate) => candidate.id === hunkId)
+      if (parsedHunk === undefined) return yield* Effect.die(new Error("Missing hunk body"))
+      return { file, hunk, bytes: new TextEncoder().encode(`${parsedHunk.lines.join("\n")}\n`) }
+    }),
+}
+
 const getHunk = (path: string) => {
   const file = originalDiff.files.find((candidate) => candidate.path === path)
   const hunk = file?.hunks[0]
@@ -205,10 +291,7 @@ describe("ReviewThreadAnchorMapper", () => {
 
         const first = yield* mapper.mapReview({
           repoId: repo.id,
-          reviewKey,
-          baseRevision: currentBaseRevision,
-          headRevision: currentHeadRevision,
-          parsedDiff: currentDiff,
+          handle: currentHandle,
         })
         const byName = new Map(
           first.map((thread) => [
@@ -252,10 +335,7 @@ describe("ReviewThreadAnchorMapper", () => {
 
         const second = yield* mapper.mapReview({
           repoId: repo.id,
-          reviewKey,
-          baseRevision: currentBaseRevision,
-          headRevision: currentHeadRevision,
-          parsedDiff: currentDiff,
+          handle: currentHandle,
         })
         expect(second).toEqual(first)
       }).pipe(Effect.provide(makeLayer(databasePath)))

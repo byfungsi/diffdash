@@ -3,7 +3,6 @@ import { dirname } from "node:path"
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { CoreRpcPayloadBytes } from "@diffdash/core-rpc"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
-import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
@@ -30,16 +29,13 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Cause, Clock, Effect, Layer, Stream } from "effect"
+import { Cause, Clock, Effect, Layer } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
 import { CoreEventHub } from "./core-event-hub"
-import {
-  coreRepositoryWatcherLayer,
-  coreRepositoryWatcherNoopLayer,
-} from "./core-repository-watcher"
-import { CoreSnapshotAcquisition, coreSnapshotAcquisitionLayer } from "./core-snapshot-acquisition"
+import { coreRepositoryWatcherLayer } from "./core-repository-watcher"
+import { coreSnapshotAcquisitionLayer } from "./core-snapshot-acquisition"
 import {
   CORE_SNAPSHOT_MAX_BLOCK_BYTES,
   CoreSnapshotIngestion,
@@ -59,7 +55,6 @@ import { GitProvider } from "./services/git-provider"
 import { Prerequisites } from "./services/prerequisites"
 import { RepositoryComparisonSource } from "./services/repository-comparison-source"
 import { RepositoryLinker } from "./services/repository-linker"
-import { ReviewSnapshotService } from "./services/review-snapshot"
 import { AgentArtifactNormalizer } from "./services/agent-artifact-normalizer"
 import { ReviewAgentRouting, ReviewAgentService } from "./services/review-agent"
 import { ReviewMcpHandlers } from "./services/review-mcp-handlers"
@@ -118,26 +113,12 @@ type StandaloneCoreServices =
   | SnapshotRepository
   | SnapshotSearch
 
-function createCoreLayerInternal(
+/** Builds the external Core graph with one SQLite-backed progressive review authority. */
+export const createStandaloneCoreLayer = (
   configuration: CoreConfiguration,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
-  includeProgressiveReviews: false,
-): Layer.Layer<CoreOperationService, CoreStartupFailure, CoreEventHub>
-function createCoreLayerInternal(
-  configuration: CoreConfiguration,
-  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
-  providerComposition: CoreProviderComposition,
-  includeProgressiveReviews: true,
-): Layer.Layer<StandaloneCoreServices, CoreStartupFailure, CoreEventHub>
-function createCoreLayerInternal(
-  configuration: CoreConfiguration,
-  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
-  providerComposition: CoreProviderComposition,
-  includeProgressiveReviews: boolean,
-):
-  | Layer.Layer<CoreOperationService, CoreStartupFailure, CoreEventHub>
-  | Layer.Layer<StandaloneCoreServices, CoreStartupFailure, CoreEventHub> {
+): Layer.Layer<StandaloneCoreServices, CoreStartupFailure, CoreEventHub> => {
   const executableSearchPath = ExecutableSearchPath.make(
     defaultExecutablePath(configuration.environment.executableSearchPath),
   )
@@ -279,48 +260,6 @@ function createCoreLayerInternal(
       Layer.mergeAll(repositoryLinkerLayer, gitProviderLayer, hostedReviewWorkspacePoolLayer),
     ),
   )
-  const reviewSnapshotLayer = ReviewSnapshotService.layer().pipe(
-    Layer.provideMerge(GitService.layer),
-    Layer.provideMerge(gitProviderLayer),
-    Layer.provideMerge(repositoryComparisonSourceLayer),
-  )
-  const legacySnapshotAcquisitionLayer = Layer.effect(
-    CoreSnapshotAcquisition,
-    Effect.gen(function* () {
-      const comparisons = yield* RepositoryComparisonSource
-      const repositories = yield* RepositoryLinker
-      const snapshots = yield* ReviewSnapshotService
-      return CoreSnapshotAcquisition.of({
-        acquireHosted: (review) =>
-          Effect.gen(function* () {
-            const project = yield* repositories.ensureHosted(review.repository, "preserve")
-            const snapshot = yield* snapshots.acquireHosted(review)
-            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
-            return makeReviewSnapshotManifest(snapshot, project.id)
-          }),
-        acquireLocal: (target) =>
-          Effect.gen(function* () {
-            const snapshot = yield* snapshots.acquireLocal(target)
-            const project = yield* repositories.ensureLocal(
-              RepositoryCheckoutPath.make(snapshot.detail.rootPath),
-            )
-            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
-            return makeReviewSnapshotManifest(snapshot, project.id)
-          }),
-        acquireComparison: (target) =>
-          Effect.gen(function* () {
-            const project = yield* comparisons.repository(target)
-            const snapshot = yield* snapshots.acquireComparison(target)
-            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
-            return makeReviewSnapshotManifest(snapshot, project.id)
-          }),
-      })
-    }),
-  ).pipe(
-    Layer.provide(reviewSnapshotLayer),
-    Layer.provide(repositoryLinkerLayer),
-    Layer.provide(repositoryComparisonSourceLayer),
-  )
   const snapshotRootPath = `${configuration.paths.database}.snapshot-blocks`
   const snapshotBlockStoreLayer = SnapshotBlockStore.layer({
     rootId: SNAPSHOT_RESOURCE_ROOT_ID,
@@ -441,12 +380,8 @@ function createCoreLayerInternal(
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(processLayer),
   )
-  const reviewAcquisitionLayer = includeProgressiveReviews
-    ? snapshotAcquisitionServiceLayer
-    : legacySnapshotAcquisitionLayer
-  const repositoryWatcherLayer = includeProgressiveReviews
-    ? coreRepositoryWatcherLayer
-    : coreRepositoryWatcherNoopLayer
+  const reviewAcquisitionLayer = snapshotAcquisitionServiceLayer
+  const repositoryWatcherLayer = coreRepositoryWatcherLayer
   const progressiveReviewLayer = Layer.mergeAll(
     progressiveReviewServiceLayer,
     snapshotIngestionServiceLayer,
@@ -469,7 +404,6 @@ function createCoreLayerInternal(
     repositoryWatcherLayer,
     ProjectWorkspaceStore.layer,
     analyticsLayer,
-    reviewSnapshotLayer,
     reviewAcquisitionLayer,
     reviewTurnStoreLayer,
     appStateLayer,
@@ -496,8 +430,6 @@ function createCoreLayerInternal(
       Layer.effect(CoreOperationService, Effect.failCause(Cause.map(cause, toCoreStartupError))),
     ),
   )
-  if (!includeProgressiveReviews) return operationLayer
-
   const exposedProgressiveReviewLayer = progressiveReviewLayer.pipe(
     Layer.provide(databaseLayer),
     Layer.provide(processLayer),
@@ -519,29 +451,3 @@ function createCoreLayerInternal(
     }),
   )
 }
-
-/** Builds the legacy runtime-neutral business graph without standalone storage acquisition. */
-export const createCoreLayer = (
-  configuration: CoreConfiguration,
-  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
-  providerComposition: CoreProviderComposition,
-): Layer.Layer<CoreOperationService, CoreStartupFailure> =>
-  createCoreLayerInternal(configuration, databaseLayer, providerComposition, false).pipe(
-    Layer.provide(
-      Layer.succeed(
-        CoreEventHub,
-        CoreEventHub.of({
-          publish: () => Effect.die("Core events are unavailable in the legacy embedded graph."),
-          replay: () => Effect.die("Core events are unavailable in the legacy embedded graph."),
-          events: Stream.empty,
-        }),
-      ),
-    ),
-  )
-
-/** Builds the external Core graph with one SQLite-backed progressive review authority. */
-export const createStandaloneCoreLayer = (
-  configuration: CoreConfiguration,
-  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
-  providerComposition: CoreProviderComposition,
-) => createCoreLayerInternal(configuration, databaseLayer, providerComposition, true)

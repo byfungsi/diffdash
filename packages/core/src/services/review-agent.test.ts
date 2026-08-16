@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -65,6 +66,7 @@ import {
 } from "@diffdash/domain/review-context"
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewDiffIdentity,
   ReviewHunkFingerprint,
   ReviewHunkId,
@@ -103,6 +105,7 @@ import {
   type PinnedRepositoryComparisonInput,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
+import { FileDeltaId, StoredSnapshotId } from "@diffdash/persistence/snapshot-block-store"
 import { makeDatabase } from "@diffdash/persistence/database"
 import * as DatabaseNode from "@diffdash/persistence/database-node"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
@@ -127,6 +130,12 @@ import {
   ReviewAgentService,
 } from "./review-agent"
 import { ReviewMcpHandlers } from "./review-mcp-handlers"
+import { OperationSnapshotReader } from "./operation-snapshot-reader"
+import {
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
+  RepositoryComparisonReviewDescriptor,
+} from "@diffdash/domain/review-context"
 
 const diff = `diff --git a/src/a.ts b/src/a.ts
 index 1111111..2222222 100644
@@ -167,6 +176,8 @@ const operationErrors = makeAgentProviderOperationErrorFactory({
 })
 const baseRevision = ReviewRevision.make("base-sha")
 const headRevision = ReviewRevision.make("head-sha")
+const applicationInstanceId = ApplicationInstanceId.make("agent-test")
+const processEpoch = CoreProcessEpoch.make("agent-test-epoch")
 const snapshot = LocalReviewSnapshot.make({
   snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000001"),
   reviewKey,
@@ -336,6 +347,9 @@ const turnIdentity = (details: ReviewThreadDetails, reviewSnapshot: ReviewSnapsh
     throw new Error("Test review turn requires a supported snapshot")
   }
   return {
+    applicationInstanceId,
+    processEpoch,
+    snapshotId: reviewSnapshot.snapshotId,
     repoId: details.thread.repoId,
     target:
       reviewSnapshot instanceof HostedReviewSnapshot
@@ -590,6 +604,101 @@ const makeLayer = (
           : Effect.fail(released.workspaceFailure),
     }),
   )
+  const snapshotReader = Layer.succeed(
+    OperationSnapshotReader,
+    OperationSnapshotReader.of({
+      open: (identity) => {
+        const selected =
+          identity.snapshotId === pullRequestSnapshot.snapshotId
+            ? pullRequestSnapshot
+            : identity.snapshotId === comparisonSnapshot.snapshotId
+              ? comparisonSnapshot
+              : snapshot
+        const descriptor =
+          selected instanceof HostedReviewSnapshot
+            ? HostedReviewDescriptor.make({
+                review: selected.detail.summary.locator,
+                title: selected.detail.summary.title,
+                authorUsername: selected.detail.summary.author.username,
+                state: selected.detail.summary.state,
+                draft: selected.detail.summary.draft,
+                baseRef: selected.detail.summary.base.name,
+                headRef: selected.detail.summary.head.name,
+                url: selected.detail.summary.url,
+              })
+            : selected instanceof RepositoryComparisonSnapshot
+              ? RepositoryComparisonReviewDescriptor.make({
+                  target: selected.detail.target,
+                  title: selected.detail.title,
+                  fetchedAt: selected.detail.fetchedAt,
+                })
+              : LocalReviewDescriptor.make({
+                  target: LocalReviewTarget.make({
+                    kind: "local",
+                    rootPath: selected.detail.rootPath,
+                    comparison: selected.detail.comparison,
+                  }),
+                  repoName: selected.detail.repoName,
+                  branchName: selected.detail.branchName,
+                  title: selected.detail.title,
+                  fetchedAt: selected.detail.fetchedAt,
+                })
+        const file = {
+          ordinal: 0,
+          deltaId: FileDeltaId.make("delta:agent"),
+          fileId: lineAnchor.fileId,
+          path: lineAnchor.filePath,
+          oldPath: null,
+          additions: 1,
+          deletions: 1,
+          status: "modified" as const,
+          visibility: { _tag: "Visible" as const },
+          patchHash:
+            selected.parsedDiff.files[0]?.patchHash ?? ReviewFilePatchHash.make("patch:agent"),
+          hunkCount: 1,
+        }
+        const hunk = {
+          deltaId: file.deltaId,
+          id: lineAnchor.hunkId,
+          ordinal: 0,
+          fingerprint: lineAnchor.hunkFingerprint,
+          header: lineAnchor.hunkHeader,
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 1,
+          lineCount: 2,
+        }
+        const bytes = new TextEncoder().encode("-const value = 1\n+const value = 2\n")
+        return Effect.succeed({
+          snapshot: {
+            id: StoredSnapshotId.make(identity.snapshotId),
+            projectId: identity.projectId,
+            reviewKey: selected.reviewKey,
+            baseRevision: selected.baseRevision,
+            headRevision: selected.headRevision,
+            semanticIdentity: "agent-test",
+            descriptor,
+            source: {
+              kind: "exactGit" as const,
+              repositoryIdentity: "agent-test",
+              baseObject: selected.baseRevision,
+              headObject: selected.headRevision,
+              diffPolicyIdentity: "canonical:v1",
+            },
+            createdAtMs: 0,
+          },
+          inventory: (offset: number) => Effect.succeed(offset === 0 ? [file] : []),
+          findFile: () => Effect.succeed(file),
+          findHunk: () => Effect.succeed(hunk),
+          hunks: (_fileId: ReviewFileId, offset: number) =>
+            Effect.succeed(offset === 0 ? [hunk] : []),
+          readFile: () => Effect.succeed({ file, hunks: [hunk], bytes }),
+          readHunk: () => Effect.succeed({ file, hunk, bytes }),
+        })
+      },
+    }),
+  )
   return ReviewAgentService.layer.pipe(
     Layer.provideMerge(persistence),
     Layer.provideMerge(registry),
@@ -598,6 +707,7 @@ const makeLayer = (
     Layer.provideMerge(mcp),
     Layer.provideMerge(mcpHandlers),
     Layer.provideMerge(worktrees),
+    Layer.provideMerge(snapshotReader),
     Layer.provideMerge(AgentArtifactNormalizer.layer),
   )
 }
@@ -687,7 +797,6 @@ describe("ReviewAgentService", () => {
         const accepted = yield* service.acceptThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, pullRequestSnapshot),
-          snapshot: pullRequestSnapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -740,7 +849,6 @@ describe("ReviewAgentService", () => {
         yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, pullRequestSnapshot),
-          snapshot: pullRequestSnapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
           onProgress: (stage) => Effect.sync(() => released.events.push(`progress.${stage}`)),
@@ -801,7 +909,6 @@ describe("ReviewAgentService", () => {
         yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, comparisonSnapshot),
-          snapshot: comparisonSnapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -860,7 +967,6 @@ describe("ReviewAgentService", () => {
             .runThreadTurn({
               threadId: created.thread.id,
               ...turnIdentity(created, pullRequestSnapshot),
-              snapshot: pullRequestSnapshot,
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
@@ -933,7 +1039,6 @@ describe("ReviewAgentService", () => {
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, snapshot),
-          snapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -989,7 +1094,6 @@ describe("ReviewAgentService", () => {
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, snapshot),
-            snapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1042,7 +1146,6 @@ describe("ReviewAgentService", () => {
             .runThreadTurn({
               threadId: created.thread.id,
               ...turnIdentity(created, snapshot),
-              snapshot,
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
@@ -1095,7 +1198,6 @@ describe("ReviewAgentService", () => {
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, snapshot),
-          snapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -1167,7 +1269,6 @@ describe("ReviewAgentService", () => {
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, snapshot),
-            snapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1224,7 +1325,6 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, pullRequestSnapshot),
-            snapshot: pullRequestSnapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1298,7 +1398,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, pullRequestSnapshot),
-            snapshot: pullRequestSnapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1358,7 +1457,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, snapshot),
-            snapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1410,7 +1508,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, snapshot),
-            snapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1461,7 +1558,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           .runThreadTurn({
             threadId: created.thread.id,
             ...turnIdentity(created, snapshot),
-            snapshot,
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1535,7 +1631,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
           ...turnIdentity(created, snapshot),
-          snapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -1609,7 +1704,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
             .runThreadTurn({
               threadId: created.thread.id,
               ...invalid,
-              snapshot: pullRequestSnapshot,
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
@@ -1656,7 +1750,6 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const input = {
           threadId: created.thread.id,
           ...turnIdentity(created, snapshot),
-          snapshot,
           cwd: repo.localPath,
           walkthrough: Option.none(),
         } as const
