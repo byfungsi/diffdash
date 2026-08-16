@@ -155,12 +155,15 @@ failure. Core alone acquires product SQLite after explicit ownership authorizati
 opens it.
 
 Core also owns the disposable-resource catalog and the one active repository watcher. Snapshot
-blocks, managed spools, process temporary data, worktree pools, and migration backups are registered
-under typed roots; policy collection cannot bypass foreground or durable-operation leases and cannot
-touch unknown older artifacts. Review operations open their own bounded snapshot-reader lease, so a
-renderer disconnect or project switch does not invalidate accepted walkthrough or agent work. Native
-watch hints are lossy accelerators only: debounced hints, focus/resume/overflow triggers, and polling
-all converge through canonical Git reconciliation before a generation-keyed state event is published.
+blocks, managed spools, process temporary data, and generated local/remote worktree pools are
+registered under typed roots; policy collection cannot bypass foreground or durable-operation leases
+and cannot touch unknown older artifacts. Agent execution atomically leases both its generated
+worktree and parent bare repository. Scoped review staging remains producer-owned, while SQLite
+migration backups remain database-recovery artifacts rather than independently collectible cache
+entries. Review operations open their own bounded snapshot-reader lease, so a renderer disconnect or
+project switch does not invalidate accepted walkthrough or agent work. Native watch hints are lossy
+accelerators only: debounced hints, focus/resume/overflow triggers, and polling all converge through
+canonical Git reconciliation before a generation-keyed state event is published.
 
 The host must call `start` before any business operation. Concurrent and repeated startup calls
 share one acquisition, startup failures are normalized at the native boundary, and disposal closes
