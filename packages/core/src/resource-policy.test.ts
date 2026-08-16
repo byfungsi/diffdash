@@ -115,4 +115,27 @@ describe("resource lifecycle policy", () => {
       expect(yield* planResourceCollectionNow([leased, pressure])).toContain(leased.id)
     }),
   )
+
+  it.effect("keeps collection arithmetic stable after one year", () =>
+    Effect.gen(function* () {
+      const dayMs = 24 * 60 * 60 * 1_000
+      const leased = disposable("year-lease", 2_000 * mib, {
+        lastUsedAtMs: 0,
+        leases: [
+          {
+            owner: "review-operation",
+            applicationInstanceId: ApplicationInstanceId.make("app-year"),
+            processEpoch: CoreProcessEpoch.make("epoch-year"),
+            renewedAtMs: 0,
+            expiresAtMs: 180 * dayMs,
+          },
+        ],
+      })
+      const pressure = disposable("year-pressure", 2_500 * mib)
+
+      yield* TestClock.adjust(365 * dayMs)
+
+      expect(yield* planResourceCollectionNow([leased, pressure])).toContain(leased.id)
+    }),
+  )
 })
