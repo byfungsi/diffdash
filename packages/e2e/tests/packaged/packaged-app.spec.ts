@@ -264,46 +264,9 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       .filter({ hasText: "new fixture" })
       .first()
     await expect(addedLine).toBeVisible()
-    const gutterNumber = fixtureDiffCard
-      .locator('diffs-container [data-line-type="change-addition"][data-column-number]:visible')
-      .last()
     const composer = window.getByRole("textbox", { name: "Thread message" })
-    await expect
-      .poll(
-        async () => {
-          if (await composer.isVisible()) return true
-          await gutterNumber.evaluate((element) => {
-            element
-              .closest("pre")
-              ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
-            element.dispatchEvent(
-              new PointerEvent("pointermove", {
-                bubbles: true,
-                composed: true,
-                pointerType: "mouse",
-              }),
-            )
-          })
-          const utility = fixtureDiffCard
-            .locator("diffs-container [data-utility-button]:visible")
-            .first()
-          if (!(await utility.isVisible())) return false
-          await utility.evaluate((button) => {
-            const init = {
-              bubbles: true,
-              button: 0,
-              composed: true,
-              pointerId: 1,
-              pointerType: "mouse",
-            }
-            button.dispatchEvent(new PointerEvent("pointerdown", init))
-            button.dispatchEvent(new PointerEvent("pointerup", init))
-          })
-          return composer.isVisible()
-        },
-        { timeout: 15_000 },
-      )
-      .toBe(true)
+    await addedLine.click()
+    await expect(composer).toBeVisible()
     await composer.fill("Review fixture line")
     await window.getByRole("button", { name: "Comment" }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
