@@ -34,4 +34,6 @@ cache high/collection watermarks.
 
 ## Results
 
-No repository-scale baseline has been promoted yet.
+No repository-scale baseline has been promoted yet. Promotion requires the content-derived fixture
+ID, pinned base/head manifest, exact DiffDash commit, machine profile, measured values, and objective
+pass/fail status required by the decision register.
