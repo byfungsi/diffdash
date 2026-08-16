@@ -59,7 +59,6 @@ describe("review thread anchors", () => {
       ),
     ).toBe(true)
   })
-
 })
 
 describe("review thread message lifecycle", () => {

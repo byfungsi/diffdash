@@ -1,7 +1,7 @@
 import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { transportError } from "@diffdash/protocol/transport-error"
 import type { ReviewSessionSearchPublication } from "@diffdash/protocol/review-session"
 import type { ApplicationRuntime } from "../../application-runtime"
@@ -100,7 +100,12 @@ export const defineReviewHandlers = (
     async (_event, request) => {
       let finalPublication: ReviewSessionSearchPublication | null = null
       await runtime.progressiveReviews.search(request, (publication) => {
-        if (publication._tag === "Final") finalPublication = publication
+        Match.valueTags(publication, {
+          Provisional: () => undefined,
+          Final: (current) => {
+            finalPublication = current
+          },
+        })
       })
       return finalPublication === null ? [] : [finalPublication]
     },

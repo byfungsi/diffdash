@@ -50,7 +50,7 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
     if (!Predicate.isObjectOrArray(item)) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
     }
-    if (item instanceof Uint8Array) {
+    if (Schema.is(Schema.Uint8Array)(item)) {
       binaryBytes += item.byteLength
       continue
     }
@@ -85,8 +85,8 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
 
   let serialized: string
   try {
-    const result = JSON.stringify(value, (_key, item: JsonPayloadValue) =>
-      item instanceof Uint8Array ? null : item,
+    const result = JSON.stringify(value, (_key, item) =>
+      Schema.is(Schema.Uint8Array)(item) ? null : item,
     )
     if (result === undefined) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
