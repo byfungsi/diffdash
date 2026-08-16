@@ -94,11 +94,11 @@ The following requirement IDs are covered by
 | `DIFF-LARGE-001` | `[B]` | Exact 20,000-line and 2,000,000-character boundaries remain eligible for highlighted rendering; values above either boundary use plain mode. |
 | `TREE-SCALE-001` | `[B]` | A deterministic 10,000-file fixture preserves one unique canonical path and status per input file. |
 | `DIFF-SCALE-001` | `[B]` | A deterministic 1,000-file fixture classifies exactly one over-threshold file for plain rendering while retaining 999 highlight-eligible files. |
-| `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
+| `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and the integrity-checked external Core artifacts for utility and Bun hosts. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
 | `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
-| `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon in addition to ASAR, updater, CLI, and native SQLite resources. |
+| `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon and external Core manifest in addition to ASAR, updater, and CLI resources. Runtime-specific Node/Bun SQLite adapters require no application-owned native addon. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 | `PACKAGE-PROVIDER-001` | `[T]` | The final packaged app discovers fixture Git and agent registrations, routes a hosted review through the host composition, and executes the selected fixture agent. |
 | `PACKAGE-PROVIDER-002` | `[T]` | Fake Git/CLI binaries and local provider fixtures prove packaged workspace bootstrap without credentials or network access. |
