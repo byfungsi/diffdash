@@ -89,6 +89,23 @@ describe("Core host selection", () => {
     }),
   )
 
+  it.effect("forced Bun skips unavailable Bun paths without falling back to utility", () =>
+    Effect.gen(function* () {
+      const { latch } = yield* makeLatch()
+      const selected = yield* selectCoreHost(
+        "bun",
+        [
+          candidate("bun", Effect.fail(candidateFailure)),
+          candidate("utility", Effect.die("must not run")),
+          candidate("bun"),
+        ],
+        latch,
+      )
+
+      expect(selected.host).toBe("bun")
+    }),
+  )
+
   it.effect("forced utility preserves the utility candidate without probing Bun", () =>
     Effect.gen(function* () {
       const { latch } = yield* makeLatch()

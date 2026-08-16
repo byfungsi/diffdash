@@ -118,10 +118,11 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
     if (!qualified.ok) {
       lastReason = "qualification-failed"
       lastQualificationCapability = qualified.error.qualificationCapability
-      if (mode !== "auto") break
-      if (!(yield* fallbackLatch.fallbackAllowed)) {
-        lastReason = "fallback-disabled"
-        break
+      if (mode === "auto") {
+        if (!(yield* fallbackLatch.fallbackAllowed)) {
+          lastReason = "fallback-disabled"
+          break
+        }
       }
       continue
     }
@@ -151,10 +152,11 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
     }
     lastReason = "startup-failed"
     lastQualificationCapability = null
-    if (mode !== "auto") break
-    if (!(yield* fallbackLatch.fallbackAllowed)) {
-      lastReason = "fallback-disabled"
-      break
+    if (mode === "auto") {
+      if (!(yield* fallbackLatch.fallbackAllowed)) {
+        lastReason = "fallback-disabled"
+        break
+      }
     }
   }
 
