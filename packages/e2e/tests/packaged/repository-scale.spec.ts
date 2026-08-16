@@ -62,6 +62,10 @@ type RendererMeasurement = {
 }
 
 test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", async () => {
+  test.skip(
+    process.env.DIFFDASH_REPOSITORY_SCALE_HOST === undefined,
+    "Repository-scale orchestration requires the promoted scale environment.",
+  )
   const configuration = await readConfiguration()
   test.setTimeout(configuration.profile === "full" ? 20 * 60_000 : 3 * 60_000)
   const userData = join(dirname(configuration.rawReport), "user-data")
