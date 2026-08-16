@@ -306,8 +306,18 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
         Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.acquireLocal, undefined, [
           null,
         ]),
-        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.get, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.generate, undefined, [
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.start, undefined, [
+          null,
+        ]),
+        Reflect.apply(
+          globalThis.window.diffDashForE2e.walkthroughOperations.getOperation,
+          undefined,
+          [null],
+        ),
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.cancel, undefined, [
+          null,
+        ]),
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.getStored, undefined, [
           null,
         ]),
       ]
@@ -335,8 +345,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       "hostedRepositories:search",
       "reviewSnapshots:acquireHosted",
       "reviewSnapshots:acquireLocal",
-      "localWalkthroughs:get",
-      "localWalkthroughs:generate",
+      "walkthroughOperations:start",
+      "walkthroughOperations:getOperation",
+      "walkthroughOperations:cancel",
+      "walkthroughOperations:getStored",
     ]
     expect(malformedIpcErrors).toHaveLength(decodedChannels.length)
     for (const [index, channel] of decodedChannels.entries()) {
@@ -576,20 +588,24 @@ test("runs an explicit Claude walkthrough successfully", async ({
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await expect(window.getByText("src/local.ts").first()).toBeVisible()
     await expect(window.getByText("notes.txt").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Approve" })).toBeHidden()
 
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:explicit-claude")
+    expect(accepted.created).toBe(true)
+    const duplicate = await startLocalWalkthrough(window, localRepo, "w:explicit-claude")
+    expect(duplicate).toMatchObject({ created: false, operationId: accepted.operationId })
     await window.getByRole("button", { name: "Walkthrough" }).click()
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(operation).toMatchObject({ state: "completed" })
+    expect(await getStoredLocalWalkthrough(window, localRepo)).toBe("found")
     expect(await countLogLines(claudeRunLog)).toBe(1)
-    expect(readLatestWalkthroughOperation(join(userData, "diffdash.sqlite"))).toMatchObject({
-      count: 1,
-      state: "completed",
-    })
   } finally {
     await app.close()
   }
@@ -634,13 +650,22 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-invalid-claude")
     await window.getByRole("button", { name: "Walkthrough" }).click()
 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     await expect(window.getByText("Walkthrough unavailable")).toBeHidden()
+    const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(operation.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerId: "claude", stage: "parse", outcome: "invalid-json" }),
+        expect.objectContaining({ providerId: "codex", stage: "validate", outcome: "succeeded" }),
+      ]),
+    )
     expect(await countLogLines(claudeRunLog)).toBe(2)
     expect(await countLogLines(codexRunLog)).toBe(1)
   } finally {
@@ -687,11 +712,24 @@ test("skips unavailable Claude and falls back to Codex in Auto mode", async ({
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-unavailable-claude")
     await window.getByRole("button", { name: "Walkthrough" }).click()
 
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(operation.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "claude",
+          stage: "probe",
+          outcome: "unavailable",
+        }),
+        expect.objectContaining({ providerId: "codex", stage: "validate", outcome: "succeeded" }),
+      ]),
+    )
     expect(await countLogLines(claudeRunLog)).toBe(0)
     expect(await countLogLines(codexRunLog)).toBe(1)
   } finally {
@@ -737,17 +775,21 @@ test("recovers a running walkthrough after renderer reload", async ({
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:renderer-reload")
     await window.getByRole("button", { name: "Walkthrough" }).click()
     await expect.poll(() => countLogLines(claudeRunLog)).toBe(1)
 
     await window.reload()
+    await window.evaluate(installDiffDashE2eApi)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await window.getByRole("button", { name: "Walkthrough" }).click()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible({
       timeout: 20_000,
     })
+    await waitForWalkthroughOperation(window, accepted.operationId, "completed")
     expect(await countLogLines(claudeRunLog)).toBe(1)
   } finally {
     await app.close()
@@ -807,9 +849,10 @@ test("kills the provider child and persists interruption after a Core crash", as
       .toBeGreaterThan(0)
 
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:core-crash")
     await expect.poll(() => readProviderRunProcessId(claudeRunLog)).toBeGreaterThan(0)
     const providerProcessId = await readProviderRunProcessId(claudeRunLog)
 
@@ -824,11 +867,7 @@ test("kills the provider child and persists interruption after a Core crash", as
         { timeout: 15_000 },
       )
       .toBe(true)
-    await expect
-      .poll(() => readLatestWalkthroughOperationState(join(userData, "diffdash.sqlite")), {
-        timeout: 15_000,
-      })
-      .toBe("interrupted")
+    await waitForWalkthroughOperation(window, accepted.operationId, "interrupted", 15_000)
     expect(await countLogLines(claudeRunLog)).toBe(1)
   } finally {
     await app.close().catch(() => undefined)
@@ -874,6 +913,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     if (forcedCoreHost !== null) {
       const coreParentPid = app.process().pid
       if (coreParentPid === undefined) throw new Error("Electron main process PID is unavailable")
@@ -889,25 +929,11 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    const rawFailurePromise = window.evaluate(
-      async ({ rootPath }) => {
-        const result = await Reflect.apply(
-          globalThis.window.diffDash.localWalkthroughs.generate,
-          undefined,
-          [{ kind: "local", rootPath, comparison: { _tag: "workingTree" } }],
-        )
-        if (!("error" in result)) throw new Error("Expected the raw bridge call to fail")
-        return {
-          envelopeIsPlain: Object.getPrototypeOf(result) === Object.prototype,
-          errorIsPlain: Object.getPrototypeOf(result.error) === Object.prototype,
-          tag: Reflect.get(result, "_tag"),
-          errorTag: Reflect.get(result.error, "_tag"),
-          code: result.error.code,
-          operation: result.error.operation,
-          providerFailure: result.error.providerFailure,
-        }
-      },
-      { rootPath: localRepo },
+    const rawAcceptance = await startLocalWalkthrough(
+      window,
+      localRepo,
+      "w:dropped-terminal-hint",
+      true,
     )
     await window.getByRole("button", { name: "Walkthrough" }).click()
 
@@ -919,49 +945,39 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await window.getByRole("button", { name: "Copy error details" }).first().click()
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 
-    const rawFailure = await rawFailurePromise
-    expect(rawFailure).toMatchObject({
+    expect(rawAcceptance).toMatchObject({
+      created: true,
       envelopeIsPlain: true,
-      errorIsPlain: true,
-      tag: "Failure",
-      errorTag: "TransportError",
-      code: forcedCoreHost === null ? "AgentProviderAuthenticationError" : "AGENT_PROVIDER_EXIT",
-      operation: "localWalkthroughs:generate",
+      valueIsPlain: true,
     })
-    if (forcedCoreHost !== null) {
-      expect(rawFailure.providerFailure).toMatchObject({
-        code: "AGENT_PROVIDER_EXIT",
-        method: "Walkthroughs.start",
-        providerId: "claude",
-        modelId: "claude-sonnet-5",
-        retryClass: "userAction",
-      })
-    }
+    const operation = await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
+    expect(operation.failure).toMatchObject({
+      code: "AGENT_PROVIDER_EXIT",
+      providerId: "claude",
+      modelId: "claude-sonnet-5",
+      retryClass: "userAction",
+    })
+    expect(operation.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: "claude",
+          stage: "execute",
+          outcome: "provider-exit",
+        }),
+      ]),
+    )
 
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
-    const operation = readLatestWalkthroughOperation(join(userData, "diffdash.sqlite"))
-    if (forcedCoreHost === null) {
-      expect(report).toContain("Error code: AgentProviderAuthenticationError")
-      expect(report).toContain("Operation: localWalkthroughs:generate")
-      expect(report).toContain("Provider tag: claude")
-      expect(report).toContain("Cause tag: ProcessExitError")
-      expect(report).toContain("Exit code: 9")
-      expect(report).toContain("Reason: Authentication or authorization failure reported.")
-      expect(report).toContain("Stderr: Authentication or authorization failure reported.")
-    } else {
-      expect(report).toContain("Method: Walkthroughs.start")
-      expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
-      expect(report).toMatch(/Operation ID: [A-Za-z0-9._:-]+/u)
-      expect(report).toContain("Error code: AGENT_PROVIDER_EXIT")
-      expect(report).toContain("Provider: claude")
-      expect(report).toContain("Model: claude-sonnet-5")
-      expect(report).toContain("Retry class: userAction")
-      expect(report).toContain("execute / provider-exit")
-      expect(report).toContain("- ProcessExitError")
-      expect(report).toContain("- Exit code: 9")
-      if (operation === null) throw new Error("Expected a persisted walkthrough operation")
-      expect(report).toContain(`Operation ID: ${operation.id}`)
-    }
+    expect(report).toContain("Method: Walkthroughs.start")
+    expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
+    expect(report).toContain(`Operation ID: ${rawAcceptance.operationId}`)
+    expect(report).toContain("Error code: AGENT_PROVIDER_EXIT")
+    expect(report).toContain("Provider: claude")
+    expect(report).toContain("Model: claude-sonnet-5")
+    expect(report).toContain("Retry class: userAction")
+    expect(report).toContain("execute / provider-exit")
+    expect(report).toContain("- ProcessExitError")
+    expect(report).toContain("- Exit code: 9")
     expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
     expect(report).not.toContain("Operation: unknown")
     for (const privateValue of [
@@ -1575,6 +1591,124 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
   return composer
 }
 
+interface WalkthroughAcceptanceSummary {
+  readonly operationId: string
+  readonly stateVersion: number
+  readonly created: boolean
+  readonly envelopeIsPlain: boolean
+  readonly valueIsPlain: boolean
+}
+
+interface WalkthroughOperationSummary {
+  readonly state: string
+  readonly stateVersion: number
+  readonly attempts: ReadonlyArray<{
+    readonly providerId: string
+    readonly modelId: string | null
+    readonly attempt: number
+    readonly stage: string
+    readonly outcome: string
+  }>
+  readonly failure: null | {
+    readonly code: string
+    readonly providerId: string | null
+    readonly modelId: string | null
+    readonly retryClass: string
+  }
+}
+
+const startLocalWalkthrough = async (
+  window: Page,
+  rootPath: string,
+  idempotencyKey: string,
+  inspectPlainEnvelope = false,
+): Promise<WalkthroughAcceptanceSummary> =>
+  window.evaluate(
+    async ({ rootPath: targetRootPath, key, inspectEnvelope }) => {
+      const result = await Reflect.apply(
+        globalThis.window.diffDash.walkthroughOperations.start,
+        undefined,
+        [
+          {
+            target: {
+              kind: "local",
+              rootPath: targetRootPath,
+              comparison: { _tag: "workingTree" },
+            },
+            regenerate: false,
+            idempotencyKey: key,
+          },
+        ],
+      )
+      if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.message)
+      const acceptance = result.value
+      if (Reflect.get(acceptance, "_tag") !== "Success") {
+        throw new Error(acceptance.error.safeMessage)
+      }
+      return {
+        operationId: acceptance.value.operationId,
+        stateVersion: acceptance.value.stateVersion,
+        created: acceptance.value.created,
+        envelopeIsPlain: !inspectEnvelope || Object.getPrototypeOf(result) === Object.prototype,
+        valueIsPlain: !inspectEnvelope || Object.getPrototypeOf(acceptance) === Object.prototype,
+      }
+    },
+    { rootPath, key: idempotencyKey, inspectEnvelope: inspectPlainEnvelope },
+  )
+
+const getWalkthroughOperation = async (
+  window: Page,
+  operationId: string,
+): Promise<WalkthroughOperationSummary> =>
+  window.evaluate(async (id) => {
+    const result = await Reflect.apply(
+      globalThis.window.diffDashForE2e.walkthroughOperations.getOperation,
+      undefined,
+      [{ operationId: id }],
+    )
+    if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.safeMessage)
+    const operation = result.value.operation
+    return {
+      state: operation.state,
+      stateVersion: operation.stateVersion,
+      attempts: operation.attempts,
+      failure: operation.state === "failed" ? operation.failure : null,
+    }
+  }, operationId)
+
+const getStoredLocalWalkthrough = async (window: Page, rootPath: string): Promise<string> =>
+  window.evaluate(async (targetRootPath) => {
+    const result = await Reflect.apply(
+      globalThis.window.diffDashForE2e.walkthroughOperations.getStored,
+      undefined,
+      [
+        {
+          target: {
+            kind: "local",
+            rootPath: targetRootPath,
+            comparison: { _tag: "workingTree" },
+          },
+        },
+      ],
+    )
+    if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.safeMessage)
+    return result.value.status
+  }, rootPath)
+
+const waitForWalkthroughOperation = async (
+  window: Page,
+  operationId: string,
+  state: "completed" | "failed" | "interrupted",
+  timeout = 20_000,
+): Promise<WalkthroughOperationSummary> => {
+  await expect
+    .poll(() => getWalkthroughOperation(window, operationId), { timeout })
+    .toMatchObject({
+      state,
+    })
+  return getWalkthroughOperation(window, operationId)
+}
+
 const countLogLines = async (path: string) => {
   try {
     return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).length
@@ -1590,56 +1724,6 @@ const readProviderRunProcessId = async (path: string): Promise<number> => {
     return Number.isInteger(processId) && processId > 0 ? processId : 0
   } catch {
     return 0
-  }
-}
-
-const readLatestWalkthroughOperationState = (databasePath: string): string | null => {
-  try {
-    const database = new DatabaseSync(databasePath, { readOnly: true })
-    try {
-      const row = database
-        .prepare("SELECT state FROM walkthrough_operations ORDER BY accepted_at DESC LIMIT 1")
-        .get()
-      if (typeof row !== "object" || row === null || !("state" in row)) return null
-      return typeof row.state === "string" ? row.state : null
-    } finally {
-      database.close()
-    }
-  } catch {
-    return null
-  }
-}
-
-const readLatestWalkthroughOperation = (
-  databasePath: string,
-): { readonly id: string; readonly state: string; readonly count: number } | null => {
-  try {
-    const database = new DatabaseSync(databasePath, { readOnly: true })
-    try {
-      const row = database
-        .prepare(
-          `SELECT id, state, (SELECT COUNT(*) FROM walkthrough_operations) AS count
-           FROM walkthrough_operations ORDER BY accepted_at DESC LIMIT 1`,
-        )
-        .get()
-      if (
-        typeof row !== "object" ||
-        row === null ||
-        !("id" in row) ||
-        !("state" in row) ||
-        !("count" in row) ||
-        typeof row.id !== "string" ||
-        typeof row.state !== "string" ||
-        typeof row.count !== "number"
-      ) {
-        return null
-      }
-      return { id: row.id, state: row.state, count: row.count }
-    } finally {
-      database.close()
-    }
-  } catch {
-    return null
   }
 }
 
