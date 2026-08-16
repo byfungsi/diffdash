@@ -20,11 +20,13 @@ test("parses process lists and classifies DiffDash ownership", () => {
   102 100 512 diffdash-core
   103 100 256 git diff
   104 100 128 /Applications/DiffDash --type=utility --utility-sub-type=network.mojom.NetworkService
+  105 100 768 /opt/diffdash/core/bun core-bun.mjs
+  106 100 640 /Applications/DiffDash --type=utility --utility-sub-type=node.mojom.NodeService core.mjs
 `)
   assert.equal(processes[0].rssBytes, 2_097_152)
   assert.deepEqual(
     processes.map((process) => classifyProcess(process, 100)),
-    ["electron", "renderer", "coreWorker", "child", "child"],
+    ["electron", "renderer", "coreWorker", "child", "child", "coreWorker", "coreWorker"],
   )
 })
 

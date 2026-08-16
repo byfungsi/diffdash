@@ -91,7 +91,13 @@ export const parseLinuxSmaps = (input) => {
 export const classifyProcess = (process, rootPid) => {
   if (process.pid === rootPid) return "electron"
   if (process.command.includes("--type=renderer")) return "renderer"
-  if (process.command.includes("diffdash-core") || process.command.includes("core-host")) {
+  if (
+    process.command.includes("diffdash-core") ||
+    process.command.includes("core-host") ||
+    process.command.includes("core-bun.mjs") ||
+    (process.command.includes("--type=utility") &&
+      process.command.includes("node.mojom.NodeService"))
+  ) {
     return "coreWorker"
   }
   return "child"
