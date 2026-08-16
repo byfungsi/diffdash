@@ -119,6 +119,25 @@ forced Bun and utility E2E additionally verify real process selection and teardo
 | `M21-RPC-RECOVERY-001` | `[T]` | `walkthrough-operation-store.test.ts` and Core startup recovery tests prove accepted active work becomes interrupted after a dead Core epoch without restarting provider work. |
 | `M21-RPC-PRESSURE-001` | `[T]` | `m21-transport-benchmark.ts` and the dated D-01 artifact lock the 512 KiB frame, 16 MiB aggregate reservation, 32 concurrent unary requests, and zero chunk/ack state. |
 
+## M21 Repository-Scale Evidence
+
+These requirements are mandatory for the external Core release. Deterministic suites establish
+correctness and bounds; only a promoted packaged Ubuntu 24.04 x86_64 report can establish the final
+full-fixture latency, process memory, renderer frame, and reclamation results.
+
+| Requirement | Class | Evidence |
+|---|---|---|
+| `M21-SCALE-FIXTURE-001` | `[T]` | `tools/repository-scale/test` proves an auth-independent fixture with exactly 61,000 changed files and 30,000,000 added rows plus binary, rename, delete, mode-only, no-newline, enormous-file, wrapped-line, dense-thread, annotation, broad-search, and revision-change cases. |
+| `M21-SCALE-INGEST-001` | `[T]` | `core-snapshot-ingestion.test.ts` streams a multi-megabyte single hunk through multiple legal blocks, validates every worker batch, binds final hunk identity transactionally, and reconstructs only through bounded range reads. |
+| `M21-SCALE-READER-001` | `[T]` | Operation snapshot reader and store suites enforce 256-row inventory/hunk pages, bounded targeted hunk/file reads, independent durable-operation leases, shared reachability, and no renderer-session dependency. |
+| `M21-SCALE-SEARCH-001` | `[T]` | Snapshot search suites prove fixed-space, case-insensitive literal scans, non-overlap, UTF-16 coordinates, capped excerpts, directional rescans, provisional/final publications, and interruption. |
+| `M21-SCALE-RENDER-001` | `[T]` | Browser suites must prove production mounts fewer than the 1,000-row limit across 61,000 files, uses bounded Pierre range hosts, preserves exact thread/search/navigation targets, and releases text, syntax, container, observer, and measurement owners after switch. |
+| `M21-SCALE-SWITCH-001` | `[T]` | Repository-scale evaluation rejects non-Linux, mixed commit/machine/host/app provenance, non-packaged runs, incomplete disposal, non-alternating scenarios, missing storage samples, fewer than ten switches, monotonic growth, or a post-warm-up plateau above the five-percent/32-MiB rule. |
+| `M21-SCALE-STORAGE-001` | `[T]` | Every promoted sample records path-free SQLite bytes, managed-resource bytes, filesystem capacity/free bytes, and signed deltas before and after its fixed process sample. |
+| `M21-SCALE-HOST-001` | `[T]` | Forced Bun and utility E2E cover process selection/teardown, explicit success, classified private-stderr failure, Auto invalid-output fallback, unavailable-provider fallback, renderer reload single-flight recovery, Core-crash interruption, child termination, and packaged provider discovery. |
+| `M21-SCALE-PACKAGED-001` | `[T]` | Final Ubuntu/macOS packaged gates must verify real Core artifacts, Bun and utility flows, AppImage launch, deb installation, watcher invalidation, Core crash, ENOSPC, and managed-space return. |
+| `M21-SCALE-SLO-001` | `[T]` | D-14 remains pending until a dated packaged report records objective pass/fail thresholds for ingest, first range, far target, provisional/final search, rescan, cancellation, frame/long-task distribution, disposal/collection, and ten-switch memory plateau. |
+
 ## Classified Product Surface
 
 These rows classify implemented behavior already covered by the named suites. More focused rows above
