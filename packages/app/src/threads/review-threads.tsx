@@ -32,6 +32,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useEffect,
+  useEffectEvent,
   useId,
   useRef,
   useState,
@@ -123,6 +124,9 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
   const localTargetKey = localTarget === null ? null : localReviewTargetKey(localTarget)
   const available = baseRevision !== null && headRevision !== null
+  const listThreadDetails = useEffectEvent(() =>
+    automation.threads.listDetails(reviewThreadTarget(hostedReview, localTarget, comparisonTarget)),
+  )
 
   const load = async () => {
     if (!available) {
@@ -174,11 +178,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setAgentErrors({})
     setLoading(true)
     setError(null)
-    runRendererPromise(
-      automation.threads.listDetails(
-        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-      ),
-    )
+    runRendererPromise(listThreadDetails())
       .then((loaded) => {
         if (!cancelled) setDetails(sortThreadDetails(loaded))
         return undefined
@@ -199,7 +199,6 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     comparisonTarget,
     headRevision,
     hostedReview,
-    localTarget,
     localTargetKey,
     automation,
   ])
