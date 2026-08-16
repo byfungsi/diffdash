@@ -9,6 +9,7 @@ import {
   parseLinuxSmaps,
   parseLinuxStatus,
   parseProcessList,
+  REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
 } from "../src/process-metrics.mjs"
 
@@ -171,11 +172,22 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   const reports = Array.from({ length: 10 }, (_, index) => ({
     version: 1,
     fixtureId: "linux-test",
+    fixtureManifest: {
+      id: "linux-test",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+    },
     session: "baseline",
     switchIndex: index + 1,
     platform: "linux",
     totalFinalRssBytes: 500 * 1024 * 1024,
-    steadyWindow: { reached: true },
+    durationMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
+    intervalMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
+    steadyWindow: {
+      reached: true,
+      windowMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauWindowMs,
+      threshold: REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold,
+    },
   }))
   assert.deepEqual(validateSwitchReports(reports, "baseline"), {
     fixtureId: "linux-test",
@@ -196,5 +208,9 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   assert.throws(
     () => validateSwitchReports(reports.with(9, { ...reports[9], platform: "darwin" }), "baseline"),
     /same platform/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(0, { ...reports[0], durationMs: 1 }), "baseline"),
+    /approved measurement policy/,
   )
 })

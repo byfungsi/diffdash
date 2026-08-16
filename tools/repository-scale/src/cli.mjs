@@ -8,6 +8,7 @@ import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
 import {
   evaluateSwitchMemoryPlateau,
   measureProcessTree,
+  REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
 } from "./process-metrics.mjs"
 
@@ -135,10 +136,26 @@ const measure = async (options) => {
   const session = safeName(options, "session")
   const measurement = await measureProcessTree({
     rootPid: pid,
-    durationMs: positiveNumber(options, "duration-ms", 60_000),
-    intervalMs: positiveNumber(options, "interval-ms", 500),
-    plateauWindowMs: positiveNumber(options, "plateau-window-ms", 10_000),
-    plateauThreshold: positiveNumber(options, "plateau-threshold", 0.05),
+    durationMs: positiveNumber(
+      options,
+      "duration-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
+    ),
+    intervalMs: positiveNumber(
+      options,
+      "interval-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
+    ),
+    plateauWindowMs: positiveNumber(
+      options,
+      "plateau-window-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauWindowMs,
+    ),
+    plateauThreshold: positiveNumber(
+      options,
+      "plateau-threshold",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold,
+    ),
   })
   const report = {
     ...measurement,

@@ -6,6 +6,14 @@ const execFilePromise = promisify(execFile)
 const roles = ["electron", "renderer", "coreWorker", "child"]
 const MINIMUM_PLATEAU_TOLERANCE_BYTES = 32 * 1024 * 1024
 
+/** Fixed sampling policy required for promoted M21 ten-switch evidence. */
+export const REPOSITORY_SCALE_MEASUREMENT_POLICY = Object.freeze({
+  durationMs: 60_000,
+  intervalMs: 500,
+  plateauWindowMs: 10_000,
+  plateauThreshold: 0.05,
+})
+
 const kilobytes = (value) => (value === null ? null : value * 1024)
 
 /** Parses the portable process columns used to discover one process tree. */
@@ -222,6 +230,7 @@ export const validateSwitchReports = (reports, session) => {
   if (String(platform).length === 0 || platform === undefined) {
     throw new Error("Switch reports must contain a platform")
   }
+  if (platform !== "linux") throw new Error("Promoted switch reports must be captured on Linux")
   reports.forEach((report, index) => {
     if (report.version !== 1)
       throw new Error(`Switch ${index + 1} has an unsupported report version`)
@@ -233,8 +242,23 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error(`Switch ${index + 1} has mismatched identity`)
     if (report.platform !== platform)
       throw new Error("All switch reports must use the same platform")
+    if (
+      report.fixtureManifest?.id !== fixtureId ||
+      !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.baseSha)) ||
+      !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.headSha))
+    ) {
+      throw new Error(`Switch ${index + 1} is not pinned to its fixture manifest`)
+    }
     if (report.steadyWindow?.reached !== true) {
       throw new Error(`Switch ${index + 1} did not reach its complete steady window`)
+    }
+    if (
+      report.durationMs !== REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs ||
+      report.intervalMs !== REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs ||
+      report.steadyWindow?.windowMs !== REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauWindowMs ||
+      report.steadyWindow?.threshold !== REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold
+    ) {
+      throw new Error(`Switch ${index + 1} did not use the approved measurement policy`)
     }
     if (!Number.isFinite(report.totalFinalRssBytes) || report.totalFinalRssBytes <= 0) {
       throw new Error(`Switch ${index + 1} has invalid final memory`)
