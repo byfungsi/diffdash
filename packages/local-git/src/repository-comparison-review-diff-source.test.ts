@@ -93,11 +93,10 @@ reviewDiffSourceConformance("repository comparison exact Git", {
     }
   },
   expectedBytes,
-  expectedFiles: [],
 })
 
 describe("repository comparison review diff source", () => {
-  it.effect("offers the immutable repository-comparison identity and exact Git objects", () =>
+  it.effect("offers the immutable repository-comparison identity as unified bytes", () =>
     Effect.gen(function* () {
       const source = yield* makeRepositoryComparisonReviewDiffSource(input)
 
@@ -113,10 +112,7 @@ describe("repository comparison review diff source", () => {
         complete: true,
         declaredBytes: expectedBytes.byteLength,
       })
-      expect(source.offer.methods.map((method) => method["_tag"])).toEqual([
-        "unifiedBytes",
-        "materializedGit",
-      ])
+      expect(source.offer.methods.map((method) => method["_tag"])).toEqual(["unifiedBytes"])
     }).pipe(Effect.provide(ProcessService.layer)),
   )
 })

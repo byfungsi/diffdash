@@ -295,9 +295,6 @@ describe("GitProviderRegistry", () => {
         }),
       }),
       unifiedBytes: () => Stream.die(new Error("Unused source method")),
-      filePage: () => Effect.die(new Error("Unused source method")),
-      materializedGit: () => Effect.die(new Error("Unused source method")),
-      bufferedBytes: () => Effect.die(new Error("Unused source method")),
       close: Effect.void,
     }
     Object.defineProperty(registration, "getReviewDiffSource", {

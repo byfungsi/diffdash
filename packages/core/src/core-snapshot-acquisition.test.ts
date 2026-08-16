@@ -149,9 +149,6 @@ const hostedSource = (closed: { count: number }): ReviewDiffSource => {
           ),
         ),
       ),
-    filePage: () => Effect.die("unused"),
-    materializedGit: () => Effect.die("unused"),
-    bufferedBytes: () => Effect.die("unused"),
     close: Effect.sync(() => {
       closed.count += 1
     }),

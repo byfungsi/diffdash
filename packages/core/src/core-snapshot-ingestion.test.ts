@@ -123,9 +123,6 @@ const source = (bytes: Uint8Array, closed: { count: number }): ReviewDiffSource 
     }),
   }),
   unifiedBytes: () => Stream.die("Fake Core worker consumes fixture bytes directly"),
-  filePage: () => Effect.die("unused"),
-  materializedGit: () => Effect.die("unused"),
-  bufferedBytes: () => Effect.die("unused"),
   close: Effect.sync(() => {
     closed.count += 1
   }),

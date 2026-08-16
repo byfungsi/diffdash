@@ -21,7 +21,6 @@ import {
   HostedReviewDiffSourceTarget,
   ProviderActor,
   ProviderRepositoryId,
-  REVIEW_DIFF_MAX_BUFFERED_BYTES,
   REVIEW_DIFF_MAX_CHUNK_BYTES,
   RepositoryComparisonRef,
   RepositoryNamespace,
@@ -36,7 +35,6 @@ import {
   ReviewDiffByteStreamValidator,
   ReviewDiffGeneration,
   ReviewDiffGenerationTracker,
-  ReviewDiffMethodUnsupported,
   ReviewDiffRevisionChanged,
   ReviewDiffSemanticIdentity,
   ReviewDiffSourceFacts,
@@ -47,10 +45,7 @@ import {
   WebUrl,
   type DiffFileStatus,
   type GitProviderRegistration,
-  type ReviewDiffBufferedBytes,
   type ReviewDiffByteChunk,
-  type ReviewDiffMaterializedGit,
-  type ReviewDiffFilePage,
   type ReviewDiffSource,
   type ReviewDiffSourceError,
   type ReviewDecision,
@@ -63,8 +58,9 @@ import {
 } from "@diffdash/process"
 
 // Four UTF-8 bytes per character keeps complete capture aligned with the 2M-character large-diff policy.
+const GITHUB_COMPLETE_DIFF_MAX_BYTES = 8 * 1024 * 1024
 const COMPLETE_DIFF_STDOUT = {
-  maxBytes: REVIEW_DIFF_MAX_BUFFERED_BYTES,
+  maxBytes: GITHUB_COMPLETE_DIFF_MAX_BYTES,
   overflow: "error",
 } satisfies ProcessOutputPolicyInput
 
@@ -503,16 +499,6 @@ const versionAtLeast = (version: string, minimum: readonly number[]) => {
   return true
 }
 
-const unsupportedMethod = (
-  acquisition: ReviewDiffAcquisition,
-  method: "filePages" | "materializedGit" | "bufferedBytes",
-): ReviewDiffMethodUnsupported =>
-  ReviewDiffMethodUnsupported.make({
-    generation: acquisition.generation,
-    method,
-    message: `GitHub review diff source does not offer ${method}`,
-  })
-
 const readDiffMetadata = (
   processes: ProcessRunner,
   executable: string,
@@ -708,14 +694,6 @@ export const createGitHubReviewDiffSource = Effect.fn("GitHub.createReviewDiffSo
   return {
     offer,
     unifiedBytes,
-    filePage: (acquisition): Effect.Effect<ReviewDiffFilePage, ReviewDiffSourceError> =>
-      unsupportedMethod(acquisition, "filePages"),
-    materializedGit: (
-      acquisition,
-    ): Effect.Effect<ReviewDiffMaterializedGit, ReviewDiffSourceError> =>
-      unsupportedMethod(acquisition, "materializedGit"),
-    bufferedBytes: (acquisition): Effect.Effect<ReviewDiffBufferedBytes, ReviewDiffSourceError> =>
-      unsupportedMethod(acquisition, "bufferedBytes"),
     close: Deferred.succeed(cancellation, undefined).pipe(
       Effect.asVoid,
       Effect.mapError(() =>

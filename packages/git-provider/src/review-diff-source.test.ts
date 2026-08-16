@@ -9,45 +9,20 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
-import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
+import { ReviewDiffIdentity, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
-  ReviewDiffIdentity,
-  ReviewFilePatchHash,
-  ReviewKey,
-  ReviewRevision,
-} from "@diffdash/domain/review-identity"
-import {
-  BufferedBytesMethod,
-  FilePagesMethod,
   HostedReviewDiffSourceTarget,
-  InvalidReviewDiffPage,
-  MaterializedGitMethod,
-  REVIEW_DIFF_MAX_BUFFERED_BYTES,
   REVIEW_DIFF_MAX_CHUNK_BYTES,
-  REVIEW_DIFF_MAX_LINE_BYTES,
-  REVIEW_DIFF_MAX_PAGE_BYTES,
-  REVIEW_DIFF_MAX_PAGE_ITEMS,
   ReviewDiffByteCompletion,
   ReviewDiffByteStreamValidator,
-  ReviewDiffFile,
-  ReviewDiffFilePage,
   ReviewDiffGeneration,
   ReviewDiffGenerationReused,
   ReviewDiffGenerationTracker,
-  ReviewDiffGiantFileUnsupported,
-  ReviewDiffHunk,
   ReviewDiffLimitExceeded,
-  ReviewDiffLine,
-  ReviewDiffMaterializedGit,
-  ReviewDiffPageValidator,
-  ReviewDiffRevisionChanged,
   ReviewDiffSourceFacts,
   ReviewDiffSourceOffer,
-  ReviewDiffTruncated,
   UnifiedBytesMethod,
-  measureReviewDiffFile,
   reviewDiffStorageRequirement,
-  validateReviewDiffBufferedBytes,
   validateReviewDiffByteChunk,
   validateReviewDiffSourceOffer,
   type ReviewDiffSource,
@@ -66,47 +41,6 @@ const review = HostedReviewLocator.make({
   number: HostedReviewNumber.make(42),
 })
 const bytes = new TextEncoder().encode("diff --git a/src/app.ts b/src/app.ts\n")
-const file = ReviewDiffFile.make({
-  ordinal: 0,
-  identity: ReviewFilePatchHash.make("file-patch:v1:fixture"),
-  oldPath: RepositoryRelativePath.make("src/app.ts"),
-  path: RepositoryRelativePath.make("src/app.ts"),
-  oldMode: "100644",
-  newMode: "100644",
-  status: "modified",
-  binary: false,
-  hunks: [
-    ReviewDiffHunk.make({
-      oldStart: 1,
-      oldLines: 1,
-      newStart: 1,
-      newLines: 1,
-      section: "render",
-      lines: [
-        ReviewDiffLine.make({ kind: "deletion", content: "old", noNewlineAtEnd: false }),
-        ReviewDiffLine.make({ kind: "addition", content: "new", noNewlineAtEnd: true }),
-      ],
-    }),
-  ],
-})
-
-const makePage = (
-  overrides: Partial<ConstructorParameters<typeof ReviewDiffFilePage>[0]> = {},
-): ReviewDiffFilePage =>
-  ReviewDiffFilePage.make({
-    generation,
-    revision,
-    semanticIdentity: identity,
-    pageOrdinal: 0,
-    firstFileOrdinal: 0,
-    byteCount: measureReviewDiffFile(file),
-    itemCount: 1,
-    files: [file],
-    complete: true,
-    nextPageOrdinal: null,
-    ...overrides,
-  })
-
 const offer = ReviewDiffSourceOffer.make({
   target: HostedReviewDiffSourceTarget.make({
     review,
@@ -114,16 +48,7 @@ const offer = ReviewDiffSourceOffer.make({
   }),
   expectedRevision: revision,
   semanticIdentity: identity,
-  methods: [
-    UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES }),
-    FilePagesMethod.make({
-      maxPageBytes: REVIEW_DIFF_MAX_PAGE_BYTES,
-      maxPageItems: REVIEW_DIFF_MAX_PAGE_ITEMS,
-      maxLineBytes: REVIEW_DIFF_MAX_LINE_BYTES,
-    }),
-    MaterializedGitMethod.make({}),
-    BufferedBytesMethod.make({ maxBytes: REVIEW_DIFF_MAX_BUFFERED_BYTES }),
-  ],
+  methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
   facts: ReviewDiffSourceFacts.make({
     origin: "local",
     revisionKind: "immutableGit",
@@ -145,26 +70,6 @@ const makeSource = (): ReviewDiffSource => ({
         totalBytes: bytes.byteLength,
       }),
     ]),
-  filePage: (request) => Effect.succeed(makePage({ generation: request.generation })),
-  materializedGit: (request) =>
-    Effect.succeed(
-      ReviewDiffMaterializedGit.make({
-        generation: request.generation,
-        revision,
-        semanticIdentity: identity,
-        repositoryIdentity: "fixture-repository",
-        baseObject: "base-object",
-        headObject: "head-object",
-        diffPolicyIdentity: "diff-policy-v1",
-      }),
-    ),
-  bufferedBytes: (request) =>
-    Effect.succeed({
-      generation: request.generation,
-      revision,
-      semanticIdentity: identity,
-      bytes,
-    }),
   close: Effect.void,
 })
 
@@ -182,7 +87,6 @@ reviewDiffSourceConformance("complete fixture", {
     }
   },
   expectedBytes: bytes,
-  expectedFiles: [file],
 })
 
 describe("review diff source boundaries", () => {
@@ -242,123 +146,6 @@ describe("review diff source boundaries", () => {
     }),
   )
 
-  it.effect("accepts the exact buffer cap and rejects one byte over without aliasing", () =>
-    Effect.gen(function* () {
-      const exactInput = new Uint8Array(REVIEW_DIFF_MAX_BUFFERED_BYTES)
-      const exact = yield* validateReviewDiffBufferedBytes({
-        generation,
-        revision,
-        semanticIdentity: identity,
-        bytes: exactInput,
-      })
-      exactInput[0] = 1
-      expect(exact.bytes[0]).toBe(0)
-
-      const overflow = yield* Effect.result(
-        validateReviewDiffBufferedBytes({
-          generation,
-          revision,
-          semanticIdentity: identity,
-          bytes: new Uint8Array(REVIEW_DIFF_MAX_BUFFERED_BYTES + 1),
-        }),
-      )
-      expect(Result.isFailure(overflow)).toBe(true)
-    }),
-  )
-
-  it.effect("accepts one exact complete page", () =>
-    Effect.gen(function* () {
-      const validator = new ReviewDiffPageValidator(generation, revision, identity)
-      yield* validator.accept(makePage())
-      yield* validator.finish()
-    }),
-  )
-
-  it.effect("rejects duplicate, missing, reordered, and contradictory page metadata", () =>
-    Effect.gen(function* () {
-      const invalidPages = [
-        makePage({ pageOrdinal: 1 }),
-        makePage({ firstFileOrdinal: 1 }),
-        makePage({ itemCount: 0 }),
-        makePage({ byteCount: measureReviewDiffFile(file) + 1 }),
-        makePage({ complete: false, nextPageOrdinal: null }),
-        makePage({ complete: true, nextPageOrdinal: 1 }),
-        makePage({ files: [ReviewDiffFile.make({ ...file, ordinal: 1 })] }),
-      ]
-      for (const page of invalidPages) {
-        const result = yield* Effect.result(
-          new ReviewDiffPageValidator(generation, revision, identity).accept(page),
-        )
-        expect(Result.isFailure(result)).toBe(true)
-        if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(InvalidReviewDiffPage)
-      }
-
-      const validator = new ReviewDiffPageValidator(generation, revision, identity)
-      yield* validator.accept(makePage())
-      const duplicate = yield* Effect.result(validator.accept(makePage()))
-      expect(Result.isFailure(duplicate)).toBe(true)
-    }),
-  )
-
-  it.effect("rejects revision drift, identity drift, truncation, and enormous lines", () =>
-    Effect.gen(function* () {
-      const changedRevision = yield* Effect.result(
-        new ReviewDiffPageValidator(generation, revision, identity).accept(
-          makePage({ revision: ReviewRevision.make("revision-2") }),
-        ),
-      )
-      expect(Result.isFailure(changedRevision)).toBe(true)
-      if (Result.isFailure(changedRevision))
-        expect(changedRevision.failure).toBeInstanceOf(ReviewDiffRevisionChanged)
-
-      const changedIdentity = yield* Effect.result(
-        new ReviewDiffPageValidator(generation, revision, identity).accept(
-          makePage({ semanticIdentity: ReviewDiffIdentity.make("other") }),
-        ),
-      )
-      expect(Result.isFailure(changedIdentity)).toBe(true)
-      if (Result.isFailure(changedIdentity))
-        expect(changedIdentity.failure).toBeInstanceOf(InvalidReviewDiffPage)
-
-      const truncated = yield* Effect.result(
-        new ReviewDiffPageValidator(generation, revision, identity).finish(),
-      )
-      expect(Result.isFailure(truncated)).toBe(true)
-      if (Result.isFailure(truncated)) expect(truncated.failure).toBeInstanceOf(ReviewDiffTruncated)
-
-      const giantFile = ReviewDiffFile.make({
-        ...file,
-        hunks: [
-          ReviewDiffHunk.make({
-            oldStart: 1,
-            oldLines: 1,
-            newStart: 1,
-            newLines: 1,
-            section: "giant",
-            lines: [
-              ReviewDiffLine.make({
-                kind: "context",
-                content: "x".repeat(REVIEW_DIFF_MAX_LINE_BYTES + 1),
-                noNewlineAtEnd: false,
-              }),
-            ],
-          }),
-        ],
-      })
-      const giant = yield* Effect.result(
-        new ReviewDiffPageValidator(generation, revision, identity).accept(
-          makePage({
-            files: [giantFile],
-            byteCount: measureReviewDiffFile(giantFile),
-          }),
-        ),
-      )
-      expect(Result.isFailure(giant)).toBe(true)
-      if (Result.isFailure(giant))
-        expect(giant.failure).toBeInstanceOf(ReviewDiffGiantFileUnsupported)
-    }),
-  )
-
   it.effect("rejects empty, duplicate, or oversized source offers", () =>
     Effect.gen(function* () {
       const invalidOffers = [
@@ -373,20 +160,6 @@ describe("review diff source boundaries", () => {
         ReviewDiffSourceOffer.make({
           ...offer,
           methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES + 1 })],
-        }),
-        ReviewDiffSourceOffer.make({
-          ...offer,
-          methods: [
-            FilePagesMethod.make({
-              maxPageBytes: REVIEW_DIFF_MAX_PAGE_BYTES + 1,
-              maxPageItems: REVIEW_DIFF_MAX_PAGE_ITEMS,
-              maxLineBytes: REVIEW_DIFF_MAX_LINE_BYTES,
-            }),
-          ],
-        }),
-        ReviewDiffSourceOffer.make({
-          ...offer,
-          methods: [BufferedBytesMethod.make({ maxBytes: REVIEW_DIFF_MAX_BUFFERED_BYTES + 1 })],
         }),
       ]
       for (const invalidOffer of invalidOffers) {

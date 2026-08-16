@@ -33,7 +33,6 @@ import {
 } from "@diffdash/domain/review-identity"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
-  MaterializedGitMethod,
   LocalReviewDiffSourceTarget,
   ReviewDiffAcquisition,
   type ReviewDiffByteChunk,
@@ -338,24 +337,45 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
   statusByPath: ReadonlyMap<string, FileDeltaIdentity["status"]>,
   processes: ProcessService["Service"],
 ) {
-  const materializedMethod = source.offer.methods.find(Schema.is(MaterializedGitMethod))
-  if (materializedMethod !== undefined && repositoryPath !== null) {
-    const materialized = yield* source.materializedGit(freshAcquisition(source))
+  if (
+    reviewDiffStorageRequirement(source.offer.facts) === "exactGitEligible" &&
+    repositoryPath !== null
+  ) {
+    const exact = Match.value(source.offer.target).pipe(
+      Match.tag("local", ({ target }) =>
+        Match.value(target.comparison).pipe(
+          Match.tag("lastCommit", (comparison) => ({
+            baseObject: comparison.baseSha,
+            headObject: comparison.headSha,
+            diffPolicyIdentity: "local-git-unified-v1",
+          })),
+          Match.orElse(() => null),
+        ),
+      ),
+      Match.tag("repositoryComparison", ({ target }) => ({
+        baseObject: target.mergeBaseSha,
+        headObject: target.headSha,
+        diffPolicyIdentity: "repository-comparison-git-unified-v1",
+      })),
+      Match.orElse(() => null),
+    )
+    if (exact === null) return yield* spoolFailure("Exact Git source target was not reproducible")
+    const repositoryIdentity = yield* readRepositoryIdentity(repositoryPath, processes)
     const identities = yield* readExactGitIdentities(
       repositoryPath,
-      materialized.baseObject,
-      materialized.headObject,
-      materialized.diffPolicyIdentity,
+      exact.baseObject,
+      exact.headObject,
+      exact.diffPolicyIdentity,
       source.offer.semanticIdentity,
       processes,
     )
     return {
       storageSource: {
         kind: "exactGit",
-        repositoryIdentity: materialized.repositoryIdentity,
-        baseObject: materialized.baseObject,
-        headObject: materialized.headObject,
-        diffPolicyIdentity: materialized.diffPolicyIdentity,
+        repositoryIdentity,
+        baseObject: exact.baseObject,
+        headObject: exact.headObject,
+        diffPolicyIdentity: exact.diffPolicyIdentity,
       } satisfies SnapshotStorageSource,
       fileDeltaKeys: identityResolver(identities, source, statusByPath),
     }
@@ -387,6 +407,21 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
     fileDeltaKeys: identityResolver(new Map(), source, statusByPath),
   }
 })
+
+const readRepositoryIdentity = Effect.fn("CoreSnapshotAcquisition.readRepositoryIdentity")(
+  function* (repositoryPath: RepositoryCheckoutPath, processes: ProcessService["Service"]) {
+    const result = yield* processes.run(
+      processRequest("git", [
+        "-C",
+        repositoryPath,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ]),
+    )
+    return createHash("sha256").update(result.stdout.trim()).digest("hex")
+  },
+)
 
 interface ExactGitFileIdentity {
   readonly oldPath: string
@@ -624,9 +659,6 @@ const makeManagedSpoolSource = Effect.fn("CoreSnapshotAcquisition.makeManagedSpo
               }).pipe(Effect.mapError(toSpoolSourceFailure)),
           ),
         ),
-      filePage: source.filePage,
-      materializedGit: source.materializedGit,
-      bufferedBytes: source.bufferedBytes,
       close: Effect.all([closeHandle(), source.close], { concurrency: 1 }).pipe(Effect.asVoid),
     }
     return {

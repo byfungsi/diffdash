@@ -152,9 +152,6 @@ describe("GitProvider", () => {
         }),
       }),
       unifiedBytes: () => Stream.die(new Error("Unused source method")),
-      filePage: () => Effect.die(new Error("Unused source method")),
-      materializedGit: () => Effect.die(new Error("Unused source method")),
-      bufferedBytes: () => Effect.die(new Error("Unused source method")),
       close: Effect.void,
     }
     const provider = makeProvider({

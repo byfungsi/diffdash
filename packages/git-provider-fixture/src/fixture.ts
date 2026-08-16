@@ -234,10 +234,6 @@ export const createFixtureGitProvider = (
               ),
             ),
           ),
-        filePage: () => Effect.die(new Error("Fixture source does not offer file pages")),
-        materializedGit: () =>
-          Effect.die(new Error("Fixture source does not offer materialized Git")),
-        bufferedBytes: () => Effect.die(new Error("Fixture source does not offer buffered bytes")),
         close: Effect.void,
       }
     }),

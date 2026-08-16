@@ -74,9 +74,6 @@ const completeSource: ReviewDiffSource = {
         totalBytes: bytes.byteLength,
       }),
     ]),
-  filePage: () => Effect.die("unused"),
-  materializedGit: () => Effect.die("unused"),
-  bufferedBytes: () => Effect.die("unused"),
   close: Effect.void,
 }
 

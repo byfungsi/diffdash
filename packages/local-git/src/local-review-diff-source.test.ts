@@ -82,7 +82,6 @@ reviewDiffSourceConformance("local exact Git", {
     }
   },
   expectedBytes: expectedImmutableBytes,
-  expectedFiles: [],
 })
 
 describe("local review diff source", () => {

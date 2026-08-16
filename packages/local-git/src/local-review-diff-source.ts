@@ -9,17 +9,13 @@ import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { ReviewDiffIdentity, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   LocalReviewDiffSourceTarget,
-  MaterializedGitMethod,
   REVIEW_DIFF_MAX_CHUNK_BYTES,
   ReviewDiffAcquisition,
   ReviewDiffByteCompletion,
   ReviewDiffGeneration,
   ReviewDiffGenerationTracker,
-  ReviewDiffMaterializedGit,
-  ReviewDiffMethodUnsupported,
   type ReviewDiffSource,
   type ReviewDiffSourceError,
-  type ReviewDiffSourceMethod,
   ReviewDiffSourceFacts,
   ReviewDiffSourceFailure,
   ReviewDiffSourceOffer,
@@ -29,7 +25,6 @@ import { ProcessService, type ProcessExecutionError } from "@diffdash/process"
 import { gitProcessRequest } from "./git-environment"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-const DIFF_POLICY_IDENTITY = "local-git-unified-v1"
 const MAX_CAPTURE_ATTEMPTS = 2
 const MAX_PATH_BYTES = 16 * 1024
 
@@ -358,10 +353,6 @@ const makeSource = (state: {
   })().pipe(
     Effect.mapError(() => sourceFailure("unifiedBytes", "Could not release review staging")),
   )
-  const methods: ReviewDiffSourceMethod[] = [
-    UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES }),
-  ]
-  if (state.exactObjects !== null) methods.push(MaterializedGitMethod.make({}))
   const offer = ReviewDiffSourceOffer.make({
     target: LocalReviewDiffSourceTarget.make({
       reviewKey: state.input.reviewKey,
@@ -369,7 +360,7 @@ const makeSource = (state: {
     }),
     expectedRevision: state.revision,
     semanticIdentity: state.semanticIdentity,
-    methods,
+    methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
     facts: ReviewDiffSourceFacts.make({
       origin: "local",
       revisionKind: state.exactObjects === null ? "mutable" : "immutableGit",
@@ -413,23 +404,6 @@ const makeSource = (state: {
           )
         }),
       ),
-    filePage: (acquisition) => unsupported(acquisition, "filePages"),
-    materializedGit: (acquisition) =>
-      Effect.gen(function* () {
-        yield* beginAcquisition(acquisition, state.revision, tracker, "materializedGit")
-        if (state.exactObjects === null)
-          return yield* unsupported<ReviewDiffMaterializedGit>(acquisition, "materializedGit")
-        return ReviewDiffMaterializedGit.make({
-          generation: acquisition.generation,
-          revision: state.revision,
-          semanticIdentity: state.semanticIdentity,
-          repositoryIdentity: state.exactObjects.repository,
-          baseObject: state.exactObjects.base,
-          headObject: state.exactObjects.head,
-          diffPolicyIdentity: DIFF_POLICY_IDENTITY,
-        })
-      }),
-    bufferedBytes: (acquisition) => unsupported(acquisition, "bufferedBytes"),
     close,
   }
 }
@@ -438,21 +412,11 @@ const beginAcquisition = (
   acquisition: ReviewDiffAcquisition,
   revision: ReviewRevision,
   tracker: ReviewDiffGenerationTracker,
-  method: "unifiedBytes" | "filePages" | "materializedGit" | "bufferedBytes",
+  method: "unifiedBytes",
 ): Effect.Effect<void, ReviewDiffSourceError> =>
   acquisition.expectedRevision !== revision
     ? Effect.fail(sourceFailure(method, "Review diff acquisition expected another local revision"))
     : tracker.begin(acquisition.generation).pipe(Effect.asVoid)
-
-const unsupported = <A>(
-  acquisition: ReviewDiffAcquisition,
-  method: "filePages" | "materializedGit" | "bufferedBytes",
-): Effect.Effect<A, ReviewDiffMethodUnsupported> =>
-  ReviewDiffMethodUnsupported.make({
-    generation: acquisition.generation,
-    method,
-    message: `Local Git does not offer ${method} for this generation`,
-  })
 
 const spoolBytes = (path: string): Stream.Stream<Uint8Array, ReviewDiffSourceFailure> =>
   Stream.unwrap(
@@ -481,7 +445,7 @@ const removePath = (path: string): Effect.Effect<void> =>
   Effect.promise(() => rm(path, { force: true, recursive: true })).pipe(Effect.ignore)
 
 const tryPromise = <A>(
-  method: "unifiedBytes" | "materializedGit",
+  method: "unifiedBytes",
   evaluate: () => Promise<A>,
 ): Effect.Effect<A, ReviewDiffSourceFailure> =>
   Effect.tryPromise({
@@ -492,10 +456,7 @@ const tryPromise = <A>(
 const sourceCreationFailure = (_cause: unknown): ReviewDiffSourceFailure =>
   sourceFailure("unifiedBytes", "Local Git could not produce a coherent review source")
 
-const sourceFailure = (
-  method: "unifiedBytes" | "filePages" | "materializedGit" | "bufferedBytes",
-  message: string,
-): ReviewDiffSourceFailure =>
+const sourceFailure = (method: "unifiedBytes", message: string): ReviewDiffSourceFailure =>
   ReviewDiffSourceFailure.make({
     generation: ReviewDiffGeneration.make("local-source"),
     method,

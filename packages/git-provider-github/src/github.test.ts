@@ -242,7 +242,6 @@ reviewDiffSourceConformance("GitHub", {
     }
   },
   expectedBytes: new TextEncoder().encode(pullRequestDiffText),
-  expectedFiles: [],
 })
 
 describe("GitHub provider", () => {
