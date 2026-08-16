@@ -22,7 +22,7 @@ export interface CoreOwnershipRecoveryAuthorization {
 export class CoreOwnershipRecoveryError extends Schema.TaggedError<CoreOwnershipRecoveryError>()(
   "CoreOwnershipRecoveryError",
   {
-    stage: Schema.Literals(["ownership", "recovery", "not-configured"]),
+    stage: Schema.Literals(["ownership", "recovery"]),
     safeMessage: Schema.Literal("DiffDash Core could not acquire and recover its owned resources."),
   },
 ) {}
@@ -45,16 +45,6 @@ export class CoreOwnershipRecovery extends Context.Service<
   CoreOwnershipRecovery,
   CoreOwnershipRecoveryOperations
 >()("@diffdash/core/CoreOwnershipRecovery") {}
-
-/** Fail-closed placeholder used until product SQLite ownership is composed into standalone Core. */
-export const coreOwnershipRecoveryNotConfigured = CoreOwnershipRecovery.of({
-  acquireAndRecover: Effect.fn("CoreOwnershipRecovery.notConfigured")(function* () {
-    return yield* CoreOwnershipRecoveryError.make({
-      stage: "not-configured",
-      safeMessage: "DiffDash Core could not acquire and recover its owned resources.",
-    })
-  }),
-})
 
 /** Inputs for the production sidecar ownership and startup-recovery implementation. */
 export interface CoreOwnershipRecoveryOptions {
