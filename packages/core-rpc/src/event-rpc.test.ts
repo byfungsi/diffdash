@@ -62,7 +62,7 @@ describe("Core state delivery RPC declarations", () => {
     return Effect.gen(function* () {
       const client = yield* RpcTest.makeClient(CoreStateDeliveryRpcs)
       const replay = yield* client["CoreEvents.replay"](
-        CoreEventReplayRequest.make({ context, afterSequence: null }),
+        CoreEventReplayRequest.make({ context, cursor: null }),
       )
       const acknowledged = yield* client["CoreCommands.acknowledge"](
         CoreCommandAcknowledgement.make({
@@ -83,7 +83,7 @@ describe("Core state delivery RPC declarations", () => {
       maxBufferSize: 512 * 1_024,
     }).makeUnsafe()
     const values = [
-      Schema.encodeSync(CoreEventReplayRequest)({ context, afterSequence: null }),
+      Schema.encodeSync(CoreEventReplayRequest)({ context, cursor: null }),
       Schema.encodeSync(CoreCommandSnapshot)(command),
     ]
     const decoded = values.flatMap((value) => {
@@ -94,7 +94,7 @@ describe("Core state delivery RPC declarations", () => {
 
     expect(Schema.decodeUnknownSync(CoreEventReplayRequest)(decoded[0])).toEqual({
       context,
-      afterSequence: null,
+      cursor: null,
     })
     expect(Schema.decodeUnknownSync(CoreCommandSnapshot)(decoded[1])).toEqual(command)
   })

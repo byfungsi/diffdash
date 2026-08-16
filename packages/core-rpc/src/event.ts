@@ -169,13 +169,22 @@ export const CoreEventHint = Schema.Struct({
 /** Hint-only event envelope. Authoritative state and terminal artifacts are always queried. */
 export type CoreEventHint = typeof CoreEventHint.Type
 
-/** Last event observed by a reconnecting host, or null when this is its first connection. */
+/** Epoch-bound last event observed by a reconnecting host. */
+export const CoreEventReplayCursor = Schema.Struct({
+  processEpoch: CoreProcessEpoch,
+  sequence: CoreEventSequence,
+}).annotate({ identifier: "CoreEventReplayCursor" })
+
+/** Epoch-bound last event observed by a reconnecting host. */
+export type CoreEventReplayCursor = typeof CoreEventReplayCursor.Type
+
+/** Current caller identity and prior event cursor, or null on first connection. */
 export const CoreEventReplayRequest = Schema.Struct({
   context: HostRequestContext,
-  afterSequence: Schema.NullOr(CoreEventSequence),
+  cursor: Schema.NullOr(CoreEventReplayCursor),
 }).annotate({ identifier: "CoreEventReplayRequest" })
 
-/** Last event observed by a reconnecting host, or null when this is its first connection. */
+/** Current caller identity and prior event cursor, or null on first connection. */
 export type CoreEventReplayRequest = typeof CoreEventReplayRequest.Type
 
 /** Bounded replay when retained, otherwise an explicit instruction to query authoritative state. */
