@@ -66,6 +66,21 @@ describe("ReviewGlobalVirtualizer", () => {
       rowFraction: 0,
     })
   })
+
+  it("removes a measured file's stale trailing height when it collapses", () => {
+    const layout = new CompactReviewLayoutIndex(
+      Uint32Array.of(100, 100, 100),
+      new Uint8Array(3),
+      (_file, rows) => rows * 10,
+    )
+    const virtualizer = new ReviewGlobalVirtualizer(layout, 1_000, 1_000)
+    virtualizer.correctMeasurement(1_500, 1, 0, 1_200)
+    const expandedLogicalHeight = layout.logicalHeight
+
+    virtualizer.correctMeasurement(1_700, 1, 0, 100)
+
+    expect(layout.logicalHeight).toBe(expandedLogicalHeight - 1_100)
+  })
 })
 
 describe("ReviewRendererCaches", () => {

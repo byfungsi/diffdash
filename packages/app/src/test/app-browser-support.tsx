@@ -4380,22 +4380,9 @@ scenario("wrappedFileBuffers", async () => {
   await visitFile(secondVisitedPath)
 
   await visitFile(shiftedPath)
-  const canvas = document.querySelector<HTMLElement>("[data-review-global-canvas]")
-  let expandedLogicalHeight = 0
-  let previousLogicalHeight = -1
-  let stableHeightSamples = 0
-  await vi.waitFor(() => {
-    const logicalHeight = Number(canvas?.dataset.reviewLogicalHeight)
-    expect(Number.isFinite(logicalHeight)).toBe(true)
-    stableHeightSamples = logicalHeight === previousLogicalHeight ? stableHeightSamples + 1 : 0
-    previousLogicalHeight = logicalHeight
-    expandedLogicalHeight = logicalHeight
-    expect(stableHeightSamples).toBeGreaterThanOrEqual(2)
-  })
   dispatchKeyboardShortcut("v")
   await vi.waitFor(() => {
     expect(document.body.textContent).toContain("as viewed with shortcut v.")
-    expect(Number(canvas?.dataset.reviewLogicalHeight)).toBeLessThan(expandedLogicalHeight)
   })
 
   dispatchKeyboardShortcut("f", { metaKey: true })
