@@ -217,7 +217,6 @@ const gitLayer = Layer.succeed(GitService, {
   listRemotes: () => Effect.die("unused"),
   resolveBranchComparison: () => Effect.die("unused"),
   resolveLastCommit: () => Effect.die("unused"),
-  getLocalReviewSnapshot: () => Effect.die("unused"),
 })
 
 const repositoriesLayer = Layer.succeed(RepositoryLinker, {
@@ -245,7 +244,6 @@ const providerLayer = (source: ReviewDiffSource) =>
     listSearchScopes: () => Effect.die("unused"),
     listHostedReviews: () => Effect.die("unused"),
     listAssignedReviews: () => Effect.die("unused"),
-    acquireHostedReviewSnapshot: () => Effect.die("legacy acquisition must not run"),
     getHostedReviewDetail: () => Effect.succeed(detail),
     getReviewDiffSource: () => Effect.succeed(source),
     getReviewDecision: () => Effect.die("unused"),
@@ -268,7 +266,6 @@ const comparisonTarget = RepositoryComparisonTarget.make({
 const comparisonLayer = Layer.succeed(RepositoryComparisonSource, {
   resolve: () => Effect.die("unused"),
   repository: () => Effect.succeed(project),
-  acquire: () => Effect.die("legacy acquisition must not run"),
   useWorkspace: (_target, run) => run(checkout),
 })
 

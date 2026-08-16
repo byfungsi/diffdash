@@ -1,23 +1,9 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
 
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import {
-  ChangedFile,
-  HostedRepositorySource,
-  makeHostedRepositoryLocator,
-} from "@diffdash/domain/git-provider"
+import { HostedRepositorySource, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import { ProjectRemoteSelectionRequired } from "@diffdash/domain/project-workspace"
-import {
-  makeRepositoryComparisonReviewKey,
-  RepositoryComparisonDetail,
-  RepositoryComparisonDiff,
-  repositoryComparisonBaseRevision,
-  repositoryComparisonHeadRevision,
-  RepositoryComparisonTarget,
-} from "@diffdash/domain/repository-comparison"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
-import { RepositoryComparisonSnapshot } from "@diffdash/domain/review-context"
-import { makeReviewDiffIdentity, makeReviewSnapshotId } from "@diffdash/domain/review-identity"
 import {
   HostedReviewWorkspacePool,
   HostedReviewWorkspacePoolError,
@@ -63,9 +49,6 @@ export class RepositoryComparisonSource extends Context.Service<
     readonly repository: (
       target: RepositoryComparisonTarget,
     ) => Effect.Effect<Repo, RepositoryComparisonSourceError>
-    readonly acquire: (
-      target: RepositoryComparisonTarget,
-    ) => Effect.Effect<RepositoryComparisonSnapshot, RepositoryComparisonSourceError>
     readonly useWorkspace: <A, E>(
       target: RepositoryComparisonTarget,
       run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
@@ -174,47 +157,6 @@ export class RepositoryComparisonSource extends Context.Service<
         } as const
       })
 
-      const acquire = Effect.fn("RepositoryComparisonSource.acquire")(function* (
-        target: RepositoryComparisonTarget,
-      ) {
-        const { input } = yield* comparisonInput(target)
-        const diff = yield* workspaces
-          .readComparisonDiff(input)
-          .pipe(Effect.mapError(mapWorkspaceError))
-        const parsedDiff = parseUnifiedDiff(diff)
-        const fetchedAt = new Date().toISOString()
-        const reviewKey = makeRepositoryComparisonReviewKey(target)
-        const baseRevision = repositoryComparisonBaseRevision(target)
-        const headRevision = repositoryComparisonHeadRevision(target)
-        const diffIdentity = makeReviewDiffIdentity(diff)
-        return RepositoryComparisonSnapshot.make({
-          snapshotId: makeReviewSnapshotId({
-            reviewKey,
-            baseRevision,
-            headRevision,
-            diffIdentity,
-          }),
-          reviewKey,
-          baseRevision,
-          headRevision,
-          detail: RepositoryComparisonDetail.make({
-            target,
-            title: `${target.baseRef}...${target.headRef}`,
-            files: parsedDiff.files.map((file) =>
-              ChangedFile.make({
-                path: file.path,
-                additions: file.additions,
-                deletions: file.deletions,
-                changeType: file.status,
-              }),
-            ),
-            fetchedAt,
-          }),
-          diff: RepositoryComparisonDiff.make({ target, diff, fetchedAt }),
-          parsedDiff,
-        })
-      })
-
       const useWorkspace = <A, E>(
         target: RepositoryComparisonTarget,
         run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
@@ -226,7 +168,7 @@ export class RepositoryComparisonSource extends Context.Service<
           ),
         )
 
-      return RepositoryComparisonSource.of({ acquire, repository, resolve, useWorkspace })
+      return RepositoryComparisonSource.of({ repository, resolve, useWorkspace })
     }),
   )
 }

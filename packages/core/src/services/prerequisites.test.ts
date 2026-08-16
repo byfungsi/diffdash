@@ -574,7 +574,6 @@ const fakeGitProviderLayer = (options: {
       listSearchScopes: () => unavailableProviderMethod(),
       listHostedReviews: () => unavailableProviderMethod(),
       listAssignedReviews: () => unavailableProviderMethod(),
-      acquireHostedReviewSnapshot: () => unavailableProviderMethod(),
       getReviewDiffSource: () => unavailableProviderMethod(),
       getHostedReviewDetail: () => unavailableProviderMethod(),
       getReviewDecision: () => unavailableProviderMethod(),

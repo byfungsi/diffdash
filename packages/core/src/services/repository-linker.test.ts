@@ -76,7 +76,6 @@ const makeLayer = (
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
-            getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
         Layer.succeed(
@@ -111,7 +110,6 @@ const makeLayer = (
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            acquireHostedReviewSnapshot: () => unavailable(),
             getReviewDiffSource: () => unavailable(),
             getHostedReviewDetail: () => unavailable(),
             getReviewDecision: () => unavailable(),
@@ -609,7 +607,6 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
-            getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
         Layer.succeed(
@@ -637,7 +634,6 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            acquireHostedReviewSnapshot: () => unavailable(),
             getReviewDiffSource: () => unavailable(),
             getHostedReviewDetail: () => unavailable(),
             getReviewDecision: () => unavailable(),

@@ -1,11 +1,6 @@
 import { Context, Effect, Layer, Match, Option, Schema } from "effect"
 import { createHash } from "node:crypto"
-import { basename } from "node:path"
 
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { VERY_LARGE_DIFF_CHARACTER_THRESHOLD } from "@diffdash/domain/large-diff-policy"
-import { LocalReviewDetail, LocalReviewDiff } from "@diffdash/domain/local-review"
-import { ChangedFile } from "@diffdash/domain/git-provider"
 import {
   type DetectedRepositoryCheckout,
   RepositoryCheckoutPath,
@@ -16,38 +11,17 @@ import {
   LastCommitComparison,
   type LocalReviewComparison,
   LocalReviewTarget,
-  workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
-import { LocalReviewSnapshot } from "@diffdash/domain/review-context"
-import {
-  makeReviewSnapshotId,
-  ReviewDiffIdentity,
-  ReviewKey,
-  ReviewRevision,
-} from "@diffdash/domain/review-identity"
+import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   ProcessService,
   ProcessOutputError,
   type ProcessResult,
   type ProcessExecutionError,
-  type ProcessOutputPolicyInput,
 } from "@diffdash/process"
 import { gitProcessRequest } from "./git-environment"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-const COMPLETE_DIFF_STDOUT = {
-  maxBytes: VERY_LARGE_DIFF_CHARACTER_THRESHOLD * 4,
-  overflow: "error",
-} satisfies ProcessOutputPolicyInput
-
-/** The local review changed while DiffDash was capturing one coherent snapshot. */
-export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChangedError>()(
-  "LocalReviewChangedError",
-  {
-    rootPath: RepositoryCheckoutPath,
-  },
-) {}
-
 /** A requested local comparison branch could not be resolved safely. */
 export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTargetError>()(
   "LocalReviewTargetError",
@@ -57,13 +31,6 @@ export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTarget
     cause: Schema.NullOr(Schema.ErrorInstance()),
   },
 ) {}
-
-type LocalReviewInput = RepositoryCheckoutPath | LocalReviewTarget
-
-/** Test seam for observing local unified-diff parsing without module mocking. */
-export interface GitServiceLayerOptions {
-  readonly parseDiff?: typeof parseUnifiedDiff
-}
 
 /** One configured local Git remote and all of its fetch URLs. */
 export class LocalGitRemote extends Schema.Class<LocalGitRemote>("LocalGitRemote")({
@@ -94,265 +61,153 @@ export class GitService extends Context.Service<
     readonly resolveLastCommit: (
       localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
-    readonly getLocalReviewSnapshot: (
-      target: LocalReviewInput,
-    ) => Effect.Effect<LocalReviewSnapshot, ProcessExecutionError | LocalReviewChangedError>
   }
 >()("@diffdash/GitService") {
-  /** Builds the local Git layer with an optional parser test seam. */
-  static readonly layerWith = (options: GitServiceLayerOptions = {}) =>
-    Layer.effect(
-      GitService,
-      Effect.gen(function* () {
-        const processes = yield* ProcessService
-        const parseDiff = options.parseDiff ?? parseUnifiedDiff
-        const detectRoot = Effect.fn("GitService.detectRoot")(function* (
-          localPath: RepositoryCheckoutPath,
-        ) {
-          const root = yield* processes.run(
-            gitProcessRequest(["-C", localPath, "rev-parse", "--show-toplevel"]),
-          )
-          return yield* parseCheckoutPath(root)
-        })
+  static readonly layer = Layer.effect(
+    GitService,
+    Effect.gen(function* () {
+      const processes = yield* ProcessService
+      const detectRoot = Effect.fn("GitService.detectRoot")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const root = yield* processes.run(
+          gitProcessRequest(["-C", localPath, "rev-parse", "--show-toplevel"]),
+        )
+        return yield* parseCheckoutPath(root)
+      })
 
-        const currentBranch = Effect.fn("GitService.currentBranch")(function* (
-          localPath: RepositoryCheckoutPath,
-        ) {
-          const result = yield* processes.run(
-            gitProcessRequest(["-C", localPath, "branch", "--show-current"]),
-          )
-          const branch = result.stdout.trim()
-          return branch.length === 0 ? null : yield* parseComparisonRef(result, branch)
-        })
+      const currentBranch = Effect.fn("GitService.currentBranch")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const result = yield* processes.run(
+          gitProcessRequest(["-C", localPath, "branch", "--show-current"]),
+        )
+        const branch = result.stdout.trim()
+        return branch.length === 0 ? null : yield* parseComparisonRef(result, branch)
+      })
 
-        const listRemotes = Effect.fn("GitService.listRemotes")(function* (
-          localPath: RepositoryCheckoutPath,
-        ) {
-          const rootPath = yield* detectRoot(localPath)
-          const names = yield* processes.run(gitProcessRequest(["-C", rootPath, "remote"]))
-          return yield* Effect.forEach(
-            names.stdout
-              .split("\n")
-              .map((name) => name.trim())
-              .filter((name) => name.length > 0),
-            (name) =>
-              processes
-                .run(gitProcessRequest(["-C", rootPath, "remote", "get-url", "--all", name]))
-                .pipe(
-                  Effect.map((result) =>
-                    LocalGitRemote.make({
-                      name,
-                      fetchUrls: result.stdout
-                        .split("\n")
-                        .map((url) => url.trim())
-                        .filter((url) => url.length > 0),
-                    }),
-                  ),
+      const listRemotes = Effect.fn("GitService.listRemotes")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const rootPath = yield* detectRoot(localPath)
+        const names = yield* processes.run(gitProcessRequest(["-C", rootPath, "remote"]))
+        return yield* Effect.forEach(
+          names.stdout
+            .split("\n")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+          (name) =>
+            processes
+              .run(gitProcessRequest(["-C", rootPath, "remote", "get-url", "--all", name]))
+              .pipe(
+                Effect.map((result) =>
+                  LocalGitRemote.make({
+                    name,
+                    fetchUrls: result.stdout
+                      .split("\n")
+                      .map((url) => url.trim())
+                      .filter((url) => url.length > 0),
+                  }),
                 ),
-            { concurrency: 1 },
-          )
-        })
-
-        const canonicalTarget = Effect.fn("GitService.canonicalTarget")(function* (
-          input: LocalReviewInput,
-        ) {
-          const target = Schema.is(RepositoryCheckoutPath)(input)
-            ? workingTreeReviewTarget(input)
-            : input
-          const rootPath = yield* detectRoot(target.rootPath)
-          return LocalReviewTarget.make({ ...target, rootPath })
-        })
-
-        const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
-          localPath: RepositoryCheckoutPath,
-          requestedBranchName: RepositoryComparisonRef | null,
-        ) {
-          const rootPath = yield* detectRoot(localPath)
-          const checkedOutBranch = yield* currentBranch(rootPath)
-          const branchName = yield* requestedBranchName === null
-            ? defaultOriginBranch(rootPath).pipe(Effect.provideService(ProcessService, processes))
-            : validateBranchName(rootPath, requestedBranchName).pipe(
-                Effect.provideService(ProcessService, processes),
-              )
-          const baseRef = RepositoryComparisonRef.make(
-            checkedOutBranch === branchName
-              ? `refs/heads/${branchName}`
-              : `refs/remotes/origin/${branchName}`,
-          )
-
-          if (checkedOutBranch !== branchName) {
-            yield* processes.run(
-              gitProcessRequest(
-                [
-                  "-C",
-                  rootPath,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  `+refs/heads/${branchName}:${baseRef}`,
-                ],
-                { timeoutMs: 60_000 },
               ),
+          { concurrency: 1 },
+        )
+      })
+
+      const resolveBranchComparison = Effect.fn("GitService.resolveBranchComparison")(function* (
+        localPath: RepositoryCheckoutPath,
+        requestedBranchName: RepositoryComparisonRef | null,
+      ) {
+        const rootPath = yield* detectRoot(localPath)
+        const checkedOutBranch = yield* currentBranch(rootPath)
+        const branchName = yield* requestedBranchName === null
+          ? defaultOriginBranch(rootPath).pipe(Effect.provideService(ProcessService, processes))
+          : validateBranchName(rootPath, requestedBranchName).pipe(
+              Effect.provideService(ProcessService, processes),
             )
-          }
-          const targetSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
-            Effect.provideService(ProcessService, processes),
-          )
-          const baseSha = yield* resolveMergeBaseSha(rootPath, branchName, targetSha).pipe(
-            Effect.provideService(ProcessService, processes),
-          )
+        const baseRef = RepositoryComparisonRef.make(
+          checkedOutBranch === branchName
+            ? `refs/heads/${branchName}`
+            : `refs/remotes/origin/${branchName}`,
+        )
 
-          return LocalReviewTarget.make({
-            kind: "local",
-            rootPath,
-            comparison: BranchComparison.make({
-              branchName,
-              baseRef,
-              baseSha: ReviewRevision.make(baseSha),
-            }),
-          })
-        })
-
-        const resolveLastCommit = Effect.fn("GitService.resolveLastCommit")(function* (
-          localPath: RepositoryCheckoutPath,
-        ) {
-          const rootPath = yield* detectRoot(localPath)
-          const revisions = yield* readLastCommitRevisions(rootPath).pipe(
-            Effect.provideService(ProcessService, processes),
-          )
-          const baseSha = Option.match(revisions.parentSha, {
-            onNone: () => ReviewRevision.make(EMPTY_TREE_SHA),
-            onSome: ReviewRevision.make,
-          })
-
-          return LocalReviewTarget.make({
-            kind: "local",
-            rootPath,
-            comparison: LastCommitComparison.make({
-              baseSha,
-              headSha: ReviewRevision.make(revisions.headSha),
-            }),
-          })
-        })
-
-        const getLocalReviewDiff = Effect.fn("GitService.getLocalReviewDiff")(function* (
-          input: LocalReviewInput,
-        ) {
-          const target = yield* canonicalTarget(input)
-          const rootPath = target.rootPath
-          const baseSha = yield* localReviewBaseSha(target).pipe(
-            Effect.provideService(ProcessService, processes),
-          )
-          const diff = yield* Match.value(target.comparison).pipe(
-            Match.tag("lastCommit", (comparison) =>
-              committedDiff(rootPath, comparison.baseSha, comparison.headSha),
+        if (checkedOutBranch !== branchName) {
+          yield* processes.run(
+            gitProcessRequest(
+              [
+                "-C",
+                rootPath,
+                "fetch",
+                "--no-tags",
+                "origin",
+                `+refs/heads/${branchName}:${baseRef}`,
+              ],
+              { timeoutMs: 60_000 },
             ),
-            Match.orElse(() =>
-              Effect.all([localTrackedDiff(rootPath, baseSha), localUntrackedDiff(rootPath)]).pipe(
-                Effect.map(joinDiffSections),
-              ),
-            ),
-            Effect.provideService(ProcessService, processes),
           )
-          const diffHash = localDiffHash(target.comparison, baseSha ?? EMPTY_TREE_SHA, diff)
-          const diffIdentity = ReviewDiffIdentity.make(diffHash)
-          const headRevision = Match.value(target.comparison).pipe(
-            Match.tag("lastCommit", (comparison) => comparison.headSha),
-            Match.orElse(() => ReviewRevision.make(diffIdentity)),
-          )
+        }
+        const targetSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
+          Effect.provideService(ProcessService, processes),
+        )
+        const baseSha = yield* resolveMergeBaseSha(rootPath, branchName, targetSha).pipe(
+          Effect.provideService(ProcessService, processes),
+        )
 
-          return LocalReviewDiff.make({
-            rootPath,
-            comparison: target.comparison,
-            baseSha: ReviewRevision.make(baseSha ?? EMPTY_TREE_SHA),
-            headSha: headRevision,
-            diffHash: diffIdentity,
-            diff,
-            fetchedAt: new Date().toISOString(),
-          })
-        })
-
-        const getLocalReviewSnapshot = Effect.fn("GitService.getLocalReviewSnapshot")(function* (
-          input: LocalReviewInput,
-        ) {
-          const target = yield* canonicalTarget(input)
-          let diff: LocalReviewDiff | null = null
-          for (let attempt = 1; attempt <= 2; attempt += 1) {
-            const before = yield* getLocalReviewDiff(target)
-            const after = yield* getLocalReviewDiff(target)
-            if (
-              before.rootPath === after.rootPath &&
-              before.baseSha === after.baseSha &&
-              before.diffHash === after.diffHash
-            ) {
-              diff = after
-              break
-            }
-          }
-          if (diff === null) {
-            return yield* LocalReviewChangedError.make({ rootPath: target.rootPath })
-          }
-          const branchName = yield* currentBranch(diff.rootPath).pipe(
-            Effect.catch(() => Effect.succeed<RepositoryComparisonRef | null>(null)),
-          )
-          const parsedDiff = parseDiff(diff.diff)
-          const detail = localReviewDetail(diff, branchName, parsedDiff)
-          const reviewKey = makeLocalReviewKey(diff.rootPath, diff.comparison)
-          const baseRevision = ReviewRevision.make(diff.baseSha)
-          const headRevision = ReviewRevision.make(diff.headSha)
-
-          return LocalReviewSnapshot.make({
-            snapshotId: makeReviewSnapshotId({
-              reviewKey,
-              baseRevision,
-              headRevision,
-              diffIdentity: ReviewDiffIdentity.make(diff.diffHash),
-            }),
-            reviewKey,
-            baseRevision,
-            headRevision,
-            detail,
-            diff,
-            parsedDiff,
-          })
-        })
-
-        return GitService.of({
-          detectRepository: Effect.fn("GitService.detectRepository")(function* (
-            localPath: RepositoryCheckoutPath,
-          ) {
-            const rootPath = yield* detectRoot(localPath)
-            const remote = yield* processes.run(
-              gitProcessRequest(["-C", rootPath, "remote", "get-url", "origin"]),
-            )
-            return {
-              rootPath,
-              remoteUrl: remote.stdout.trim(),
-            }
+        return LocalReviewTarget.make({
+          kind: "local",
+          rootPath,
+          comparison: BranchComparison.make({
+            branchName,
+            baseRef,
+            baseSha: ReviewRevision.make(baseSha),
           }),
-          detectRoot,
-          currentBranch,
-          listRemotes,
-          resolveBranchComparison,
-          resolveLastCommit,
-          getLocalReviewSnapshot,
         })
-      }),
-    )
+      })
 
-  static readonly layer = GitService.layerWith()
+      const resolveLastCommit = Effect.fn("GitService.resolveLastCommit")(function* (
+        localPath: RepositoryCheckoutPath,
+      ) {
+        const rootPath = yield* detectRoot(localPath)
+        const revisions = yield* readLastCommitRevisions(rootPath).pipe(
+          Effect.provideService(ProcessService, processes),
+        )
+        const baseSha = Option.match(revisions.parentSha, {
+          onNone: () => ReviewRevision.make(EMPTY_TREE_SHA),
+          onSome: ReviewRevision.make,
+        })
+
+        return LocalReviewTarget.make({
+          kind: "local",
+          rootPath,
+          comparison: LastCommitComparison.make({
+            baseSha,
+            headSha: ReviewRevision.make(revisions.headSha),
+          }),
+        })
+      })
+
+      return GitService.of({
+        detectRepository: Effect.fn("GitService.detectRepository")(function* (
+          localPath: RepositoryCheckoutPath,
+        ) {
+          const rootPath = yield* detectRoot(localPath)
+          const remote = yield* processes.run(
+            gitProcessRequest(["-C", rootPath, "remote", "get-url", "origin"]),
+          )
+          return {
+            rootPath,
+            remoteUrl: remote.stdout.trim(),
+          }
+        }),
+        detectRoot,
+        currentBranch,
+        listRemotes,
+        resolveBranchComparison,
+        resolveLastCommit,
+      })
+    }),
+  )
 }
-
-const currentHeadSha = (rootPath: RepositoryCheckoutPath) =>
-  Effect.gen(function* () {
-    const processes = yield* ProcessService
-    return yield* processes
-      .run(gitProcessRequest(["-C", rootPath, "rev-parse", "--verify", "HEAD"]))
-      .pipe(
-        Effect.flatMap((result) => parseCommitSha(result)),
-        Effect.catchTag("ProcessExitError", () => Effect.succeed(null)),
-      )
-  })
 
 type LastCommitRevisions = {
   readonly headSha: GitCommitSha
@@ -444,16 +299,6 @@ const resolveMergeBaseSha = (
     )
   })
 
-const localReviewBaseSha = (
-  target: LocalReviewTarget,
-): Effect.Effect<string | null, ProcessExecutionError, ProcessService> =>
-  Match.value(target.comparison).pipe(
-    Match.tag("workingTree", () => currentHeadSha(target.rootPath)),
-    Match.tag("branch", (comparison) => Effect.succeed<string | null>(comparison.baseSha)),
-    Match.tag("lastCommit", (comparison) => Effect.succeed<string | null>(comparison.baseSha)),
-    Match.exhaustive,
-  )
-
 const validateBranchName = (
   rootPath: RepositoryCheckoutPath,
   requestedBranchName: RepositoryComparisonRef,
@@ -524,133 +369,7 @@ const defaultOriginBranch = (rootPath: RepositoryCheckoutPath) =>
     return yield* validateBranchName(rootPath, parsed)
   })
 
-const localTrackedDiff = (rootPath: RepositoryCheckoutPath, baseSha: string | null) =>
-  Effect.gen(function* () {
-    const processes = yield* ProcessService
-    const args =
-      baseSha === null
-        ? ["-C", rootPath, "diff", "--cached", "--no-ext-diff", "--"]
-        : ["-C", rootPath, "diff", "--no-ext-diff", baseSha, "--"]
-    const result = yield* processes.run(
-      gitProcessRequest(args, {
-        timeoutMs: 60_000,
-        stdout: COMPLETE_DIFF_STDOUT,
-      }),
-    )
-    return result.stdout
-  })
-
-const committedDiff = (
-  rootPath: RepositoryCheckoutPath,
-  baseSha: ReviewRevision,
-  headSha: ReviewRevision,
-) =>
-  Effect.gen(function* () {
-    const processes = yield* ProcessService
-    const result = yield* processes.run(
-      gitProcessRequest(["-C", rootPath, "diff", "--no-ext-diff", baseSha, headSha, "--"], {
-        timeoutMs: 60_000,
-        stdout: COMPLETE_DIFF_STDOUT,
-      }),
-    )
-    return result.stdout
-  })
-
-const localUntrackedDiff = (rootPath: RepositoryCheckoutPath) =>
-  Effect.gen(function* () {
-    const processes = yield* ProcessService
-    const untracked = yield* processes.run(
-      gitProcessRequest(["-C", rootPath, "ls-files", "--others", "--exclude-standard", "-z"], {
-        timeoutMs: 20_000,
-      }),
-    )
-    const paths = splitNul(untracked.stdout)
-    const diffs = yield* Effect.forEach(paths, (path) => untrackedFileDiff(rootPath, path))
-    return joinDiffSections(diffs)
-  })
-
-const untrackedFileDiff = (rootPath: RepositoryCheckoutPath, path: string) =>
-  Effect.gen(function* () {
-    const processes = yield* ProcessService
-    return yield* processes
-      .run(
-        gitProcessRequest(["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path], {
-          cwd: rootPath,
-          timeoutMs: 60_000,
-          stdout: COMPLETE_DIFF_STDOUT,
-        }),
-      )
-      .pipe(
-        Effect.map((result) => result.stdout),
-        Effect.catchTag("ProcessExitError", (error) =>
-          error.exitCode === 1 ? Effect.succeed(error.stdout) : Effect.fail(error),
-        ),
-      )
-  })
-
-const splitNul = (output: string) => output.split("\0").filter((path) => path.length > 0)
-
-const joinDiffSections = (sections: readonly string[]) =>
-  sections
-    .map((section) => section.trimEnd())
-    .filter((section) => section.length > 0)
-    .join("\n")
-
-const localReviewDetail = (
-  diff: LocalReviewDiff,
-  branchName: RepositoryComparisonRef | null,
-  parsedDiff: ReturnType<typeof parseUnifiedDiff>,
-) => {
-  const repoName = basename(diff.rootPath) || diff.rootPath
-  return LocalReviewDetail.make({
-    rootPath: diff.rootPath,
-    repoName,
-    branchName,
-    comparison: diff.comparison,
-    baseSha: diff.baseSha,
-    headSha: diff.headSha,
-    diffHash: diff.diffHash,
-    title: Match.value(diff.comparison).pipe(
-      Match.tag("workingTree", () => "Local changes"),
-      Match.tag("branch", (comparison) => `Changes vs ${comparison.branchName}`),
-      Match.tag("lastCommit", () => "Last commit"),
-      Match.exhaustive,
-    ),
-    files: parsedDiff.files.map((file) =>
-      ChangedFile.make({
-        path: file.path,
-        additions: file.additions,
-        deletions: file.deletions,
-        changeType: file.status,
-      }),
-    ),
-    fetchedAt: diff.fetchedAt,
-  })
-}
-
-const localDiffHash = (comparison: LocalReviewComparison, baseSha: string, diff: string) => {
-  const hash = createHash("sha256")
-  return Match.value(comparison)
-    .pipe(
-      Match.tag("branch", (branch) =>
-        hash.update("branch\0").update(branch.baseRef).update("\0").update(baseSha).update("\0"),
-      ),
-      Match.tag("workingTree", () => hash),
-      Match.tag("lastCommit", (commit) =>
-        hash
-          .update("lastCommit\0")
-          .update(commit.baseSha)
-          .update("\0")
-          .update(commit.headSha)
-          .update("\0"),
-      ),
-      Match.exhaustive,
-    )
-    .update(diff)
-    .digest("hex")
-}
-
-/** Creates the stable review identity shared by local snapshot and streaming acquisition paths. */
+/** Creates the stable review identity used by local streaming acquisition. */
 export const makeLocalReviewKey = (
   rootPath: RepositoryCheckoutPath,
   comparison: LocalReviewComparison,
