@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- [#81](https://github.com/byfungsi/diffdash/pull/81) [`65cce5b`](https://github.com/byfungsi/diffdash/commit/65cce5b7e09953eb5ba1805534b3e077420b9c9f) Thanks [@hanipcode](https://github.com/hanipcode)! - Prevent local review thread loading from repeatedly refreshing, and keep E2E desktop windows hidden.
+
 ## 0.9.0
 
 ### Minor Changes
