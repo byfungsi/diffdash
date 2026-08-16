@@ -26,6 +26,7 @@ import {
   snapshotProjectAuthorityLayer,
 } from "./snapshot-production-adapters"
 import { SnapshotGitRangeSource, SnapshotProjectAuthority } from "./snapshot-repository"
+import { testReviewDescriptor } from "../test-review-descriptor"
 
 const projectId = ReviewProjectId.make("local:production-adapter")
 const unusedRepositoryOperation = () => Effect.die("Repository operation is unused")
@@ -77,6 +78,7 @@ describe("snapshot production adapters", () => {
         baseRevision,
         headRevision,
         semanticIdentity: diffIdentity,
+        descriptor: testReviewDescriptor,
         source: {
           kind: "exactGit" as const,
           repositoryIdentity: createHash("sha256").update(commonDirectory).digest("hex"),

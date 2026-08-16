@@ -14,6 +14,7 @@ import {
 import {
   ReviewFileId,
   ReviewFilePatchHash,
+  ReviewHunkId,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -45,6 +46,8 @@ import {
   type LazySnapshotBlock,
   type SnapshotRepositoryOptions,
 } from "./snapshot-repository"
+import { testReviewDescriptor } from "../test-review-descriptor"
+import { OperationSnapshotReader, operationSnapshotReaderLayer } from "./operation-snapshot-reader"
 
 const encoder = new TextEncoder()
 const projectId = ReviewProjectId.make("project:one")
@@ -102,7 +105,14 @@ const makeLayer = (
     Layer.succeed(SnapshotGitRangeSource, { generateFile }),
     Layer.succeed(SnapshotProjectAuthority, { contains: () => Effect.succeed(true) }),
   )
-  return snapshotRepositoryLayer(options).pipe(Layer.provideMerge(dependencies))
+  return Layer.merge(
+    snapshotRepositoryLayer(options),
+    operationSnapshotReaderLayer({
+      leaseLifetimeMs: 1_000,
+      maximumHunkBytes: 1_024,
+      maximumFileBytes: 4_096,
+    }),
+  ).pipe(Layer.provideMerge(dependencies))
 }
 
 const deltaIdentity = FileDeltaIdentity.make({
@@ -206,6 +216,7 @@ const publish = Effect.fn("SnapshotRepositoryTest.publish")(function* (
     baseRevision: "base",
     headRevision: "head",
     semanticIdentity: "semantic:one",
+    descriptor: testReviewDescriptor,
     source:
       source === "managedSpool"
         ? { kind: "managedSpool", resourceId }
@@ -236,6 +247,48 @@ const publish = Effect.fn("SnapshotRepositoryTest.publish")(function* (
 })
 
 describe("SnapshotRepository", () => {
+  it.effect("keeps operation leases independent from the foreground session", () =>
+    Effect.gen(function* () {
+      const directory = yield* tempDirectory
+      yield* Effect.gen(function* () {
+        const { deltaId, resources, store } = yield* setup(directory)
+        const block = yield* addBlock(store, deltaId, 0, 0, "-old\n+new\n")
+        yield* publish(store, snapshotOne, deltaId, [block], "managedSpool")
+        const repository = yield* SnapshotRepository
+        const foreground = identity(snapshotOne)
+        yield* repository.openSession(foreground)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const reader = yield* OperationSnapshotReader
+            const operation = yield* reader.open({
+              applicationInstanceId: ApplicationInstanceId.make("app:one"),
+              processEpoch: CoreProcessEpoch.make("epoch:one"),
+              operationId: "walkthrough:one",
+              projectId,
+              reviewKey,
+              snapshotId: snapshotOne,
+            })
+            const hunk = yield* operation.readHunk(
+              ReviewFileId.make("file:0"),
+              Schema.decodeSync(ReviewHunkId)("hunk:one"),
+            )
+            expect(new TextDecoder().decode(hunk.bytes)).toBe("-old\n+new\n")
+            const spool = yield* resources.get(CatalogResourceId.make(`spool:${snapshotOne}`))
+            expect(spool.leases).toMatchObject([
+              { ownerKind: "durableOperation", ownerId: "walkthrough:one" },
+            ])
+          }),
+        )
+
+        const page = yield* repository.inventory(foreground, 0, 1)
+        expect(page.files).toHaveLength(1)
+        const spool = yield* resources.get(CatalogResourceId.make(`spool:${snapshotOne}`))
+        expect(spool.leases).toEqual([])
+      }).pipe(Effect.provide(makeLayer(directory)))
+    }),
+  )
+
   it.effect("returns identical semantic ranges from spool and exact-Git manifests", () =>
     Effect.gen(function* () {
       const directory = yield* tempDirectory

@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Result } from "effect"
 import { ReviewFilePatchHash, ReviewProjectId } from "@diffdash/domain/review-identity"
+import { LocalReviewDescriptor } from "@diffdash/domain/review-context"
+import { LocalReviewTarget, WorkingTreeComparison } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 
 import * as DatabaseNode from "./database-node"
 import {
@@ -54,6 +57,17 @@ const identity = FileDeltaIdentity.make({
 
 const bytes = new TextEncoder().encode(" context\n-old\n+new\n")
 const checksum = `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+const descriptor = LocalReviewDescriptor.make({
+  target: LocalReviewTarget.make({
+    kind: "local",
+    rootPath: RepositoryCheckoutPath.make("/tmp/diffdash"),
+    comparison: WorkingTreeComparison.make({}),
+  }),
+  repoName: "diffdash",
+  branchName: null,
+  title: "Local changes",
+  fetchedAt: "2026-08-16T00:00:00.000Z",
+})
 
 const registerRootAndDelta = Effect.fn("SnapshotBlockStoreTest.registerRootAndDelta")(function* (
   directory: string,
@@ -127,6 +141,7 @@ const publish = Effect.fn("SnapshotBlockStoreTest.publish")(function* (
     baseRevision: "base",
     headRevision: "head",
     semanticIdentity: `semantic:${snapshotId}`,
+    descriptor,
     source: {
       kind: "exactGit",
       repositoryIdentity: "github:fungsi/diffdash",
@@ -264,6 +279,7 @@ describe("SnapshotBlockStore", () => {
             headObject: "head-object",
             diffPolicyIdentity: identity.diffPolicyIdentity,
           },
+          descriptor,
           blockIds: [blockId],
           checkpoints: [{ blockId, byteOffset: 0, lineOffset: 0 }],
         })
@@ -301,6 +317,7 @@ describe("SnapshotBlockStore", () => {
           baseRevision: "base",
           headRevision: "head",
           semanticIdentity: "semantic:remote",
+          descriptor,
           source: { kind: "managedSpool", resourceId },
           files: [],
           blockIds: [],

@@ -18,7 +18,10 @@ import {
 } from "@diffdash/domain/repository-comparison"
 import {
   HostedReviewSnapshotManifest,
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
   LocalReviewSnapshotManifest,
+  RepositoryComparisonReviewDescriptor,
   RepositoryComparisonSnapshotManifest,
   ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
@@ -135,6 +138,7 @@ export const coreSnapshotAcquisitionLayer = (
         readonly source: ReviewDiffSource
         readonly projectId: import("@diffdash/domain/review-identity").ReviewProjectId
         readonly baseRevision: ReviewRevision
+        readonly descriptor: import("@diffdash/domain/review-context").ReviewDescriptor
         readonly repositoryPath: RepositoryCheckoutPath | null
         readonly statusByPath: ReadonlyMap<string, FileDeltaIdentity["status"]>
       }) {
@@ -172,6 +176,7 @@ export const coreSnapshotAcquisitionLayer = (
               baseRevision: input.baseRevision,
               headRevision: source.offer.expectedRevision,
               semanticIdentity: source.offer.semanticIdentity,
+              descriptor: input.descriptor,
               storageSource: prepared.storageSource,
             },
             fileDeltaKeys: sourceMaterial.fileDeltaKeys,
@@ -200,6 +205,16 @@ export const coreSnapshotAcquisitionLayer = (
           source,
           projectId: project.id,
           baseRevision: revisions.base,
+          descriptor: HostedReviewDescriptor.make({
+            review: detail.summary.locator,
+            title: detail.summary.title,
+            authorUsername: detail.summary.author.username,
+            state: detail.summary.state,
+            draft: detail.summary.draft,
+            baseRef: detail.summary.base.name,
+            headRef: detail.summary.head.name,
+            url: detail.summary.url,
+          }),
           repositoryPath: project.localPath,
           statusByPath: changedFileStatuses(detail.files),
         }).pipe(Effect.mapError(reviewFailure("hosted.snapshot")))
@@ -222,17 +237,30 @@ export const coreSnapshotAcquisitionLayer = (
           Effect.mapError(reviewFailure("local.snapshot")),
           Effect.onError(() => source.close.pipe(Effect.ignore)),
         )
-        const result = yield* ingest({
-          source,
-          projectId: project.id,
-          baseRevision,
-          repositoryPath: target.rootPath,
-          statusByPath: new Map(),
-        }).pipe(Effect.mapError(reviewFailure("local.snapshot")))
         const branchName = yield* git
           .currentBranch(target.rootPath)
           .pipe(Effect.catch(() => Effect.succeed(null)))
         const now = yield* Clock.currentTimeMillis
+        const title = Match.value(target.comparison).pipe(
+          Match.tag("workingTree", () => "Local changes"),
+          Match.tag("branch", (comparison) => `Changes vs ${comparison.branchName}`),
+          Match.tag("lastCommit", () => "Last commit"),
+          Match.exhaustive,
+        )
+        const result = yield* ingest({
+          source,
+          projectId: project.id,
+          baseRevision,
+          descriptor: LocalReviewDescriptor.make({
+            target,
+            repoName: basename(target.rootPath) || target.rootPath,
+            branchName,
+            title,
+            fetchedAt: new Date(now).toISOString(),
+          }),
+          repositoryPath: target.rootPath,
+          statusByPath: new Map(),
+        }).pipe(Effect.mapError(reviewFailure("local.snapshot")))
         const detail = LocalReviewDetail.make({
           rootPath: target.rootPath,
           repoName: basename(target.rootPath) || target.rootPath,
@@ -241,12 +269,7 @@ export const coreSnapshotAcquisitionLayer = (
           baseSha: baseRevision,
           headSha: source.offer.expectedRevision,
           diffHash: ReviewDiffIdentity.make(source.offer.semanticIdentity),
-          title: Match.value(target.comparison).pipe(
-            Match.tag("workingTree", () => "Local changes"),
-            Match.tag("branch", (comparison) => `Changes vs ${comparison.branchName}`),
-            Match.tag("lastCommit", () => "Last commit"),
-            Match.exhaustive,
-          ),
+          title,
           files: changedFiles(result),
           fetchedAt: new Date(now).toISOString(),
         })
@@ -271,17 +294,23 @@ export const coreSnapshotAcquisitionLayer = (
               Effect.mapError(comparisonFailure("acquire.source")),
             )
             const baseRevision = repositoryComparisonBaseRevision(target)
+            const now = yield* Clock.currentTimeMillis
+            const title = `${target.baseRef}...${target.headRef}`
             const result = yield* ingest({
               source,
               projectId: project.id,
               baseRevision,
+              descriptor: RepositoryComparisonReviewDescriptor.make({
+                target,
+                title,
+                fetchedAt: new Date(now).toISOString(),
+              }),
               repositoryPath,
               statusByPath: new Map(),
             }).pipe(Effect.mapError(comparisonFailure("acquire.ingestion")))
-            const now = yield* Clock.currentTimeMillis
             const detail = RepositoryComparisonDetail.make({
               target,
-              title: `${target.baseRef}...${target.headRef}`,
+              title,
               files: changedFiles(result),
               fetchedAt: new Date(now).toISOString(),
             })

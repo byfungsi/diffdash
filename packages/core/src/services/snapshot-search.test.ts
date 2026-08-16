@@ -48,6 +48,7 @@ import {
   type SnapshotSearchInput,
   type SnapshotSearchProvisional,
 } from "./snapshot-search"
+import { testReviewDescriptor } from "../test-review-descriptor"
 
 const encoder = new TextEncoder()
 const rootId = ResourceRootId.make("snapshot-search-root")
@@ -207,6 +208,7 @@ const publishFixture = Effect.fn("SnapshotSearchTest.publishFixture")(function* 
     baseRevision: "base",
     headRevision: "head",
     semanticIdentity: "semantic:search",
+    descriptor: testReviewDescriptor,
     source: {
       kind: "exactGit",
       repositoryIdentity: "repo:search",

@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto"
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises"
 import { isAbsolute, relative, resolve, sep } from "node:path"
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
+import { Context, Effect, Layer, Match, Option, Predicate, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 
 import { DiffFileStatus, type DiffFileVisibility } from "@diffdash/domain/diff"
+import {
+  ReviewDescriptor,
+  type ReviewDescriptor as ReviewDescriptorType,
+} from "@diffdash/domain/review-context"
 import { ReviewFilePatchHash, ReviewProjectId } from "@diffdash/domain/review-identity"
 import { type Database, makeDatabase, toError } from "./database"
 import {
@@ -20,6 +24,7 @@ const BoundedId = Schema.String.pipe(
 )
 const NonNegativeInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))
 const PositiveInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)))
+const MAX_REVIEW_DESCRIPTOR_BYTES = 64 * 1024
 
 /** Stable identity of an immutable review snapshot manifest. */
 export const StoredSnapshotId = BoundedId.pipe(Schema.brand("StoredSnapshotId"))
@@ -114,6 +119,7 @@ export interface PublishSnapshotInput {
   readonly baseRevision: string
   readonly headRevision: string
   readonly semanticIdentity: string
+  readonly descriptor: ReviewDescriptorType
   readonly source: SnapshotStorageSource
   readonly files: ReadonlyArray<SnapshotFilePlacement>
   readonly blockIds: ReadonlyArray<DiffBlockId>
@@ -199,6 +205,7 @@ export interface StoredSnapshot {
   readonly baseRevision: string
   readonly headRevision: string
   readonly semanticIdentity: string
+  readonly descriptor: ReviewDescriptorType
   readonly source: SnapshotStorageSource
   readonly files: ReadonlyArray<SnapshotFilePlacement>
   readonly blockIds: ReadonlyArray<DiffBlockId>
@@ -341,6 +348,7 @@ export class SnapshotBlockStore extends Context.Service<
             rawManifest,
             () => new Error(`Missing snapshot manifest ${id}`),
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotManifestRow)))
+          const descriptor = yield* decodeDescriptor(manifest.descriptor_json)
           return {
             id: manifest.id,
             projectId: manifest.project_id,
@@ -348,6 +356,7 @@ export class SnapshotBlockStore extends Context.Service<
             baseRevision: manifest.base_revision,
             headRevision: manifest.head_revision,
             semanticIdentity: manifest.semantic_identity,
+            descriptor,
             source: decodeSource(manifest),
             createdAtMs: manifest.created_at_ms,
           }
@@ -647,6 +656,7 @@ export class SnapshotBlockStore extends Context.Service<
           }, mapError("recoverWrites")),
 
           publishSnapshot: Effect.fn("SnapshotBlockStore.publishSnapshot")(function* (input) {
+            const descriptorJson = yield* encodeDescriptor(input.descriptor)
             yield* database.transaction(
               Effect.gen(function* () {
                 const source = sourceColumns(input.source)
@@ -654,8 +664,8 @@ export class SnapshotBlockStore extends Context.Service<
                   `INSERT INTO review_snapshot_manifests (
                     id, project_id, review_key, base_revision, head_revision, semantic_identity, source_kind,
                     spool_resource_id, repository_identity, base_object, head_object,
-                    diff_policy_identity, created_at_ms
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    diff_policy_identity, descriptor_json, created_at_ms
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                   [
                     input.id,
                     input.projectId,
@@ -669,10 +679,17 @@ export class SnapshotBlockStore extends Context.Service<
                     source.baseObject,
                     source.headObject,
                     source.diffPolicyIdentity,
+                    descriptorJson,
                     input.createdAtMs,
                   ],
                 )
-                for (const file of input.files)
+                for (const file of input.files) {
+                  const visibility = Match.value(file.visibility).pipe(
+                    Match.tagsExhaustive({
+                      Visible: () => ({ tag: "Visible" as const, reason: null }),
+                      Hidden: ({ reason }) => ({ tag: "Hidden" as const, reason }),
+                    }),
+                  )
                   yield* database.run(
                     `INSERT INTO review_snapshot_files (
                       snapshot_id, ordinal, delta_id, file_id, path, old_path, additions, deletions,
@@ -688,12 +705,13 @@ export class SnapshotBlockStore extends Context.Service<
                       file.additions,
                       file.deletions,
                       file.status,
-                      file.visibility._tag,
-                      file.visibility._tag === "Hidden" ? file.visibility.reason : null,
+                      visibility.tag,
+                      visibility.reason,
                       file.patchHash,
                       file.hunkCount,
                     ],
                   )
+                }
                 for (const [ordinal, blockId] of input.blockIds.entries())
                   yield* database.run(
                     `INSERT INTO review_block_placements (snapshot_id, ordinal, block_id)
@@ -998,8 +1016,27 @@ const SnapshotManifestRow = Schema.Struct({
   base_object: Schema.NullOr(Schema.String),
   head_object: Schema.NullOr(Schema.String),
   diff_policy_identity: Schema.NullOr(Schema.String),
+  descriptor_json: Schema.NullOr(Schema.String),
   created_at_ms: NonNegativeInt,
 })
+
+const encodeDescriptor = (descriptor: ReviewDescriptorType) =>
+  Effect.try({
+    try: () => {
+      const encoded = JSON.stringify(Schema.encodeSync(ReviewDescriptor)(descriptor))
+      if (Buffer.byteLength(encoded) > MAX_REVIEW_DESCRIPTOR_BYTES)
+        throw new Error("Review snapshot descriptor exceeds its durable size bound")
+      return encoded
+    },
+    catch: toError,
+  })
+
+const decodeDescriptor = (encoded: string | null) =>
+  encoded === null
+    ? Effect.fail(new Error("Snapshot manifest does not contain a review descriptor"))
+    : Effect.try({ try: () => JSON.parse(encoded), catch: toError }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(ReviewDescriptor)),
+      )
 
 const SnapshotFileRow = Schema.Struct({
   snapshot_id: StoredSnapshotId,

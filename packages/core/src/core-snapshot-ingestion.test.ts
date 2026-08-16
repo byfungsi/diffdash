@@ -12,6 +12,9 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
+import { LocalReviewDescriptor } from "@diffdash/domain/review-context"
+import { LocalReviewTarget, WorkingTreeComparison } from "@diffdash/domain/local-review"
+import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   ReviewDiffIdentity,
   ReviewKey,
@@ -86,6 +89,17 @@ const defaultOptions: CoreSnapshotIngestionOptions = {
   managedQuotaBytes: 4 * 1024 * 1024,
   reservationLifetimeMs: 60_000,
 }
+const descriptor = LocalReviewDescriptor.make({
+  target: LocalReviewTarget.make({
+    kind: "local",
+    rootPath: RepositoryCheckoutPath.make("/tmp/diffdash"),
+    comparison: WorkingTreeComparison.make({}),
+  }),
+  repoName: "diffdash",
+  branchName: null,
+  title: "Local changes",
+  fetchedAt: "2026-08-16T00:00:00.000Z",
+})
 
 const tempDirectory = Effect.acquireRelease(
   Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-snapshot-ingestion-"))),
@@ -125,6 +139,7 @@ const input = (reviewSource: ReviewDiffSource) => ({
     baseRevision,
     headRevision: revision,
     semanticIdentity,
+    descriptor,
     storageSource: {
       kind: "exactGit" as const,
       repositoryIdentity: "fixture:diffdash/snapshot-ingestion",

@@ -7,6 +7,7 @@ import type {
 } from "@diffdash/git-provider"
 import { reviewDiffStorageRequirement } from "@diffdash/git-provider"
 import { ParsedDiffFile, type DiffFileVisibility } from "@diffdash/domain/diff"
+import type { ReviewDescriptor } from "@diffdash/domain/review-context"
 import {
   DiffBlockId,
   type FileDeltaId,
@@ -65,6 +66,7 @@ export interface CoreSnapshotManifestIdentity {
   readonly baseRevision: ReviewRevision
   readonly headRevision: ReviewRevision
   readonly semanticIdentity: ReviewDiffIdentity
+  readonly descriptor: ReviewDescriptor
   readonly storageSource: SnapshotStorageSource
 }
 
@@ -187,6 +189,7 @@ export const coreSnapshotIngestionLayer = (
             baseRevision: input.manifest.baseRevision,
             headRevision: input.manifest.headRevision,
             semanticIdentity: input.manifest.semanticIdentity,
+            descriptor: input.manifest.descriptor,
             source: input.manifest.storageSource,
             files: publication.files,
             blockIds: publication.blocks.map(({ id }) => id),

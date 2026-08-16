@@ -2,10 +2,17 @@ import { Match, Schema } from "effect"
 
 import { ParsedDiff } from "./diff"
 import { DiffFileStatus, DiffFileVisibility, type ParsedDiffFile } from "./diff"
-import { HostedReviewDetail, HostedReviewDiff } from "./git-provider"
-import { LocalReviewDetail, LocalReviewDiff } from "./local-review"
-import { RepositoryComparisonDetail, RepositoryComparisonDiff } from "./repository-comparison"
+import { HostedReviewDetail, HostedReviewDiff, HostedReviewLocator } from "./git-provider"
+import { LocalReviewDetail, LocalReviewDiff, LocalReviewTarget } from "./local-review"
+import {
+  RepositoryComparisonDetail,
+  RepositoryComparisonDiff,
+  RepositoryComparisonRef,
+  RepositoryComparisonTarget,
+} from "./repository-comparison"
 import { RepositoryRelativePath } from "./repository-path"
+import { UtcIsoTimestamp } from "./domain-scalar"
+import { WebUrl } from "./web-url"
 import {
   ReviewFileId,
   ReviewFilePatchHash,
@@ -60,6 +67,52 @@ export const ReviewSnapshot = Schema.Union([
 
 /** A coherent local or provider-backed review revision. */
 export type ReviewSnapshot = typeof ReviewSnapshot.Type
+
+const ReviewDescriptorText = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+  Schema.check(Schema.isMaxLength(4_096)),
+)
+
+/** Durable hosted metadata needed to resolve and execute operations without retaining a diff. */
+export class HostedReviewDescriptor extends Schema.TaggedClass<HostedReviewDescriptor>()("hosted", {
+  review: HostedReviewLocator,
+  title: ReviewDescriptorText,
+  authorUsername: ReviewDescriptorText,
+  state: ReviewDescriptorText,
+  draft: Schema.Boolean,
+  baseRef: RepositoryComparisonRef,
+  headRef: RepositoryComparisonRef,
+  url: WebUrl,
+}) {}
+
+/** Durable local metadata needed to resolve and execute operations without retaining a diff. */
+export class LocalReviewDescriptor extends Schema.TaggedClass<LocalReviewDescriptor>()("local", {
+  target: LocalReviewTarget,
+  repoName: ReviewDescriptorText,
+  branchName: Schema.NullOr(RepositoryComparisonRef),
+  title: ReviewDescriptorText,
+  fetchedAt: UtcIsoTimestamp,
+}) {}
+
+/** Durable comparison metadata needed to resolve and execute operations without retaining a diff. */
+export class RepositoryComparisonReviewDescriptor extends Schema.TaggedClass<RepositoryComparisonReviewDescriptor>()(
+  "repositoryComparison",
+  {
+    target: RepositoryComparisonTarget,
+    title: ReviewDescriptorText,
+    fetchedAt: UtcIsoTimestamp,
+  },
+) {}
+
+/** Bounded metadata and target facts persisted with an immutable review snapshot. */
+export const ReviewDescriptor = Schema.Union([
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
+  RepositoryComparisonReviewDescriptor,
+])
+
+/** Bounded metadata and target facts persisted with an immutable review snapshot. */
+export type ReviewDescriptor = typeof ReviewDescriptor.Type
 
 /** File-tree metadata for one parsed file without raw patch text or hunks. */
 export class ReviewSnapshotFileInventory extends Schema.Class<ReviewSnapshotFileInventory>(

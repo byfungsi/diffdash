@@ -26,6 +26,8 @@ const RESOURCE_CATALOG_CAPABILITY = "resource-catalog"
 const RESOURCE_CATALOG_CAPABILITY_VERSION = 1
 const SNAPSHOT_BLOCK_STORAGE_CAPABILITY = "snapshot-block-storage"
 const SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION = 1
+const REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY = "review-snapshot-descriptor"
+const REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY_VERSION = 1
 const CORE_DURABLE_COMMAND_CAPABILITY = "core-durable-command"
 const CORE_DURABLE_COMMAND_CAPABILITY_VERSION = 1
 
@@ -1325,6 +1327,28 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
            VALUES (?, ?, ?)
            ON CONFLICT(name) DO UPDATE SET version = excluded.version, installed_at = excluded.installed_at`,
           [SNAPSHOT_BLOCK_STORAGE_CAPABILITY, SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION, now],
+        )
+      }),
+    )
+  }
+
+  if (
+    (yield* readCapabilityVersion(database, REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY)) <
+    REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* database.run("ALTER TABLE review_snapshot_manifests ADD COLUMN descriptor_json TEXT")
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET version = excluded.version, installed_at = excluded.installed_at`,
+          [
+            REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY,
+            REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY_VERSION,
+            now,
+          ],
         )
       }),
     )
