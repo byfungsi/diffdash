@@ -240,6 +240,7 @@ const ResourceCatalogOperation = Schema.Literals([
   "list",
   "reserve",
   "commitReservation",
+  "finalizeWrite",
   "expireReservations",
   "acquireLease",
   "acquireLeases",
@@ -282,6 +283,13 @@ export class ResourceCatalog extends Context.Service<
     readonly commitReservation: (input: {
       readonly id: ResourceReservationId
       readonly actualBytes: number
+      readonly nowMs: number
+    }) => Effect.Effect<CatalogResource, ResourceCatalogError>
+    readonly finalizeWrite: (input: {
+      readonly resourceId: CatalogResourceId
+      readonly expectedBytes: number
+      readonly checksum: string
+      readonly validation: string
       readonly nowMs: number
     }) => Effect.Effect<CatalogResource, ResourceCatalogError>
     readonly expireReservations: (nowMs: number) => Effect.Effect<void, ResourceCatalogError>
@@ -511,6 +519,30 @@ export class ResourceCatalog extends Context.Service<
               }),
             )
             .pipe(Effect.mapError((cause) => catalogError("commitReservation", cause)))
+        }),
+        finalizeWrite: Effect.fn("ResourceCatalog.finalizeWrite")(function (input) {
+          return database
+            .transaction(
+              Effect.gen(function* () {
+                const resource = yield* get(input.resourceId)
+                if (
+                  resource.state !== "writing" ||
+                  resource.reservedBytes !== 0 ||
+                  resource.bytes !== input.expectedBytes
+                ) {
+                  return yield* Effect.fail(
+                    new Error("Finalized resource does not match its completed write"),
+                  )
+                }
+                yield* database.run(
+                  `UPDATE resources SET state = 'ready', checksum = ?, validation = ?,
+                     updated_at_ms = ?, last_used_at_ms = ? WHERE id = ? AND state = 'writing'`,
+                  [input.checksum, input.validation, input.nowMs, input.nowMs, input.resourceId],
+                )
+                return yield* get(input.resourceId)
+              }),
+            )
+            .pipe(Effect.mapError((cause) => catalogError("finalizeWrite", cause)))
         }),
         expireReservations: Effect.fn("ResourceCatalog.expireReservations")(function (nowMs) {
           return database

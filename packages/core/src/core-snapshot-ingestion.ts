@@ -89,6 +89,7 @@ export interface CoreSnapshotIngestedFile extends SnapshotFilePlacement {
 export interface CoreSnapshotIngestionResult {
   readonly projectId: ReviewProjectId
   readonly snapshotId: ReviewSnapshotId
+  readonly reviewKey: ReviewKey
   readonly files: ReadonlyArray<CoreSnapshotIngestedFile>
 }
 
@@ -153,7 +154,6 @@ export const coreSnapshotIngestionLayer = (
       const ingest = Effect.fn("CoreSnapshotIngestion.ingest")(function* (
         input: CoreSnapshotIngestionInput,
       ) {
-        yield* validateManifestIdentity(input)
         const state = new IngestionState(input.manifest.reviewKey, maximumBlockBytes)
         let batchFailure: CoreSnapshotIngestionError | SnapshotBlockStoreError | null = null
 
@@ -170,9 +170,10 @@ export const coreSnapshotIngestionLayer = (
                 )
               : Effect.void,
           )
-          .pipe(Effect.ensuring(input.source.close.pipe(Effect.ignore)), Effect.scoped)
+          .pipe(Effect.scoped)
 
         const workflow = Effect.gen(function* () {
+          yield* validateManifestIdentity(input)
           const processingExit = yield* Effect.exit(processing)
           if (batchFailure !== null) return yield* Effect.fail(batchFailure)
           if (Exit.isFailure(processingExit)) return yield* Effect.failCause(processingExit.cause)
@@ -195,6 +196,7 @@ export const coreSnapshotIngestionLayer = (
           return {
             projectId: input.manifest.projectId,
             snapshotId: input.manifest.snapshotId,
+            reviewKey: input.manifest.reviewKey,
             files: publication.inventory,
           }
         })
@@ -203,6 +205,7 @@ export const coreSnapshotIngestionLayer = (
           Effect.onExit((exit) =>
             Exit.isFailure(exit) ? store.recoverWrites().pipe(Effect.ignore) : Effect.void,
           ),
+          Effect.ensuring(input.source.close.pipe(Effect.ignore)),
         )
       })
 

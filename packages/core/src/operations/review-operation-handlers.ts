@@ -1,5 +1,3 @@
-import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
-import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
   REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
@@ -11,7 +9,6 @@ import { Effect } from "effect"
 import { CoreMethod } from "../core-contract"
 import { GitProvider } from "../services/git-provider"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
-import { RepositoryLinker } from "../services/repository-linker"
 import { ReviewSnapshotService } from "../services/review-snapshot"
 import {
   paginateReviewSnapshot,
@@ -20,9 +17,6 @@ import {
 import type { OperationHandlersFor } from "./operation-handlers"
 
 type ReviewMethod =
-  | typeof CoreMethod.acquireHostedReviewSnapshot
-  | typeof CoreMethod.acquireLocalReviewSnapshot
-  | typeof CoreMethod.acquireRepositoryComparisonSnapshot
   | typeof CoreMethod.getHostedReviewDecision
   | typeof CoreMethod.getReviewSnapshotPage
   | typeof CoreMethod.listAssignedHostedReviews
@@ -35,37 +29,13 @@ type ReviewMethod =
 export const makeReviewOperationHandlers: Effect.Effect<
   OperationHandlersFor<ReviewMethod>,
   never,
-  GitProvider | RepositoryComparisonSource | RepositoryLinker | ReviewSnapshotService
+  GitProvider | RepositoryComparisonSource | ReviewSnapshotService
 > = Effect.gen(function* () {
   const comparisons = yield* RepositoryComparisonSource
   const gitProvider = yield* GitProvider
-  const repositories = yield* RepositoryLinker
   const snapshots = yield* ReviewSnapshotService
 
   return {
-    [CoreMethod.acquireHostedReviewSnapshot]: ({ review }) =>
-      Effect.gen(function* () {
-        const project = yield* repositories.ensureHosted(review.repository, "preserve")
-        const snapshot = yield* snapshots.acquireHosted(review)
-        yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
-        return makeReviewSnapshotManifest(snapshot, project.id)
-      }),
-    [CoreMethod.acquireLocalReviewSnapshot]: ({ target }) =>
-      Effect.gen(function* () {
-        const snapshot = yield* snapshots.acquireLocal(target)
-        const project = yield* repositories.ensureLocal(
-          RepositoryCheckoutPath.make(snapshot.detail.rootPath),
-        )
-        yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
-        return makeReviewSnapshotManifest(snapshot, project.id)
-      }),
-    [CoreMethod.acquireRepositoryComparisonSnapshot]: ({ target }) =>
-      Effect.gen(function* () {
-        const repo = yield* comparisons.repository(target)
-        const snapshot = yield* snapshots.acquireComparison(target)
-        yield* snapshots.associateProject(snapshot.snapshotId, repo.id).pipe(Effect.orDie)
-        return makeReviewSnapshotManifest(snapshot, repo.id)
-      }),
     [CoreMethod.getHostedReviewDecision]: ({ review }) => gitProvider.getReviewDecision(review),
     [CoreMethod.getReviewSnapshotPage]: (request) =>
       snapshots.get(request.snapshotId).pipe(

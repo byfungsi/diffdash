@@ -112,6 +112,7 @@ const layerFor = (
           listAssignedReviews: () => Effect.die(new Error("Assigned review listing is unused")),
           acquireHostedReviewSnapshot: () => Effect.die(new Error("Hosted acquisition is unused")),
           getReviewDiffSource: () => Effect.die(new Error("Hosted acquisition is unused")),
+          getHostedReviewDetail: () => Effect.die(new Error("Hosted detail is unused")),
           getReviewDecision: () => Effect.die(new Error("Review decision is unused")),
           submitReviewDecision: () => Effect.die(new Error("Review submission is unused")),
           hostedReviewCheckoutSpec: () => Effect.die(new Error("Checkout spec is unused")),

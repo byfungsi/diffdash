@@ -297,7 +297,7 @@ export class GitService extends Context.Service<
           )
           const parsedDiff = parseDiff(diff.diff)
           const detail = localReviewDetail(diff, branchName, parsedDiff)
-          const reviewKey = ReviewKey.make(localReviewKey(diff.rootPath, diff.comparison))
+          const reviewKey = makeLocalReviewKey(diff.rootPath, diff.comparison)
           const baseRevision = ReviewRevision.make(diff.baseSha)
           const headRevision = ReviewRevision.make(diff.headSha)
 
@@ -650,16 +650,22 @@ const localDiffHash = (comparison: LocalReviewComparison, baseSha: string, diff:
     .digest("hex")
 }
 
-const localReviewKey = (rootPath: RepositoryCheckoutPath, comparison: LocalReviewComparison) => {
+/** Creates the stable review identity shared by local snapshot and streaming acquisition paths. */
+export const makeLocalReviewKey = (
+  rootPath: RepositoryCheckoutPath,
+  comparison: LocalReviewComparison,
+): ReviewKey => {
   const rootHash = createHash("sha256").update(rootPath).digest("hex")
-  return Match.value(comparison).pipe(
-    Match.tag("workingTree", () => `local:${rootHash}`),
-    Match.tag("branch", (branch) => {
-      const refHash = createHash("sha256").update(branch.baseRef).digest("hex")
-      return `local:${rootHash}:base:${refHash}`
-    }),
-    Match.tag("lastCommit", (commit) => `local:${rootHash}:commit:${commit.headSha}`),
-    Match.exhaustive,
+  return ReviewKey.make(
+    Match.value(comparison).pipe(
+      Match.tag("workingTree", () => `local:${rootHash}`),
+      Match.tag("branch", (branch) => {
+        const refHash = createHash("sha256").update(branch.baseRef).digest("hex")
+        return `local:${rootHash}:base:${refHash}`
+      }),
+      Match.tag("lastCommit", (commit) => `local:${rootHash}:commit:${commit.headSha}`),
+      Match.exhaustive,
+    ),
   )
 }
 

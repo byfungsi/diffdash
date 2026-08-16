@@ -28,7 +28,8 @@ import { GitProvider } from "./git-provider"
 import { RepositoryLinker, RepositorySelectionIntent } from "./repository-linker"
 import { CoreExpectedCause, toCoreExpectedCause } from "../core-error-cause"
 
-const RepositoryComparisonOperation = Schema.String.pipe(
+/** Stable internal operation label retained by repository-comparison failures. */
+export const RepositoryComparisonOperation = Schema.String.pipe(
   Schema.brand("RepositoryComparisonOperation"),
 )
 

@@ -10,6 +10,7 @@ import {
   type HostedRepositoryLocator,
   ResolvedHostedRepository,
   type HostedReviewLocator,
+  type HostedReviewDetail,
   type HostedReviewSummary,
 } from "@diffdash/domain/git-provider"
 import { HostedReviewSnapshot } from "@diffdash/domain/review-context"
@@ -101,6 +102,9 @@ export class GitProvider extends Context.Service<
     readonly acquireHostedReviewSnapshot: (
       review: HostedReviewLocator,
     ) => Effect.Effect<HostedReviewSnapshot, ReviewContextError>
+    readonly getHostedReviewDetail: (
+      review: HostedReviewLocator,
+    ) => Effect.Effect<HostedReviewDetail, GitProviderCallError>
     readonly getReviewDiffSource: (
       review: HostedReviewLocator,
     ) => Effect.Effect<ReviewDiffSource, GitProviderCallError>
@@ -274,6 +278,10 @@ export class GitProvider extends Context.Service<
               ),
             ),
           acquireHostedReviewSnapshot,
+          getHostedReviewDetail: (review) =>
+            provider(review.repository.providerId).pipe(
+              Effect.flatMap((registration) => registration.getReview(review)),
+            ),
           getReviewDiffSource: (review) =>
             provider(review.repository.providerId).pipe(
               Effect.flatMap((registration) => registration.getReviewDiffSource(review)),

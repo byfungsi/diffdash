@@ -31,6 +31,7 @@ import { Cause, Clock, Effect, Layer } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
+import { coreSnapshotAcquisitionLayer } from "./core-snapshot-acquisition"
 import {
   CORE_SNAPSHOT_MAX_BLOCK_BYTES,
   CoreSnapshotIngestion,
@@ -288,6 +289,10 @@ function createCoreLayerInternal(
       const resources = yield* ResourceCatalog
       const store = yield* SnapshotBlockStore
       yield* fileSystem.ensureDirectory(snapshotRootPath, { recursive: true, mode: 0o700 })
+      yield* fileSystem.ensureDirectory(`${snapshotRootPath}/spools`, {
+        recursive: true,
+        mode: 0o700,
+      })
       const nowMs = yield* Clock.currentTimeMillis
       yield* resources.registerRoot({
         id: SNAPSHOT_RESOURCE_ROOT_ID,
@@ -299,6 +304,19 @@ function createCoreLayerInternal(
       yield* store.recoverCollections(nowMs)
     }),
   ).pipe(Layer.provide(snapshotPersistenceLayer))
+  const snapshotAcquisitionServiceLayer = coreSnapshotAcquisitionLayer({
+    rootId: SNAPSHOT_RESOURCE_ROOT_ID,
+    rootPath: snapshotRootPath,
+    managedQuotaBytes: SNAPSHOT_MANAGED_QUOTA_BYTES,
+    reservationLifetimeMs: SNAPSHOT_RESERVATION_LIFETIME_MS,
+  }).pipe(
+    Layer.provideMerge(snapshotIngestionServiceLayer),
+    Layer.provideMerge(repositoryLinkerLayer),
+    Layer.provideMerge(repositoryComparisonSourceLayer),
+    Layer.provideMerge(gitProviderLayer),
+    Layer.provideMerge(GitService.layer),
+    Layer.provideMerge(processLayer),
+  )
   const progressiveReviewLayer = Layer.mergeAll(
     progressiveReviewServiceLayer,
     snapshotIngestionServiceLayer,
@@ -320,6 +338,8 @@ function createCoreLayerInternal(
     ProjectWorkspaceStore.layer,
     analyticsLayer,
     reviewSnapshotLayer,
+    snapshotStorageStartupLayer,
+    snapshotAcquisitionServiceLayer,
     reviewTurnStoreLayer,
     appStateLayer,
     prerequisitesLayer,
