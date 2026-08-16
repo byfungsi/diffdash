@@ -394,13 +394,14 @@ export class ResourceCatalog extends Context.Service<
               : input.location.identity
           return database
             .transaction(
-              database
-                .run(
+              Effect.gen(function* () {
+                yield* database.run(
                   `INSERT INTO resources (
                     id, parent_id, kind, policy_class, state, generation, location_kind, root_id,
                     location_value, bytes, created_at_ms, updated_at_ms, last_used_at_ms,
                     checksum, validation
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO NOTHING`,
                   [
                     input.id,
                     input.parentId,
@@ -419,7 +420,14 @@ export class ResourceCatalog extends Context.Service<
                     input.validation,
                   ],
                 )
-                .pipe(Effect.andThen(get(input.id))),
+                const resource = yield* get(input.id)
+                if (!sameRegistration(resource, input)) {
+                  return yield* Effect.fail(
+                    new Error("A registered resource identity cannot be rebound"),
+                  )
+                }
+                return resource
+              }),
             )
             .pipe(Effect.mapError((cause) => catalogError("register", cause)))
         }),
@@ -732,6 +740,20 @@ export class ResourceCatalog extends Context.Service<
 
 const catalogError = (operation: ResourceCatalogOperation, cause: Error): ResourceCatalogError =>
   ResourceCatalogError.make({ operation, cause: toError(cause) })
+
+const sameRegistration = (resource: CatalogResource, input: RegisterResourceInput): boolean =>
+  resource.parentId === input.parentId &&
+  resource.kind === input.kind &&
+  resource.policyClass === input.policyClass &&
+  resource.generation === input.generation &&
+  (resource.location.kind === "filesystem" && input.location.kind === "filesystem"
+    ? resource.location.rootId === input.location.rootId &&
+      resource.location.relativePath === input.location.relativePath
+    : resource.location.kind === "gitRef" && input.location.kind === "gitRef"
+      ? resource.location.identity === input.location.identity
+      : resource.location.kind === "updaterPartial" && input.location.kind === "updaterPartial"
+        ? resource.location.identity === input.location.identity
+        : false)
 
 const makeGet = (database: Database) =>
   Effect.fn("ResourceCatalog.get")(function (id: CatalogResourceId) {

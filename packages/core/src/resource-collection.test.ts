@@ -10,12 +10,14 @@ import {
 } from "@diffdash/persistence/resource-catalog"
 import * as DatabaseNode from "@diffdash/persistence/database-node"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Layer, Result } from "effect"
+import { Effect, Fiber, Layer, Result } from "effect"
+import { TestClock } from "effect/testing"
 
 import {
   makeBoundedLogicalResourceAdapter,
   makeFilesystemResourceAdapter,
   makeResourceCollection,
+  makeUpdaterPartialResourceAdapter,
   ResourceAdapterError,
   type ResourceMutationAdapter,
 } from "./resource-collection"
@@ -179,6 +181,65 @@ describe("resource collection", () => {
         yield* collection.reconcile(3, 10)
         expect(yield* catalog.get(resource.id)).toMatchObject({ state: "deleted", bytes: 0 })
       }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("bounds updater mutations and never forwards another location kind", () =>
+    Effect.gen(function* () {
+      const calls: string[] = []
+      const adapter = makeUpdaterPartialResourceAdapter(
+        (operation, identity) =>
+          Effect.sync(() => {
+            calls.push(`${operation}:${identity}`)
+          }),
+        { timeoutMs: 1_000, maximumIdentityBytes: 8 },
+      )
+      const base = CatalogResource.make({
+        id: CatalogResourceId.make("updater"),
+        parentId: null,
+        kind: "updaterPartial",
+        policyClass: "temporary",
+        state: "collecting",
+        generation: 1,
+        bytes: 1,
+        reservedBytes: 0,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        lastUsedAtMs: 1,
+        checksum: null,
+        validation: null,
+        recoveryToken: ResourceRecoveryToken.make("updater-token"),
+        failure: null,
+        retryAtMs: null,
+        leases: [],
+        location: { kind: "updaterPartial", identity: "partial" },
+      })
+      const token = ResourceRecoveryToken.make("updater-token")
+
+      yield* adapter.quarantine(base, token)
+      expect(calls).toEqual(["quarantine:partial"])
+
+      const oversized = CatalogResource.make({
+        ...base,
+        location: { kind: "updaterPartial", identity: "too-large" },
+      })
+      const wrongKind = CatalogResource.make({
+        ...base,
+        location: { kind: "gitRef", identity: "partial" },
+      })
+      expect(Result.isFailure(yield* Effect.result(adapter.delete(oversized, token)))).toBe(true)
+      expect(Result.isFailure(yield* Effect.result(adapter.delete(wrongKind, token)))).toBe(true)
+      expect(calls).toHaveLength(1)
+
+      const stalled = makeUpdaterPartialResourceAdapter(() => Effect.never, {
+        timeoutMs: 5,
+        maximumIdentityBytes: 8,
+      })
+      const stalledMutation = yield* stalled
+        .delete(base, token)
+        .pipe(Effect.result, Effect.forkChild)
+      yield* TestClock.adjust(6)
+      expect(Result.isFailure(yield* Fiber.join(stalledMutation))).toBe(true)
     }),
   )
 })

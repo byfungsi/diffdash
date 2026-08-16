@@ -135,6 +135,56 @@ export const makeBoundedLogicalResourceAdapter = (
   }
 }
 
+/** Builds a bounded adapter that exposes only opaque updater-partial identities to the host. */
+export const makeUpdaterPartialResourceAdapter = (
+  mutate: (
+    operation: ResourceAdapterOperation,
+    identity: string,
+    token: ResourceRecoveryToken,
+  ) => Effect.Effect<void, ResourceAdapterError>,
+  options: { readonly timeoutMs: number; readonly maximumIdentityBytes: number },
+): ResourceMutationAdapter => {
+  if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)
+    throw new TypeError("Updater partial timeout must be a positive safe integer")
+  if (!Number.isSafeInteger(options.maximumIdentityBytes) || options.maximumIdentityBytes <= 0)
+    throw new TypeError("Updater partial identity limit must be a positive safe integer")
+
+  const run = (
+    operation: ResourceAdapterOperation,
+    resource: CatalogResource,
+    token: ResourceRecoveryToken,
+  ) => {
+    if (resource.location.kind !== "updaterPartial") {
+      return Effect.fail(
+        adapterError(operation, resource.id, new Error("Expected updater-partial location")),
+      )
+    }
+    if (
+      new TextEncoder().encode(resource.location.identity).byteLength > options.maximumIdentityBytes
+    ) {
+      return Effect.fail(
+        adapterError(
+          operation,
+          resource.id,
+          new Error("Updater partial identity exceeds its limit"),
+        ),
+      )
+    }
+    return mutate(operation, resource.location.identity, token).pipe(
+      Effect.timeout(`${options.timeoutMs} millis`),
+      Effect.mapError((cause) =>
+        Schema.is(ResourceAdapterError)(cause)
+          ? cause
+          : adapterError(operation, resource.id, cause),
+      ),
+    )
+  }
+  return {
+    quarantine: (resource, token) => run("quarantine", resource, token),
+    delete: (resource, token) => run("delete", resource, token),
+  }
+}
+
 /** Builds collection around a durable catalog and typed mutation adapters. */
 export const makeResourceCollection = (
   catalog: Context.Service.Shape<typeof ResourceCatalog>,
@@ -264,10 +314,11 @@ const adapterError = <Cause>(
   cause: Cause,
 ) => {
   const error = Predicate.isError(cause) ? cause : new Error(String(cause))
+  const reason = Predicate.isString(error.message) ? error.message : String(cause)
   return ResourceAdapterError.make({
     operation,
     resourceId,
-    reason: error.message,
+    reason,
     cause: error,
   })
 }
