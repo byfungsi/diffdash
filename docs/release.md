@@ -66,7 +66,9 @@ pnpm --filter @diffdash/repository-scale run -- --host=bun --session=linux-bun
 These commands fail on missing lifecycle evidence; a blocked or path-bearing summary is not a pass.
 Promote only reviewed aggregates from the ignored raw artifacts into a dated copy of
 `docs/benchmarks/m21-release-slo-template.md`. D-14 remains pending until that report has observed
-thresholds and engineering/product approval.
+thresholds and engineering/product approval. The manually dispatched `Repository Scale Evidence`
+workflow runs the same full gate on Ubuntu 24.04 x86_64 for both hosts and retains private raw failure
+artifacts for seven days.
 
 Use the workflow's manual dispatch for recovery. Enable its `promote` input only when recovering an already-published release whose automatic promotion failed.
 
