@@ -46,6 +46,28 @@ Review and publish the draft in GitHub. The `release: published` event then veri
 
 The Releases dashboard is also supported. Creating and publishing a release with a new matching tag starts the same workflow. The published release can briefly appear without binaries while Actions builds them; the stable updater channel remains unchanged until all assets and public checks pass. Dashboard-created lightweight tags and locally created annotated tags are both accepted.
 
+For a Core or repository-scale release, run the packaged deterministic smoke under both external
+hosts before creating the version PR:
+
+```bash
+pnpm --filter @diffdash/repository-scale smoke -- --host=utility
+pnpm --filter @diffdash/repository-scale smoke -- --host=bun
+```
+
+The full M21 promotion additionally requires a pinned generated fixture and a packaged Ubuntu 24.04
+x86_64 run for each host:
+
+```bash
+pnpm repository-scale:generate
+pnpm --filter @diffdash/repository-scale run -- --host=utility --session=linux-utility
+pnpm --filter @diffdash/repository-scale run -- --host=bun --session=linux-bun
+```
+
+These commands fail on missing lifecycle evidence; a blocked or path-bearing summary is not a pass.
+Promote only reviewed aggregates from the ignored raw artifacts into a dated copy of
+`docs/benchmarks/m21-release-slo-template.md`. D-14 remains pending until that report has observed
+thresholds and engineering/product approval.
+
 Use the workflow's manual dispatch for recovery. Enable its `promote` input only when recovering an already-published release whose automatic promotion failed.
 
 ## Local Recovery Flow
