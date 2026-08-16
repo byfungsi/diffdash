@@ -24,10 +24,11 @@ process samples remain ignored under `tools/repository-scale/.cache/`.
 6. Copy only reviewed aggregate values into a dated section below. Record the DiffDash commit,
    fixture ID, operating system, architecture, physical memory, scenario, and pass/fail guardrails.
 
-Linux `/proc` measurements include RSS, anonymous/private RSS, swap, and disk I/O. macOS measurements
-provide RSS only. Renderer-owned DOM, frame, highlight, and reconciliation observations come from the
-existing browser instrumentation; future Core queue and reservation counters must use the same dated
-evidence section rather than entering telemetry.
+Linux `/proc` measurements include RSS, anonymous/private RSS, swap, and disk I/O. Every platform
+also records SQLite bytes, managed-resource bytes, and filesystem free-space deltas without retaining
+their paths. macOS process measurements provide RSS only. Renderer-owned DOM, frame, highlight, and
+reconciliation observations come from browser instrumentation; Core queue, reservation, cache, and
+worker counters must use the same dated evidence section rather than entering telemetry.
 
 Initial guardrails remain upper bounds: 128 MiB renderer line chunks, 64 MiB renderer highlighted
 ranges, 64 MiB renderer layout/navigation metadata, 64 MiB Core parser/source buffers, 16 MiB
@@ -39,3 +40,10 @@ cache high/collection watermarks.
 No repository-scale baseline has been promoted yet. Promotion requires the content-derived fixture
 ID, pinned base/head manifest, exact DiffDash commit, machine profile, measured values, and objective
 pass/fail status required by the decision register.
+
+The M21 specification records pre-cutover observations of approximately 424 MiB renderer residency,
+737 MiB peak residency, and 398 MiB swap. It also records the comparison product at approximately
+1.15 GiB on Linux with three desktop workers, a complete browser-side patch model, and a 100-entry AST
+LRU. These are comparison inputs, not promoted DiffDash measurements. The final report must reproduce
+or explain each value and must attribute retained text, syntax output, DOM/container state,
+annotations, measurement state, workers, queues, and reservations by owner.
