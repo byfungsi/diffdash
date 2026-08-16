@@ -88,12 +88,12 @@ export interface CoreSnapshotIngestedFile extends SnapshotFilePlacement {
   readonly hunkCount: number
 }
 
-/** Published snapshot identity and file inventory returned to acquisition handlers. */
+/** Published snapshot identity returned to acquisition handlers. */
 export interface CoreSnapshotIngestionResult {
   readonly projectId: ReviewProjectId
   readonly snapshotId: ReviewSnapshotId
   readonly reviewKey: ReviewKey
-  readonly files: ReadonlyArray<CoreSnapshotIngestedFile>
+  readonly fileCount: number
 }
 
 /** Invalid stream state, inconsistent exact identity, oversized indivisible content, or quota. */
@@ -205,7 +205,7 @@ export const coreSnapshotIngestionLayer = (
             projectId: input.manifest.projectId,
             snapshotId: input.manifest.snapshotId,
             reviewKey: input.manifest.reviewKey,
-            files: publication.inventory,
+            fileCount: publication.files.length,
           }
         })
 
@@ -259,7 +259,6 @@ interface ExpectedBlock {
 
 interface PublicationState {
   readonly files: ReadonlyArray<CoreSnapshotIngestedFile>
-  readonly inventory: ReadonlyArray<CoreSnapshotIngestedFile>
   readonly blocks: ReadonlyArray<ExpectedBlock>
   readonly checkpoints: ReadonlyArray<SnapshotCheckpoint>
 }
@@ -268,7 +267,6 @@ class IngestionState {
   readonly #reviewKey: ReviewKey
   readonly #maximumBlockBytes: number
   readonly #files: CoreSnapshotIngestedFile[] = []
-  readonly #inventory: CoreSnapshotIngestedFile[] = []
   readonly #blocks: ExpectedBlock[] = []
   readonly #checkpoints: SnapshotCheckpoint[] = []
   #file: ActiveFile | null = null
@@ -508,7 +506,6 @@ class IngestionState {
       hunkCount: active.hunkCount,
     }
     this.#files.push(inventory)
-    this.#inventory.push(inventory)
     this.#file = null
     return Effect.void
   }
@@ -523,7 +520,6 @@ class IngestionState {
     if (this.#file !== null) return invalidOrder("Incremental worker finished with an open file")
     return Effect.succeed({
       files: this.#files,
-      inventory: this.#inventory,
       blocks: this.#blocks,
       checkpoints: this.#checkpoints,
     })

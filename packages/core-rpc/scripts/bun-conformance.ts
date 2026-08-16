@@ -416,6 +416,11 @@ const walkthroughReviewGeneration = Schema.decodeUnknownSync(WalkthroughReviewGe
   baseRevision: "base-bun",
   headRevision: "head-bun",
 })
+const walkthroughTarget = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
+  kind: "local",
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
+})
 const walkthroughAttempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries)([
   {
     stage: "execute",
@@ -427,7 +432,7 @@ const walkthroughAttempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries
 ])
 const walkthroughStart = Schema.decodeUnknownSync(StartWalkthroughRequest)({
   ...request,
-  reviewGeneration: walkthroughReviewGeneration,
+  target: walkthroughTarget,
   regenerate: false,
   idempotencyKey: "w:bun-intent",
 })
@@ -447,7 +452,7 @@ const walkthroughCancel = CancelWalkthroughRequest.make({
 })
 const walkthroughGetStored = GetStoredWalkthroughRequest.make({
   ...request,
-  reviewGeneration: walkthroughReviewGeneration,
+  target: walkthroughTarget,
   promptVersion: "walkthrough-v4",
 })
 const walkthroughStoredResult = Schema.decodeUnknownSync(GetStoredWalkthroughResult)({

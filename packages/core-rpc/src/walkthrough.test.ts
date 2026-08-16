@@ -51,6 +51,11 @@ const reviewGeneration = WalkthroughReviewGeneration.make({
   baseRevision: ReviewRevision.make("base-1"),
   headRevision: ReviewRevision.make("head-1"),
 })
+const target = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
+  kind: "local",
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
+})
 const requestIdentity = {
   applicationInstanceId: ApplicationInstanceId.make("app-1"),
   processEpoch: CoreProcessEpoch.make("epoch-1"),
@@ -270,7 +275,7 @@ describe("walkthrough RPC values", () => {
     })
     const startRequest = StartWalkthroughRequest.make({
       ...requestIdentity,
-      reviewGeneration,
+      target,
       regenerate: false,
       idempotencyKey,
     })
@@ -549,7 +554,7 @@ describe("walkthrough RPC values", () => {
   it("roundtrips public walkthrough values through native MessagePack", () => {
     const startRequest = StartWalkthroughRequest.make({
       ...requestIdentity,
-      reviewGeneration,
+      target,
       regenerate: false,
       idempotencyKey,
     })
@@ -566,7 +571,7 @@ describe("walkthrough RPC values", () => {
     const cancel = CancelWalkthroughRequest.make({ ...requestIdentity, operationId })
     const getStored = GetStoredWalkthroughRequest.make({
       ...requestIdentity,
-      reviewGeneration,
+      target,
       promptVersion,
     })
     const storedResult = Schema.decodeUnknownSync(GetStoredWalkthroughResult)({

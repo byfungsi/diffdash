@@ -38,7 +38,6 @@ import {
 } from "@diffdash/domain/review-agent"
 import {
   CurrentReviewAnchor,
-  isReviewAnchorInParsedDiff,
   LineReviewAnchor,
   ReviewThread,
   ReviewThreadDetails,
@@ -520,8 +519,8 @@ const materializeRevision = (
       reviewKey,
       baseRevision,
       headRevision,
+      fileCount: parsedDiff.files.length,
       detail,
-      files: parsedDiff.files.map(makeDemoReviewSnapshotFileInventory),
     })
 
     return {
@@ -621,14 +620,14 @@ const materializeThread = (
       source.anchorState === "Active"
         ? yield* resolveLineAnchor(manifest.id, currentRevision.parsedDiff, source.locator)
         : null
-    if (!isReviewAnchorInParsedDiff(originalAnchor, originalRevision.parsedDiff)) {
+    if (!isDemoReviewAnchorInParsedDiff(originalAnchor, originalRevision.parsedDiff)) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} original anchor does not match revision ${source.originalRevisionId}.`,
       ])
     }
     if (
       activeAnchor !== null &&
-      !isReviewAnchorInParsedDiff(activeAnchor, currentRevision.parsedDiff)
+      !isDemoReviewAnchorInParsedDiff(activeAnchor, currentRevision.parsedDiff)
     ) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} current anchor does not match revision ${source.currentRevisionId}.`,
@@ -712,6 +711,33 @@ const hunkContainsLocator = (
     lineNumber: locator.lineNumber,
     content: locator.lineContent,
   }) !== null
+
+/** Checks a demo line anchor against the fixture metadata and projected hunk lines. */
+export const isDemoReviewAnchorInParsedDiff = (
+  anchor: LineReviewAnchor,
+  parsedDiff: ParsedDiff,
+): boolean => {
+  const file = parsedDiff.files.find(
+    (candidate) =>
+      candidate.fileId === anchor.fileId &&
+      candidate.path === anchor.filePath &&
+      candidate.oldPath === anchor.oldPath,
+  )
+  const hunk = file?.hunks.find(
+    (candidate) =>
+      candidate.id === anchor.hunkId &&
+      candidate.fingerprint === anchor.hunkFingerprint &&
+      candidate.header === anchor.hunkHeader,
+  )
+  return (
+    hunk !== undefined &&
+    findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
+      side: anchor.side,
+      lineNumber: anchor.lineNumber,
+      content: anchor.lineContent,
+    }) !== null
+  )
+}
 
 const validateManifest = (manifest: DemoScenarioManifest) => {
   const details: string[] = []

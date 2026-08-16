@@ -74,6 +74,11 @@ const reviewGeneration = WalkthroughReviewGeneration.make({
   baseRevision: ReviewRevision.make("base-rpc"),
   headRevision: ReviewRevision.make("head-rpc"),
 })
+const target = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
+  kind: "local",
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
+})
 const attempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries)([
   {
     stage: "execute",
@@ -85,7 +90,7 @@ const attempts = Schema.decodeUnknownSync(WalkthroughAttemptSummaries)([
 ])
 const startRequest = StartWalkthroughRequest.make({
   ...requestIdentity,
-  reviewGeneration,
+  target,
   regenerate: false,
   idempotencyKey: WalkthroughIdempotencyKey.make("w:rpc-intent"),
 })
@@ -102,7 +107,7 @@ const getOperationRequest = GetWalkthroughOperationRequest.make({
 const cancelRequest = CancelWalkthroughRequest.make({ ...requestIdentity, operationId })
 const getStoredRequest = GetStoredWalkthroughRequest.make({
   ...requestIdentity,
-  reviewGeneration,
+  target,
   promptVersion,
 })
 const activeOperation = Schema.decodeUnknownSync(WalkthroughOperationSnapshot)({

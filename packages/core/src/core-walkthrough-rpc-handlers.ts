@@ -25,6 +25,7 @@ import {
 } from "@diffdash/core-rpc/walkthrough"
 import { WalkthroughBusinessRpcs } from "@diffdash/core-rpc/walkthrough-rpc"
 import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import { Effect, Layer, Match, Option, Schema } from "effect"
 import {
   ApplicationInstanceId,
@@ -34,7 +35,7 @@ import {
 } from "@diffdash/core-rpc/identity"
 
 import { CoreOperationService } from "./core-operation-service"
-import type { CoreWalkthroughOperationFailure } from "./core-contract"
+import type { CoreThreadResolutionFailure, CoreWalkthroughOperationFailure } from "./core-contract"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import { coreRuntimeOperationsLayer } from "./core-runtime-services"
 
@@ -49,12 +50,16 @@ export const coreWalkthroughRpcHandlersWithRuntimeLayer = WalkthroughBusinessRpc
         core
           .pipe(
             Effect.flatMap((operations) =>
-              operations.walkthroughs.startGeneration({
-                acceptedRequest: request,
-                idempotencyKey: WalkthroughOperationIdempotencyKey.make(request.idempotencyKey),
-                reviewGeneration: domainGeneration(request.reviewGeneration),
-                regenerate: request.regenerate,
-              }),
+              operations.walkthroughs.resolveGeneration(request.target).pipe(
+                Effect.flatMap((reviewGeneration) =>
+                  operations.walkthroughs.startGeneration({
+                    acceptedRequest: request,
+                    idempotencyKey: WalkthroughOperationIdempotencyKey.make(request.idempotencyKey),
+                    reviewGeneration,
+                    regenerate: request.regenerate,
+                  }),
+                ),
+              ),
             ),
           )
           .pipe(
@@ -75,6 +80,12 @@ export const coreWalkthroughRpcHandlersWithRuntimeLayer = WalkthroughBusinessRpc
                   Match.tag(
                     "WalkthroughReviewGenerationChangedError",
                     () => "WALKTHROUGH_REVIEW_GENERATION_CHANGED" as const,
+                  ),
+                  Match.tag("ReviewContextError", () => "WALKTHROUGH_REVIEW_RESOLUTION" as const),
+                  Match.tag("RepositoryLinkError", () => "WALKTHROUGH_REVIEW_RESOLUTION" as const),
+                  Match.tag(
+                    "RepositoryComparisonSourceError",
+                    () => "WALKTHROUGH_REVIEW_RESOLUTION" as const,
                   ),
                   Match.orElse(() => "WALKTHROUGH_OPERATION_STORE" as const),
                 ),
@@ -113,29 +124,34 @@ export const coreWalkthroughRpcHandlersWithRuntimeLayer = WalkthroughBusinessRpc
         core
           .pipe(
             Effect.flatMap((operations) =>
-              operations.walkthroughs.getStoredGeneration(
-                domainGeneration(request.reviewGeneration),
-                request.promptVersion,
-              ),
+              operations.walkthroughs
+                .resolveGeneration(request.target)
+                .pipe(
+                  Effect.flatMap((generation) =>
+                    operations.walkthroughs
+                      .getStoredGeneration(generation, request.promptVersion)
+                      .pipe(Effect.map((stored) => ({ generation, stored }))),
+                  ),
+                ),
             ),
           )
           .pipe(
-            Effect.map((stored) =>
+            Effect.map(({ generation, stored }) =>
               Option.match(stored, {
                 onNone: () =>
                   Schema.decodeUnknownSync(GetStoredWalkthroughResult)({
                     status: "notFound",
-                    reviewGeneration: request.reviewGeneration,
+                    reviewGeneration: rpcGeneration(generation),
                     promptVersion: request.promptVersion,
                   }),
                 onSome: (artifact) =>
                   Schema.decodeUnknownSync(GetStoredWalkthroughResult)({
                     status: "found",
-                    stored: storedArtifact(request.reviewGeneration, artifact),
+                    stored: storedArtifact(rpcGeneration(generation), artifact),
                   }),
               }),
             ),
-            Effect.mapError(() => getStoredFailure(request)),
+            Effect.mapError((error) => getStoredFailure(request, error)),
           ),
     }
   }),
@@ -145,9 +161,6 @@ export const coreWalkthroughRpcHandlersWithRuntimeLayer = WalkthroughBusinessRpc
 export const coreWalkthroughRpcHandlersLayer = coreWalkthroughRpcHandlersWithRuntimeLayer.pipe(
   Layer.provide(coreRuntimeOperationsLayer),
 )
-
-const domainGeneration = (generation: WalkthroughReviewGeneration) =>
-  WalkthroughOperationReviewGeneration.make(generation)
 
 const rpcGeneration = (generation: WalkthroughOperationReviewGeneration) =>
   WalkthroughReviewGeneration.make(generation)
@@ -287,7 +300,10 @@ const failureDetail = (code: string, safeMessage: string) => ({
 
 const startFailure = (
   request: StartWalkthroughRequest,
-  code: "WALKTHROUGH_REVIEW_GENERATION_CHANGED" | "WALKTHROUGH_OPERATION_STORE",
+  code:
+    | "WALKTHROUGH_REVIEW_GENERATION_CHANGED"
+    | "WALKTHROUGH_REVIEW_RESOLUTION"
+    | "WALKTHROUGH_OPERATION_STORE",
 ) =>
   Schema.decodeUnknownSync(WalkthroughStartFailure)({
     _tag: "WalkthroughPublicFailure",
@@ -341,13 +357,24 @@ const cancelFailure = (
     ),
   })
 
-const getStoredFailure = (request: GetStoredWalkthroughRequest) =>
+const getStoredFailure = (
+  request: GetStoredWalkthroughRequest,
+  error: CoreThreadResolutionFailure | WalkthroughStoreError,
+) =>
   Schema.decodeUnknownSync(WalkthroughGetStoredFailure)({
     _tag: "WalkthroughPublicFailure",
     ...requestIdentity(request),
     method: "Walkthroughs.getStored",
     operationId: null,
-    ...failureDetail("WALKTHROUGH_STORE", "DiffDash could not read the stored walkthrough."),
+    ...failureDetail(
+      Match.valueTags(error, {
+        ReviewContextError: () => "WALKTHROUGH_REVIEW_RESOLUTION" as const,
+        RepositoryLinkError: () => "WALKTHROUGH_REVIEW_RESOLUTION" as const,
+        RepositoryComparisonSourceError: () => "WALKTHROUGH_REVIEW_RESOLUTION" as const,
+        WalkthroughStoreError: () => "WALKTHROUGH_STORE" as const,
+      }),
+      "DiffDash could not read the stored walkthrough.",
+    ),
   })
 
 const legacyOperationFailure = (operationId: DomainWalkthroughOperationId) =>

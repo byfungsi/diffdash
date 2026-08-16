@@ -466,19 +466,19 @@ export const ReviewSnapshotsAcquireHostedRpc = applicationRpc(
   "ReviewSnapshots.acquireHosted",
   withContext({ review: HostedReviewLocator }),
   HostedReviewSnapshotManifest,
-  read(60_000, 8 * MIB),
+  read(60_000),
 )
 export const ReviewSnapshotsAcquireLocalRpc = applicationRpc(
   "ReviewSnapshots.acquireLocal",
   withContext({ target: LocalReviewTarget }),
   LocalReviewSnapshotManifest,
-  read(60_000, 8 * MIB),
+  read(60_000),
 )
 export const ReviewSnapshotsAcquireRepositoryComparisonRpc = applicationRpc(
   "ReviewSnapshots.acquireRepositoryComparison",
   withContext({ target: RepositoryComparisonTarget }),
   RepositoryComparisonSnapshotManifest,
-  read(60_000, 8 * MIB),
+  read(60_000),
 )
 export const RepositoriesFavoriteRemoteRpc = applicationRpc(
   "Repositories.favoriteRemote",

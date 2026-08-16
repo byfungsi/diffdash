@@ -89,6 +89,11 @@ const reviewGeneration = WalkthroughReviewGeneration.make({
   baseRevision: ReviewRevision.make("base-handler"),
   headRevision: ReviewRevision.make("head-handler"),
 })
+const target = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
+  kind: "local",
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
+})
 const operationId = WalkthroughOperationId.make("operation-handler")
 const timestamp = WalkthroughOperationTimestamp.make("2026-08-16T00:00:00.000Z")
 const evidence = WalkthroughOperationAcceptanceEvidence.make({
@@ -234,6 +239,7 @@ const operationsLayer = Layer.succeed(
     methods: unavailableMethods,
     reviewAgents: unusedReviewAgents,
     walkthroughs: {
+      resolveGeneration: () => Effect.succeed(reviewGeneration),
       startGeneration: () =>
         Effect.succeed(
           WalkthroughOperationAcceptance.make({ created: true, operation: activeOperation }),
@@ -285,7 +291,7 @@ describe("Core walkthrough RPC handlers", () => {
       const start = yield* client["Walkthroughs.start"](
         StartWalkthroughRequest.make({
           ...requestIdentity,
-          reviewGeneration,
+          target,
           regenerate: false,
           idempotencyKey: WalkthroughIdempotencyKey.make("w:handler"),
         }),
@@ -311,7 +317,7 @@ describe("Core walkthrough RPC handlers", () => {
       const stored = yield* client["Walkthroughs.getStored"](
         GetStoredWalkthroughRequest.make({
           ...requestIdentity,
-          reviewGeneration,
+          target,
           promptVersion: "walkthrough-v4",
         }),
       )
@@ -377,7 +383,7 @@ describe("Core walkthrough RPC handlers", () => {
       const accepted = yield* client["Walkthroughs.start"](
         StartWalkthroughRequest.make({
           ...requestIdentity,
-          reviewGeneration,
+          target,
           regenerate: false,
           idempotencyKey: WalkthroughIdempotencyKey.make("w:handler"),
         }),
@@ -391,7 +397,7 @@ describe("Core walkthrough RPC handlers", () => {
       const stored = yield* client["Walkthroughs.getStored"](
         GetStoredWalkthroughRequest.make({
           ...requestIdentity,
-          reviewGeneration,
+          target,
           promptVersion: "walkthrough-v4",
         }),
       )
@@ -428,6 +434,7 @@ describe("Core walkthrough RPC handlers", () => {
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
+              resolveGeneration: () => Effect.succeed(reviewGeneration),
               startGeneration: () => Effect.die("Unexpected walkthrough start"),
               getSnapshot: () =>
                 Ref.get(cancelled).pipe(
@@ -513,6 +520,7 @@ describe("Core walkthrough RPC handlers", () => {
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
+            resolveGeneration: () => Effect.succeed(reviewGeneration),
             startGeneration: () =>
               Deferred.succeed(startEntered, undefined).pipe(
                 Effect.andThen(Effect.never),
@@ -563,7 +571,7 @@ describe("Core walkthrough RPC handlers", () => {
         StartWalkthroughRequest.make({
           ...requestIdentity,
           requestId: HostRequestId.make("h:walkthrough-start-before"),
-          reviewGeneration,
+          target,
           regenerate: false,
           idempotencyKey: WalkthroughIdempotencyKey.make("w:start-before"),
         }),
@@ -602,6 +610,7 @@ describe("Core walkthrough RPC handlers", () => {
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
+              resolveGeneration: () => Effect.succeed(reviewGeneration),
               startGeneration: () =>
                 Effect.uninterruptible(
                   Effect.gen(function* () {
@@ -660,7 +669,7 @@ describe("Core walkthrough RPC handlers", () => {
         StartWalkthroughRequest.make({
           ...requestIdentity,
           requestId: HostRequestId.make("h:walkthrough-worker-start"),
-          reviewGeneration,
+          target,
           regenerate: false,
           idempotencyKey: WalkthroughIdempotencyKey.make("w:worker-start"),
         }),
@@ -702,6 +711,7 @@ describe("Core walkthrough RPC handlers", () => {
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
+            resolveGeneration: () => Effect.succeed(reviewGeneration),
             startGeneration: () => Effect.die("Unexpected walkthrough start"),
             getSnapshot: () =>
               Effect.gen(function* () {

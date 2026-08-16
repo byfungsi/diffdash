@@ -500,12 +500,6 @@ importers:
 
   packages/desktop:
     dependencies:
-      '@diffdash/agent-provider':
-        specifier: workspace:*
-        version: link:../agent-provider
-      '@diffdash/agents':
-        specifier: workspace:*
-        version: link:../agents
       '@diffdash/app':
         specifier: workspace:*
         version: link:../app
@@ -518,9 +512,6 @@ importers:
       '@diffdash/domain':
         specifier: workspace:*
         version: link:../domain
-      '@diffdash/persistence':
-        specifier: workspace:*
-        version: link:../persistence
       '@diffdash/process':
         specifier: workspace:*
         version: link:../process

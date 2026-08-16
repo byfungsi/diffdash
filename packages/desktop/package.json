@@ -35,13 +35,10 @@
     "lint": "oxlint electron src scripts --no-error-on-unmatched-pattern"
   },
   "dependencies": {
-    "@diffdash/agents": "workspace:*",
-    "@diffdash/agent-provider": "workspace:*",
     "@diffdash/app": "workspace:*",
     "@diffdash/core": "workspace:*",
     "@diffdash/core-rpc": "workspace:*",
     "@diffdash/domain": "workspace:*",
-    "@diffdash/persistence": "workspace:*",
     "@diffdash/protocol": "workspace:*",
     "@diffdash/process": "workspace:*",
     "@effect/platform-node": "catalog:",

@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import * as Rpc from "effect/unstable/rpc/Rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
@@ -16,7 +17,6 @@ import {
 import {
   ReviewAgentCancelFailure,
   ReviewAgentGetOperationFailure,
-  ReviewAgentOperationAccepted,
   ReviewAgentOperationRequest,
   ReviewAgentOperationSnapshot,
   ReviewAgentStartFailure,
@@ -40,10 +40,10 @@ export const ReviewAgentCancelDefectSchema = ReviewAgentCancelFailure.pipe(
   Schema.decodeTo(DefectValue),
 )
 
-/** Business RPC that durably accepts and detaches one review-agent response. */
+/** Business RPC that durably runs one review-agent response and returns its authoritative thread. */
 export const ReviewAgentStartRpc = Rpc.make("ReviewThreads.runAgent", {
   payload: StartReviewAgentOperationRequest,
-  success: ReviewAgentOperationAccepted,
+  success: ReviewThreadDetails,
   error: ReviewAgentStartFailure,
   defect: ReviewAgentStartDefectSchema,
 })
@@ -51,9 +51,9 @@ export const ReviewAgentStartRpc = Rpc.make("ReviewThreads.runAgent", {
   .annotate(
     CoreRpcMethodPolicyAnnotation,
     CoreRpcMethodPolicy.make({
-      deadlineMs: CoreRpcDeadlineMilliseconds.make(5_000),
+      deadlineMs: CoreRpcDeadlineMilliseconds.make(10 * 60_000),
       maxRequestBytes: CoreRpcPayloadBytes.make(16 * 1_024),
-      maxResponseBytes: CoreRpcPayloadBytes.make(2 * 1_024),
+      maxResponseBytes: CoreRpcPayloadBytes.make(256 * 1_024),
       cancellation: "detachedAfterAcceptance",
       requiredScope: "review",
       mutationClass: "uncertainMutation",

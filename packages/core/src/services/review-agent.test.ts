@@ -59,7 +59,6 @@ import {
   LocalReviewSnapshotManifest,
   RepositoryComparisonReviewDescriptor,
   RepositoryComparisonSnapshotManifest,
-  ReviewSnapshotFileInventory,
   type ReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import {
@@ -176,26 +175,13 @@ const lineAnchor = LineReviewAnchor.make({
   lineContent: "const value = 2",
 })
 const patchHash = ReviewFilePatchHash.make("patch:agent")
-const manifestFiles = (manifestReviewKey: ReviewKey) => [
-  ReviewSnapshotFileInventory.make({
-    fileId: lineAnchor.fileId,
-    patchHash,
-    reviewKey: manifestReviewKey,
-    path: lineAnchor.filePath,
-    oldPath: null,
-    status: "modified",
-    visibility: { _tag: "Visible" },
-    additions: 1,
-    deletions: 1,
-    hunkCount: 1,
-  }),
-]
 const localManifest = LocalReviewSnapshotManifest.make({
   projectId: ReviewProjectId.make(reviewKey),
   snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000001"),
   reviewKey,
   baseRevision,
   headRevision,
+  fileCount: 1,
   detail: LocalReviewDetail.make({
     rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
     repoName: "diffdash",
@@ -207,7 +193,6 @@ const localManifest = LocalReviewSnapshotManifest.make({
     files: [],
     fetchedAt: "2026-07-12T00:00:00.000Z",
   }),
-  files: manifestFiles(reviewKey),
 })
 const pullRequestLocator = makeHostedReviewLocator("github", "fungsi", "diffdash", 42)
 const pullRequestReviewKey = ReviewKey.make("github:fungsi/diffdash#42")
@@ -217,6 +202,7 @@ const hostedManifest = HostedReviewSnapshotManifest.make({
   reviewKey: pullRequestReviewKey,
   baseRevision,
   headRevision,
+  fileCount: 1,
   detail: HostedReviewDetail.make({
     summary: HostedReviewSummary.make({
       locator: pullRequestLocator,
@@ -246,7 +232,6 @@ const hostedManifest = HostedReviewSnapshotManifest.make({
     files: [],
     commits: [],
   }),
-  files: manifestFiles(pullRequestReviewKey),
 })
 const comparisonTarget = RepositoryComparisonTarget.make({
   kind: "repositoryComparison",
@@ -264,13 +249,13 @@ const comparisonManifest = RepositoryComparisonSnapshotManifest.make({
   reviewKey: comparisonReviewKey,
   baseRevision: ReviewRevision.make(comparisonTarget.mergeBaseSha),
   headRevision: ReviewRevision.make(comparisonTarget.headSha),
+  fileCount: 1,
   detail: RepositoryComparisonDetail.make({
     target: comparisonTarget,
     title: "v1.0.0...v1.1.0",
     files: [],
     fetchedAt: "2026-08-05T00:00:00.000Z",
   }),
-  files: manifestFiles(comparisonReviewKey),
 })
 
 type ProviderReviewThreadOutput =
@@ -736,7 +721,6 @@ const testGitProvider = (): GitProviderRegistration => {
     listReviews: () => unavailableGitOperation(),
     getReview: () => unavailableGitOperation(),
     getReviewDiffSource: () => unavailableGitOperation(),
-    getReviewDiff: () => unavailableGitOperation(),
     getReviewDecision: () => unavailableGitOperation(),
     submitReviewDecision: () => unavailableGitOperation(),
     repositoryUrl: () => Effect.succeed(WebUrl.make("https://git.test/repository")),

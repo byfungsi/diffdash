@@ -3,7 +3,7 @@ import { Effect } from "effect"
 
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewHunkId, ReviewProjectId } from "@diffdash/domain/review-identity"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
@@ -26,6 +26,7 @@ import {
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
 import { LocalViewedFilesRequest } from "@diffdash/protocol/viewed-files"
+import { WalkthroughBridgeIdempotencyKey } from "@diffdash/protocol/walkthrough-operation"
 import { buildWalkthroughHunkDigest, walkthroughLocalDiffScope } from "@diffdash/domain/walkthrough"
 import { createDemoLocalReviewFixtures } from "./local-review-fixtures"
 
@@ -99,8 +100,20 @@ describe("scenario-backed DiffDash API", () => {
       const range = yield* Effect.promise(() =>
         api.progressiveReviews.readRange({
           identity: session.identity,
-          fileId: page.files[0]?.fileId ?? manifest.files[0]!.fileId,
+          fileId: page.files[0]?.fileId ?? scenario.currentRevision.parsedDiff.files[0]!.fileId,
           startLine: 0,
+        }),
+      )
+      const laterFile = scenario.currentRevision.parsedDiff.files
+        .slice(8)
+        .find((file) => file.hunks.length > 0)
+      expect(laterFile).toBeDefined()
+      if (laterFile === undefined) return
+      const resolved = yield* Effect.promise(() =>
+        api.progressiveReviews.resolveTarget({
+          identity: session.identity,
+          fileId: laterFile.fileId,
+          target: { _tag: "HunkLine", hunkId: laterFile.hunks[0]?.id ?? null, line: 0 },
         }),
       )
 
@@ -109,8 +122,44 @@ describe("scenario-backed DiffDash API", () => {
       expect(manifest.detail.summary.head.revision).toBe("c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69")
       expect(page.files).toHaveLength(8)
       expect(page.nextOffset).not.toBeNull()
+      expect(resolved.file.fileId).toBe(laterFile.fileId)
+      yield* Effect.promise(() =>
+        expect(
+          api.progressiveReviews.resolveTarget({
+            identity: session.identity,
+            fileId: laterFile.fileId,
+            target: {
+              _tag: "HunkLine",
+              hunkId: ReviewHunkId.make("missing-demo-hunk"),
+              line: 0,
+            },
+          }),
+        ).rejects.toThrow("Demo review target is unavailable"),
+      )
       expect(new TextDecoder().decode(range.blocks[0]?.bytes)).toContain("diff --git")
       expect(timeline.getState().revisionId).toBe("01-initial")
+    }),
+  )
+
+  it.effect("cancels pending walkthrough hints when the scenario resets", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const { api, timeline } = createDemoRuntime(scenario)
+      const hints: unknown[] = []
+      const unsubscribe = api.walkthroughOperations.onHint((hint) => hints.push(hint))
+
+      yield* Effect.promise(() =>
+        api.walkthroughOperations.start({
+          target: HostedReviewTarget.make({ kind: "hosted", review }),
+          regenerate: false,
+          idempotencyKey: WalkthroughBridgeIdempotencyKey.make("w:demo-reset"),
+        }),
+      )
+      yield* Effect.promise(() => timeline.reset(scenario.manifest.id))
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+      unsubscribe()
+
+      expect(hints).toEqual([])
     }),
   )
 

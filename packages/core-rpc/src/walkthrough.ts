@@ -22,6 +22,7 @@ import {
   WalkthroughOperationStateVersion,
   WalkthroughOperationTimestamp,
 } from "@diffdash/domain/walkthrough-operation"
+import { ReviewThreadTarget } from "@diffdash/domain/review-thread"
 import { Schema } from "effect"
 
 /** Current walkthrough prompt identity used for exact stored-artifact lookups. */
@@ -384,6 +385,7 @@ const WalkthroughCancelFailureCode = Schema.Literals([
   "WALKTHROUGH_INTERNAL_ERROR",
 ])
 const WalkthroughGetStoredFailureCode = Schema.Literals([
+  "WALKTHROUGH_REVIEW_RESOLUTION",
   "WALKTHROUGH_STORE",
   "WALKTHROUGH_INTERNAL_ERROR",
 ])
@@ -874,7 +876,7 @@ export class StartWalkthroughRequest extends Schema.Class<StartWalkthroughReques
   "StartWalkthroughRequest",
 )({
   ...HostRequestIdentityFields,
-  reviewGeneration: WalkthroughReviewGeneration,
+  target: ReviewThreadTarget,
   regenerate: Schema.Boolean,
   idempotencyKey: WalkthroughIdempotencyKey,
 }) {}
@@ -910,7 +912,7 @@ export class GetStoredWalkthroughRequest extends Schema.Class<GetStoredWalkthrou
   "GetStoredWalkthroughRequest",
 )({
   ...HostRequestIdentityFields,
-  reviewGeneration: WalkthroughReviewGeneration,
+  target: ReviewThreadTarget,
   promptVersion: BoundedPromptVersion,
 }) {}
 

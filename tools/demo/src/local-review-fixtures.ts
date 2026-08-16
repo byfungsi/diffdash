@@ -37,11 +37,7 @@ import {
   WalkthroughStop,
   WalkthroughSupportItem,
 } from "@diffdash/domain/walkthrough"
-import {
-  makeDemoReviewSnapshotFileInventory,
-  type MaterializedDemoRevision,
-  type MaterializedDemoScenario,
-} from "./demo-scenario"
+import { type MaterializedDemoRevision, type MaterializedDemoScenario } from "./demo-scenario"
 
 const rootPath = RepositoryCheckoutPath.make("/Users/demo/emberline-dispatch")
 const workingTreeBaseSha = "4b7c939f526dce56d26f4383a832e23186c24684"
@@ -163,8 +159,8 @@ const makeFixture = (input: {
     reviewKey: input.reviewKey,
     baseRevision,
     headRevision,
+    fileCount: input.revision.parsedDiff.files.length,
     detail,
-    files: input.revision.parsedDiff.files.map(makeDemoReviewSnapshotFileInventory),
   })
   const walkthrough = localWalkthrough(input.revision, manifest)
   const thread = localThread(

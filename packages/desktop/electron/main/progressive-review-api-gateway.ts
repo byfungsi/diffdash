@@ -130,6 +130,7 @@ export const createProgressiveReviewApiGateway = (
       identity: toBrowserIdentity(target.identity),
       file: target.file,
       blockOrdinal: target.blockOrdinal,
+      firstLine: target.firstLine,
       line: target.line,
     }
   },

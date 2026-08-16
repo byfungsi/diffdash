@@ -9,14 +9,7 @@ import {
   GetWalkthroughOperationRequest,
   StartWalkthroughRequest,
   WalkthroughIdempotencyKey,
-  WalkthroughReviewGeneration,
 } from "@diffdash/core-rpc/walkthrough"
-import {
-  ReviewKey,
-  ReviewProjectId,
-  ReviewRevision,
-  ReviewSnapshotId,
-} from "@diffdash/domain/review-identity"
 import {
   WalkthroughOperationId,
   WalkthroughOperationPromptVersion,
@@ -35,25 +28,22 @@ const identity = {
   requestId: HostRequestId.make("h:transport-policy"),
 } as const
 const operationId = WalkthroughOperationId.make("operation-transport-policy")
-const reviewGeneration = WalkthroughReviewGeneration.make({
+const target = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
   kind: "local",
-  projectId: ReviewProjectId.make("project-transport-policy"),
-  snapshotId: ReviewSnapshotId.make("snapshot:v1:0123456789abcdef0123456789abcdef"),
-  reviewKey: ReviewKey.make("local:project-transport-policy:working-tree"),
-  baseRevision: ReviewRevision.make("base-transport-policy"),
-  headRevision: ReviewRevision.make("head-transport-policy"),
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
 })
 const getOperationPayload = GetWalkthroughOperationRequest.make({ ...identity, operationId })
 const startPayload = StartWalkthroughRequest.make({
   ...identity,
-  reviewGeneration,
+  target,
   regenerate: false,
   idempotencyKey: WalkthroughIdempotencyKey.make("w:transport-policy"),
 })
 const cancelPayload = CancelWalkthroughRequest.make({ ...identity, operationId })
 const getStoredPayload = GetStoredWalkthroughRequest.make({
   ...identity,
-  reviewGeneration,
+  target,
   promptVersion: WalkthroughOperationPromptVersion.make("walkthrough-v4"),
 })
 const makeParser = () => RpcSerialization.makeMsgPack({ useRecords: true }).makeUnsafe()

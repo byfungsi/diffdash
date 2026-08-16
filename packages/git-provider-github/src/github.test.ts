@@ -305,7 +305,7 @@ describe("GitHub provider", () => {
     }),
   )
 
-  it.effect("normalizes repository search, review detail, diff, and decisions", () =>
+  it.effect("normalizes repository search, review detail, and decisions", () =>
     Effect.gen(function* () {
       const provider = createGitHubProvider({}, fakeProcesses())
       const repositories = yield* provider.searchRepositories({
@@ -314,7 +314,6 @@ describe("GitHub provider", () => {
       })
       const reviews = yield* provider.listReviews(repository())
       const detail = yield* provider.getReview(review())
-      const diff = yield* provider.getReviewDiff(review())
       const decision = yield* provider.getReviewDecision(review())
 
       expect(repositories[0]).toMatchObject({
@@ -327,7 +326,6 @@ describe("GitHub provider", () => {
       })
       expect(detail.files[0]).toMatchObject({ path: "src/renderer/src/app.tsx" })
       expect(detail.commits[0]).toMatchObject({ title: "Add PR workspace" })
-      expect(diff.diff).toBe(pullRequestDiffText)
       expect(decision).toBe("approved")
     }),
   )
@@ -375,7 +373,13 @@ describe("GitHub provider", () => {
     const calls: Call[] = []
     const provider = createGitHubProvider({}, fakeProcesses(calls))
     return Effect.gen(function* () {
-      yield* provider.getReviewDiff(review())
+      const source = yield* provider.getReviewDiffSource(review())
+      const acquisition = ReviewDiffAcquisition.make({
+        generation: ReviewDiffGeneration.make("raw-output-policy"),
+        expectedRevision: source.offer.expectedRevision,
+      })
+      yield* source.unifiedBytes(acquisition).pipe(Stream.runDrain)
+      yield* source.close
       const diffCall = calls.find(
         (call) => call.args[0] === "pr" && call.args[1] === "diff" && !call.args.includes("--help"),
       )

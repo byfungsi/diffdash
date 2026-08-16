@@ -57,7 +57,8 @@ export const gitProviderConformance = (name: string, fixtures: GitProviderConfor
         expect(review.locator.number).toBe(HostedReviewNumber.make(fixtures.reviewNumber))
         expect(makeHostedReviewKey(review.locator)).toContain(`#${fixtures.reviewNumber}`)
         yield* provider.getReview(review.locator)
-        yield* provider.getReviewDiff(review.locator)
+        const source = yield* provider.getReviewDiffSource(review.locator)
+        yield* source.close
         yield* provider.getReviewDecision(review.locator)
         yield* provider.bootstrapBareRepository(repository.locator, "/tmp/provider-conformance.git")
         const checkout = yield* provider.checkoutSpec(

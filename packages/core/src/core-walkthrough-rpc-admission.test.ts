@@ -63,9 +63,14 @@ const reviewGeneration = WalkthroughReviewGeneration.make({
   baseRevision: ReviewRevision.make("base-admission"),
   headRevision: ReviewRevision.make("head-admission"),
 })
+const target = Schema.decodeUnknownSync(StartWalkthroughRequest.fields.target)({
+  kind: "local",
+  rootPath: "/workspace/diffdash",
+  comparison: { _tag: "workingTree" },
+})
 const startRequest = StartWalkthroughRequest.make({
   ...requestIdentity,
-  reviewGeneration,
+  target,
   regenerate: false,
   idempotencyKey: WalkthroughIdempotencyKey.make("w:admission-intent"),
 })
@@ -76,7 +81,7 @@ const getOperationRequest = GetWalkthroughOperationRequest.make({
 const cancelRequest = CancelWalkthroughRequest.make({ ...requestIdentity, operationId })
 const getStoredRequest = GetStoredWalkthroughRequest.make({
   ...requestIdentity,
-  reviewGeneration,
+  target,
   promptVersion,
 })
 const storedNotFound = Schema.decodeUnknownSync(GetStoredWalkthroughResult)({

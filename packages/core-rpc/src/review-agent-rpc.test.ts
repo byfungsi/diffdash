@@ -4,7 +4,7 @@ import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import { ReviewThreadId } from "@diffdash/domain/review-thread"
+import { ReviewThreadDetails, ReviewThreadId } from "@diffdash/domain/review-thread"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer, Option, Result, Schema } from "effect"
 import * as Rpc from "effect/unstable/rpc/Rpc"
@@ -19,7 +19,6 @@ import {
 import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "./identity"
 import { getCoreRpcMethodPolicy } from "./method-policy"
 import {
-  ReviewAgentOperationAccepted,
   ReviewAgentOperationRequest,
   ReviewAgentStartFailure,
   StartReviewAgentOperationRequest,
@@ -70,7 +69,48 @@ const startRequest = StartReviewAgentOperationRequest.make({
   expectedHeadRevision: running.headRevision,
 })
 const operationRequest = ReviewAgentOperationRequest.make({ ...identity, runId })
-const accepted = ReviewAgentOperationAccepted.make({ ...identity, runId })
+const completedThread = Schema.decodeUnknownSync(ReviewThreadDetails)({
+  thread: {
+    id: running.threadId,
+    repoId: "project-review-agent",
+    reviewKey: running.reviewKey,
+    prNumber: null,
+    baseRevision: running.baseRevision,
+    headRevision: running.headRevision,
+    currentBaseRevision: running.baseRevision,
+    currentHeadRevision: running.headRevision,
+    originalAnchor: {
+      _tag: "line",
+      fileId: "file-review-agent",
+      filePath: "src/review.ts",
+      oldPath: null,
+      hunkId: "hunk-review-agent",
+      hunkFingerprint: "fingerprint-review-agent",
+      hunkHeader: "@@ -1 +1 @@",
+      side: "new",
+      lineNumber: 1,
+      lineContent: "const reviewed = true",
+    },
+    currentAnchor: {
+      _tag: "Active",
+      anchor: {
+        _tag: "line",
+        fileId: "file-review-agent",
+        filePath: "src/review.ts",
+        oldPath: null,
+        hunkId: "hunk-review-agent",
+        hunkFingerprint: "fingerprint-review-agent",
+        hunkHeader: "@@ -1 +1 @@",
+        side: "new",
+        lineNumber: 1,
+        lineContent: "const reviewed = true",
+      },
+    },
+    createdAt: "2026-08-16T00:00:00.000Z",
+    updatedAt: "2026-08-16T00:00:01.000Z",
+  },
+  conversation: [],
+})
 const passAdmissionLayer = Layer.mergeAll(
   Layer.succeed(ReviewAgentStartAdmissionMiddleware, (effect) => effect),
   Layer.succeed(ReviewAgentGetOperationAdmissionMiddleware, (effect) => effect),
@@ -78,20 +118,23 @@ const passAdmissionLayer = Layer.mergeAll(
 )
 
 describe("review-agent RPC declarations", () => {
-  it.effect("runs short start, state, and cancellation through native Effect RPC", () => {
-    const handlers = ReviewAgentBusinessRpcs.toLayer({
-      "ReviewThreads.runAgent": () => Effect.succeed(accepted),
-      "ReviewAgents.getOperation": () => Effect.succeed(running),
-      "ReviewAgents.cancel": () => Effect.succeed(cancelled),
-    })
+  it.effect(
+    "returns the completed thread, state, and cancellation through native Effect RPC",
+    () => {
+      const handlers = ReviewAgentBusinessRpcs.toLayer({
+        "ReviewThreads.runAgent": () => Effect.succeed(completedThread),
+        "ReviewAgents.getOperation": () => Effect.succeed(running),
+        "ReviewAgents.cancel": () => Effect.succeed(cancelled),
+      })
 
-    return Effect.gen(function* () {
-      const client = yield* RpcTest.makeClient(ReviewAgentBusinessRpcs)
-      expect(yield* client["ReviewThreads.runAgent"](startRequest)).toEqual(accepted)
-      expect(yield* client["ReviewAgents.getOperation"](operationRequest)).toEqual(running)
-      expect(yield* client["ReviewAgents.cancel"](operationRequest)).toEqual(cancelled)
-    }).pipe(Effect.provide(handlers), Effect.provide(passAdmissionLayer))
-  })
+      return Effect.gen(function* () {
+        const client = yield* RpcTest.makeClient(ReviewAgentBusinessRpcs)
+        expect(yield* client["ReviewThreads.runAgent"](startRequest)).toEqual(completedThread)
+        expect(yield* client["ReviewAgents.getOperation"](operationRequest)).toEqual(running)
+        expect(yield* client["ReviewAgents.cancel"](operationRequest)).toEqual(cancelled)
+      }).pipe(Effect.provide(handlers), Effect.provide(passAdmissionLayer))
+    },
+  )
 
   it.effect("preserves method identity and AgentRunId in plain expected failures", () => {
     const failure = ReviewAgentStartFailure.make({
@@ -117,12 +160,12 @@ describe("review-agent RPC declarations", () => {
     }).pipe(Effect.provide(handlers), Effect.provide(passAdmissionLayer))
   })
 
-  it("declares detached start and operation-resumable query/cancel policies", () => {
+  it("declares durable completion and operation-resumable query/cancel policies", () => {
     expect(getCoreRpcMethodPolicy(ReviewAgentStartRpc)).toEqual(
       Option.some({
-        deadlineMs: 5_000,
+        deadlineMs: 10 * 60_000,
         maxRequestBytes: 16 * 1_024,
-        maxResponseBytes: 2 * 1_024,
+        maxResponseBytes: 256 * 1_024,
         cancellation: "detachedAfterAcceptance",
         requiredScope: "review",
         mutationClass: "uncertainMutation",

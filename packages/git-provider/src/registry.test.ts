@@ -11,7 +11,6 @@ import {
   HostedRepositoryLocator,
   HostedRepositoryName,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
@@ -124,16 +123,27 @@ const makeProvider = (idValue: string, host = "git.example.com"): GitProviderReg
       ]),
     listReviews: () => Effect.succeed([summary]),
     getReview: () => Effect.succeed(HostedReviewDetail.make({ summary, files: [], commits: [] })),
-    getReviewDiffSource: () => Effect.die(new Error("Review diff source is unused")),
-    getReviewDiff: () =>
-      Effect.succeed(
-        HostedReviewDiff.make({
-          locator: review,
-          headRevision: ReviewRevision.make("head"),
-          diff: "",
-          fetchedAt: "2026-07-16T00:00:00.000Z",
+    getReviewDiffSource: () =>
+      Effect.succeed({
+        offer: ReviewDiffSourceOffer.make({
+          target: HostedReviewDiffSourceTarget.make({
+            review,
+            reviewKey: ReviewKey.make(`${id}:platform/backend/service#42`),
+          }),
+          expectedRevision: ReviewRevision.make("head"),
+          semanticIdentity: ReviewDiffSemanticIdentity.make("conformance-source"),
+          methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
+          facts: ReviewDiffSourceFacts.make({
+            origin: "remote",
+            revisionKind: "mutable",
+            reproducible: false,
+            complete: true,
+            declaredBytes: 0,
+          }),
         }),
-      ),
+        unifiedBytes: () => Stream.empty,
+        close: Effect.void,
+      }),
     getReviewDecision: () => Effect.succeed("none" as const),
     submitReviewDecision: () => Effect.void,
     repositoryUrl: () => Effect.succeed(WebUrl.make(`https://${host}/platform/backend/service`)),
@@ -376,7 +386,7 @@ describe("GitProviderRegistry", () => {
     })
   })
 
-  it.effect("rejects same-provider cross-target review and checkout results", () => {
+  it.effect("rejects same-provider cross-target checkout results", () => {
     const registration = makeProvider("fake")
     const requested = HostedReviewLocator.make({
       repository: HostedRepositoryLocator.make({
@@ -389,17 +399,6 @@ describe("GitProviderRegistry", () => {
     const other = HostedReviewLocator.make({
       repository: requested.repository,
       number: HostedReviewNumber.make(43),
-    })
-    Object.defineProperty(registration, "getReviewDiff", {
-      value: () =>
-        Effect.succeed(
-          HostedReviewDiff.make({
-            locator: other,
-            headRevision: ReviewRevision.make("head"),
-            diff: "",
-            fetchedAt: "2026-07-16T00:00:00.000Z",
-          }),
-        ),
     })
     Object.defineProperty(registration, "checkoutSpec", {
       value: () =>
@@ -417,15 +416,11 @@ describe("GitProviderRegistry", () => {
     return Effect.gen(function* () {
       const registry = yield* GitProviderRegistry
       const provider = yield* registry.get(GitProviderId.make("fake"))
-      const diff = yield* Effect.result(provider.getReviewDiff(requested))
       const checkout = yield* Effect.result(
         provider.checkoutSpec(requested, ReviewRevision.make("head")),
       )
 
-      expect(Result.isFailure(diff)).toBe(true)
       expect(Result.isFailure(checkout)).toBe(true)
-      if (Result.isFailure(diff))
-        expect(diff.failure.message).toBe("Provider returned data for another target")
       if (Result.isFailure(checkout)) {
         expect(checkout.failure.message).toBe("Provider returned data for another target")
       }

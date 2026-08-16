@@ -110,20 +110,6 @@ const documentedPackageDependencies = new Map([
   ["@diffdash/review-data-worker", ["@diffdash/domain", "@diffdash/git-provider"]],
 ])
 const desktopErrorAdapterDependencies = new Map([
-  [
-    "packages/desktop/electron/main/ipc/walkthrough-public-error.ts",
-    new Set([
-      "@diffdash/agent-provider",
-      "@diffdash/agents",
-      "@diffdash/domain",
-      "@diffdash/persistence",
-      "@diffdash/process",
-    ]),
-  ],
-  [
-    "packages/desktop/electron/main/ipc/review-thread-public-error.ts",
-    new Set(["@diffdash/agent-provider"]),
-  ],
   ["packages/desktop/electron/main/ipc/public-error.ts", new Set(["@diffdash/domain"])],
 ])
 
@@ -850,6 +836,24 @@ test("persistence stores depend only on the generic Effect SQL client", () => {
 
   const coreLayer = readFileSync(resolve(root, "packages/core/src/core-layer.ts"), "utf8")
   assert.doesNotMatch(coreLayer, /@diffdash\/persistence\/database-(?:node|bun)/)
+})
+
+test("review acquisition and walkthrough APIs retain no legacy reconstruction path", () => {
+  const reviewContext = readFileSync(resolve(root, "packages/domain/src/review-context.ts"), "utf8")
+  assert.doesNotMatch(
+    reviewContext,
+    /class (?:Hosted|Local|RepositoryComparison)ReviewSnapshot\b|makeReviewSnapshotManifest/,
+  )
+  for (const directory of [
+    resolve(root, "packages/app/src"),
+    resolve(root, "packages/desktop/electron"),
+    resolve(root, "packages/protocol/src"),
+  ]) {
+    for (const file of sourceFiles(directory)) {
+      if (/\.test\.[cm]?[jt]sx?$/.test(file)) continue
+      assert.doesNotMatch(readFileSync(file, "utf8"), /localWalkthroughs|walkthroughs:generate/)
+    }
+  }
 })
 
 test("Electron controllers consume only the closed Core operation boundary", () => {

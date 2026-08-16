@@ -315,6 +315,7 @@ export const ResolvedReviewSessionTarget = Schema.Struct({
   identity: ReviewSessionIdentity,
   file: ReviewSessionFile,
   blockOrdinal: NonNegativeInteger,
+  firstLine: NonNegativeInteger,
   line: NonNegativeInteger,
 }).annotate({ identifier: "ResolvedReviewSessionTarget" })
 

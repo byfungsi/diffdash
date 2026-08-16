@@ -14,7 +14,6 @@ import {
   HostedRepositoryName,
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
@@ -32,7 +31,6 @@ import {
   makeReviewKey,
   ReviewDiffAcquisition,
   ReviewDiffByteCompletion,
-  ReviewDiffByteStreamValidator,
   ReviewDiffGeneration,
   ReviewDiffGenerationTracker,
   ReviewDiffRevisionChanged,
@@ -56,13 +54,6 @@ import {
   type ProcessOutputPolicyInput,
   type ProcessRunner,
 } from "@diffdash/process"
-
-// Four UTF-8 bytes per character keeps complete capture aligned with the 2M-character large-diff policy.
-const GITHUB_COMPLETE_DIFF_MAX_BYTES = 8 * 1024 * 1024
-const COMPLETE_DIFF_STDOUT = {
-  maxBytes: GITHUB_COMPLETE_DIFF_MAX_BYTES,
-  overflow: "error",
-} satisfies ProcessOutputPolicyInput
 
 const GH_STREAM_MINIMUM_VERSION = [2, 7, 0] as const
 const GH_STREAM_STDERR_BYTES = 256 * 1024
@@ -997,48 +988,6 @@ export const createGitHubProvider = (
       )
     }),
     getReview,
-    getReviewDiff: Effect.fn("GitHub.getReviewDiff")(function* (review) {
-      const source = yield* getReviewDiffSource(review)
-      const acquisition = ReviewDiffAcquisition.make({
-        generation: ReviewDiffGeneration.make(`legacy-${Date.now()}`),
-        expectedRevision: source.offer.expectedRevision,
-      })
-      const validator = new ReviewDiffByteStreamValidator(
-        acquisition.generation,
-        acquisition.expectedRevision,
-        source.offer.semanticIdentity,
-      )
-      const chunks: Uint8Array[] = []
-      let totalBytes = 0
-      yield* source.unifiedBytes(acquisition).pipe(
-        Stream.runForEach((event) =>
-          validator.accept(event).pipe(
-            Effect.flatMap((validated) => {
-              if (Schema.is(ReviewDiffByteCompletion)(validated)) return Effect.void
-              totalBytes += validated.bytes.byteLength
-              return totalBytes > COMPLETE_DIFF_STDOUT.maxBytes
-                ? Effect.fail(new Error("Legacy GitHub diff exceeded its complete-buffer limit"))
-                : Effect.sync(() => void chunks.push(validated.bytes))
-            }),
-          ),
-        ),
-        Effect.andThen(Effect.suspend(() => validator.finish())),
-        Effect.ensuring(source.close.pipe(Effect.ignore)),
-        Effect.mapError(operationError(providerId, "getReviewDiff")),
-      )
-      const bytes = new Uint8Array(totalBytes)
-      let offset = 0
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-      return HostedReviewDiff.make({
-        locator: review,
-        headRevision: source.offer.expectedRevision,
-        diff: new TextDecoder().decode(bytes),
-        fetchedAt: new Date().toISOString(),
-      })
-    }),
     getReviewDiffSource,
     getReviewDecision,
     submitReviewDecision: Effect.fn("GitHub.submitReviewDecision")(function* (review, decision) {

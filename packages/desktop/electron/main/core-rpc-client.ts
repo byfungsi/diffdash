@@ -35,13 +35,7 @@ import {
   type CoreShutdownAcknowledged,
 } from "@diffdash/core-rpc/lifecycle"
 import type { CoreShutdownFailure } from "@diffdash/core-rpc/failure"
-import type {
-  ReviewAgentOperationAccepted,
-  ReviewAgentOperationRequest,
-  ReviewAgentOperationSnapshot,
-  ReviewAgentStartFailure,
-  ReviewAgentGetOperationFailure,
-} from "@diffdash/core-rpc/review-agent"
+import type { ReviewAgentStartFailure } from "@diffdash/core-rpc/review-agent"
 import type {
   CancelWalkthroughRequest,
   GetStoredWalkthroughRequest,
@@ -94,10 +88,7 @@ import * as Socket from "effect/unstable/socket/Socket"
 type CoreRpcApplicationRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
 
-type CoreRpcApplicationOutput<Method extends CoreMethodType> =
-  Method extends "ReviewThreads.runAgent"
-    ? ReviewAgentOperationAccepted
-    : CoreOperationOutput<Method>
+type CoreRpcApplicationOutput<Method extends CoreMethodType> = CoreOperationOutput<Method>
 
 type CoreRpcApplicationFailure =
   | CoreApplicationFailure
@@ -161,12 +152,6 @@ export class CoreRpcClient extends Context.Service<
     ) => Effect.Effect<
       DatabaseOwnershipAuthorized,
       CoreAuthorizeDatabaseOwnershipFailure | CoreTransportAuthenticationFailure | RpcClientError
-    >
-    readonly getReviewAgentOperation: (
-      request: ReviewAgentOperationRequest,
-    ) => Effect.Effect<
-      ReviewAgentOperationSnapshot,
-      ReviewAgentGetOperationFailure | CoreTransportAuthenticationFailure | RpcClientError
     >
     readonly startWalkthrough: (
       request: StartWalkthroughRequest,
@@ -474,10 +459,6 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
           "CoreRpcClient.setRepositoryComparisonViewedFile",
         )((request) => authenticated(client("ViewedFiles.setRepositoryComparison", request))),
       }
-      const getReviewAgentOperation = Effect.fn("CoreRpcClient.getReviewAgentOperation")(
-        (request: ReviewAgentOperationRequest) =>
-          authenticated(client("ReviewAgents.getOperation", request)),
-      )
       const e2eReviewLifecycleDiagnostics = Effect.fn(
         "CoreRpcClient.e2eReviewLifecycleDiagnostics",
       )((request: HostRequestContext) =>
@@ -560,7 +541,6 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
             cancelWalkthrough,
             e2eHoldNextReviewAcquisition,
             e2eReviewLifecycleDiagnostics,
-            getReviewAgentOperation,
             getStoredWalkthrough,
             getWalkthroughOperation,
             health,

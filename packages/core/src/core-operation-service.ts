@@ -7,6 +7,8 @@ import {
 import type { AgentRun } from "@diffdash/domain/agent-run"
 import type { AgentRunId } from "@diffdash/domain/agent-run-id"
 import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
+import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import { WalkthroughOperationReviewGeneration } from "@diffdash/domain/walkthrough-operation"
 import { Context, Effect, Layer, Option } from "effect"
 
 import type { CoreThreadResolutionFailure } from "./core-contract"
@@ -46,7 +48,11 @@ export type CoreReviewAgentStartError =
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
   readonly methods: OperationHandlers
-  readonly walkthroughs: WalkthroughOperations
+  readonly walkthroughs: WalkthroughOperations & {
+    readonly resolveGeneration: (
+      target: ReviewThreadTarget,
+    ) => Effect.Effect<WalkthroughOperationReviewGeneration, CoreThreadResolutionFailure>
+  }
   readonly reviewAgents: {
     readonly start: (
       input: StartReviewAgentOperationRequest,
@@ -77,6 +83,19 @@ export const coreOperationLayer = Layer.effect(
     const events = yield* CoreEventHub
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
+    const resolveWalkthroughGeneration = Effect.fn("Core.Walkthroughs.resolveGeneration")(
+      function* (target: ReviewThreadTarget) {
+        const { snapshot } = yield* reviews.resolve(target)
+        return WalkthroughOperationReviewGeneration.make({
+          kind: target.kind,
+          projectId: snapshot.projectId,
+          snapshotId: snapshot.snapshotId,
+          reviewKey: snapshot.reviewKey,
+          baseRevision: snapshot.baseRevision,
+          headRevision: snapshot.headRevision,
+        })
+      },
+    )
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
     const applicationHandlers = yield* makeApplicationOperationHandlers
     const repositoryHandlers = yield* makeRepositoryOperationHandlers
@@ -210,7 +229,7 @@ export const coreOperationLayer = Layer.effect(
         )
       }),
       methods: handlers,
-      walkthroughs,
+      walkthroughs: { ...walkthroughs, resolveGeneration: resolveWalkthroughGeneration },
       reviewAgents: {
         start: startReviewAgent,
         getOperation: reviewAgentOperations.getOperation,

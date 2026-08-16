@@ -261,6 +261,7 @@ export const CoreResolvedReviewTarget = Schema.Struct({
   identity: CoreReviewSessionIdentity,
   file: CoreReviewFile,
   blockOrdinal: NonNegativeInteger,
+  firstLine: NonNegativeInteger,
   line: NonNegativeInteger,
 }).annotate({ identifier: "CoreResolvedReviewTarget" })
 

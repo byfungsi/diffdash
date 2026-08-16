@@ -3,15 +3,14 @@ import { open, type FileHandle } from "node:fs/promises"
 import { basename, join, relative } from "node:path"
 
 import {
-  ChangedFile,
+  type ChangedFile,
   type HostedReviewDetail,
   type HostedReviewLocator,
 } from "@diffdash/domain/git-provider"
-import { LocalReviewDetail, type LocalReviewTarget } from "@diffdash/domain/local-review"
+import { type LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   makeRepositoryComparisonReviewKey,
-  RepositoryComparisonDetail,
   repositoryComparisonBaseRevision,
   repositoryComparisonHeadRevision,
   type RepositoryComparisonTarget,
@@ -23,15 +22,12 @@ import {
   LocalReviewSnapshotManifest,
   RepositoryComparisonReviewDescriptor,
   RepositoryComparisonSnapshotManifest,
-  ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
   makeReviewSnapshotId,
   ReviewDiffIdentity,
-  ReviewFileId,
   ReviewRevision,
 } from "@diffdash/domain/review-identity"
-import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   LocalReviewDiffSourceTarget,
   ReviewDiffAcquisition,
@@ -223,7 +219,7 @@ export const coreSnapshotAcquisitionLayer = (
         }).pipe(Effect.mapError(reviewFailure("hosted.snapshot")))
         return HostedReviewSnapshotManifest.make({
           ...manifestIdentity(result, revisions.base, source.offer.expectedRevision),
-          detail,
+          detail: { summary: detail.summary },
         })
       })
 
@@ -306,7 +302,7 @@ export const coreSnapshotAcquisitionLayer = (
           repositoryPath: target.rootPath,
           statusByPath: new Map(),
         }).pipe(Effect.mapError(reviewFailure("local.snapshot")))
-        const detail = LocalReviewDetail.make({
+        const detail = {
           rootPath: target.rootPath,
           repoName: basename(target.rootPath) || target.rootPath,
           branchName,
@@ -315,9 +311,8 @@ export const coreSnapshotAcquisitionLayer = (
           headSha: source.offer.expectedRevision,
           diffHash: ReviewDiffIdentity.make(source.offer.semanticIdentity),
           title,
-          files: changedFiles(result),
           fetchedAt: new Date(now).toISOString(),
-        })
+        }
         return LocalReviewSnapshotManifest.make({
           ...manifestIdentity(result, baseRevision, source.offer.expectedRevision),
           detail,
@@ -353,12 +348,11 @@ export const coreSnapshotAcquisitionLayer = (
               repositoryPath,
               statusByPath: new Map(),
             }).pipe(Effect.mapError(comparisonFailure("acquire.ingestion")))
-            const detail = RepositoryComparisonDetail.make({
+            const detail = {
               target,
               title,
-              files: changedFiles(result),
               fetchedAt: new Date(now).toISOString(),
-            })
+            }
             return RepositoryComparisonSnapshotManifest.make({
               ...manifestIdentity(result, baseRevision, repositoryComparisonHeadRevision(target)),
               detail,
@@ -784,31 +778,8 @@ const manifestIdentity = (
   reviewKey: result.reviewKey,
   baseRevision,
   headRevision,
-  files: result.files.map((file) =>
-    ReviewSnapshotFileInventory.make({
-      fileId: ReviewFileId.make(file.fileId),
-      patchHash: file.patchHash,
-      reviewKey: file.reviewKey,
-      path: RepositoryRelativePath.make(file.path),
-      oldPath: file.oldPath === null ? null : RepositoryRelativePath.make(file.oldPath),
-      status: file.status,
-      visibility: file.visibility,
-      additions: file.additions,
-      deletions: file.deletions,
-      hunkCount: file.hunkCount,
-    }),
-  ),
+  fileCount: result.fileCount,
 })
-
-const changedFiles = (result: CoreSnapshotIngestionResult): ReadonlyArray<ChangedFile> =>
-  result.files.map((file) =>
-    ChangedFile.make({
-      path: RepositoryRelativePath.make(file.path),
-      additions: file.additions,
-      deletions: file.deletions,
-      changeType: file.status,
-    }),
-  )
 
 const changedFileStatuses = (
   files: ReadonlyArray<ChangedFile>,

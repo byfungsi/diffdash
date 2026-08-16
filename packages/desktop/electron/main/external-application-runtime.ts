@@ -8,14 +8,7 @@ import {
   HostRequestId,
 } from "@diffdash/core-rpc/identity"
 import { AuthorizeDatabaseOwnershipRequest } from "@diffdash/core-rpc/lifecycle"
-import {
-  CancelledAgentRun,
-  CompletedAgentRun,
-  FailedAgentRun,
-  InterruptedAgentRun,
-  RunningAgentRun,
-  StartReviewAgentOperationRequest,
-} from "@diffdash/core-rpc/review-agent"
+import { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
 import {
   CancelWalkthroughRequest,
   GetStoredWalkthroughRequest,
@@ -23,7 +16,6 @@ import {
   StartWalkthroughRequest,
   CurrentWalkthroughPromptVersion,
   WalkthroughIdempotencyKey,
-  WalkthroughReviewGeneration,
 } from "@diffdash/core-rpc/walkthrough"
 import {
   WalkthroughStartBridgeFailure,
@@ -114,35 +106,10 @@ export const createExternalApplicationRuntime = (
       ...requestContext(),
       ...input,
     })
-    const accepted = await invoke((client) => client.runReviewThreadAgent(reviewAgentRequest))
     options?.onReviewThreadAgentProgress?.("reviewing")
-    const waitForCompletion = async (): Promise<void> => {
-      const operation = await invoke((client) =>
-        client.getReviewAgentOperation({ ...requestContext(), runId: accepted.runId }),
-      )
-      if (Schema.is(RunningAgentRun)(operation)) {
-        await runtime.runPromise(Effect.sleep("100 millis"))
-        return waitForCompletion()
-      }
-      if (Schema.is(FailedAgentRun)(operation)) throw new Error(operation.error)
-      if (Schema.is(CancelledAgentRun)(operation)) {
-        throw new Error("Review agent operation was cancelled.")
-      }
-      if (Schema.is(InterruptedAgentRun)(operation)) {
-        throw new Error("Review agent operation was interrupted.")
-      }
-      if (!Schema.is(CompletedAgentRun)(operation)) {
-        throw new Error("Review agent operation ended in an unsupported state.")
-      }
-    }
-    await waitForCompletion()
+    const thread = await invoke((client) => client.runReviewThreadAgent(reviewAgentRequest))
     options?.onReviewThreadAgentProgress?.("restoring-workspace")
-    return invoke((client) =>
-      client.getReviewThread({
-        ...requestContext(),
-        threadId: reviewAgentRequest.threadId,
-      }),
-    )
+    return thread
   }
 
   const core: ApplicationRuntime["core"] = {
@@ -253,43 +220,6 @@ export const createExternalApplicationRuntime = (
       invoke((client) =>
         client.setRepositoryComparisonViewedFile({ ...requestContext(), ...input }),
       ),
-  }
-
-  const walkthroughGeneration = async (
-    target: WalkthroughBridgeStartRequest["target"],
-  ): Promise<WalkthroughReviewGeneration> => {
-    const current = session
-    if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-    const context = requestContext()
-    const manifest =
-      target.kind === "hosted"
-        ? await runtime.runPromise(
-            current.client.acquireHostedReviewSnapshot({
-              ...context,
-              review: target.review,
-            }),
-          )
-        : target.kind === "local"
-          ? await runtime.runPromise(
-              current.client.acquireLocalReviewSnapshot({
-                ...context,
-                target,
-              }),
-            )
-          : await runtime.runPromise(
-              current.client.acquireRepositoryComparisonSnapshot({
-                ...context,
-                target,
-              }),
-            )
-    return WalkthroughReviewGeneration.make({
-      kind: target.kind,
-      projectId: manifest.projectId,
-      snapshotId: manifest.snapshotId,
-      reviewKey: manifest.reviewKey,
-      baseRevision: manifest.baseRevision,
-      headRevision: manifest.headRevision,
-    })
   }
 
   let eventCursor: CoreEventReplayCursor | null = null
@@ -564,7 +494,7 @@ export const createExternalApplicationRuntime = (
             current.client.startWalkthrough(
               StartWalkthroughRequest.make({
                 ...requestContext(),
-                reviewGeneration: await walkthroughGeneration(input.target),
+                target: input.target,
                 regenerate: input.regenerate,
                 idempotencyKey: WalkthroughIdempotencyKey.make(input.idempotencyKey),
               }),
@@ -631,7 +561,7 @@ export const createExternalApplicationRuntime = (
             current.client.getStoredWalkthrough(
               GetStoredWalkthroughRequest.make({
                 ...requestContext(),
-                reviewGeneration: await walkthroughGeneration(target),
+                target,
                 promptVersion: CurrentWalkthroughPromptVersion,
               }),
             ),

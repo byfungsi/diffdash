@@ -1,17 +1,15 @@
-import { Match, Schema } from "effect"
+import { Schema } from "effect"
 
-import { ParsedDiff } from "./diff"
-import { DiffFileStatus, DiffFileVisibility, type ParsedDiffFile } from "./diff"
-import { HostedReviewDetail, HostedReviewDiff, HostedReviewLocator } from "./git-provider"
-import { LocalReviewDetail, LocalReviewDiff, LocalReviewTarget } from "./local-review"
+import { DiffFileStatus, DiffFileVisibility } from "./diff"
+import { HostedReviewDetail, HostedReviewLocator } from "./git-provider"
+import { LocalReviewDetail, LocalReviewTarget } from "./local-review"
 import {
   RepositoryComparisonDetail,
-  RepositoryComparisonDiff,
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
 } from "./repository-comparison"
 import { RepositoryRelativePath } from "./repository-path"
-import { UtcIsoTimestamp } from "./domain-scalar"
+import { NonNegativeInteger, UtcIsoTimestamp } from "./domain-scalar"
 import { WebUrl } from "./web-url"
 import {
   ReviewFileId,
@@ -21,52 +19,6 @@ import {
   ReviewRevision,
   ReviewSnapshotId,
 } from "./review-identity"
-
-/** Coherent metadata and diff content for one hosted review revision. */
-export class HostedReviewSnapshot extends Schema.TaggedClass<HostedReviewSnapshot>()("hosted", {
-  snapshotId: ReviewSnapshotId,
-  reviewKey: ReviewKey,
-  baseRevision: ReviewRevision,
-  headRevision: ReviewRevision,
-  detail: HostedReviewDetail,
-  diff: HostedReviewDiff,
-  parsedDiff: ParsedDiff,
-}) {}
-
-/** Coherent metadata and diff content for one local working-tree revision. */
-export class LocalReviewSnapshot extends Schema.TaggedClass<LocalReviewSnapshot>()("local", {
-  snapshotId: ReviewSnapshotId,
-  reviewKey: ReviewKey,
-  baseRevision: ReviewRevision,
-  headRevision: ReviewRevision,
-  detail: LocalReviewDetail,
-  diff: LocalReviewDiff,
-  parsedDiff: ParsedDiff,
-}) {}
-
-/** Coherent metadata and diff content for one immutable repository comparison. */
-export class RepositoryComparisonSnapshot extends Schema.TaggedClass<RepositoryComparisonSnapshot>()(
-  "repositoryComparison",
-  {
-    snapshotId: ReviewSnapshotId,
-    reviewKey: ReviewKey,
-    baseRevision: ReviewRevision,
-    headRevision: ReviewRevision,
-    detail: RepositoryComparisonDetail,
-    diff: RepositoryComparisonDiff,
-    parsedDiff: ParsedDiff,
-  },
-) {}
-
-/** A coherent local or provider-backed review revision. */
-export const ReviewSnapshot = Schema.Union([
-  HostedReviewSnapshot,
-  LocalReviewSnapshot,
-  RepositoryComparisonSnapshot,
-])
-
-/** A coherent local or provider-backed review revision. */
-export type ReviewSnapshot = typeof ReviewSnapshot.Type
 
 const ReviewDescriptorText = Schema.String.pipe(
   Schema.check(Schema.isMinLength(1)),
@@ -130,7 +82,29 @@ export class ReviewSnapshotFileInventory extends Schema.Class<ReviewSnapshotFile
   hunkCount: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
-/** Renderer-safe hosted snapshot metadata and complete file inventory. */
+const HostedReviewSnapshotDetail = Schema.Struct({
+  summary: HostedReviewDetail.fields.summary,
+})
+
+const LocalReviewSnapshotDetail = Schema.Struct({
+  rootPath: LocalReviewDetail.fields.rootPath,
+  repoName: LocalReviewDetail.fields.repoName,
+  branchName: LocalReviewDetail.fields.branchName,
+  comparison: LocalReviewDetail.fields.comparison,
+  baseSha: LocalReviewDetail.fields.baseSha,
+  headSha: LocalReviewDetail.fields.headSha,
+  diffHash: LocalReviewDetail.fields.diffHash,
+  title: LocalReviewDetail.fields.title,
+  fetchedAt: LocalReviewDetail.fields.fetchedAt,
+})
+
+const RepositoryComparisonSnapshotDetail = Schema.Struct({
+  target: RepositoryComparisonDetail.fields.target,
+  title: RepositoryComparisonDetail.fields.title,
+  fetchedAt: RepositoryComparisonDetail.fields.fetchedAt,
+})
+
+/** Renderer-safe hosted snapshot identity and bounded metadata. */
 export class HostedReviewSnapshotManifest extends Schema.TaggedClass<HostedReviewSnapshotManifest>()(
   "hosted",
   {
@@ -139,12 +113,12 @@ export class HostedReviewSnapshotManifest extends Schema.TaggedClass<HostedRevie
     reviewKey: ReviewKey,
     baseRevision: ReviewRevision,
     headRevision: ReviewRevision,
-    detail: HostedReviewDetail,
-    files: Schema.Array(ReviewSnapshotFileInventory),
+    fileCount: NonNegativeInteger,
+    detail: HostedReviewSnapshotDetail,
   },
 ) {}
 
-/** Renderer-safe local snapshot metadata and complete file inventory. */
+/** Renderer-safe local snapshot identity and bounded metadata. */
 export class LocalReviewSnapshotManifest extends Schema.TaggedClass<LocalReviewSnapshotManifest>()(
   "local",
   {
@@ -153,12 +127,12 @@ export class LocalReviewSnapshotManifest extends Schema.TaggedClass<LocalReviewS
     reviewKey: ReviewKey,
     baseRevision: ReviewRevision,
     headRevision: ReviewRevision,
-    detail: LocalReviewDetail,
-    files: Schema.Array(ReviewSnapshotFileInventory),
+    fileCount: NonNegativeInteger,
+    detail: LocalReviewSnapshotDetail,
   },
 ) {}
 
-/** Renderer-safe immutable comparison metadata and complete file inventory. */
+/** Renderer-safe immutable comparison identity and bounded metadata. */
 export class RepositoryComparisonSnapshotManifest extends Schema.TaggedClass<RepositoryComparisonSnapshotManifest>()(
   "repositoryComparison",
   {
@@ -167,83 +141,17 @@ export class RepositoryComparisonSnapshotManifest extends Schema.TaggedClass<Rep
     reviewKey: ReviewKey,
     baseRevision: ReviewRevision,
     headRevision: ReviewRevision,
-    detail: RepositoryComparisonDetail,
-    files: Schema.Array(ReviewSnapshotFileInventory),
+    fileCount: NonNegativeInteger,
+    detail: RepositoryComparisonSnapshotDetail,
   },
 ) {}
 
-/** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
+/** Renderer-safe snapshot identity and bounded source metadata. */
 export const ReviewSnapshotManifest = Schema.Union([
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
   RepositoryComparisonSnapshotManifest,
 ])
 
-/** Renderer-safe snapshot metadata without raw complete diff or parsed hunks. */
+/** Renderer-safe snapshot identity and bounded source metadata. */
 export type ReviewSnapshotManifest = typeof ReviewSnapshotManifest.Type
-
-/** Projects an internally coherent hosted snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(
-  snapshot: HostedReviewSnapshot,
-  projectId: ReviewProjectId,
-): HostedReviewSnapshotManifest
-
-/** Projects an internally coherent local snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(
-  snapshot: LocalReviewSnapshot,
-  projectId: ReviewProjectId,
-): LocalReviewSnapshotManifest
-
-/** Projects an immutable comparison snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(
-  snapshot: RepositoryComparisonSnapshot,
-  projectId: ReviewProjectId,
-): RepositoryComparisonSnapshotManifest
-
-/** Projects an internally coherent snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(
-  snapshot: ReviewSnapshot,
-  projectId: ReviewProjectId,
-): ReviewSnapshotManifest
-
-/** Projects an internally coherent snapshot into renderer-safe manifest metadata. */
-export function makeReviewSnapshotManifest(
-  snapshot: ReviewSnapshot,
-  projectId: ReviewProjectId,
-): ReviewSnapshotManifest {
-  const identity = {
-    projectId,
-    snapshotId: snapshot.snapshotId,
-    reviewKey: snapshot.reviewKey,
-    baseRevision: snapshot.baseRevision,
-    headRevision: snapshot.headRevision,
-    files: snapshot.parsedDiff.files.map(makeReviewSnapshotFileInventory),
-  }
-  return Match.value(snapshot).pipe(
-    Match.tag("hosted", (hosted) =>
-      HostedReviewSnapshotManifest.make({ ...identity, detail: hosted.detail }),
-    ),
-    Match.tag("local", (local) =>
-      LocalReviewSnapshotManifest.make({ ...identity, detail: local.detail }),
-    ),
-    Match.tag("repositoryComparison", (comparison) =>
-      RepositoryComparisonSnapshotManifest.make({ ...identity, detail: comparison.detail }),
-    ),
-    Match.exhaustive,
-  )
-}
-
-/** Projects one parsed file into renderer-safe inventory metadata. */
-export const makeReviewSnapshotFileInventory = (file: ParsedDiffFile) =>
-  ReviewSnapshotFileInventory.make({
-    fileId: file.fileId,
-    patchHash: file.patchHash,
-    reviewKey: file.reviewKey,
-    path: file.path,
-    oldPath: file.oldPath,
-    status: file.status,
-    visibility: file.visibility,
-    additions: file.additions,
-    deletions: file.deletions,
-    hunkCount: file.hunks.length,
-  })

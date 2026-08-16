@@ -1,4 +1,4 @@
-import { AgentProviderId } from "@diffdash/agent-provider"
+import { AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
@@ -404,7 +404,7 @@ describe("IPC contract", () => {
       error: transportError(
         "AgentProviderAuthenticationError",
         "Authentication is required.",
-        "walkthroughs:generate",
+        "Walkthroughs.start",
         diagnostic,
         providerFailure,
       ),
@@ -419,7 +419,7 @@ describe("IPC contract", () => {
       error: {
         code: "AgentProviderAuthenticationError",
         message: "Authentication is required.",
-        operation: "walkthroughs:generate",
+        operation: "Walkthroughs.start",
         diagnostic,
         providerFailure,
       },

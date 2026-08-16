@@ -90,7 +90,13 @@ const makeClient = (overrides: Partial<ProgressiveReviewNativeClient> = {}) =>
       byteCount: 0,
       complete: true,
     }),
-    resolveTarget: async () => ({ identity: nativeIdentity, file, blockOrdinal: 2, line: 4 }),
+    resolveTarget: async () => ({
+      identity: nativeIdentity,
+      file,
+      blockOrdinal: 2,
+      firstLine: 40,
+      line: 4,
+    }),
     search: () => emptyPublications(),
     ...overrides,
   }) satisfies ProgressiveReviewNativeClient
@@ -159,7 +165,7 @@ describe("createProgressiveReviewApiGateway", () => {
         fileId: file.fileId,
         target: { _tag: "HunkLine", hunkId: null, line: 4 },
       }),
-    ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, line: 4 })
+    ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, firstLine: 40, line: 4 })
     expect(
       await api.resolveTarget({
         identity: browserIdentity,
@@ -171,7 +177,7 @@ describe("createProgressiveReviewApiGateway", () => {
           lineNumber: 40,
         },
       }),
-    ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, line: 4 })
+    ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, firstLine: 40, line: 4 })
 
     expect(openSession).toHaveBeenCalledWith({
       ...context,

@@ -1,7 +1,10 @@
 import {
+  CancelledAgentRun,
+  CompletedAgentRun,
+  FailedAgentRun,
+  InterruptedAgentRun,
   ReviewAgentCancelFailure,
   ReviewAgentGetOperationFailure,
-  ReviewAgentOperationAccepted,
   ReviewAgentStartFailure,
   type ReviewAgentOperationRequest,
   type StartReviewAgentOperationRequest,
@@ -11,9 +14,11 @@ import {
   ReviewTurnRejectedError,
   ReviewTurnTargetError,
 } from "@diffdash/persistence/review-turn-store"
+import type { AgentRunId } from "@diffdash/domain/agent-run-id"
+import type { ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import { Effect, Layer, Option, Schema } from "effect"
 
-import type { CoreReviewAgentStartError } from "./core-operation-service"
+import { CoreOperationService, type CoreReviewAgentStartError } from "./core-operation-service"
 import { CoreRuntimeServices } from "./core-runtime-services"
 import { coreRuntimeOperationsLayer } from "./core-runtime-services"
 
@@ -25,16 +30,12 @@ export const coreReviewAgentRpcHandlersWithRuntimeLayer = ReviewAgentBusinessRpc
     return {
       "ReviewThreads.runAgent": (request) =>
         core.pipe(
-          Effect.flatMap((operations) => operations.reviewAgents.start(request)),
-          Effect.map((runId) =>
-            ReviewAgentOperationAccepted.make({
-              applicationInstanceId: request.applicationInstanceId,
-              processEpoch: request.processEpoch,
-              requestId: request.requestId,
-              runId,
-            }),
+          Effect.flatMap((operations) =>
+            operations.reviewAgents.start(request).pipe(
+              Effect.mapError((error) => startFailure(request, error)),
+              Effect.flatMap((runId) => awaitReviewAgent(operations, request, runId)),
+            ),
           ),
-          Effect.mapError((error) => startFailure(request, error)),
         ),
       "ReviewAgents.getOperation": (request) =>
         core.pipe(
@@ -61,6 +62,62 @@ export const coreReviewAgentRpcHandlersWithRuntimeLayer = ReviewAgentBusinessRpc
     }
   }),
 )
+
+const awaitReviewAgent = (
+  operations: CoreOperationService["Service"],
+  request: StartReviewAgentOperationRequest,
+  runId: AgentRunId,
+): Effect.Effect<ReviewThreadDetails, ReviewAgentStartFailure> =>
+  Effect.gen(function* () {
+    while (true) {
+      const operation = yield* operations.reviewAgents
+        .getOperation(runId)
+        .pipe(
+          Effect.mapError(() => terminalFailure(request, runId, "REVIEW_AGENT_OPERATION_STORE")),
+        )
+      if (Option.isNone(operation)) {
+        return yield* Effect.fail(
+          terminalFailure(request, runId, "REVIEW_AGENT_OPERATION_NOT_FOUND"),
+        )
+      }
+      if (Schema.is(CompletedAgentRun)(operation.value)) {
+        return yield* operations.methods["ReviewThreads.get"](
+          { threadId: request.threadId },
+          {},
+        ).pipe(
+          Effect.mapError(() => terminalFailure(request, runId, "REVIEW_AGENT_OPERATION_STORE")),
+        )
+      }
+      if (Schema.is(FailedAgentRun)(operation.value)) {
+        return yield* Effect.fail(terminalFailure(request, runId, "REVIEW_AGENT_PROVIDER_FAILURE"))
+      }
+      if (Schema.is(CancelledAgentRun)(operation.value)) {
+        return yield* Effect.fail(terminalFailure(request, runId, "REVIEW_AGENT_CANCELLED"))
+      }
+      if (Schema.is(InterruptedAgentRun)(operation.value)) {
+        return yield* Effect.fail(terminalFailure(request, runId, "REVIEW_AGENT_INTERRUPTED"))
+      }
+      yield* Effect.sleep("100 millis")
+    }
+  })
+
+const terminalFailure = (
+  request: StartReviewAgentOperationRequest,
+  runId: AgentRunId,
+  code:
+    | "REVIEW_AGENT_OPERATION_NOT_FOUND"
+    | "REVIEW_AGENT_OPERATION_STORE"
+    | "REVIEW_AGENT_PROVIDER_FAILURE"
+    | "REVIEW_AGENT_CANCELLED"
+    | "REVIEW_AGENT_INTERRUPTED",
+) =>
+  ReviewAgentStartFailure.make({
+    ...requestIdentity(request),
+    method: "ReviewThreads.runAgent",
+    runId,
+    code,
+    safeMessage: "DiffDash could not complete this review-agent operation.",
+  })
 
 /** Review-agent handlers backed directly by an already-composed operation service. */
 export const coreReviewAgentRpcHandlersLayer = coreReviewAgentRpcHandlersWithRuntimeLayer.pipe(

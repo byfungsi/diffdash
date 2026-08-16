@@ -199,12 +199,12 @@ describe("CoreSnapshotIngestion", () => {
 
         const result = yield* ingestion.ingest(input(source(patch, closed)))
         expect(result.snapshotId).toBe(snapshotId)
-        expect(result.files).toHaveLength(1)
-        expect(result.files[0]?.hunkCount).toBe(1)
-        expect(result.files[0]?.patchHash).toMatch(/^file-patch:v2:/)
+        expect(result.fileCount).toBe(1)
 
         const snapshot = yield* store.getSnapshot(StoredSnapshotId.make(snapshotId))
         expect(snapshot.files).toHaveLength(1)
+        expect(snapshot.files[0]?.hunkCount).toBe(1)
+        expect(snapshot.files[0]?.patchHash).toMatch(/^file-patch:v2:/)
         expect(snapshot.blockIds).toHaveLength(2)
         expect(snapshot.checkpoints).toHaveLength(2)
         const blocks = yield* store.visibleBlocks(makeFileDeltaId(exactIdentity))
@@ -248,11 +248,11 @@ describe("CoreSnapshotIngestion", () => {
           yield* Effect.promise(() => mkdir(harness.rootPath, { recursive: true }))
           yield* resources.registerRoot({ id: rootId, path: harness.rootPath, createdAtMs: 0 })
 
-          const result = yield* ingestion.ingest(input(source(patch, closed)))
-          expect(result.files[0]).toMatchObject({ additions: lineCount, hunkCount: 1 })
+          yield* ingestion.ingest(input(source(patch, closed)))
 
           const deltaId = makeFileDeltaId(exactIdentity)
           const snapshot = yield* store.getSnapshot(StoredSnapshotId.make(snapshotId))
+          expect(snapshot.files[0]).toMatchObject({ additions: lineCount, hunkCount: 1 })
           const blocks = yield* store.visibleBlocks(deltaId)
           const hunkId = blocks.find(({ hunk_id }) => hunk_id !== null)?.hunk_id
           if (hunkId === null || hunkId === undefined)

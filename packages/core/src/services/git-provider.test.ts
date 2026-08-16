@@ -72,7 +72,6 @@ const makeProvider = (
   listReviews: unexpectedProviderOperation,
   getReview: unexpectedProviderOperation,
   getReviewDiffSource: overrides.getReviewDiffSource ?? unexpectedProviderOperation,
-  getReviewDiff: unexpectedProviderOperation,
   getReviewDecision: unexpectedProviderOperation,
   submitReviewDecision: unexpectedProviderOperation,
   repositoryUrl: overrides.repositoryUrl ?? unexpectedProviderOperation,

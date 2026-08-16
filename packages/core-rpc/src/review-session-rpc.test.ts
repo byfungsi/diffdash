@@ -14,6 +14,7 @@ import {
   CoreReviewSessionId,
   CoreReviewSessionIdentity,
   CoreReviewSessionStateVersion,
+  CoreResolvedReviewTarget,
   CoreReviewTargetRequest,
   OpenCoreReviewSessionRequest,
 } from "./review-session"
@@ -109,5 +110,24 @@ describe("Core progressive review RPC declarations", () => {
         line: 4,
       }),
     ).toBe(false)
+    const resolved = {
+      identity,
+      file: {
+        ordinal: 9,
+        fileId,
+        path: "src/example.ts",
+        oldPath: null,
+        additions: 1,
+        deletions: 1,
+        status: "modified",
+        visibility: { _tag: "Visible" },
+        patchHash: `file-patch:v2:${"0".repeat(64)}`,
+        hunkCount: 1,
+      },
+      blockOrdinal: 7,
+      firstLine: 384,
+      line: 401,
+    }
+    expect(Schema.decodeUnknownSync(CoreResolvedReviewTarget)(resolved).firstLine).toBe(384)
   })
 })

@@ -9,7 +9,6 @@ import {
   HostedRepositoryLocator,
   ResolvedHostedRepository,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewSummary,
   ReviewDecision,
@@ -43,7 +42,6 @@ export {
   ProviderRepositoryId,
   ResolvedHostedRepository,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
@@ -166,10 +164,6 @@ export interface GitProviderRegistration {
   readonly getReviewDiffSource: (
     review: HostedReviewLocator,
   ) => Effect.Effect<ReviewDiffSource, GitProviderOperationError>
-  /** @deprecated Use `getReviewDiffSource` for production review ingestion. */
-  readonly getReviewDiff: (
-    review: HostedReviewLocator,
-  ) => Effect.Effect<HostedReviewDiff, GitProviderOperationError>
   readonly getReviewDecision: (
     review: HostedReviewLocator,
   ) => Effect.Effect<ReviewDecision, GitProviderOperationError>
@@ -462,20 +456,6 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               ),
               Effect.onError(() => source.close.pipe(Effect.ignore)),
             ),
-          ),
-        ),
-      getReviewDiff: (review) =>
-        requireReviewProvider(providerId, "getReviewDiff", review).pipe(
-          Effect.andThen(
-            invokeProvider(providerId, "getReviewDiff", () => registration.getReviewDiff(review)),
-          ),
-          Effect.flatMap((result) =>
-            decodeResult(providerId, "getReviewDiff", HostedReviewDiff, result),
-          ),
-          Effect.flatMap((result) =>
-            sameHostedReview(result.locator, review)
-              ? Effect.succeed(result)
-              : wrongTargetResult(providerId, "getReviewDiff"),
           ),
         ),
       getReviewDecision: (review) =>

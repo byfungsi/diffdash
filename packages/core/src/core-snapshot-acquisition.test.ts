@@ -214,7 +214,7 @@ const ingestionLayer = Layer.succeed(CoreSnapshotIngestion, {
         projectId: input.manifest.projectId,
         snapshotId: input.manifest.snapshotId,
         reviewKey: input.manifest.reviewKey,
-        files: [],
+        fileCount: 1,
       }),
     ),
 })
@@ -357,7 +357,9 @@ describe("CoreSnapshotAcquisition", () => {
         })
         const manifest = yield* acquisition.acquireHosted(review)
         expect(manifest.projectId).toBe(projectId)
-        expect(manifest.detail).toBe(detail)
+        expect(manifest.fileCount).toBe(1)
+        expect(manifest.detail).toEqual({ summary: detail.summary })
+        expect(manifest).not.toHaveProperty("files")
         const spool = (yield* resources.list()).find(({ kind }) => kind === "snapshot-spool")
         expect(spool?.state).toBe("ready")
         expect(spool?.bytes).toBe(patchBytes.byteLength)
@@ -385,6 +387,8 @@ describe("CoreSnapshotAcquisition", () => {
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.detail.diffHash).toBeTruthy()
         expect(manifest.detail.title).toBe("Last commit")
+        expect(manifest.detail).not.toHaveProperty("files")
+        expect(manifest).not.toHaveProperty("files")
       }).pipe(Effect.provide(acquisitionLayer(directory, hostedSource({ count: 0 }))))
     }),
   )
@@ -429,6 +433,8 @@ describe("CoreSnapshotAcquisition", () => {
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.detail.target).toBe(comparisonTarget)
         expect(manifest.detail.title).toBe("main...feature")
+        expect(manifest.detail).not.toHaveProperty("files")
+        expect(manifest).not.toHaveProperty("files")
       }).pipe(Effect.provide(acquisitionLayer(directory, hostedSource({ count: 0 }))))
     }),
   )

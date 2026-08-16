@@ -30,6 +30,15 @@ export const toPublicIpcError = <A>(error: A, operation: string) => {
         operation,
       ),
     ),
+    Match.when(
+      Schema.is(
+        Schema.Struct({
+          code: Schema.String,
+          safeMessage: Schema.String,
+        }),
+      ),
+      (failure) => transportError(failure.code, failure.safeMessage, operation),
+    ),
     Match.orElse((value) => {
       const domainFailure = safeDomainFailure(value)
       return domainFailure === null

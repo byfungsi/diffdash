@@ -215,14 +215,9 @@ Updater, window, dialog, shell, IPC sender validation, and renderer transport re
 FUN-254 continues with renderer-visible replay and cross-process diagnostics without moving
 orchestration back into Electron.
 
-The remaining Electron imports of Core-owned error types are temporary transport adapters with
-explicit migration owners:
-
-| Electron adapter | Migration owner |
-| --- | --- |
-| `ipc/walkthrough-public-error.ts` | FUN-254 moves walkthrough failure classification and diagnostics behind the durable Core operation boundary |
-| `ipc/review-thread-public-error.ts` | FUN-215 moves review-thread failure envelopes behind external Core RPC during atomic cutover |
-| `ipc/public-error.ts` | FUN-215 moves remaining domain-to-transport failure envelopes behind external Core RPC during atomic cutover |
+Core classifies business failures before they cross RPC. Electron's generic IPC projection consumes
+only bounded source-safe `code` and `safeMessage` fields; it does not import provider, agent, or
+persistence failures or reconstruct business state.
 
 See [Git provider authoring](git-provider-authoring.md) and
 [agent provider authoring](agent-provider-authoring.md) for extension contracts.

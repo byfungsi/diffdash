@@ -211,6 +211,7 @@ export const coreProgressiveReviewRpcHandlersLayer = CoreProgressiveReviewRpcs.t
             identity: request.identity,
             file: reviewFile(target.file),
             blockOrdinal: target.blockOrdinal,
+            firstLine: target.blockFirstLine,
             line: target.line,
           })),
           Effect.mapError((error) =>

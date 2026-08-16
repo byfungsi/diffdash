@@ -14,7 +14,6 @@ import {
   HostedRepositoryName,
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
@@ -237,17 +236,6 @@ export const createFixtureGitProvider = (
         close: Effect.void,
       }
     }),
-    getReviewDiff: (locator) =>
-      requireReview(locator, "getReviewDiff").pipe(
-        Effect.as(
-          HostedReviewDiff.make({
-            locator: review,
-            headRevision,
-            diff: diffText,
-            fetchedAt: "2026-07-16T01:00:00.000Z",
-          }),
-        ),
-      ),
     getReviewDecision: (locator) =>
       requireReview(locator, "getReviewDecision").pipe(Effect.as("none" as const)),
     submitReviewDecision: () =>

@@ -83,7 +83,6 @@ const unusedApplicationMethods: Omit<
   listRepositoryComparisonViewedFiles: unused,
   setRepositoryComparisonViewedFile: unused,
   cancelWalkthrough: () => Effect.die("Not used by bootstrap tests."),
-  getReviewAgentOperation: () => Effect.die("Not used by bootstrap tests."),
   getStoredWalkthrough: () => Effect.die("Not used by bootstrap tests."),
   getWalkthroughOperation: () => Effect.die("Not used by bootstrap tests."),
   shutdown: () => Effect.die("Not used by bootstrap tests."),
