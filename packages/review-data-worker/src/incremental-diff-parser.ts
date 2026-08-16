@@ -131,7 +131,6 @@ export class IncrementalUnifiedDiffParser {
   readonly #decoder = new TextDecoder("utf-8", { fatal: true })
   readonly #limits: { readonly maxChunkBytes: number; readonly maxLineBytes: number }
   #pending = ""
-  #pendingEndedAtNewline = false
   #file: DraftFile | null = null
   #hunk: DraftHunk | null = null
   #nextFileOrdinal = 0
@@ -168,7 +167,6 @@ export class IncrementalUnifiedDiffParser {
       return this.#failure("invalidUtf8", 0, chunk.byteLength)
     }
     this.#pending += text
-    this.#pendingEndedAtNewline = this.#pending.endsWith("\n")
     let newline = this.#pending.indexOf("\n")
     while (newline >= 0) {
       const line = this.#pending.slice(0, newline)
@@ -201,7 +199,7 @@ export class IncrementalUnifiedDiffParser {
         this.#limits.maxLineBytes,
         encoder.encode(this.#pending).byteLength,
       )
-    if (this.#pending.length > 0 || this.#pendingEndedAtNewline) {
+    if (this.#pending.length > 0) {
       const lineError = this.#acceptLine(this.#pending)
       if (lineError !== null) return lineError
     }

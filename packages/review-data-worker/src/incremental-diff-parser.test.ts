@@ -56,6 +56,26 @@ diff --git a/next.txt b/next.txt
 `
 
 describe("IncrementalUnifiedDiffParser", () => {
+  it("does not synthesize an empty hunk line after a trailing newline", () => {
+    const parser = new IncrementalUnifiedDiffParser()
+    const accepted = parser.accept(
+      new TextEncoder().encode(
+        "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+      ),
+    )
+    const finished = parser.finish()
+    expect(accepted._tag).toBe("Success")
+    expect(finished._tag).toBe("Success")
+    if (accepted._tag === "Failure" || finished._tag === "Failure") return
+    const parsedEvents = [...accepted.batches, ...finished.batches].flatMap(
+      ({ events: batchEvents }) => batchEvents,
+    )
+    const lines = parsedEvents.filter((event) => event._tag === "HunkLine")
+    const closed = parsedEvents.find((event) => event._tag === "HunkClosed")
+    expect(lines.map(({ line }) => line)).toEqual(["-old", "+new"])
+    expect(closed?._tag === "HunkClosed" ? closed.lineCount : null).toBe(2)
+  })
+
   it("matches the v1 semantic corpus and identities at every byte split point", () => {
     const bytes = new TextEncoder().encode(corpus)
     const expected = parseUnifiedDiff(corpus)
