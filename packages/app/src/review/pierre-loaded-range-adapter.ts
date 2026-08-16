@@ -5,8 +5,9 @@ import type {
   PostRenderPhase,
   RenderRange,
   SelectionSide,
+  VirtualFileMetrics,
 } from "./pierre"
-import { PierreRangeFileDiff } from "./pierre"
+import { type DiffVirtualizer, PierreRangeFileDiff, VirtualizedFileDiff } from "./pierre"
 import type { ReviewCacheResource } from "./review-global-virtualizer"
 import { ReviewRendererCaches, ReviewShellPool } from "./review-global-virtualizer"
 
@@ -53,6 +54,13 @@ export type PierreRangePublication<Annotation> = {
   readonly renderer: PierreLoadedRangeRenderer<Annotation>
 }
 
+/** Optional production virtualization dependencies shared by every pooled range shell. */
+export type PierreRangeVirtualization = {
+  readonly virtualizer: DiffVirtualizer
+  readonly metrics: Partial<VirtualFileMetrics>
+  readonly workerManager?: ConstructorParameters<typeof VirtualizedFileDiff>[3]
+}
+
 /** Accounted host resources created by the adapter rather than the range loader. */
 export type PierreShellResourceBytes = {
   readonly domContainer: number
@@ -75,34 +83,57 @@ export type PierreRangeShell<Annotation> = {
 
 /** Public-Pierre-API renderer for one already-loaded bounded range. */
 export class PierreLoadedRangeRenderer<Annotation> {
-  private instance: PierreRangeFileDiff<Annotation> | null = null
+  private instance: PierreRangeFileDiff<Annotation> | VirtualizedFileDiff<Annotation> | null = null
+  private virtualizedInstance: VirtualizedFileDiff<Annotation> | null = null
   private observer: ResizeObserver | null = null
   private lastHeight = 0
   private onHeightDelta: ((delta: number, height: number) => void) | null = null
 
-  constructor(readonly container: HTMLElement) {}
+  constructor(
+    readonly container: HTMLElement,
+    private readonly virtualization?: PierreRangeVirtualization,
+  ) {}
 
   /** Renders plain text synchronously and starts measured-height feedback. */
   renderPlain(
     range: PierreLoadedRange<Annotation>,
     options: FileDiffOptions<Annotation>,
     onHeightDelta: (delta: number, height: number) => void,
-  ): PierreRangeFileDiff<Annotation> {
+  ): PierreRangeFileDiff<Annotation> | VirtualizedFileDiff<Annotation> {
     this.reset()
     this.onHeightDelta = onHeightDelta
-    const instance = new PierreRangeFileDiff<Annotation>({
+    const resolvedOptions = {
       ...options,
       diffStyle: range.identity.mode,
       tokenizeMaxLength: 0,
       onPostRender: this.postRender(options.onPostRender),
-    })
+    }
+    const virtualizedInstance =
+      this.virtualization === undefined
+        ? null
+        : new VirtualizedFileDiff<Annotation>(
+            resolvedOptions,
+            this.virtualization.virtualizer,
+            this.virtualization.metrics,
+            this.virtualization.workerManager,
+          )
+    const instance = virtualizedInstance ?? new PierreRangeFileDiff<Annotation>(resolvedOptions)
     this.instance = instance
-    instance.render({
-      fileContainer: this.container,
-      fileDiff: range.fileDiff,
-      lineAnnotations: [...range.annotations],
-      renderRange: range.renderRange,
-    })
+    this.virtualizedInstance = virtualizedInstance
+    instance.render(
+      virtualizedInstance === null
+        ? {
+            fileContainer: this.container,
+            fileDiff: range.fileDiff,
+            lineAnnotations: [...range.annotations],
+            renderRange: range.renderRange,
+          }
+        : {
+            fileContainer: this.container,
+            fileDiff: range.fileDiff,
+            lineAnnotations: [...range.annotations],
+          },
+    )
     this.observeHeight()
     return instance
   }
@@ -122,17 +153,36 @@ export class PierreLoadedRangeRenderer<Annotation> {
     })
     await instance.primeHighlightCache(range.fileDiff)
     if (instance !== this.instance || !isCurrent()) return false
-    instance.render({
-      fileDiff: range.fileDiff,
-      lineAnnotations: [...range.annotations],
-      renderRange: range.renderRange,
-    })
+    instance.render(
+      this.virtualizedInstance === null
+        ? {
+            fileDiff: range.fileDiff,
+            lineAnnotations: [...range.annotations],
+            renderRange: range.renderRange,
+          }
+        : {
+            fileDiff: range.fileDiff,
+            lineAnnotations: [...range.annotations],
+          },
+    )
     return true
   }
 
   /** Resolves source coordinates through Pierre's documented semantic lookup. */
   getLineIndex(lineNumber: number, side: SelectionSide): readonly number[] | undefined {
     return this.instance?.getLineIndex(lineNumber, side)
+  }
+
+  /** Returns the live virtualized instance when this shell participates in viewport navigation. */
+  getVirtualizedInstance(): VirtualizedFileDiff<Annotation> | null {
+    return this.virtualizedInstance
+  }
+
+  /** Activates a virtualized shell after its pooled container enters the live scroll surface. */
+  activateVirtualized(): void {
+    const instance = this.virtualizedInstance
+    if (instance === null) return
+    instance.setVisibility(true)
   }
 
   /** Disconnects measured-height observation without otherwise changing the shell. */
@@ -153,6 +203,7 @@ export class PierreLoadedRangeRenderer<Annotation> {
     this.releaseMeasurement()
     this.instance?.cleanUp()
     this.instance = null
+    this.virtualizedInstance = null
     this.container.replaceChildren()
     for (const attribute of Array.from(this.container.attributes)) {
       if (attribute.name !== "class") this.container.removeAttribute(attribute.name)
@@ -189,11 +240,15 @@ export class PierreLoadedRangeRenderer<Annotation> {
 /** Creates a bounded pool whose reset contract removes all Pierre and host state. */
 export const createPierreRangeShellPool = <Annotation>(
   maximum: number,
+  virtualization?: PierreRangeVirtualization,
 ): ReviewShellPool<PierreRangeShell<Annotation>> =>
   new ReviewShellPool<PierreRangeShell<Annotation>>(maximum, {
     create: (): PierreRangeShell<Annotation> => {
-      const container = document.createElement("div")
-      return { container, renderer: new PierreLoadedRangeRenderer<Annotation>(container) }
+      const container = document.createElement("diffs-container")
+      return {
+        container,
+        renderer: new PierreLoadedRangeRenderer<Annotation>(container, virtualization),
+      }
     },
     reset: (shell) => shell.renderer.reset(),
     destroy: (shell) => {
@@ -322,6 +377,7 @@ export class PierreLoadedRangeAdapter<Annotation> {
     if (!active.active || !this.isCurrent(operation, request.identity, plain.identity)) return
     this.current = active
     this.callbacks.onPublish({ phase: "plain", range: plain, ...shell })
+    shell.renderer.activateVirtualized()
     if (previous !== null && previous.cacheKey !== active.cacheKey) {
       this.caches.delete(previous.cacheKey)
     }

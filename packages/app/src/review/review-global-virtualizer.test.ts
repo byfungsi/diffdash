@@ -39,6 +39,9 @@ describe("ReviewGlobalVirtualizer", () => {
     expect(layout.heightOf(3)).toBe(50_000_000)
     expect(final.physicalTop).toBeLessThan(10_000_000)
     expect(final.pageOrigin + final.physicalTop).toBe(final.logicalTop)
+    const finalWindow = virtualizer.window(final.logicalTop, 800, 1_200)
+    expect([...finalWindow.files]).toContain(3)
+    expect(finalWindow.mountedRows).toBeLessThanOrEqual(1_000)
   })
 
   it("keeps inverse-sticky content stable and preserves semantic anchors on reflow", () => {

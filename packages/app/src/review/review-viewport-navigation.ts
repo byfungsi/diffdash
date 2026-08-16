@@ -37,6 +37,7 @@ export interface ReviewDiffRegistration {
   readonly generation: number
   readonly host: HTMLElement
   readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
+  readonly reviewKey: string
   readonly rendered: boolean
 }
 
@@ -87,6 +88,11 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     { readonly generation: number; readonly passes: number }
   >()
   #bindings: ReviewViewportNavigationBindings | null = null
+  #focusedNavigation: {
+    readonly expiresAt: number
+    readonly input: ReviewNavigationInput
+    readonly target: LocalResolvedReviewNavigationTarget
+  } | null = null
 
   constructor(anchors: ReviewNavigationAnchorRegistry) {
     this.#anchors = anchors
@@ -95,6 +101,27 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   /** Replaces render-owned bindings without replacing the bridge or its epoch. */
   readonly update = (bindings: ReviewViewportNavigationBindings) => {
     this.#bindings = bindings
+  }
+
+  /** Restores navigation-owned focus after Pierre republishes its active range shell. */
+  readonly reconcileRenderedFocus = (reviewKey: string) => {
+    const navigation = this.#focusedNavigation
+    if (navigation === null || navigation.target.file.reviewKey !== reviewKey) return
+    if (performance.now() > navigation.expiresAt) {
+      this.#focusedNavigation = null
+      return
+    }
+    window.requestAnimationFrame(() => {
+      const anchor = this.#mountContentAnchor(navigation.target)
+      if (anchor === null) return
+      this.#align(
+        anchor,
+        navigation.input.behavior.alignment,
+        this.#targetStickyHeight(navigation.target),
+      )
+      if (deepActiveElement() !== document.body) return
+      anchor.focus?.()
+    })
   }
 
   /** Resolves a semantic target strictly inside the active manifest. */
@@ -306,7 +333,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       this.#throwIfAborted(signal)
       const mounted = this.#mountContentAnchor(resolved)
       if (mounted !== null) {
-        this.#reconciliations.delete(resolved.anchorKey)
         const release = this.#anchors.registerAnchor(resolved.anchorKey, mounted)
         const anchor = this.#anchors.getAnchor(resolved.anchorKey)
         if (anchor !== null) {
@@ -387,7 +413,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         currentAnchor = await this.waitForAnchor(resolved, signal)
         await this.position(currentAnchor, input, signal)
         if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
-        stableFrames = 0
         continue
       }
       const stickyHeight = this.#targetStickyHeight(resolved)
@@ -404,11 +429,21 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
       await nextFrame(signal)
+      if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
+        stableFrames = STABLE_FRAME_COUNT - 1
+      }
     }
     if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
       currentAnchor.focus?.()
+      this.#focusedNavigation = {
+        expiresAt: performance.now() + 2_000,
+        input,
+        target: resolved,
+      }
       refocusAfterLayout(currentAnchor, 3)
     }
+    this.#current().searchHighlights.refresh()
+    this.#reconciliations.delete(resolved.anchorKey)
   }
 
   readonly #validateParsedTarget = (
@@ -487,6 +522,21 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       point.side === "old" ? "deletions" : "additions",
     )
     if (line === null) return null
+    const resolveRegistration = () => {
+      const current = this.#current().diffRegistrations.get(resolved.file.reviewKey)
+      return current !== undefined && current.rendered && current.host.isConnected ? current : null
+    }
+    const resolveLine = () => {
+      const current = resolveRegistration()
+      return current === null
+        ? null
+        : findRenderedDiffLine(
+            current.host,
+            current.instance,
+            point.lineNumber,
+            point.side === "old" ? "deletions" : "additions",
+          )
+    }
 
     if (
       Match.valueTags(resolved.target, {
@@ -498,23 +548,34 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         range: () => false,
       })
     ) {
-      const card = registration.host.closest<HTMLElement>("[data-review-file-id]")
-      const panel =
-        card === null
+      const resolvePanel = () => {
+        const card =
+          resolveRegistration()?.host.closest<HTMLElement>("[data-review-file-id]") ?? null
+        return card === null
           ? null
           : ([...card.querySelectorAll<HTMLElement>("[data-review-thread-id]")].find(
               (candidate) => candidate.dataset.reviewThreadId === resolved.threadId,
             ) ?? null)
+      }
+      const panel = resolvePanel()
       if (panel === null) return null
       return {
-        measure: () => line.getBoundingClientRect(),
-        focus: () => focusThreadPanel(panel),
-        ownsFocus: (active) => active !== null && (active === panel || panel.contains(active)),
-        isConnected: () => line.isConnected && panel.isConnected,
+        measure: () => (resolveLine() ?? line).getBoundingClientRect(),
+        focus: () => {
+          const current = resolvePanel()
+          return current !== null && focusThreadPanel(current)
+        },
+        ownsFocus: (active) => {
+          const current = resolvePanel()
+          return (
+            active !== null && current !== null && (active === current || current.contains(active))
+          )
+        },
+        isConnected: () => resolveLine() !== null && resolvePanel() !== null,
       }
     }
 
-    return focusableAnchor(line)
+    return resolvingFocusableAnchor(resolveLine, line)
   }
 
   readonly #primeContentAnchor = (resolved: LocalResolvedReviewNavigationTarget) => {
@@ -549,17 +610,16 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const container = this.#container()
       const stickyHeight = this.#targetStickyHeight(resolved)
       const viewportHeight = Math.max(1, container.clientHeight - stickyHeight)
-      const top =
-        bindings.diffVirtualizer.getOffsetInScrollContainer(
-          searchPosition?.host ?? registration.host,
-        ) +
-        position.top -
-        stickyHeight -
-        (viewportHeight - position.height) / 2
+      const positionHost = searchPosition?.host ?? registration.host
+      const hostTop =
+        positionHost.getBoundingClientRect().top -
+        container.getBoundingClientRect().top +
+        container.scrollTop
+      const top = hostTop + position.top - stickyHeight - (viewportHeight - position.height) / 2
       setProgrammaticScrollTop(container, top)
     }
     const reconciliation = this.#reconciliations.get(resolved.anchorKey)
-    if (reconciliation === undefined || reconciliation.passes < 3) {
+    if (reconciliation === undefined || reconciliation.passes < 1) {
       const generation = bindings.requestReconciliation(resolved.file.reviewKey)
       if (generation !== null) {
         this.#reconciliations.set(resolved.anchorKey, {
@@ -632,7 +692,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   }
 
   readonly #align = (
-    anchor: MountedReviewAnchor,
+    anchor: Pick<MountedReviewAnchor, "measure">,
     alignment: ReviewNavigationInput["behavior"]["alignment"],
     stickyHeight: number,
   ) => {
@@ -812,20 +872,29 @@ const resolvedPoint = (
   }
 }
 
-const focusableAnchor = (
-  element: HTMLElement,
-  measure: () => DOMRect | null = () => element.getBoundingClientRect(),
-): Omit<MountedReviewAnchor, "generation"> => ({
-  measure: () => measure() ?? element.getBoundingClientRect(),
-  focus: () => {
-    if (!element.isConnected || element.getClientRects().length === 0) return false
-    element.tabIndex = -1
-    element.focus({ preventScroll: true })
-    return deepActiveElement() === element
-  },
-  ownsFocus: (active) => active === element,
-  isConnected: () => element.isConnected,
-})
+const resolvingFocusableAnchor = (
+  resolve: () => HTMLElement | null,
+  initial: HTMLElement,
+): Omit<MountedReviewAnchor, "generation"> => {
+  let last = initial
+  const current = () => {
+    const resolved = resolve()
+    if (resolved !== null) last = resolved
+    return resolved
+  }
+  return {
+    measure: () => (current() ?? last).getBoundingClientRect(),
+    focus: () => {
+      const element = current()
+      if (element === null || element.getClientRects().length === 0) return false
+      element.tabIndex = -1
+      element.focus({ preventScroll: true })
+      return deepActiveElement() === element
+    },
+    ownsFocus: (active) => active !== null && active === current(),
+    isConnected: () => current() !== null,
+  }
+}
 
 const focusThreadPanel = (panel: HTMLElement) => {
   const endpoint =
@@ -886,8 +955,7 @@ const nextFrame = (signal: AbortSignal) =>
 const refocusAfterLayout = (anchor: MountedReviewAnchor, remainingFrames: number): void => {
   if (remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
-    if (!anchor.isConnected()) return
-    anchor.focus?.()
+    if (anchor.isConnected()) anchor.focus?.()
     refocusAfterLayout(anchor, remainingFrames - 1)
   })
 }

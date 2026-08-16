@@ -87,6 +87,11 @@ export class ReviewSearchHighlightManager {
     }
 
     if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
+    this.registrations.forEach((registration, registeredReviewKey) => {
+      if (registeredReviewKey !== reviewKey && registration.host === host) {
+        this.registrations.delete(registeredReviewKey)
+      }
+    })
     this.registrations.set(reviewKey, { host, instance })
     this.scheduleRebuild()
   }
@@ -122,6 +127,11 @@ export class ReviewSearchHighlightManager {
   /** Returns the mounted Pierre row containing the active substring. */
   getActiveMatchElement(): HTMLElement | null {
     return this.activeElement?.isConnected === true ? this.activeElement : null
+  }
+
+  /** Rebuilds search ranges after imperative navigation settles a virtualized row. */
+  refresh(): void {
+    this.scheduleRebuild()
   }
 
   /** Removes all registered hosts and document-level highlight ranges. */

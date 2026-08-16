@@ -1,7 +1,10 @@
 import type {
   ProgressiveReviewApi,
+  ReviewSessionRange,
   ReviewSessionRangeRequest,
 } from "@diffdash/protocol/review-session"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import type { ParsedDiffFile } from "@diffdash/domain/diff"
 
 import type { PierreLoadedRange, PierreRangeIdentity } from "./pierre-loaded-range-adapter"
 import { getSingularPatch } from "./pierre"
@@ -17,13 +20,24 @@ export const loadProgressivePierreRange = async <Annotation>(
   if (signal.aborted) throw signal.reason
   const range = await (wait ? api.waitForRange(request) : api.readRange(request))
   if (signal.aborted) throw signal.reason
+  return progressivePierreRange(identity, range)
+}
+
+/** Translates one already-loaded legal range without joining any other file content. */
+export const progressivePierreRange = <Annotation>(
+  identity: PierreRangeIdentity,
+  range: ReviewSessionRange,
+): PierreLoadedRange<Annotation> => {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const content = range.blocks.map((block) => decoder.decode(block.bytes)).join("")
   const path = range.file.path
   const patch = content.startsWith("diff --git ")
     ? content
     : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${content}`
-  const fileDiff = getSingularPatch(patch)
+  const fileDiff = {
+    ...getSingularPatch(patch),
+    cacheKey: `${identity.snapshotGeneration}:${identity.rangeKey}`,
+  }
   const totalLines = identity.mode === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount
   return {
     identity,
@@ -35,6 +49,19 @@ export const loadProgressivePierreRange = async <Annotation>(
       bufferAfter: 0,
     },
     annotations: [],
-    resources: [],
+    resources: [{ kind: "text", bytes: range.byteCount, release: () => undefined }],
   }
+}
+
+/** Parses only the legal bounded range currently owned by a Pierre shell. */
+export const parseProgressiveRangeFile = (range: ReviewSessionRange): ParsedDiffFile => {
+  const decoder = new TextDecoder("utf-8", { fatal: true })
+  const content = range.blocks.map((block) => decoder.decode(block.bytes)).join("")
+  const path = range.file.path
+  const patch = content.startsWith("diff --git ")
+    ? content
+    : `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${content}`
+  const file = parseUnifiedDiff(patch).files[0]
+  if (file === undefined) throw new Error(`Bounded range for ${path} did not contain a diff file`)
+  return file
 }

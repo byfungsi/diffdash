@@ -108,7 +108,8 @@ describe("createProgressiveReviewApi", () => {
       readRange: async () => success({ identity, file, blocks: [], byteCount: 0, complete: true }),
       waitForRange: async () =>
         success({ identity, file, blocks: [], byteCount: 0, complete: true }),
-      resolveTarget: async () => success({ identity, file, blockOrdinal: 0, line: 1 }),
+      resolveTarget: async () =>
+        success({ identity, file, blockOrdinal: 0, firstLine: 0, line: 1 }),
       search: async (_request, onPublication) => {
         onPublication(publication)
         return success(undefined)
@@ -142,7 +143,7 @@ describe("createProgressiveReviewApi", () => {
         fileId: file.fileId,
         target: { _tag: "HunkLine", hunkId: null, line: 1 },
       }),
-    ).toEqual({ identity, file, blockOrdinal: 0, line: 1 })
+    ).toEqual({ identity, file, blockOrdinal: 0, firstLine: 0, line: 1 })
     const publications: unknown[] = []
     await api.search(
       {

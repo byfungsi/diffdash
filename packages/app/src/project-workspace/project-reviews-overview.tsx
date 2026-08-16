@@ -152,7 +152,7 @@ const renderLocalOverview = (
     ready: ({ data }) => (
       <OverviewStatus
         actions={openAction}
-        text={`${data.files.length} changed file${data.files.length === 1 ? "" : "s"}.`}
+        text={`${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}.`}
       />
     ),
     empty: () => <OverviewStatus actions={openAction} text="Working tree clean." />,
@@ -164,13 +164,13 @@ const renderLocalOverview = (
       />
     ),
     stale: ({ data, reason }) => (
-      <OverviewStatus actions={openAction} text={`${data.files.length} changed files. ${reason}`} />
+      <OverviewStatus actions={openAction} text={`${data.fileCount} changed files. ${reason}`} />
     ),
     invalid: ({ reason }) => <OverviewStatus actions={null} text={reason} />,
     degraded: ({ data, issues }) => (
       <OverviewStatus
         actions={openAction}
-        text={`${data.files.length} changed files. ${issues.join(" ")}`}
+        text={`${data.fileCount} changed files. ${issues.join(" ")}`}
       />
     ),
   })

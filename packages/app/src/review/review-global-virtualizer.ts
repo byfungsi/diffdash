@@ -313,7 +313,13 @@ export class ReviewGlobalVirtualizer {
   }
 
   /** Computes a global file window while enforcing the mounted-row ceiling. */
-  window(logicalTop: number, viewportHeight: number, overscan: number): ReviewMountWindow {
+  window(
+    logicalTop: number,
+    viewportHeight: number,
+    overscan: number,
+    priorityFileIndex?: number,
+    forcePriority = false,
+  ): ReviewMountWindow {
     if (this.layout.fileCount === 0) {
       return { files: new Uint32Array(), mountedRows: 0, top: 0, bottom: 0 }
     }
@@ -323,11 +329,44 @@ export class ReviewGlobalVirtualizer {
       logicalTop + viewportHeight + Math.max(0, overscan),
     )
     const first = this.layout.fileAt(top)
+    const firstVisible = this.layout.fileAt(logicalTop)
+    if (
+      forcePriority &&
+      priorityFileIndex !== undefined &&
+      priorityFileIndex >= 0 &&
+      priorityFileIndex < this.layout.fileCount &&
+      (this.layout.topOf(priorityFileIndex) >= bottom ||
+        this.layout.topOf(priorityFileIndex) + this.layout.heightOf(priorityFileIndex) <= top)
+    ) {
+      return {
+        files: Uint32Array.of(priorityFileIndex),
+        mountedRows: Math.min(
+          this.layout.rowCounts[priorityFileIndex] ?? 0,
+          this.maximumMountedRows,
+        ),
+        top,
+        bottom,
+      }
+    }
+    const priorityFile =
+      priorityFileIndex !== undefined &&
+      priorityFileIndex >= first &&
+      priorityFileIndex < this.layout.fileCount &&
+      this.layout.topOf(priorityFileIndex) < bottom &&
+      this.layout.topOf(priorityFileIndex) + this.layout.heightOf(priorityFileIndex) > top
+        ? priorityFileIndex
+        : firstVisible
+    const priorityRows = Math.min(this.layout.rowCounts[priorityFile] ?? 0, this.maximumMountedRows)
     const files: number[] = []
     let rows = 0
     for (let file = first; file < this.layout.fileCount; file += 1) {
       if (this.layout.topOf(file) >= bottom && files.length > 0) break
       const fileRows = this.layout.rowCounts[file] ?? 0
+      if (file < priorityFile && rows + fileRows > this.maximumMountedRows - priorityRows) {
+        files.length = 0
+        rows = 0
+        continue
+      }
       if (files.length > 0 && rows + fileRows > this.maximumMountedRows) break
       files.push(file)
       rows += Math.min(fileRows, this.maximumMountedRows - rows)
