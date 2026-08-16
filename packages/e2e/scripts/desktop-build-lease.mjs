@@ -17,7 +17,8 @@ export const withDesktopBuildLease = async (operation) => {
   const token = randomUUID()
   const deadline = Date.now() + timeoutMilliseconds
   while (!(await tryAcquire(token))) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for the Desktop E2E build lease.")
+    if (Date.now() >= deadline)
+      throw new Error("Timed out waiting for the Desktop E2E build lease.")
     await new Promise((resolvePromise) => setTimeout(resolvePromise, retryMilliseconds))
   }
 
@@ -67,7 +68,8 @@ const tryAcquire = async (token) => {
 const ownerIsAlive = async () => {
   try {
     const owner = JSON.parse(await readFile(ownerPath, "utf8"))
-    if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0) return false
+    if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid) || owner.pid <= 0)
+      return false
     process.kill(owner.pid, 0)
     return true
   } catch (error) {
