@@ -66,6 +66,14 @@ test("generates every scale scenario without network access", async (context) =>
     "revisionChange",
     "wrappedLine",
   ])
+  const { stdout: origin } = await git(
+    result.repository,
+    "config",
+    "--local",
+    "--get",
+    "remote.origin.url",
+  )
+  assert.equal(origin.trim(), "https://github.com/diffdash/repository-scale-fixture.git")
   const { stdout: numstat } = await git(
     result.repository,
     "diff",

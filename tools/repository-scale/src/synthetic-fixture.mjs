@@ -184,6 +184,12 @@ export const generateSyntheticFixture = async ({ directory, profile = repository
   await rm(repository, { recursive: true, force: true })
   await mkdir(repository, { recursive: true })
   await runGit(repository, ["init", "--quiet", "--initial-branch=main"])
+  await runGit(repository, [
+    "remote",
+    "add",
+    "origin",
+    "https://github.com/diffdash/repository-scale-fixture.git",
+  ])
   await writeScenarioBase(repository)
   await runGit(repository, ["add", "--all"])
   await runGit(repository, ["commit", "--quiet", "-m", "fixture base"])
