@@ -26,13 +26,9 @@ import {
   NoAgentProviderAvailableError,
   type ResolvedWalkthroughCandidate,
 } from "@diffdash/agent-provider/registry"
-import { LocalReviewDetail } from "@diffdash/domain/local-review"
 import type { AIAgentSelection } from "@diffdash/domain/ai-settings"
-import { type ChangedFile, HostedReviewDetail, ReviewCommit } from "@diffdash/domain/git-provider"
-import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import { RepositoryComparisonDetail } from "@diffdash/domain/repository-comparison"
-import { ReviewRevision } from "@diffdash/domain/review-identity"
 import {
+  DEFAULT_WALKTHROUGH_PROMPT_BUDGET,
   Walkthrough,
   WalkthroughChapterId,
   WalkthroughGenerationDetails,
@@ -46,7 +42,17 @@ import {
   validateWalkthrough,
   WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
+import { ReviewPromptFile, ReviewPromptIdentity } from "./review-prompt-context"
+export { ReviewPromptFile, ReviewPromptIdentity } from "./review-prompt-context"
 const WALKTHROUGH_GENERATION_TIMEOUT_MS = 10 * 60 * 1_000
+
+/** Hard limits inherited from bounded walkthrough preparation and persisted tree summaries. */
+export const WALKTHROUGH_PROMPT_CONTEXT_LIMITS = {
+  maxDiffChars: DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxDiffChars,
+  maxFiles: DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxFiles,
+  maxHunks: DEFAULT_WALKTHROUGH_PROMPT_BUDGET.maxHunks,
+  maxChangedFileTreeChars: 60_000,
+} as const
 
 /** Settings needed to route one walkthrough without knowing concrete providers. */
 export interface WalkthroughRouteSelection {
@@ -89,37 +95,29 @@ export const WALKTHROUGH_EXECUTION_POLICY = AgentExecutionPolicy.make({
   allowedMcpTools: [],
 })
 
-const HostedWalkthroughReviewContext = Schema.Struct({
-  kind: Schema.Literal("hosted"),
-  hostedReview: HostedReviewDetail,
+/** Durable metadata and bounded, already-selected file inventory for walkthrough prompts. */
+export const WalkthroughReviewContext = Schema.Struct({
+  review: ReviewPromptIdentity,
+  files: Schema.Array(ReviewPromptFile).pipe(
+    Schema.check(Schema.isMaxLength(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxFiles)),
+  ),
 })
 
-const LocalDiffWalkthroughReviewContext = Schema.Struct({
-  kind: Schema.Literal("localDiff"),
-  localReview: LocalReviewDetail,
-})
-
-const RepositoryComparisonWalkthroughReviewContext = Schema.Struct({
-  kind: Schema.Literal("repositoryComparison"),
-  comparison: RepositoryComparisonDetail,
-})
-
-/** Review metadata variants supported by walkthrough generation. */
-export const WalkthroughReviewContext = Schema.Union([
-  HostedWalkthroughReviewContext,
-  LocalDiffWalkthroughReviewContext,
-  RepositoryComparisonWalkthroughReviewContext,
-])
-
-/** Review metadata variants supported by walkthrough generation. */
+/** Durable metadata and bounded, already-selected file inventory for walkthrough prompts. */
 export type WalkthroughReviewContext = typeof WalkthroughReviewContext.Type
 
 /** Input required to generate a reviewer-oriented walkthrough for a review diff. */
 export const WalkthroughGenerationInput = Schema.Struct({
   review: WalkthroughReviewContext,
-  diff: Schema.String,
-  hunkDigest: Schema.Array(WalkthroughHunkDigest),
-  changedFileTree: Schema.String,
+  diff: Schema.String.pipe(
+    Schema.check(Schema.isMaxLength(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxDiffChars)),
+  ),
+  hunkDigest: Schema.Array(WalkthroughHunkDigest).pipe(
+    Schema.check(Schema.isMaxLength(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxHunks)),
+  ),
+  changedFileTree: Schema.String.pipe(
+    Schema.check(Schema.isMaxLength(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxChangedFileTreeChars)),
+  ),
   generation: WalkthroughGenerationDetails,
   promptStats: Schema.OptionFromOptional(WalkthroughPromptStats),
   workingDirectory: Schema.OptionFromOptional(Schema.String),
@@ -274,7 +272,11 @@ const walkthroughWorkingDirectory = (
   explicitWorkingDirectory: Option.Option<string>,
 ): string =>
   Option.getOrElse(explicitWorkingDirectory, () =>
-    review.kind === "localDiff" ? review.localReview.rootPath : remoteWorkingDirectory,
+    Match.valueTags(review.review.descriptor, {
+      hosted: () => remoteWorkingDirectory,
+      local: (descriptor) => descriptor.target.rootPath,
+      repositoryComparison: () => remoteWorkingDirectory,
+    }),
   )
 
 type Registry = Context.Service.Shape<typeof AgentProviderRegistry>
@@ -674,27 +676,6 @@ const WalkthroughPromptReviewFile = EncodedWalkthroughPromptReviewFile.pipe(
   ),
 )
 
-const EncodedWalkthroughPromptCommit = Schema.Struct({
-  oid: ReviewRevision,
-  msg: Schema.String,
-  date: Schema.NullOr(Schema.String),
-})
-
-const WalkthroughPromptCommit = EncodedWalkthroughPromptCommit.pipe(
-  Schema.decodeTo(
-    Schema.toType(ReviewCommit),
-    SchemaTransformation.transform({
-      decode: ({ oid, msg, date }) =>
-        ReviewCommit.make({ revision: oid, title: msg, authoredAt: date }),
-      encode: ({ revision, title, authoredAt }) => ({
-        oid: revision,
-        msg: title,
-        date: authoredAt,
-      }),
-    }),
-  ),
-)
-
 const LocalWalkthroughPromptReview = Schema.Struct({
   type: Schema.Literal("local-diff"),
   title: Schema.String,
@@ -729,13 +710,11 @@ const HostedWalkthroughPromptReview = Schema.Struct({
   repository: Schema.String,
   n: Schema.Number,
   title: Schema.String,
-  body: Schema.NullOr(Schema.String),
   author: Schema.String,
   base: Schema.String,
   baseSha: Schema.NullOr(Schema.String),
   head: Schema.String,
   headSha: Schema.NullOr(Schema.String),
-  commits: Schema.Array(WalkthroughPromptCommit),
   files: Schema.Array(WalkthroughPromptReviewFile),
 })
 
@@ -756,63 +735,62 @@ const walkthroughReviewPayload = (
   review: WalkthroughReviewContext,
   hunkDigest: readonly WalkthroughHunkDigest[],
 ): typeof WalkthroughPromptReview.Type => {
-  switch (review.kind) {
-    case "localDiff":
-      return LocalWalkthroughPromptReview.make({
+  const identity = review.review
+  return Match.valueTags(identity.descriptor, {
+    local: (descriptor) =>
+      LocalWalkthroughPromptReview.make({
         type: "local-diff",
-        title: review.localReview.title,
-        repo: review.localReview.repoName,
-        root: review.localReview.rootPath,
-        branch: review.localReview.branchName,
-        base: review.localReview.baseSha,
-        head: review.localReview.headSha,
-        files: walkthroughPromptReviewFiles(review.localReview.files, hunkDigest),
-      })
-    case "repositoryComparison": {
-      const target = review.comparison.target
+        title: descriptor.title,
+        repo: descriptor.repoName,
+        root: descriptor.target.rootPath,
+        branch: descriptor.branchName,
+        base: identity.baseRevision,
+        head: identity.headRevision,
+        files: walkthroughPromptReviewFiles(review.files, hunkDigest),
+      }),
+    repositoryComparison: (descriptor) => {
+      const target = descriptor.target
       return RepositoryComparisonWalkthroughPromptReview.make({
         type: "repository-comparison",
         context: "diff-only",
         provider: target.repository.providerId,
         namespace: target.repository.namespace,
         repository: target.repository.name,
-        title: review.comparison.title,
+        title: descriptor.title,
         base: target.baseRef,
         baseSha: target.baseSha,
         mergeBaseSha: target.mergeBaseSha,
         head: target.headRef,
         headSha: target.headSha,
-        files: walkthroughPromptReviewFiles(review.comparison.files, hunkDigest),
+        files: walkthroughPromptReviewFiles(review.files, hunkDigest),
       })
-    }
-    case "hosted": {
-      const summary = review.hostedReview.summary
+    },
+    hosted: (descriptor) => {
+      const target = descriptor.review
       return HostedWalkthroughPromptReview.make({
         type: "hosted-review",
         context: "diff-only",
-        provider: summary.locator.repository.providerId,
-        namespace: summary.locator.repository.namespace,
-        repository: summary.locator.repository.name,
-        n: summary.locator.number,
-        title: summary.title,
-        body: summary.body,
-        author: summary.author.username,
-        base: summary.base.name,
-        baseSha: summary.base.revision,
-        head: summary.head.name,
-        headSha: summary.head.revision,
-        commits: review.hostedReview.commits,
-        files: walkthroughPromptReviewFiles(review.hostedReview.files, hunkDigest),
+        provider: target.repository.providerId,
+        namespace: target.repository.namespace,
+        repository: target.repository.name,
+        n: target.number,
+        title: descriptor.title,
+        author: descriptor.authorUsername,
+        base: descriptor.baseRef,
+        baseSha: identity.baseRevision,
+        head: descriptor.headRef,
+        headSha: identity.headRevision,
+        files: walkthroughPromptReviewFiles(review.files, hunkDigest),
       })
-    }
-  }
+    },
+  })
 }
 
 const walkthroughPromptReviewFiles = (
-  files: readonly ChangedFile[],
+  files: readonly ReviewPromptFile[],
   hunkDigest: readonly WalkthroughHunkDigest[],
 ) => {
-  const totalsByPath = new Map<RepositoryRelativePath, { additions: number; deletions: number }>()
+  const totalsByPath = new Map<ReviewPromptFile["path"], { additions: number; deletions: number }>()
   const fileByPath = new Map(files.map((file) => [file.path, file]))
 
   for (const hunk of hunkDigest) {
@@ -832,7 +810,7 @@ const walkthroughPromptReviewFiles = (
       deletions: totals.deletions,
       path,
       changeType: Option.getOrElse(
-        Option.map(Option.fromUndefinedOr(fileByPath.get(path)), (file) => file.changeType),
+        Option.map(Option.fromUndefinedOr(fileByPath.get(path)), (file) => file.status),
         () => "modified",
       ),
     }

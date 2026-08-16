@@ -1,20 +1,17 @@
-import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import {
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA,
   type ReviewAgentArtifact,
   type ReviewAgentArtifactId,
 } from "@diffdash/domain/review-agent"
-import type { ReviewSnapshot } from "@diffdash/domain/review-context"
 import type { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
 import type {
   ReviewThread,
-  ReviewThreadAnchor,
   ReviewThreadMessage,
   UserReviewThreadMessage,
 } from "@diffdash/domain/review-thread"
-import { orderedReviewFiles, orderedReviewHunks } from "@diffdash/domain/review-ordering"
 import { truncateUtf8, utf8ByteLength as byteLength } from "@diffdash/domain/utf8"
 import { Array, Effect, Match, Order, Schema } from "effect"
+import type { ReviewPromptFile, ReviewPromptIdentity } from "./review-prompt-context"
 
 const DEFAULT_TOTAL_PROMPT_BUDGET_BYTES = 64 * 1024
 const MAX_CHANGED_FILE_INVENTORY_BYTES = 16 * 1024
@@ -29,15 +26,42 @@ const MAX_ARTIFACT_SECTION_BYTES = 12 * 1024
 const MAX_ARTIFACT_CONTENT_BYTES = 4 * 1024
 const HISTORICAL_MESSAGE_LIMIT = 10
 
+/** Hard input limits for already-selected review-thread prompt context. */
+export const REVIEW_THREAD_PROMPT_CONTEXT_LIMITS = {
+  maxFileInventoryCount: 256,
+  maxFileInventoryBytes: MAX_CHANGED_FILE_INVENTORY_BYTES,
+  maxAnchorHunkLines: 512,
+  maxAnchorHunkBytes: MAX_ANCHOR_HUNK_BYTES,
+} as const
+
 /** One persisted artifact deliberately selected for the next review-agent turn. */
 export interface SelectedReviewAgentArtifact {
   readonly id: ReviewAgentArtifactId
   readonly artifact: ReviewAgentArtifact
 }
 
+/** Bounded changed-file inventory selected before prompt construction. */
+export interface ReviewThreadPromptFileInventory {
+  readonly totalFiles: number
+  readonly files: readonly ReviewPromptFile[]
+}
+
+/** One already-selected, bounded excerpt from the thread's immutable anchor hunk. */
+export interface ReviewThreadPromptHunkExcerpt {
+  readonly fileId: ReviewFileId
+  readonly hunkId: ReviewHunkId
+  readonly header: string
+  readonly lines: readonly string[]
+  readonly anchorLineIndex: number
+  readonly omittedBefore: number
+  readonly omittedAfter: number
+}
+
 /** Immutable review data and bounded thread state used to construct one agent prompt. */
 export interface ReviewThreadPromptInput {
-  readonly snapshot: ReviewSnapshot
+  readonly review: ReviewPromptIdentity
+  readonly fileInventory: ReviewThreadPromptFileInventory
+  readonly anchorHunk: ReviewThreadPromptHunkExcerpt | null
   readonly thread: ReviewThread
   readonly messages: readonly ReviewThreadMessage[]
   readonly latestUserMessage: UserReviewThreadMessage
@@ -86,7 +110,9 @@ export const buildReviewThreadPrompt = (
       budgetBytes: stableBudgetBytes,
     })
   }
-  const stablePromptPrefix = buildStableBase(input.snapshot)
+  const inventoryError = validateBoundedInventory(input.fileInventory)
+  if (inventoryError !== null) return inventoryError
+  const stablePromptPrefix = buildStableBase(input.review, input.fileInventory)
   const stableBytes = byteLength(stablePromptPrefix)
   const effectiveStableBudget = Math.min(stableBudgetBytes, totalBudgetBytes)
   if (stableBytes > effectiveStableBudget) {
@@ -107,17 +133,9 @@ export const buildReviewThreadPrompt = (
   }
 
   const includedHunkIds = dynamic.hunkSliced ? [] : [dynamic.hunkId]
-  const includedHunkIdSet = new Set<ReviewHunkId>(includedHunkIds)
-  const omittedHunkIds = orderedReviewFiles(input.snapshot).flatMap((file) =>
-    orderedReviewHunks(file.hunks).flatMap((hunk) =>
-      includedHunkIdSet.has(hunk.id) ? [] : [hunk.id],
-    ),
-  )
-  const omittedHunkIdSet = new Set<ReviewHunkId>(omittedHunkIds)
-  const omittedFileIds = orderedReviewFiles(input.snapshot).flatMap((file) =>
-    file.hunks.length === 0 || file.hunks.some((hunk) => omittedHunkIdSet.has(hunk.id))
-      ? [file.fileId]
-      : [],
+  const omittedHunkIds = dynamic.hunkSliced ? [dynamic.hunkId] : []
+  const omittedFileIds = input.fileInventory.files.flatMap((file) =>
+    file.fileId === dynamic.fileId && !dynamic.hunkSliced ? [] : [file.fileId],
   )
 
   return Effect.succeed({
@@ -129,49 +147,51 @@ export const buildReviewThreadPrompt = (
   })
 }
 
-const buildStableBase = (snapshot: ReviewSnapshot) =>
+const buildStableBase = (
+  review: ReviewPromptIdentity,
+  inventory: ReviewThreadPromptFileInventory,
+) =>
   [
     "# DiffDash review thread context v2",
     `## Review instructions\n\n${REVIEW_INSTRUCTIONS}`,
     `## Thread-mode safety\n\n${SAFETY_RULES}`,
     `## Required response schema\n\nReturn all three keys. Use \`null\` for no summary or referenced anchors.\n\n\`\`\`json\n${RESPONSE_SCHEMA}\n\`\`\``,
-    `## Review metadata\n\n\`\`\`json\n${JSON.stringify(reviewMetadata(snapshot))}\n\`\`\``,
-    `## Bounded changed-file inventory\n\n\`\`\`json\n${JSON.stringify(diffInventory(snapshot))}\n\`\`\``,
+    `## Review metadata\n\n\`\`\`json\n${JSON.stringify(reviewMetadata(review))}\n\`\`\``,
+    `## Bounded changed-file inventory\n\n\`\`\`json\n${JSON.stringify(diffInventory(inventory))}\n\`\`\``,
     `## DiffDash MCP context tools\n\n${MCP_INSTRUCTIONS}`,
   ].join("\n\n")
 
-const reviewMetadata = (snapshot: ReviewSnapshot) => {
+const reviewMetadata = (review: ReviewPromptIdentity) => {
   const identity = {
-    reviewKey: snapshot.reviewKey,
-    baseRevision: snapshot.baseRevision,
-    headRevision: snapshot.headRevision,
+    reviewKey: review.reviewKey,
+    baseRevision: review.baseRevision,
+    headRevision: review.headRevision,
   }
-  return Match.value(snapshot).pipe(
+  return Match.value(review.descriptor).pipe(
     Match.tag("hosted", (hosted) => {
-      const summary = hosted.detail.summary
       return {
         ...identity,
         kind: "hosted",
-        providerId: summary.locator.repository.providerId,
-        repository: `${summary.locator.repository.namespace}/${summary.locator.repository.name}`,
-        number: summary.locator.number,
-        title: summary.title,
-        author: summary.author.username,
-        state: summary.state,
-        draft: summary.draft,
-        baseRef: summary.base.name,
-        headRef: summary.head.name,
-        url: summary.url,
+        providerId: hosted.review.repository.providerId,
+        repository: `${hosted.review.repository.namespace}/${hosted.review.repository.name}`,
+        number: hosted.review.number,
+        title: hosted.title,
+        author: hosted.authorUsername,
+        state: hosted.state,
+        draft: hosted.draft,
+        baseRef: hosted.baseRef,
+        headRef: hosted.headRef,
+        url: hosted.url,
       }
     }),
     Match.tag("repositoryComparison", (comparison) => {
-      const target = comparison.detail.target
+      const target = comparison.target
       return {
         ...identity,
         kind: "repositoryComparison",
         providerId: target.repository.providerId,
         repository: `${target.repository.namespace}/${target.repository.name}`,
-        title: comparison.detail.title,
+        title: comparison.title,
         baseRef: target.baseRef,
         baseSha: target.baseSha,
         mergeBaseSha: target.mergeBaseSha,
@@ -182,17 +202,17 @@ const reviewMetadata = (snapshot: ReviewSnapshot) => {
     Match.tag("local", (local) => ({
       ...identity,
       kind: "local",
-      repository: local.detail.repoName,
-      rootPath: local.detail.rootPath,
-      title: local.detail.title,
-      branch: local.detail.branchName,
+      repository: local.repoName,
+      rootPath: local.target.rootPath,
+      title: local.title,
+      branch: local.branchName,
     })),
     Match.exhaustive,
   )
 }
 
-const diffInventory = (snapshot: ReviewSnapshot) => {
-  const allFiles = orderedReviewFiles(snapshot).map((file) =>
+const diffInventory = (inventory: ReviewThreadPromptFileInventory) => {
+  const files = inventory.files.map((file) =>
     file.status === "renamed"
       ? {
           path: file.path,
@@ -200,40 +220,53 @@ const diffInventory = (snapshot: ReviewSnapshot) => {
           status: file.status,
           additions: file.additions,
           deletions: file.deletions,
-          hunkCount: file.hunks.length,
+          hunkCount: file.hunkCount,
         }
       : {
           path: file.path,
           status: file.status,
           additions: file.additions,
           deletions: file.deletions,
-          hunkCount: file.hunks.length,
+          hunkCount: file.hunkCount,
         },
   )
-  const files: (typeof allFiles)[number][] = []
-  for (const file of allFiles) {
-    const candidateFiles = [...files, file]
-    const candidate = {
-      totalFiles: allFiles.length,
-      includedFiles: candidateFiles.length,
-      omittedFiles: allFiles.length - candidateFiles.length,
-      files: candidateFiles,
-    }
-    if (byteLength(JSON.stringify(candidate)) > MAX_CHANGED_FILE_INVENTORY_BYTES) break
-    files.push(file)
-  }
   return {
-    totalFiles: allFiles.length,
+    totalFiles: inventory.totalFiles,
     includedFiles: files.length,
-    omittedFiles: allFiles.length - files.length,
+    omittedFiles: inventory.totalFiles - files.length,
     files,
   }
+}
+
+const validateBoundedInventory = (
+  inventory: ReviewThreadPromptFileInventory,
+): ReviewThreadPromptError | null => {
+  if (
+    !Number.isSafeInteger(inventory.totalFiles) ||
+    inventory.totalFiles < inventory.files.length ||
+    inventory.files.length > REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryCount
+  ) {
+    return ReviewThreadPromptError.make({
+      reason: "The changed-file inventory exceeds its count limit or has invalid totals",
+      requiredBytes: inventory.files.length,
+      budgetBytes: REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryCount,
+    })
+  }
+  const inventoryBytes = byteLength(JSON.stringify(diffInventory(inventory)))
+  return inventoryBytes > REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryBytes
+    ? ReviewThreadPromptError.make({
+        reason: "The already-selected changed-file inventory exceeds its byte limit",
+        requiredBytes: inventoryBytes,
+        budgetBytes: REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryBytes,
+      })
+    : null
 }
 
 interface DynamicPromptSuccess {
   readonly ok: true
   readonly text: string
   readonly hunkId: ReviewHunkId
+  readonly fileId: ReviewFileId
   readonly hunkSliced: boolean
 }
 
@@ -257,26 +290,34 @@ const buildDynamicSuffix = (
       requiredBytes: MIN_ANCHOR_HUNK_BYTES,
     }
   }
-  const file =
-    input.snapshot.parsedDiff.files.find((candidate) => candidate.fileId === anchor.fileId) ??
-    input.snapshot.parsedDiff.files.find(
-      (candidate) => candidate.path === anchor.filePath && candidate.oldPath === anchor.oldPath,
-    )
-  const hunk =
-    file?.hunks.find((candidate) => candidate.id === anchor.hunkId) ??
-    file?.hunks.find(
-      (candidate) =>
-        candidate.header === anchor.hunkHeader && findAnchorLineIndex(candidate, anchor) !== -1,
-    )
-  if (file === undefined || hunk === undefined) {
+  const hunk = input.anchorHunk
+  if (hunk === null || hunk.fileId !== anchor.fileId || hunk.hunkId !== anchor.hunkId) {
     return {
       ok: false,
       reason: "The current review thread hunk is unavailable in the immutable snapshot",
       requiredBytes: MIN_ANCHOR_HUNK_BYTES,
     }
   }
-  const anchorLineIndex = findAnchorLineIndex(hunk, anchor)
-  if (anchorLineIndex === -1) {
+  const excerptBytes = byteLength([hunk.header, ...hunk.lines].join("\n"))
+  if (
+    hunk.lines.length > REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxAnchorHunkLines ||
+    excerptBytes > REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxAnchorHunkBytes
+  ) {
+    return {
+      ok: false,
+      reason: "The already-selected anchor hunk excerpt exceeds its input limit",
+      requiredBytes: excerptBytes,
+    }
+  }
+  const anchorLine = hunk.lines[hunk.anchorLineIndex]
+  const expectedPrefix = anchor.side === "new" ? "+" : "-"
+  if (
+    !Number.isSafeInteger(hunk.anchorLineIndex) ||
+    hunk.anchorLineIndex < 0 ||
+    anchorLine === undefined ||
+    (anchorLine[0] !== expectedPrefix && anchorLine[0] !== " ") ||
+    anchorLine.slice(1) !== anchor.lineContent
+  ) {
     return {
       ok: false,
       reason: "The current review thread line is unavailable in its immutable hunk",
@@ -313,7 +354,7 @@ const buildDynamicSuffix = (
     }
   }
 
-  const renderedHunk = renderAnchorHunk(file.fileId, hunk, anchorLineIndex, hunkBudgetBytes)
+  const renderedHunk = renderAnchorHunk(hunk, hunkBudgetBytes)
   let text = `${coreBeforeHunk}\n\n${renderedHunk.text}`
   for (const section of optionalDynamicSections(input)) {
     const candidate = `${text}\n\n${section}`
@@ -327,7 +368,13 @@ const buildDynamicSuffix = (
     }
   }
 
-  return { ok: true, text, hunkId: hunk.id, hunkSliced: renderedHunk.sliced }
+  return {
+    ok: true,
+    text,
+    hunkId: hunk.hunkId,
+    fileId: hunk.fileId,
+    hunkSliced: renderedHunk.sliced,
+  }
 }
 
 const optionalDynamicSections = (input: ReviewThreadPromptInput) => {
@@ -424,39 +471,25 @@ const truncatePromptText = (value: string, maxBytes: number, marker: string) => 
   return truncateUtf8(value, maxBytes, suffix)
 }
 
-type PromptHunk = ReviewSnapshot["parsedDiff"]["files"][number]["hunks"][number]
-
-const findAnchorLineIndex = (hunk: PromptHunk, anchor: ReviewThreadAnchor) => {
-  const line = findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
-    side: anchor.side,
-    lineNumber: anchor.lineNumber,
-    content: anchor.lineContent,
-  })
-  return line?.index ?? -1
-}
-
-const renderAnchorHunk = (
-  fileId: ReviewFileId,
-  hunk: PromptHunk,
-  anchorLineIndex: number,
-  maxBytes: number,
-) => {
-  const identity = `[DIFFDASH_CURRENT_ANCHOR_HUNK fileId=${JSON.stringify(fileId)} hunkId=${JSON.stringify(hunk.id)}]`
+const renderAnchorHunk = (hunk: ReviewThreadPromptHunkExcerpt, maxBytes: number) => {
+  const identity = `[DIFFDASH_CURRENT_ANCHOR_HUNK fileId=${JSON.stringify(hunk.fileId)} hunkId=${JSON.stringify(hunk.hunkId)}]`
   const full = [identity, hunk.header, ...hunk.lines].join("\n")
-  if (byteLength(full) <= maxBytes) return { text: full, sliced: false }
+  if (hunk.omittedBefore === 0 && hunk.omittedAfter === 0 && byteLength(full) <= maxBytes) {
+    return { text: full, sliced: false }
+  }
 
   const header = truncatePromptText(hunk.header, 1024, "DIFFDASH_HUNK_HEADER_TRUNCATED")
   const renderSlice = (start: number, end: number, lines: readonly string[]) =>
     [
       identity,
       header,
-      `[DIFFDASH_HUNK_SLICE anchorCentered=true omittedBefore=${start} omittedAfter=${hunk.lines.length - end}]`,
+      `[DIFFDASH_HUNK_SLICE anchorCentered=true omittedBefore=${hunk.omittedBefore + start} omittedAfter=${hunk.omittedAfter + hunk.lines.length - end}]`,
       ...lines,
     ].join("\n")
 
-  let start = anchorLineIndex
-  let end = anchorLineIndex + 1
-  let selectedLines = [hunk.lines[anchorLineIndex] ?? ""]
+  let start = hunk.anchorLineIndex
+  let end = hunk.anchorLineIndex + 1
+  let selectedLines = [hunk.lines[hunk.anchorLineIndex] ?? ""]
   let text = renderSlice(start, end, selectedLines)
   if (byteLength(text) > maxBytes) {
     const emptyAnchor = renderSlice(start, end, [""])
