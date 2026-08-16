@@ -54,7 +54,7 @@ import {
   type SnapshotStorageSource,
 } from "@diffdash/persistence/snapshot-block-store"
 import { ProcessService, processRequest, type ProcessExecutionError } from "@diffdash/process"
-import { Clock, Context, Effect, Layer, Match, Schema, Stream } from "effect"
+import { Clock, Context, Deferred, Effect, Layer, Match, Schema, Stream } from "effect"
 
 import { toCoreExpectedCause } from "./core-error-cause"
 import {
@@ -132,6 +132,10 @@ export const coreSnapshotAcquisitionLayer = (
       const repositories = yield* RepositoryLinker
       const resources = yield* ResourceCatalog
       const resourceCollection = yield* ResourceCollection
+      const localInFlight = new Map<
+        string,
+        Deferred.Deferred<LocalReviewSnapshotManifest, LocalSnapshotAcquisitionFailure>
+      >()
 
       const ingest = Effect.fn("CoreSnapshotAcquisition.ingest")(function* (input: {
         readonly source: ReviewDiffSource
@@ -223,7 +227,7 @@ export const coreSnapshotAcquisitionLayer = (
         })
       })
 
-      const acquireLocal = Effect.fn("CoreSnapshotAcquisition.acquireLocal")(function* (
+      const acquireLocalOnce = Effect.fn("CoreSnapshotAcquisition.acquireLocalOnce")(function* (
         target: LocalReviewTarget,
       ) {
         const project = yield* repositories.ensureLocal(target.rootPath)
@@ -317,6 +321,30 @@ export const coreSnapshotAcquisitionLayer = (
           ...manifestIdentity(result, baseRevision, source.offer.expectedRevision),
           detail,
         })
+      })
+
+      const acquireLocal = Effect.fn("CoreSnapshotAcquisition.acquireLocal")(function* (
+        target: LocalReviewTarget,
+      ) {
+        const key = JSON.stringify(target)
+        const candidate = yield* Deferred.make<
+          LocalReviewSnapshotManifest,
+          LocalSnapshotAcquisitionFailure
+        >()
+        const pending = yield* Effect.sync(() => {
+          const current = localInFlight.get(key)
+          if (current !== undefined) return current
+          localInFlight.set(key, candidate)
+          return candidate
+        })
+        if (pending !== candidate) return yield* Deferred.await(pending)
+
+        const exit = yield* Effect.exit(acquireLocalOnce(target))
+        yield* Deferred.done(candidate, exit)
+        yield* Effect.sync(() => {
+          if (localInFlight.get(key) === candidate) localInFlight.delete(key)
+        })
+        return yield* Deferred.await(candidate)
       })
 
       const acquireComparison = Effect.fn("CoreSnapshotAcquisition.acquireComparison")(function* (

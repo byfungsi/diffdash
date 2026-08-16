@@ -910,10 +910,11 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       true,
     )
     await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+    await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
 
     await expect(
       window.getByText("DiffDash could not complete this walkthrough operation.").first(),
-    ).toBeVisible()
+    ).toBeVisible({ timeout: 20_000 })
     await window.getByRole("button", { name: "Copy error details" }).first().click()
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 

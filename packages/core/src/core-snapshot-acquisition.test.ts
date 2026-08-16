@@ -383,7 +383,11 @@ describe("CoreSnapshotAcquisition", () => {
       })
       yield* Effect.gen(function* () {
         const acquisition = yield* CoreSnapshotAcquisition
-        const manifest = yield* acquisition.acquireLocal(target)
+        const [manifest, concurrentManifest] = yield* Effect.all(
+          [acquisition.acquireLocal(target), acquisition.acquireLocal(target)],
+          { concurrency: "unbounded" },
+        )
+        expect(concurrentManifest).toEqual(manifest)
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.detail.diffHash).toBeTruthy()
         expect(manifest.detail.title).toBe("Last commit")
