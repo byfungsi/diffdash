@@ -38,15 +38,6 @@ export class RepositoryComparisonDetail extends Schema.Class<RepositoryCompariso
   fetchedAt: Schema.String,
 }) {}
 
-/** Raw unified diff captured from one exact immutable repository comparison. */
-export class RepositoryComparisonDiff extends Schema.Class<RepositoryComparisonDiff>(
-  "RepositoryComparisonDiff",
-)({
-  target: RepositoryComparisonTarget,
-  diff: Schema.String,
-  fetchedAt: Schema.String,
-}) {}
-
 /** Creates the durable identity for one exact repository comparison. */
 export const makeRepositoryComparisonReviewKey = (target: RepositoryComparisonTarget) =>
   ReviewKey.make(

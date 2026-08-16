@@ -24,7 +24,6 @@ import {
   HostedRepository,
   HostedRepositorySource,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewSummary,
   makeHostedRepositoryLocator,
   makeHostedReviewLocator,
@@ -34,8 +33,8 @@ import {
 import {
   BranchComparison,
   LocalReviewDetail,
-  LocalReviewDiff,
   LocalReviewTarget,
+  WorkingTreeComparison,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import {
@@ -205,6 +204,38 @@ interface ReviewSearchFixtureResponse {
 type ReviewSearchFixture = (
   request: ReviewSearchFixtureRequest,
 ) => Promise<ReviewSearchFixtureResponse>
+
+type HostedReviewDiff = {
+  readonly locator: HostedReviewSummary["locator"]
+  readonly headRevision: ReviewRevision | null
+  readonly diff: string
+  readonly fetchedAt: string
+}
+
+const HostedReviewDiff = {
+  make: (value: HostedReviewDiff): HostedReviewDiff => value,
+}
+
+type LocalReviewDiff = {
+  readonly rootPath: RepositoryCheckoutPath
+  readonly comparison: LocalReviewTarget["comparison"]
+  readonly baseSha: ReviewRevision
+  readonly headSha: ReviewRevision
+  readonly diffHash: ReviewDiffIdentity
+  readonly diff: string
+  readonly fetchedAt: string
+}
+
+const LocalReviewDiff = {
+  make: (
+    value: Omit<LocalReviewDiff, "comparison"> & {
+      readonly comparison?: LocalReviewDiff["comparison"]
+    },
+  ): LocalReviewDiff => ({
+    ...value,
+    comparison: value.comparison ?? WorkingTreeComparison.make({}),
+  }),
+}
 
 const repo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",

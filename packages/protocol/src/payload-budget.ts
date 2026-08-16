@@ -85,7 +85,7 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
 
   let serialized: string
   try {
-    const result = JSON.stringify(value, (_key, item: unknown) =>
+    const result = JSON.stringify(value, (_key, item: JsonPayloadValue) =>
       item instanceof Uint8Array ? null : item,
     )
     if (result === undefined) {

@@ -271,14 +271,6 @@ export class HostedReviewDetail extends Schema.Class<HostedReviewDetail>("Hosted
   commits: Schema.Array(ReviewCommit),
 }) {}
 
-/** Raw unified diff output and cache metadata for a hosted review. */
-export class HostedReviewDiff extends Schema.Class<HostedReviewDiff>("HostedReviewDiff")({
-  locator: HostedReviewLocator,
-  headRevision: Schema.NullOr(ReviewRevision),
-  diff: Schema.String,
-  fetchedAt: UtcIsoTimestamp,
-}) {}
-
 /** Canonical persisted key for one hosted repository. */
 export const makeHostedRepositoryKey = (locator: HostedRepositoryLocator) =>
   `${locator.providerId}:${locator.namespace}/${locator.name}`
