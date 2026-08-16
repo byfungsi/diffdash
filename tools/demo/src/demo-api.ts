@@ -102,6 +102,15 @@ import {
   ReviewSnapshotSearchMatch,
   ReviewSnapshotSearchMatchId,
 } from "@diffdash/protocol/review-snapshot"
+import {
+  DisposedReviewSession,
+  ReadyReviewSession,
+  ReviewSessionId,
+  ReviewSessionIdentity,
+  ReviewSessionProcessId,
+  ReviewSessionSearchPublication,
+  ReviewSessionStateVersion,
+} from "@diffdash/protocol/review-session"
 import type { MaterializedDemoScenario } from "./demo-scenario"
 import { createDemoLocalReviewFixtures, type DemoLocalReviewFixture } from "./local-review-fixtures"
 
@@ -965,6 +974,101 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           totalMatches: matches.length,
           nextCursor: null,
         })
+      },
+    },
+    progressiveReviews: {
+      openSession: async (request) =>
+        ReadyReviewSession.make({
+          identity: ReviewSessionIdentity.make({
+            ...request,
+            processId: ReviewSessionProcessId.make("demo-process"),
+            sessionId: ReviewSessionId.make(`demo:${request.snapshotId}`),
+            stateVersion: ReviewSessionStateVersion.make(1),
+          }),
+        }),
+      currentSession: async (request) => ReadyReviewSession.make({ identity: request.identity }),
+      closeSession: async (request) =>
+        DisposedReviewSession.make({ identity: request.identity, reason: "closed" }),
+      inventory: async (request) => {
+        const snapshot = snapshotCache.get(request.identity.snapshotId)
+        if (snapshot === undefined) throw new Error("Demo review snapshot is unavailable")
+        const files = snapshot.parsedDiff.files.slice(
+          request.offset,
+          request.offset + request.limit,
+        )
+        const nextOffset = request.offset + files.length
+        return {
+          identity: request.identity,
+          files: files.map((file, index) => ({
+            ordinal: request.offset + index,
+            fileId: file.fileId,
+            path: file.path,
+            oldPath: file.oldPath,
+            additions: file.additions,
+            deletions: file.deletions,
+            status: file.status,
+            visibility: file.visibility,
+            patchHash: file.patchHash,
+            hunkCount: file.hunks.length,
+          })),
+          nextOffset: nextOffset < snapshot.parsedDiff.files.length ? nextOffset : null,
+        }
+      },
+      readRange: async (request) => {
+        const snapshot = snapshotCache.get(request.identity.snapshotId)
+        const file = snapshot?.parsedDiff.files.find(({ fileId }) => fileId === request.fileId)
+        if (file === undefined) throw new Error("Demo review file is unavailable")
+        const bytes = new TextEncoder().encode(file.patch)
+        return {
+          identity: request.identity,
+          file: {
+            ordinal: snapshot?.parsedDiff.files.indexOf(file) ?? 0,
+            fileId: file.fileId,
+            path: file.path,
+            oldPath: file.oldPath,
+            additions: file.additions,
+            deletions: file.deletions,
+            status: file.status,
+            visibility: file.visibility,
+            patchHash: file.patchHash,
+            hunkCount: file.hunks.length,
+          },
+          blocks: [
+            {
+              id: `demo:${file.fileId}`,
+              hunkId: null,
+              ordinal: 0,
+              firstLine: 0,
+              lineCount: Math.max(1, file.patch.split("\n").length),
+              bytes,
+            },
+          ],
+          byteCount: bytes.byteLength,
+          complete: true,
+        }
+      },
+      waitForRange: async (request) => api.progressiveReviews.readRange(request),
+      resolveTarget: async (request) => {
+        const page = await api.progressiveReviews.inventory({
+          identity: request.identity,
+          offset: 0,
+          limit: REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
+        })
+        const file = page.files.find(({ fileId }) => fileId === request.fileId)
+        if (file === undefined) throw new Error("Demo review target is unavailable")
+        return { identity: request.identity, file, blockOrdinal: 0, line: request.line }
+      },
+      search: async (request, onPublication) => {
+        onPublication(
+          ReviewSessionSearchPublication.cases.Final.make({
+            identity: request.identity,
+            totalMatches: 0,
+            matches: [],
+            previousCursor: null,
+            nextCursor: null,
+            wrapped: false,
+          }),
+        )
       },
     },
     viewedFiles: {
