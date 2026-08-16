@@ -78,23 +78,10 @@ import {
   type CoreWalkthroughOperationFailure,
   type CoreWalkthroughStartFailure,
   type GetStoredWalkthrough,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationAccepted,
-  WalkthroughOperationArtifactUnavailable,
-  WalkthroughOperationCancelled,
-  WalkthroughOperationCompleted,
-  WalkthroughOperationDefect,
-  WalkthroughOperationFailed,
   type WalkthroughOperationId as WalkthroughOperationIdType,
-  WalkthroughOperationInterrupted,
   WalkthroughOperationNotFound,
-  type WalkthroughOperationResult,
-  WalkthroughOperationStateUnavailable,
-  WalkthroughOperationSuperseded,
-  WalkthroughOperationTerminalFailure,
 } from "../core-contract"
 import { ReviewContextError } from "../services/git-provider"
-import { captureCoreDefect } from "../core-defect-boundary"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
 import {
   OPERATION_SNAPSHOT_HUNK_LIMIT,
@@ -177,21 +164,8 @@ export const makeWalkthroughActiveWorkers: Effect.Effect<
   }
 })
 
-/** Scoped admission, observation, and cancellation for durable walkthrough operations. */
-export interface WalkthroughLifecycle {
-  readonly start: (
-    request: StartWalkthroughOperation,
-  ) => Effect.Effect<WalkthroughOperationAccepted, CoreWalkthroughStartFailure>
-  readonly getOperation: (
-    operationId: WalkthroughOperationIdType,
-  ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
-  readonly cancel: (
-    operationId: WalkthroughOperationIdType,
-  ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
-}
-
 /** Scoped walkthrough capability including generation and persistent cache access. */
-export interface WalkthroughOperations extends WalkthroughLifecycle {
+export interface WalkthroughOperations {
   readonly startGeneration: (
     request: StartWalkthroughGeneration,
   ) => Effect.Effect<WalkthroughOperationAcceptance, CoreWalkthroughStartFailure>
@@ -278,56 +252,6 @@ export const makeWalkthroughOperations = (
         promptVersion,
       }),
     )
-
-    const resolveWalkthrough = Effect.fn("Core.Walkthroughs.resolve")(function (
-      request: StartWalkthroughOperation,
-    ): Effect.Effect<ResolvedWalkthrough, CoreWalkthroughStartFailure> {
-      const target = request.target
-      switch (target.kind) {
-        case "hosted":
-          return reviews.resolveHosted(target).pipe(
-            Effect.map((resolved) => ({
-              kind: "hosted" as const,
-              target,
-              regenerate: request.regenerate,
-              repoId: resolved.repo.id,
-              snapshotId: resolved.snapshot.snapshotId,
-              reviewKey: resolved.snapshot.reviewKey,
-              baseRevision: resolved.snapshot.baseRevision,
-              headRevision: resolved.snapshot.headRevision,
-              prNumber: resolved.prNumber,
-            })),
-          )
-        case "repositoryComparison":
-          return reviews.resolveRepositoryComparison(target).pipe(
-            Effect.map((resolved) => ({
-              kind: "repositoryComparison" as const,
-              target,
-              regenerate: request.regenerate,
-              repoId: resolved.repo.id,
-              snapshotId: resolved.snapshot.snapshotId,
-              reviewKey: resolved.snapshot.reviewKey,
-              baseRevision: resolved.snapshot.baseRevision,
-              headRevision: resolved.snapshot.headRevision,
-              prNumber: null,
-            })),
-          )
-        case "local":
-          return reviews.resolveLocal(target).pipe(
-            Effect.map((resolved) => ({
-              kind: "local" as const,
-              target,
-              regenerate: request.regenerate,
-              repoId: resolved.repo.id,
-              snapshotId: resolved.snapshot.snapshotId,
-              reviewKey: resolved.snapshot.reviewKey,
-              baseRevision: resolved.snapshot.baseRevision,
-              headRevision: resolved.snapshot.headRevision,
-              prNumber: null,
-            })),
-          )
-      }
-    })
 
     const loadOrGenerate = Effect.fn("Core.Walkthroughs.loadOrGenerate")(function* (
       resolved: ResolvedWalkthrough,
@@ -481,15 +405,6 @@ export const makeWalkthroughOperations = (
       )
     })
 
-    const start: WalkthroughLifecycle["start"] = Effect.fn("Core.Walkthroughs.start")(
-      function* (request) {
-        const resolved = yield* resolveWalkthrough(request)
-        const route = yield* walkthroughService.prepareRoute
-        const acceptance = yield* acceptAndRun(resolved, route, null)
-        return { operationId: acceptance.operation.id }
-      },
-    )
-
     const startGeneration: WalkthroughOperations["startGeneration"] = Effect.fn(
       "Core.Walkthroughs.startGeneration",
     )(function* (request) {
@@ -508,92 +423,6 @@ export const makeWalkthroughOperations = (
           attempts: [],
         }),
       )
-    })
-
-    const materializeOperation: (
-      operation: WalkthroughOperation,
-    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure> = Effect.fn(
-      "Core.Walkthroughs.materializeOperation",
-    )(function* (operation) {
-      switch (operation.state) {
-        case "completed": {
-          const walkthrough = yield* walkthroughStore.get(artifactCacheKey(operation.artifact))
-          return yield* Option.match(walkthrough, {
-            onNone: () =>
-              Effect.fail(
-                WalkthroughOperationArtifactUnavailable.make({ operationId: operation.id }),
-              ),
-            onSome: (stored) =>
-              exactArtifactMatches(stored, operation.artifact)
-                ? Effect.succeed(WalkthroughOperationCompleted.make({ walkthrough: stored }))
-                : Effect.fail(
-                    WalkthroughOperationArtifactUnavailable.make({ operationId: operation.id }),
-                  ),
-          })
-        }
-        case "failed":
-          return WalkthroughOperationFailed.make({
-            error: WalkthroughOperationTerminalFailure.make({
-              operationId: operation.id,
-              failure: operation.failure,
-            }),
-          })
-        case "cancelled":
-          return WalkthroughOperationCancelled.make({})
-        case "superseded":
-          return WalkthroughOperationSuperseded.make({
-            supersededByOperationId: operation.supersededByOperationId,
-          })
-        case "interrupted":
-          return WalkthroughOperationInterrupted.make({})
-        case "accepted":
-        case "running":
-          return yield* WalkthroughOperationStateUnavailable.make({ operationId: operation.id })
-      }
-    })
-
-    const getOperation: WalkthroughLifecycle["getOperation"] = Effect.fn(
-      "Core.Walkthroughs.getOperation",
-    )(function* (operationId) {
-      const operation = yield* requireOperation(operationStore, operationId)
-      const active = isActiveOperation(operation)
-        ? yield* activeWorkers.get(operation.id)
-        : Option.none<Fiber.Fiber<WalkthroughWorkerExit>>()
-      const workerExit = Option.isSome(active)
-        ? Option.some(yield* Fiber.await(active.value))
-        : Option.none<Exit.Exit<WalkthroughWorkerExit>>()
-      const authoritative = yield* requireOperation(operationStore, operation.id)
-      if (
-        isActiveOperation(authoritative) &&
-        Option.isSome(workerExit) &&
-        Exit.isSuccess(workerExit.value) &&
-        Exit.isFailure(workerExit.value.value)
-      ) {
-        const failure = Cause.findErrorOption(workerExit.value.value.cause)
-        if (Option.isSome(failure)) return yield* failure.value
-        const defect = Cause.findDefect(workerExit.value.value.cause)
-        if (Result.isSuccess(defect)) return yield* Effect.die(defect.success)
-      }
-      if (
-        authoritative.state === "failed" &&
-        Option.isSome(workerExit) &&
-        Exit.isSuccess(workerExit.value) &&
-        Exit.isSuccess(workerExit.value.value) &&
-        Option.isSome(workerExit.value.value.value)
-      ) {
-        const cause = workerExit.value.value.value.value
-        const defect = Cause.findDefect(cause)
-        if (Result.isSuccess(defect)) {
-          return WalkthroughOperationDefect.make({
-            defect: captureCoreDefect(defect.success).summary,
-          })
-        }
-        const failure = Cause.findErrorOption(cause)
-        if (Option.isSome(failure)) {
-          return WalkthroughOperationFailed.make({ error: failure.value })
-        }
-      }
-      return yield* materializeOperation(authoritative)
     })
 
     const getSnapshot: WalkthroughOperations["getSnapshot"] = Effect.fn(
@@ -624,19 +453,9 @@ export const makeWalkthroughOperations = (
       return operation
     })
 
-    const cancel: WalkthroughLifecycle["cancel"] = Effect.fn("Core.Walkthroughs.cancel")(
-      function* (operationId) {
-        const operation = yield* cancelSnapshot(operationId)
-        return yield* materializeOperation(operation)
-      },
-    )
-
     return {
-      start,
       startGeneration,
-      getOperation,
       getSnapshot,
-      cancel,
       cancelSnapshot,
       getStored: getStoredWalkthrough,
       getStoredGeneration,
@@ -766,16 +585,6 @@ const exactCacheKeyMatches = (walkthrough: StoredWalkthrough, key: WalkthroughCa
   walkthrough.headSha === key.headSha &&
   walkthrough.promptVersion === key.promptVersion
 
-const exactArtifactMatches = (
-  walkthrough: StoredWalkthrough,
-  artifact: WalkthroughArtifactReference,
-) =>
-  walkthrough.repoId === artifact.repoId &&
-  walkthrough.reviewKey === artifact.reviewKey &&
-  walkthrough.baseSha === artifact.baseRevision &&
-  walkthrough.headSha === artifact.headRevision &&
-  walkthrough.promptVersion === artifact.promptVersion
-
 const isActiveOperation = (
   operation: WalkthroughOperation,
 ): operation is Extract<WalkthroughOperation, { readonly state: "accepted" | "running" }> =>
@@ -786,11 +595,12 @@ const operationSnapshotIdentity = (
   resolved: ResolvedWalkthrough,
 ): OperationSnapshotIdentity => {
   const accepted = operation.acceptanceEvidence?.acceptedRequest
+  if (accepted === undefined) {
+    throw new Error("Walkthrough operation is missing authenticated acceptance evidence.")
+  }
   return {
-    applicationInstanceId: ApplicationInstanceId.make(
-      accepted?.applicationInstanceId ?? "embedded-core",
-    ),
-    processEpoch: CoreProcessEpoch.make(accepted?.processEpoch ?? "embedded-epoch"),
+    applicationInstanceId: ApplicationInstanceId.make(accepted.applicationInstanceId),
+    processEpoch: CoreProcessEpoch.make(accepted.processEpoch),
     operationId: operation.id,
     projectId: resolved.repoId,
     reviewKey: resolved.reviewKey,
@@ -936,14 +746,6 @@ const candidatePlanFingerprint = (route: WalkthroughPreparedRoute) =>
       )
       .digest("hex")}`,
   )
-
-const artifactCacheKey = (artifact: WalkthroughArtifactReference): WalkthroughCacheKey => ({
-  repoId: artifact.repoId,
-  reviewKey: artifact.reviewKey,
-  baseSha: artifact.baseRevision,
-  headSha: artifact.headRevision,
-  promptVersion: artifact.promptVersion,
-})
 
 const walkthroughCacheKey = (
   repoId: ReviewProjectIdType,

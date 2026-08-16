@@ -42,6 +42,7 @@ import type { WalkthroughOperationStoreError } from "@diffdash/persistence/walkt
 import type { ResourceCatalogError } from "@diffdash/persistence/resource-catalog"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import type { ProcessExecutionError } from "@diffdash/process"
+import type { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc/identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import type {
@@ -118,7 +119,7 @@ export const CoreMethod = {
 /** One business operation accepted by the Core RPC boundary. */
 export type CoreMethod = (typeof CoreMethod)[keyof typeof CoreMethod]
 
-/** Protocol contracts reused while Core remains embedded behind Electron. */
+/** Protocol contracts mapped onto the named external Core operation boundary. */
 export const CoreMethodChannel = {
   [CoreMethod.analyticsCapture]: InvokeChannel.analyticsCapture,
   [CoreMethod.analyticsStart]: InvokeChannel.analyticsStart,
@@ -184,6 +185,8 @@ export type CoreMethodOutput<Method extends CoreMethod> = InvokeResponse<
 
 /** Host callbacks required by operations that publish transient progress. */
 export interface CoreOperationOptions {
+  readonly applicationInstanceId?: ApplicationInstanceId
+  readonly processEpoch?: CoreProcessEpoch
   readonly onReviewThreadAgentProgress?: (stage: ReviewAgentProgressStage) => void
 }
 

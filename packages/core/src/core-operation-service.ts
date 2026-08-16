@@ -57,7 +57,7 @@ interface CoreOperationServiceShape {
   }
 }
 
-/** Internal authority that exposes only cohesive Core operations to the embedded runtime. */
+/** Internal authority that exposes only cohesive operations to the external Core RPC handlers. */
 export class CoreOperationService extends Context.Service<
   CoreOperationService,
   CoreOperationServiceShape

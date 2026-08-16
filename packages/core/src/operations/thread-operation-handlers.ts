@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
 import { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
 import {
   ReviewThreadAnchorInvalidError,
@@ -17,7 +16,7 @@ import {
 } from "../services/operation-snapshot-projection"
 import { Effect, Option } from "effect"
 
-import { CoreMethod } from "../core-contract"
+import { CoreMethod, type CoreOperationOptions } from "../core-contract"
 import type { OperationHandlersFor } from "./operation-handlers"
 import type { ReviewResolution } from "./review-resolution"
 import type { WalkthroughOperations } from "./walkthrough-operations"
@@ -52,11 +51,17 @@ export const makeThreadOperationHandlers = (
     const open = (
       repoId: Parameters<typeof operationIdentity>[0],
       snapshot: Parameters<typeof operationIdentity>[1],
-    ) => snapshotReader.open(operationIdentity(repoId, snapshot))
+      options: CoreOperationOptions,
+    ) =>
+      requireRequestIdentity(options).pipe(
+        Effect.flatMap((identity) =>
+          snapshotReader.open(operationIdentity(repoId, snapshot, identity)),
+        ),
+      )
 
     return {
       [CoreMethod.addReviewThreadUserMessage]: (request) => threads.addUserMessage(request),
-      [CoreMethod.createReviewThread]: (request) =>
+      [CoreMethod.createReviewThread]: (request, options) =>
         Effect.scoped(
           Effect.gen(function* () {
             const { repo, snapshot, prNumber } = yield* reviews.resolve(request.target)
@@ -71,7 +76,7 @@ export const makeThreadOperationHandlers = (
                 currentHeadRevision: snapshot.headRevision,
               })
             }
-            const handle = yield* open(repo.id, snapshot).pipe(
+            const handle = yield* open(repo.id, snapshot, options).pipe(
               Effect.mapError(snapshotResolutionError),
             )
             const anchorRead = yield* handle
@@ -109,11 +114,11 @@ export const makeThreadOperationHandlers = (
           }),
         ),
       [CoreMethod.getReviewThread]: ({ threadId }) => threads.get(threadId),
-      [CoreMethod.listReviewThreads]: ({ target }) =>
+      [CoreMethod.listReviewThreads]: ({ target }, options) =>
         Effect.scoped(
           Effect.gen(function* () {
             const { repo, snapshot } = yield* reviews.resolve(target)
-            const handle = yield* open(repo.id, snapshot).pipe(
+            const handle = yield* open(repo.id, snapshot, options).pipe(
               Effect.mapError(snapshotResolutionError),
             )
             return yield* threadMapper
@@ -140,14 +145,15 @@ export const makeThreadOperationHandlers = (
           })
           const { repo, snapshot } = yield* reviews.resolve(request.target)
           const walkthrough = yield* walkthroughs.getCached(repo.id, snapshot)
+          const requestIdentity = yield* requireRequestIdentity(options)
           return yield* reviewAgents.runThreadTurn({
             threadId: request.threadId,
             repoId: repo.id,
             target: request.target,
             mapping,
             snapshotId: snapshot.snapshotId,
-            applicationInstanceId: EMBEDDED_APPLICATION_INSTANCE_ID,
-            processEpoch: EMBEDDED_PROCESS_EPOCH,
+            applicationInstanceId: requestIdentity.applicationInstanceId,
+            processEpoch: requestIdentity.processEpoch,
             cwd: repo.localPath,
             walkthrough,
             onProgress: (stage) => Effect.sync(() => options.onReviewThreadAgentProgress?.(stage)),
@@ -156,23 +162,29 @@ export const makeThreadOperationHandlers = (
     } satisfies OperationHandlersFor<ThreadMethod>
   })
 
-const EMBEDDED_APPLICATION_INSTANCE_ID = ApplicationInstanceId.make("embedded-core")
-const EMBEDDED_PROCESS_EPOCH = CoreProcessEpoch.make("embedded-epoch")
-
 const operationIdentity = (
   projectId: Parameters<ReviewThreadStore["Service"]["listForReview"]>[0]["repoId"],
   snapshot: {
     readonly snapshotId: Parameters<OperationSnapshotReader["Service"]["open"]>[0]["snapshotId"]
     readonly reviewKey: Parameters<OperationSnapshotReader["Service"]["open"]>[0]["reviewKey"]
   },
+  requestIdentity: Required<Pick<CoreOperationOptions, "applicationInstanceId" | "processEpoch">>,
 ) => ({
-  applicationInstanceId: EMBEDDED_APPLICATION_INSTANCE_ID,
-  processEpoch: EMBEDDED_PROCESS_EPOCH,
+  applicationInstanceId: requestIdentity.applicationInstanceId,
+  processEpoch: requestIdentity.processEpoch,
   operationId: `thread:${randomUUID()}`,
   projectId,
   reviewKey: snapshot.reviewKey,
   snapshotId: snapshot.snapshotId,
 })
+
+const requireRequestIdentity = (options: CoreOperationOptions) =>
+  options.applicationInstanceId === undefined || options.processEpoch === undefined
+    ? Effect.die(new Error("Core operation request identity is required for snapshot ownership."))
+    : Effect.succeed({
+        applicationInstanceId: options.applicationInstanceId,
+        processEpoch: options.processEpoch,
+      })
 
 const snapshotResolutionError = (cause: Error) =>
   ReviewContextError.make({

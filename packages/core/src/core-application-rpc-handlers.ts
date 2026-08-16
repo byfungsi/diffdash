@@ -202,7 +202,10 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         ),
       "ReviewThreads.create": (request: ApplicationRpcRequest<"ReviewThreads.create">) =>
         handle("ReviewThreads.create", request, (methods) =>
-          methods["ReviewThreads.create"](request, {}),
+          methods["ReviewThreads.create"](request, {
+            applicationInstanceId: request.applicationInstanceId,
+            processEpoch: request.processEpoch,
+          }),
         ),
       "ReviewThreads.get": (request: ApplicationRpcRequest<"ReviewThreads.get">) =>
         handle("ReviewThreads.get", request, (methods) =>
@@ -210,7 +213,10 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         ),
       "ReviewThreads.list": (request: ApplicationRpcRequest<"ReviewThreads.list">) =>
         handle("ReviewThreads.list", request, (methods) =>
-          methods["ReviewThreads.list"](request, {}),
+          methods["ReviewThreads.list"](request, {
+            applicationInstanceId: request.applicationInstanceId,
+            processEpoch: request.processEpoch,
+          }),
         ),
       "Settings.get": (request: ApplicationRpcRequest<"Settings.get">) =>
         handle("Settings.get", request, (methods) => methods["Settings.get"](request, {})),

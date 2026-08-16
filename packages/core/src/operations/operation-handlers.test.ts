@@ -19,6 +19,14 @@ it("keeps Core RPC dispatch on the closed named operation surface", () => {
   expect(sources.join("\n")).not.toMatch(/operations\.execute|readonly execute: <Method/)
 })
 
+it("does not synthesize embedded ownership identities for durable operations", () => {
+  const sources = ["thread-operation-handlers.ts", "walkthrough-operations.ts"].map((path) =>
+    readFileSync(new URL(path, import.meta.url), "utf8"),
+  )
+
+  expect(sources.join("\n")).not.toMatch(/embedded-core|embedded-epoch/)
+})
+
 it("rejects a Core method owned by more than one capability", () => {
   expect(() =>
     assertUniqueOperationHandlers([

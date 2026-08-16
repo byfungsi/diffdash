@@ -234,14 +234,11 @@ const operationsLayer = Layer.succeed(
     methods: unavailableMethods,
     reviewAgents: unusedReviewAgents,
     walkthroughs: {
-      start: () => Effect.die("Unexpected legacy walkthrough start"),
       startGeneration: () =>
         Effect.succeed(
           WalkthroughOperationAcceptance.make({ created: true, operation: activeOperation }),
         ),
-      getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
       getSnapshot: () => Effect.succeed(activeOperation),
-      cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
       cancelSnapshot: () => Effect.succeed(cancelledOperation),
       getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
       getStoredGeneration: () => Effect.succeed(Option.some(storedWalkthrough)),
@@ -431,14 +428,11 @@ describe("Core walkthrough RPC handlers", () => {
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
-              start: () => Effect.die("Unexpected legacy walkthrough start"),
               startGeneration: () => Effect.die("Unexpected walkthrough start"),
-              getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
               getSnapshot: () =>
                 Ref.get(cancelled).pipe(
                   Effect.map((isCancelled) => (isCancelled ? cancelledOperation : activeOperation)),
                 ),
-              cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
               cancelSnapshot: () =>
                 Deferred.succeed(cancellationStarted, undefined).pipe(
                   Effect.andThen(Deferred.await(releaseCancellation)),
@@ -519,7 +513,6 @@ describe("Core walkthrough RPC handlers", () => {
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
-            start: () => Effect.die("Unexpected legacy walkthrough start"),
             startGeneration: () =>
               Deferred.succeed(startEntered, undefined).pipe(
                 Effect.andThen(Effect.never),
@@ -532,9 +525,7 @@ describe("Core walkthrough RPC handlers", () => {
                 ),
                 Effect.onInterrupt(() => Deferred.succeed(startInterrupted, undefined)),
               ),
-            getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
             getSnapshot: () => Effect.die("Unexpected walkthrough read"),
-            cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
             cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
             getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
             getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
@@ -611,7 +602,6 @@ describe("Core walkthrough RPC handlers", () => {
             methods: unavailableMethods,
             reviewAgents: unusedReviewAgents,
             walkthroughs: {
-              start: () => Effect.die("Unexpected legacy walkthrough start"),
               startGeneration: () =>
                 Effect.uninterruptible(
                   Effect.gen(function* () {
@@ -631,9 +621,7 @@ describe("Core walkthrough RPC handlers", () => {
                     })
                   }),
                 ),
-              getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
               getSnapshot: () => Effect.succeed(activeOperation),
-              cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
               cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
               getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
               getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
@@ -714,9 +702,7 @@ describe("Core walkthrough RPC handlers", () => {
           methods: unavailableMethods,
           reviewAgents: unusedReviewAgents,
           walkthroughs: {
-            start: () => Effect.die("Unexpected legacy walkthrough start"),
             startGeneration: () => Effect.die("Unexpected walkthrough start"),
-            getOperation: () => Effect.die("Unexpected legacy walkthrough read"),
             getSnapshot: () =>
               Effect.gen(function* () {
                 const count = yield* Ref.updateAndGet(active, (value) => value + 1)
@@ -744,7 +730,6 @@ describe("Core walkthrough RPC handlers", () => {
                   ),
                 ),
               ),
-            cancel: () => Effect.die("Unexpected legacy walkthrough cancellation"),
             cancelSnapshot: () => Effect.die("Unexpected walkthrough cancellation"),
             getStored: () => Effect.die("Unexpected legacy walkthrough cache read"),
             getStoredGeneration: () => Effect.die("Unexpected walkthrough cache read"),
