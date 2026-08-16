@@ -127,15 +127,15 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
       }),
     ),
   ).pipe(Command.withDescription("Open a repository's pull requests"))
-  const branch = gitRevisionArgument("branch").pipe(Argument.optional)
-  const diff = Command.make("diff", { branch }, ({ branch: branchName }) =>
+  const revision = gitRevisionArgument("revision").pipe(Argument.optional)
+  const diff = Command.make("diff", { revision }, ({ revision: requestedRevision }) =>
     select(
       OpenBranchDiffCommand.make({
         localPath: CliRepositoryPath.make(resolve(cwd)),
-        branchName: Option.getOrNull(branchName),
+        branchName: Option.getOrNull(requestedRevision),
       }),
     ),
-  ).pipe(Command.withDescription("Open local changes against a branch"))
+  ).pipe(Command.withDescription("Open local changes against a Git revision"))
   const lastCommit = Command.make("last-commit", {}, () =>
     select(
       OpenLastCommitCommand.make({
@@ -227,7 +227,7 @@ const parsePublicCommand = (args: readonly string[], cwd: string): CliNavigation
   return result
 }
 
-const gitRevisionArgument = (name: "base" | "branch" | "head") =>
+const gitRevisionArgument = (name: "base" | "head" | "revision") =>
   Argument.string(name).pipe(
     Argument.mapTryCatch(
       (input) => CliGitRevision.make(input),

@@ -642,6 +642,15 @@ const localReviewKey = (
       const refHash = createHash("sha256").update(branch.baseRef).digest("hex")
       return ReviewKey.make(`local:${rootHash}:base:${refHash}`)
     }),
+    Match.tag("revision", (revision) => {
+      const refHash = createHash("sha256").update(revision.revision).digest("hex")
+      return ReviewKey.make(`local:${rootHash}:revision:${refHash}`)
+    }),
+    Match.tag("revisionRange", (range) =>
+      ReviewKey.make(
+        `local:${rootHash}:range:${range.baseSha}:${range.headSha}:${range.mergeBaseSha}`,
+      ),
+    ),
     Match.tag("lastCommit", (commit) =>
       ReviewKey.make(`local:${rootHash}:commit:${commit.headSha}`),
     ),

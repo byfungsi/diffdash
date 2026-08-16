@@ -15,6 +15,21 @@ export const BranchComparison = Schema.TaggedStruct("branch", {
   baseSha: ReviewRevision,
 })
 
+/** Local checkout compared from the merge base of one resolved Git revision. */
+export const RevisionComparison = Schema.TaggedStruct("revision", {
+  revision: RepositoryComparisonRef,
+  baseSha: ReviewRevision,
+})
+
+/** Immutable local comparison between two resolved Git revisions. */
+export const RevisionRangeComparison = Schema.TaggedStruct("revisionRange", {
+  baseRef: RepositoryComparisonRef,
+  headRef: RepositoryComparisonRef,
+  baseSha: ReviewRevision,
+  headSha: ReviewRevision,
+  mergeBaseSha: ReviewRevision,
+})
+
 /** One immutable commit compared with its first parent, or the empty tree for a root commit. */
 export const LastCommitComparison = Schema.TaggedStruct("lastCommit", {
   baseSha: ReviewRevision,
@@ -25,6 +40,8 @@ export const LastCommitComparison = Schema.TaggedStruct("lastCommit", {
 export const LocalReviewComparison = Schema.Union([
   WorkingTreeComparison,
   BranchComparison,
+  RevisionComparison,
+  RevisionRangeComparison,
   LastCommitComparison,
 ])
 
@@ -88,6 +105,16 @@ export const localReviewTargetKey = (target: LocalReviewTarget) =>
       "branch",
       (comparison) =>
         `${target.rootPath}\u0000branch\u0000${comparison.baseRef}\u0000${comparison.baseSha}`,
+    ),
+    Match.tag(
+      "revision",
+      (comparison) =>
+        `${target.rootPath}\u0000revision\u0000${comparison.revision}\u0000${comparison.baseSha}`,
+    ),
+    Match.tag(
+      "revisionRange",
+      (comparison) =>
+        `${target.rootPath}\u0000revisionRange\u0000${comparison.baseSha}\u0000${comparison.headSha}\u0000${comparison.mergeBaseSha}`,
     ),
     Match.tag(
       "lastCommit",

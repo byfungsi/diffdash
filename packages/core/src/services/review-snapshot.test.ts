@@ -90,6 +90,8 @@ const layerFor = (
           currentBranch: () => Effect.die(new Error("Branch detection is unused")),
           listRemotes: () => Effect.die(new Error("Remote listing is unused")),
           resolveBranchComparison: () => Effect.die(new Error("Branch comparison is unused")),
+          resolveRevisionRangeComparison: () =>
+            Effect.die(new Error("Revision range comparison is unused")),
           resolveLastCommit: () => Effect.die(new Error("Last commit resolution is unused")),
           getLocalReviewSnapshot: acquireLocal,
         }),

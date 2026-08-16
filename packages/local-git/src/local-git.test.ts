@@ -426,6 +426,26 @@ index 0000000..3333333
         if (joined.includes("check-ref-format --branch dev")) {
           return Effect.succeed(makeProcessResult("dev\n", args))
         }
+        if (
+          joined.includes("refs/heads/dev^{commit}") ||
+          joined.includes("refs/tags/dev^{commit}")
+        ) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command: "git",
+              args: [...args],
+              cwd: null,
+              exitCode: 128,
+              signal: null,
+              stdout: "",
+              stderr: "unknown revision",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Unknown revision",
+            }),
+          )
+        }
         if (joined.includes(" fetch --no-tags origin ")) {
           return Effect.succeed(makeProcessResult("", args))
         }
@@ -589,6 +609,26 @@ index 0000000..3333333
         if (joined.includes("check-ref-format --branch dev")) {
           return Effect.succeed(makeProcessResult("dev\n", args))
         }
+        if (
+          joined.includes("refs/heads/dev^{commit}") ||
+          joined.includes("refs/tags/dev^{commit}")
+        ) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command,
+              args: [...args],
+              cwd: request.cwd,
+              exitCode: 128,
+              signal: null,
+              stdout: "",
+              stderr: "unknown revision",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Unknown revision",
+            }),
+          )
+        }
         if (joined.includes(" fetch --no-tags origin ")) {
           return Effect.succeed(makeProcessResult("", args))
         }
@@ -719,6 +759,72 @@ index 0000000..3333333
         expect(devSnapshot.diff.diff).not.toContain("main only")
         expect(git(rootPath, "branch", "--show-current")).toBe(branchBefore)
         expect(git(rootPath, "status", "--porcelain", "--untracked-files=all")).toBe(statusBefore)
+      }),
+  )
+
+  it.effect(
+    "resolves local branches, tags, SHAs, HEAD, and immutable ranges without a remote",
+    () =>
+      Effect.gen(function* () {
+        const rootPath = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-local-revision-test-"))),
+          (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
+        )
+        git(rootPath, "init", "-b", "main")
+        writeFileSync(join(rootPath, "base.txt"), "base\n")
+        commitAll(rootPath, "base")
+        const baseSha = git(rootPath, "rev-parse", "HEAD")
+        git(rootPath, "tag", "base-release")
+        git(rootPath, "checkout", "-b", "feature/local")
+        writeFileSync(join(rootPath, "feature.txt"), "feature\n")
+        commitAll(rootPath, "feature")
+        const headSha = git(rootPath, "rev-parse", "HEAD")
+        writeFileSync(join(rootPath, "untracked.txt"), "untracked\n")
+
+        const service = yield* GitService.pipe(
+          Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
+        )
+        const checkoutPath = RepositoryCheckoutPath.make(rootPath)
+        for (const revision of [baseSha, "base-release", "main"] as const) {
+          const target = yield* service.resolveBranchComparison(
+            checkoutPath,
+            RepositoryComparisonRef.make(revision),
+          )
+          const snapshot = yield* service.getLocalReviewSnapshot(target)
+          const paths = snapshot.parsedDiff.files.map((file) => file.path)
+
+          expect(target.comparison).toMatchObject({ baseSha })
+          expect(paths).toEqual(expect.arrayContaining(["feature.txt", "untracked.txt"]))
+        }
+
+        const headTarget = yield* service.resolveBranchComparison(
+          checkoutPath,
+          RepositoryComparisonRef.make("HEAD"),
+        )
+        const headSnapshot = yield* service.getLocalReviewSnapshot(headTarget)
+        expect(headTarget.comparison).toMatchObject({ _tag: "revision", revision: "HEAD" })
+        expect(headSnapshot.parsedDiff.files.map((file) => file.path)).toEqual(["untracked.txt"])
+
+        rmSync(join(rootPath, "untracked.txt"))
+        const rangeTarget = yield* service.resolveRevisionRangeComparison(
+          checkoutPath,
+          RepositoryComparisonRef.make(baseSha),
+          RepositoryComparisonRef.make(headSha),
+        )
+        const rangeSnapshot = yield* service.getLocalReviewSnapshot(rangeTarget)
+        expect(rangeTarget.comparison).toMatchObject({
+          _tag: "revisionRange",
+          baseSha,
+          headSha,
+          mergeBaseSha: baseSha,
+        })
+        expect(rangeSnapshot.parsedDiff.files.map((file) => file.path)).toEqual(["feature.txt"])
+
+        writeFileSync(join(rootPath, "dirty.txt"), "dirty\n")
+        const changedResult = yield* service.getLocalReviewSnapshot(rangeTarget).pipe(Effect.result)
+        expect(Result.isFailure(changedResult) && changedResult.failure).toBeInstanceOf(
+          LocalReviewChangedError,
+        )
       }),
   )
 

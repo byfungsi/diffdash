@@ -16,6 +16,7 @@ import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   BranchComparison,
   LocalReviewTarget,
+  RevisionRangeComparison,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import {
@@ -26,6 +27,7 @@ import {
 import { HostedReviewTarget } from "@diffdash/domain/review-thread"
 import { ReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { StoredWalkthrough, Walkthrough } from "@diffdash/domain/walkthrough"
+import { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import {
   CoreFileOpenIntent,
   CoreDefectSummary,
@@ -238,6 +240,17 @@ describe("EmbeddedCore", () => {
       headSha: GitCommitSha.make("b".repeat(40)),
       mergeBaseSha: GitCommitSha.make("c".repeat(40)),
     })
+    const localComparison = LocalReviewTarget.make({
+      kind: "local",
+      rootPath,
+      comparison: RevisionRangeComparison.make({
+        baseRef: RepositoryComparisonRef.make("main"),
+        headRef: RepositoryComparisonRef.make("HEAD"),
+        baseSha: ReviewRevision.make("a".repeat(40)),
+        headSha: ReviewRevision.make("b".repeat(40)),
+        mergeBaseSha: ReviewRevision.make("c".repeat(40)),
+      }),
+    })
 
     expect(localViewedFileScope(ReviewProjectId.make("repo-1"), workingTree, null)).toEqual({
       repoId: "repo-1",
@@ -262,6 +275,12 @@ describe("EmbeddedCore", () => {
       sourceIdentity: "detached",
       comparisonKind: "branch",
       comparisonTarget: "main",
+    })
+    expect(localViewedFileScope(ReviewProjectId.make("repo-1"), localComparison, null)).toEqual({
+      repoId: "repo-1",
+      sourceIdentity: `comparison:${"c".repeat(40)}...${"b".repeat(40)}`,
+      comparisonKind: "branch",
+      comparisonTarget: `${"c".repeat(40)}...${"b".repeat(40)}`,
     })
     expect(comparisonViewedFileScope(ReviewProjectId.make("repo-1"), repositoryComparison)).toEqual(
       {
@@ -478,6 +497,76 @@ describe("EmbeddedCore", () => {
       expect(result.ok).toBe(false)
       if (result.ok) throw new Error("Expected repository installation to fail")
       expect(result.error).toMatchObject({ _tag: "RepositoryLinkError" })
+    }),
+  )
+
+  it.effect("resolves and acquires an immutable comparison from a local-only repository", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const repositoryPath = join(directory, "local-comparison")
+      mkdirSync(repositoryPath)
+      execFileSync("git", ["init", "-b", "main", repositoryPath])
+      writeFileSync(join(repositoryPath, "base.txt"), "base\n")
+      execFileSync("git", ["-C", repositoryPath, "add", "."])
+      execFileSync("git", [
+        "-C",
+        repositoryPath,
+        "-c",
+        "user.name=DiffDash Test",
+        "-c",
+        "user.email=diffdash@example.test",
+        "commit",
+        "-m",
+        "base",
+      ])
+      const baseSha = execFileSync("git", ["-C", repositoryPath, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim()
+      writeFileSync(join(repositoryPath, "feature.txt"), "feature\n")
+      execFileSync("git", ["-C", repositoryPath, "add", "."])
+      execFileSync("git", [
+        "-C",
+        repositoryPath,
+        "-c",
+        "user.name=DiffDash Test",
+        "-c",
+        "user.email=diffdash@example.test",
+        "commit",
+        "-m",
+        "feature",
+      ])
+      const headSha = execFileSync("git", ["-C", repositoryPath, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim()
+
+      const core = createEmbeddedCore(testConfiguration(directory))
+      yield* Effect.addFinalizer(() => Effect.promise(core.dispose))
+      successValue(yield* Effect.promise(core.start))
+      const resolved = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.resolveRepositoryComparison, {
+            command: OpenRepositoryComparisonCommand.make({
+              localPath: RepositoryCheckoutPath.make(repositoryPath),
+              repository: null,
+              baseRef: RepositoryComparisonRef.make(baseSha),
+              headRef: RepositoryComparisonRef.make(headSha),
+            }),
+          }),
+        ),
+      )
+      expect(resolved.target).toMatchObject({
+        kind: "local",
+        comparison: { _tag: "revisionRange", baseSha, headSha, mergeBaseSha: baseSha },
+      })
+      if (resolved.target.kind !== "local") throw new Error("Expected a local comparison")
+      const target = resolved.target
+
+      const manifest = successValue(
+        yield* Effect.promise(() =>
+          core.execute(CoreMethod.acquireLocalReviewSnapshot, { target }),
+        ),
+      )
+      expect(manifest.detail.files.map((file) => file.path)).toEqual(["feature.txt"])
     }),
   )
 

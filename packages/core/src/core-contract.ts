@@ -307,7 +307,11 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.searchHostedRepositories]: CoreGitProviderFailure
   readonly [CoreMethod.resolveLocalBranch]: ProcessExecutionError | LocalReviewTargetError
   readonly [CoreMethod.resolveLastCommit]: ProcessExecutionError | LocalReviewTargetError
-  readonly [CoreMethod.resolveRepositoryComparison]: RepositoryComparisonSourceError
+  readonly [CoreMethod.resolveRepositoryComparison]:
+    | LocalReviewTargetError
+    | ProcessExecutionError
+    | RepositoryComparisonSourceError
+    | RepositoryLinkError
   readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
   readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError
   readonly [CoreMethod.acquireRepositoryComparisonSnapshot]: RepositoryComparisonSourceError

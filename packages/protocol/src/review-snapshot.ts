@@ -107,7 +107,7 @@ export class ResolvedRepositoryComparison extends Schema.Class<ResolvedRepositor
   "ResolvedRepositoryComparison",
 )({
   repo: Repo,
-  target: RepositoryComparisonTarget,
+  target: Schema.Union([RepositoryComparisonTarget, LocalReviewTarget]),
 }) {}
 
 /** Renderer request to resolve and pin one repository comparison command. */

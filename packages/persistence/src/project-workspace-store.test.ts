@@ -5,6 +5,7 @@ import { makeHostedRepositoryLocator, makeHostedReviewLocator } from "@diffdash/
 import {
   BranchComparison,
   LocalReviewTarget,
+  RevisionRangeComparison,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
@@ -37,6 +38,17 @@ const branchTarget = LocalReviewTarget.make({
     branchName: RepositoryComparisonRef.make("main"),
     baseRef: RepositoryComparisonRef.make("refs/heads/main"),
     baseSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+  }),
+})
+const revisionRangeTarget = LocalReviewTarget.make({
+  kind: "local",
+  rootPath: checkoutPath,
+  comparison: RevisionRangeComparison.make({
+    baseRef: RepositoryComparisonRef.make("v1.0.0"),
+    headRef: RepositoryComparisonRef.make("HEAD"),
+    baseSha: ReviewRevision.make("a".repeat(40)),
+    headSha: ReviewRevision.make("b".repeat(40)),
+    mergeBaseSha: ReviewRevision.make("a".repeat(40)),
   }),
 })
 const comparisonTarget = RepositoryComparisonTarget.make({
@@ -78,6 +90,7 @@ const saveInput = (
     | typeof hostedTarget
     | typeof workingTreeTarget
     | typeof branchTarget
+    | typeof revisionRangeTarget
     | typeof comparisonTarget
     | null,
 ) =>
@@ -164,6 +177,21 @@ describe("ProjectWorkspaceStore", () => {
         if (saved.selectedReviewTarget?.kind === "local") {
           expect(saved.selectedReviewTarget.comparison).toEqual(branchTarget.comparison)
         }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("round trips an immutable local revision range", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      yield* Effect.gen(function* () {
+        yield* insertProject
+        const saved = yield* (yield* ProjectWorkspaceStore).save(
+          saveInput("threads", revisionRangeTarget),
+        )
+
+        expect(saved.selectedReviewTarget).toEqual(revisionRangeTarget)
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

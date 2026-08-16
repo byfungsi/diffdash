@@ -43,7 +43,7 @@ export class OpenPullRequestCommand extends Schema.TaggedClass<OpenPullRequestCo
   },
 ) {}
 
-/** Open local changes compared with an explicit or default branch. */
+/** Open local changes compared with an explicit revision or the default branch. */
 export class OpenBranchDiffCommand extends Schema.TaggedClass<OpenBranchDiffCommand>()(
   "openBranchDiff",
   {

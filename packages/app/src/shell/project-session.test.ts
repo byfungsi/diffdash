@@ -1,4 +1,9 @@
-import { HostedRepositorySource, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
+import {
+  HostedRepositorySource,
+  LocalRepositorySource,
+  makeHostedRepositoryLocator,
+} from "@diffdash/domain/git-provider"
+import { LocalReviewTarget, RevisionRangeComparison } from "@diffdash/domain/local-review"
 import {
   ProjectOpened,
   ProjectRemoteCandidate,
@@ -6,7 +11,10 @@ import {
   ProjectWorkspaceState,
 } from "@diffdash/domain/project-workspace"
 import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
+import { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
+import { ResolvedRepositoryComparison } from "@diffdash/protocol/review-snapshot"
 import { Option } from "effect"
 import { describe, expect, it, vi } from "vitest"
 
@@ -145,5 +153,44 @@ describe("ProjectSession", () => {
       reviewType: "pull_request",
     })
     expect(openProject).toHaveBeenLastCalledWith("/workspace/diffdash", Option.some(github))
+  })
+
+  it("projects a local repository comparison through the local review flow", async () => {
+    const localRepo = Repo.make({
+      ...repo,
+      id: ReviewProjectId.make("local:workspace/diffdash"),
+      source: LocalRepositorySource.make(),
+    })
+    const target = LocalReviewTarget.make({
+      kind: "local",
+      rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
+      comparison: RevisionRangeComparison.make({
+        baseRef: RepositoryComparisonRef.make("main"),
+        headRef: RepositoryComparisonRef.make("HEAD"),
+        baseSha: ReviewRevision.make("a".repeat(40)),
+        headSha: ReviewRevision.make("b".repeat(40)),
+        mergeBaseSha: ReviewRevision.make("a".repeat(40)),
+      }),
+    })
+    const dependencies = makeDependencies()
+    const session = new ProjectSession({
+      ...dependencies,
+      resolveRepositoryComparison: async () =>
+        ResolvedRepositoryComparison.make({ repo: localRepo, target }),
+    })
+
+    const opened = await session.openRepositoryComparison(
+      OpenRepositoryComparisonCommand.make({
+        localPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
+        repository: null,
+        baseRef: RepositoryComparisonRef.make("main"),
+        headRef: RepositoryComparisonRef.make("HEAD"),
+      }),
+    )
+
+    expect(opened).toMatchObject({
+      projection: { selectedReview: { kind: "localDiff", target } },
+      reviewType: "local_diff",
+    })
   })
 })

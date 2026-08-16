@@ -7107,7 +7107,11 @@ const installDiffDashApi = (
         title:
           target.comparison["_tag"] === "branch"
             ? `Changes vs ${target.comparison.branchName}`
-            : "Local changes",
+            : target.comparison["_tag"] === "revision"
+              ? `Changes vs ${target.comparison.revision}`
+              : target.comparison["_tag"] === "revisionRange"
+                ? `${target.comparison.baseRef}...${target.comparison.headRef}`
+                : "Local changes",
       }),
   )
   const getLocalReviewDiff = vi.fn<(target: LocalReviewTarget) => Promise<LocalReviewDiff>>(

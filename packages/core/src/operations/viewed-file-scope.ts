@@ -14,15 +14,31 @@ export const localViewedFileScope = (
   target: Extract<ReviewThreadTarget, { readonly kind: "local" }>,
   sourceBranch: RepositoryComparisonRef | null,
 ): LocalViewedFileScope => {
-  const sourceIdentity = Option.match(Option.fromNullishOr(sourceBranch), {
-    onNone: () => "detached",
-    onSome: (branch) => `branch:${branch}`,
-  })
+  const sourceIdentity = Match.value(target.comparison).pipe(
+    Match.tag(
+      "revisionRange",
+      ({ headSha, mergeBaseSha }) => `comparison:${mergeBaseSha}...${headSha}`,
+    ),
+    Match.orElse(() =>
+      Option.match(Option.fromNullishOr(sourceBranch), {
+        onNone: () => "detached",
+        onSome: (branch) => `branch:${branch}`,
+      }),
+    ),
+  )
   const comparison = Match.valueTags(target.comparison, {
     workingTree: () => ({ comparisonKind: "workingTree" as const, comparisonTarget: "" }),
     branch: ({ branchName }) => ({
       comparisonKind: "branch" as const,
       comparisonTarget: branchName,
+    }),
+    revision: ({ revision }) => ({
+      comparisonKind: "branch" as const,
+      comparisonTarget: revision,
+    }),
+    revisionRange: ({ headSha, mergeBaseSha }) => ({
+      comparisonKind: "branch" as const,
+      comparisonTarget: `${mergeBaseSha}...${headSha}`,
     }),
     lastCommit: ({ headSha }) => ({
       comparisonKind: "branch" as const,
