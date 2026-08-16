@@ -133,6 +133,7 @@ test("accepts only the exact generated full fixture profile", () => {
 test("emits path-free summaries and rejects path-bearing summary data", () => {
   const summary = summarizeOrchestrationReport(passingReport())
   assert.equal(summary.passed, true)
+  assert.equal(assertPathFreeSummary({ optional: undefined }).optional, undefined)
   assert.equal(summary.provenance.packagedArtifactDigest, "e".repeat(64))
   assert.equal(JSON.stringify(summary).includes(process.cwd()), false)
   assert.throws(

@@ -45,7 +45,8 @@ export const parseOrchestrationOptions = (args, profile) => {
   return { host, manifest: values.get("manifest"), profile, session }
 }
 
-const isRecord = (value) => value !== null && Object.getPrototypeOf(value) === Object.prototype
+const isRecord = (value) =>
+  value === Object(value) && Object.getPrototypeOf(value) === Object.prototype
 const isLifecycleIdentity = (value) =>
   Object.prototype.toString.call(value) === "[object String]" &&
   value.length > 0 &&

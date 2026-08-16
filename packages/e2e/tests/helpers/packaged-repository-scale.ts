@@ -26,7 +26,7 @@ export const packagedE2eExecutable = (): string => {
 export const packagedE2eArtifact = (): string => {
   const executable = packagedE2eExecutable()
   if (process.platform === "darwin") {
-    return join(resolve(dirname(executable), "../.."), "Resources", "app.asar")
+    return join(resolve(dirname(executable), ".."), "Resources", "app.asar")
   }
   return join(dirname(executable), "resources", "app.asar")
 }
