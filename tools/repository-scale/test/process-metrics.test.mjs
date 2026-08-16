@@ -170,7 +170,8 @@ test("evaluates ten switches with warm-up, absolute tolerance, and growth detect
 
 test("rejects stale, incomplete, and mixed switch reports", () => {
   const reports = Array.from({ length: 10 }, (_, index) => ({
-    version: 1,
+    version: 2,
+    diffdashCommit: "c".repeat(40),
     fixtureId: "linux-test",
     fixtureManifest: {
       id: "linux-test",
@@ -180,6 +181,14 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
     session: "baseline",
     switchIndex: index + 1,
     platform: "linux",
+    machineProfile: {
+      platform: "linux",
+      architecture: "x64",
+      operatingSystemRelease: "6.8.0-test",
+      logicalCpuCount: 8,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      nodeVersion: "v22.20.0",
+    },
     totalFinalRssBytes: 500 * 1024 * 1024,
     durationMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
     intervalMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
@@ -190,7 +199,9 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
     },
   }))
   assert.deepEqual(validateSwitchReports(reports, "baseline"), {
+    diffdashCommit: "c".repeat(40),
     fixtureId: "linux-test",
+    machineProfile: reports[0].machineProfile,
     platform: "linux",
   })
   assert.throws(
@@ -212,5 +223,24 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   assert.throws(
     () => validateSwitchReports(reports.with(0, { ...reports[0], durationMs: 1 }), "baseline"),
     /approved measurement policy/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(4, { ...reports[4], diffdashCommit: "d".repeat(40) }),
+        "baseline",
+      ),
+    /same DiffDash commit/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(2, {
+          ...reports[2],
+          machineProfile: { ...reports[2].machineProfile, logicalCpuCount: 16 },
+        }),
+        "baseline",
+      ),
+    /same machine profile/,
   )
 })

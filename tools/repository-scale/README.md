@@ -49,8 +49,9 @@ pnpm repository-scale:measure -- \
   --switch=1
 ```
 
-The manifest pins every report to the exact fixture ID and base/head revisions. The JSON report
-contains no command lines or repository paths. It records peak RSS by Electron,
+The manifest pins every report to the exact fixture ID and base/head revisions. Reports also record
+the exact DiffDash commit and a source-safe machine profile; all ten switches must use identical
+provenance. The JSON report contains no command lines or repository paths. It records peak RSS by Electron,
 renderer, Core/worker, and child ownership. Linux also reports exact private RSS, swap, and benchmark
 I/O deltas from `/proc`; unsupported macOS fields remain `null`. Each sample records a final ten-second
 steady window, but the switch gate is authoritative. After switch ten, evaluate the session:

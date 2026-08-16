@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { readFile } from "node:fs/promises"
+import { arch, cpus, platform as osPlatform, release, totalmem } from "node:os"
 import { promisify } from "node:util"
 
 const execFilePromise = promisify(execFile)
@@ -13,6 +14,19 @@ export const REPOSITORY_SCALE_MEASUREMENT_POLICY = Object.freeze({
   plateauWindowMs: 10_000,
   plateauThreshold: 0.05,
 })
+
+/** Captures source-safe host facts required to reproduce one promoted measurement. */
+export const captureMachineProfile = () => ({
+  platform: osPlatform(),
+  architecture: arch(),
+  operatingSystemRelease: release(),
+  logicalCpuCount: cpus().length,
+  physicalMemoryBytes: totalmem(),
+  nodeVersion: process.version,
+})
+
+const isNonEmptyString = (value) =>
+  Object.prototype.toString.call(value) === "[object String]" && value.length > 0
 
 const kilobytes = (value) => (value === null ? null : value * 1024)
 
@@ -224,6 +238,8 @@ export const validateSwitchReports = (reports, session) => {
     throw new Error("Switch report validation requires exactly ten reports")
   const fixtureId = reports[0]?.fixtureId
   const platform = reports[0]?.platform
+  const diffdashCommit = reports[0]?.diffdashCommit
+  const machineProfile = reports[0]?.machineProfile
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(String(fixtureId))) {
     throw new Error("Switch reports must contain a valid fixture identity")
   }
@@ -231,8 +247,24 @@ export const validateSwitchReports = (reports, session) => {
     throw new Error("Switch reports must contain a platform")
   }
   if (platform !== "linux") throw new Error("Promoted switch reports must be captured on Linux")
+  if (!/^[a-f0-9]{40}$/u.test(String(diffdashCommit))) {
+    throw new Error("Switch reports must contain an exact DiffDash commit")
+  }
+  if (
+    machineProfile?.platform !== "linux" ||
+    !isNonEmptyString(machineProfile.architecture) ||
+    !isNonEmptyString(machineProfile.operatingSystemRelease) ||
+    !Number.isSafeInteger(machineProfile.logicalCpuCount) ||
+    machineProfile.logicalCpuCount <= 0 ||
+    !Number.isSafeInteger(machineProfile.physicalMemoryBytes) ||
+    machineProfile.physicalMemoryBytes <= 0 ||
+    !/^v\d+/u.test(String(machineProfile.nodeVersion))
+  ) {
+    throw new Error("Switch reports must contain a complete Linux machine profile")
+  }
+  const encodedMachineProfile = JSON.stringify(machineProfile)
   reports.forEach((report, index) => {
-    if (report.version !== 1)
+    if (report.version !== 2)
       throw new Error(`Switch ${index + 1} has an unsupported report version`)
     if (report.fixtureId !== fixtureId)
       throw new Error("All switch reports must use the same fixture")
@@ -242,6 +274,11 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error(`Switch ${index + 1} has mismatched identity`)
     if (report.platform !== platform)
       throw new Error("All switch reports must use the same platform")
+    if (report.diffdashCommit !== diffdashCommit)
+      throw new Error("All switch reports must use the same DiffDash commit")
+    if (JSON.stringify(report.machineProfile) !== encodedMachineProfile) {
+      throw new Error("All switch reports must use the same machine profile")
+    }
     if (
       report.fixtureManifest?.id !== fixtureId ||
       !/^[a-f0-9]{40}$/u.test(String(report.fixtureManifest?.baseSha)) ||
@@ -264,7 +301,7 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error(`Switch ${index + 1} has invalid final memory`)
     }
   })
-  return { fixtureId, platform }
+  return { diffdashCommit, fixtureId, machineProfile, platform }
 }
 
 /** Samples one process tree and evaluates its final-window memory plateau. */
@@ -301,7 +338,7 @@ export const measureProcessTree = async ({
   const plateauVariation = plateauMean === 0 ? 0 : (plateauMaximum - plateauMinimum) / plateauMean
   const finalSample = samples.at(-1)
   return {
-    version: 1,
+    version: 2,
     platform: process.platform,
     rootPid,
     startedAt: samples[0].capturedAt,

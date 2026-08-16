@@ -1,11 +1,14 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 
 import { prepareGitFixture } from "./git-fixture.mjs"
 import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
 import {
+  captureMachineProfile,
   evaluateSwitchMemoryPlateau,
   measureProcessTree,
   REPOSITORY_SCALE_MEASUREMENT_POLICY,
@@ -13,7 +16,9 @@ import {
 } from "./process-metrics.mjs"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const workspaceRoot = resolve(packageRoot, "../..")
 const defaultCacheDirectory = resolve(packageRoot, ".cache")
+const execFilePromise = promisify(execFile)
 
 const usage = `Usage:
   pnpm repository-scale:generate [--name=pathological]
@@ -134,6 +139,13 @@ const measure = async (options) => {
   }
   const fixture = await readFixtureManifest(options)
   const session = safeName(options, "session")
+  const { stdout: commitOutput } = await execFilePromise("git", ["rev-parse", "--verify", "HEAD"], {
+    cwd: workspaceRoot,
+  })
+  const diffdashCommit = commitOutput.trim()
+  if (!/^[a-f0-9]{40}$/u.test(diffdashCommit)) {
+    throw new Error("Unable to resolve the exact DiffDash commit")
+  }
   const measurement = await measureProcessTree({
     rootPid: pid,
     durationMs: positiveNumber(
@@ -159,8 +171,10 @@ const measure = async (options) => {
   })
   const report = {
     ...measurement,
+    diffdashCommit,
     fixtureId: fixture.id,
     fixtureManifest: fixture,
+    machineProfile: captureMachineProfile(),
     session,
     switchIndex,
   }
@@ -186,10 +200,10 @@ const evaluate = async (options) => {
       ).then(JSON.parse),
     ),
   )
-  const { fixtureId } = validateSwitchReports(reports, session)
+  const provenance = validateSwitchReports(reports, session)
   const evaluation = {
     ...evaluateSwitchMemoryPlateau(reports),
-    fixtureId,
+    ...provenance,
     session,
   }
   const output = resolve(reportDirectory, "evaluation.json")
