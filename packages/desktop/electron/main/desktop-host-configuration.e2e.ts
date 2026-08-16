@@ -3,10 +3,17 @@ import type { DesktopStartupConfiguration } from "./desktop-host-configuration"
 const optionalEnvironmentValue = (value: string | undefined): string | null =>
   value === undefined || value.length === 0 ? null : value
 
+const coreHostMode = (value: string | undefined): "auto" | "bun" | "utility" => {
+  if (value === undefined || value.length === 0) return "auto"
+  if (value === "bun" || value === "utility") return value
+  throw new Error("DIFFDASH_E2E_CORE_HOST must be bun or utility")
+}
+
 /** Reads E2E-only host behavior from the Playwright launch environment. */
 export const makeE2EDesktopStartupConfiguration = (
   environment: Readonly<Record<string, string | undefined>>,
 ): DesktopStartupConfiguration => ({
+  coreHostMode: coreHostMode(environment.DIFFDASH_E2E_CORE_HOST),
   hiddenWindow: environment.DIFFDASH_E2E_HIDDEN === "1",
   updatesDisabled: environment.DIFFDASH_E2E_DISABLE_UPDATES === "1",
   fixtures: {

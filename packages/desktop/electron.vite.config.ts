@@ -62,6 +62,7 @@ const internalPackages = [
   "@diffdash/agents",
   "@diffdash/app",
   "@diffdash/core",
+  "@diffdash/core-rpc",
   "@diffdash/domain",
   "@diffdash/git-provider",
   "@diffdash/git-provider-fixture",

@@ -6,6 +6,7 @@ import { Effect, Schema } from "effect"
 import { app } from "electron"
 import type { ApplicationIdentity } from "./application-identity"
 import { decodeCoreConfiguration } from "./core-configuration"
+import type { CoreHostMode } from "./core-host-selection"
 import { resolveApplicationPaths, type ApplicationPaths } from "./paths"
 
 const optionalEnvironmentValue = (value: string | undefined): string | null =>
@@ -84,6 +85,7 @@ export interface DesktopHostConfiguration {
   }
   readonly policies: {
     readonly allowMultipleInstances: boolean
+    readonly coreHostMode: CoreHostMode
     readonly debugOnboarding: boolean
     readonly hiddenWindow: boolean
     readonly updatesDisabled: boolean
@@ -98,6 +100,7 @@ export interface DesktopHostConfiguration {
 
 /** Build-selected behavior that must be supplied by a concrete desktop entrypoint. */
 export interface DesktopStartupConfiguration {
+  readonly coreHostMode: CoreHostMode
   readonly hiddenWindow: boolean
   readonly updatesDisabled: boolean
   readonly fixtures: {
@@ -113,6 +116,7 @@ export interface DesktopStartupConfiguration {
 
 /** Production startup behavior, independent of all E2E environment switches. */
 export const productionDesktopStartupConfiguration: DesktopStartupConfiguration = {
+  coreHostMode: "auto",
   hiddenWindow: false,
   updatesDisabled: false,
   fixtures: {
@@ -210,6 +214,7 @@ export const makeDesktopHostConfiguration = (
       application: core.application,
       policies: {
         allowMultipleInstances: source.environment.DIFFDASH_ALLOW_MULTIPLE_INSTANCES === "1",
+        coreHostMode: startup.coreHostMode,
         debugOnboarding: !source.packaged && source.environment.DEBUG_ONBOARD === "1",
         hiddenWindow: startup.hiddenWindow,
         updatesDisabled: startup.updatesDisabled,

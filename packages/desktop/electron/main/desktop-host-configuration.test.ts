@@ -66,6 +66,7 @@ describe("desktop host configuration", () => {
         },
         policies: {
           allowMultipleInstances: true,
+          coreHostMode: "auto",
           debugOnboarding: true,
           hiddenWindow: false,
           updatesDisabled: false,
@@ -111,7 +112,11 @@ describe("desktop host configuration", () => {
       )
       const encodedCore = Schema.encodeSync(CoreConfiguration)(configuration.core)
 
-      expect(configuration.policies).toMatchObject({ hiddenWindow: true, updatesDisabled: true })
+      expect(configuration.policies).toMatchObject({
+        coreHostMode: "auto",
+        hiddenWindow: true,
+        updatesDisabled: true,
+      })
       expect(encodedCore.fixtures).toEqual({
         agentProviderEnabled: true,
         agentProviderNeverCompletes: true,
@@ -123,6 +128,18 @@ describe("desktop host configuration", () => {
       })
     }),
   )
+
+  it("accepts only explicit E2E Core host overrides", () => {
+    expect(makeE2EDesktopStartupConfiguration({ DIFFDASH_E2E_CORE_HOST: "bun" }).coreHostMode).toBe(
+      "bun",
+    )
+    expect(
+      makeE2EDesktopStartupConfiguration({ DIFFDASH_E2E_CORE_HOST: "utility" }).coreHostMode,
+    ).toBe("utility")
+    expect(() =>
+      makeE2EDesktopStartupConfiguration({ DIFFDASH_E2E_CORE_HOST: "embedded" }),
+    ).toThrow("DIFFDASH_E2E_CORE_HOST must be bun or utility")
+  })
 
   it.effect("resolves packaged ESM resources without CommonJS directory globals", () =>
     Effect.gen(function* () {

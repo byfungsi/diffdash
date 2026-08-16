@@ -769,10 +769,9 @@ const hasCoreHostProcess = (rootPid: number, host: "bun" | "utility"): boolean =
   }
   return rows.some((row) => {
     if (!descendants.has(row.pid) || row.pid === rootPid) return false
-    if (!row.command.includes("core.mjs")) return false
     return host === "bun"
-      ? /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
-      : row.command.includes("--type=utility")
+      ? row.command.includes("core.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+      : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
   })
 }
 
