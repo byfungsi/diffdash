@@ -128,6 +128,7 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
     }
 
     const session = yield* candidate.start.pipe(
+      Effect.retry({ times: 2 }),
       Effect.map((value) => ({ ok: true, value }) as const),
       Effect.catch((error) => Effect.succeed({ ok: false, error } as const)),
     )

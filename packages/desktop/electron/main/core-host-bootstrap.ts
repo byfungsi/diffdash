@@ -184,7 +184,12 @@ export const bootstrapCoreHost = (
         processEpoch,
         requestId: options.generateRequestId?.() ?? HostRequestId.make(`h:${randomUUID()}`),
       })
-      const health = yield* client.health(request)
+      const health = yield* client.health(request).pipe(
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.fail(bootstrapFailure("authenticating")),
+        }),
+      )
       if (health.lifecycle !== "awaitingOwnership") {
         return yield* Effect.fail(bootstrapFailure("authenticating"))
       }

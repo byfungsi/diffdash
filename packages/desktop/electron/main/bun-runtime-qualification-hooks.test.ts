@@ -3,10 +3,11 @@ import { Effect, Ref } from "effect"
 
 import {
   makeBunRuntimeQualificationHooks,
+  retryBunCoreHealthProbe,
   type BunRuntimeQualificationExecutor,
   type BunRuntimeQualificationOptions,
 } from "./bun-runtime-qualification-hooks"
-import type { BunRuntimeCandidate } from "./core-bun-runtime"
+import { BunRuntimeProbeError, type BunRuntimeCandidate } from "./core-bun-runtime"
 
 const candidate: BunRuntimeCandidate = {
   executablePath: "/Applications/DiffDash.app/private/bun",
@@ -14,6 +15,23 @@ const candidate: BunRuntimeCandidate = {
 }
 
 describe("production Bun runtime qualification hooks", () => {
+  it.effect("retries transient Core health failures within its attempt budget", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      yield* retryBunCoreHealthProbe(
+        Ref.updateAndGet(attempts, (current) => current + 1).pipe(
+          Effect.flatMap((attempt) =>
+            attempt < 3
+              ? BunRuntimeProbeError.make({ safeMessage: "A Bun runtime probe failed." })
+              : Effect.void,
+          ),
+        ),
+      )
+
+      expect(yield* Ref.get(attempts)).toBe(3)
+    }),
+  )
+
   it.effect(
     "routes every capability through the executable seam without exposing process output",
     () =>

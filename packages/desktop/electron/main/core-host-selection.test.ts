@@ -119,6 +119,31 @@ describe("Core host selection", () => {
     }),
   )
 
+  it.effect("retries a transient startup failure with a fresh candidate attempt", () =>
+    Effect.gen(function* () {
+      const { latch } = yield* makeLatch()
+      const attempts = yield* Ref.make(0)
+      const selected = yield* selectCoreHost(
+        "bun",
+        [
+          candidate(
+            "bun",
+            Effect.void,
+            Ref.updateAndGet(attempts, (current) => current + 1).pipe(
+              Effect.flatMap((attempt) =>
+                attempt < 3 ? Effect.fail(startupFailure) : Effect.succeed(session("bun")),
+              ),
+            ),
+          ),
+        ],
+        latch,
+      )
+
+      expect(selected.host).toBe("bun")
+      expect(yield* Ref.get(attempts)).toBe(3)
+    }),
+  )
+
   it.effect("stops fallback once the pre-ownership latch is closed", () =>
     Effect.gen(function* () {
       const { allowed, latch } = yield* makeLatch()

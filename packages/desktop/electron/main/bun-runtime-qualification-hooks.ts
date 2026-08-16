@@ -20,6 +20,7 @@ import type { VerifiedCoreArtifact } from "./core-artifact"
 const PROCESS_TIMEOUT_MILLISECONDS = 3_000
 const PROCESS_OUTPUT_LIMIT_BYTES = 4_096
 const SAFE_MESSAGE = "A Bun runtime probe failed." as const
+const CORE_HEALTH_ATTEMPTS = 3
 const scriptCapabilities = [
   "worker",
   "processCancellation",
@@ -153,6 +154,18 @@ export interface BunRuntimeQualificationOptions {
 
 const probeError = () => BunRuntimeProbeError.make({ safeMessage: SAFE_MESSAGE })
 
+/** Bounds a Bun Core health exchange and retries with a fresh scoped process after a stall. */
+export const retryBunCoreHealthProbe = <Error>(
+  probe: Effect.Effect<void, Error>,
+): Effect.Effect<void, Error | BunRuntimeProbeError> =>
+  probe.pipe(
+    Effect.timeoutOrElse({
+      duration: PROCESS_TIMEOUT_MILLISECONDS,
+      orElse: () => Effect.fail(probeError()),
+    }),
+    Effect.retry({ times: CORE_HEALTH_ATTEMPTS - 1 }),
+  )
+
 const probeEnvironment = (
   environment: Readonly<Record<string, string | undefined>>,
 ): Readonly<Record<string, string>> => {
@@ -246,48 +259,50 @@ const makeSystemExecutor = (
     const existing = completedHealthProbes.get(candidate.executablePath)
     if (existing !== undefined) return existing
     const probe = Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tempResources = yield* TempResources
-          const directory = yield* tempResources.makeTempDirectoryScoped({
-            parentDirectory: options.temporaryDirectory,
-            prefix: "dd-bun-qualification-",
-          })
-          const databasePath = join(directory, "qualification.sqlite")
-          const statePath = join(directory, "state.json")
-          const encodedConfiguration = yield* Schema.encodeEffect(CoreConfiguration)(
-            options.coreConfiguration,
-          )
-          const configuration = yield* Schema.decodeUnknownEffect(CoreConfiguration)({
-            ...encodedConfiguration,
-            paths: {
-              ...encodedConfiguration.paths,
-              database: CoreAbsolutePath.make(databasePath),
-              settings: CoreAbsolutePath.make(join(directory, "settings.json")),
-              state: CoreAbsolutePath.make(statePath),
-              temporaryDirectory: CoreAbsolutePath.make(join(directory, "temp")),
-              worktreePool: CoreAbsolutePath.make(join(directory, "worktrees")),
-              remoteWorktreePool: CoreAbsolutePath.make(join(directory, "remote-worktrees")),
-            },
-          })
-          yield* bootstrapCoreHost({
-            artifact: options.artifact,
-            applicationInstanceId: ApplicationInstanceId.make("bun-runtime-qualification"),
-            temporaryDirectory: directory,
-            startTransport: (transport) =>
-              startCoreBunProcess({
-                applicationCwd: options.applicationCwd,
-                bunExecutablePath: candidate.executablePath,
-                configuration: transport,
-                databasePath,
-                environment: options.environment,
-                statePath,
-                coreConfiguration: configuration,
-                listenTimeout: PROCESS_TIMEOUT_MILLISECONDS,
-              }).pipe(Effect.asVoid),
-          })
-        }),
-      ).pipe(Effect.provide(platformLayer)),
+      retryBunCoreHealthProbe(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const tempResources = yield* TempResources
+            const directory = yield* tempResources.makeTempDirectoryScoped({
+              parentDirectory: options.temporaryDirectory,
+              prefix: "dd-bun-qualification-",
+            })
+            const databasePath = join(directory, "qualification.sqlite")
+            const statePath = join(directory, "state.json")
+            const encodedConfiguration = yield* Schema.encodeEffect(CoreConfiguration)(
+              options.coreConfiguration,
+            )
+            const configuration = yield* Schema.decodeUnknownEffect(CoreConfiguration)({
+              ...encodedConfiguration,
+              paths: {
+                ...encodedConfiguration.paths,
+                database: CoreAbsolutePath.make(databasePath),
+                settings: CoreAbsolutePath.make(join(directory, "settings.json")),
+                state: CoreAbsolutePath.make(statePath),
+                temporaryDirectory: CoreAbsolutePath.make(join(directory, "temp")),
+                worktreePool: CoreAbsolutePath.make(join(directory, "worktrees")),
+                remoteWorktreePool: CoreAbsolutePath.make(join(directory, "remote-worktrees")),
+              },
+            })
+            yield* bootstrapCoreHost({
+              artifact: options.artifact,
+              applicationInstanceId: ApplicationInstanceId.make("bun-runtime-qualification"),
+              temporaryDirectory: directory,
+              startTransport: (transport) =>
+                startCoreBunProcess({
+                  applicationCwd: options.applicationCwd,
+                  bunExecutablePath: candidate.executablePath,
+                  configuration: transport,
+                  databasePath,
+                  environment: options.environment,
+                  statePath,
+                  coreConfiguration: configuration,
+                  listenTimeout: PROCESS_TIMEOUT_MILLISECONDS,
+                }).pipe(Effect.asVoid),
+            })
+          }),
+        ).pipe(Effect.provide(platformLayer)),
+      ),
     ).then(() => undefined)
     completedHealthProbes.set(candidate.executablePath, probe)
     return probe
