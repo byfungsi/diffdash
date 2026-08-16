@@ -280,11 +280,12 @@ const writePromptFile = (
     .makeTempFileScoped(
       prompt,
       directory === undefined
-        ? { prefix: "opencode-prompt-", fileName: "prompt.txt" }
+        ? { prefix: "opencode-prompt-", fileName: "prompt.txt", resourceClass: "agentTemp" }
         : {
             parentDirectory: directory,
             prefix: "opencode-prompt-",
             fileName: "prompt.txt",
+            resourceClass: "agentTemp",
           },
     )
     .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))

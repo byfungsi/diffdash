@@ -5,7 +5,10 @@ import { CoreRpcPayloadBytes } from "@diffdash/core-rpc"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
-import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
+import {
+  HostedReviewWorkspacePool,
+  ReviewRefMutation,
+} from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
@@ -83,6 +86,7 @@ import {
   makeDisposableResourceLifecycle,
 } from "./disposable-resource-lifecycle"
 import { agentWorkspaceResourcesLayer } from "./agent-workspace-resources"
+import { makeProducerResourceLifecycles } from "./producer-resource-lifecycle"
 
 /** Maximum aggregate exact-Git output reserved by one lazy file regeneration. */
 export const CORE_SNAPSHOT_MAX_LAZY_BYTES = 16 * 1_024 * 1_024
@@ -151,7 +155,6 @@ export const createStandaloneCoreLayer = (
   )
   const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
   const fileStorageLayer = FileStorage.layer.pipe(Layer.provide(platformLayer))
-  const tempResourcesLayer = TempResources.layer.pipe(Layer.provide(platformLayer))
   const settingsLayer = AppSettings.layer(settingsPath).pipe(Layer.provide(fileStorageLayer))
   const processLayer = ProcessService.layer
   const gitProviderRegistryLayer = Layer.effect(
@@ -176,24 +179,6 @@ export const createStandaloneCoreLayer = (
     analytics: configuration.analytics,
     settingsPath,
   }).pipe(Layer.provideMerge(settingsLayer), Layer.provide(fileStorageLayer))
-  const agentProviderRegistryLayer = Layer.effect(
-    AgentProviderRegistry,
-    Effect.gen(function* () {
-      const processes = yield* ProcessService
-      const tempResources = yield* TempResources
-      const { registrations, policies } = providerComposition.createAgentProviders(
-        {
-          processes,
-          tempResources,
-          tempDirectory: agentWorkingDirectory,
-        },
-        configuration,
-      )
-      return yield* AgentProviderRegistry.pipe(
-        Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
-      )
-    }),
-  ).pipe(Layer.provide(tempResourcesLayer))
   const walkthroughRoutingLayer = Layer.effect(
     WalkthroughRouting,
     Effect.gen(function* () {
@@ -208,10 +193,6 @@ export const createStandaloneCoreLayer = (
       })
     }),
   ).pipe(Layer.provide(settingsLayer))
-  const walkthroughLayer = WalkthroughService.layer({
-    remoteWorkingDirectory: agentWorkingDirectory,
-  }).pipe(Layer.provide(agentProviderRegistryLayer), Layer.provide(walkthroughRoutingLayer))
-  const agentProvidersLayer = AgentProviders.layer.pipe(Layer.provide(agentProviderRegistryLayer))
   const threadStoreLayer = ReviewThreadStore.layer
   const reviewTurnStoreLayer = ReviewTurnStore.layer
   const artifactStoreLayer = AgentRunArtifactStore.layer
@@ -235,10 +216,6 @@ export const createStandaloneCoreLayer = (
     Layer.provideMerge(processLayer),
   )
   const mcpLayer = DiffDashMcpServer.layer
-  const hostedReviewWorkspacePoolLayer = HostedReviewWorkspacePool.layer({
-    remoteWorktreePoolPath: RepositoryCheckoutPath.make(remoteWorktreePoolPath),
-    worktreePoolPath: RepositoryCheckoutPath.make(worktreePoolPath),
-  })
   const threadAnchorMapperLayer = ReviewThreadAnchorMapper.layer.pipe(
     Layer.provideMerge(threadStoreLayer),
   )
@@ -246,11 +223,6 @@ export const createStandaloneCoreLayer = (
     Layer.provideMerge(RepositoryStore.layer),
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(gitProviderLayer),
-  )
-  const repositoryComparisonSourceLayer = RepositoryComparisonSource.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(repositoryLinkerLayer, gitProviderLayer, hostedReviewWorkspacePoolLayer),
-    ),
   )
   const snapshotRootPath = `${configuration.paths.database}.snapshot-blocks`
   const snapshotBlockStoreLayer = SnapshotBlockStore.layer({
@@ -274,16 +246,40 @@ export const createStandaloneCoreLayer = (
     ResourceCollection,
     Effect.gen(function* () {
       const resources = yield* ResourceCatalog
+      const reviewRefs = yield* ReviewRefMutation
       return makeResourceCollection(resources, {
         filesystem: makeFilesystemResourceAdapter(resourceRoots),
-        gitRef: makeBoundedLogicalResourceAdapter(unavailableLogicalMutation, 5_000),
+        gitRef: makeBoundedLogicalResourceAdapter(
+          (operation, location) =>
+            location.kind === "gitRef"
+              ? reviewRefs.mutate(operation, location.identity).pipe(
+                  Effect.mapError((cause) =>
+                    ResourceAdapterError.make({
+                      operation,
+                      resourceId: "cataloged-review-ref",
+                      reason: cause.reason,
+                      cause,
+                    }),
+                  ),
+                )
+              : unavailableLogicalMutation(operation, location),
+          5_000,
+        ),
         updaterPartial: makeUpdaterPartialResourceAdapter(
           (operation) => unavailableLogicalMutation(operation, { kind: "updaterPartial" }),
           { timeoutMs: 5_000, maximumIdentityBytes: 4_096 },
         ),
       })
     }),
-  ).pipe(Layer.provideMerge(snapshotPersistenceLayer))
+  ).pipe(
+    Layer.provideMerge(snapshotPersistenceLayer),
+    Layer.provide(
+      ReviewRefMutation.layer({
+        remoteWorktreePoolPath: RepositoryCheckoutPath.make(remoteWorktreePoolPath),
+        worktreePoolPath: RepositoryCheckoutPath.make(worktreePoolPath),
+      }).pipe(Layer.provide(processLayer)),
+    ),
+  )
   const disposableResourceLifecycleLayer = Layer.effect(
     DisposableResourceLifecycle,
     Effect.gen(function* () {
@@ -304,6 +300,54 @@ export const createStandaloneCoreLayer = (
   const resourceLifecycleLayer = Layer.merge(
     disposableResourceLifecycleLayer,
     resourceLifecycleStartupLayer,
+  )
+  const producerLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const resources = yield* ResourceCatalog
+      const collection = yield* ResourceCollection
+      const lifecycle = makeProducerResourceLifecycles(resources, collection, {
+        tempRootId: PROCESS_TEMP_RESOURCE_ROOT_ID,
+        tempRootPath: agentWorkingDirectory,
+      })
+      return Layer.merge(
+        TempResources.layerWithLifecycle(lifecycle.tempResources).pipe(
+          Layer.provide(platformLayer),
+        ),
+        HostedReviewWorkspacePool.layer({
+          remoteWorktreePoolPath: RepositoryCheckoutPath.make(remoteWorktreePoolPath),
+          reviewRefs: lifecycle.reviewRefs,
+          worktreePoolPath: RepositoryCheckoutPath.make(worktreePoolPath),
+        }).pipe(Layer.provide(processLayer)),
+      )
+    }),
+  ).pipe(Layer.provideMerge(resourceCollectionLayer))
+  const agentProviderRegistryLayer = Layer.effect(
+    AgentProviderRegistry,
+    Effect.gen(function* () {
+      const processes = yield* ProcessService
+      const tempResources = yield* TempResources
+      const { registrations, policies } = providerComposition.createAgentProviders(
+        {
+          processes,
+          tempResources,
+          tempDirectory: agentWorkingDirectory,
+        },
+        configuration,
+      )
+      return yield* AgentProviderRegistry.pipe(
+        Effect.provide(AgentProviderRegistry.layer(registrations, policies)),
+      )
+    }),
+  ).pipe(Layer.provide(producerLayer))
+  const walkthroughLayer = WalkthroughService.layer({
+    remoteWorkingDirectory: agentWorkingDirectory,
+  }).pipe(Layer.provide(agentProviderRegistryLayer), Layer.provide(walkthroughRoutingLayer))
+  const agentProvidersLayer = AgentProviders.layer.pipe(Layer.provide(agentProviderRegistryLayer))
+  const hostedReviewWorkspacePoolLayer = producerLayer
+  const repositoryComparisonSourceLayer = RepositoryComparisonSource.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(repositoryLinkerLayer, gitProviderLayer, hostedReviewWorkspacePoolLayer),
+    ),
   )
   const agentWorkspaceResourceLayer = agentWorkspaceResourcesLayer({
     local: { rootId: LOCAL_WORKTREE_RESOURCE_ROOT_ID, rootPath: worktreePoolPath },

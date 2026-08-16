@@ -602,11 +602,12 @@ const withMcpConfigPath = <A, E, R>(
       .makeTempFileScoped(
         JSON.stringify(makeMcpConfig(request)),
         tempDirectory === undefined
-          ? { prefix: "diffdash-claude-", fileName: "mcp.json" }
+          ? { prefix: "diffdash-claude-", fileName: "mcp.json", resourceClass: "agentTemp" }
           : {
               parentDirectory: tempDirectory,
               prefix: "diffdash-claude-",
               fileName: "mcp.json",
+              resourceClass: "agentTemp",
             },
       )
       .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),

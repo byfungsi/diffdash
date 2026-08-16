@@ -15,6 +15,22 @@ export class TempResourceError extends Schema.TaggedError<TempResourceError>()(
 export interface TempDirectoryOptions {
   readonly parentDirectory?: string
   readonly prefix?: string
+  readonly resourceClass?: TempResourceClass
+}
+
+/** Catalog class selected by the producer creating a temporary resource. */
+export type TempResourceClass = "agentTemp" | "processTemp"
+
+/** Verified directory emitted only after the temporary-resource producer creates it. */
+export interface CreatedTempResource {
+  readonly directory: string
+  readonly parentDirectory: string
+  readonly resourceClass: TempResourceClass
+}
+
+/** Optional lifecycle authority installed by an owning composition root. */
+export interface TempResourceLifecycle {
+  readonly manage: (resource: CreatedTempResource) => Effect.Effect<void, Error, Scope.Scope>
 }
 
 /** Options controlling a file or output path inside a private temporary directory. */
@@ -40,7 +56,18 @@ export interface TempResourceOperations {
 export class TempResources extends Context.Service<TempResources, TempResourceOperations>()(
   "@diffdash/process/TempResources",
 ) {
-  static readonly layer = Layer.effect(
+  /** Default temporary-resource implementation with scope-owned cleanup. */
+  static get layer() {
+    return makeTempResourcesLayer()
+  }
+
+  /** Builds temporary resources with lifecycle integration selected by a composition root. */
+  static readonly layerWithLifecycle = (lifecycle: TempResourceLifecycle) =>
+    makeTempResourcesLayer(lifecycle)
+}
+
+function makeTempResourcesLayer(lifecycle?: TempResourceLifecycle) {
+  return Layer.effect(
     TempResources,
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -57,11 +84,30 @@ export class TempResources extends Context.Service<TempResources, TempResourceOp
             "create-directory",
           )
           yield* fileSystem.makeDirectory(parentDirectory, { recursive: true, mode: 0o700 })
-          const directory = yield* fileSystem.makeTempDirectoryScoped({
+          const directory = yield* fileSystem.makeTempDirectory({
             directory: parentDirectory,
             prefix,
           })
           yield* fileSystem.chmod(directory, 0o700)
+          if (lifecycle === undefined) {
+            yield* Effect.addFinalizer(() =>
+              fileSystem.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
+            )
+          } else {
+            yield* lifecycle
+              .manage({
+                directory,
+                parentDirectory,
+                resourceClass: options.resourceClass ?? "processTemp",
+              })
+              .pipe(
+                Effect.onError(() =>
+                  fileSystem
+                    .remove(directory, { recursive: true, force: true })
+                    .pipe(Effect.ignore),
+                ),
+              )
+          }
           return directory
         }).pipe(
           Effect.mapError((cause) =>

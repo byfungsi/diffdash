@@ -34,8 +34,12 @@ import { ReviewThreadId } from "@diffdash/domain/review-thread"
 import { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
 import { ProcessService, type ProcessRunner } from "@diffdash/process"
 import {
+  type CreatedReviewRef,
+  encodeReviewRefIdentity,
   HostedReviewWorkspacePool as ReviewWorktreePool,
   HostedReviewWorkspacePoolError as ReviewWorktreePoolError,
+  ReviewRefMutation,
+  type ReviewRefLifecycle,
 } from "./hosted-review-workspace-pool"
 import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
@@ -58,6 +62,72 @@ const fixture = Effect.acquireRelease(Effect.sync(makeGitFixture), (value) =>
 )
 
 describe("HostedReviewWorkspacePool", () => {
+  it.effect("publishes and protects only the review ref it created and verified", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const managed: CreatedReviewRef[][] = []
+      let protectedDuringUse = false
+      const reviewRefs: ReviewRefLifecycle = {
+        manage: (refs, use) =>
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              managed.push([...refs])
+              protectedDuringUse = true
+            }),
+            () => use,
+            () => Effect.sync(() => void (protectedDuringUse = false)),
+          ),
+      }
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool.use(workspaceInput(value, "cataloged-ref"), () =>
+          Effect.sync(() => expect(protectedDuringUse).toBe(true)),
+        )
+      }).pipe(Effect.provide(poolLayer(value, ProcessService.layer, reviewRefs)))
+
+      expect(protectedDuringUse).toBe(false)
+      expect(managed).toHaveLength(2)
+      expect([...new Set(managed.flat().map(({ ref }) => ref))]).toHaveLength(1)
+      expect(managed[0]).toEqual([
+        {
+          repositoryPath: expect.stringContaining("/repository.git"),
+          ref: expect.stringMatching(
+            new RegExp(`^refs/diffdash/reviews/${value.snapshot.review.number}/heads/`),
+          ),
+          targetSha: value.headSha,
+        },
+      ])
+      expect(
+        git(
+          managed[0]?.[0]?.repositoryPath ?? "",
+          "show-ref",
+          "--verify",
+          managed[0]?.[0]?.ref ?? "",
+        ).split(" ")[0],
+      ).toBe(value.headSha)
+
+      const capture = managed[0]?.[0]
+      if (capture === undefined) throw new Error("Expected one producer-created review ref")
+      yield* Effect.gen(function* () {
+        const mutation = yield* ReviewRefMutation
+        const identity = encodeReviewRefIdentity(capture)
+        yield* mutation.mutate("quarantine", identity)
+        yield* mutation.mutate("delete", identity)
+      }).pipe(
+        Effect.provide(
+          ReviewRefMutation.layer({
+            remoteWorktreePoolPath: value.remotePool,
+            worktreePoolPath: value.pool,
+          }).pipe(Layer.provide(ProcessService.layer)),
+        ),
+      )
+      expect(() => git(capture.repositoryPath, "show-ref", "--verify", capture.ref)).toThrow(
+        /Command failed/u,
+      )
+    }),
+  )
+
   it.effect(
     "leases the exact PR head without changing the user's checkout and rebuilds it clean",
     () =>
@@ -1250,9 +1320,14 @@ describe("HostedReviewWorkspacePool", () => {
   )
 })
 
-const poolLayer = (value: GitFixture, processLayer = ProcessService.layer) =>
+const poolLayer = (
+  value: GitFixture,
+  processLayer = ProcessService.layer,
+  reviewRefs?: ReviewRefLifecycle,
+) =>
   ReviewWorktreePool.layer({
     remoteWorktreePoolPath: value.remotePool,
+    ...(reviewRefs === undefined ? {} : { reviewRefs }),
     worktreePoolPath: value.pool,
   }).pipe(Layer.provide(processLayer))
 

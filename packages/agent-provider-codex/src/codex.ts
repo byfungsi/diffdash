@@ -209,6 +209,7 @@ const executeWalkthrough = (
             parentDirectory: tempDirectory,
             prefix: "codex-output-",
             fileName: "output.txt",
+            resourceClass: "agentTemp",
           })
           .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
         const result = yield* dependencies.processes
@@ -1097,11 +1098,16 @@ const withOutputSchemaPath = <A, E, R>(
       .makeTempFileScoped(
         JSON.stringify(reviewResponseJsonSchema),
         tempDirectory === undefined
-          ? { prefix: "diffdash-codex-", fileName: "review-thread-response.schema.json" }
+          ? {
+              prefix: "diffdash-codex-",
+              fileName: "review-thread-response.schema.json",
+              resourceClass: "agentTemp",
+            }
           : {
               parentDirectory: tempDirectory,
               prefix: "diffdash-codex-",
               fileName: "review-thread-response.schema.json",
+              resourceClass: "agentTemp",
             },
       )
       .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
