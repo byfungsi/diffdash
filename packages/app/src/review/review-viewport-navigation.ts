@@ -28,7 +28,7 @@ import {
 import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-navigation-anchors"
 import type { DiffVirtualizer, VirtualizedFileDiff } from "./pierre"
 import type { ReviewSearchHighlightManager } from "./review-search-highlights"
-import type { ReviewSnapshotPageReader } from "./review-snapshot-page-session"
+import type { ProgressiveReviewContentReader } from "./progressive-review-content-session"
 import type { ReviewThreadAnnotation } from "./thread-annotations"
 
 /** Runtime Pierre registration retained only by the viewport execution plane. */
@@ -44,7 +44,7 @@ export interface ReviewViewportNavigationBindings {
   readonly manifest: ReviewSnapshotManifest
   readonly containerRef: RefObject<HTMLDivElement | null>
   readonly stickyChromeRef: RefObject<HTMLDivElement | null>
-  readonly pages: ReviewSnapshotPageReader
+  readonly pages: ProgressiveReviewContentReader
   readonly diffRegistrations: ReadonlyMap<string, ReviewDiffRegistration>
   readonly diffVirtualizer: DiffVirtualizer
   readonly searchHighlights: ReviewSearchHighlightManager
@@ -191,20 +191,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const status = result.statuses.get(resolved.file.fileId)
     const file = bindings.pages.getFile(resolved.file.fileId)
     if (status === "expired") throw new ReviewNavigationSnapshotExpiredError()
-    if (status === "tooLarge") {
-      if (
-        Match.valueTags(resolved.target, {
-          file: () => true,
-          thread: () => false,
-          extension: () => false,
-          hunk: () => false,
-          line: () => false,
-          range: () => false,
-        })
-      )
-        return
-      throw new ReviewNavigationUnavailableError("fileContentUnavailable")
-    }
     if (status === "failed") {
       const cause = result.failureCauses.get(resolved.file.fileId)
       if (cause !== undefined) throw cause

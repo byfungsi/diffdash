@@ -2,14 +2,13 @@ import { ParsedDiffFile } from "@diffdash/domain/diff"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
 import { Schema } from "effect"
 
-/** Explicit renderer memory bounds for parsed diff pages. */
 const DEFAULT_REVIEW_PAGE_CACHE_CONFIG = {
   maxBytes: 8 * 1_024 * 1_024,
   maxFiles: 32,
 } as const
 
 /** Renderer parsed-file cache bounds. */
-interface ReviewPageCacheConfig {
+export interface ReviewPageCacheConfig {
   readonly maxBytes: number
   readonly maxFiles: number
 }
@@ -19,7 +18,7 @@ interface CachedReviewFile {
   readonly file: ParsedDiffFile
 }
 
-/** Bounded LRU cache for complete parsed files loaded from snapshot page IPC. */
+/** Bounded LRU cache for complete parsed files loaded from persisted ranges. */
 export class ReviewPageCache {
   readonly #config: ReviewPageCacheConfig
   readonly #entries = new Map<string, CachedReviewFile>()
@@ -52,27 +51,26 @@ export class ReviewPageCache {
     return entry.file
   }
 
-  /** Adds complete parsed files and evicts least-recent entries under both bounds. */
-  put(files: readonly ParsedDiffFile[], pinnedFileIds: ReadonlySet<string> = new Set()): void {
-    for (const file of files) {
-      const encoded = Schema.encodeSync(ParsedDiffFile)(file)
-      const bytes = jsonSafeUtf8ByteLength(encoded)
-      if (bytes > this.#config.maxBytes) continue
-      const previous = this.#entries.get(file.fileId)
-      if (previous !== undefined) {
-        this.#entries.delete(file.fileId)
-        this.#bytes -= previous.bytes
-      }
-      this.#entries.set(file.fileId, { bytes, file })
-      this.#bytes += bytes
+  /** Adds one complete parsed file and reports whether it fit within the byte bound. */
+  put(file: ParsedDiffFile): boolean {
+    const encoded = Schema.encodeSync(ParsedDiffFile)(file)
+    const bytes = jsonSafeUtf8ByteLength(encoded)
+    if (bytes > this.#config.maxBytes) return false
+    const previous = this.#entries.get(file.fileId)
+    if (previous !== undefined) {
+      this.#entries.delete(file.fileId)
+      this.#bytes -= previous.bytes
     }
+    this.#entries.set(file.fileId, { bytes, file })
+    this.#bytes += bytes
 
     while (this.#entries.size > this.#config.maxFiles || this.#bytes > this.#config.maxBytes) {
-      const candidate = [...this.#entries].find(([fileId]) => !pinnedFileIds.has(fileId))
+      const candidate = this.#entries.entries().next().value
       if (candidate === undefined) break
       this.#entries.delete(candidate[0])
       this.#bytes -= candidate[1].bytes
     }
+    return this.#entries.has(file.fileId)
   }
 
   /** Returns cached files in current LRU order. */

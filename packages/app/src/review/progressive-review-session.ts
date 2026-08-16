@@ -16,7 +16,6 @@ import type { ReviewRendererCaches } from "./review-global-virtualizer"
 import type { ReviewLoadScheduler } from "./review-load-scheduler"
 import type { ReviewNavigatorController } from "./review-navigation"
 import type { ReviewSearchController } from "./review-search-state"
-import type { ReviewSnapshotPageSession } from "./review-snapshot-page-session"
 
 /** Renderer output categories that must never cross progressive session ownership. */
 export type ReviewSessionPublicationCategory =
@@ -55,7 +54,7 @@ export interface ProgressiveReviewSessionResources {
   readonly rendererCaches: readonly ReviewRendererCaches[]
   readonly pierreAdapters: readonly ReviewSessionDisposable[]
   readonly pierreShellPools: readonly ReviewSessionShellPool[]
-  readonly snapshotPages: Pick<ReviewSnapshotPageSession, "dispose">
+  readonly snapshotPages: ReviewSessionDisposable
   readonly navigator: Pick<ReviewNavigatorController, "dispose">
   readonly search: Pick<ReviewSearchController, "dispose">
   readonly highlights: readonly ReviewSessionDisposable[]

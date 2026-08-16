@@ -5,7 +5,7 @@ import { Button } from "@/shared/ui/button"
 import { MiddleTruncatedText } from "@/shared/ui/middle-truncated-text"
 import { UnicodeLoadingText } from "@/shared/ui/unicode-loading-text"
 import { Match } from "effect"
-import type { ReviewSnapshotRefreshStatus } from "./review-snapshot-page-session"
+import type { ProgressiveReviewRefreshStatus } from "./progressive-review-content-session"
 import { diffCardDomId } from "./viewed-file-viewport"
 
 /** Lazy parsed-file placeholder inputs. */
@@ -14,7 +14,7 @@ interface ReviewPagePlaceholderProps {
   readonly file: ReviewSnapshotFileInventory
   readonly loading: boolean
   readonly scrollContainerRef: RefObject<HTMLElement | null>
-  readonly snapshotRefresh: ReviewSnapshotRefreshStatus
+  readonly snapshotRefresh: ProgressiveReviewRefreshStatus
   readonly tooLarge: boolean
   readonly onFileAnchorChange: (element: HTMLElement, focusElement: HTMLElement) => () => void
   readonly onRetry: () => void

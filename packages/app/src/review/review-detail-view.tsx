@@ -130,7 +130,7 @@ import {
 } from "./review-viewport-navigation"
 import { reviewThreadScope, reviewWalkthroughScope } from "./review-subject"
 import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
-import { useReviewSnapshotPages } from "./use-review-snapshot-pages"
+import { useProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
@@ -442,12 +442,6 @@ export const ReviewDetailView = ({
   const reviewSearchQuery = reviewSearchToolbar.query
   const reviewSearchTotalMatches = reviewSearchToolbar.totalMatches
   const activeReviewSearchIndex = reviewSearchToolbar.activeGlobalIndex
-  reviewSearchController.updateRuntime({
-    navigator: reviewNavigator,
-    onSnapshotExpired: onReload,
-    search: (request) => runRendererPromise(reviewContentService.snapshots.search(request)),
-  })
-
   useEffect(() => {
     if (quickNavigationRequestRef.current === quickNavigationRequest) return
     quickNavigationRequestRef.current = quickNavigationRequest
@@ -470,12 +464,20 @@ export const ReviewDetailView = ({
     fileErrors,
     files: snapshotFiles,
     loadingFileIds,
-    pageReader: snapshotPageReader,
-    setPinnedFileIds: setPinnedSnapshotFileIds,
+    inventory: progressiveInventory,
+    inventoryError,
+    inventoryLoading,
+    identity: progressiveIdentity,
+    reader: snapshotPageReader,
     snapshotRefresh,
-    tooLargeFileIds,
-  } = useReviewSnapshotPages(manifest, sourceOperations.refresh)
+  } = useProgressiveReviewContent(manifest, sourceOperations.refresh)
   const loadSnapshotFiles = snapshotPageReader.loadFiles
+  reviewSearchController.updateRuntime({
+    navigator: reviewNavigator,
+    identity: progressiveIdentity,
+    reviewKeys: new Map(progressiveInventory.map((file) => [file.fileId, file.reviewKey])),
+    search: reviewContentService.progressive.search,
+  })
   const registerFileNavigationAnchor = useStableCallback(
     (fileId: ReviewFileId, element: HTMLElement, focusElement: HTMLElement) =>
       reviewNavigationAnchors.registerAnchor(reviewFileAnchorKey(fileId), {
@@ -608,7 +610,7 @@ export const ReviewDetailView = ({
       setThreadSidebarState({ _tag: "list" })
     }
   }, [reviewThreads.details, reviewThreads.loading, threadSidebarState])
-  const changedFiles = manifest.files
+  const changedFiles = progressiveInventory
   const loadedFilesById = new Map(snapshotFiles.map((file) => [file.fileId, file]))
   const loadedChangedFiles = changedFiles.flatMap((file) => {
     const loaded = loadedFilesById.get(file.fileId)
@@ -788,43 +790,23 @@ export const ReviewDetailView = ({
     viewedFileKeys,
     visibleFiles: visibleChangedFiles,
   })
-  const selectedFileId =
-    selectedPath === null
-      ? null
-      : (changedFiles.find((file) => file.path === selectedPath)?.fileId ?? null)
   useEffect(() => {
-    const pinnedFileIds = new Set<ReviewFileId>()
-    if (selectedFileId !== null) pinnedFileIds.add(selectedFileId)
-    if (activeReviewSearchOccurrence !== null) {
-      pinnedFileIds.add(activeReviewSearchOccurrence.fileId)
-    }
-    if (expandedLineAnchor !== null) pinnedFileIds.add(expandedLineAnchor.fileId)
-    for (const fileId of navigationPresentation.pinnedFileIds) pinnedFileIds.add(fileId)
-    setPinnedSnapshotFileIds(pinnedFileIds)
-  }, [
-    activeReviewSearchOccurrence,
-    expandedLineAnchor,
-    selectedFileId,
-    setPinnedSnapshotFileIds,
-    navigationPresentation.pinnedFileIds,
-  ])
-  useEffect(() => {
-    const initialFileIds = manifest.files.slice(0, 3).map((file) => file.fileId)
+    const initialFileIds = progressiveInventory.slice(0, 3).map((file) => file.fileId)
     void loadSnapshotFiles(initialFileIds)
-  }, [loadSnapshotFiles, manifest.files, manifest.snapshotId])
+  }, [loadSnapshotFiles, manifest.snapshotId, progressiveInventory])
   useEffect(() => {
     if (selectedPath === null) return
-    const file = manifest.files.find((candidate) => candidate.path === selectedPath)
+    const file = progressiveInventory.find((candidate) => candidate.path === selectedPath)
     if (file !== undefined) void loadSnapshotFiles([file.fileId])
-  }, [loadSnapshotFiles, manifest.files, selectedPath])
+  }, [loadSnapshotFiles, progressiveInventory, selectedPath])
   useEffect(() => {
     if (activeWalkthrough === null) return
     const hunkIds = walkthroughReviewSteps(activeWalkthrough).flatMap((step) => step.hunkIds)
-    const fileIds = manifest.files
+    const fileIds = progressiveInventory
       .filter((file) => hunkIds.some((hunkId) => hunkId.startsWith(`${file.path}:`)))
       .map((file) => file.fileId)
     void loadSnapshotFiles(fileIds)
-  }, [activeWalkthrough, loadSnapshotFiles, manifest.files])
+  }, [activeWalkthrough, loadSnapshotFiles, progressiveInventory])
   const moveReviewSearch = useStableCallback((direction: -1 | 1) => {
     reviewSearchController.move(direction)
   })
@@ -940,7 +922,7 @@ export const ReviewDetailView = ({
     },
   )
   reviewViewportBridge.update({
-    manifest,
+    manifest: { ...manifest, files: progressiveInventory },
     containerRef: diffScrollContainerRef,
     stickyChromeRef: stickyReviewChromeRef,
     pages: snapshotPageReader,
@@ -1965,7 +1947,11 @@ export const ReviewDetailView = ({
                 {normalizedFileFilter.length === 0 && renderedChangedFiles.length === 0 ? (
                   <EmptyState>
                     <div className="space-y-3">
-                      <p>No changed files in this review.</p>
+                      <p>
+                        {inventoryLoading
+                          ? "Loading changed files..."
+                          : (inventoryError ?? "No changed files in this review.")}
+                      </p>
                       <Button variant="outline" onClick={() => onActiveRibbonChange("reviews")}>
                         Choose another review
                       </Button>
@@ -1985,7 +1971,7 @@ export const ReviewDetailView = ({
                       loading={loadingFileIds.has(file.fileId)}
                       scrollContainerRef={diffScrollContainerRef}
                       snapshotRefresh={snapshotRefresh}
-                      tooLarge={tooLargeFileIds.has(file.fileId)}
+                      tooLarge={false}
                       onFileAnchorChange={(element, focusElement) =>
                         registerFileNavigationAnchor(file.fileId, element, focusElement)
                       }

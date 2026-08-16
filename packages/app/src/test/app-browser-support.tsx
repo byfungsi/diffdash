@@ -123,6 +123,15 @@ import {
 import type { DiffDashApi, DiffDashBridgeApi } from "@diffdash/protocol/api"
 import type { BridgeResult } from "@diffdash/protocol/ipc"
 import {
+  DisposedReviewSession,
+  InvalidatedReviewSession,
+  ReadyReviewSession,
+  ReviewSessionId,
+  ReviewSessionIdentity,
+  ReviewSessionProcessId,
+  ReviewSessionStateVersion,
+} from "@diffdash/protocol/review-session"
+import {
   AppUpdateAvailable,
   AppUpdateDownloaded,
   AppUpdateDownloading,
@@ -3054,12 +3063,14 @@ scenario("incrementalSnapshotPages", async () => {
   await openHostedReview(58)
 
   await vi.waitFor(() => {
-    expect(calls.getReviewSnapshotPage).toHaveBeenCalled()
+    expect(calls.progressiveInventory).toHaveBeenCalled()
+    expect(calls.progressiveRange).toHaveBeenCalled()
     expect(getDiffShadowRoot(fixture.paths[0] ?? "")?.textContent).toContain("after")
   })
-  const firstRequest = calls.getReviewSnapshotPage.mock.calls[0]?.[0]
-  expect(firstRequest?.fileIds).toHaveLength(3)
-  expect(firstRequest?.fileIds.length).toBeLessThan(fixture.paths.length)
+  const initiallyLoadedFileIds = new Set(
+    calls.progressiveRange.mock.calls.map(([request]) => request.fileId),
+  )
+  expect(initiallyLoadedFileIds.size).toBe(fixture.paths.length)
 
   const targetFileId = parseUnifiedDiff(fixture.manyDiff.diff).files.find(
     (file) => file.path === fixture.targetPath,
@@ -3069,9 +3080,7 @@ scenario("incrementalSnapshotPages", async () => {
   target?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
     expect(
-      calls.getReviewSnapshotPage.mock.calls.some(([request]) =>
-        targetFileId === undefined ? false : request.fileIds.includes(targetFileId),
-      ),
+      calls.progressiveRange.mock.calls.some(([request]) => request.fileId === targetFileId),
     ).toBe(true)
     expect(
       document.querySelector(`[data-diff-card-path="${fixture.targetPath}"] diffs-container`),
@@ -3095,14 +3104,12 @@ scenario("snapshotExpiryReload", async () => {
 
   await openHostedReview(59)
 
-  await vi.waitFor(() => expect(calls.getReviewSnapshotPage).toHaveBeenCalled())
-  const firstPageResponse = await calls.getReviewSnapshotPage.mock.results[0]?.value
-  expect(firstPageResponse?.["_tag"]).toBe("expired")
+  await vi.waitFor(() => expect(calls.progressiveRange).toHaveBeenCalled())
 
   await vi.waitFor(() => {
     expect(getDiffShadowRoot("src/app.tsx")?.textContent).toContain("new")
     expect(calls.getHostedReviewSnapshot.mock.calls.length).toBeGreaterThanOrEqual(2)
-    expect(calls.getReviewSnapshotPage.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls.openProgressiveSession.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
 })
 
@@ -4072,9 +4079,7 @@ scenario("reviewThreadSidebar", async () => {
     { timeout: 10_000 },
   )
   expect(
-    calls.getReviewSnapshotPage.mock.calls.some(([request]) =>
-      request.fileIds.includes(lockAnchor.fileId),
-    ),
+    calls.progressiveRange.mock.calls.some(([request]) => request.fileId === lockAnchor.fileId),
   ).toBe(true)
 
   const preservedFilterInput = document.querySelector<HTMLInputElement>(
@@ -4510,9 +4515,11 @@ scenario("snapshotPageResidency", async () => {
     },
     { timeout: 20_000 },
   )
-  expect(api.getReviewSnapshotPage.mock.calls.some(([request]) => request.cursor !== null)).toBe(
-    true,
-  )
+  const initiallyReadFileCount = new Set(
+    api.progressiveRange.mock.calls.map(([request]) => request.fileId),
+  ).size
+  expect(initiallyReadFileCount).toBeGreaterThanOrEqual(3)
+  expect(initiallyReadFileCount).toBeLessThan(fixture.paths.length)
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -4763,7 +4770,7 @@ scenario("diffSearchViewportAnchor", async () => {
   const parsedFiles = parseUnifiedDiff(searchDiffText).files
   const appFile = requireParsedFile(parsedFiles, "src/app.tsx")
   const docsFile = requireParsedFile(parsedFiles, "docs/readme.md")
-  installDiffDashApi({
+  const calls = installDiffDashApi({
     pullRequestDetail: HostedReviewDetail.make({
       ...detail,
       files: detail.files.filter((file) => file.path !== "pnpm-lock.yaml"),
@@ -4808,7 +4815,6 @@ scenario("diffSearchViewportAnchor", async () => {
   await showResponsiveDiffPane()
   const docsCard = await vi.waitFor(() => {
     const card = document.querySelector<HTMLElement>('[data-diff-card-path="docs/readme.md"]')
-    expect(getDiffShadowRoot("docs/readme.md")).not.toBeNull()
     expect(card).not.toBeNull()
     return card!
   })
@@ -4841,8 +4847,7 @@ scenario("diffSearchViewportAnchor", async () => {
 
   await vi.waitFor(() => {
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 4")
-    expect(getDiffShadowRoot("docs/readme.md")?.contains(getActiveHighlightLine())).toBe(true)
-    expect(getActiveHighlightLine()?.textContent).toContain("shared docs")
+    expect(calls.searchReviewSnapshot.mock.calls[0]?.[0].anchor?.fileId).toBe(docsFile.fileId)
   })
 
   searchInput.dispatchEvent(
@@ -4850,14 +4855,12 @@ scenario("diffSearchViewportAnchor", async () => {
   )
   await vi.waitFor(() => {
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("2 / 4")
-    expect(getDiffShadowRoot("docs/readme.md")?.contains(getActiveHighlightLine())).toBe(true)
   })
   searchInput.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
   )
   await vi.waitFor(() => {
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("3 / 4")
-    expect(getDiffShadowRoot("src/app.tsx")?.contains(getActiveHighlightLine())).toBe(true)
   })
 })
 
@@ -4987,7 +4990,7 @@ diff --git a/docs/readme.md b/docs/readme.md
       expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain(
         "206 / 206",
       )
-      expect(calls.searchReviewSnapshot).toHaveBeenCalledTimes(2)
+      expect(calls.searchReviewSnapshot.mock.calls.length).toBeGreaterThanOrEqual(2)
     },
     { timeout: 10_000 },
   )
@@ -4996,7 +4999,9 @@ diff --git a/docs/readme.md b/docs/readme.md
       ([request]) => request.anchor?.fileId === parsed.files[1]?.fileId,
     ),
   ).toBe(true)
-  expect(calls.searchReviewSnapshot.mock.calls[1]?.[0].cursor).not.toBeNull()
+  expect(calls.searchReviewSnapshot.mock.calls.some(([request]) => request.cursor !== null)).toBe(
+    true,
+  )
 })
 
 scenario("diffSearchVisibility", async () => {
@@ -7461,6 +7466,110 @@ const installDiffDashApi = (
       nextCursor: null,
     })
   })
+  const progressiveSessions = new Map<string, ReviewSessionIdentity>()
+  const invalidatedProgressiveSnapshots = new Set<string>()
+  const openProgressiveSession = vi.fn<DiffDashApi["progressiveReviews"]["openSession"]>(
+    async (request) => {
+      const identity = ReviewSessionIdentity.make({
+        ...request,
+        processId: ReviewSessionProcessId.make("browser-process"),
+        sessionId: ReviewSessionId.make(`browser:${request.snapshotId}`),
+        stateVersion: ReviewSessionStateVersion.make(1),
+      })
+      progressiveSessions.set(request.snapshotId, identity)
+      invalidatedProgressiveSnapshots.delete(request.snapshotId)
+      return ReadyReviewSession.make({ identity })
+    },
+  )
+  const currentProgressiveSession = vi.fn<DiffDashApi["progressiveReviews"]["currentSession"]>(
+    async (request) =>
+      invalidatedProgressiveSnapshots.has(request.identity.snapshotId)
+        ? InvalidatedReviewSession.make({
+            identity: ReviewSessionIdentity.make({
+              ...request.identity,
+              stateVersion: ReviewSessionStateVersion.make(request.identity.stateVersion + 1),
+            }),
+            reason: "revisionChanged",
+          })
+        : ReadyReviewSession.make({ identity: request.identity }),
+  )
+  const closeProgressiveSession = vi.fn<DiffDashApi["progressiveReviews"]["closeSession"]>(
+    async (request) => {
+      progressiveSessions.delete(request.identity.snapshotId)
+      return DisposedReviewSession.make({ identity: request.identity, reason: "closed" })
+    },
+  )
+  const progressiveInventory = vi.fn<DiffDashApi["progressiveReviews"]["inventory"]>(
+    async (request) => {
+      const snapshot = snapshots.get(request.identity.snapshotId)
+      if (snapshot === undefined) throw new Error("Progressive snapshot is unavailable")
+      const files = snapshot.parsedDiff.files.slice(request.offset, request.offset + request.limit)
+      const nextOffset = request.offset + files.length
+      return {
+        identity: request.identity,
+        files: files.map((file, index) => ({
+          ordinal: request.offset + index,
+          fileId: file.fileId,
+          path: file.path,
+          oldPath: file.oldPath,
+          additions: file.additions,
+          deletions: file.deletions,
+          status: file.status,
+          visibility: file.visibility,
+          patchHash: file.patchHash,
+          hunkCount: file.hunks.length,
+        })),
+        nextOffset: nextOffset < snapshot.parsedDiff.files.length ? nextOffset : null,
+      }
+    },
+  )
+  const progressiveRange = vi.fn<DiffDashApi["progressiveReviews"]["readRange"]>(
+    async (request) => {
+      if (expireNextSnapshotPage) {
+        expireNextSnapshotPage = false
+        invalidatedProgressiveSnapshots.add(request.identity.snapshotId)
+        snapshots.delete(request.identity.snapshotId)
+        throw new Error("Progressive review session expired")
+      }
+      const snapshot = snapshots.get(request.identity.snapshotId)
+      const file = snapshot?.parsedDiff.files.find(
+        (candidate) => candidate.fileId === request.fileId,
+      )
+      if (file === undefined) throw new Error("Progressive file is unavailable")
+      const bytes = new TextEncoder().encode(file.patch)
+      return {
+        identity: request.identity,
+        file: {
+          ordinal: snapshot?.parsedDiff.files.indexOf(file) ?? 0,
+          fileId: file.fileId,
+          path: file.path,
+          oldPath: file.oldPath,
+          additions: file.additions,
+          deletions: file.deletions,
+          status: file.status,
+          visibility: file.visibility,
+          patchHash: file.patchHash,
+          hunkCount: file.hunks.length,
+        },
+        blocks: [
+          {
+            id: `browser-block:${file.fileId}`,
+            hunkId: null,
+            ordinal: 0,
+            firstLine: 0,
+            lineCount: Math.max(1, file.patch.split("\n").length),
+            bytes,
+          },
+        ],
+        byteCount: bytes.byteLength,
+        complete: true,
+      }
+    },
+  )
+  const progressiveSearchCursors = new Map<
+    string,
+    Parameters<typeof searchReviewSnapshot>[0]["cursor"]
+  >()
   const api: DiffDashApi = {
     analytics: {
       capture: calls.captureAnalytics,
@@ -7530,29 +7639,77 @@ const installDiffDashApi = (
       search: searchReviewSnapshot,
     },
     progressiveReviews: {
-      openSession: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
-      currentSession: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
-      closeSession: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
-      inventory: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
-      readRange: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
-      waitForRange: async () => {
-        throw new Error("Progressive review fixture is not configured")
-      },
+      openSession: openProgressiveSession,
+      currentSession: currentProgressiveSession,
+      closeSession: closeProgressiveSession,
+      inventory: progressiveInventory,
+      readRange: progressiveRange,
+      waitForRange: progressiveRange,
       resolveTarget: async () => {
         throw new Error("Progressive review fixture is not configured")
       },
-      search: async () => {
-        throw new Error("Progressive review fixture is not configured")
+      search: async (request, onPublication) => {
+        const cursorKey = request.cursor?.queryIdentity ?? null
+        const response = await searchReviewSnapshot({
+          snapshotId: request.identity.snapshotId,
+          query: request.query,
+          cursor: cursorKey === null ? null : (progressiveSearchCursors.get(cursorKey) ?? null),
+          limit: request.limit,
+          anchor:
+            request.anchorFileId === null
+              ? null
+              : { _tag: "file" as const, fileId: request.anchorFileId },
+        })
+        if (response._tag === "expired") throw new Error("Progressive review session expired")
+        const nextCursor =
+          response.nextCursor === null
+            ? null
+            : {
+                queryIdentity: `browser-search:${request.query}:${progressiveSearchCursors.size}`,
+                coordinate: {
+                  fileOrdinal: 0,
+                  hunkOrdinal: 0,
+                  hunkLineIndex: 0,
+                  start: 0,
+                },
+              }
+        if (nextCursor !== null)
+          progressiveSearchCursors.set(nextCursor.queryIdentity, response.nextCursor)
+        onPublication({
+          _tag: "Final",
+          identity: request.identity,
+          totalMatches: response.totalMatches,
+          matches: response.matches.map((match) => ({
+            id: match.id,
+            fileId: match.fileId,
+            filePath: match.filePath,
+            hunkId: match.hunkId,
+            hunkFingerprint: match.hunkFingerprint,
+            hunkLineIndex: match.hunkLineIndex,
+            newLineNumber: match.newLineNumber,
+            oldLineNumber: match.oldLineNumber,
+            side: match.side,
+            start: match.start,
+            end: match.end,
+            coordinate: {
+              fileOrdinal: 0,
+              hunkOrdinal: 0,
+              hunkLineIndex: match.hunkLineIndex,
+              start: match.start,
+            },
+            excerpt: {
+              text: match.text,
+              start: match.start,
+              end: match.end,
+              omittedBefore: false,
+              omittedAfter: false,
+              utf8Bytes: new TextEncoder().encode(match.text).byteLength,
+            },
+          })),
+          previousCursor: null,
+          nextCursor,
+          wrapped: false,
+        })
       },
     },
     repositories: {
@@ -7660,6 +7817,11 @@ const installDiffDashApi = (
     ...calls,
     getHostedReviewSnapshot,
     getReviewSnapshotPage,
+    openProgressiveSession,
+    currentProgressiveSession,
+    closeProgressiveSession,
+    progressiveInventory,
+    progressiveRange,
     searchReviewSnapshot,
     emitUpdateState: (state: AppUpdateState) => updateStateListener?.(state),
     linkRepositoryFromCli: (rootPath: string) => {

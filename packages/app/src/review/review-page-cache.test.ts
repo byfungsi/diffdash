@@ -1,78 +1,37 @@
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { describe, expect, it } from "@effect/vitest"
+import { describe, expect, it } from "vitest"
+
 import { ReviewPageCache } from "./review-page-cache"
 
-const files = parseUnifiedDiff(`diff --git a/a.ts b/a.ts
---- a/a.ts
-+++ b/a.ts
-@@ -1 +1 @@
--old
-+a
-diff --git a/b.ts b/b.ts
---- a/b.ts
-+++ b/b.ts
-@@ -1 +1 @@
--old
-+b
-diff --git a/c.ts b/c.ts
---- a/c.ts
-+++ b/c.ts
-@@ -1 +1 @@
--old
-+c`).files
+const file = (path: string, content = "new") => {
+  const parsed = parseUnifiedDiff(
+    `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${content}\n`,
+  ).files[0]
+  if (parsed === undefined) throw new Error("Expected parsed fixture file")
+  return parsed
+}
 
 describe("ReviewPageCache", () => {
-  it("evicts least-recent complete files under the explicit entry bound", () => {
+  it("evicts least-recent files under its count bound", () => {
     const cache = new ReviewPageCache({ maxBytes: 1_000_000, maxFiles: 2 })
-    const first = files[0]
-    const second = files[1]
-    const third = files[2]
-    expect(first).toBeDefined()
-    expect(second).toBeDefined()
-    expect(third).toBeDefined()
-    if (first === undefined || second === undefined || third === undefined) return
+    const first = file("first.ts")
+    const second = file("second.ts")
+    const third = file("third.ts")
 
-    cache.put([first, second])
+    expect(cache.put(first)).toBe(true)
+    expect(cache.put(second)).toBe(true)
     expect(cache.get(first.fileId)).toBe(first)
-    cache.put([third])
+    expect(cache.put(third)).toBe(true)
 
-    expect(cache.get(first.fileId)).toBe(first)
     expect(cache.get(second.fileId)).toBeNull()
-    expect(cache.get(third.fileId)).toBe(third)
-    expect(cache.stats().files).toBe(2)
+    expect(cache.files().map(({ fileId }) => fileId)).toEqual([first.fileId, third.fileId])
   })
 
-  it("evicts an unpinned entry instead of a least-recent pinned entry", () => {
-    const cache = new ReviewPageCache({ maxBytes: 1_000_000, maxFiles: 2 })
-    const first = files[0]
-    const second = files[1]
-    const third = files[2]
-    expect(first).toBeDefined()
-    expect(second).toBeDefined()
-    expect(third).toBeDefined()
-    if (first === undefined || second === undefined || third === undefined) return
+  it("refuses a file larger than its byte bound without retaining it", () => {
+    const cache = new ReviewPageCache({ maxBytes: 128, maxFiles: 2 })
+    const oversized = file("large.ts", "x".repeat(1_000))
 
-    cache.put([first, second])
-    cache.put([third], new Set([first.fileId, third.fileId]))
-
-    expect(cache.get(first.fileId)).toBe(first)
-    expect(cache.get(second.fileId)).toBeNull()
-    expect(cache.get(third.fileId)).toBe(third)
-    expect(cache.stats().files).toBe(2)
-  })
-
-  it("never falls back to evicting a pinned entry", () => {
-    const cache = new ReviewPageCache({ maxBytes: 1_000_000, maxFiles: 1 })
-    const first = files[0]
-    const second = files[1]
-    expect(first).toBeDefined()
-    expect(second).toBeDefined()
-    if (first === undefined || second === undefined) return
-
-    cache.put([first, second], new Set([first.fileId, second.fileId]))
-
-    expect(cache.get(first.fileId)).toBe(first)
-    expect(cache.get(second.fileId)).toBe(second)
-    expect(cache.stats().files).toBe(2)
+    expect(cache.put(oversized)).toBe(false)
+    expect(cache.stats()).toEqual({ bytes: 0, files: 0 })
   })
 })

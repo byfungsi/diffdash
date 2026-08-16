@@ -175,7 +175,7 @@ export class ReviewSearchHighlightManager {
           if (
             row === null ||
             seenRows.has(row) ||
-            !renderedTextMatchesSource(row, occurrence.text)
+            !renderedTextMatchesSource(row, occurrence.text, occurrence.start, occurrence.end)
           ) {
             continue
           }
@@ -224,9 +224,15 @@ const renderedSearchCoordinates = (
         ],
       ]
 
-const renderedTextMatchesSource = (row: HTMLElement, source: string) => {
+const renderedTextMatchesSource = (
+  row: HTMLElement,
+  source: string,
+  start: number,
+  end: number,
+) => {
   const rendered = row.textContent ?? ""
-  return rendered === source || (rendered.endsWith("\n") && rendered.slice(0, -1) === source)
+  const normalized = rendered.endsWith("\n") ? rendered.slice(0, -1) : rendered
+  return normalized === source || normalized.slice(start, end) === source
 }
 
 const createStaticTextRange = (

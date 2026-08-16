@@ -5,11 +5,11 @@ import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { ReviewPagePlaceholder } from "./review-page-placeholder"
-import type { ReviewSnapshotRefreshStatus } from "./review-snapshot-page-session"
+import type { ProgressiveReviewRefreshStatus } from "./progressive-review-content-session"
 
 const originalIntersectionObserver = Object.getOwnPropertyDescriptor(window, "IntersectionObserver")
 const noop = (): void => undefined
-const IDLE_SNAPSHOT_REFRESH: ReviewSnapshotRefreshStatus = { _tag: "idle" }
+const IDLE_SNAPSHOT_REFRESH: ProgressiveReviewRefreshStatus = { _tag: "idle" }
 
 let root: Root | null = null
 let observedRoot: Element | Document | null | undefined
@@ -133,7 +133,7 @@ const PlaceholderHarness = ({
 }: {
   readonly error: string | null
   readonly loading: boolean
-  readonly snapshotRefresh?: ReviewSnapshotRefreshStatus
+  readonly snapshotRefresh?: ProgressiveReviewRefreshStatus
   readonly onRetry?: () => void
   readonly onRefresh?: () => void
   readonly onVisible?: () => void

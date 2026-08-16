@@ -8,17 +8,21 @@ import {
   ReviewSnapshotAddress,
 } from "@diffdash/domain/review-navigation"
 import {
-  type ReviewSnapshotSearchCursor,
   type ReviewSnapshotSearchFileAnchor,
   type ReviewSnapshotSearchMatch,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
+  ReviewSnapshotSearchMatch as ReviewSnapshotSearchMatchSchema,
 } from "@diffdash/protocol/review-snapshot"
+import type {
+  ReviewSessionIdentity,
+  ReviewSessionSearchCursor,
+  ReviewSessionSearchPublication,
+  ReviewSessionSearchRequest,
+} from "@diffdash/protocol/review-session"
+import type { ReviewFileId, ReviewKey } from "@diffdash/domain/review-identity"
 import { Match, Schema } from "effect"
 import { Atom, AtomRegistry } from "effect/unstable/reactivity"
 
 import type { ReviewNavigator } from "./review-navigation"
-import { type ReviewSearchPage, ReviewSearchPageCache } from "./review-search-page-cache"
 
 /** Serializable lifecycle state for the current search result set. */
 export type ReviewSearchResultStatus =
@@ -109,8 +113,12 @@ export interface ReviewSearchToolbarState {
 /** Runtime capabilities kept outside serializable atom state. */
 export interface ReviewSearchRuntime {
   readonly navigator: Pick<ReviewNavigator, "navigate" | "cancelActiveForOrigins">
-  readonly onSnapshotExpired: () => void
-  readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
+  readonly identity: ReviewSessionIdentity | null
+  readonly reviewKeys: ReadonlyMap<ReviewFileId, ReviewKey>
+  readonly search: (
+    request: ReviewSessionSearchRequest,
+    onPublication: (publication: ReviewSessionSearchPublication) => void,
+  ) => Promise<void>
 }
 
 const IDLE_RESULT_STATUS: ReviewSearchResultStatus = { _tag: "idle" }
@@ -264,7 +272,6 @@ export const reduceReviewSearch = (
 /** Coordinates revision-scoped atom commands with bounded cache, IPC, and navigation work. */
 export class ReviewSearchController {
   readonly #registry: AtomRegistry.AtomRegistry
-  readonly #cache = new ReviewSearchPageCache()
   readonly #modelAtom: Atom.Writable<ReviewSearchModel>
   readonly #commandAtom: Atom.Writable<ReviewSearchCommandResult, ReviewSearchCommand>
   readonly #releases: Array<() => void> = []
@@ -324,7 +331,6 @@ export class ReviewSearchController {
         ? { _tag: "replace", session }
         : { _tag: "attach", session },
     )
-    this.#cache.clear()
     this.#start(result.operation)
   }
 
@@ -332,7 +338,6 @@ export class ReviewSearchController {
   readonly detach = () => {
     if (this.#disposed) return
     this.#dispatch({ _tag: "detach" })
-    this.#cache.clear()
     this.#runtime?.navigator.cancelActiveForOrigins(["search-preview", "search-activation"])
   }
 
@@ -340,7 +345,6 @@ export class ReviewSearchController {
   readonly open = (anchor: ReviewSnapshotSearchFileAnchor | null) => {
     this.#assertUsable()
     const result = this.#dispatch({ _tag: "open", anchor })
-    this.#cache.clear()
     this.#start(result.operation)
   }
 
@@ -348,7 +352,6 @@ export class ReviewSearchController {
   readonly close = () => {
     if (this.#disposed) return
     this.#dispatch({ _tag: "close" })
-    this.#cache.clear()
     this.#runtime?.navigator.cancelActiveForOrigins(["search-preview", "search-activation"])
   }
 
@@ -358,7 +361,6 @@ export class ReviewSearchController {
     const result = this.#dispatch(
       anchor === undefined ? { _tag: "query", query } : { _tag: "query", query, anchor },
     )
-    this.#cache.clear()
     this.#start(result.operation)
   }
 
@@ -391,63 +393,100 @@ export class ReviewSearchController {
   }
 
   readonly #activateIndex = async (operation: ReviewSearchOperation) => {
-    let cached = this.#findCurrent(operation, operation.targetIndex)
-    if (cached !== null) {
-      this.#activateMatch(operation, cached.page.cursor, cached.match)
-      return
-    }
-
-    let cursor: ReviewSnapshotSearchCursor | null = null
+    let cursor: ReviewSessionSearchCursor | null = null
     let startIndex = 0
     while (this.#isCurrent(operation.key)) {
-      // Opaque cursors require replaying pages in order after bounded-cache eviction.
+      // Opaque query-bound cursors require sequential traversal without retaining complete results.
       // oxlint-disable-next-line eslint/no-await-in-loop
       const page = await this.#requestPage(cursor, startIndex, operation)
       if (page === null) return
-      const pageEnd = page.startIndex + page.response.matches.length
+      const pageEnd = page.startIndex + page.matches.length
       if (operation.targetIndex >= page.startIndex && operation.targetIndex < pageEnd) {
-        cached = this.#findCurrent(operation, operation.targetIndex)
-        if (cached !== null) this.#activateMatch(operation, cached.page.cursor, cached.match)
+        const match = page.matches[operation.targetIndex - page.startIndex]
+        if (match !== undefined) this.#activateMatch(operation, match)
         else this.#fail(operation)
         return
       }
-      if (page.response.totalMatches === 0 && operation.targetIndex === 0) return
-      if (page.response.nextCursor === null || page.response.matches.length === 0) {
+      if (page.totalMatches === 0 && operation.targetIndex === 0) return
+      if (page.nextCursor === null || page.matches.length === 0) {
         this.#fail(operation)
         return
       }
       startIndex = pageEnd
-      cursor = page.response.nextCursor
+      cursor = page.nextCursor
     }
   }
 
   readonly #requestPage = async (
-    cursor: ReviewSnapshotSearchCursor | null,
+    cursor: ReviewSessionSearchCursor | null,
     startIndex: number,
     operation: ReviewSearchOperation,
-  ): Promise<ReviewSearchPage | null> => {
+  ): Promise<{
+    readonly startIndex: number
+    readonly matches: readonly ReviewSnapshotSearchMatch[]
+    readonly totalMatches: number
+    readonly nextCursor: ReviewSessionSearchCursor | null
+  } | null> => {
     if (!this.#isCurrent(operation.key)) return null
-    const cached = this.#cache.get(cursor)
-    if (cached !== null) return cached
     const runtime = this.#runtime
     const model = this.#registry.get(this.#modelAtom)
-    if (runtime === null || model.session === null) {
+    if (runtime === null || runtime.identity === null || model.session === null) {
       this.#fail(operation)
       return null
     }
+    const identity = runtime.identity
 
-    let response: typeof ReviewSnapshotSearchResponse.Type
+    const finalPublications: Array<
+      Extract<ReviewSessionSearchPublication, { readonly _tag: "Final" }>
+    > = []
     try {
-      response = Schema.decodeUnknownSync(ReviewSnapshotSearchResponse)(
-        await runtime.search(
-          ReviewSnapshotSearchRequest.make({
-            snapshotId: operation.key.snapshotId,
-            query: model.query,
-            cursor,
-            limit: 200,
-            anchor: model.anchor,
-          }),
-        ),
+      await runtime.search(
+        {
+          identity,
+          query: model.query,
+          cursor,
+          limit: 200,
+          anchorFileId: model.anchor?.fileId ?? null,
+          direction: "next",
+        },
+        (publication) => {
+          if (
+            !this.#isCurrent(operation.key) ||
+            !sameSessionIdentity(publication.identity, identity)
+          ) {
+            return
+          }
+          const matches = publication.matches.map((match) =>
+            Schema.decodeUnknownSync(ReviewSnapshotSearchMatchSchema)({
+              id: match.id,
+              fileId: match.fileId,
+              filePath: match.filePath,
+              reviewKey: runtime.reviewKeys.get(match.fileId) ?? identity.reviewKey,
+              hunkId: match.hunkId,
+              hunkFingerprint: match.hunkFingerprint,
+              hunkLineIndex: match.hunkLineIndex,
+              newLineNumber: match.newLineNumber,
+              oldLineNumber: match.oldLineNumber,
+              side: match.side,
+              text: match.excerpt.text.slice(match.excerpt.start, match.excerpt.end),
+              start: match.start,
+              end: match.end,
+            }),
+          )
+          Match.valueTags(publication, {
+            Provisional: ({ lowerBoundMatches }) => {
+              this.#dispatch({
+                _tag: "results",
+                key: operation.key,
+                totalMatches: lowerBoundMatches,
+                retainedMatches: matches,
+              })
+            },
+            Final: (final) => {
+              finalPublications.push(final)
+            },
+          })
+        },
       )
     } catch {
       this.#fail(operation)
@@ -455,58 +494,52 @@ export class ReviewSearchController {
     }
 
     if (!this.#isCurrent(operation.key)) return null
-    const availableResponse = Match.valueTags(response, {
-      available: (available) => available,
-      expired: () => null,
-    })
-    if (availableResponse === null) {
-      const result = this.#dispatch({ _tag: "expired", key: operation.key })
-      if (!result.stale) {
-        this.#cache.clear()
-        runtime.onSnapshotExpired()
-      }
-      return null
-    }
-    if (availableResponse.snapshotId !== operation.key.snapshotId) {
+    const finalPublication = finalPublications.at(-1)
+    if (
+      finalPublication === undefined ||
+      !sameSessionIdentity(finalPublication.identity, identity)
+    ) {
       this.#fail(operation)
       return null
     }
-
-    const activeCursor = this.#cache.find(model.activeGlobalIndex)?.page.cursor
-    const pinnedCursors = new Set<ReviewSnapshotSearchCursor | null>([cursor])
-    if (activeCursor !== undefined) pinnedCursors.add(activeCursor)
-    const page = { cursor, response: availableResponse, startIndex }
-    try {
-      if (!this.#cache.put(page, pinnedCursors)) {
-        this.#fail(operation)
-        return null
-      }
-    } catch {
-      this.#fail(operation)
-      return null
-    }
-    const retainedMatches = Object.freeze([...this.#cache.matches()])
+    const matches = finalPublication.matches.map((match) =>
+      Schema.decodeUnknownSync(ReviewSnapshotSearchMatchSchema)({
+        id: match.id,
+        fileId: match.fileId,
+        filePath: match.filePath,
+        reviewKey: runtime.reviewKeys.get(match.fileId) ?? identity.reviewKey,
+        hunkId: match.hunkId,
+        hunkFingerprint: match.hunkFingerprint,
+        hunkLineIndex: match.hunkLineIndex,
+        newLineNumber: match.newLineNumber,
+        oldLineNumber: match.oldLineNumber,
+        side: match.side,
+        text: match.excerpt.text.slice(match.excerpt.start, match.excerpt.end),
+        start: match.start,
+        end: match.end,
+      }),
+    )
     const result = this.#dispatch({
       _tag: "results",
       key: operation.key,
-      totalMatches: availableResponse.totalMatches,
-      retainedMatches,
+      totalMatches: finalPublication.totalMatches,
+      retainedMatches: matches,
     })
-    return result.stale ? null : page
-  }
-
-  readonly #findCurrent = (operation: ReviewSearchOperation, index: number) => {
-    if (!this.#isCurrent(operation.key)) return null
-    return this.#cache.find(index)
+    return result.stale
+      ? null
+      : {
+          startIndex,
+          matches,
+          totalMatches: finalPublication.totalMatches,
+          nextCursor: finalPublication.nextCursor,
+        }
   }
 
   readonly #activateMatch = (
     operation: ReviewSearchOperation,
-    cursor: ReviewSnapshotSearchCursor | null,
     match: ReviewSnapshotSearchMatch,
   ) => {
     if (!this.#isCurrent(operation.key)) return
-    this.#cache.get(cursor)
     const result = this.#dispatch({
       _tag: "activate",
       key: operation.key,
@@ -559,8 +592,7 @@ export class ReviewSearchController {
 
   readonly #fail = (operation: ReviewSearchOperation) => {
     if (!this.#isCurrent(operation.key)) return
-    const result = this.#dispatch({ _tag: "failed", operation })
-    if (!result.stale && operation.kind === "query") this.#cache.clear()
+    this.#dispatch({ _tag: "failed", operation })
   }
 
   readonly #isCurrent = (key: ReviewSearchOperationKey) =>
@@ -620,6 +652,14 @@ const sameOperationKey = (model: ReviewSearchModel, key: ReviewSearchOperationKe
   model.sessionEpoch === key.sessionEpoch &&
   model.queryEpoch === key.queryEpoch &&
   model.moveEpoch === key.moveEpoch
+
+const sameSessionIdentity = (left: ReviewSessionIdentity, right: ReviewSessionIdentity): boolean =>
+  left.projectId === right.projectId &&
+  left.reviewKey === right.reviewKey &&
+  left.snapshotId === right.snapshotId &&
+  left.processId === right.processId &&
+  left.sessionId === right.sessionId &&
+  left.stateVersion === right.stateVersion
 
 const commandResult = (
   model: ReviewSearchModel,
