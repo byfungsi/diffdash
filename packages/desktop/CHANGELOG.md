@@ -1,5 +1,11 @@
 # DiffDash Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- [#79](https://github.com/byfungsi/diffdash/pull/79) [`39902f8`](https://github.com/byfungsi/diffdash/commit/39902f8886700f247d2d9da546b8b9e2b342aa43) Thanks [@hanipcode](https://github.com/hanipcode)! - Review branches, tags, commit SHAs, and HEAD from local repositories, including immutable comparisons without a hosted remote.
+
 ## 0.8.1
 
 ### Patch Changes
