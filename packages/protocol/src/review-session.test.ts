@@ -8,6 +8,8 @@ import {
   ReviewSessionId,
   ReviewSessionIdentity,
   ReviewSessionProcessId,
+  ReviewSessionRange,
+  ReviewSessionSearchPublication,
   ReviewSessionState,
   ReviewSessionStateVersion,
   VerifyingReviewSession,
@@ -70,5 +72,45 @@ describe("progressive review session protocol", () => {
     })
     expect(reviewSessionCapabilities(verifying).mutations).toBe("disabled")
     expect(reviewSessionCapabilities(ready).mutations).toBe("enabled")
+  })
+
+  it("keeps ranges binary and search publications page-bounded", () => {
+    expect(
+      Schema.is(ReviewSessionRange)({
+        identity,
+        file: {
+          ordinal: 0,
+          fileId: "file",
+          path: "src/file.ts",
+          oldPath: null,
+          additions: 1,
+          deletions: 0,
+        },
+        blocks: [
+          {
+            id: "block",
+            hunkId: "hunk",
+            ordinal: 0,
+            firstLine: 0,
+            lineCount: 1,
+            bytes: new Uint8Array([43, 120, 10]),
+          },
+        ],
+        byteCount: 3,
+        complete: true,
+      }),
+    ).toBe(true)
+
+    expect(
+      Schema.is(ReviewSessionSearchPublication)({
+        _tag: "Provisional",
+        identity,
+        lowerBoundMatches: 201,
+        matches: Array.from({ length: 201 }, () => ({})),
+        previousCursor: null,
+        nextCursor: null,
+        wrapped: false,
+      }),
+    ).toBe(false)
   })
 })
