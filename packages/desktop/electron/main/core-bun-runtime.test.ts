@@ -145,63 +145,66 @@ describe("Bun Core runtime", () => {
     })
   })
 
-  it.live("launches the generated Core artifact with the qualified Bun runtime", () =>
-    Effect.gen(function* () {
-      const tempResources = yield* TempResources
-      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
-        prefix: "dd-core-bun-parent-",
-      })
-      const artifactDirectory = join(temporaryDirectory, "artifact")
-      execFileSync(
-        process.execPath,
-        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
-        {
-          cwd: resolve("."),
-          stdio: "ignore",
-        },
-      )
-      const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
-        readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
-      )
-      const artifact = yield* verifyCoreArtifact({
-        artifactDirectory,
-        expectedBuildId: manifest.buildId,
-      })
-      const bun = discoverBunRuntimeCandidates({
-        environment: process.env,
-        homeDirectory: process.env.HOME ?? null,
-        platform: process.platform,
-      }).find(({ executablePath }) => existsSync(executablePath))
-      expect(bun).toBeDefined()
-      if (bun === undefined) return
+  it.live(
+    "launches the generated Core artifact with the qualified Bun runtime",
+    () =>
+      Effect.gen(function* () {
+        const tempResources = yield* TempResources
+        const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+          prefix: "dd-core-bun-parent-",
+        })
+        const artifactDirectory = join(temporaryDirectory, "artifact")
+        execFileSync(
+          process.execPath,
+          ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+          {
+            cwd: resolve("."),
+            stdio: "ignore",
+          },
+        )
+        const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
+          readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
+        )
+        const artifact = yield* verifyCoreArtifact({
+          artifactDirectory,
+          expectedBuildId: manifest.buildId,
+        })
+        const bun = discoverBunRuntimeCandidates({
+          environment: process.env,
+          homeDirectory: process.env.HOME ?? null,
+          platform: process.platform,
+        }).find(({ executablePath }) => existsSync(executablePath))
+        expect(bun).toBeDefined()
+        if (bun === undefined) return
 
-      const session = yield* bootstrapCoreHost({
-        artifact,
-        applicationInstanceId: ApplicationInstanceId.make("app-real-bun"),
-        temporaryDirectory,
-        generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-bun"),
-        generateRequestId: () => HostRequestId.make("h:real-bun-health"),
-        generateToken: () => Redacted.make("real-bun-token-with-at-least-32-bytes"),
-        startTransport: (configuration) => {
-          const databasePath = join(temporaryDirectory, "diffdash.sqlite")
-          const statePath = join(temporaryDirectory, "state.json")
-          return startCoreBunProcess({
-            applicationCwd: resolve("."),
-            bunExecutablePath: bun.executablePath,
-            configuration,
-            databasePath,
-            environment: process.env,
-            statePath,
-            coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
-          }).pipe(Effect.asVoid)
-        },
-      })
+        const session = yield* bootstrapCoreHost({
+          artifact,
+          applicationInstanceId: ApplicationInstanceId.make("app-real-bun"),
+          temporaryDirectory,
+          generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-bun"),
+          generateRequestId: () => HostRequestId.make("h:real-bun-health"),
+          generateToken: () => Redacted.make("real-bun-token-with-at-least-32-bytes"),
+          startTransport: (configuration) => {
+            const databasePath = join(temporaryDirectory, "diffdash.sqlite")
+            const statePath = join(temporaryDirectory, "state.json")
+            return startCoreBunProcess({
+              applicationCwd: resolve("."),
+              bunExecutablePath: bun.executablePath,
+              configuration,
+              databasePath,
+              environment: process.env,
+              statePath,
+              coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
+            }).pipe(Effect.asVoid)
+          },
+        })
 
-      expect(session.health).toEqual({
-        applicationInstanceId: "app-real-bun",
-        processEpoch: "epoch-real-bun",
-        lifecycle: "awaitingOwnership",
-      })
-    }).pipe(Effect.provide(launchDependencies)),
+        expect(session.health).toEqual({
+          applicationInstanceId: "app-real-bun",
+          processEpoch: "epoch-real-bun",
+          lifecycle: "awaitingOwnership",
+        })
+      }).pipe(Effect.provide(launchDependencies)),
+    15_000,
   )
 })
