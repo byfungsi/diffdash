@@ -1,4 +1,3 @@
-import { CoreMethod } from "@diffdash/core"
 import { Effect, Predicate } from "effect"
 import {
   app,
@@ -126,8 +125,8 @@ const start = async (
   const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()
   if (shouldRepairOnStartup) {
-    void applicationRuntime
-      .execute(CoreMethod.repairRepositoryIdentities, {})
+    void applicationRuntime.core
+      .repairRepositoryIdentities({})
       .then((result) => {
         console.info(
           `[repositories:repair] resolved=${result.resolvedCount} unresolved=${result.unresolvedCount} localAliases=${result.localAliasCount}`,

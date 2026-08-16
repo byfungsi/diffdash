@@ -1,11 +1,6 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
 import {
-  CoreMethod,
-  type CoreOperationOptions,
-  type CoreMethod as CoreMethodType,
-  type CoreMethodInput,
-  type CoreOperationOutput,
   type GetStoredWalkthrough,
   type StartWalkthroughOperation,
   type WalkthroughOperationAccepted,
@@ -62,6 +57,7 @@ import {
 } from "./core-host-selection"
 import { makeCoreHostCrashCircuit, superviseReadyCoreHost } from "./core-host-supervisor"
 import type { CoreProcessHandle } from "./core-process-launcher"
+import type { CoreRpcClient } from "./core-rpc-client"
 import { startCoreUtilityProcessManaged } from "./core-utility-process-launcher"
 import type { DesktopHostConfiguration } from "./desktop-host-configuration"
 import { createProgressiveReviewApiGateway } from "./progressive-review-api-gateway"
@@ -100,55 +96,153 @@ export const createExternalApplicationRuntime = (
     })
   }
 
-  async function execute<Method extends CoreMethodType>(
-    method: Method,
-    input: CoreMethodInput<Method>,
-    options?: CoreOperationOptions,
-  ): Promise<CoreOperationOutput<Method>>
-  async function execute(
-    method: CoreMethodType,
-    input: CoreMethodInput<CoreMethodType>,
-    options?: CoreOperationOptions,
-  ): Promise<CoreOperationOutput<CoreMethodType>> {
+  const invoke = <A, E>(
+    operation: (client: CoreRpcClient["Service"]) => Effect.Effect<A, E>,
+  ): Promise<A> => {
     const current = session
     if (current?.client === undefined) throw new Error("DiffDash Core is not started.")
-    const client = current.client
-    const request = { ...requestContext(), ...input }
-    if (method === CoreMethod.runReviewThreadAgent) {
-      const reviewAgentRequest = Schema.decodeUnknownSync(StartReviewAgentOperationRequest)(request)
-      const accepted = await runtime.runPromise(
-        client.execute(CoreMethod.runReviewThreadAgent, reviewAgentRequest),
+    return runtime.runPromise(operation(current.client))
+  }
+
+  const runReviewThreadAgent: ApplicationRuntime["core"]["runReviewThreadAgent"] = async (
+    input,
+    options,
+  ) => {
+    const reviewAgentRequest = Schema.decodeUnknownSync(StartReviewAgentOperationRequest)({
+      ...requestContext(),
+      ...input,
+    })
+    const accepted = await invoke((client) => client.runReviewThreadAgent(reviewAgentRequest))
+    options?.onReviewThreadAgentProgress?.("reviewing")
+    const waitForCompletion = async (): Promise<void> => {
+      const operation = await invoke((client) =>
+        client.getReviewAgentOperation({ ...requestContext(), runId: accepted.runId }),
       )
-      options?.onReviewThreadAgentProgress?.("reviewing")
-      const waitForCompletion = async (): Promise<void> => {
-        const operation = await runtime.runPromise(
-          client.getReviewAgentOperation({ ...requestContext(), runId: accepted.runId }),
-        )
-        if (Schema.is(RunningAgentRun)(operation)) {
-          await runtime.runPromise(Effect.sleep("100 millis"))
-          return waitForCompletion()
-        }
-        if (Schema.is(FailedAgentRun)(operation)) throw new Error(operation.error)
-        if (Schema.is(CancelledAgentRun)(operation)) {
-          throw new Error("Review agent operation was cancelled.")
-        }
-        if (Schema.is(InterruptedAgentRun)(operation)) {
-          throw new Error("Review agent operation was interrupted.")
-        }
-        if (!Schema.is(CompletedAgentRun)(operation)) {
-          throw new Error("Review agent operation ended in an unsupported state.")
-        }
+      if (Schema.is(RunningAgentRun)(operation)) {
+        await runtime.runPromise(Effect.sleep("100 millis"))
+        return waitForCompletion()
       }
-      await waitForCompletion()
-      options?.onReviewThreadAgentProgress?.("restoring-workspace")
-      return runtime.runPromise(
-        client.execute(CoreMethod.getReviewThread, {
-          ...requestContext(),
-          threadId: reviewAgentRequest.threadId,
-        }),
-      )
+      if (Schema.is(FailedAgentRun)(operation)) throw new Error(operation.error)
+      if (Schema.is(CancelledAgentRun)(operation)) {
+        throw new Error("Review agent operation was cancelled.")
+      }
+      if (Schema.is(InterruptedAgentRun)(operation)) {
+        throw new Error("Review agent operation was interrupted.")
+      }
+      if (!Schema.is(CompletedAgentRun)(operation)) {
+        throw new Error("Review agent operation ended in an unsupported state.")
+      }
     }
-    return runtime.runPromise(client.execute(method, request))
+    await waitForCompletion()
+    options?.onReviewThreadAgentProgress?.("restoring-workspace")
+    return invoke((client) =>
+      client.getReviewThread({
+        ...requestContext(),
+        threadId: reviewAgentRequest.threadId,
+      }),
+    )
+  }
+
+  const core: ApplicationRuntime["core"] = {
+    analyticsCapture: (input) =>
+      invoke((client) => client.analyticsCapture({ ...requestContext(), ...input })),
+    analyticsStart: (input) =>
+      invoke((client) => client.analyticsStart({ ...requestContext(), ...input })),
+    agentProvidersGetCatalog: (input) =>
+      invoke((client) => client.agentProvidersGetCatalog({ ...requestContext(), ...input })),
+    appDiagnostics: (input) =>
+      invoke((client) => client.appDiagnostics({ ...requestContext(), ...input })),
+    appInstallDiffDashCli: (input) =>
+      invoke((client) => client.appInstallDiffDashCli({ ...requestContext(), ...input })),
+    appOpenLocalRepositoryFile: (input) =>
+      invoke((client) => client.appOpenLocalRepositoryFile({ ...requestContext(), ...input })),
+    appOpenRepositoryComparisonFile: (input) =>
+      invoke((client) => client.appOpenRepositoryComparisonFile({ ...requestContext(), ...input })),
+    appOpenRepositoryFile: (input) =>
+      invoke((client) => client.appOpenRepositoryFile({ ...requestContext(), ...input })),
+    appStateGet: (input) =>
+      invoke((client) => client.appStateGet({ ...requestContext(), ...input })),
+    appStateUpdate: (input) =>
+      invoke((client) => client.appStateUpdate({ ...requestContext(), ...input })),
+    listProviders: (input) =>
+      invoke((client) => client.listProviders({ ...requestContext(), ...input })),
+    submitHostedReviewDecision: (input) =>
+      invoke((client) => client.submitHostedReviewDecision({ ...requestContext(), ...input })),
+    getHostedReviewDecision: (input) =>
+      invoke((client) => client.getHostedReviewDecision({ ...requestContext(), ...input })),
+    listHostedReviews: (input) =>
+      invoke((client) => client.listHostedReviews({ ...requestContext(), ...input })),
+    listAssignedHostedReviews: (input) =>
+      invoke((client) => client.listAssignedHostedReviews({ ...requestContext(), ...input })),
+    listHostedRepositorySearchScopes: (input) =>
+      invoke((client) =>
+        client.listHostedRepositorySearchScopes({ ...requestContext(), ...input }),
+      ),
+    searchHostedRepositories: (input) =>
+      invoke((client) => client.searchHostedRepositories({ ...requestContext(), ...input })),
+    resolveLocalBranch: (input) =>
+      invoke((client) => client.resolveLocalBranch({ ...requestContext(), ...input })),
+    resolveLastCommit: (input) =>
+      invoke((client) => client.resolveLastCommit({ ...requestContext(), ...input })),
+    resolveRepositoryComparison: (input) =>
+      invoke((client) => client.resolveRepositoryComparison({ ...requestContext(), ...input })),
+    acquireHostedReviewSnapshot: (input) =>
+      invoke((client) => client.acquireHostedReviewSnapshot({ ...requestContext(), ...input })),
+    acquireLocalReviewSnapshot: (input) =>
+      invoke((client) => client.acquireLocalReviewSnapshot({ ...requestContext(), ...input })),
+    acquireRepositoryComparisonSnapshot: (input) =>
+      invoke((client) =>
+        client.acquireRepositoryComparisonSnapshot({ ...requestContext(), ...input }),
+      ),
+    favoriteRemoteRepository: (input) =>
+      invoke((client) => client.favoriteRemoteRepository({ ...requestContext(), ...input })),
+    forgetRepository: (input) =>
+      invoke((client) => client.forgetRepository({ ...requestContext(), ...input })),
+    installRepository: (input) =>
+      invoke((client) => client.installRepository({ ...requestContext(), ...input })),
+    linkRepository: (input) =>
+      invoke((client) => client.linkRepository({ ...requestContext(), ...input })),
+    listRepositories: (input) =>
+      invoke((client) => client.listRepositories({ ...requestContext(), ...input })),
+    openProject: (input) =>
+      invoke((client) => client.openProject({ ...requestContext(), ...input })),
+    repairRepositoryIdentities: (input) =>
+      invoke((client) => client.repairRepositoryIdentities({ ...requestContext(), ...input })),
+    setRepositoryFavorite: (input) =>
+      invoke((client) => client.setRepositoryFavorite({ ...requestContext(), ...input })),
+    projectWorkspaceGet: (input) =>
+      invoke((client) => client.projectWorkspaceGet({ ...requestContext(), ...input })),
+    projectWorkspaceSave: (input) =>
+      invoke((client) => client.projectWorkspaceSave({ ...requestContext(), ...input })),
+    addReviewThreadUserMessage: (input) =>
+      invoke((client) => client.addReviewThreadUserMessage({ ...requestContext(), ...input })),
+    createReviewThread: (input) =>
+      invoke((client) => client.createReviewThread({ ...requestContext(), ...input })),
+    getReviewThread: (input) =>
+      invoke((client) => client.getReviewThread({ ...requestContext(), ...input })),
+    listReviewThreads: (input) =>
+      invoke((client) => client.listReviewThreads({ ...requestContext(), ...input })),
+    runReviewThreadAgent,
+    settingsGet: (input) =>
+      invoke((client) => client.settingsGet({ ...requestContext(), ...input })),
+    settingsUpdate: (input) =>
+      invoke((client) => client.settingsUpdate({ ...requestContext(), ...input })),
+    listViewedFiles: (input) =>
+      invoke((client) => client.listViewedFiles({ ...requestContext(), ...input })),
+    listLocalViewedFiles: (input) =>
+      invoke((client) => client.listLocalViewedFiles({ ...requestContext(), ...input })),
+    setViewedFile: (input) =>
+      invoke((client) => client.setViewedFile({ ...requestContext(), ...input })),
+    setLocalViewedFile: (input) =>
+      invoke((client) => client.setLocalViewedFile({ ...requestContext(), ...input })),
+    listRepositoryComparisonViewedFiles: (input) =>
+      invoke((client) =>
+        client.listRepositoryComparisonViewedFiles({ ...requestContext(), ...input }),
+      ),
+    setRepositoryComparisonViewedFile: (input) =>
+      invoke((client) =>
+        client.setRepositoryComparisonViewedFile({ ...requestContext(), ...input }),
+      ),
   }
 
   const walkthroughGeneration = async (
@@ -160,20 +254,20 @@ export const createExternalApplicationRuntime = (
     const manifest =
       target.kind === "hosted"
         ? await runtime.runPromise(
-            current.client.execute(CoreMethod.acquireHostedReviewSnapshot, {
+            current.client.acquireHostedReviewSnapshot({
               ...context,
               review: target.review,
             }),
           )
         : target.kind === "local"
           ? await runtime.runPromise(
-              current.client.execute(CoreMethod.acquireLocalReviewSnapshot, {
+              current.client.acquireLocalReviewSnapshot({
                 ...context,
                 target,
               }),
             )
           : await runtime.runPromise(
-              current.client.execute(CoreMethod.acquireRepositoryComparisonSnapshot, {
+              current.client.acquireRepositoryComparisonSnapshot({
                 ...context,
                 target,
               }),
@@ -450,7 +544,7 @@ export const createExternalApplicationRuntime = (
 
   return {
     start,
-    execute,
+    core,
     walkthroughs: {
       start: async (input: StartWalkthroughOperation): Promise<WalkthroughOperationAccepted> => {
         const current = session

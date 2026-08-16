@@ -12,14 +12,17 @@ export const defineThreadHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.defineCore(CoreMethod.listReviewThreads, runtime.execute)
-  handlers.defineCore(CoreMethod.addReviewThreadUserMessage, runtime.execute)
-  handlers.defineCore(CoreMethod.createReviewThread, runtime.execute)
-  handlers.defineCore(CoreMethod.getReviewThread, runtime.execute)
+  handlers.defineCore(CoreMethod.listReviewThreads, runtime.core.listReviewThreads)
+  handlers.defineCore(
+    CoreMethod.addReviewThreadUserMessage,
+    runtime.core.addReviewThreadUserMessage,
+  )
+  handlers.defineCore(CoreMethod.createReviewThread, runtime.core.createReviewThread)
+  handlers.defineCore(CoreMethod.getReviewThread, runtime.core.getReviewThread)
   handlers.define(
     InvokeChannel.runReviewThreadAgent,
     async (event, request) =>
-      runtime.execute(CoreMethod.runReviewThreadAgent, request, {
+      runtime.core.runReviewThreadAgent(request, {
         onReviewThreadAgentProgress: (stage) => {
           sendProtocolEvent(
             event.sender,

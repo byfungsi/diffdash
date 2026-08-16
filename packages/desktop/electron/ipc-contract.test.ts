@@ -839,21 +839,12 @@ describe("IPC contract", () => {
       InvokeChannel.analyticsCapture,
     ])
     const execute = vi.fn<
-      (
-        method: typeof CoreMethod.analyticsCapture,
-        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
-      ) => Promise<void>
-    >(
-      async (
-        method: typeof CoreMethod.analyticsCapture,
-        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
-      ): Promise<void> => {
-        expect(method).toBe(CoreMethod.analyticsCapture)
-        expect(input).toEqual({
-          event: { event: "review_opened", reviewType: "pull_request" },
-        })
-      },
-    )
+      (input: InvokeRequest<typeof InvokeChannel.analyticsCapture>) => Promise<void>
+    >(async (input: InvokeRequest<typeof InvokeChannel.analyticsCapture>): Promise<void> => {
+      expect(input).toEqual({
+        event: { event: "review_opened", reviewType: "pull_request" },
+      })
+    })
     registry.defineCore(CoreMethod.analyticsCapture, execute)
     registry.install()
 
@@ -974,34 +965,76 @@ const testUpdater = (): DesktopUpdater => ({
   dispose: () => Effect.void,
 })
 
-const testRuntime = (message: string): ApplicationRuntime => ({
-  start: async () => undefined,
-  dispose: async () => undefined,
-  execute: async () => {
+const testRuntime = (message: string): ApplicationRuntime => {
+  const reject = async (): Promise<never> => {
     throw new Error(message)
-  },
-  walkthroughs: {
-    start: async () => {
-      throw new Error(message)
+  }
+  return {
+    start: async () => undefined,
+    dispose: async () => undefined,
+    core: {
+      analyticsCapture: reject,
+      analyticsStart: reject,
+      agentProvidersGetCatalog: reject,
+      appDiagnostics: reject,
+      appInstallDiffDashCli: reject,
+      appOpenLocalRepositoryFile: reject,
+      appOpenRepositoryComparisonFile: reject,
+      appOpenRepositoryFile: reject,
+      appStateGet: reject,
+      appStateUpdate: reject,
+      listProviders: reject,
+      submitHostedReviewDecision: reject,
+      getHostedReviewDecision: reject,
+      listHostedReviews: reject,
+      listAssignedHostedReviews: reject,
+      listHostedRepositorySearchScopes: reject,
+      searchHostedRepositories: reject,
+      resolveLocalBranch: reject,
+      resolveLastCommit: reject,
+      resolveRepositoryComparison: reject,
+      acquireHostedReviewSnapshot: reject,
+      acquireLocalReviewSnapshot: reject,
+      acquireRepositoryComparisonSnapshot: reject,
+      favoriteRemoteRepository: reject,
+      forgetRepository: reject,
+      installRepository: reject,
+      linkRepository: reject,
+      listRepositories: reject,
+      openProject: reject,
+      repairRepositoryIdentities: reject,
+      setRepositoryFavorite: reject,
+      projectWorkspaceGet: reject,
+      projectWorkspaceSave: reject,
+      addReviewThreadUserMessage: reject,
+      createReviewThread: reject,
+      getReviewThread: reject,
+      listReviewThreads: reject,
+      runReviewThreadAgent: reject,
+      settingsGet: reject,
+      settingsUpdate: reject,
+      listViewedFiles: reject,
+      listLocalViewedFiles: reject,
+      setViewedFile: reject,
+      setLocalViewedFile: reject,
+      listRepositoryComparisonViewedFiles: reject,
+      setRepositoryComparisonViewedFile: reject,
     },
-    getOperation: async () => {
-      throw new Error(message)
+    walkthroughs: {
+      start: reject,
+      getOperation: reject,
+      cancel: reject,
+      getStored: reject,
     },
-    cancel: async () => {
-      throw new Error(message)
+    progressiveReviews: {
+      openSession: reject,
+      currentSession: reject,
+      closeSession: reject,
+      inventory: reject,
+      readRange: reject,
+      waitForRange: reject,
+      resolveTarget: reject,
+      search: reject,
     },
-    getStored: async () => {
-      throw new Error(message)
-    },
-  },
-  progressiveReviews: {
-    openSession: async () => Promise.reject(new Error(message)),
-    currentSession: async () => Promise.reject(new Error(message)),
-    closeSession: async () => Promise.reject(new Error(message)),
-    inventory: async () => Promise.reject(new Error(message)),
-    readRange: async () => Promise.reject(new Error(message)),
-    waitForRange: async () => Promise.reject(new Error(message)),
-    resolveTarget: async () => Promise.reject(new Error(message)),
-    search: async () => Promise.reject(new Error(message)),
-  },
-})
+  }
+}

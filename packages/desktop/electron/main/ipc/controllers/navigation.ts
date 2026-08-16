@@ -1,4 +1,3 @@
-import { CoreMethod } from "@diffdash/core"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { CliNavigationCommand } from "@diffdash/protocol/cli-navigation"
 import { transportError } from "@diffdash/protocol/transport-error"
@@ -62,7 +61,7 @@ export const defineNavigationHandlers = (
     }
 
     const normalizedFilePath = normalizeReviewFilePath(request.filePath)
-    const intent = await runtime.execute(CoreMethod.appOpenRepositoryFile, {
+    const intent = await runtime.core.appOpenRepositoryFile({
       ...request,
       filePath: normalizedFilePath,
     })
@@ -78,7 +77,7 @@ export const defineNavigationHandlers = (
           "Cannot open an absolute file path from a review.",
         )
       }
-      const intent = await runtime.execute(CoreMethod.appOpenRepositoryComparisonFile, {
+      const intent = await runtime.core.appOpenRepositoryComparisonFile({
         target,
         filePath: normalizeReviewFilePath(filePath),
       })
@@ -89,7 +88,7 @@ export const defineNavigationHandlers = (
   handlers.define(
     InvokeChannel.appOpenLocalRepositoryFile,
     async (_event, { rootPath, filePath }): Promise<void> => {
-      const intent = await runtime.execute(CoreMethod.appOpenLocalRepositoryFile, {
+      const intent = await runtime.core.appOpenLocalRepositoryFile({
         rootPath,
         filePath: normalizeReviewFilePath(filePath),
       })

@@ -1,7 +1,14 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import type { CoreMethod, CoreMethodInput, CoreOperationOutput } from "@diffdash/core"
+import {
+  CoreMethod,
+  type CoreMethod as CoreMethodType,
+  type CoreMethodInput,
+  type CoreOperationOutput,
+} from "@diffdash/core"
 import type { CoreApplicationFailure } from "@diffdash/core-rpc/application-rpc"
 import type {
+  AppStateReadFailure,
+  AppStateGetAdmissionFailure,
   CoreAuthorizeDatabaseOwnershipFailure,
   CoreHealthIdentityMismatchFailure,
   CoreTransportAuthenticationFailure,
@@ -80,15 +87,18 @@ import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization"
 import * as Socket from "effect/unstable/socket/Socket"
 
-type CoreRpcApplicationRequest<Method extends CoreMethod> = HostRequestContext &
+type CoreRpcApplicationRequest<Method extends CoreMethodType> = HostRequestContext &
   CoreMethodInput<Method>
 
-type CoreRpcApplicationOutput<Method extends CoreMethod> = Method extends "ReviewThreads.runAgent"
-  ? ReviewAgentOperationAccepted
-  : CoreOperationOutput<Method>
+type CoreRpcApplicationOutput<Method extends CoreMethodType> =
+  Method extends "ReviewThreads.runAgent"
+    ? ReviewAgentOperationAccepted
+    : CoreOperationOutput<Method>
 
 type CoreRpcApplicationFailure =
   | CoreApplicationFailure
+  | AppStateReadFailure
+  | AppStateGetAdmissionFailure
   | ReviewAgentStartFailure
   | CoreTransportAuthenticationFailure
   | RpcClientError
@@ -97,6 +107,12 @@ type CoreProgressiveReviewFailure =
   | CoreReviewSessionFailure
   | CoreTransportAuthenticationFailure
   | RpcClientError
+
+type CoreRpcApplicationClient = {
+  readonly [Name in keyof typeof CoreMethod]: (
+    request: CoreRpcApplicationRequest<(typeof CoreMethod)[Name]>,
+  ) => Effect.Effect<CoreRpcApplicationOutput<(typeof CoreMethod)[Name]>, CoreRpcApplicationFailure>
+}
 
 /** Host-side rejection when health does not identify the exact launched Core epoch. */
 export class CoreRpcHealthVerificationError extends Schema.TaggedError<CoreRpcHealthVerificationError>()(
@@ -120,7 +136,7 @@ export interface CoreRpcClientOptions {
 /** Authenticated Electron-side client for the Core control plane. */
 export class CoreRpcClient extends Context.Service<
   CoreRpcClient,
-  {
+  CoreRpcApplicationClient & {
     readonly health: (
       request: HostRequestContext,
     ) => Effect.Effect<
@@ -136,10 +152,6 @@ export class CoreRpcClient extends Context.Service<
       DatabaseOwnershipAuthorized,
       CoreAuthorizeDatabaseOwnershipFailure | CoreTransportAuthenticationFailure | RpcClientError
     >
-    readonly execute: <Method extends CoreMethod>(
-      method: Method,
-      request: CoreRpcApplicationRequest<Method>,
-    ) => Effect.Effect<CoreRpcApplicationOutput<Method>, CoreRpcApplicationFailure>
     readonly getReviewAgentOperation: (
       request: ReviewAgentOperationRequest,
     ) => Effect.Effect<
@@ -303,12 +315,149 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         (request: AuthorizeDatabaseOwnershipRequest) =>
           authenticated(client("Core.authorizeDatabaseOwnership", request)),
       )
-      // SAFETY: The authenticated catalog contains every CoreMethod with the same request/output
-      // correlation. Effect's flattened client loses that correlation for a generic tag subset.
-      // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion
-      const applicationClient = client as CoreRpcClient["Service"]["execute"]
-      const execute: CoreRpcClient["Service"]["execute"] = (method, request) =>
-        authenticated(applicationClient(method, request))
+      const applicationClient: CoreRpcApplicationClient = {
+        analyticsCapture: Effect.fn("CoreRpcClient.analyticsCapture")((request) =>
+          authenticated(client("Analytics.capture", request)),
+        ),
+        analyticsStart: Effect.fn("CoreRpcClient.analyticsStart")((request) =>
+          authenticated(client("Analytics.start", request)),
+        ),
+        agentProvidersGetCatalog: Effect.fn("CoreRpcClient.agentProvidersGetCatalog")((request) =>
+          authenticated(client("AgentProviders.getCatalog", request)),
+        ),
+        appDiagnostics: Effect.fn("CoreRpcClient.appDiagnostics")((request) =>
+          authenticated(client("Prerequisites.get", request)),
+        ),
+        appInstallDiffDashCli: Effect.fn("CoreRpcClient.appInstallDiffDashCli")((request) =>
+          authenticated(client("Prerequisites.installDiffDashCli", request)),
+        ),
+        appOpenLocalRepositoryFile: Effect.fn("CoreRpcClient.appOpenLocalRepositoryFile")(
+          (request) => authenticated(client("FileNavigation.resolveLocalRepositoryFile", request)),
+        ),
+        appOpenRepositoryComparisonFile: Effect.fn("CoreRpcClient.appOpenRepositoryComparisonFile")(
+          (request) =>
+            authenticated(client("FileNavigation.resolveRepositoryComparisonFile", request)),
+        ),
+        appOpenRepositoryFile: Effect.fn("CoreRpcClient.appOpenRepositoryFile")((request) =>
+          authenticated(client("FileNavigation.resolveHostedReviewFile", request)),
+        ),
+        appStateGet: Effect.fn("CoreRpcClient.appStateGet")((request) =>
+          authenticated(client("AppState.get", request)),
+        ),
+        appStateUpdate: Effect.fn("CoreRpcClient.appStateUpdate")((request) =>
+          authenticated(client("AppState.update", request)),
+        ),
+        listProviders: Effect.fn("CoreRpcClient.listProviders")((request) =>
+          authenticated(client("GitProviders.list", request)),
+        ),
+        submitHostedReviewDecision: Effect.fn("CoreRpcClient.submitHostedReviewDecision")(
+          (request) => authenticated(client("HostedReviews.submitDecision", request)),
+        ),
+        getHostedReviewDecision: Effect.fn("CoreRpcClient.getHostedReviewDecision")((request) =>
+          authenticated(client("HostedReviews.getDecision", request)),
+        ),
+        listHostedReviews: Effect.fn("CoreRpcClient.listHostedReviews")((request) =>
+          authenticated(client("HostedReviews.list", request)),
+        ),
+        listAssignedHostedReviews: Effect.fn("CoreRpcClient.listAssignedHostedReviews")((request) =>
+          authenticated(client("HostedReviews.listAssigned", request)),
+        ),
+        listHostedRepositorySearchScopes: Effect.fn(
+          "CoreRpcClient.listHostedRepositorySearchScopes",
+        )((request) => authenticated(client("GitProviders.listSearchScopes", request))),
+        searchHostedRepositories: Effect.fn("CoreRpcClient.searchHostedRepositories")((request) =>
+          authenticated(client("GitProviders.searchRepositories", request)),
+        ),
+        resolveLocalBranch: Effect.fn("CoreRpcClient.resolveLocalBranch")((request) =>
+          authenticated(client("LocalReviews.resolveBranch", request)),
+        ),
+        resolveLastCommit: Effect.fn("CoreRpcClient.resolveLastCommit")((request) =>
+          authenticated(client("LocalReviews.resolveLastCommit", request)),
+        ),
+        resolveRepositoryComparison: Effect.fn("CoreRpcClient.resolveRepositoryComparison")(
+          (request) => authenticated(client("RepositoryComparisons.resolve", request)),
+        ),
+        acquireHostedReviewSnapshot: Effect.fn("CoreRpcClient.acquireHostedReviewSnapshot")(
+          (request) => authenticated(client("ReviewSnapshots.acquireHosted", request)),
+        ),
+        acquireLocalReviewSnapshot: Effect.fn("CoreRpcClient.acquireLocalReviewSnapshot")(
+          (request) => authenticated(client("ReviewSnapshots.acquireLocal", request)),
+        ),
+        acquireRepositoryComparisonSnapshot: Effect.fn(
+          "CoreRpcClient.acquireRepositoryComparisonSnapshot",
+        )((request) =>
+          authenticated(client("ReviewSnapshots.acquireRepositoryComparison", request)),
+        ),
+        favoriteRemoteRepository: Effect.fn("CoreRpcClient.favoriteRemoteRepository")((request) =>
+          authenticated(client("Repositories.favoriteRemote", request)),
+        ),
+        forgetRepository: Effect.fn("CoreRpcClient.forgetRepository")((request) =>
+          authenticated(client("Repositories.forget", request)),
+        ),
+        installRepository: Effect.fn("CoreRpcClient.installRepository")((request) =>
+          authenticated(client("Repositories.install", request)),
+        ),
+        linkRepository: Effect.fn("CoreRpcClient.linkRepository")((request) =>
+          authenticated(client("Repositories.link", request)),
+        ),
+        listRepositories: Effect.fn("CoreRpcClient.listRepositories")((request) =>
+          authenticated(client("Repositories.list", request)),
+        ),
+        openProject: Effect.fn("CoreRpcClient.openProject")((request) =>
+          authenticated(client("Repositories.openProject", request)),
+        ),
+        repairRepositoryIdentities: Effect.fn("CoreRpcClient.repairRepositoryIdentities")(
+          (request) => authenticated(client("Repositories.repairIdentities", request)),
+        ),
+        setRepositoryFavorite: Effect.fn("CoreRpcClient.setRepositoryFavorite")((request) =>
+          authenticated(client("Repositories.setFavorite", request)),
+        ),
+        projectWorkspaceGet: Effect.fn("CoreRpcClient.projectWorkspaceGet")((request) =>
+          authenticated(client("ProjectWorkspace.get", request)),
+        ),
+        projectWorkspaceSave: Effect.fn("CoreRpcClient.projectWorkspaceSave")((request) =>
+          authenticated(client("ProjectWorkspace.save", request)),
+        ),
+        addReviewThreadUserMessage: Effect.fn("CoreRpcClient.addReviewThreadUserMessage")(
+          (request) => authenticated(client("ReviewThreads.addUserMessage", request)),
+        ),
+        createReviewThread: Effect.fn("CoreRpcClient.createReviewThread")((request) =>
+          authenticated(client("ReviewThreads.create", request)),
+        ),
+        getReviewThread: Effect.fn("CoreRpcClient.getReviewThread")((request) =>
+          authenticated(client("ReviewThreads.get", request)),
+        ),
+        listReviewThreads: Effect.fn("CoreRpcClient.listReviewThreads")((request) =>
+          authenticated(client("ReviewThreads.list", request)),
+        ),
+        runReviewThreadAgent: Effect.fn("CoreRpcClient.runReviewThreadAgent")((request) =>
+          authenticated(client("ReviewThreads.runAgent", request)),
+        ),
+        settingsGet: Effect.fn("CoreRpcClient.settingsGet")((request) =>
+          authenticated(client("Settings.get", request)),
+        ),
+        settingsUpdate: Effect.fn("CoreRpcClient.settingsUpdate")((request) =>
+          authenticated(client("Settings.update", request)),
+        ),
+        listViewedFiles: Effect.fn("CoreRpcClient.listViewedFiles")((request) =>
+          authenticated(client("ViewedFiles.listHosted", request)),
+        ),
+        listLocalViewedFiles: Effect.fn("CoreRpcClient.listLocalViewedFiles")((request) =>
+          authenticated(client("ViewedFiles.listLocal", request)),
+        ),
+        setViewedFile: Effect.fn("CoreRpcClient.setViewedFile")((request) =>
+          authenticated(client("ViewedFiles.setHosted", request)),
+        ),
+        setLocalViewedFile: Effect.fn("CoreRpcClient.setLocalViewedFile")((request) =>
+          authenticated(client("ViewedFiles.setLocal", request)),
+        ),
+        listRepositoryComparisonViewedFiles: Effect.fn(
+          "CoreRpcClient.listRepositoryComparisonViewedFiles",
+        )((request) => authenticated(client("ViewedFiles.listRepositoryComparison", request))),
+        setRepositoryComparisonViewedFile: Effect.fn(
+          "CoreRpcClient.setRepositoryComparisonViewedFile",
+        )((request) => authenticated(client("ViewedFiles.setRepositoryComparison", request))),
+      }
       const getReviewAgentOperation = Effect.fn("CoreRpcClient.getReviewAgentOperation")(
         (request: ReviewAgentOperationRequest) =>
           authenticated(client("ReviewAgents.getOperation", request)),
@@ -381,9 +530,9 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         Context.add(
           CoreRpcClient,
           CoreRpcClient.of({
+            ...applicationClient,
             authorizeDatabaseOwnership,
             cancelWalkthrough,
-            execute,
             getReviewAgentOperation,
             getStoredWalkthrough,
             getWalkthroughOperation,

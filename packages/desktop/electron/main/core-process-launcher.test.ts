@@ -129,8 +129,7 @@ describe("Core process launcher", () => {
         )).lifecycle
       }
       expect(lifecycle).toBe("ready")
-      const state = yield* client.execute(
-        "AppState.get",
+      const state = yield* client.appStateGet(
         HostRequestContext.make({
           applicationInstanceId: session.applicationInstanceId,
           processEpoch: session.processEpoch,

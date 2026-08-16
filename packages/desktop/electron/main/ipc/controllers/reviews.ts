@@ -17,22 +17,43 @@ export const defineReviewHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.defineCore(CoreMethod.listHostedReviews, runtime.execute)
-  handlers.defineCore(CoreMethod.listAssignedHostedReviews, runtime.execute)
-  handlers.defineCore(CoreMethod.getHostedReviewDecision, runtime.execute)
-  handlers.defineCore(CoreMethod.submitHostedReviewDecision, runtime.execute)
-  handlers.defineCore(CoreMethod.resolveLocalBranch, runtime.execute)
-  handlers.defineCore(CoreMethod.resolveLastCommit, runtime.execute)
-  handlers.defineCore(CoreMethod.resolveRepositoryComparison, runtime.execute)
-  handlers.defineCore(CoreMethod.acquireHostedReviewSnapshot, runtime.execute)
-  handlers.defineCore(CoreMethod.acquireLocalReviewSnapshot, runtime.execute)
-  handlers.defineCore(CoreMethod.acquireRepositoryComparisonSnapshot, runtime.execute)
-  handlers.defineCore(CoreMethod.listViewedFiles, runtime.execute)
-  handlers.defineCore(CoreMethod.setViewedFile, runtime.execute)
-  handlers.defineCore(CoreMethod.listLocalViewedFiles, runtime.execute)
-  handlers.defineCore(CoreMethod.setLocalViewedFile, runtime.execute)
-  handlers.defineCore(CoreMethod.listRepositoryComparisonViewedFiles, runtime.execute)
-  handlers.defineCore(CoreMethod.setRepositoryComparisonViewedFile, runtime.execute)
+  handlers.defineCore(CoreMethod.listHostedReviews, runtime.core.listHostedReviews)
+  handlers.defineCore(CoreMethod.listAssignedHostedReviews, runtime.core.listAssignedHostedReviews)
+  handlers.defineCore(CoreMethod.getHostedReviewDecision, runtime.core.getHostedReviewDecision)
+  handlers.defineCore(
+    CoreMethod.submitHostedReviewDecision,
+    runtime.core.submitHostedReviewDecision,
+  )
+  handlers.defineCore(CoreMethod.resolveLocalBranch, runtime.core.resolveLocalBranch)
+  handlers.defineCore(CoreMethod.resolveLastCommit, runtime.core.resolveLastCommit)
+  handlers.defineCore(
+    CoreMethod.resolveRepositoryComparison,
+    runtime.core.resolveRepositoryComparison,
+  )
+  handlers.defineCore(
+    CoreMethod.acquireHostedReviewSnapshot,
+    runtime.core.acquireHostedReviewSnapshot,
+  )
+  handlers.defineCore(
+    CoreMethod.acquireLocalReviewSnapshot,
+    runtime.core.acquireLocalReviewSnapshot,
+  )
+  handlers.defineCore(
+    CoreMethod.acquireRepositoryComparisonSnapshot,
+    runtime.core.acquireRepositoryComparisonSnapshot,
+  )
+  handlers.defineCore(CoreMethod.listViewedFiles, runtime.core.listViewedFiles)
+  handlers.defineCore(CoreMethod.setViewedFile, runtime.core.setViewedFile)
+  handlers.defineCore(CoreMethod.listLocalViewedFiles, runtime.core.listLocalViewedFiles)
+  handlers.defineCore(CoreMethod.setLocalViewedFile, runtime.core.setLocalViewedFile)
+  handlers.defineCore(
+    CoreMethod.listRepositoryComparisonViewedFiles,
+    runtime.core.listRepositoryComparisonViewedFiles,
+  )
+  handlers.defineCore(
+    CoreMethod.setRepositoryComparisonViewedFile,
+    runtime.core.setRepositoryComparisonViewedFile,
+  )
   handlers.define(
     InvokeChannel.openProgressiveReviewSession,
     (_event, request) => runtime.progressiveReviews.openSession(request),

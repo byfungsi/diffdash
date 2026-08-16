@@ -859,7 +859,13 @@ test("Electron controllers consume only the closed Core operation boundary", () 
     ...sourceFiles(join(desktopDirectory, "electron")),
   ]
   for (const file of desktopSource) {
-    assert.doesNotMatch(readFileSync(file, "utf8"), /@diffdash\/core\/legacy|runLegacy/)
+    const source = readFileSync(file, "utf8")
+    assert.doesNotMatch(source, /@diffdash\/core\/legacy|runLegacy/)
+    assert.doesNotMatch(
+      source,
+      /\b(?:runtime|client)\.execute\s*\(/,
+      `${relative(desktopDirectory, file)} uses generic Core operation dispatch`,
+    )
   }
 
   const controllerDirectory = join(desktopDirectory, "electron/main/ipc/controllers")

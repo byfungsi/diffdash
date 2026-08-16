@@ -7,6 +7,6 @@ export const defineProjectWorkspaceHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.defineCore(CoreMethod.projectWorkspaceGet, runtime.execute)
-  handlers.defineCore(CoreMethod.projectWorkspaceSave, runtime.execute)
+  handlers.defineCore(CoreMethod.projectWorkspaceGet, runtime.core.projectWorkspaceGet)
+  handlers.defineCore(CoreMethod.projectWorkspaceSave, runtime.core.projectWorkspaceSave)
 }

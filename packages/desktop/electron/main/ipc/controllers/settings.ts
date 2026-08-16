@@ -36,27 +36,27 @@ export const defineSettingsHandlers = (
   handlers: IpcControllerRegistry,
   configuration: DesktopHostConfiguration,
 ) => {
-  handlers.defineCore(CoreMethod.agentProvidersGetCatalog, runtime.execute)
-  handlers.defineCore(CoreMethod.settingsGet, runtime.execute)
-  handlers.defineCore(CoreMethod.settingsUpdate, runtime.execute)
+  handlers.defineCore(CoreMethod.agentProvidersGetCatalog, runtime.core.agentProvidersGetCatalog)
+  handlers.defineCore(CoreMethod.settingsGet, runtime.core.settingsGet)
+  handlers.defineCore(CoreMethod.settingsUpdate, runtime.core.settingsUpdate)
 
   handlers.define(InvokeChannel.appStateGet, async () => {
     if (configuration.policies.debugOnboarding) return debugAppState()
 
-    return runtime.execute(CoreMethod.appStateGet, {})
+    return runtime.core.appStateGet({})
   })
 
   handlers.define(InvokeChannel.appStateUpdate, async (_event, { state: parsed }) => {
     if (configuration.policies.debugOnboarding) return parsed
 
-    return runtime.execute(CoreMethod.appStateUpdate, { state: parsed })
+    return runtime.core.appStateUpdate({ state: parsed })
   })
 
   handlers.define(InvokeChannel.appDiagnostics, async (): Promise<AppPrerequisites> => {
     if (configuration.policies.debugOnboarding) return debugMissingPrerequisites()
 
-    return runtime.execute(CoreMethod.appDiagnostics, {})
+    return runtime.core.appDiagnostics({})
   })
 
-  handlers.defineCore(CoreMethod.appInstallDiffDashCli, runtime.execute)
+  handlers.defineCore(CoreMethod.appInstallDiffDashCli, runtime.core.appInstallDiffDashCli)
 }
