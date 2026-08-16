@@ -101,6 +101,19 @@ jobs:
         if: steps.integration.outputs.required == 'true'
         run: xvfb-run -a pnpm ci:integration
 
+      - name: Upload failed integration evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-linux-failure-evidence
+          path: |
+            packages/e2e/test-results
+            packages/e2e/playwright-report
+            packages/desktop/test-results
+            tools/repository-scale/.cache/reports
+          if-no-files-found: ignore
+          retention-days: 7
+
   packaged-macos:
     name: Packaged Core hosts (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
@@ -141,3 +154,15 @@ jobs:
 
       - name: Run packaged Bun and utility flows
         run: pnpm test:e2e:packaged
+
+      - name: Upload failed packaged evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-macos-${{ matrix.arch }}-failure-evidence
+          path: |
+            packages/e2e/test-results
+            packages/e2e/playwright-report
+            packages/desktop/test-results
+          if-no-files-found: ignore
+          retention-days: 7
