@@ -10,6 +10,7 @@ import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review
 import { Context, Effect, Layer, Option } from "effect"
 
 import type { CoreThreadResolutionFailure } from "./core-contract"
+import { CoreEventHub } from "./core-event-hub"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
@@ -31,6 +32,8 @@ import { makeThreadOperationHandlers } from "./operations/thread-operation-handl
 import { makeViewedFileOperationHandlers } from "./operations/viewed-file-operation-handlers"
 import {
   makeWalkthroughOperations,
+  publishWalkthroughTerminalHint,
+  recoverInterruptedWalkthroughOperations,
   type WalkthroughOperations,
 } from "./operations/walkthrough-operations"
 
@@ -71,6 +74,7 @@ export const coreOperationLayer = Layer.effect(
     const reviewAgentOperations = yield* ReviewAgentOperationsService
     const walkthroughOperationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
+    const events = yield* CoreEventHub
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
@@ -173,7 +177,7 @@ export const coreOperationLayer = Layer.effect(
               ),
             )
           if (Option.isSome(artifact)) {
-            yield* walkthroughOperationStore
+            const transition = yield* walkthroughOperationStore
               .completeSuccess({
                 operationId: operation.id,
                 expectedStateVersion: operation.stateVersion,
@@ -188,9 +192,14 @@ export const coreOperationLayer = Layer.effect(
                   }),
                 ),
               )
+            if (transition.won && transition.operation.state === "completed") {
+              yield* Effect.exit(publishWalkthroughTerminalHint(events, transition.operation))
+            }
           }
         }
-        yield* walkthroughOperationStore.recoverActiveAsInterrupted.pipe(
+        yield* recoverInterruptedWalkthroughOperations(walkthroughOperationStore, (operation) =>
+          publishWalkthroughTerminalHint(events, operation),
+        ).pipe(
           Effect.mapError((cause) =>
             CoreStartupError.make({
               operation: "recoverInterruptedWalkthroughOperations",

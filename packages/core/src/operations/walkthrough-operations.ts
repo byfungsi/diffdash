@@ -43,6 +43,7 @@ import {
   type WalkthroughOperationIdentity as WalkthroughOperationIdentityType,
 } from "@diffdash/domain/walkthrough-operation"
 import {
+  type AcceptWalkthroughOperationInput,
   WalkthroughOperationStore,
   WalkthroughOperationStoreError,
 } from "@diffdash/persistence/walkthrough-operation-store"
@@ -81,6 +82,7 @@ import {
   type WalkthroughOperationId as WalkthroughOperationIdType,
   WalkthroughOperationNotFound,
 } from "../core-contract"
+import { CoreEventHub } from "../core-event-hub"
 import { ReviewContextError } from "../services/git-provider"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
 import {
@@ -209,6 +211,7 @@ export const makeWalkthroughOperations = (
   | RepositoryComparisonSource
   | Scope.Scope
   | OperationSnapshotReader
+  | CoreEventHub
   | WalkthroughOperationStore
   | WalkthroughService
   | WalkthroughStore
@@ -219,8 +222,11 @@ export const makeWalkthroughOperations = (
     const operationStore = yield* WalkthroughOperationStore
     const walkthroughStore = yield* WalkthroughStore
     const snapshotReader = yield* OperationSnapshotReader
+    const events = yield* CoreEventHub
     const activeWorkers = yield* makeWalkthroughActiveWorkers
     const startSemaphore = yield* Semaphore.make(1)
+    const publishTerminal = (operation: WalkthroughTerminalOperation) =>
+      publishWalkthroughTerminalHint(events, operation)
 
     const getCached: WalkthroughOperations["getCached"] = Effect.fn("Core.Walkthroughs.getCached")(
       (repoId, snapshot) => walkthroughStore.get(walkthroughCacheKey(repoId, snapshot)),
@@ -356,7 +362,12 @@ export const makeWalkthroughOperations = (
         const exit = yield* Effect.exit(
           generateResolved(resolved, route, operationSnapshotIdentity(operation, resolved)),
         )
-        yield* persistTerminalExit(operationStore, running.operation, exit)
+        yield* persistWalkthroughTerminalExit(
+          operationStore,
+          running.operation,
+          exit,
+          publishTerminal,
+        )
         return Exit.match(exit, {
           onSuccess: () => Option.none(),
           onFailure: Option.some,
@@ -384,12 +395,16 @@ export const makeWalkthroughOperations = (
       return yield* startSemaphore.withPermits(1)(
         Effect.uninterruptible(
           Effect.gen(function* () {
-            const acceptance = yield* operationStore.acceptOrGet({
-              operationId: WalkthroughOperationId.make(randomUUID()),
-              identity: operationIdentity(resolved.repoId, resolved),
-              regenerate: resolved.regenerate,
-              acceptanceEvidence,
-            })
+            const acceptance = yield* acceptWalkthroughOperation(
+              operationStore,
+              {
+                operationId: WalkthroughOperationId.make(randomUUID()),
+                identity: operationIdentity(resolved.repoId, resolved),
+                regenerate: resolved.regenerate,
+                acceptanceEvidence,
+              },
+              publishTerminal,
+            )
             if (acceptance.created) {
               if (acceptance.operation.regenerationOfOperationId !== null) {
                 yield* activeWorkers.cancel(acceptance.operation.regenerationOfOperationId)
@@ -434,16 +449,18 @@ export const makeWalkthroughOperations = (
     )(function* (operationId) {
       let operation = yield* requireOperation(operationStore, operationId)
       while (isActiveOperation(operation)) {
-        const transition = yield* operationStore
-          .requestCancellation({
+        const transition = yield* requestWalkthroughCancellation(
+          operationStore,
+          {
             operationId,
             expectedStateVersion: operation.stateVersion,
-          })
-          .pipe(
-            Effect.catchTag("WalkthroughOperationNotFoundError", () =>
-              WalkthroughOperationNotFound.make({ operationId }),
-            ),
-          )
+          },
+          publishTerminal,
+        ).pipe(
+          Effect.catchTag("WalkthroughOperationNotFoundError", () =>
+            WalkthroughOperationNotFound.make({ operationId }),
+          ),
+        )
         operation = transition.operation
         if (transition.won) {
           yield* activeWorkers.cancel(operationId)
@@ -463,10 +480,103 @@ export const makeWalkthroughOperations = (
     }
   })
 
-const persistTerminalExit = (
+/** Authoritative persisted walkthrough state that no longer has active work. */
+export type WalkthroughTerminalOperation = Exclude<
+  WalkthroughOperation,
+  { readonly state: "accepted" | "running" }
+>
+
+/** Best-effort sink for one authoritative terminal walkthrough state. */
+export type WalkthroughTerminalPublisher = (
+  operation: WalkthroughTerminalOperation,
+) => Effect.Effect<void, Error>
+
+const isTerminalOperation = (
+  operation: WalkthroughOperation,
+): operation is WalkthroughTerminalOperation =>
+  operation.state !== "accepted" && operation.state !== "running"
+
+const publishTerminalIsolated = (
+  operation: WalkthroughOperation,
+  publish: WalkthroughTerminalPublisher,
+) =>
+  isTerminalOperation(operation) ? Effect.exit(publish(operation)).pipe(Effect.asVoid) : Effect.void
+
+/** Publishes a privacy-safe hint containing only durable walkthrough identity and scope. */
+export const publishWalkthroughTerminalHint = (
+  events: CoreEventHub["Service"],
+  operation: WalkthroughTerminalOperation,
+) =>
+  events
+    .publish({
+      topic: "walkthrough.operation.terminal",
+      schemaVersion: 1,
+      scopes: [
+        { name: "project", id: operation.identity.repoId },
+        { name: "review", id: operation.identity.reviewKey },
+      ],
+      source: "walkthrough-operation",
+      reason: "terminal-state-committed",
+      subject: { kind: "operation", operationId: operation.id },
+      kind: "operationTerminal",
+      stateVersion: operation.stateVersion,
+    })
+    .pipe(Effect.asVoid)
+
+/** Accepts durable work and hints when regeneration atomically supersedes prior work. */
+export const acceptWalkthroughOperation = Effect.fn("Core.Walkthroughs.acceptOperation")(function* (
+  store: WalkthroughOperationStore["Service"],
+  input: AcceptWalkthroughOperationInput,
+  publish: WalkthroughTerminalPublisher,
+) {
+  const acceptance = yield* store.acceptOrGet(input)
+  const supersededId = acceptance.created ? acceptance.operation.regenerationOfOperationId : null
+  if (supersededId !== null) {
+    const superseded = yield* Effect.exit(store.get(supersededId))
+    if (Exit.isSuccess(superseded) && Option.isSome(superseded.value)) {
+      yield* publishTerminalIsolated(superseded.value.value, publish)
+    }
+  }
+  return acceptance
+})
+
+/** Commits cancellation before publishing its best-effort reconciliation hint. */
+export const requestWalkthroughCancellation = Effect.fn("Core.Walkthroughs.cancelOperation")(
+  function* (
+    store: WalkthroughOperationStore["Service"],
+    input: Parameters<WalkthroughOperationStore["Service"]["requestCancellation"]>[0],
+    publish: WalkthroughTerminalPublisher,
+  ) {
+    const transition = yield* store.requestCancellation(input)
+    if (transition.won) {
+      yield* publishTerminalIsolated(transition.operation, publish)
+    }
+    return transition
+  },
+)
+
+/** Recovers abandoned active operations before publishing interruption hints. */
+export const recoverInterruptedWalkthroughOperations = Effect.fn(
+  "Core.Walkthroughs.recoverInterrupted",
+)(function* (store: WalkthroughOperationStore["Service"], publish: WalkthroughTerminalPublisher) {
+  const interrupted = yield* store.recoverActiveAsInterrupted
+  yield* Effect.forEach(interrupted, (operation) => publishTerminalIsolated(operation, publish), {
+    discard: true,
+  })
+  return interrupted
+})
+
+const publishWonTerminal = (
+  transition: { readonly won: boolean; readonly operation: WalkthroughOperation },
+  publish: WalkthroughTerminalPublisher,
+) => (transition.won ? publishTerminalIsolated(transition.operation, publish) : Effect.void)
+
+/** Persists a worker terminal exit before publishing its best-effort reconciliation hint. */
+export const persistWalkthroughTerminalExit = (
   store: WalkthroughOperationStore["Service"],
   running: Extract<WalkthroughOperation, { readonly state: "running" }>,
   exit: Exit.Exit<StoredWalkthrough, CoreWalkthroughFailure>,
+  publish: WalkthroughTerminalPublisher,
 ) =>
   Exit.match(exit, {
     onSuccess: () =>
@@ -476,7 +586,7 @@ const persistTerminalExit = (
           expectedStateVersion: running.stateVersion,
           artifact: WalkthroughArtifactReference.make(running.identity),
         })
-        .pipe(Effect.asVoid),
+        .pipe(Effect.flatMap((transition) => publishWonTerminal(transition, publish))),
     onFailure: (cause) => {
       const defect = Cause.findDefect(cause)
       if (Result.isSuccess(defect)) {
@@ -485,7 +595,7 @@ const persistTerminalExit = (
             operationId: running.id,
             expectedStateVersion: running.stateVersion,
           })
-          .pipe(Effect.asVoid)
+          .pipe(Effect.flatMap((transition) => publishWonTerminal(transition, publish)))
       }
       const failure = Cause.findErrorOption(cause)
       if (Option.isSome(failure)) {
@@ -495,7 +605,7 @@ const persistTerminalExit = (
             expectedStateVersion: running.stateVersion,
             failure: classifyExpectedFailure(failure.value),
           })
-          .pipe(Effect.asVoid)
+          .pipe(Effect.flatMap((transition) => publishWonTerminal(transition, publish)))
       }
       return Cause.hasInterrupts(cause)
         ? Effect.void
@@ -504,7 +614,7 @@ const persistTerminalExit = (
               operationId: running.id,
               expectedStateVersion: running.stateVersion,
             })
-            .pipe(Effect.asVoid)
+            .pipe(Effect.flatMap((transition) => publishWonTerminal(transition, publish)))
     },
   })
 
