@@ -81,6 +81,10 @@ interface ApplicationCoreRuntime {
   readonly repairRepositoryIdentities: ApplicationCoreOperation<
     typeof CoreMethod.repairRepositoryIdentities
   >
+  readonly resourceDiagnostics: ApplicationCoreOperation<typeof CoreMethod.resourceDiagnostics>
+  readonly clearDisposableResources: ApplicationCoreOperation<
+    typeof CoreMethod.clearDisposableResources
+  >
   readonly setRepositoryFavorite: ApplicationCoreOperation<typeof CoreMethod.setRepositoryFavorite>
   readonly projectWorkspaceGet: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceGet>
   readonly projectWorkspaceSave: ApplicationCoreOperation<typeof CoreMethod.projectWorkspaceSave>

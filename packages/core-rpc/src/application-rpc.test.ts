@@ -47,6 +47,8 @@ const coreMethods = [
   "ReviewThreads.runAgent",
   "Settings.get",
   "Settings.update",
+  "Resources.diagnostics",
+  "Resources.clearDisposable",
   "ViewedFiles.listHosted",
   "ViewedFiles.listLocal",
   "ViewedFiles.setHosted",
@@ -62,8 +64,8 @@ describe("Core application RPC catalog", () => {
       .merge(ReviewAgentBusinessRpcs)
     const coreDeclarations = coreMethods.map((method) => declarations.requests.get(method))
 
-    expect(coreMethods).toHaveLength(46)
-    expect(new Set(coreMethods)).toHaveLength(46)
+    expect(coreMethods).toHaveLength(48)
+    expect(new Set(coreMethods)).toHaveLength(48)
     expect(coreDeclarations.every((declaration) => declaration !== undefined)).toBe(true)
     expect(
       coreDeclarations.every(
@@ -90,5 +92,22 @@ describe("Core application RPC catalog", () => {
         query: null,
       })._tag,
     ).toBe("Success")
+  })
+
+  it("bounds resource diagnostics and models clear-cache as an idempotent mutation", () => {
+    const diagnostics = CoreApplicationRpcs.requests.get("Resources.diagnostics")
+    const clear = CoreApplicationRpcs.requests.get("Resources.clearDisposable")
+
+    expect(diagnostics).toBeDefined()
+    expect(clear).toBeDefined()
+    if (diagnostics === undefined || clear === undefined) return
+
+    const diagnosticsPolicy = Option.getOrThrow(getCoreRpcMethodPolicy(diagnostics))
+    const clearPolicy = Option.getOrThrow(getCoreRpcMethodPolicy(clear))
+    expect(diagnosticsPolicy.maxResponseBytes).toBe(16 * 1_024)
+    expect(diagnosticsPolicy.mutationClass).toBe("read")
+    expect(clearPolicy.maxResponseBytes).toBe(16 * 1_024)
+    expect(clearPolicy.mutationClass).toBe("idempotentMutation")
+    expect(clearPolicy.idempotency).toBe("idempotent")
   })
 })

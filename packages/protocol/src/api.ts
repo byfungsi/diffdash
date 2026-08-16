@@ -74,6 +74,7 @@ import type {
 } from "./viewed-files"
 import type { BridgeResult } from "./ipc"
 import type { ProgressiveReviewApi } from "./review-session"
+import type { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 
 type EventSubscription<Value> = (listener: (value: Value) => void) => () => void
 
@@ -96,6 +97,10 @@ export interface DiffDashApi {
     readonly onCommandsAvailable: EventSubscription<void>
   }
   readonly diagnostics: () => Promise<AppPrerequisites>
+  readonly resources?: {
+    readonly diagnostics: () => Promise<ResourceDiagnostics>
+    readonly clearDisposable: () => Promise<ClearDisposableResourcesResult>
+  }
   readonly agentProviders: {
     readonly getCatalog: () => Promise<AgentProviderCatalog>
   }

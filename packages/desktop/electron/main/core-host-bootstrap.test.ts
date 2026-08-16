@@ -62,6 +62,8 @@ const unusedApplicationMethods: Omit<
   listRepositories: unused,
   openProject: unused,
   repairRepositoryIdentities: unused,
+  resourceDiagnostics: unused,
+  clearDisposableResources: unused,
   setRepositoryFavorite: unused,
   projectWorkspaceGet: unused,
   projectWorkspaceSave: unused,

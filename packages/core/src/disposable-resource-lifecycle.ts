@@ -2,35 +2,19 @@ import {
   type CatalogResource,
   CatalogResourceClass,
   type CatalogResourceId,
-  type CatalogResourceState,
   ResourceCatalog,
   type ResourceCatalogError,
   type ResourceLeaseId,
   type ResourceRecoveryToken,
 } from "@diffdash/persistence/resource-catalog"
+import type {
+  ClearDisposableResourcesResult,
+  ResourceClassDiagnostics,
+  ResourceDiagnostics,
+} from "@diffdash/protocol/resource-diagnostics"
 import { Context, Effect, Schema } from "effect"
 
 import { ResourceCollection } from "./resource-collection"
-
-/** Aggregate resource diagnostics that contain no paths, repository identities, or owner IDs. */
-export interface ResourceClassDiagnostics {
-  readonly resourceClass: CatalogResourceClass
-  readonly bytes: number
-  readonly reservedBytes: number
-  readonly resources: number
-  readonly activeLeases: number
-  readonly failures: number
-  readonly states: Readonly<Record<CatalogResourceState, number>>
-}
-
-/** Privacy-safe diagnostics for all explicitly cataloged disposable resources. */
-export interface DisposableResourceDiagnostics {
-  readonly bytes: number
-  readonly reservedBytes: number
-  readonly activeLeases: number
-  readonly failures: number
-  readonly classes: readonly ResourceClassDiagnostics[]
-}
 
 /** Exact ownership used by a continuing agent run rather than a renderer lifetime. */
 export interface AgentWorkspaceLeaseInput {
@@ -52,22 +36,16 @@ export interface ClearResourceCacheInput {
   readonly recoveryToken: (resourceId: CatalogResourceId) => ResourceRecoveryToken
 }
 
-/** Result of a policy-driven clear-cache pass. */
-export interface ClearResourceCacheResult {
-  readonly collected: readonly CatalogResourceId[]
-  readonly protected: readonly CatalogResourceId[]
-}
-
 /** Catalog-backed policy for diagnostics, clear-cache, and agent workspace protection. */
 export class DisposableResourceLifecycle extends Context.Service<
   DisposableResourceLifecycle,
   {
     readonly diagnostics: (
       nowMs: number,
-    ) => Effect.Effect<DisposableResourceDiagnostics, ResourceCatalogError>
+    ) => Effect.Effect<ResourceDiagnostics, ResourceCatalogError>
     readonly clearCache: (
       input: ClearResourceCacheInput,
-    ) => Effect.Effect<ClearResourceCacheResult, ResourceCatalogError>
+    ) => Effect.Effect<ClearDisposableResourcesResult, ResourceCatalogError>
     readonly acquireAgentWorkspace: (
       input: AgentWorkspaceLeaseInput,
     ) => Effect.Effect<void, ResourceCatalogError>
@@ -89,17 +67,49 @@ export const makeDisposableResourceLifecycle = (
     clearCache: Effect.fn("DisposableResourceLifecycle.clearCache")(function* (input) {
       const resources = yield* catalog.list()
       const { collectible, protectedResources } = planClearCache(resources, input.nowMs)
+      let collectedResources = 0
+      let collectedBytes = 0
+      let retainedLeasedResources = protectedResources.length
+      let retainedLeasedBytes = sumAccountedBytes(protectedResources)
       for (const resource of collectible) {
-        yield* collection.collect({
-          resourceId: resource.id,
-          recoveryToken: input.recoveryToken(resource.id),
-          nowMs: input.nowMs,
-          retryAtMs: input.retryAtMs,
-        })
+        const claimed = yield* collection
+          .collect({
+            resourceId: resource.id,
+            recoveryToken: input.recoveryToken(resource.id),
+            nowMs: input.nowMs,
+            retryAtMs: input.retryAtMs,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catch((cause) =>
+              catalog.list().pipe(
+                Effect.flatMap((current) => {
+                  const candidate = current.find(({ id }) => id === resource.id)
+                  return candidate !== undefined &&
+                    resourceHasLiveLease(candidate, current, input.nowMs)
+                    ? Effect.succeed(false)
+                    : Effect.fail(cause)
+                }),
+              ),
+            ),
+          )
+        if (!claimed) {
+          retainedLeasedResources += 1
+          retainedLeasedBytes += resource.bytes + resource.reservedBytes
+          continue
+        }
+        const current = yield* catalog.get(resource.id)
+        if (current.state === "deleted") {
+          collectedResources += 1
+          collectedBytes += resource.bytes + resource.reservedBytes
+        }
       }
       return {
-        collected: collectible.map(({ id }) => id),
-        protected: protectedResources.map(({ id }) => id),
+        collectedResources,
+        collectedBytes,
+        retainedLeasedResources,
+        retainedLeasedBytes,
+        diagnostics: summarizeResources(yield* catalog.list(), input.nowMs),
       }
     }),
     acquireAgentWorkspace: Effect.fn("DisposableResourceLifecycle.acquireAgentWorkspace")(
@@ -142,7 +152,7 @@ export const makeDisposableResourceLifecycle = (
 const summarizeResources = (
   resources: readonly CatalogResource[],
   nowMs: number,
-): DisposableResourceDiagnostics => {
+): ResourceDiagnostics => {
   const byClass = new Map<CatalogResourceClass, ResourceClassDiagnostics>()
   for (const resource of resources) {
     if (
@@ -171,6 +181,7 @@ const summarizeResources = (
   return {
     bytes: classes.reduce((total, entry) => total + entry.bytes, 0),
     reservedBytes: classes.reduce((total, entry) => total + entry.reservedBytes, 0),
+    resources: classes.reduce((total, entry) => total + entry.resources, 0),
     activeLeases: classes.reduce((total, entry) => total + entry.activeLeases, 0),
     failures: classes.reduce((total, entry) => total + entry.failures, 0),
     classes,
@@ -244,6 +255,21 @@ const planClearCache = (resources: readonly CatalogResource[], nowMs: number) =>
 
 const isClearableState = (resource: CatalogResource): boolean =>
   resource.state === "ready" || resource.state === "deletionFailed"
+
+const resourceHasLiveLease = (
+  resource: CatalogResource,
+  resources: readonly CatalogResource[],
+  nowMs: number,
+): boolean => {
+  const children = resources.filter(({ parentId }) => parentId === resource.id)
+  return (
+    resource.leases.some(({ expiresAtMs }) => expiresAtMs > nowMs) ||
+    children.some((child) => resourceHasLiveLease(child, resources, nowMs))
+  )
+}
+
+const sumAccountedBytes = (resources: readonly CatalogResource[]): number =>
+  resources.reduce((total, resource) => total + resource.bytes + resource.reservedBytes, 0)
 
 const sortCopy = <Value>(
   values: readonly Value[],

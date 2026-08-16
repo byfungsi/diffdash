@@ -216,6 +216,14 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("Settings.get", request, (methods) => methods["Settings.get"](request, {})),
       "Settings.update": (request: ApplicationRpcRequest<"Settings.update">) =>
         handle("Settings.update", request, (methods) => methods["Settings.update"](request, {})),
+      "Resources.diagnostics": (request: ApplicationRpcRequest<"Resources.diagnostics">) =>
+        handle("Resources.diagnostics", request, (methods) =>
+          methods["Resources.diagnostics"](request, {}),
+        ),
+      "Resources.clearDisposable": (request: ApplicationRpcRequest<"Resources.clearDisposable">) =>
+        handle("Resources.clearDisposable", request, (methods) =>
+          methods["Resources.clearDisposable"](request, {}),
+        ),
       "ViewedFiles.listHosted": (request: ApplicationRpcRequest<"ViewedFiles.listHosted">) =>
         handle("ViewedFiles.listHosted", request, (methods) =>
           methods["ViewedFiles.listHosted"](request, {}),

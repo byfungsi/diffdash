@@ -1003,6 +1003,8 @@ const testRuntime = (message: string): ApplicationRuntime => {
       listRepositories: reject,
       openProject: reject,
       repairRepositoryIdentities: reject,
+      resourceDiagnostics: reject,
+      clearDisposableResources: reject,
       setRepositoryFavorite: reject,
       projectWorkspaceGet: reject,
       projectWorkspaceSave: reject,

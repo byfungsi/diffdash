@@ -161,6 +161,7 @@ describe("disposable resource lifecycle", () => {
         const diagnostics = yield* lifecycle.diagnostics(10)
         expect(diagnostics).toMatchObject({
           bytes: 300,
+          resources: 5,
           activeLeases: 2,
           failures: 1,
         })
@@ -179,8 +180,12 @@ describe("disposable resource lifecycle", () => {
           retryAtMs: 20,
           recoveryToken: (id) => ResourceRecoveryToken.make(`first-${id}`),
         })
-        expect(first.collected).toEqual([CatalogResourceId.make("remote")])
-        expect(first.protected).toEqual(expect.arrayContaining([repository.id, worktree.id]))
+        expect(first).toMatchObject({
+          collectedResources: 1,
+          collectedBytes: 60,
+          retainedLeasedResources: 2,
+          retainedLeasedBytes: 140,
+        })
         expect(existsSync(remotePath)).toBe(false)
         expect(existsSync(worktreePath)).toBe(true)
         expect(existsSync(backupPath)).toBe(true)

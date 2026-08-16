@@ -416,6 +416,7 @@ export const createStandaloneCoreLayer = (
     WalkthroughStore.layer,
     reviewAgentLayer,
     reviewAgentOperationServiceLayer,
+    resourceLifecycleLayer,
     threadAnchorMapperLayer,
   ).pipe(
     Layer.provide(databaseLayer),

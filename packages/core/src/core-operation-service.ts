@@ -18,6 +18,7 @@ import {
   type OperationHandlers,
 } from "./operations/operation-handlers"
 import { makeRepositoryOperationHandlers } from "./operations/repository-operation-handlers"
+import { makeResourceOperationHandlers } from "./operations/resource-operation-handlers"
 import { makeReviewAcquisitionOperationHandlers } from "./operations/review-acquisition-operation-handlers"
 import {
   ReviewAgentOperationsService,
@@ -75,6 +76,7 @@ export const coreOperationLayer = Layer.effect(
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
     const applicationHandlers = yield* makeApplicationOperationHandlers
     const repositoryHandlers = yield* makeRepositoryOperationHandlers
+    const resourceHandlers = yield* makeResourceOperationHandlers
     const reviewAcquisitionHandlers = yield* makeReviewAcquisitionOperationHandlers
     const reviewHandlers = yield* makeReviewOperationHandlers
     const settingsHandlers = yield* makeSettingsOperationHandlers
@@ -109,6 +111,7 @@ export const coreOperationLayer = Layer.effect(
       analyticsHandlers,
       applicationHandlers,
       repositoryHandlers,
+      resourceHandlers,
       reviewAcquisitionHandlers,
       reviewHandlers,
       settingsHandlers,
@@ -122,6 +125,7 @@ export const coreOperationLayer = Layer.effect(
       ...analyticsHandlers,
       ...applicationHandlers,
       ...repositoryHandlers,
+      ...resourceHandlers,
       ...reviewAcquisitionHandlers,
       ...reviewHandlers,
       ...settingsHandlers,

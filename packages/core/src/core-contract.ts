@@ -39,6 +39,7 @@ import type {
 } from "@diffdash/persistence/review-turn-store"
 import type { ViewedFileStoreError } from "@diffdash/persistence/viewed-file-store"
 import type { WalkthroughOperationStoreError } from "@diffdash/persistence/walkthrough-operation-store"
+import type { ResourceCatalogError } from "@diffdash/persistence/resource-catalog"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import type { ProcessExecutionError } from "@diffdash/process"
 import { InvokeChannel } from "@diffdash/protocol/channels"
@@ -104,6 +105,8 @@ export const CoreMethod = {
   runReviewThreadAgent: "ReviewThreads.runAgent",
   settingsGet: "Settings.get",
   settingsUpdate: "Settings.update",
+  resourceDiagnostics: "Resources.diagnostics",
+  clearDisposableResources: "Resources.clearDisposable",
   listViewedFiles: "ViewedFiles.listHosted",
   listLocalViewedFiles: "ViewedFiles.listLocal",
   setViewedFile: "ViewedFiles.setHosted",
@@ -158,6 +161,8 @@ export const CoreMethodChannel = {
   [CoreMethod.runReviewThreadAgent]: InvokeChannel.runReviewThreadAgent,
   [CoreMethod.settingsGet]: InvokeChannel.settingsGet,
   [CoreMethod.settingsUpdate]: InvokeChannel.settingsUpdate,
+  [CoreMethod.resourceDiagnostics]: InvokeChannel.resourceDiagnostics,
+  [CoreMethod.clearDisposableResources]: InvokeChannel.clearDisposableResources,
   [CoreMethod.listViewedFiles]: InvokeChannel.listViewedFiles,
   [CoreMethod.listLocalViewedFiles]: InvokeChannel.listLocalViewedFiles,
   [CoreMethod.setViewedFile]: InvokeChannel.setViewedFile,
@@ -306,6 +311,8 @@ export interface CoreOperationFailureMap {
     | CoreReviewAgentFailure
   readonly [CoreMethod.settingsGet]: AppSettingsError
   readonly [CoreMethod.settingsUpdate]: AppSettingsError
+  readonly [CoreMethod.resourceDiagnostics]: ResourceCatalogError
+  readonly [CoreMethod.clearDisposableResources]: ResourceCatalogError
   readonly [CoreMethod.listViewedFiles]: RepositoryLinkError | ViewedFileStoreError
   readonly [CoreMethod.setViewedFile]: RepositoryLinkError | ViewedFileStoreError
   readonly [CoreMethod.listLocalViewedFiles]: RepositoryLinkError | ViewedFileStoreError

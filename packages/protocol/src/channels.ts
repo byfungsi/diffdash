@@ -45,6 +45,8 @@ export const InvokeChannel = {
   listRepositories: "repositories:list",
   openProject: "repositories:openProject",
   repairRepositoryIdentities: "repositories:repairIdentities",
+  resourceDiagnostics: "resources:diagnostics",
+  clearDisposableResources: "resources:clearDisposable",
   selectLocalFolder: "repositories:selectLocalFolder",
   setRepositoryFavorite: "repositories:setFavorite",
   projectWorkspaceGet: "projectWorkspace:get",

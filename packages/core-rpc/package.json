@@ -22,6 +22,7 @@
     "./review-session": "./src/review-session.ts",
     "./review-session-rpc": "./src/review-session-rpc.ts",
     "./review-session-rpc-admission": "./src/review-session-rpc-admission.ts",
+    "./resource": "./src/resource.ts",
     "./transport": "./src/transport.ts",
     "./walkthrough": "./src/walkthrough.ts",
     "./walkthrough-rpc": "./src/walkthrough-rpc.ts"

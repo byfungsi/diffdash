@@ -39,6 +39,8 @@ export const defineSettingsHandlers = (
   handlers.defineCore(CoreMethod.agentProvidersGetCatalog, runtime.core.agentProvidersGetCatalog)
   handlers.defineCore(CoreMethod.settingsGet, runtime.core.settingsGet)
   handlers.defineCore(CoreMethod.settingsUpdate, runtime.core.settingsUpdate)
+  handlers.defineCore(CoreMethod.resourceDiagnostics, runtime.core.resourceDiagnostics)
+  handlers.defineCore(CoreMethod.clearDisposableResources, runtime.core.clearDisposableResources)
 
   handlers.define(InvokeChannel.appStateGet, async () => {
     if (configuration.policies.debugOnboarding) return debugAppState()

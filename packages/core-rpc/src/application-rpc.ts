@@ -63,6 +63,7 @@ import {
   CoreRpcPayloadBytes,
   type CoreRpcMethodPolicy as CoreRpcMethodPolicyType,
 } from "./method-policy"
+import { CoreClearDisposableResourcesResult, CoreResourceDiagnostics } from "./resource"
 
 const KIB = 1_024
 const MIB = 1_024 * KIB
@@ -548,6 +549,18 @@ export const SettingsUpdateRpc = applicationRpc(
   AISettings,
   idempotentMutation(),
 )
+export const ResourceDiagnosticsRpc = applicationRpc(
+  "Resources.diagnostics",
+  EmptyRequest,
+  CoreResourceDiagnostics,
+  read(5_000, 16 * KIB),
+)
+export const ClearDisposableResourcesRpc = applicationRpc(
+  "Resources.clearDisposable",
+  EmptyRequest,
+  CoreClearDisposableResourcesResult,
+  idempotentMutation(30_000, 16 * KIB),
+)
 export const ViewedFilesListHostedRpc = applicationRpc(
   "ViewedFiles.listHosted",
   withContext({ review: HostedReviewLocator, baseRefName: RepositoryComparisonRef }),
@@ -641,6 +654,8 @@ export const CoreApplicationRpcs = RpcGroup.make(
   ReviewThreadsListRpc,
   SettingsGetRpc,
   SettingsUpdateRpc,
+  ResourceDiagnosticsRpc,
+  ClearDisposableResourcesRpc,
   ViewedFilesListHostedRpc,
   ViewedFilesListLocalRpc,
   ViewedFilesSetHostedRpc,

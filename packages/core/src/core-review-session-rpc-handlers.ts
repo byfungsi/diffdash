@@ -293,9 +293,7 @@ export const coreProgressiveReviewRpcHandlersWithRuntimeLayer =
               ),
             findFile: (identity, fileId) =>
               runtime.progressiveReviews.pipe(
-                Effect.flatMap((progressive) =>
-                  progressive.repository.findFile(identity, fileId),
-                ),
+                Effect.flatMap((progressive) => progressive.repository.findFile(identity, fileId)),
               ),
             findFileHunk: (identity, fileId, hunkId) =>
               runtime.progressiveReviews.pipe(

@@ -17,6 +17,7 @@
     "./payload-utf8": "./src/payload-utf8.ts",
     "./prerequisites": "./src/prerequisites.ts",
     "./repository-link": "./src/repository-link.ts",
+    "./resource-diagnostics": "./src/resource-diagnostics.ts",
     "./review-threads": "./src/review-threads.ts",
     "./review-snapshot": "./src/review-snapshot.ts",
     "./review-session": "./src/review-session.ts",

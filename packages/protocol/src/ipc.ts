@@ -54,6 +54,7 @@ import {
 import { assertJsonPayloadWithinBudget, jsonSafeUtf8ByteLength } from "./payload-budget"
 import { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import { LinkRepositoryCheckoutRequest } from "./repository-link"
+import { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 import {
   AcquireHostedReviewSnapshotRequest,
   AcquireLocalReviewSnapshotRequest,
@@ -402,6 +403,18 @@ export const InvokeContract = {
     InvokeChannel.repairRepositoryIdentities,
     EmptyRequest,
     RepositoryIdentityRepairSummary,
+  ),
+  [InvokeChannel.resourceDiagnostics]: defineInvoke(
+    InvokeChannel.resourceDiagnostics,
+    EmptyRequest,
+    ResourceDiagnostics,
+    { maxRequestBytes: 1 * KIB, maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.clearDisposableResources]: defineInvoke(
+    InvokeChannel.clearDisposableResources,
+    EmptyRequest,
+    ClearDisposableResourcesResult,
+    { maxRequestBytes: 1 * KIB, maxResponseBytes: 16 * KIB },
   ),
   [InvokeChannel.selectLocalFolder]: defineInvoke(
     InvokeChannel.selectLocalFolder,

@@ -36,6 +36,10 @@ const api: DiffDashBridgeApi = {
       ),
   },
   diagnostics: () => transport.invoke(InvokeChannel.appDiagnostics, {}),
+  resources: {
+    diagnostics: () => transport.invoke(InvokeChannel.resourceDiagnostics, {}),
+    clearDisposable: () => transport.invoke(InvokeChannel.clearDisposableResources, {}),
+  },
   agentProviders: {
     getCatalog: () => transport.invoke(InvokeChannel.agentProvidersGetCatalog, {}),
   },

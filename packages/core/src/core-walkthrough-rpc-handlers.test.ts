@@ -217,6 +217,8 @@ const unavailableMethods = {
   "ReviewThreads.runAgent": unavailableMethod,
   "Settings.get": unavailableMethod,
   "Settings.update": unavailableMethod,
+  "Resources.diagnostics": unavailableMethod,
+  "Resources.clearDisposable": unavailableMethod,
   "ViewedFiles.listHosted": unavailableMethod,
   "ViewedFiles.listLocal": unavailableMethod,
   "ViewedFiles.setHosted": unavailableMethod,

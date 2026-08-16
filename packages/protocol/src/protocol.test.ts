@@ -140,9 +140,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(68)
+    expect(new Set(invokeChannels).size).toBe(70)
     expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(71)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(73)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",

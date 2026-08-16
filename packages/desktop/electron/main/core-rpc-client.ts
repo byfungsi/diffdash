@@ -409,6 +409,12 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         repairRepositoryIdentities: Effect.fn("CoreRpcClient.repairRepositoryIdentities")(
           (request) => authenticated(client("Repositories.repairIdentities", request)),
         ),
+        resourceDiagnostics: Effect.fn("CoreRpcClient.resourceDiagnostics")((request) =>
+          authenticated(client("Resources.diagnostics", request)),
+        ),
+        clearDisposableResources: Effect.fn("CoreRpcClient.clearDisposableResources")((request) =>
+          authenticated(client("Resources.clearDisposable", request)),
+        ),
         setRepositoryFavorite: Effect.fn("CoreRpcClient.setRepositoryFavorite")((request) =>
           authenticated(client("Repositories.setFavorite", request)),
         ),
