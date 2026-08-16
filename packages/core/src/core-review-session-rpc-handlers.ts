@@ -204,8 +204,7 @@ export const coreProgressiveReviewRpcHandlersLayer = CoreProgressiveReviewRpcs.t
             repository.resolveTarget(
               repositoryIdentity(request, state.identity),
               request.fileId,
-              request.hunkId,
-              request.line,
+              request.target,
             ),
           ),
           Effect.map((target) => ({
@@ -308,10 +307,10 @@ export const coreProgressiveReviewRpcHandlersWithRuntimeLayer =
                   progressive.repository.findFileHunk(identity, fileId, hunkId),
                 ),
               ),
-            resolveTarget: (identity, fileId, hunkId, line) =>
+            resolveTarget: (identity, fileId, target) =>
               runtime.progressiveReviews.pipe(
                 Effect.flatMap((progressive) =>
-                  progressive.repository.resolveTarget(identity, fileId, hunkId, line),
+                  progressive.repository.resolveTarget(identity, fileId, target),
                 ),
               ),
             waitForRange: (identity, fileId, startLine) =>

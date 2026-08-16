@@ -284,12 +284,27 @@ export const ReviewSessionRange = Schema.Struct({
 /** Complete blocks split only at persisted legal boundaries. */
 export type ReviewSessionRange = typeof ReviewSessionRange.Type
 
+/** Coordinate used to resolve one progressive review target. */
+export const ReviewSessionTarget = Schema.TaggedUnion({
+  HunkLine: {
+    hunkId: Schema.NullOr(ReviewHunkId),
+    line: NonNegativeInteger,
+  },
+  SideLine: {
+    hunkId: ReviewHunkId,
+    side: Schema.Literals(["old", "new"]),
+    lineNumber: PositiveInteger,
+  },
+}).annotate({ identifier: "ReviewSessionTarget" })
+
+/** Coordinate used to resolve one progressive review target. */
+export type ReviewSessionTarget = typeof ReviewSessionTarget.Type
+
 /** Semantic target request against one exact progressive session version. */
 export const ReviewSessionTargetRequest = Schema.Struct({
   identity: ReviewSessionIdentity,
   fileId: ReviewFileId,
-  hunkId: Schema.NullOr(ReviewHunkId),
-  line: NonNegativeInteger,
+  target: ReviewSessionTarget,
 }).annotate({ identifier: "ReviewSessionTargetRequest" })
 
 /** Semantic target request against one exact progressive session version. */

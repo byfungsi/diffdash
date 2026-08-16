@@ -5,7 +5,7 @@ import type {
   ReviewSnapshotFileInventory,
   ReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
-import { ReviewFileId, type ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import type { ReviewFileId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
 import type {
   RangeReviewNavigationTarget,
   ReviewLinePoint,
@@ -14,8 +14,9 @@ import type {
 } from "@diffdash/domain/review-navigation"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
+import type { ResolvedReviewSessionTarget } from "@diffdash/protocol/review-session"
 import type { RefObject } from "react"
-import { Match, Result, Schema } from "effect"
+import { Match } from "effect"
 
 import { findRenderedDiffLine } from "./review-rendered-line"
 import {
@@ -55,7 +56,11 @@ export interface ReviewViewportNavigationBindings {
   readonly searchOccurrences: readonly ReviewSnapshotSearchMatch[]
   readonly threads: readonly ReviewThreadDetails[]
   readonly requestReconciliation: (reviewKey: string) => number | null
-  readonly prepareFile: (file: ReviewSnapshotFileInventory, input: ReviewNavigationInput) => void
+  readonly prepareFile: (
+    file: ReviewSnapshotFileInventory,
+    input: ReviewNavigationInput,
+    persistedTarget: ResolvedReviewSessionTarget | null,
+  ) => void
   readonly activateWindow: () => Promise<void>
 }
 
@@ -64,9 +69,9 @@ interface LocalResolvedReviewNavigationTarget extends ResolvedReviewNavigationTa
   readonly linePoint: ReviewLinePoint | null
   readonly threadAnchor: ReviewThreadAnchor | null
   readonly threadId: string | null
+  readonly persistedTarget: ResolvedReviewSessionTarget | null
 }
 
-const EAGER_PLACEHOLDER_MARGIN = 600
 const STABLE_FRAME_COUNT = 3
 
 /** Imperative DOM/Pierre execution plane for the renderer-local review navigator. */
@@ -139,6 +144,18 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         (candidate) => candidate.fileId === anchor.fileId && candidate.path === anchor.filePath,
       )
       if (file === undefined) throw new ReviewNavigationUnavailableError("targetOutdated")
+      const persistedTarget = await bindings.pages.resolveTarget(
+        {
+          fileId: file.fileId,
+          target: {
+            _tag: "SideLine",
+            hunkId: anchor.hunkId,
+            side: anchor.side,
+            lineNumber: anchor.lineNumber,
+          },
+        },
+        signal,
+      )
       const resolved = {
         target,
         file,
@@ -152,6 +169,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         },
         threadAnchor: anchor,
         threadId: threadTarget.threadId,
+        persistedTarget,
       }
       this.#localTargets.set(resolved, resolved)
       return resolved
@@ -168,19 +186,44 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (fileTarget === null) throw new ReviewNavigationUnavailableError("targetNotFound")
     const file = bindings.inventory.find((candidate) => candidate.fileId === fileTarget.fileId)
     if (file === undefined) throw new ReviewNavigationUnavailableError("targetNotFound")
+    const linePoint = Match.valueTags(fileTarget, {
+      line: ({ point }) => point,
+      range: ({ start }) => start,
+      file: () => null,
+      hunk: () => null,
+    })
+    const searchOccurrence = Match.valueTags(fileTarget, {
+      range: (range) =>
+        bindings.searchOccurrences.find((occurrence) =>
+          rangeMatchesOccurrence(range, occurrence),
+        ) ?? null,
+      file: () => null,
+      hunk: () => null,
+      line: () => null,
+    })
+    const persistedTarget =
+      searchOccurrence === null
+        ? null
+        : await bindings.pages.resolveTarget(
+            {
+              fileId: file.fileId,
+              target: {
+                _tag: "HunkLine",
+                hunkId: searchOccurrence.hunkId,
+                line: searchOccurrence.hunkLineIndex,
+              },
+            },
+            signal,
+          )
     const resolved = {
       target,
       file,
       fileId: file.fileId,
       anchorKey: targetAnchorKey(fileTarget),
-      linePoint: Match.valueTags(fileTarget, {
-        line: ({ point }) => point,
-        range: ({ start }) => start,
-        file: () => null,
-        hunk: () => null,
-      }),
+      linePoint,
       threadAnchor: null,
       threadId: null,
+      persistedTarget,
     }
     this.#localTargets.set(resolved, resolved)
     return resolved
@@ -189,6 +232,10 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   /** Loads and validates the exact parsed resource required by a resolved target. */
   readonly loadTarget = async (target: ResolvedReviewNavigationTarget, signal: AbortSignal) => {
     const resolved = this.#localTarget(target)
+    if (resolved.persistedTarget !== null) {
+      this.#throwIfAborted(signal)
+      return
+    }
     const bindings = this.#current()
     const result = await bindings.pages.loadFiles([resolved.file.fileId])
     this.#throwIfAborted(signal)
@@ -199,8 +246,14 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const cause = result.failureCauses.get(resolved.file.fileId)
       if (cause !== undefined) throw cause
     }
-    if (status !== "loaded" || file === null)
+    if (status !== "loaded" || file === null) {
+      if (
+        status === "loaded" &&
+        (resolved.persistedTarget !== null || this.#validateMountedTarget(resolved))
+      )
+        return
       throw new Error(`Unable to load ${resolved.file.fileId}`)
+    }
     this.#validateParsedTarget(file, resolved)
   }
 
@@ -219,7 +272,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   ) => {
     this.#throwIfAborted(signal)
     const resolved = this.#localTarget(target)
-    this.#current().prepareFile(resolved.file, input)
+    this.#current().prepareFile(resolved.file, input, resolved.persistedTarget)
     await nextFrame(signal)
   }
 
@@ -328,7 +381,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const resolved = this.#resolved(anchor)
     let currentAnchor = anchor
     let stableFrames = 0
-    let previousHeight = -1
     while (stableFrames < STABLE_FRAME_COUNT) {
       this.#throwIfAborted(signal)
       if (!currentAnchor.isConnected()) {
@@ -336,28 +388,26 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         await this.position(currentAnchor, input, signal)
         if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
         stableFrames = 0
-        previousHeight = -1
         continue
       }
-      const container = this.#container()
-      const beforeTop = currentAnchor.measure().top
       const stickyHeight = this.#targetStickyHeight(resolved)
       this.#align(currentAnchor, input.behavior.alignment, stickyHeight)
-      const afterTop = currentAnchor.measure().top
-      const focusMatches =
+      let focusMatches =
         input.behavior.focus === "preserve" ||
         (currentAnchor.ownsFocus?.(deepActiveElement()) ??
           anchorOwnsDeepFocus(currentAnchor, deepActiveElement()))
+      if (!focusMatches && input.behavior.focus === "target") {
+        focusMatches = currentAnchor.focus?.() === true
+      }
       const geometryMatches =
         this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
-      const stable =
-        geometryMatches &&
-        focusMatches &&
-        Math.abs(afterTop - beforeTop) <= 1 &&
-        previousHeight === container.scrollHeight
+      const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
-      previousHeight = container.scrollHeight
       await nextFrame(signal)
+    }
+    if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
+      currentAnchor.focus?.()
+      refocusAfterLayout(currentAnchor, 3)
     }
   }
 
@@ -397,6 +447,29 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     })
   }
 
+  readonly #validateMountedTarget = (resolved: LocalResolvedReviewNavigationTarget): boolean => {
+    if (
+      Match.valueTags(resolved.target, {
+        file: () => true,
+        extension: () => false,
+        hunk: () => false,
+        line: () => false,
+        range: () => false,
+        thread: () => false,
+      })
+    ) {
+      return true
+    }
+    const point = resolved.linePoint
+    const registration = this.#current().diffRegistrations.get(resolved.file.reviewKey)
+    if (point === null || registration === undefined || !registration.rendered) return false
+    const side = point.side === "old" ? "deletions" : "additions"
+    if (registration.instance.getLineIndex(point.lineNumber, side) === undefined) {
+      throw new ReviewNavigationUnavailableError("targetOutdated")
+    }
+    return true
+  }
+
   readonly #mountContentAnchor = (
     resolved: LocalResolvedReviewNavigationTarget,
   ): Omit<MountedReviewAnchor, "generation"> | null => {
@@ -407,22 +480,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     }
     const point = resolvedPoint(bindings.pages.getFile(resolved.file.fileId), resolved)
     if (point === null) return null
-    if (
-      Match.valueTags(resolved.target, {
-        range: () => true,
-        file: () => false,
-        thread: () => false,
-        extension: () => false,
-        hunk: () => false,
-        line: () => false,
-      })
-    ) {
-      const activeElement = bindings.searchHighlights.getActiveMatchElement()
-      const activeRect = bindings.searchHighlights.getActiveMatchRect()
-      if (activeElement !== null && activeRect !== null) {
-        return focusableAnchor(activeElement, () => bindings.searchHighlights.getActiveMatchRect())
-      }
-    }
     const line = findRenderedDiffLine(
       registration.host,
       registration.instance,
@@ -501,14 +558,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         (viewportHeight - position.height) / 2
       setProgrammaticScrollTop(container, top)
     }
-    registration.instance.syncVirtualizedTop()
-    bindings.diffVirtualizer.markDOMDirty()
-    bindings.diffVirtualizer.requestHeightReconcile(registration.instance)
     const reconciliation = this.#reconciliations.get(resolved.anchorKey)
-    if (
-      reconciliation === undefined ||
-      (registration.generation > reconciliation.generation && reconciliation.passes < 2)
-    ) {
+    if (reconciliation === undefined || reconciliation.passes < 3) {
       const generation = bindings.requestReconciliation(resolved.file.reviewKey)
       if (generation !== null) {
         this.#reconciliations.set(resolved.anchorKey, {
@@ -524,7 +575,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     anchor: MountedReviewAnchor,
     signal: AbortSignal,
   ) => {
-    let previousEagerKey = ""
     for (;;) {
       this.#throwIfAborted(signal)
       this.#align(anchor, "start", this.#targetStickyHeight(resolved))
@@ -535,16 +585,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const precedingLoads = [...bindings.pages.getProjection().loadingFileIds].filter(
         (fileId) => bindings.inventory.findIndex((file) => file.fileId === fileId) < targetIndex,
       )
-      const eagerIds = eagerPlaceholderFileIds(this.#container(), bindings.inventory)
-      const eagerKey = eagerIds.join("\u0000")
-      if (eagerIds.length > 0) {
-        await bindings.pages.loadFiles(eagerIds)
-        previousEagerKey = eagerKey
-        await nextFrame(signal)
-        continue
-      }
-      if (precedingLoads.length > 0 || previousEagerKey !== eagerKey) {
-        previousEagerKey = eagerKey
+      if (precedingLoads.length > 0) {
         await nextFrame(signal)
         continue
       }
@@ -574,9 +615,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const bindings = this.#current()
     const registration = bindings.diffRegistrations.get(resolved.file.reviewKey)
     if (registration === undefined || !registration.host.isConnected) return
-    registration.instance.syncVirtualizedTop()
-    bindings.diffVirtualizer.markDOMDirty()
-    bindings.diffVirtualizer.requestHeightReconcile(registration.instance)
     const anchorKey = reviewFileAnchorKey(resolved.file.fileId)
     const reconciliation = this.#reconciliations.get(anchorKey)
     if (
@@ -676,7 +714,11 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
 const isLocalResolvedReviewNavigationTarget = (
   target: ResolvedReviewNavigationTarget,
 ): target is LocalResolvedReviewNavigationTarget =>
-  "file" in target && "linePoint" in target && "threadAnchor" in target && "threadId" in target
+  "file" in target &&
+  "linePoint" in target &&
+  "threadAnchor" in target &&
+  "threadId" in target &&
+  "persistedTarget" in target
 
 const targetAnchorKey = (
   target: Exclude<ReviewNavigationTarget, { readonly _tag: "thread" | "extension" }>,
@@ -824,30 +866,6 @@ const setProgrammaticScrollTop = (container: HTMLElement, requested: number) => 
   container.dispatchEvent(new Event("scroll"))
 }
 
-const eagerPlaceholderFileIds = (
-  container: HTMLElement,
-  inventory: readonly ReviewSnapshotFileInventory[],
-) => {
-  const containerRect = container.getBoundingClientRect()
-  const byId = new Map(inventory.map((file) => [file.fileId, file]))
-  return [
-    ...container.querySelectorAll<HTMLElement>("[data-review-page-placeholder-file-id]"),
-  ].flatMap((placeholder) => {
-    const decodedFileId = Schema.decodeUnknownResult(ReviewFileId)(
-      placeholder.dataset.reviewPagePlaceholderFileId,
-    )
-    if (Result.isFailure(decodedFileId)) return []
-    const fileId = decodedFileId.success
-    const rect = placeholder.getBoundingClientRect()
-    return fileId !== undefined &&
-      byId.has(fileId) &&
-      rect.bottom >= containerRect.top - EAGER_PLACEHOLDER_MARGIN &&
-      rect.top <= containerRect.bottom + EAGER_PLACEHOLDER_MARGIN
-      ? [fileId]
-      : []
-  })
-}
-
 const nextFrame = (signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
@@ -864,3 +882,12 @@ const nextFrame = (signal: AbortSignal) =>
     }
     signal.addEventListener("abort", onAbort, { once: true })
   })
+
+const refocusAfterLayout = (anchor: MountedReviewAnchor, remainingFrames: number): void => {
+  if (remainingFrames <= 0) return
+  window.requestAnimationFrame(() => {
+    if (!anchor.isConnected()) return
+    anchor.focus?.()
+    refocusAfterLayout(anchor, remainingFrames - 1)
+  })
+}

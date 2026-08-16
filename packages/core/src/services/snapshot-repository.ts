@@ -28,7 +28,18 @@ import {
   ResourceLeaseId,
   ResourceReservationId,
 } from "@diffdash/persistence/resource-catalog"
-import { Clock, Context, Effect, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect"
 
 /** Maximum changed files returned by one progressive inventory query. */
 export const SNAPSHOT_INVENTORY_QUERY_LIMIT = 256
@@ -168,6 +179,20 @@ export interface ResolvedSnapshotTarget {
   readonly targetLineOffset: number
 }
 
+/** Persisted coordinate used to locate one exact snapshot block. */
+export type SnapshotTarget =
+  | {
+      readonly _tag: "HunkLine"
+      readonly hunkId: ReviewHunkId | null
+      readonly line: number
+    }
+  | {
+      readonly _tag: "SideLine"
+      readonly hunkId: ReviewHunkId
+      readonly side: "old" | "new"
+      readonly lineNumber: number
+    }
+
 /** Repository limits sourced from Core RPC and managed-resource policy. */
 export interface SnapshotRepositoryOptions {
   readonly maximumResponseBytes: CoreRpcPayloadBytes
@@ -214,8 +239,7 @@ export class SnapshotRepository extends Context.Service<
     readonly resolveTarget: (
       identity: SnapshotRepositoryIdentity,
       fileId: ReviewFileId,
-      hunkId: ReviewHunkId | null,
-      line: number,
+      target: SnapshotTarget,
     ) => Effect.Effect<ResolvedSnapshotTarget, SnapshotRepositoryError>
     readonly waitForRange: (
       identity: SnapshotRepositoryIdentity,
@@ -558,7 +582,7 @@ export const snapshotRepositoryLayer = (
           },
         ),
         resolveTarget: Effect.fn("SnapshotRepository.resolveTarget")(
-          function* (identity, fileId, hunkId, line) {
+          function* (identity, fileId, coordinate) {
             const { file, session } = yield* loadFile("resolveTarget", identity, fileId)
             let blocks = yield* store
               .visibleBlocks(file.deltaId)
@@ -569,34 +593,102 @@ export const snapshotRepositoryLayer = (
               )
             if (blocks.length === 0)
               blocks = yield* materialize("resolveTarget", identity, session, file)
-            let target: VisibleDiffBlock | undefined
-            let targetLineOffset = 0
-            if (hunkId === null) {
-              target = blocks.find(
-                (block) => line >= block.first_line && line < block.first_line + block.line_count,
-              )
-              if (target !== undefined) targetLineOffset = line - target.first_line
-            } else {
-              let remaining = line
-              for (const block of blocks) {
-                if (block.hunk_id !== hunkId) continue
-                if (remaining < block.line_count) {
-                  target = block
-                  targetLineOffset = remaining
-                  break
+            const resolution = yield* Match.valueTags(coordinate, {
+              HunkLine: ({ hunkId, line }) => {
+                let target: VisibleDiffBlock | undefined
+                let targetLineOffset = 0
+                if (hunkId === null) {
+                  target = blocks.find(
+                    (block) =>
+                      line >= block.first_line && line < block.first_line + block.line_count,
+                  )
+                  if (target !== undefined) targetLineOffset = line - target.first_line
+                } else {
+                  let remaining = line
+                  for (const block of blocks) {
+                    if (block.hunk_id !== hunkId) continue
+                    if (remaining < block.line_count) {
+                      target = block
+                      targetLineOffset = remaining
+                      break
+                    }
+                    remaining -= block.line_count
+                  }
                 }
-                remaining -= block.line_count
-              }
-            }
-            if (target === undefined)
+                return Effect.succeed({ line, target, targetLineOffset })
+              },
+              SideLine: (sideTarget) =>
+                Effect.gen(function* () {
+                  const hunk = yield* store
+                    .findFileHunk(file.deltaId, sideTarget.hunkId)
+                    .pipe(
+                      Effect.mapError(() =>
+                        reject("resolveTarget", "notFound", "Snapshot target hunk was not found"),
+                      ),
+                    )
+                  let oldLineNumber = hunk.oldStart
+                  let newLineNumber = hunk.newStart
+                  let target: VisibleDiffBlock | undefined
+                  let targetLineOffset = 0
+                  for (const block of blocks) {
+                    if (block.hunk_id !== sideTarget.hunkId) continue
+                    const bytes = yield* store
+                      .readManagedRange(block.resource_id, 0, block.byte_count)
+                      .pipe(
+                        Effect.mapError(() =>
+                          reject(
+                            "resolveTarget",
+                            "sourceUnavailable",
+                            "Could not read target block",
+                          ),
+                        ),
+                      )
+                    const text = yield* Effect.try({
+                      try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes.bytes),
+                      catch: () =>
+                        reject(
+                          "resolveTarget",
+                          "sourceUnavailable",
+                          "Committed snapshot block is not valid UTF-8",
+                        ),
+                    })
+                    const patchLines = text.split("\n")
+                    if (patchLines.at(-1) === "") patchLines.pop()
+                    for (const [offset, patchLine] of patchLines.entries()) {
+                      const marker = patchLine[0]
+                      const matches =
+                        marker === " "
+                          ? sideTarget.side === "old"
+                            ? oldLineNumber === sideTarget.lineNumber
+                            : newLineNumber === sideTarget.lineNumber
+                          : marker === "-"
+                            ? sideTarget.side === "old" && oldLineNumber === sideTarget.lineNumber
+                            : marker === "+" &&
+                              sideTarget.side === "new" &&
+                              newLineNumber === sideTarget.lineNumber
+                      if (matches) {
+                        target = block
+                        targetLineOffset = offset
+                        break
+                      }
+                      if (marker === " " || marker === "-") oldLineNumber += 1
+                      if (marker === " " || marker === "+") newLineNumber += 1
+                    }
+                    if (target !== undefined) break
+                    yield* current("resolveTarget", identity)
+                  }
+                  return { line: sideTarget.lineNumber, target, targetLineOffset }
+                }),
+            })
+            if (resolution.target === undefined)
               return yield* reject("resolveTarget", "notFound", "Snapshot target was not found")
             yield* current("resolveTarget", identity)
             return {
               file,
-              blockOrdinal: target.ordinal,
-              blockFirstLine: target.first_line,
-              line,
-              targetLineOffset,
+              blockOrdinal: resolution.target.ordinal,
+              blockFirstLine: resolution.target.first_line,
+              line: resolution.line,
+              targetLineOffset: resolution.targetLineOffset,
             }
           },
         ),

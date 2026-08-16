@@ -50,8 +50,7 @@ export interface ProgressiveReviewNativeClient {
     request: HostRequestContext & {
       readonly identity: CoreReviewSessionIdentity
       readonly fileId: Parameters<ProgressiveReviewApi["resolveTarget"]>[0]["fileId"]
-      readonly hunkId: Parameters<ProgressiveReviewApi["resolveTarget"]>[0]["hunkId"]
-      readonly line: number
+      readonly target: Parameters<ProgressiveReviewApi["resolveTarget"]>[0]["target"]
     },
   ) => Promise<CoreResolvedReviewTarget>
   readonly search: (
@@ -125,8 +124,7 @@ export const createProgressiveReviewApiGateway = (
       ...context,
       identity: toNativeIdentity(request.identity, context),
       fileId: request.fileId,
-      hunkId: request.hunkId,
-      line: request.line,
+      target: request.target,
     })
     return {
       identity: toBrowserIdentity(target.identity),

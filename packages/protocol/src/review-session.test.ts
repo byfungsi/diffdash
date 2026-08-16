@@ -1,5 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
-import { ReviewKey, ReviewProjectId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewHunkId,
+  ReviewKey,
+  ReviewProjectId,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import { Result, Schema } from "effect"
 
 import {
@@ -12,6 +18,7 @@ import {
   ReviewSessionSearchPublication,
   ReviewSessionState,
   ReviewSessionStateVersion,
+  ReviewSessionTargetRequest,
   VerifyingReviewSession,
   reviewSessionCapabilities,
 } from "./review-session"
@@ -116,5 +123,25 @@ describe("progressive review session protocol", () => {
         wrapped: false,
       }),
     ).toBe(false)
+  })
+
+  it("requires one atomic hunk-relative or side-line target coordinate", () => {
+    const fileId = ReviewFileId.make("file")
+    const hunkId = ReviewHunkId.make("hunk")
+    expect(
+      Schema.is(ReviewSessionTargetRequest)({
+        identity,
+        fileId,
+        target: { _tag: "HunkLine", hunkId, line: 4 },
+      }),
+    ).toBe(true)
+    expect(
+      Schema.is(ReviewSessionTargetRequest)({
+        identity,
+        fileId,
+        target: { _tag: "SideLine", hunkId, side: "new", lineNumber: 40 },
+      }),
+    ).toBe(true)
+    expect(Schema.is(ReviewSessionTargetRequest)({ identity, fileId, hunkId, line: 4 })).toBe(false)
   })
 })

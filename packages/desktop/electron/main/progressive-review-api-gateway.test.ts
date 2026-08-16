@@ -1,6 +1,7 @@
 import {
   ReviewFileId,
   ReviewFilePatchHash,
+  ReviewHunkId,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -156,8 +157,19 @@ describe("createProgressiveReviewApiGateway", () => {
       await api.resolveTarget({
         identity: browserIdentity,
         fileId: file.fileId,
-        hunkId: null,
-        line: 4,
+        target: { _tag: "HunkLine", hunkId: null, line: 4 },
+      }),
+    ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, line: 4 })
+    expect(
+      await api.resolveTarget({
+        identity: browserIdentity,
+        fileId: file.fileId,
+        target: {
+          _tag: "SideLine",
+          hunkId: ReviewHunkId.make("hunk"),
+          side: "new",
+          lineNumber: 40,
+        },
       }),
     ).toEqual({ identity: browserIdentity, file, blockOrdinal: 2, line: 4 })
 
@@ -192,8 +204,18 @@ describe("createProgressiveReviewApiGateway", () => {
       ...context,
       identity: nativeIdentity,
       fileId: file.fileId,
-      hunkId: null,
-      line: 4,
+      target: { _tag: "HunkLine", hunkId: null, line: 4 },
+    })
+    expect(resolveTarget).toHaveBeenCalledWith({
+      ...context,
+      identity: nativeIdentity,
+      fileId: file.fileId,
+      target: {
+        _tag: "SideLine",
+        hunkId: ReviewHunkId.make("hunk"),
+        side: "new",
+        lineNumber: 40,
+      },
     })
   })
 

@@ -1,4 +1,10 @@
-import { ReviewKey, ReviewProjectId, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import {
+  ReviewFileId,
+  ReviewHunkId,
+  ReviewKey,
+  ReviewProjectId,
+  ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import { describe, expect, it } from "@effect/vitest"
 import { Option, Schema } from "effect"
 
@@ -8,6 +14,7 @@ import {
   CoreReviewSessionId,
   CoreReviewSessionIdentity,
   CoreReviewSessionStateVersion,
+  CoreReviewTargetRequest,
   OpenCoreReviewSessionRequest,
 } from "./review-session"
 import { CoreProgressiveReviewRpcs } from "./review-session-rpc"
@@ -69,5 +76,38 @@ describe("Core progressive review RPC declarations", () => {
         snapshotId: identity.snapshotId,
       }),
     ).toBe(true)
+
+    const requestIdentity = {
+      applicationInstanceId: identity.applicationInstanceId,
+      processEpoch: identity.processEpoch,
+      requestId: HostRequestId.make("h:request"),
+    }
+    const fileId = ReviewFileId.make("file")
+    const hunkId = ReviewHunkId.make("hunk")
+    expect(
+      Schema.is(CoreReviewTargetRequest)({
+        ...requestIdentity,
+        identity,
+        fileId,
+        target: { _tag: "HunkLine", hunkId, line: 4 },
+      }),
+    ).toBe(true)
+    expect(
+      Schema.is(CoreReviewTargetRequest)({
+        ...requestIdentity,
+        identity,
+        fileId,
+        target: { _tag: "SideLine", hunkId, side: "old", lineNumber: 40 },
+      }),
+    ).toBe(true)
+    expect(
+      Schema.is(CoreReviewTargetRequest)({
+        ...requestIdentity,
+        identity,
+        fileId,
+        hunkId,
+        line: 4,
+      }),
+    ).toBe(false)
   })
 })

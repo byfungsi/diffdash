@@ -229,13 +229,28 @@ export const CoreReviewRange = Schema.Struct({
 /** Complete blocks split only at persisted legal boundaries. */
 export type CoreReviewRange = typeof CoreReviewRange.Type
 
+/** Coordinate used to resolve one Core review target. */
+export const CoreReviewTarget = Schema.TaggedUnion({
+  HunkLine: {
+    hunkId: Schema.NullOr(ReviewHunkId),
+    line: NonNegativeInteger,
+  },
+  SideLine: {
+    hunkId: ReviewHunkId,
+    side: Schema.Literals(["old", "new"]),
+    lineNumber: PositiveInteger,
+  },
+}).annotate({ identifier: "CoreReviewTarget" })
+
+/** Coordinate used to resolve one Core review target. */
+export type CoreReviewTarget = typeof CoreReviewTarget.Type
+
 /** Semantic target request against one exact session version. */
 export const CoreReviewTargetRequest = Schema.Struct({
   ...RequestIdentity,
   identity: CoreReviewSessionIdentity,
   fileId: ReviewFileId,
-  hunkId: Schema.NullOr(ReviewHunkId),
-  line: NonNegativeInteger,
+  target: CoreReviewTarget,
 }).annotate({ identifier: "CoreReviewTargetRequest" })
 
 /** Semantic target request against one exact session version. */

@@ -162,6 +162,8 @@ const addBlock = Effect.fn("SnapshotRepositoryTest.addBlock")(function* (
   text: string,
 ) {
   const bytes = encoder.encode(text)
+  const patchLines = text.split("\n")
+  if (patchLines.at(-1) === "") patchLines.pop()
   const id = DiffBlockId.make(`block:${ordinal}`)
   const prepared = yield* store.prepareBlock({
     id,
@@ -169,7 +171,7 @@ const addBlock = Effect.fn("SnapshotRepositoryTest.addBlock")(function* (
     hunkId: "hunk:one",
     ordinal,
     firstLine,
-    lineCount: 2,
+    lineCount: patchLines.length,
     byteCount: bytes.byteLength,
     checksum: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     reservationId: ResourceReservationId.make(`reservation:${ordinal}`),
@@ -355,18 +357,66 @@ describe("SnapshotRepository", () => {
         const repository = yield* SnapshotRepository
         const address = identity(snapshotOne)
         yield* repository.openSession(address)
-        const target = yield* repository.resolveTarget(
-          address,
-          ReviewFileId.make("file:0"),
-          ReviewHunkId.make("hunk:one"),
-          198,
-        )
+        const target = yield* repository.resolveTarget(address, ReviewFileId.make("file:0"), {
+          _tag: "HunkLine",
+          hunkId: ReviewHunkId.make("hunk:one"),
+          line: 198,
+        })
         const range = yield* repository.readRange(address, ReviewFileId.make("file:0"), 198)
         expect(target.blockOrdinal).toBe(99)
         expect(target.blockFirstLine).toBe(198)
         expect(target.targetLineOffset).toBe(0)
         expect(range.blocks.map(({ ordinal }) => ordinal)).toEqual([99])
         expect(range.byteCount).toBeLessThanOrEqual(options.maximumResponseBytes)
+      }).pipe(Effect.provide(makeLayer(directory)))
+    }),
+  )
+
+  it.effect("resolves old and new absolute lines in later blocks of a large hunk", () =>
+    Effect.gen(function* () {
+      const directory = yield* tempDirectory
+      yield* Effect.gen(function* () {
+        const { deltaId, store } = yield* setup(directory)
+        const ids: DiffBlockId[] = []
+        for (let ordinal = 0; ordinal < 100; ordinal += 1) {
+          ids.push(
+            yield* addBlock(
+              store,
+              deltaId,
+              ordinal,
+              ordinal * 3,
+              ` shared ${ordinal}\n-old ${ordinal}\n+new ${ordinal}\n`,
+            ),
+          )
+        }
+        yield* publish(store, snapshotOne, deltaId, ids, "managedSpool")
+        const repository = yield* SnapshotRepository
+        const address = identity(snapshotOne)
+        const fileId = ReviewFileId.make("file:0")
+        const hunkId = ReviewHunkId.make("hunk:one")
+        yield* repository.openSession(address)
+
+        for (const [target, targetLineOffset] of [
+          [{ _tag: "SideLine", hunkId, side: "old", lineNumber: 199 }, 0],
+          [{ _tag: "SideLine", hunkId, side: "new", lineNumber: 199 }, 0],
+          [{ _tag: "SideLine", hunkId, side: "old", lineNumber: 200 }, 1],
+          [{ _tag: "SideLine", hunkId, side: "new", lineNumber: 200 }, 2],
+        ] as const) {
+          const resolved = yield* repository.resolveTarget(address, fileId, target)
+          expect(resolved.blockOrdinal).toBe(99)
+          expect(resolved.targetLineOffset).toBe(targetLineOffset)
+        }
+
+        const missing = yield* Effect.result(
+          repository.resolveTarget(address, fileId, {
+            _tag: "SideLine",
+            hunkId,
+            side: "old",
+            lineNumber: 201,
+          }),
+        )
+        expect(Result.isFailure(missing)).toBe(true)
+        if (Result.isFailure(missing)) expect(missing.failure.reason).toBe("notFound")
       }).pipe(Effect.provide(makeLayer(directory)))
     }),
   )

@@ -140,8 +140,7 @@ describe("createProgressiveReviewApi", () => {
       await api.resolveTarget({
         ...identityRequest,
         fileId: file.fileId,
-        hunkId: null,
-        line: 1,
+        target: { _tag: "HunkLine", hunkId: null, line: 1 },
       }),
     ).toEqual({ identity, file, blockOrdinal: 0, line: 1 })
     const publications: unknown[] = []
