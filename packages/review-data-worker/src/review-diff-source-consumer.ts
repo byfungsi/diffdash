@@ -72,6 +72,8 @@ const relay = (
         Match.tags({
           Accepted: () => Effect.void,
           Finished: () => Effect.void,
+          Failed: ({ message }) =>
+            ReviewDataWorkerFailure.make({ message: `${failureMessage}: ${message}` }),
         }),
         Match.orElse(() => ReviewDataWorkerFailure.make({ message: failureMessage })),
       ),

@@ -205,6 +205,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       ],
       env: environment,
     })
+    const window = await app.firstWindow()
     report.gates.packaged = await app.evaluate(({ app: runtimeApp }) => runtimeApp.isPackaged)
     report.provenance.packaged = report.gates.packaged
     report.provenance.appVersion = await app.evaluate(({ app: runtimeApp }) =>
@@ -218,7 +219,6 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     observedCoreProcessIds = coreHostProcessIds(rootPid, configuration.host)
     report.gates.hostSelected = observedCoreProcessIds.length > 0
 
-    const window = await app.firstWindow()
     await startRendererMeasurement(window)
     await window.evaluate(installDiffDashE2eApi)
     await waitForComparison(window, configuration.fixture)

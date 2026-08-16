@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process"
-import { access, mkdir, readFile, writeFile } from "node:fs/promises"
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
 import { evaluateSwitchMemoryPlateau, validateSwitchReports } from "./process-metrics.mjs"
@@ -347,6 +347,7 @@ export const runRepositoryScaleOrchestration = async ({
   const reportDirectory = resolve(cacheDirectory, "orchestration", session)
   const rawReportPath = resolve(reportDirectory, "raw.json")
   const summaryPath = resolve(reportDirectory, "summary.json")
+  await rm(reportDirectory, { recursive: true, force: true })
   await mkdir(reportDirectory, { recursive: true })
   const diffdashCommit = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: resolve(e2eDirectory, "../.."),

@@ -36,6 +36,17 @@ describe("ReviewDataWorkerClient", () => {
     expect(runtime.terminated).toBe(true)
   })
 
+  it("copies Node buffers into an owned transferable Uint8Array", async () => {
+    const runtime = new CapturingChunkRuntime()
+    const client = new ReviewDataWorkerClient(runtime, new URL("file:///fixture-worker.mjs"))
+
+    await expect(client.sendChunk(Buffer.from([1, 2, 3]))).resolves.toMatchObject({
+      _tag: "Accepted",
+    })
+    expect(runtime.receivedPlainBytes).toBe(true)
+    expect(runtime.receivedOwnedTransfer).toBe(true)
+  })
+
   it("terminates when a batch is attributed to a command that cannot emit batches", async () => {
     const runtime = new UnsolicitedBatchRuntime()
     const client = new ReviewDataWorkerClient(runtime, new URL("file:///fixture-worker.mjs"))
@@ -62,6 +73,32 @@ describe("ReviewDataWorkerClient", () => {
     await expect(client.heartbeat()).resolves.toMatchObject({ _tag: "Failed" })
   })
 })
+
+class CapturingChunkRuntime implements ReviewDataWorkerRuntime {
+  receivedOwnedTransfer = false
+  receivedPlainBytes = false
+
+  start(_moduleUrl: URL): ReviewDataWorkerHandle {
+    const listeners = new Set<(response: ReviewDataWorkerResponse) => void>()
+    return {
+      post: (command, transfer = []): void => {
+        if (command._tag !== "Chunk") return
+        this.receivedPlainBytes = command.bytes.constructor === Uint8Array
+        this.receivedOwnedTransfer = transfer[0] === command.bytes.buffer
+        queueMicrotask(() => {
+          for (const listener of listeners)
+            listener({ _tag: "Accepted", requestId: command.requestId })
+        })
+      },
+      onResponse: (listener): (() => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      onFailure: () => () => undefined,
+      terminate: async () => undefined,
+    }
+  }
+}
 
 class HeldChunkRuntime implements ReviewDataWorkerRuntime {
   terminated = false

@@ -142,7 +142,7 @@ export class ReviewDataWorkerClient {
       })
     }
     this.#chunkPending = true
-    const copy = bytes.slice()
+    const copy = Uint8Array.from(bytes)
     return this.#request({ _tag: "Chunk", requestId, bytes: copy }, [copy.buffer]).finally(() => {
       this.#chunkPending = false
     })
