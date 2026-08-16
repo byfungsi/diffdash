@@ -6,9 +6,10 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
-import { ReviewDiffIdentity, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewDiffIdentity, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
   REVIEW_DIFF_MAX_CHUNK_BYTES,
+  HostedReviewDiffSourceTarget,
   ReviewDiffAcquisition,
   ReviewDiffByteCompletion,
   ReviewDiffGeneration,
@@ -38,13 +39,16 @@ const bytes = new TextEncoder().encode(
   "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
 )
 const offer = ReviewDiffSourceOffer.make({
-  review: HostedReviewLocator.make({
-    repository: HostedRepositoryLocator.make({
-      providerId: GitProviderId.make("fixture"),
-      namespace: RepositoryNamespace.make("diffdash"),
-      name: HostedRepositoryName.make("worker"),
+  target: HostedReviewDiffSourceTarget.make({
+    reviewKey: ReviewKey.make("fixture:diffdash/worker#1"),
+    review: HostedReviewLocator.make({
+      repository: HostedRepositoryLocator.make({
+        providerId: GitProviderId.make("fixture"),
+        namespace: RepositoryNamespace.make("diffdash"),
+        name: HostedRepositoryName.make("worker"),
+      }),
+      number: HostedReviewNumber.make(1),
     }),
-    number: HostedReviewNumber.make(1),
   }),
   expectedRevision: revision,
   semanticIdentity: identity,

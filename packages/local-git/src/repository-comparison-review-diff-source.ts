@@ -178,7 +178,7 @@ const diffBytes = (
     )
     .pipe(
       Stream.flatMap((event) =>
-        event._tag === "ProcessByteChunk" ? Stream.make(event.bytes) : Stream.empty,
+        event["_tag"] === "ProcessByteChunk" ? Stream.make(event.bytes) : Stream.empty,
       ),
     )
 

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 
 import { makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
@@ -52,13 +52,17 @@ const expectedBytes = new Uint8Array(
 const sources: ReviewDiffSource[] = []
 
 beforeAll(async () => {
-  for (let index = 0; index < 6; index += 1) {
-    sources.push(
-      await Effect.runPromise(
-        makeRepositoryComparisonReviewDiffSource(input).pipe(Effect.provide(ProcessService.layer)),
+  sources.push(
+    ...(await Promise.all(
+      Array.from({ length: 6 }, () =>
+        Effect.runPromise(
+          makeRepositoryComparisonReviewDiffSource(input).pipe(
+            Effect.provide(ProcessService.layer),
+          ),
+        ),
       ),
-    )
-  }
+    )),
+  )
 })
 
 afterAll(() => rmSync(fixtureRoot, { force: true, recursive: true }))
@@ -71,7 +75,23 @@ const takeSource = (): ReviewDiffSource => {
 
 reviewDiffSourceConformance("repository comparison exact Git", {
   create: takeSource,
-  createCancellable: () => ({ source: takeSource(), closed: () => true }),
+  createCancellable: () => {
+    let closed = false
+    const source = takeSource()
+    return {
+      source: {
+        ...source,
+        unifiedBytes: (acquisition) =>
+          source
+            .unifiedBytes(acquisition)
+            .pipe(
+              Stream.concat(Stream.never),
+              Stream.ensuring(Effect.sync(() => void (closed = true))),
+            ),
+      },
+      closed: () => closed,
+    }
+  },
   expectedBytes,
   expectedFiles: [],
 })
@@ -93,7 +113,7 @@ describe("repository comparison review diff source", () => {
         complete: true,
         declaredBytes: expectedBytes.byteLength,
       })
-      expect(source.offer.methods.map((method) => method._tag)).toEqual([
+      expect(source.offer.methods.map((method) => method["_tag"])).toEqual([
         "unifiedBytes",
         "materializedGit",
       ])
