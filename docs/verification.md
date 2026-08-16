@@ -107,8 +107,8 @@ The following requirement IDs are covered by
 ## M21 Walkthrough Core Evidence
 
 These FUN-218 requirements are gated together by
-`pnpm --filter @diffdash/core-rpc benchmark:m21`. The external host remains inactive in production;
-FUN-215 owns production cutover and FUN-254 owns renderer replay and cross-process diagnostics.
+`pnpm --filter @diffdash/core-rpc benchmark:m21`. Production uses the authenticated external host;
+forced Bun and utility E2E additionally verify real process selection and teardown.
 
 | Requirement | Class | Evidence |
 |---|---|---|
@@ -116,7 +116,7 @@ FUN-215 owns production cutover and FUN-254 owns renderer replay and cross-proce
 | `M21-RPC-POLICY-001` | `[T]` | `core-rpc-transport-policy.test.ts` enforces each walkthrough method's exact MessagePack request and response boundary, duplicate live request IDs, 32-request concurrency, and bounded overflow failures. |
 | `M21-RPC-DEADLINE-001` | `[T]` | `core-walkthrough-rpc-admission.test.ts` applies each walkthrough deadline and bounds uninterruptible cancellations that continue after caller timeout. |
 | `M21-RPC-DISCONNECT-001` | `[T]` | Real-socket tests use controlled operation effects to interrupt reads and starts before handler acceptance, preserve a Core-scoped worker after the acceptance boundary, and finish admitted cancellation during client disconnect and server close; operation and persistence suites separately lock the durable transition ordering. |
-| `M21-RPC-RECOVERY-001` | `[T]` | `embedded-core.test.ts` proves accepted active work becomes interrupted after Core disposal and restart without restarting provider work. |
+| `M21-RPC-RECOVERY-001` | `[T]` | `walkthrough-operation-store.test.ts` and Core startup recovery tests prove accepted active work becomes interrupted after a dead Core epoch without restarting provider work. |
 | `M21-RPC-PRESSURE-001` | `[T]` | `m21-transport-benchmark.ts` and the dated D-01 artifact lock the 512 KiB frame, 16 MiB aggregate reservation, 32 concurrent unary requests, and zero chunk/ack state. |
 
 ## Classified Product Surface

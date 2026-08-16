@@ -115,7 +115,7 @@ export const CoreMethod = {
   setRepositoryComparisonViewedFile: "ViewedFiles.setRepositoryComparison",
 } as const
 
-/** One business operation accepted by the embedded Core boundary. */
+/** One business operation accepted by the Core RPC boundary. */
 export type CoreMethod = (typeof CoreMethod)[keyof typeof CoreMethod]
 
 /** Protocol contracts reused while Core remains embedded behind Electron. */
@@ -331,10 +331,10 @@ export type CoreOperationFailure<Method extends CoreMethod> = CoreOperationFailu
 /** Expected failures while loading an already-persisted walkthrough. */
 export type CoreGetStoredWalkthroughFailure = CoreThreadResolutionFailure | WalkthroughStoreError
 
-/** Stable identity shared by durable storage and the embedded Core boundary. */
+/** Stable identity shared by durable storage and the Core RPC boundary. */
 export const WalkthroughOperationId = DomainWalkthroughOperationId
 
-/** Stable identity shared by durable storage and the embedded Core boundary. */
+/** Stable identity shared by durable storage and the Core RPC boundary. */
 export type WalkthroughOperationId = WalkthroughOperationIdType
 
 /** A requested embedded walkthrough operation is no longer known to this Core epoch. */

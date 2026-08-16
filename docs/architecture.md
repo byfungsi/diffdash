@@ -1,7 +1,7 @@
 # Architecture
 
-DiffDash is a pnpm workspace with an Electron native-host composition root and one embedded Core
-business runtime. Package boundaries separate domain, platform, host orchestration, and concrete
+DiffDash is a pnpm workspace with an Electron native host and one authenticated external Core
+business process. Package boundaries separate domain, platform, host orchestration, and concrete
 integrations; they are enforced by
 `scripts/build/package-boundaries.test.mjs`.
 
@@ -54,9 +54,8 @@ demo and promotional output but is never shipped in the desktop application.
 - `@diffdash/protocol` depends only on browser-safe domain contracts and Effect. It never imports
   Electron, Node, persistence, or a concrete provider.
 - `@diffdash/core-rpc` owns runtime-neutral native Effect RPC declarations shared by Core and the
-  inactive external-Core Electron client. Desktop already owns that client dependency and
-  package-graph edge, while production continues to use embedded Core until atomic cutover. The
-  contract package depends only on approved domain contracts and Effect, and never imports renderer
+  external-Core Electron client. The contract package depends only on approved domain contracts and
+  Effect, and never imports renderer
   IPC, host, persistence, settings, or runtime adapters. Effect owns RPC correlation and
   serialization; DiffDash annotations add application identities, logical budgets, and lifecycle
   policy.
@@ -81,13 +80,13 @@ demo and promotional output but is never shipped in the desktop application.
   `@diffdash/process` when needed, and provider-owned libraries. They never depend on desktop,
   renderer, protocol, settings, persistence, orchestration, or another concrete provider.
 - Provider-neutral orchestration may depend on SDKs and infrastructure, but not concrete providers.
-- `@diffdash/core` owns the single business `ManagedRuntime`, service Layer graph, and concrete
+- `@diffdash/core` owns the single business runtime, service Layer graph, and concrete
   provider registration, review-thread anchor mapping, prompt construction, artifact normalization,
   deterministic review ordering, and offset pagination. Its public `core.ts` entrypoint is an
   export-only facade; internal code depends on the closed `core-contract.ts` leaf instead of
   importing the public entrypoint. Core imports no Electron, updater, renderer, or desktop modules.
 - `@diffdash/desktop` owns windows, preload security, dialogs, shell integration, the updater,
-  single-instance behavior, and embedded Core lifecycle.
+  single-instance behavior, external Core process supervision, and the native RPC client.
 
 The desktop build has two explicit main-process composition roots. Normal `build`, `pack`, and
 `dist` tasks select the production entrypoint, which contains no E2E environment-controlled policy
@@ -97,7 +96,7 @@ entrypoint and fixture provider implementations are not reachable from the produ
 The same fail-closed mode selection produces a deterministic standalone `core.mjs` and bounded
 manifest. Desktop embeds the bundle-derived build identity, while electron-builder copies the exact
 artifact to `resources/core` outside ASAR. Production graph tests reject fixture providers from the
-production Core artifact; the external artifact remains inactive until atomic cutover.
+production Core artifact.
 
 Dependencies must remain acyclic and use `workspace:*`. Relative imports cannot cross package
 roots. Browser-safe exports are bundled in a browser target during the boundary test to reject Node,
@@ -107,20 +106,18 @@ Electron, SQLite, and concrete-provider leakage.
 
 Providers are built into DiffDash and reviewed and released with the desktop application. A package
 boundary is an ownership, test, and dependency boundary, not runtime sandboxing. Concrete provider
-code executes as trusted code in the embedded Core and can use capabilities explicitly passed by
+code executes as trusted code in the external Core and can use capabilities explicitly passed by
 Core composition. Do not treat the package model as safe plugin loading for untrusted third-party
 code.
 
-## Embedded Core Migration
+## External Core Boundary
 
-Electron controllers call the closed `CoreMethod` catalog and the Core-owned walkthrough operation
-facade. Internal Effect tags, Layers, and the managed runtime are not exposed to Electron. Boundary
-tests reject direct business-service imports and generic runtime execution from controllers.
-Each Core call returns `CoreResult<Value, Failure>` with an exact method-correlated expected failure
-union. The Electron application-runtime adapter deliberately unwraps that result into the existing
-IPC error adapters; only defects reject directly from `EmbeddedCore`.
+Electron controllers call literal typed RPC methods through one shared native client. Internal
+Effect tags, Layers, product SQLite, providers, and business services are not exposed to Electron.
+Boundary tests reject direct business-service imports, renderer access to Core RPC, generic runtime
+execution, and any application `ManagedRuntime`.
 
-The external-Core RPC path remains inactive until the atomic production cutover. Its native Effect
+Native Effect
 RPC middleware enforces process identity, ready-only business admission, method deadlines, and
 cancellation policy before invoking Core handlers. The bounded walkthrough protocol enforces each
 method's logical MessagePack request and response limits before the 512 KiB native frame ceiling,
@@ -130,7 +127,7 @@ global runtime. `CoreLifecycle` owns the authoritative admission and drain decis
 middleware maps it to exact wire failures without adding a custom dispatcher or transport envelope.
 Control RPCs remain callable according to their own bootstrap and shutdown lifecycle rules.
 Core privately merges the disjoint control and business audiences into one scoped, transport-neutral
-`RpcServer`. The first inactive external-host vertical supplies the native Unix socket protocol with
+`RpcServer`. The external host uses the native Unix socket protocol with
 bounded MessagePack input, a private `0700` runtime directory, and a `0600` socket. A one-time redacted
 credential carried in native RPC headers atomically binds the first authenticated Effect client ID;
 wrong credentials do not consume it, and no later connection can authenticate even after disconnect.
@@ -138,10 +135,9 @@ Authentication advances the existing public lifecycle from `starting` to `awaiti
 socket listening, connection, and host-side epoch verification remain private transport states.
 Electron owns a scoped native client and independently rejects a health value that does not identify
 the exact launched application instance and process epoch. Real socket integration proves native
-disconnect scope cleanup without activating an external process or changing current embedded
-production ownership.
+disconnect scope cleanup and process-owned request lifetimes.
 
-The inactive Electron host coordinator owns one memoized bootstrap acquisition per application
+The Electron host coordinator owns one memoized bootstrap acquisition per application
 scope. It creates a fresh short private runtime directory, process epoch, request ID, and redacted
 one-time token. Before creating the transport, Desktop schema-decodes a bounded build manifest,
 requires the exact Desktop build identity and utility/Bun runtime contract, and verifies the
@@ -155,13 +151,12 @@ preparingRuntime -> transportListening -> authenticating -> epochVerified -> awa
 Concurrent and repeated starts share one session. Any failure or scope closure terminates the child,
 closes client and launcher resources, removes the runtime directory, and exposes only a stage plus
 fixed safe message; the socket path and token are not retained in the returned session or public
-failure. This real-process path remains inactive in production until database ownership authorization
-and atomic cutover are complete.
+failure. Core alone acquires product SQLite after explicit ownership authorization; Electron never
+opens it.
 
 The host must call `start` before any business operation. Concurrent and repeated startup calls
-share one acquisition, startup failures are normalized to Core-owned errors, and repeated disposal
-shares one cleanup. Calls made before startup, during disposal, or after disposal return a typed
-`CoreLifecycleError`; they never acquire a second runtime implicitly. Electron installs graceful
+share one acquisition, startup failures are normalized at the native boundary, and disposal closes
+the RPC client, supervised process, socket, and private runtime directory. Electron installs graceful
 shutdown ownership before Core startup so partial startup is still disposed.
 
 Native-host configuration is schema-decoded once. Optional paths, environment values, fixtures,

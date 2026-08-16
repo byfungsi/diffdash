@@ -103,7 +103,7 @@ export interface CoreHostBootstrapSession {
   readonly state: Effect.Effect<CoreHostBootstrapState>
 }
 
-/** Single-flight authority for establishing the inactive external Core transport. */
+/** Single-flight authority for establishing the external Core transport. */
 export class CoreHostBootstrap extends Context.Service<
   CoreHostBootstrap,
   {
