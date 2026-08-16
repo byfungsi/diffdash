@@ -13,6 +13,7 @@
     "test:core-hosts": "node scripts/run-forced-core-host-e2e.mjs",
     "package:e2e": "node scripts/run-packaged-e2e-build.mjs",
     "test:packaged": "pnpm package:e2e && playwright test --project=packaged",
+    "test:packaged:hosts": "pnpm package:e2e && node scripts/run-packaged-core-host-e2e.mjs",
     "test:restart": "playwright test --project=packaged --grep restart",
     "test:providers": "playwright test --project=desktop --grep 'Home to Review'",
     "e2e": "pnpm test:desktop",

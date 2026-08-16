@@ -44,7 +44,7 @@
     "test:boundaries": "node --test scripts/build/package-boundaries.test.mjs scripts/lint/oxlint-plugin-diffdash.test.mjs",
     "test:browser": "pnpm --filter @diffdash/app test:browser",
     "test:e2e": "turbo run e2e --filter @diffdash/e2e",
-    "test:e2e:packaged": "pnpm --filter @diffdash/e2e test:packaged",
+    "test:e2e:packaged": "pnpm --filter @diffdash/e2e test:packaged:hosts",
     "test:all": "pnpm test && pnpm test:browser && pnpm test:e2e && pnpm --filter @diffdash/download-worker test",
     "lint": "oxlint . --no-error-on-unmatched-pattern && pnpm test:boundaries",
     "lint:fix": "oxlint . --fix --no-error-on-unmatched-pattern",

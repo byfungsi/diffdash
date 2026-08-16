@@ -71,9 +71,21 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   }
+  const forcedCoreHost = readForcedPackagedCoreHost()
+  let forcedCoreProcessIds: ReadonlyArray<number> = []
   let app = await electron.launch(launchOptions)
 
   try {
+    if (forcedCoreHost !== null) {
+      const rootPid = app.process().pid
+      if (rootPid === undefined) throw new Error("Packaged Electron process has no PID")
+      await expect
+        .poll(() => coreHostProcessIds(rootPid, forcedCoreHost).length, {
+          timeout: 10_000,
+        })
+        .toBeGreaterThan(0)
+      forcedCoreProcessIds = coreHostProcessIds(rootPid, forcedCoreHost)
+    }
     expect(
       await app.evaluate(({ app: runtimeApp }) => ({
         appPath: runtimeApp.getAppPath(),
@@ -221,6 +233,11 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
 
     await app.close()
+    if (forcedCoreHost !== null) {
+      await expect
+        .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+        .toBe(false)
+    }
     const database = await stat(join(userData, "diffdash.sqlite"))
     expect(database.size).toBeGreaterThan(0)
 
@@ -339,6 +356,55 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await app.close().catch(() => undefined)
   }
 })
+
+const readForcedPackagedCoreHost = (): "bun" | "utility" | null => {
+  if (process.env.DIFFDASH_E2E_PACKAGED_FORCED_CORE_HOST_GATE !== "1") return null
+  const host = process.env.DIFFDASH_E2E_CORE_HOST
+  if (host === "bun" || host === "utility") return host
+  throw new Error("The packaged Core host gate requires DIFFDASH_E2E_CORE_HOST=bun or utility")
+}
+
+const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyArray<number> => {
+  if (process.platform === "win32") {
+    throw new Error("Packaged Core host process verification is not implemented on Windows")
+  }
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line)
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] ?? "" }]
+    })
+  const descendants = new Set([rootPid])
+  let discovered = true
+  while (discovered) {
+    discovered = false
+    for (const row of rows) {
+      if (descendants.has(row.parentPid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid)
+        discovered = true
+      }
+    }
+  }
+  return rows.flatMap((row) => {
+    if (!descendants.has(row.pid) || row.pid === rootPid) return []
+    const matches =
+      host === "bun"
+        ? row.command.includes("core-bun.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+        : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
+    return matches ? [row.pid] : []
+  })
+}
+
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
 
 type PackagedAppPaths = {
   readonly executable: string
