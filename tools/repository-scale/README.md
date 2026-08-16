@@ -45,6 +45,8 @@ warm-up:
 pnpm repository-scale:measure -- \
   --pid=<pid> \
   --manifest=tools/repository-scale/.cache/fixtures/<fixture-id>/manifest.json \
+  --database=/path/to/user-data/diffdash.sqlite \
+  --managed-root=/path/to/user-data/managed \
   --session=linux-baseline \
   --switch=1 \
   --host=utility \
@@ -57,10 +59,12 @@ pnpm repository-scale:measure -- \
 The manifest pins every report to the exact fixture ID and base/head revisions. Reports also record
 the exact DiffDash commit and a source-safe machine profile; all ten switches must use identical
 provenance. Reports must alternate pathological and small reviews and are rejected unless the
-packaged app has completed foreground disposal. The JSON report contains no command lines or repository paths. It records peak RSS by Electron,
-renderer, Core/worker, and child ownership. Linux also reports exact private RSS, swap, and benchmark
-I/O deltas from `/proc`; unsupported macOS fields remain `null`. Each sample records a final ten-second
-steady window, but the switch gate is authoritative. After switch ten, evaluate the session:
+packaged app has completed foreground disposal. The JSON report contains no command lines or
+repository paths. It records peak RSS by Electron, renderer, Core/worker, and child ownership. Linux
+also reports exact private RSS, swap, and benchmark I/O deltas from `/proc`; SQLite bytes,
+managed-resource bytes, and filesystem free-space deltas are recorded before and after every sample.
+Unsupported macOS process fields remain `null`. Each sample records a final ten-second steady window,
+but the switch gate is authoritative. After switch ten, evaluate the session:
 
 ```sh
 pnpm repository-scale:evaluate -- --session=linux-baseline

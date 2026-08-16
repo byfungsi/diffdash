@@ -10,6 +10,7 @@ import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
 import {
   captureMachineProfile,
   evaluateSwitchMemoryPlateau,
+  measureManagedStorage,
   measureProcessTree,
   REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
@@ -23,7 +24,7 @@ const execFilePromise = promisify(execFile)
 const usage = `Usage:
   pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
-  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --packaged=true --disposal-complete=true
+  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --database=<diffdash.sqlite> --managed-root=<managed-directory> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --packaged=true --disposal-complete=true
   pnpm repository-scale:evaluate -- --session=<name>
 `
 
@@ -40,6 +41,8 @@ const commandOptions = {
     "app-version",
     "packaged",
     "disposal-complete",
+    "database",
+    "managed-root",
     "duration-ms",
     "interval-ms",
     "plateau-window-ms",
@@ -163,6 +166,10 @@ const measure = async (options) => {
   }
   const packaged = requiredTrue(options, "packaged")
   const disposalComplete = requiredTrue(options, "disposal-complete")
+  const storagePaths = {
+    databasePath: resolve(required(options, "database")),
+    managedRoot: resolve(required(options, "managed-root")),
+  }
   const { stdout: commitOutput } = await execFilePromise("git", ["rev-parse", "--verify", "HEAD"], {
     cwd: workspaceRoot,
   })
@@ -170,6 +177,7 @@ const measure = async (options) => {
   if (!/^[a-f0-9]{40}$/u.test(diffdashCommit)) {
     throw new Error("Unable to resolve the exact DiffDash commit")
   }
+  const storageBefore = await measureManagedStorage(storagePaths)
   const measurement = await measureProcessTree({
     rootPid: pid,
     durationMs: positiveNumber(
@@ -193,6 +201,7 @@ const measure = async (options) => {
       REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold,
     ),
   })
+  const storageAfter = await measureManagedStorage(storagePaths)
   const report = {
     ...measurement,
     appVersion,
@@ -205,6 +214,13 @@ const measure = async (options) => {
     packaged,
     scenario,
     session,
+    storage: {
+      before: storageBefore,
+      after: storageAfter,
+      databaseDeltaBytes: storageAfter.databaseBytes - storageBefore.databaseBytes,
+      managedDeltaBytes: storageAfter.managedBytes - storageBefore.managedBytes,
+      freeSpaceDeltaBytes: storageAfter.filesystemFreeBytes - storageBefore.filesystemFreeBytes,
+    },
     switchIndex,
   }
   const output = resolve(

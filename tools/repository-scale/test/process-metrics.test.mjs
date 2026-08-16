@@ -1,9 +1,13 @@
 import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
 import {
   classifyProcess,
   evaluateSwitchMemoryPlateau,
+  measureManagedStorage,
   measureProcessTree,
   parseLinuxIo,
   parseLinuxSmaps,
@@ -12,6 +16,30 @@ import {
   REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
 } from "../src/process-metrics.mjs"
+
+test("reports database, managed, and free-space bytes without paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "diffdash-scale-storage-"))
+  try {
+    const managedRoot = join(root, "managed")
+    const nested = join(managedRoot, "nested")
+    const databasePath = join(root, "diffdash.sqlite")
+    await mkdir(nested, { recursive: true })
+    await Promise.all([
+      writeFile(databasePath, Buffer.alloc(17)),
+      writeFile(join(managedRoot, "block"), Buffer.alloc(23)),
+      writeFile(join(nested, "spool"), Buffer.alloc(31)),
+    ])
+
+    const measured = await measureManagedStorage({ databasePath, managedRoot })
+    assert.equal(measured.databaseBytes, 17)
+    assert.equal(measured.managedBytes, 54)
+    assert.ok(measured.filesystemFreeBytes > 0)
+    assert.ok(measured.filesystemTotalBytes >= measured.filesystemFreeBytes)
+    assert.equal(JSON.stringify(measured).includes(root), false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test("parses process lists and classifies DiffDash ownership", () => {
   const processes = parseProcessList(`
@@ -192,6 +220,23 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
     platform: "linux",
     packaged: true,
     scenario: index % 2 === 0 ? "pathological" : "small",
+    storage: {
+      before: {
+        databaseBytes: 1_000,
+        managedBytes: 2_000,
+        filesystemFreeBytes: 10_000,
+        filesystemTotalBytes: 20_000,
+      },
+      after: {
+        databaseBytes: 1_010,
+        managedBytes: 2_020,
+        filesystemFreeBytes: 9_970,
+        filesystemTotalBytes: 20_000,
+      },
+      databaseDeltaBytes: 10,
+      managedDeltaBytes: 20,
+      freeSpaceDeltaBytes: -30,
+    },
     machineProfile: {
       platform: "linux",
       architecture: "x64",
@@ -271,5 +316,9 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
         "baseline",
       ),
     /before disposal completed/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(3, { ...reports[3], storage: null }), "baseline"),
+    /incomplete managed storage/,
   )
 })

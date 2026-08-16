@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { readFile } from "node:fs/promises"
+import { lstat, readFile, readdir, statfs } from "node:fs/promises"
 import { arch, cpus, platform as osPlatform, release, totalmem } from "node:os"
 import { promisify } from "node:util"
 
@@ -24,6 +24,56 @@ export const captureMachineProfile = () => ({
   physicalMemoryBytes: totalmem(),
   nodeVersion: process.version,
 })
+
+/** Captures path-free disk ownership and capacity for one repository-scale sample. */
+export const measureManagedStorage = async ({ databasePath, managedRoot }) => {
+  const [databaseBytes, managedBytes, filesystem] = await Promise.all([
+    entryBytes(databasePath),
+    treeBytes(managedRoot),
+    statfs(managedRoot, { bigint: true }),
+  ])
+  return {
+    databaseBytes,
+    managedBytes,
+    filesystemFreeBytes: safeBytes(filesystem.bavail * filesystem.bsize),
+    filesystemTotalBytes: safeBytes(filesystem.blocks * filesystem.bsize),
+  }
+}
+
+const entryBytes = async (path) => {
+  const metadata = await lstat(path)
+  if (metadata.isSymbolicLink()) throw new Error("Managed storage path must not be a symlink")
+  return metadata.isFile() ? metadata.size : 0
+}
+
+const treeBytes = async (root) => {
+  const pending = [root]
+  let bytes = 0
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (current === undefined) break
+    // Sequential traversal avoids an unbounded promise set on repository-scale cache trees.
+    // eslint-disable-next-line no-await-in-loop
+    const metadata = await lstat(current)
+    if (metadata.isSymbolicLink()) throw new Error("Managed storage tree contains a symlink")
+    if (metadata.isFile()) {
+      bytes += metadata.size
+      continue
+    }
+    if (!metadata.isDirectory()) continue
+    // eslint-disable-next-line no-await-in-loop
+    const entries = await readdir(current)
+    for (const entry of entries) pending.push(`${current}/${entry}`)
+  }
+  return bytes
+}
+
+const safeBytes = (value) => {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("Filesystem byte count is outside the reportable range")
+  }
+  return Number(value)
+}
 
 const isNonEmptyString = (value) =>
   Object.prototype.toString.call(value) === "[object String]" && value.length > 0
@@ -298,6 +348,8 @@ export const validateSwitchReports = (reports, session) => {
       throw new Error(`Switch ${index + 1} did not use a packaged application`)
     if (report.disposalComplete !== true)
       throw new Error(`Switch ${index + 1} was captured before disposal completed`)
+    if (!validStorageMeasurement(report.storage))
+      throw new Error(`Switch ${index + 1} has incomplete managed storage measurements`)
     if (report.scenario !== "pathological" && report.scenario !== "small")
       throw new Error(`Switch ${index + 1} has no recognized scenario`)
     if (index > 0 && report.scenario === reports[index - 1]?.scenario)
@@ -328,6 +380,26 @@ export const validateSwitchReports = (reports, session) => {
     }
   })
   return { appVersion, coreHost, diffdashCommit, fixtureId, machineProfile, platform }
+}
+
+const validStorageMeasurement = (storage) => {
+  const snapshots = [storage?.before, storage?.after]
+  return (
+    snapshots.every(
+      (snapshot) =>
+        Number.isSafeInteger(snapshot?.databaseBytes) &&
+        snapshot.databaseBytes >= 0 &&
+        Number.isSafeInteger(snapshot.managedBytes) &&
+        snapshot.managedBytes >= 0 &&
+        Number.isSafeInteger(snapshot.filesystemFreeBytes) &&
+        snapshot.filesystemFreeBytes >= 0 &&
+        Number.isSafeInteger(snapshot.filesystemTotalBytes) &&
+        snapshot.filesystemTotalBytes >= snapshot.filesystemFreeBytes,
+    ) &&
+    Number.isSafeInteger(storage?.databaseDeltaBytes) &&
+    Number.isSafeInteger(storage?.managedDeltaBytes) &&
+    Number.isSafeInteger(storage?.freeSpaceDeltaBytes)
+  )
 }
 
 /** Samples one process tree and evaluates its final-window memory plateau. */
