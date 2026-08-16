@@ -116,8 +116,10 @@ describe("Bun Core runtime", () => {
       configPath: "/private/core/bunfig.toml",
       encodedStartupConfiguration: "encoded-secret",
       entrypointPath: "/Applications/DiffDash.app/Resources/core/core.mjs",
+      additionalAllowedEnvironmentNames: ["DIFFDASH_E2E_TERMINAL_HINT_DELIVERY"],
       environment: {
         BUN_OPTIONS: "--preload=attack.ts",
+        DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "drop",
         HOME: "/Users/test",
         NODE_OPTIONS: "--require attack.js",
         PATH: "/usr/bin",
@@ -136,6 +138,7 @@ describe("Bun Core runtime", () => {
       cwd: "/Applications/DiffDash.app",
       environment: {
         [CORE_PROCESS_STARTUP_ENV]: "encoded-secret",
+        DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "drop",
         HOME: "/Users/test",
         PATH: "/usr/bin",
       },

@@ -31,10 +31,25 @@ const makeRunning = (id: string, threadId = "thread-256") =>
     startedAt: "2026-08-16T00:00:00.000Z",
   })
 
+const makeCompleted = (run: RunningAgentRun) =>
+  CompletedAgentRun.make({
+    id: run.id,
+    threadId: run.threadId,
+    reviewKey: run.reviewKey,
+    baseRevision: run.baseRevision,
+    headRevision: run.headRevision,
+    provider: run.provider,
+    model: run.model,
+    promptVersion: run.promptVersion,
+    startedAt: run.startedAt,
+    completedAt: "2026-08-16T00:00:01.000Z",
+  })
+
 const makeHarness = Effect.fn("ReviewAgentOperationsTest.makeHarness")(function* () {
   const runs = yield* Ref.make(new Map<AgentRunId, AgentRun>())
   const workers = yield* Ref.make(new Map<AgentRunId, Effect.Effect<void>>())
   const hints = yield* Ref.make<readonly AgentRun[]>([])
+  const hintDelivery = yield* Ref.make<"normal" | "drop" | "duplicate">("normal")
   const executions = yield* Ref.make(0)
 
   const store: ReviewAgentOperationStore<never> = {
@@ -122,10 +137,22 @@ const makeHarness = Effect.fn("ReviewAgentOperationsTest.makeHarness")(function*
           worker: Ref.update(executions, (count) => count + 1).pipe(Effect.andThen(worker)),
         }
       }),
-    onTerminalHint: (operation) => Ref.update(hints, (all) => [...all, operation]),
+    onTerminalHint: (operation) =>
+      Ref.get(hintDelivery).pipe(
+        Effect.flatMap((delivery) =>
+          Ref.update(hints, (all) => [
+            ...all,
+            ...(delivery === "drop"
+              ? []
+              : delivery === "duplicate"
+                ? [operation, operation]
+                : [operation]),
+          ]),
+        ),
+      ),
   })
 
-  return { operations, runs, workers, hints, executions }
+  return { operations, runs, workers, hints, hintDelivery, executions }
 })
 
 describe("ReviewAgentOperations", () => {
@@ -181,6 +208,46 @@ describe("ReviewAgentOperations", () => {
       const hinted = (yield* Ref.get(harness.hints))[0]
       expect(hinted).toMatchObject({ _tag: "Completed" })
       expect(Option.getOrThrow(yield* harness.operations.getOperation(run.id))).toEqual(hinted)
+    }),
+  )
+
+  it.effect("recovers a lost terminal hint and reconciles a duplicate by stable run identity", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness()
+      const lost = makeRunning("run-lost-hint")
+      const duplicated = makeRunning("run-duplicated-hint")
+      for (const run of [lost, duplicated]) {
+        yield* Ref.update(harness.workers, (all) =>
+          new Map(all).set(
+            run.id,
+            Ref.update(harness.runs, (stored) => new Map(stored).set(run.id, makeCompleted(run))),
+          ),
+        )
+      }
+
+      yield* Ref.set(harness.hintDelivery, "drop")
+      const lostRunId = yield* harness.operations.start(lost.id)
+      while ((yield* harness.operations.activeCount) > 0) yield* Effect.yieldNow
+
+      expect(yield* Ref.get(harness.hints)).toEqual([])
+      expect(Option.getOrThrow(yield* harness.operations.getOperation(lostRunId))).toMatchObject({
+        _tag: "Completed",
+        id: lostRunId,
+      })
+
+      yield* Ref.set(harness.hintDelivery, "duplicate")
+      const duplicatedRunId = yield* harness.operations.start(duplicated.id)
+      while ((yield* harness.operations.activeCount) > 0) yield* Effect.yieldNow
+
+      const duplicateHints = yield* Ref.get(harness.hints)
+      expect(duplicateHints.map(({ id }) => id)).toEqual([duplicatedRunId, duplicatedRunId])
+      const reconciled = yield* Effect.forEach(duplicateHints, ({ id }) =>
+        harness.operations.getOperation(id),
+      )
+      expect(reconciled).toHaveLength(2)
+      expect(new Set(reconciled.map((operation) => Option.getOrThrow(operation).id))).toEqual(
+        new Set([duplicatedRunId]),
+      )
     }),
   )
 

@@ -5,7 +5,8 @@ import { createExternalApplicationRuntime } from "./external-application-runtime
 
 /** Playwright desktop composition with explicitly selected E2E behavior. */
 export const e2eDesktopApplicationComposition: DesktopApplicationComposition = {
-  createApplicationRuntime: createExternalApplicationRuntime,
+  createApplicationRuntime: (configuration) =>
+    createExternalApplicationRuntime(configuration, ["DIFFDASH_E2E_TERMINAL_HINT_DELIVERY"]),
   resolveHostConfiguration: (identity) =>
     resolveDesktopHostConfiguration(identity, makeE2EDesktopStartupConfiguration(process.env)),
 }

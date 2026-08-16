@@ -113,6 +113,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     preload: {
+      define: {
+        "process.env.DIFFDASH_E2E_BUILD": JSON.stringify(mode === "e2e" ? "1" : "0"),
+      },
       plugins: [externalizeDepsPlugin({ exclude: internalPackages })],
       build: {
         rollupOptions: {

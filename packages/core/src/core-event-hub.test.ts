@@ -11,15 +11,21 @@ const layer = makeCoreEventHubLayer({
   replayCapacity: 2,
 })
 
-const draft = (stateVersion: number) => ({
+const draft = (stateVersion: number, operationId = "operation-1") => ({
   topic: "walkthrough.operation.progress",
   schemaVersion: 1,
   scopes: [{ name: "project", id: "project-1" }],
   source: "walkthrough-operation",
   reason: "state-transition",
-  subject: { kind: "operation" as const, operationId: "operation-1" },
+  subject: { kind: "operation" as const, operationId },
   kind: "operationProgress" as const,
   stateVersion,
+})
+
+const terminalDraft = (stateVersion: number, operationId: string) => ({
+  ...draft(stateVersion, operationId),
+  topic: "walkthrough.operation.terminal",
+  kind: "operationTerminal" as const,
 })
 
 describe("CoreEventHub", () => {
@@ -100,5 +106,40 @@ describe("CoreEventHub", () => {
         }),
       ),
     ),
+  )
+
+  it.effect(
+    "deterministically drops and duplicates terminal delivery without changing identity",
+    () => {
+      let deliveries = 0
+      return Effect.gen(function* () {
+        const hub = yield* CoreEventHub
+
+        const dropped = yield* hub.publish(terminalDraft(1, "operation-lost"))
+        const duplicated = yield* hub.publish(terminalDraft(2, "operation-duplicated"))
+        const replay = yield* hub.replay(epoch, CoreEventSequence.make(1))
+
+        expect(dropped.metadata.subject).toMatchObject({ operationId: "operation-lost" })
+        expect(duplicated.metadata.subject).toMatchObject({ operationId: "operation-duplicated" })
+        expect(replay).toMatchObject({
+          kind: "replay",
+          events: [
+            { metadata: { eventId: duplicated.metadata.eventId }, stateVersion: 2 },
+            { metadata: { eventId: duplicated.metadata.eventId }, stateVersion: 2 },
+          ],
+        })
+      }).pipe(
+        Effect.provide(
+          makeCoreEventHubLayer({
+            applicationInstanceId: ApplicationInstanceId.make("app-fault-delivery"),
+            processEpoch: epoch,
+            deliveryTransform: (hint) => {
+              deliveries += 1
+              return deliveries === 1 ? [] : [hint, hint]
+            },
+          }),
+        ),
+      )
+    },
   )
 })

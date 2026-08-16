@@ -56,6 +56,8 @@ export const makeCoreEventHubLayer = (options: {
   readonly applicationInstanceId: ApplicationInstanceId
   readonly processEpoch: CoreProcessEpoch
   readonly replayCapacity?: number
+  /** Test-composition seam for deterministic delivery faults; production omits it. */
+  readonly deliveryTransform?: (hint: CoreEventHint) => ReadonlyArray<CoreEventHint>
 }) =>
   Layer.effect(
     CoreEventHub,
@@ -108,8 +110,13 @@ export const makeCoreEventHubLayer = (options: {
               kind: draft.kind,
               stateVersion: CoreStateVersion.make(draft.stateVersion),
             }
-            yield* Ref.update(retained, (events) => [...events, hint].slice(-replayCapacity))
-            yield* PubSub.publish(pubsub, hint)
+            const delivered = options.deliveryTransform?.(hint) ?? [hint]
+            yield* Ref.update(retained, (events) =>
+              [...events, ...delivered].slice(-replayCapacity),
+            )
+            yield* Effect.forEach(delivered, (event) => PubSub.publish(pubsub, event), {
+              discard: true,
+            })
             return hint
           }),
         ),

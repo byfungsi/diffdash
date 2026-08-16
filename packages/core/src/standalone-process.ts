@@ -6,6 +6,7 @@ import {
   CORE_PROCESS_STARTUP_MAX_BYTES,
   decodeCoreProcessStartupConfiguration,
 } from "@diffdash/core-rpc/process-startup"
+import type { CoreEventHint } from "@diffdash/core-rpc/event"
 import { CoreCommandStore } from "@diffdash/persistence/core-command-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
 import { Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
@@ -52,6 +53,7 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
   encodedConfiguration: Option.Option<string>,
   databaseLayerForPath: (path: string) => Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
+  eventDeliveryTransform?: (hint: CoreEventHint) => ReadonlyArray<CoreEventHint>,
 ) {
   const configuration = yield* Effect.fromOption(encodedConfiguration).pipe(
     Effect.mapError(() => startupFailure("configuration-invalid")),
@@ -126,7 +128,11 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
           Effect.andThen(
             Effect.gen(function* () {
               const databaseLayer = databaseLayerForPath(coreConfiguration.paths.database)
-              const eventLayer = makeCoreEventHubLayer(identity)
+              const eventLayer = makeCoreEventHubLayer(
+                eventDeliveryTransform === undefined
+                  ? identity
+                  : { ...identity, deliveryTransform: eventDeliveryTransform },
+              )
               const commandLayer = coreDurableCommandLayer.pipe(
                 Layer.provide(CoreCommandStore.layer),
                 Layer.provide(eventLayer),
@@ -179,11 +185,17 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
 export const runStandaloneCoreProcess = (
   databaseLayerForPath: (path: string) => Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition = productionProviderComposition,
+  eventDeliveryTransform?: (hint: CoreEventHint) => ReadonlyArray<CoreEventHint>,
 ): void => {
   const encodedConfiguration = Option.fromNullishOr(process.env[CORE_PROCESS_STARTUP_ENV])
   delete process.env[CORE_PROCESS_STARTUP_ENV]
   NodeRuntime.runMain(
-    launchStandaloneCoreProcess(encodedConfiguration, databaseLayerForPath, providerComposition),
+    launchStandaloneCoreProcess(
+      encodedConfiguration,
+      databaseLayerForPath,
+      providerComposition,
+      eventDeliveryTransform,
+    ),
     { disableErrorReporting: true },
   )
 }

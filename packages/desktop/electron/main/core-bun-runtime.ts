@@ -90,6 +90,7 @@ export interface StartCoreBunProcessOptions {
   readonly configuration: CoreHostTransportConfiguration
   readonly databasePath: string
   readonly environment: Readonly<Record<string, string | undefined>>
+  readonly additionalAllowedEnvironmentNames?: ReadonlyArray<string>
   readonly statePath: string
   readonly coreConfiguration: CoreConfiguration
   readonly listenTimeout?: number
@@ -214,11 +215,16 @@ export const qualifyBunRuntime = Effect.fn("qualifyBunRuntime")(function* (
 export const makeBunCoreEnvironment = (
   environment: Readonly<Record<string, string | undefined>>,
   encodedStartupConfiguration: string,
+  additionalAllowedNames: ReadonlyArray<string> = [],
 ): Readonly<Record<string, string>> => {
   const allowed: Record<string, string> = {
     [CORE_PROCESS_STARTUP_ENV]: encodedStartupConfiguration,
   }
   for (const name of BUN_ENVIRONMENT_ALLOWLIST) {
+    const value = environment[name]
+    if (value !== undefined) allowed[name] = value
+  }
+  for (const name of additionalAllowedNames) {
     const value = environment[name]
     if (value !== undefined) allowed[name] = value
   }
@@ -232,6 +238,7 @@ export const makeBunCoreCommand = (options: {
   readonly encodedStartupConfiguration: string
   readonly entrypointPath: string
   readonly environment: Readonly<Record<string, string | undefined>>
+  readonly additionalAllowedEnvironmentNames?: ReadonlyArray<string>
 }): BunCoreCommand => ({
   args: [
     `--cwd=${options.applicationCwd}`,
@@ -241,7 +248,11 @@ export const makeBunCoreCommand = (options: {
     options.entrypointPath,
   ],
   cwd: options.applicationCwd,
-  environment: makeBunCoreEnvironment(options.environment, options.encodedStartupConfiguration),
+  environment: makeBunCoreEnvironment(
+    options.environment,
+    options.encodedStartupConfiguration,
+    options.additionalAllowedEnvironmentNames,
+  ),
 })
 
 /** Launches Core with Bun using an owned empty config, application cwd, and isolated environment. */
@@ -270,13 +281,21 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
 
   const spawner: CoreProcessSpawner = {
     spawn: ({ entrypointPath, encodedStartupConfiguration }) => {
-      const command = makeBunCoreCommand({
+      const commandOptions = {
         applicationCwd: options.applicationCwd,
         configPath,
         encodedStartupConfiguration,
         entrypointPath,
         environment: options.environment,
-      })
+      }
+      const command = makeBunCoreCommand(
+        options.additionalAllowedEnvironmentNames === undefined
+          ? commandOptions
+          : {
+              ...commandOptions,
+              additionalAllowedEnvironmentNames: options.additionalAllowedEnvironmentNames,
+            },
+      )
       const child = spawn(options.bunExecutablePath, command.args, {
         cwd: command.cwd,
         env: command.environment,

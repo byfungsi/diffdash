@@ -566,6 +566,7 @@ test("runs an explicit Claude walkthrough successfully", async ({
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "duplicate",
       FAKE_CLAUDE_RUN_LOG: claudeRunLog,
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
@@ -585,6 +586,10 @@ test("runs an explicit Claude walkthrough successfully", async ({
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     expect(await countLogLines(claudeRunLog)).toBe(1)
+    expect(readLatestWalkthroughOperation(join(userData, "diffdash.sqlite"))).toMatchObject({
+      count: 1,
+      state: "completed",
+    })
   } finally {
     await app.close()
   }
@@ -858,6 +863,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       ...(forcedCoreHost === null ? {} : { DIFFDASH_E2E_CORE_HOST: forcedCoreHost }),
       DIFFDASH_E2E_HIDDEN: "1",
+      DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "drop",
       FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
@@ -933,6 +939,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     }
 
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
+    const operation = readLatestWalkthroughOperation(join(userData, "diffdash.sqlite"))
     if (forcedCoreHost === null) {
       expect(report).toContain("Error code: AgentProviderAuthenticationError")
       expect(report).toContain("Operation: localWalkthroughs:generate")
@@ -952,6 +959,8 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       expect(report).toContain("execute / provider-exit")
       expect(report).toContain("- ProcessExitError")
       expect(report).toContain("- Exit code: 9")
+      if (operation === null) throw new Error("Expected a persisted walkthrough operation")
+      expect(report).toContain(`Operation ID: ${operation.id}`)
     }
     expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
     expect(report).not.toContain("Operation: unknown")
@@ -1593,6 +1602,39 @@ const readLatestWalkthroughOperationState = (databasePath: string): string | nul
         .get()
       if (typeof row !== "object" || row === null || !("state" in row)) return null
       return typeof row.state === "string" ? row.state : null
+    } finally {
+      database.close()
+    }
+  } catch {
+    return null
+  }
+}
+
+const readLatestWalkthroughOperation = (
+  databasePath: string,
+): { readonly id: string; readonly state: string; readonly count: number } | null => {
+  try {
+    const database = new DatabaseSync(databasePath, { readOnly: true })
+    try {
+      const row = database
+        .prepare(
+          `SELECT id, state, (SELECT COUNT(*) FROM walkthrough_operations) AS count
+           FROM walkthrough_operations ORDER BY accepted_at DESC LIMIT 1`,
+        )
+        .get()
+      if (
+        typeof row !== "object" ||
+        row === null ||
+        !("id" in row) ||
+        !("state" in row) ||
+        !("count" in row) ||
+        typeof row.id !== "string" ||
+        typeof row.state !== "string" ||
+        typeof row.count !== "number"
+      ) {
+        return null
+      }
+      return { id: row.id, state: row.state, count: row.count }
     } finally {
       database.close()
     }
