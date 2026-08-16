@@ -112,6 +112,10 @@ test("reports process peaks, I/O deltas, and a complete steady window", async ()
   assert.equal(report.peaks.electron.writeBytes, 15)
   assert.equal(report.totalPeakRssBytes, 111)
   assert.equal(report.totalFinalRssBytes, 111)
+  assert.deepEqual(
+    report.samples.map(({ elapsedMs }) => elapsedMs),
+    [0, 1, 2, 3],
+  )
   assert.equal(report.steadyWindow.reached, true)
 })
 

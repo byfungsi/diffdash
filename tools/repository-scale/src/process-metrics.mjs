@@ -350,6 +350,11 @@ export const measureProcessTree = async ({
     startedAt: samples[0].capturedAt,
     completedAt: samples.at(-1).capturedAt,
     sampleCount: samples.length,
+    samples: entries.map(({ elapsedMs, sample }) => ({
+      elapsedMs,
+      capturedAt: sample.capturedAt,
+      byRole: sample.byRole,
+    })),
     intervalMs,
     durationMs,
     peaks: Object.fromEntries(
