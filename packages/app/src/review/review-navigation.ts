@@ -767,10 +767,14 @@ export class ReviewNavigatorController implements ReviewNavigator {
       }
 
       phase = "verifying"
+      const verificationDeadlineAt = Math.min(
+        operation.deadlineAt,
+        this.#scheduler.now() + this.#budgets.positioningMs,
+      )
       await this.#runPhase(
         operation,
         phase,
-        Math.max(0, layoutDeadlineAt - this.#scheduler.now()),
+        Math.max(0, verificationDeadlineAt - this.#scheduler.now()),
         "positioningFailed",
         true,
         signal,

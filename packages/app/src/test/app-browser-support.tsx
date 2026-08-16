@@ -661,7 +661,7 @@ const makeManyFileDiffFixture = () => {
     diff: fileSpecs
       .map(({ lineCount, path }, fileIndex) => {
         const padding = "wrapped-content-".repeat(
-          fileIndex === targetIndex ? 45 : fileIndex % 3 === 0 ? 6 : 2,
+          fileIndex === targetIndex ? 10 : fileIndex % 3 === 0 ? 6 : 2,
         )
         const changedLines = Array.from({ length: lineCount }, (_, lineIndex) => {
           const lineNumber = lineIndex + 1
@@ -4331,6 +4331,7 @@ scenario("wrappedFileBuffers", async () => {
     parseUnifiedDiff(fixture.manyDiff.diff).files,
     fixture.targetPath,
   )
+  expect(new TextEncoder().encode(targetFile.patch).byteLength).toBeLessThanOrEqual(320 * 1_024)
   const targetText = 'const row691 = "TARGET_FINAL_691"'
   installDiffDashApi({
     pullRequestDetail: fixture.manyDetail,
@@ -4379,8 +4380,23 @@ scenario("wrappedFileBuffers", async () => {
   await visitFile(secondVisitedPath)
 
   await visitFile(shiftedPath)
-  getViewedCheckbox(shiftedPath)?.click()
-  await vi.waitFor(() => expect(getViewedCheckbox(shiftedPath)?.checked).toBe(true))
+  const canvas = document.querySelector<HTMLElement>("[data-review-global-canvas]")
+  let expandedLogicalHeight = 0
+  let previousLogicalHeight = -1
+  let stableHeightSamples = 0
+  await vi.waitFor(() => {
+    const logicalHeight = Number(canvas?.dataset.reviewLogicalHeight)
+    expect(Number.isFinite(logicalHeight)).toBe(true)
+    stableHeightSamples = logicalHeight === previousLogicalHeight ? stableHeightSamples + 1 : 0
+    previousLogicalHeight = logicalHeight
+    expandedLogicalHeight = logicalHeight
+    expect(stableHeightSamples).toBeGreaterThanOrEqual(2)
+  })
+  dispatchKeyboardShortcut("v")
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("as viewed with shortcut v.")
+    expect(Number(canvas?.dataset.reviewLogicalHeight)).toBeLessThan(expandedLogicalHeight)
+  })
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
