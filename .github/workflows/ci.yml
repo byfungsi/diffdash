@@ -100,3 +100,44 @@ jobs:
       - name: Run dependent provider and protocol integration
         if: steps.integration.outputs.required == 'true'
         run: xvfb-run -a pnpm ci:integration
+
+  packaged-macos:
+    name: Packaged Core hosts (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.23
+
+      - name: Verify runner architecture
+        run: node -e 'if (process.arch !== process.argv[1]) throw new Error(`Expected ${process.argv[1]}, got ${process.arch}`)' "${{ matrix.arch }}"
+
+      - name: Install dependencies from lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Run packaged Bun and utility flows
+        run: pnpm test:e2e:packaged
