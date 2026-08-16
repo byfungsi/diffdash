@@ -55,14 +55,3 @@ export const coreRepositoryWatcherLayer = Layer.effect(
     })
   }),
 ).pipe(Layer.provide(RepositoryReconciler.layer))
-
-/** Inert watcher used only by the legacy embedded graph, which has no Core event authority. */
-export const coreRepositoryWatcherNoopLayer = Layer.succeed(
-  CoreRepositoryWatcher,
-  CoreRepositoryWatcher.of({
-    activate: () => Effect.succeed(0),
-    deactivate: () => Effect.void,
-    hint: () => Effect.void,
-    force: () => Effect.void,
-  }),
-)

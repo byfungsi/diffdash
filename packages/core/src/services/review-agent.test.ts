@@ -27,7 +27,6 @@ import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { AIAgentSelection, AIModelId, AIProviderId } from "@diffdash/domain/ai-settings"
 import { AgentPromptVersion } from "@diffdash/domain/agent-run"
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import {
   HostedRepositorySource,
   LocalRepositorySource,
@@ -39,11 +38,7 @@ import {
   UpsertRepositoryInput,
 } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import {
-  LocalReviewDetail,
-  LocalReviewDiff,
-  LocalReviewTarget,
-} from "@diffdash/domain/local-review"
+import { LocalReviewDetail, LocalReviewTarget } from "@diffdash/domain/local-review"
 import {
   ReviewAgentArtifact,
   ReviewAgentProviderId,
@@ -54,15 +49,18 @@ import {
   GitCommitSha,
   makeRepositoryComparisonReviewKey,
   RepositoryComparisonDetail,
-  RepositoryComparisonDiff,
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
 import {
-  HostedReviewSnapshot,
-  LocalReviewSnapshot,
-  RepositoryComparisonSnapshot,
-  type ReviewSnapshot,
+  HostedReviewDescriptor,
+  HostedReviewSnapshotManifest,
+  LocalReviewDescriptor,
+  LocalReviewSnapshotManifest,
+  RepositoryComparisonReviewDescriptor,
+  RepositoryComparisonSnapshotManifest,
+  ReviewSnapshotFileInventory,
+  type ReviewSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import {
   ReviewFileId,
@@ -94,7 +92,6 @@ import {
   GitProviderTerminology,
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewSummary,
   ProviderActor,
   makeHostedReviewLocator,
@@ -119,7 +116,7 @@ import {
 import { describe, expect, it } from "@effect/vitest"
 import { DiffDashMcpServer } from "@diffdash/mcp"
 import type { DiffDashMcpToolHandlers } from "@diffdash/mcp/port"
-import { Deferred, Effect, Fiber, Layer, Option, Redacted, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Match, Option, Redacted, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 import { AgentArtifactNormalizer, normalizeAgentArtifactType } from "./agent-artifact-normalizer"
 import {
@@ -131,19 +128,7 @@ import {
 } from "./review-agent"
 import { ReviewMcpHandlers } from "./review-mcp-handlers"
 import { OperationSnapshotReader } from "./operation-snapshot-reader"
-import {
-  HostedReviewDescriptor,
-  LocalReviewDescriptor,
-  RepositoryComparisonReviewDescriptor,
-} from "@diffdash/domain/review-context"
 
-const diff = `diff --git a/src/a.ts b/src/a.ts
-index 1111111..2222222 100644
---- a/src/a.ts
-+++ b/src/a.ts
-@@ -1 +1 @@
--const value = 1
-+const value = 2`
 const reviewKey = ReviewKey.make(
   `local:${createHash("sha256").update("/workspace/diffdash").digest("hex")}`,
 )
@@ -178,7 +163,34 @@ const baseRevision = ReviewRevision.make("base-sha")
 const headRevision = ReviewRevision.make("head-sha")
 const applicationInstanceId = ApplicationInstanceId.make("agent-test")
 const processEpoch = CoreProcessEpoch.make("agent-test-epoch")
-const snapshot = LocalReviewSnapshot.make({
+const lineAnchor = LineReviewAnchor.make({
+  fileId: ReviewFileId.make("file-agent"),
+  filePath: RepositoryRelativePath.make("src/a.ts"),
+  oldPath: null,
+  hunkId: ReviewHunkId.make("hunk-agent"),
+  hunkFingerprint: ReviewHunkFingerprint.make("fingerprint-agent"),
+  hunkHeader: "@@ -1 +1 @@",
+  side: "new",
+  lineNumber: 1,
+  lineContent: "const value = 2",
+})
+const patchHash = ReviewFilePatchHash.make("patch:agent")
+const manifestFiles = (manifestReviewKey: ReviewKey) => [
+  ReviewSnapshotFileInventory.make({
+    fileId: lineAnchor.fileId,
+    patchHash,
+    reviewKey: manifestReviewKey,
+    path: lineAnchor.filePath,
+    oldPath: null,
+    status: "modified",
+    visibility: { _tag: "Visible" },
+    additions: 1,
+    deletions: 1,
+    hunkCount: 1,
+  }),
+]
+const localManifest = LocalReviewSnapshotManifest.make({
+  projectId: ReviewProjectId.make(reviewKey),
   snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000001"),
   reviewKey,
   baseRevision,
@@ -194,20 +206,14 @@ const snapshot = LocalReviewSnapshot.make({
     files: [],
     fetchedAt: "2026-07-12T00:00:00.000Z",
   }),
-  diff: LocalReviewDiff.make({
-    rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
-    baseSha: baseRevision,
-    headSha: headRevision,
-    diffHash: ReviewDiffIdentity.make("diff-hash"),
-    diff,
-    fetchedAt: "2026-07-12T00:00:00.000Z",
-  }),
-  parsedDiff: parseUnifiedDiff(diff),
+  files: manifestFiles(reviewKey),
 })
 const pullRequestLocator = makeHostedReviewLocator("github", "fungsi", "diffdash", 42)
-const pullRequestSnapshot = HostedReviewSnapshot.make({
+const pullRequestReviewKey = ReviewKey.make("github:fungsi/diffdash#42")
+const hostedManifest = HostedReviewSnapshotManifest.make({
+  projectId: ReviewProjectId.make("github:fungsi/diffdash"),
   snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000002"),
-  reviewKey: ReviewKey.make("github:fungsi/diffdash#42"),
+  reviewKey: pullRequestReviewKey,
   baseRevision,
   headRevision,
   detail: HostedReviewDetail.make({
@@ -239,13 +245,7 @@ const pullRequestSnapshot = HostedReviewSnapshot.make({
     files: [],
     commits: [],
   }),
-  diff: HostedReviewDiff.make({
-    locator: pullRequestLocator,
-    headRevision,
-    diff,
-    fetchedAt: "2026-07-12T00:00:00.000Z",
-  }),
-  parsedDiff: parseUnifiedDiff(diff),
+  files: manifestFiles(pullRequestReviewKey),
 })
 const comparisonTarget = RepositoryComparisonTarget.make({
   kind: "repositoryComparison",
@@ -256,9 +256,11 @@ const comparisonTarget = RepositoryComparisonTarget.make({
   headSha: GitCommitSha.make("b".repeat(40)),
   mergeBaseSha: GitCommitSha.make("c".repeat(40)),
 })
-const comparisonSnapshot = RepositoryComparisonSnapshot.make({
+const comparisonReviewKey = makeRepositoryComparisonReviewKey(comparisonTarget)
+const comparisonManifest = RepositoryComparisonSnapshotManifest.make({
+  projectId: ReviewProjectId.make("github:fungsi/diffdash"),
   snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000003"),
-  reviewKey: makeRepositoryComparisonReviewKey(comparisonTarget),
+  reviewKey: comparisonReviewKey,
   baseRevision: ReviewRevision.make(comparisonTarget.mergeBaseSha),
   headRevision: ReviewRevision.make(comparisonTarget.headSha),
   detail: RepositoryComparisonDetail.make({
@@ -267,23 +269,7 @@ const comparisonSnapshot = RepositoryComparisonSnapshot.make({
     files: [],
     fetchedAt: "2026-08-05T00:00:00.000Z",
   }),
-  diff: RepositoryComparisonDiff.make({
-    target: comparisonTarget,
-    diff,
-    fetchedAt: "2026-08-05T00:00:00.000Z",
-  }),
-  parsedDiff: parseUnifiedDiff(diff),
-})
-const lineAnchor = LineReviewAnchor.make({
-  fileId: ReviewFileId.make("file-agent"),
-  filePath: RepositoryRelativePath.make("src/a.ts"),
-  oldPath: null,
-  hunkId: ReviewHunkId.make("hunk-agent"),
-  hunkFingerprint: ReviewHunkFingerprint.make("fingerprint-agent"),
-  hunkHeader: "@@ -1 +1 @@",
-  side: "new",
-  lineNumber: 1,
-  lineContent: "const value = 2",
+  files: manifestFiles(comparisonReviewKey),
 })
 
 type ProviderReviewThreadOutput =
@@ -336,34 +322,28 @@ const makeProviderResult = (input: {
     sessionId: input.sessionId === undefined ? null : AgentSessionId.make(input.sessionId),
   }) satisfies ProviderReviewThreadOutput
 
-const turnIdentity = (details: ReviewThreadDetails, reviewSnapshot: ReviewSnapshot) => {
+const turnIdentity = (details: ReviewThreadDetails, manifest: ReviewSnapshotManifest) => {
   const currentAnchor = details.thread.activeAnchor
   if (currentAnchor === null) throw new Error("Test review thread requires an active anchor")
-  if (
-    !(reviewSnapshot instanceof HostedReviewSnapshot) &&
-    !(reviewSnapshot instanceof LocalReviewSnapshot) &&
-    !(reviewSnapshot instanceof RepositoryComparisonSnapshot)
-  ) {
-    throw new Error("Test review turn requires a supported snapshot")
-  }
   return {
     applicationInstanceId,
     processEpoch,
-    snapshotId: reviewSnapshot.snapshotId,
+    snapshotId: manifest.snapshotId,
     repoId: details.thread.repoId,
-    target:
-      reviewSnapshot instanceof HostedReviewSnapshot
-        ? HostedReviewTarget.make({
-            kind: "hosted",
-            review: reviewSnapshot.detail.summary.locator,
-          })
-        : reviewSnapshot instanceof RepositoryComparisonSnapshot
-          ? reviewSnapshot.detail.target
-          : LocalReviewTarget.make({
-              kind: "local",
-              rootPath: reviewSnapshot.detail.rootPath,
-              comparison: reviewSnapshot.detail.comparison,
-            }),
+    target: Match.value(manifest).pipe(
+      Match.tag("hosted", ({ detail }) =>
+        HostedReviewTarget.make({ kind: "hosted", review: detail.summary.locator }),
+      ),
+      Match.tag("repositoryComparison", ({ detail }) => detail.target),
+      Match.tag("local", ({ detail }) =>
+        LocalReviewTarget.make({
+          kind: "local",
+          rootPath: detail.rootPath,
+          comparison: detail.comparison,
+        }),
+      ),
+      Match.exhaustive,
+    ),
     mapping: ReviewTurnMappingToken.make({
       threadId: details.thread.id,
       repoId: details.thread.repoId,
@@ -609,40 +589,46 @@ const makeLayer = (
     OperationSnapshotReader.of({
       open: (identity) => {
         const selected =
-          identity.snapshotId === pullRequestSnapshot.snapshotId
-            ? pullRequestSnapshot
-            : identity.snapshotId === comparisonSnapshot.snapshotId
-              ? comparisonSnapshot
-              : snapshot
-        const descriptor =
-          selected instanceof HostedReviewSnapshot
-            ? HostedReviewDescriptor.make({
-                review: selected.detail.summary.locator,
-                title: selected.detail.summary.title,
-                authorUsername: selected.detail.summary.author.username,
-                state: selected.detail.summary.state,
-                draft: selected.detail.summary.draft,
-                baseRef: selected.detail.summary.base.name,
-                headRef: selected.detail.summary.head.name,
-                url: selected.detail.summary.url,
-              })
-            : selected instanceof RepositoryComparisonSnapshot
-              ? RepositoryComparisonReviewDescriptor.make({
-                  target: selected.detail.target,
-                  title: selected.detail.title,
-                  fetchedAt: selected.detail.fetchedAt,
-                })
-              : LocalReviewDescriptor.make({
-                  target: LocalReviewTarget.make({
-                    kind: "local",
-                    rootPath: selected.detail.rootPath,
-                    comparison: selected.detail.comparison,
-                  }),
-                  repoName: selected.detail.repoName,
-                  branchName: selected.detail.branchName,
-                  title: selected.detail.title,
-                  fetchedAt: selected.detail.fetchedAt,
-                })
+          identity.snapshotId === hostedManifest.snapshotId
+            ? hostedManifest
+            : identity.snapshotId === comparisonManifest.snapshotId
+              ? comparisonManifest
+              : localManifest
+        const descriptor = Match.value(selected).pipe(
+          Match.tag("hosted", ({ detail }) =>
+            HostedReviewDescriptor.make({
+              review: detail.summary.locator,
+              title: detail.summary.title,
+              authorUsername: detail.summary.author.username,
+              state: detail.summary.state,
+              draft: detail.summary.draft,
+              baseRef: detail.summary.base.name,
+              headRef: detail.summary.head.name,
+              url: detail.summary.url,
+            }),
+          ),
+          Match.tag("repositoryComparison", ({ detail }) =>
+            RepositoryComparisonReviewDescriptor.make({
+              target: detail.target,
+              title: detail.title,
+              fetchedAt: detail.fetchedAt,
+            }),
+          ),
+          Match.tag("local", ({ detail }) =>
+            LocalReviewDescriptor.make({
+              target: LocalReviewTarget.make({
+                kind: "local",
+                rootPath: detail.rootPath,
+                comparison: detail.comparison,
+              }),
+              repoName: detail.repoName,
+              branchName: detail.branchName,
+              title: detail.title,
+              fetchedAt: detail.fetchedAt,
+            }),
+          ),
+          Match.exhaustive,
+        )
         const file = {
           ordinal: 0,
           deltaId: FileDeltaId.make("delta:agent"),
@@ -653,8 +639,7 @@ const makeLayer = (
           deletions: 1,
           status: "modified" as const,
           visibility: { _tag: "Visible" as const },
-          patchHash:
-            selected.parsedDiff.files[0]?.patchHash ?? ReviewFilePatchHash.make("patch:agent"),
+          patchHash,
           hunkCount: 1,
         }
         const hunk = {
@@ -786,7 +771,7 @@ describe("ReviewAgentService", () => {
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: pullRequestSnapshot.reviewKey,
+          reviewKey: hostedManifest.reviewKey,
           prNumber: 42,
           baseRevision,
           headRevision,
@@ -796,7 +781,7 @@ describe("ReviewAgentService", () => {
         const service = yield* ReviewAgentService
         const accepted = yield* service.acceptThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, pullRequestSnapshot),
+          ...turnIdentity(created, hostedManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -839,7 +824,7 @@ describe("ReviewAgentService", () => {
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: pullRequestSnapshot.reviewKey,
+          reviewKey: hostedManifest.reviewKey,
           prNumber: 42,
           baseRevision,
           headRevision,
@@ -848,7 +833,7 @@ describe("ReviewAgentService", () => {
         })
         yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, pullRequestSnapshot),
+          ...turnIdentity(created, hostedManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
           onProgress: (stage) => Effect.sync(() => released.events.push(`progress.${stage}`)),
@@ -899,16 +884,16 @@ describe("ReviewAgentService", () => {
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: comparisonSnapshot.reviewKey,
+          reviewKey: comparisonManifest.reviewKey,
           prNumber: null,
-          baseRevision: comparisonSnapshot.baseRevision,
-          headRevision: comparisonSnapshot.headRevision,
+          baseRevision: comparisonManifest.baseRevision,
+          headRevision: comparisonManifest.headRevision,
           anchor: lineAnchor,
           bodyMarkdown: MarkdownBody.make("Inspect the immutable comparison."),
         })
         yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, comparisonSnapshot),
+          ...turnIdentity(created, comparisonManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -956,7 +941,7 @@ describe("ReviewAgentService", () => {
           )
           const created = yield* (yield* ReviewThreadStore).create({
             repoId: repo.id,
-            reviewKey: pullRequestSnapshot.reviewKey,
+            reviewKey: hostedManifest.reviewKey,
             prNumber: 42,
             baseRevision,
             headRevision,
@@ -966,7 +951,7 @@ describe("ReviewAgentService", () => {
           const turn = yield* (yield* ReviewAgentService)
             .runThreadTurn({
               threadId: created.thread.id,
-              ...turnIdentity(created, pullRequestSnapshot),
+              ...turnIdentity(created, hostedManifest),
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
@@ -1038,7 +1023,7 @@ describe("ReviewAgentService", () => {
         })
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, snapshot),
+          ...turnIdentity(created, localManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -1093,7 +1078,7 @@ describe("ReviewAgentService", () => {
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, snapshot),
+            ...turnIdentity(created, localManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1101,7 +1086,7 @@ describe("ReviewAgentService", () => {
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
         const runs = yield* inspectRuns(created.thread.id)
 
-        expect(error).toBeInstanceOf(ReviewAgentFinalizeError)
+        expect(Schema.is(ReviewAgentFinalizeError)(error)).toBe(true)
         expect(error).toMatchObject({ operation: "completeTurn" })
         expect(details.messages.at(-1)?._tag).toBe("Pending")
         expect(runs).toHaveLength(1)
@@ -1145,7 +1130,7 @@ describe("ReviewAgentService", () => {
           const error = yield* (yield* ReviewAgentService)
             .runThreadTurn({
               threadId: created.thread.id,
-              ...turnIdentity(created, snapshot),
+              ...turnIdentity(created, localManifest),
               cwd: repo.localPath,
               walkthrough: Option.none(),
             })
@@ -1153,7 +1138,7 @@ describe("ReviewAgentService", () => {
           const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
           const runs = yield* inspectRuns(created.thread.id)
 
-          expect(error).toBeInstanceOf(ReviewAgentFinalizeError)
+          expect(Schema.is(ReviewAgentFinalizeError)(error)).toBe(true)
           expect(error).toMatchObject({ operation: "failTurn" })
           expect(details.messages.at(-1)?._tag).toBe("Pending")
           expect(runs[0]?.status).toBe("running")
@@ -1197,7 +1182,7 @@ describe("ReviewAgentService", () => {
         })
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, snapshot),
+          ...turnIdentity(created, localManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -1268,14 +1253,14 @@ describe("ReviewAgentService", () => {
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, snapshot),
+            ...turnIdentity(created, localManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const runs = yield* inspectRuns(created.thread.id)
 
-        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
+        expect(Schema.is(ReviewAgentProviderFailureError)(error)).toBe(true)
         expect(runs).toEqual([expect.objectContaining({ provider: "opencode", status: "failed" })])
       }).pipe(Effect.provide(layer))
 
@@ -1314,7 +1299,7 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: pullRequestSnapshot.reviewKey,
+          reviewKey: hostedManifest.reviewKey,
           prNumber: 42,
           baseRevision,
           headRevision,
@@ -1324,7 +1309,7 @@ Failed to authenticate. OAuth session expired and could not be refreshed.`,
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, pullRequestSnapshot),
+            ...turnIdentity(created, hostedManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1387,7 +1372,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: pullRequestSnapshot.reviewKey,
+          reviewKey: hostedManifest.reviewKey,
           prNumber: 42,
           baseRevision,
           headRevision,
@@ -1397,7 +1382,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, pullRequestSnapshot),
+            ...turnIdentity(created, hostedManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1456,7 +1441,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, snapshot),
+            ...turnIdentity(created, localManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
@@ -1464,13 +1449,12 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
 
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
         const runs = yield* inspectRuns(created.thread.id)
-        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
-        if (error instanceof ReviewAgentProviderFailureError) {
-          expect(error.failure).toMatchObject({
-            providerId: "opencode",
-            category: "model-unavailable",
-          })
-        }
+        if (!Schema.is(ReviewAgentProviderFailureError)(error))
+          throw new Error("Expected a provider failure")
+        expect(error.failure).toMatchObject({
+          providerId: "opencode",
+          category: "model-unavailable",
+        })
         expect(details.messages).toHaveLength(1)
         expect(runs).toEqual([])
       }).pipe(Effect.provide(layer))
@@ -1507,19 +1491,18 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, snapshot),
+            ...turnIdentity(created, localManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
 
-        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
-        if (error instanceof ReviewAgentProviderFailureError) {
-          expect(error.failure).toMatchObject({
-            providerId: "unavailable",
-            category: "configuration",
-          })
-        }
+        if (!Schema.is(ReviewAgentProviderFailureError)(error))
+          throw new Error("Expected a provider failure")
+        expect(error.failure).toMatchObject({
+          providerId: "unavailable",
+          category: "configuration",
+        })
       }).pipe(Effect.provide(layer))
     }),
   )
@@ -1557,20 +1540,19 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const error = yield* (yield* ReviewAgentService)
           .runThreadTurn({
             threadId: created.thread.id,
-            ...turnIdentity(created, snapshot),
+            ...turnIdentity(created, localManifest),
             cwd: repo.localPath,
             walkthrough: Option.none(),
           })
           .pipe(Effect.flip)
         const details = yield* (yield* ReviewThreadStore).get(created.thread.id)
 
-        expect(error).toBeInstanceOf(ReviewAgentProviderFailureError)
-        if (error instanceof ReviewAgentProviderFailureError) {
-          expect(error.failure).toMatchObject({
-            providerId: "opencode",
-            category: "invalid-response",
-          })
-        }
+        if (!Schema.is(ReviewAgentProviderFailureError)(error))
+          throw new Error("Expected a provider failure")
+        expect(error.failure).toMatchObject({
+          providerId: "opencode",
+          category: "invalid-response",
+        })
         expect(details.messages[1]).toMatchObject({
           _tag: "Failed",
           failure: {
@@ -1609,7 +1591,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
           anchor: lineAnchor,
           bodyMarkdown: MarkdownBody.make("Recover this interrupted turn."),
         })
-        const identity = turnIdentity(created, snapshot)
+        const identity = turnIdentity(created, localManifest)
         const targetInput = {
           threadId: created.thread.id,
           target: identity.target,
@@ -1630,7 +1612,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
 
         const completed = yield* (yield* ReviewAgentService).runThreadTurn({
           threadId: created.thread.id,
-          ...turnIdentity(created, snapshot),
+          ...turnIdentity(created, localManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         })
@@ -1674,14 +1656,14 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         )
         const created = yield* (yield* ReviewThreadStore).create({
           repoId: repo.id,
-          reviewKey: pullRequestSnapshot.reviewKey,
+          reviewKey: hostedManifest.reviewKey,
           prNumber: 42,
           baseRevision,
           headRevision,
           anchor: lineAnchor,
           bodyMarkdown: MarkdownBody.make("Reject wrong targets."),
         })
-        const identity = turnIdentity(created, pullRequestSnapshot)
+        const identity = turnIdentity(created, hostedManifest)
         const wrongTargets = [
           {
             ...identity,
@@ -1708,7 +1690,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
               walkthrough: Option.none(),
             })
             .pipe(Effect.flip)
-          expect(error).toBeInstanceOf(ReviewTurnTargetError)
+          expect(Schema.is(ReviewTurnTargetError)(error)).toBe(true)
         }
         expect(providerCalls).toBe(0)
         expect((yield* (yield* ReviewThreadStore).get(created.thread.id)).messages).toHaveLength(1)
@@ -1749,7 +1731,7 @@ Authorization: Basic workspace-basic-secret id_token=workspace-id-secret`,
         const service = yield* ReviewAgentService
         const input = {
           threadId: created.thread.id,
-          ...turnIdentity(created, snapshot),
+          ...turnIdentity(created, localManifest),
           cwd: repo.localPath,
           walkthrough: Option.none(),
         } as const
