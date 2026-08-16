@@ -20,7 +20,7 @@ bounds and cannot be increased without an RFC amendment.
 | D-11 | Bun/utility worker heartbeat, kill, cancellation, heap reclamation, and crash behavior | Worker-host implementation and generated-artifact Node/Bun process checks complete 2026-08-16 in [`m21-review-worker-2026-08-16.md`](m21-review-worker-2026-08-16.md); packaged heap/RSS/reclamation measurement remains |
 | D-12 | Compact index, logical scroll page, mounted rows, independent text/highlight/AST/DOM/annotation/measurement budgets, viewport conflation, queue/concurrency/output reservation, inverse-sticky behavior, rebasing, and container reset | Decided 2026-08-16 by deterministic structural evidence in [`m21-global-virtualizer-2026-08-16.md`](m21-global-virtualizer-2026-08-16.md); packaged Linux RSS/swap/frame promotion remains |
 | D-13 | Pierre public loaded-range API versus an isolated patch/fork, including coordinates, wrap measurement, deferred syntax, annotations, cancellation, and cleanup | Decided 2026-08-16 by [`m21-pierre-partial-range-2026-08-16.md`](m21-pierre-partial-range-2026-08-16.md) |
-| D-14 | Packaged Linux ingest, first-range, far-target, search provisional/final/rescan, cancellation, frame/long-task, and collection latency SLOs | Pending packaged 61k-file/30m-row evidence; deterministic tests are not sufficient for approval |
+| D-14 | Packaged Linux ingest, first-range, far-target, search provisional/final/rescan, cancellation, frame/long-task, and collection latency SLOs | Pending packaged 61k-file/30m-row evidence; deterministic tests are not sufficient for approval. Use [`m21-release-slo-template.md`](m21-release-slo-template.md) for promotion |
 
 ## Existing Upper Bounds
 
