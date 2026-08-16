@@ -387,6 +387,7 @@ export const createStandaloneCoreLayer = (
     reservationLifetimeMs: SNAPSHOT_RESERVATION_LIFETIME_MS,
   }).pipe(
     Layer.provideMerge(snapshotIngestionServiceLayer),
+    Layer.provideMerge(resourceCollectionLayer),
     Layer.provideMerge(repositoryLinkerLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
     Layer.provideMerge(gitProviderLayer),

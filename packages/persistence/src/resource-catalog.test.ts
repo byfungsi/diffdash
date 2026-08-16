@@ -31,7 +31,7 @@ const register = (
   catalog.register({
     id: CatalogResourceId.make(id),
     parentId: parentId === null ? null : CatalogResourceId.make(parentId),
-    kind: "snapshot",
+    kind: "snapshot-block",
     policyClass: "cache",
     state: "ready",
     generation: 1,

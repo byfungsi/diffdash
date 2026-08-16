@@ -49,7 +49,7 @@ describe("resource collection", () => {
         const resource = yield* catalog.register({
           id: CatalogResourceId.make("snapshot-1"),
           parentId: null,
-          kind: "snapshot",
+          kind: "snapshot-block",
           policyClass: "cache",
           state: "ready",
           generation: 1,
@@ -91,7 +91,7 @@ describe("resource collection", () => {
       const base = {
         id: CatalogResourceId.make("unsafe"),
         parentId: null,
-        kind: "cache",
+        kind: "agentTemp",
         policyClass: "cache" as const,
         state: "collecting" as const,
         generation: 1,
@@ -135,7 +135,7 @@ describe("resource collection", () => {
         const resource = yield* catalog.register({
           id: CatalogResourceId.make("logical-1"),
           parentId: null,
-          kind: "git-pack",
+          kind: "reviewRef",
           policyClass: "cache",
           state: "ready",
           generation: 1,

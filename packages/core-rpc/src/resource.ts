@@ -4,17 +4,14 @@ const NonNegativeInt = Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualT
 const ResourceDiagnosticClass = Schema.Literals([
   "agentTemp",
   "bareRepository",
-  "cache",
-  "git-pack",
   "localWorktreePool",
   "migrationBackup",
   "processTemp",
   "remoteWorktreePool",
   "reviewRef",
   "reviewStaging",
-  "snapshot",
+  "snapshot-block",
   "snapshot-spool",
-  "updaterPartial",
 ])
 const ResourceStateDiagnostics = Schema.Struct({
   writing: NonNegativeInt,
@@ -41,7 +38,7 @@ export const CoreResourceDiagnostics = Schema.Struct({
   resources: NonNegativeInt,
   activeLeases: NonNegativeInt,
   failures: NonNegativeInt,
-  classes: Schema.Array(ResourceClassDiagnostics).pipe(Schema.check(Schema.isMaxLength(13))),
+  classes: Schema.Array(ResourceClassDiagnostics).pipe(Schema.check(Schema.isMaxLength(10))),
 })
 
 /** Privacy-safe result of Core's policy-driven disposable-resource collection pass. */

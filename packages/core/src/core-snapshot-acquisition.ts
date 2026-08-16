@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { open, type FileHandle } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { basename, join, relative } from "node:path"
 
 import {
   ChangedFile,
@@ -49,6 +49,7 @@ import {
   CatalogResourceId,
   ResourceCatalog,
   type ResourceCatalogError,
+  ResourceRecoveryToken,
   ResourceReservationId,
   type ResourceRootId,
 } from "@diffdash/persistence/resource-catalog"
@@ -73,6 +74,7 @@ import {
   RepositoryComparisonSourceError,
 } from "./services/repository-comparison-source"
 import { RepositoryLinker, type RepositoryLinkError } from "./services/repository-linker"
+import { ResourceCollection } from "./resource-collection"
 
 const DIFF_OPTIONS = "--no-ext-diff --no-color"
 const FILE_DELTA_IDENTITY_VERSION = 1
@@ -121,6 +123,7 @@ export const coreSnapshotAcquisitionLayer = (
   | RepositoryComparisonSource
   | RepositoryLinker
   | ResourceCatalog
+  | ResourceCollection
 > =>
   Layer.effect(
     CoreSnapshotAcquisition,
@@ -132,6 +135,7 @@ export const coreSnapshotAcquisitionLayer = (
       const providers = yield* GitProvider
       const repositories = yield* RepositoryLinker
       const resources = yield* ResourceCatalog
+      const resourceCollection = yield* ResourceCollection
 
       const ingest = Effect.fn("CoreSnapshotAcquisition.ingest")(function* (input: {
         readonly source: ReviewDiffSource
@@ -228,7 +232,49 @@ export const coreSnapshotAcquisitionLayer = (
       ) {
         const project = yield* repositories.ensureLocal(target.rootPath)
         const reviewKey = makeLocalReviewKey(target.rootPath, target.comparison)
-        const source = yield* makeLocalReviewDiffSource({ reviewKey, target }).pipe(
+        const source = yield* makeLocalReviewDiffSource({
+          reviewKey,
+          target,
+          stagingDirectory: join(options.rootPath, "review-staging"),
+          stagingObserver: {
+            publish: (capture) => {
+              const relativePath = relative(options.rootPath, capture.directory)
+              const resourceId = CatalogResourceId.make(
+                `review-staging:${createHash("sha256").update(relativePath).digest("hex")}`,
+              )
+              return resources
+                .register({
+                  id: resourceId,
+                  parentId: null,
+                  kind: "reviewStaging",
+                  policyClass: "temporary",
+                  state: "ready",
+                  generation: 1,
+                  location: { kind: "filesystem", rootId: options.rootId, relativePath },
+                  bytes: capture.bytes,
+                  nowMs: Date.now(),
+                  checksum: capture.digest,
+                  validation: "verified-local-review-staging-v1",
+                })
+                .pipe(Effect.asVoid, Effect.mapError(localStagingFailure))
+            },
+            remove: (capture) => {
+              const relativePath = relative(options.rootPath, capture.directory)
+              const resourceId = CatalogResourceId.make(
+                `review-staging:${createHash("sha256").update(relativePath).digest("hex")}`,
+              )
+              const nowMs = Date.now()
+              return resourceCollection
+                .collect({
+                  resourceId,
+                  recoveryToken: ResourceRecoveryToken.make(`review-staging:${randomUUID()}`),
+                  nowMs,
+                  retryAtMs: nowMs + 60_000,
+                })
+                .pipe(Effect.mapError(localStagingFailure))
+            },
+          },
+        }).pipe(
           Effect.provideService(ProcessService, processes),
           Effect.mapError(reviewFailure("local.snapshot")),
         )
@@ -682,6 +728,13 @@ const spoolFailure = (message: string): ReviewDiffSourceFailure =>
     generation: ReviewDiffGeneration.make("core-managed-spool"),
     method: "unifiedBytes",
     message,
+  })
+
+const localStagingFailure = (): ReviewDiffSourceFailure =>
+  ReviewDiffSourceFailure.make({
+    generation: ReviewDiffGeneration.make("local-review-staging"),
+    method: "unifiedBytes",
+    message: "Could not catalog local review staging",
   })
 
 const toSpoolSourceFailure = (

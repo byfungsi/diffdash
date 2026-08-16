@@ -61,17 +61,14 @@ export type CatalogPolicyClass = typeof CatalogPolicyClass.Type
 export const CatalogResourceClass = Schema.Literals([
   "agentTemp",
   "bareRepository",
-  "cache",
-  "git-pack",
   "localWorktreePool",
   "migrationBackup",
   "processTemp",
   "remoteWorktreePool",
   "reviewRef",
   "reviewStaging",
-  "snapshot",
+  "snapshot-block",
   "snapshot-spool",
-  "updaterPartial",
 ])
 /** Allowlisted resource class safe to expose in aggregate diagnostics. */
 export type CatalogResourceClass = typeof CatalogResourceClass.Type

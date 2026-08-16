@@ -17,7 +17,11 @@ import {
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
 import { WebUrl } from "@diffdash/domain/web-url"
-import { LastCommitComparison, LocalReviewTarget } from "@diffdash/domain/local-review"
+import {
+  LastCommitComparison,
+  LocalReviewTarget,
+  WorkingTreeComparison,
+} from "@diffdash/domain/local-review"
 import { RemoteOnly, Repo, RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import {
   GitCommitSha,
@@ -51,6 +55,11 @@ import {
   coreSnapshotAcquisitionLayer,
   parseExactGitIdentities,
 } from "./core-snapshot-acquisition"
+import {
+  makeFilesystemResourceAdapter,
+  makeResourceCollection,
+  ResourceCollection,
+} from "./resource-collection"
 import { CoreSnapshotIngestion } from "./core-snapshot-ingestion"
 import { GitProvider } from "./services/git-provider"
 import { RepositoryComparisonSource } from "./services/repository-comparison-source"
@@ -282,6 +291,17 @@ const acquisitionLayer = (directory: string, source: ReviewDiffSource) => {
   const resourceLayer = ResourceCatalog.layer.pipe(
     Layer.provide(DatabaseNode.layer(join(directory, "database.sqlite"))),
   )
+  const collectionLayer = Layer.effect(
+    ResourceCollection,
+    Effect.gen(function* () {
+      const noOpAdapter = { quarantine: () => Effect.void, delete: () => Effect.void }
+      return makeResourceCollection(yield* ResourceCatalog, {
+        filesystem: makeFilesystemResourceAdapter(new Map([[rootId, join(directory, "managed")]])),
+        gitRef: noOpAdapter,
+        updaterPartial: noOpAdapter,
+      })
+    }),
+  ).pipe(Layer.provideMerge(resourceLayer))
   return coreSnapshotAcquisitionLayer({
     rootId,
     rootPath: join(directory, "managed"),
@@ -295,6 +315,7 @@ const acquisitionLayer = (directory: string, source: ReviewDiffSource) => {
     Layer.provideMerge(comparisonLayer),
     Layer.provideMerge(repositoriesLayer),
     Layer.provideMerge(resourceLayer),
+    Layer.provideMerge(collectionLayer),
   )
 }
 
@@ -364,6 +385,37 @@ describe("CoreSnapshotAcquisition", () => {
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.detail.diffHash).toBeTruthy()
         expect(manifest.detail.title).toBe("Last commit")
+      }).pipe(Effect.provide(acquisitionLayer(directory, hostedSource({ count: 0 }))))
+    }),
+  )
+
+  it.effect("catalogs and collects only producer-declared mutable review staging", () =>
+    Effect.gen(function* () {
+      const directory = yield* testDirectory
+      const target = LocalReviewTarget.make({
+        kind: "local",
+        rootPath: checkout,
+        comparison: WorkingTreeComparison.make({}),
+      })
+      yield* Effect.gen(function* () {
+        const acquisition = yield* CoreSnapshotAcquisition
+        const resources = yield* ResourceCatalog
+        yield* resources.registerRoot({
+          id: rootId,
+          path: join(directory, "managed"),
+          createdAtMs: 0,
+        })
+
+        yield* acquisition.acquireLocal(target)
+
+        const staging = (yield* resources.list()).filter(({ kind }) => kind === "reviewStaging")
+        expect(staging).toHaveLength(1)
+        expect(staging[0]).toMatchObject({
+          policyClass: "temporary",
+          state: "deleted",
+          bytes: 0,
+          validation: "verified-local-review-staging-v1",
+        })
       }).pipe(Effect.provide(acquisitionLayer(directory, hostedSource({ count: 0 }))))
     }),
   )

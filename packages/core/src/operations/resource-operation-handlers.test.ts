@@ -61,7 +61,7 @@ describe("resource operation handlers", () => {
         yield* catalog.register({
           id: CatalogResourceId.make("updater-partial"),
           parentId: null,
-          kind: "updaterPartial",
+          kind: "agentTemp",
           policyClass: "cache",
           state: "ready",
           generation: 1,

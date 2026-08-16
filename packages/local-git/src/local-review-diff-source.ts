@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { mkdtemp, open, rm, type FileHandle } from "node:fs/promises"
+import { mkdir, mkdtemp, open, rm, type FileHandle } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -32,13 +32,29 @@ const MAX_PATH_BYTES = 16 * 1024
 export interface LocalReviewDiffSourceInput {
   readonly reviewKey: ReviewKey
   readonly target: LocalReviewTarget
+  readonly stagingDirectory?: string
+  readonly stagingObserver?: LocalReviewStagingObserver
 }
 
-interface Capture {
+/** Producer callback for one explicitly created mutable-review staging directory. */
+export interface LocalReviewStagingObserver {
+  readonly publish: (
+    capture: LocalReviewStagingCapture,
+  ) => Effect.Effect<void, ReviewDiffSourceFailure>
+  readonly remove: (
+    capture: LocalReviewStagingCapture,
+  ) => Effect.Effect<void, ReviewDiffSourceFailure>
+}
+
+/** Exact staging artifact declared by the local-review producer. */
+export interface LocalReviewStagingCapture {
+  readonly directory: string
   readonly path: string
   readonly bytes: number
   readonly digest: string
 }
+
+type Capture = LocalReviewStagingCapture
 
 interface ExactObjects {
   readonly base: string
@@ -72,7 +88,12 @@ export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(
     })
   }
 
-  const capture = yield* captureVerified(target, processes)
+  const capture = yield* captureVerified(
+    target,
+    processes,
+    input.stagingObserver,
+    input.stagingDirectory,
+  )
   return makeSource({
     input,
     processes,
@@ -87,10 +108,13 @@ export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(
 const captureVerified = Effect.fn("LocalReviewDiffSource.captureVerified")(function* (
   target: LocalReviewTarget,
   processes: ProcessService["Service"],
+  observer: LocalReviewStagingObserver | undefined,
+  parentDirectory = tmpdir(),
 ): Effect.fn.Return<Capture, ReviewDiffSourceFailure> {
+  yield* tryPromise("unifiedBytes", () => mkdir(parentDirectory, { recursive: true, mode: 0o700 }))
   for (let attempt = 0; attempt < MAX_CAPTURE_ATTEMPTS; attempt += 1) {
     const directory = yield* tryPromise("unifiedBytes", () =>
-      mkdtemp(join(tmpdir(), "diffdash-review-source-")),
+      mkdtemp(join(parentDirectory, "diffdash-review-source-")),
     )
     const path = join(directory, "review.diff")
     const capture = yield* writeCapture(path, target, processes).pipe(
@@ -108,7 +132,11 @@ const captureVerified = Effect.fn("LocalReviewDiffSource.captureVerified")(funct
       verified.success.digest === capture.digest &&
       verified.success.bytes === capture.bytes
     ) {
-      return capture
+      const published = { ...capture, directory }
+      if (observer !== undefined) {
+        yield* observer.publish(published).pipe(Effect.onError(() => removePath(directory)))
+      }
+      return published
     }
     yield* removePath(directory)
   }
@@ -138,7 +166,7 @@ const writeCapture = Effect.fn("LocalReviewDiffSource.writeCapture")(function* (
     Effect.mapError(sourceCreationFailure),
     Effect.ensuring(closeHandle(handle)),
   )
-  return { path, bytes, digest: hash.digest("hex") }
+  return { directory: dirname(path), path, bytes, digest: hash.digest("hex") }
 })
 
 const digestDiff = Effect.fn("LocalReviewDiffSource.digestDiff")(function* (
@@ -349,7 +377,11 @@ const makeSource = (state: {
   const close = Effect.fn("LocalReviewDiffSource.close")(function* () {
     if (closed) return
     closed = true
-    if (state.capture !== null) yield* removePath(dirname(state.capture.path))
+    if (state.capture !== null) {
+      yield* state.input.stagingObserver === undefined
+        ? removePath(state.capture.directory)
+        : state.input.stagingObserver.remove(state.capture)
+    }
   })().pipe(
     Effect.mapError(() => sourceFailure("unifiedBytes", "Could not release review staging")),
   )

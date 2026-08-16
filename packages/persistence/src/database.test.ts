@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -713,6 +714,21 @@ describe("database-node", () => {
           ),
         ).sql
         expect(messagesSql).toContain("FOREIGN KEY(agent_run_id, thread_id)")
+        expect(
+          yield* database.all(
+            `SELECT kind, policy_class, state, bytes, location_kind, location_value
+             FROM resources WHERE kind = 'migrationBackup'`,
+          ),
+        ).toEqual([
+          {
+            kind: "migrationBackup",
+            policy_class: "migrationBackup",
+            state: "ready",
+            bytes: statSync(join(directory, backups[0] ?? "")).size,
+            location_kind: "filesystem",
+            location_value: backups[0],
+          },
+        ])
         yield* database.run(
           `INSERT INTO agent_runs (
             id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
