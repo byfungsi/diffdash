@@ -259,14 +259,49 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
 
     const fixtureDiffCard = window.locator('[data-diff-card-path="src/fixture.ts"]')
+    await expect(fixtureDiffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
     const addedLine = fixtureDiffCard
       .locator('diffs-container [data-content] > [data-line-type="change-addition"]')
       .filter({ hasText: "new fixture" })
       .first()
     await expect(addedLine).toBeVisible()
+    const lineIndex = await addedLine.getAttribute("data-line-index")
+    if (lineIndex === null) throw new Error("Fixture addition line has no rendered index")
+    const gutterNumber = fixtureDiffCard
+      .locator(
+        `diffs-container [data-line-type="change-addition"][data-line-index="${lineIndex}"][data-column-number]`,
+      )
+      .last()
     const composer = window.getByRole("textbox", { name: "Thread message" })
-    await addedLine.click()
-    await expect(composer).toBeVisible()
+    await expect
+      .poll(
+        async () => {
+          if (await composer.isVisible()) return true
+          await gutterNumber.evaluate((gutter) => {
+            gutter.dispatchEvent(
+              new PointerEvent("pointermove", {
+                bubbles: true,
+                composed: true,
+                pointerType: "mouse",
+              }),
+            )
+            const utility = gutter.querySelector("[data-utility-button]")
+            if (utility === null) return
+            const init = {
+              bubbles: true,
+              button: 0,
+              composed: true,
+              pointerId: 1,
+              pointerType: "mouse",
+            }
+            utility.dispatchEvent(new PointerEvent("pointerdown", init))
+            document.dispatchEvent(new PointerEvent("pointerup", init))
+          })
+          return composer.isVisible()
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true)
     await composer.fill("Review fixture line")
     await window.getByRole("button", { name: "Comment" }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
