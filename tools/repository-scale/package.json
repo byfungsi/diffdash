@@ -6,7 +6,7 @@
   "exports": {},
   "scripts": {
     "benchmark:generate": "node src/cli.mjs generate",
-    "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs",
+    "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs && node --check src/synthetic-fixture.mjs",
     "typecheck": "pnpm build",
     "benchmark:prepare": "node src/cli.mjs prepare",
     "measure": "node src/cli.mjs measure",

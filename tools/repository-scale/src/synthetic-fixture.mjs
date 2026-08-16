@@ -4,6 +4,35 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
 const FIXTURE_DATE = "2026-01-01T00:00:00Z"
+const SCENARIO_INDICES = {
+  enormousFile: 0,
+  wrappedLine: 1,
+  annotation: 2,
+  broadSearch: 3,
+  binary: 4,
+  rename: 5,
+  delete: 6,
+  executableModeChange: 7,
+  noNewline: 8,
+  denseThread: 9,
+}
+const ZERO_ADDITION_INDICES = [
+  SCENARIO_INDICES.binary,
+  SCENARIO_INDICES.rename,
+  SCENARIO_INDICES.delete,
+  SCENARIO_INDICES.executableModeChange,
+]
+const BINARY_BASE_CONTENT = Buffer.from([0x00, 0x44, 0x49, 0x46, 0x46, 0x42, 0x41, 0x53, 0x45])
+const BINARY_HEAD_CONTENT = Buffer.from([0x00, 0x44, 0x49, 0x46, 0x46, 0x48, 0x45, 0x41, 0x44])
+
+const scenarioPaths = {
+  binary: "fixture/scenarios/binary.bin",
+  deleted: "fixture/scenarios/deleted.txt",
+  executableModeChange: "fixture/scenarios/executable.sh",
+  noNewline: "fixture/scenarios/no-newline.txt",
+  renameFrom: "fixture/scenarios/rename-source.txt",
+  renameTo: "fixture/scenarios/renamed-target.txt",
+}
 
 const fixtureId = (profile, baseSha, headSha, revisionSha) => {
   const digest = createHash("sha256")
@@ -57,18 +86,23 @@ const validateProfile = (profile) => {
       throw new Error(`${field} must be a positive safe integer`)
     }
   }
-  if (profile.fileCount < 5) throw new Error("fileCount must leave room for all fixture scenarios")
-  if (profile.rowCount < profile.enormousFileRows + profile.fileCount - 1) {
+  if (profile.fileCount < Object.keys(SCENARIO_INDICES).length) {
+    throw new Error("fileCount must leave room for all fixture scenarios")
+  }
+  const rowContributingFiles = profile.fileCount - ZERO_ADDITION_INDICES.length
+  if (profile.rowCount < profile.enormousFileRows + rowContributingFiles - 1) {
     throw new Error("rowCount cannot be distributed across the requested files")
   }
 }
 
 const rowAllocation = (profile, index) => {
-  if (index === 0) return profile.enormousFileRows
+  if (ZERO_ADDITION_INDICES.includes(index)) return 0
+  if (index === SCENARIO_INDICES.enormousFile) return profile.enormousFileRows
   const remainingRows = profile.rowCount - profile.enormousFileRows
-  const remainingFiles = profile.fileCount - 1
+  const remainingFiles = profile.fileCount - ZERO_ADDITION_INDICES.length - 1
   const quotient = Math.floor(remainingRows / remainingFiles)
-  return quotient + (index <= remainingRows % remainingFiles ? 1 : 0)
+  const allocationRank = index - ZERO_ADDITION_INDICES.filter((value) => value <= index).length
+  return quotient + (allocationRank <= remainingRows % remainingFiles ? 1 : 0)
 }
 
 const filePath = (repository, index) =>
@@ -81,14 +115,48 @@ const filePath = (repository, index) =>
 
 const contentFor = (index, rows, wrappedLineBytes) => {
   const marker =
-    index === 2 ? "annotation-anchor" : index === 3 ? "broad-search-match" : "scale-row"
+    index === SCENARIO_INDICES.annotation
+      ? "annotation-anchor"
+      : index === SCENARIO_INDICES.broadSearch
+        ? "broad-search-match"
+        : index === SCENARIO_INDICES.denseThread
+          ? "dense-thread-anchor"
+          : "scale-row"
   const lines = Array.from({ length: rows })
   for (let row = 0; row < rows; row += 1) {
     lines[row] =
       `${marker} file=${String(index).padStart(5, "0")} row=${String(row).padStart(7, "0")} value=head\n`
   }
-  if (index === 1) lines[0] = `${"w".repeat(wrappedLineBytes)}\n`
+  if (index === SCENARIO_INDICES.wrappedLine) lines[0] = `${"w".repeat(wrappedLineBytes)}\n`
   return lines.join("")
+}
+
+const noNewlineContent = (rows) =>
+  Array.from(
+    { length: rows },
+    (_, row) => `no-newline row=${String(row).padStart(7, "0")} value=head`,
+  ).join("\n")
+
+const writeScenarioBase = async (repository) => {
+  const path = (name) => join(repository, scenarioPaths[name])
+  await mkdir(dirname(path("binary")), { recursive: true })
+  await Promise.all([
+    writeFile(path("binary"), BINARY_BASE_CONTENT),
+    writeFile(path("deleted"), "deleted in head\n"),
+    writeFile(path("executableModeChange"), "#!/bin/sh\nprintf 'mode-only fixture\\n'\n"),
+    writeFile(path("noNewline"), "no-newline value=base"),
+    writeFile(path("renameFrom"), "pure rename fixture\n"),
+  ])
+}
+
+const writeScenarioHead = async (repository, profile) => {
+  await writeFile(join(repository, scenarioPaths.binary), BINARY_HEAD_CONTENT)
+  await writeFile(
+    join(repository, scenarioPaths.noNewline),
+    noNewlineContent(rowAllocation(profile, SCENARIO_INDICES.noNewline)),
+  )
+  await rm(join(repository, scenarioPaths.deleted))
+  await runGit(repository, ["mv", scenarioPaths.renameFrom, scenarioPaths.renameTo])
 }
 
 const writeFiles = async (repository, profile, start = 0) => {
@@ -97,6 +165,7 @@ const writeFiles = async (repository, profile, start = 0) => {
   await Promise.all(
     Array.from({ length: end - start }, async (_, offset) => {
       const index = start + offset
+      if (ZERO_ADDITION_INDICES.includes(index) || index === SCENARIO_INDICES.noNewline) return
       const path = filePath(repository, index)
       await mkdir(dirname(path), { recursive: true })
       await writeFile(
@@ -115,32 +184,51 @@ export const generateSyntheticFixture = async ({ directory, profile = repository
   await rm(repository, { recursive: true, force: true })
   await mkdir(repository, { recursive: true })
   await runGit(repository, ["init", "--quiet", "--initial-branch=main"])
-  await runGit(repository, ["commit", "--quiet", "--allow-empty", "-m", "fixture base"])
+  await writeScenarioBase(repository)
+  await runGit(repository, ["add", "--all"])
+  await runGit(repository, ["commit", "--quiet", "-m", "fixture base"])
   const baseSha = await runGit(repository, ["rev-parse", "HEAD"])
 
   await writeFiles(repository, profile)
+  await writeScenarioHead(repository, profile)
   await runGit(repository, ["add", "--all"])
+  await runGit(repository, ["update-index", "--chmod=+x", scenarioPaths.executableModeChange])
   await runGit(repository, ["commit", "--quiet", "-m", "fixture pathological comparison"])
   const headSha = await runGit(repository, ["rev-parse", "HEAD"])
 
-  await writeFile(filePath(repository, 2), "annotation-anchor moved by revision change\n")
+  await writeFile(
+    filePath(repository, SCENARIO_INDICES.annotation),
+    "annotation-anchor moved by revision change\n",
+  )
   await runGit(repository, ["add", "--all"])
   await runGit(repository, ["commit", "--quiet", "-m", "fixture revision change"])
   const revisionSha = await runGit(repository, ["rev-parse", "HEAD"])
   await runGit(repository, ["checkout", "--quiet", headSha])
 
   const manifest = {
-    version: 1,
+    version: 2,
     id: fixtureId(profile, baseSha, headSha, revisionSha),
     kind: "synthetic-repository-scale",
     baseSha,
     headSha,
     revisionSha,
     profile,
+    scale: {
+      addedRows: profile.rowCount,
+      binaryFiles: 1,
+      changedFiles: profile.fileCount,
+      deletedRows: 2,
+    },
     scenarios: {
       annotation: "fixture/000/00002.txt",
+      binary: scenarioPaths.binary,
       broadSearch: "fixture/000/00003.txt",
+      delete: scenarioPaths.deleted,
+      denseThread: "fixture/000/00009.txt",
       enormousFile: "fixture/000/00000.txt",
+      executableModeChange: scenarioPaths.executableModeChange,
+      noNewline: scenarioPaths.noNewline,
+      rename: { from: scenarioPaths.renameFrom, to: scenarioPaths.renameTo },
       revisionChange: { from: headSha, to: revisionSha },
       wrappedLine: "fixture/000/00001.txt",
     },

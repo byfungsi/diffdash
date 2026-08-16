@@ -26,6 +26,15 @@ cd tools/repository-scale/.cache/fixtures/<fixture-id>/repository
 diffdash compare <base-sha> <head-sha>
 ```
 
+## Generate the synthetic comparison
+
+`pnpm repository-scale:generate` creates deterministic base, head, and annotation-revision commits
+without network access. The default manifest describes 61,000 logical changed files and 30,000,000
+added text rows. A detected rename counts as one changed file; binary files count toward files but not
+rows. Deleted rows are separate and do not reduce the configured added-row total. The fixture includes
+binary modification, pure rename, deletion, executable mode-only, no-final-newline, dense-thread,
+annotation, broad-search, enormous-file, and wrapped-line scenarios.
+
 ## Measure the process tree
 
 Find the main DiffDash Electron PID after opening the comparison. Record one post-disposal sample
