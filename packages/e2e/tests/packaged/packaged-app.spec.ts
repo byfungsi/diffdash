@@ -399,9 +399,15 @@ const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
 
   const manifest = parseCoreArtifactManifest(await readFile(coreManifest, "utf8"))
   const entrypoint = await readFile(coreEntrypoint)
+  const bunEntrypointPath = join(coreDirectory, manifest.bunEntrypoint)
+  await assertFile(bunEntrypointPath)
+  const bunEntrypoint = await readFile(bunEntrypointPath)
   expect(manifest.buildId).toMatch(/^core-e2e-[a-f0-9]{40}$/u)
   expect(manifest.entrypoint).toBe("core.mjs")
   expect(manifest.entrypointSha256).toBe(createHash("sha256").update(entrypoint).digest("hex"))
+  expect(manifest.bunEntrypointSha256).toBe(
+    createHash("sha256").update(bunEntrypoint).digest("hex"),
+  )
   expect(resolvePath(coreDirectory).startsWith(`${resolvePath(packaged.resources)}${sep}`)).toBe(
     true,
   )
@@ -433,7 +439,17 @@ const parseCoreArtifactManifest = (text: string) => {
     !("utility" in value.runtime) ||
     value.runtime.utility !== true ||
     !("bun" in value.runtime) ||
-    value.runtime.bun !== false
+    typeof value.runtime.bun !== "object" ||
+    value.runtime.bun === null ||
+    !("minimumVersion" in value.runtime.bun) ||
+    typeof value.runtime.bun.minimumVersion !== "string" ||
+    !("architecture" in value.runtime.bun) ||
+    typeof value.runtime.bun.architecture !== "string" ||
+    !("entrypoint" in value.runtime.bun) ||
+    value.runtime.bun.entrypoint !== "core-bun.mjs" ||
+    !("entrypointSha256" in value.runtime.bun) ||
+    typeof value.runtime.bun.entrypointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.runtime.bun.entrypointSha256)
   ) {
     throw new Error("Packaged Core manifest is invalid.")
   }
@@ -441,6 +457,8 @@ const parseCoreArtifactManifest = (text: string) => {
     buildId: value.buildId,
     entrypoint: value.entrypoint,
     entrypointSha256: value.entrypointSha256,
+    bunEntrypoint: value.runtime.bun.entrypoint,
+    bunEntrypointSha256: value.runtime.bun.entrypointSha256,
   }
 }
 
