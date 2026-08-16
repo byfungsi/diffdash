@@ -1,6 +1,9 @@
+import { dirname } from "node:path"
+
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { CoreRpcPayloadBytes } from "@diffdash/core-rpc"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
+import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
 import { HostedReviewWorkspacePool } from "@diffdash/local-git/hosted-review-workspace-pool"
@@ -27,11 +30,16 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Cause, Clock, Effect, Layer } from "effect"
+import { Cause, Clock, Effect, Layer, Stream } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
-import { coreSnapshotAcquisitionLayer } from "./core-snapshot-acquisition"
+import { CoreEventHub } from "./core-event-hub"
+import {
+  coreRepositoryWatcherLayer,
+  coreRepositoryWatcherNoopLayer,
+} from "./core-repository-watcher"
+import { CoreSnapshotAcquisition, coreSnapshotAcquisitionLayer } from "./core-snapshot-acquisition"
 import {
   CORE_SNAPSHOT_MAX_BLOCK_BYTES,
   CoreSnapshotIngestion,
@@ -62,19 +70,50 @@ import {
 } from "./services/snapshot-production-adapters"
 import { SnapshotRepository, snapshotRepositoryLayer } from "./services/snapshot-repository"
 import { SnapshotSearch, snapshotSearchLayer } from "./services/snapshot-search"
+import {
+  makeBoundedLogicalResourceAdapter,
+  makeFilesystemResourceAdapter,
+  makeResourceCollection,
+  makeUpdaterPartialResourceAdapter,
+  ResourceAdapterError,
+  ResourceCollection,
+} from "./resource-collection"
+import {
+  DisposableResourceLifecycle,
+  makeDisposableResourceLifecycle,
+} from "./disposable-resource-lifecycle"
 
 /** Maximum aggregate exact-Git output reserved by one lazy file regeneration. */
 export const CORE_SNAPSHOT_MAX_LAZY_BYTES = 16 * 1_024 * 1_024
 
 const SNAPSHOT_RESOURCE_ROOT_ID = ResourceRootId.make("core:snapshot-blocks:v1")
+const PROCESS_TEMP_RESOURCE_ROOT_ID = ResourceRootId.make("core:process-temp:v1")
+const LOCAL_WORKTREE_RESOURCE_ROOT_ID = ResourceRootId.make("core:local-worktrees:v1")
+const REMOTE_WORKTREE_RESOURCE_ROOT_ID = ResourceRootId.make("core:remote-worktrees:v1")
+const MIGRATION_BACKUP_RESOURCE_ROOT_ID = ResourceRootId.make("core:migration-backups:v1")
 const SNAPSHOT_RESERVATION_LIFETIME_MS = 60_000
 const SNAPSHOT_LEASE_LIFETIME_MS = 30_000
 const SNAPSHOT_MANAGED_QUOTA_BYTES = 4 * 1_024 * 1_024 * 1_024
+
+const unavailableLogicalMutation = (
+  operation: "quarantine" | "delete",
+  location: { readonly kind: string },
+) =>
+  Effect.fail(
+    ResourceAdapterError.make({
+      operation,
+      resourceId: "unavailable-logical-resource",
+      reason: `No production mutation authority is installed for ${location.kind}.`,
+      cause: new Error(`No production mutation authority is installed for ${location.kind}.`),
+    }),
+  )
 
 type StandaloneCoreServices =
   | CoreOperationService
   | CoreSnapshotIngestion
   | CoreProgressiveReviewService
+  | DisposableResourceLifecycle
+  | ResourceCollection
   | SnapshotRepository
   | SnapshotSearch
 
@@ -83,21 +122,21 @@ function createCoreLayerInternal(
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
   includeProgressiveReviews: false,
-): Layer.Layer<CoreOperationService, CoreStartupFailure>
+): Layer.Layer<CoreOperationService, CoreStartupFailure, CoreEventHub>
 function createCoreLayerInternal(
   configuration: CoreConfiguration,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
   includeProgressiveReviews: true,
-): Layer.Layer<StandaloneCoreServices, CoreStartupFailure>
+): Layer.Layer<StandaloneCoreServices, CoreStartupFailure, CoreEventHub>
 function createCoreLayerInternal(
   configuration: CoreConfiguration,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
   includeProgressiveReviews: boolean,
 ):
-  | Layer.Layer<CoreOperationService, CoreStartupFailure>
-  | Layer.Layer<StandaloneCoreServices, CoreStartupFailure> {
+  | Layer.Layer<CoreOperationService, CoreStartupFailure, CoreEventHub>
+  | Layer.Layer<StandaloneCoreServices, CoreStartupFailure, CoreEventHub> {
   const executableSearchPath = ExecutableSearchPath.make(
     defaultExecutablePath(configuration.environment.executableSearchPath),
   )
@@ -244,12 +283,91 @@ function createCoreLayerInternal(
     Layer.provideMerge(gitProviderLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
+  const legacySnapshotAcquisitionLayer = Layer.effect(
+    CoreSnapshotAcquisition,
+    Effect.gen(function* () {
+      const comparisons = yield* RepositoryComparisonSource
+      const repositories = yield* RepositoryLinker
+      const snapshots = yield* ReviewSnapshotService
+      return CoreSnapshotAcquisition.of({
+        acquireHosted: (review) =>
+          Effect.gen(function* () {
+            const project = yield* repositories.ensureHosted(review.repository, "preserve")
+            const snapshot = yield* snapshots.acquireHosted(review)
+            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
+            return makeReviewSnapshotManifest(snapshot, project.id)
+          }),
+        acquireLocal: (target) =>
+          Effect.gen(function* () {
+            const snapshot = yield* snapshots.acquireLocal(target)
+            const project = yield* repositories.ensureLocal(
+              RepositoryCheckoutPath.make(snapshot.detail.rootPath),
+            )
+            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
+            return makeReviewSnapshotManifest(snapshot, project.id)
+          }),
+        acquireComparison: (target) =>
+          Effect.gen(function* () {
+            const project = yield* comparisons.repository(target)
+            const snapshot = yield* snapshots.acquireComparison(target)
+            yield* snapshots.associateProject(snapshot.snapshotId, project.id).pipe(Effect.orDie)
+            return makeReviewSnapshotManifest(snapshot, project.id)
+          }),
+      })
+    }),
+  ).pipe(
+    Layer.provide(reviewSnapshotLayer),
+    Layer.provide(repositoryLinkerLayer),
+    Layer.provide(repositoryComparisonSourceLayer),
+  )
   const snapshotRootPath = `${configuration.paths.database}.snapshot-blocks`
   const snapshotBlockStoreLayer = SnapshotBlockStore.layer({
     rootId: SNAPSHOT_RESOURCE_ROOT_ID,
     rootPath: snapshotRootPath,
   })
   const snapshotPersistenceLayer = Layer.merge(ResourceCatalog.layer, snapshotBlockStoreLayer)
+  const resourceRoots = new Map([
+    [SNAPSHOT_RESOURCE_ROOT_ID, snapshotRootPath],
+    [PROCESS_TEMP_RESOURCE_ROOT_ID, agentWorkingDirectory],
+    [LOCAL_WORKTREE_RESOURCE_ROOT_ID, worktreePoolPath],
+    [REMOTE_WORKTREE_RESOURCE_ROOT_ID, remoteWorktreePoolPath],
+    [MIGRATION_BACKUP_RESOURCE_ROOT_ID, dirname(configuration.paths.database)],
+  ])
+  const resourceCollectionLayer = Layer.effect(
+    ResourceCollection,
+    Effect.gen(function* () {
+      const resources = yield* ResourceCatalog
+      return makeResourceCollection(resources, {
+        filesystem: makeFilesystemResourceAdapter(resourceRoots),
+        gitRef: makeBoundedLogicalResourceAdapter(unavailableLogicalMutation, 5_000),
+        updaterPartial: makeUpdaterPartialResourceAdapter(
+          (operation) => unavailableLogicalMutation(operation, { kind: "updaterPartial" }),
+          { timeoutMs: 5_000, maximumIdentityBytes: 4_096 },
+        ),
+      })
+    }),
+  ).pipe(Layer.provideMerge(snapshotPersistenceLayer))
+  const disposableResourceLifecycleLayer = Layer.effect(
+    DisposableResourceLifecycle,
+    Effect.gen(function* () {
+      const resources = yield* ResourceCatalog
+      const collection = yield* ResourceCollection
+      return makeDisposableResourceLifecycle(resources, collection)
+    }),
+  ).pipe(Layer.provideMerge(resourceCollectionLayer))
+  const resourceLifecycleStartupLayer = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const resources = yield* ResourceCatalog
+      const nowMs = yield* Clock.currentTimeMillis
+      for (const [id, path] of resourceRoots) {
+        yield* resources.registerRoot({ id, path, createdAtMs: nowMs })
+      }
+    }),
+  ).pipe(Layer.provide(disposableResourceLifecycleLayer))
+  const resourceLifecycleLayer = Layer.merge(
+    disposableResourceLifecycleLayer,
+    resourceLifecycleStartupLayer,
+  )
   const projectAuthorityLayer = snapshotProjectAuthorityLayer
   const gitRangeSourceLayer = snapshotGitRangeSourceLayer.pipe(
     Layer.provide(RepositoryStore.layer),
@@ -317,10 +435,17 @@ function createCoreLayerInternal(
     Layer.provideMerge(GitService.layer),
     Layer.provideMerge(processLayer),
   )
+  const reviewAcquisitionLayer = includeProgressiveReviews
+    ? snapshotAcquisitionServiceLayer
+    : legacySnapshotAcquisitionLayer
+  const repositoryWatcherLayer = includeProgressiveReviews
+    ? coreRepositoryWatcherLayer
+    : coreRepositoryWatcherNoopLayer
   const progressiveReviewLayer = Layer.mergeAll(
     progressiveReviewServiceLayer,
     snapshotIngestionServiceLayer,
     snapshotStorageStartupLayer,
+    resourceLifecycleLayer,
   )
   const prerequisitesLayer = Prerequisites.layer({
     appImagePath: configuration.paths.appImageOption,
@@ -335,11 +460,11 @@ function createCoreLayerInternal(
     temporaryDirectoryLayer,
     repositoryLinkerLayer,
     repositoryComparisonSourceLayer,
+    repositoryWatcherLayer,
     ProjectWorkspaceStore.layer,
     analyticsLayer,
     reviewSnapshotLayer,
-    snapshotStorageStartupLayer,
-    snapshotAcquisitionServiceLayer,
+    reviewAcquisitionLayer,
     reviewTurnStoreLayer,
     appStateLayer,
     prerequisitesLayer,
@@ -379,6 +504,8 @@ function createCoreLayerInternal(
         Layer.effect(CoreOperationService, failure),
         Layer.effect(CoreSnapshotIngestion, failure),
         Layer.effect(CoreProgressiveReviewService, failure),
+        Layer.effect(DisposableResourceLifecycle, failure),
+        Layer.effect(ResourceCollection, failure),
         Layer.effect(SnapshotRepository, failure),
         Layer.effect(SnapshotSearch, failure),
       )
@@ -392,7 +519,18 @@ export const createCoreLayer = (
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
 ): Layer.Layer<CoreOperationService, CoreStartupFailure> =>
-  createCoreLayerInternal(configuration, databaseLayer, providerComposition, false)
+  createCoreLayerInternal(configuration, databaseLayer, providerComposition, false).pipe(
+    Layer.provide(
+      Layer.succeed(
+        CoreEventHub,
+        CoreEventHub.of({
+          publish: () => Effect.die("Core events are unavailable in the legacy embedded graph."),
+          replay: () => Effect.die("Core events are unavailable in the legacy embedded graph."),
+          events: Stream.empty,
+        }),
+      ),
+    ),
+  )
 
 /** Builds the external Core graph with one SQLite-backed progressive review authority. */
 export const createStandaloneCoreLayer = (

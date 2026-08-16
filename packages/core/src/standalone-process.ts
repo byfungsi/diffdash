@@ -8,7 +8,7 @@ import {
 } from "@diffdash/core-rpc/process-startup"
 import { CoreCommandStore } from "@diffdash/persistence/core-command-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
-import { Context, Effect, Exit, Layer, Option, Schema } from "effect"
+import { Clock, Context, Effect, Exit, Layer, Option, Schema } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { isAbsolute } from "node:path"
 
@@ -31,6 +31,7 @@ import { CoreProgressiveReviewService } from "./core-review-session-rpc-handlers
 import { SnapshotRepository } from "./services/snapshot-repository"
 import { SnapshotSearch } from "./services/snapshot-search"
 import { toCoreStartupError } from "./core-startup-error"
+import { ResourceCollection } from "./resource-collection"
 
 /** Sanitized startup failure that cannot expose the transport credential or private paths. */
 export class StandaloneCoreProcessError extends Schema.TaggedError<StandaloneCoreProcessError>()(
@@ -135,12 +136,17 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
                 coreConfiguration,
                 databaseLayer,
                 providerComposition,
-              )
+              ).pipe(Layer.provideMerge(eventLayer))
               const runtimeContext = yield* Layer.build(
                 Layer.mergeAll(operationLayer, commandLayer, eventLayer),
               )
               const operations = Context.get(runtimeContext, CoreOperationService)
               yield* operations.start
+              const nowMs = yield* Clock.currentTimeMillis
+              yield* Context.get(runtimeContext, ResourceCollection).reconcile(
+                nowMs,
+                nowMs + 60_000,
+              )
               yield* runtimeServices.install({
                 operations,
                 commands: Context.get(runtimeContext, CoreDurableCommandService),

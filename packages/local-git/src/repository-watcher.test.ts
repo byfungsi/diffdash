@@ -146,6 +146,31 @@ describe("RepositoryWatcher", () => {
     }),
   )
 
+  it.effect("falls back to immediate reconciliation and polling when native watching fails", () =>
+    Effect.gen(function* () {
+      const reads = yield* Ref.make(0)
+      const failedWatchSource: RepositoryWatchSource = {
+        start: (_directories, onSignal) =>
+          Effect.sync(() => {
+            onSignal("overflow")
+            return Effect.void
+          }),
+      }
+      const watcher = yield* makeRepositoryWatcher({
+        watchSource: failedWatchSource,
+        publish: () => Effect.void,
+        limits: { pollingInterval: 100 },
+      }).pipe(Effect.provide(reconcilerLayer(reads, () => state("unchanged"))))
+
+      yield* watcher.activate(projectA, checkoutPath)
+      yield* waitUntilEffect(Ref.get(reads).pipe(Effect.map((count) => count === 2)))
+      yield* TestClock.adjust(100)
+      yield* waitUntilEffect(Ref.get(reads).pipe(Effect.map((count) => count === 3)))
+
+      expect(yield* Ref.get(reads)).toBe(3)
+    }),
+  )
+
   it.effect("cancels inactive work and never publishes a stale project generation", () =>
     Effect.gen(function* () {
       const projectAStarted = yield* Deferred.make<void>()

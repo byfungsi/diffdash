@@ -1,9 +1,10 @@
 import { RepositorySearchRequest } from "@diffdash/domain/repository"
 import { GitService } from "@diffdash/local-git/local-git"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
-import { Effect } from "effect"
+import { Effect, Match } from "effect"
 
 import { CoreMethod } from "../core-contract"
+import { CoreRepositoryWatcher } from "../core-repository-watcher"
 import { GitProvider } from "../services/git-provider"
 import { RepositoryLinker, RepositorySelectionIntent } from "../services/repository-linker"
 import type { OperationHandlersFor } from "./operation-handlers"
@@ -29,17 +30,19 @@ type RepositoryMethod =
 export const makeRepositoryOperationHandlers: Effect.Effect<
   OperationHandlersFor<RepositoryMethod>,
   never,
-  GitProvider | GitService | ProjectWorkspaceStore | RepositoryLinker
+  CoreRepositoryWatcher | GitProvider | GitService | ProjectWorkspaceStore | RepositoryLinker
 > = Effect.gen(function* () {
   const gitProvider = yield* GitProvider
   const git = yield* GitService
   const projectWorkspace = yield* ProjectWorkspaceStore
   const repositories = yield* RepositoryLinker
+  const watcher = yield* CoreRepositoryWatcher
 
   return {
     [CoreMethod.favoriteRemoteRepository]: ({ repository }) =>
       repositories.ensureHosted(repository.locator, "mark"),
-    [CoreMethod.forgetRepository]: ({ projectId }) => repositories.forget(projectId),
+    [CoreMethod.forgetRepository]: ({ projectId }) =>
+      repositories.forget(projectId).pipe(Effect.tap(() => watcher.deactivate(projectId))),
     [CoreMethod.installRepository]: ({ localPath }) => repositories.install(localPath),
     [CoreMethod.linkRepository]: (request) => repositories.link(request),
     [CoreMethod.listHostedRepositorySearchScopes]: ({ providerId }) =>
@@ -47,12 +50,22 @@ export const makeRepositoryOperationHandlers: Effect.Effect<
     [CoreMethod.listProviders]: () => gitProvider.listProviders,
     [CoreMethod.listRepositories]: ({ query }) => repositories.list(query ?? undefined),
     [CoreMethod.openProject]: ({ localPath, selectedRepository }) =>
-      repositories.openProject(
-        localPath,
-        selectedRepository === null
-          ? RepositorySelectionIntent.Automatic()
-          : RepositorySelectionIntent.Selected({ repository: selectedRepository }),
-      ),
+      repositories
+        .openProject(
+          localPath,
+          selectedRepository === null
+            ? RepositorySelectionIntent.Automatic()
+            : RepositorySelectionIntent.Selected({ repository: selectedRepository }),
+        )
+        .pipe(
+          Effect.tap((result) =>
+            Match.valueTags(result, {
+              opened: ({ repo }) =>
+                repo.localPath === null ? Effect.void : watcher.activate(repo.id, repo.localPath),
+              remoteSelectionRequired: () => Effect.void,
+            }),
+          ),
+        ),
     [CoreMethod.projectWorkspaceGet]: ({ projectId }) => projectWorkspace.get(projectId),
     [CoreMethod.projectWorkspaceSave]: ({ input }) => projectWorkspace.save(input),
     [CoreMethod.repairRepositoryIdentities]: () => repositories.repairIdentities(),
