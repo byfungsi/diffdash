@@ -271,6 +271,7 @@ describe("SnapshotBlockStore", () => {
           Buffer.from(bytes),
         )
         yield* publish(store, "snapshot:metadata", deltaId, blockId)
+        yield* publish(store, "snapshot:metadata", deltaId, blockId)
         expect(yield* store.getSnapshot(StoredSnapshotId.make("snapshot:metadata"))).toMatchObject({
           source: {
             kind: "exactGit",

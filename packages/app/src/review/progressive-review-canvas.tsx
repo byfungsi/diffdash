@@ -306,6 +306,12 @@ export const ProgressiveReviewCanvas = ({
     <div
       ref={canvasRef}
       data-review-global-canvas
+      data-review-process-id={identity.processId}
+      data-review-project-id={identity.projectId}
+      data-review-review-key={identity.reviewKey}
+      data-review-session-id={identity.sessionId}
+      data-review-snapshot-id={identity.snapshotId}
+      data-review-state-version={identity.stateVersion}
       data-review-logical-height={resources.virtualizer.layout.logicalHeight}
       data-review-mounted-rows={mount.mountedRows}
       data-review-viewport-top={viewport.logicalTop}

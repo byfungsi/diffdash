@@ -299,8 +299,10 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
       const child = spawn(options.bunExecutablePath, command.args, {
         cwd: command.cwd,
         env: command.environment,
-        stdio: "ignore",
+        stdio: "pipe",
       })
+      child.stdout?.resume()
+      child.stderr?.resume()
       const exited = new Promise<number>((resolve) =>
         child.once("exit", (code) => resolve(code ?? -1)),
       )

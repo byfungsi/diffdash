@@ -356,7 +356,7 @@ export const InvokeContract = {
   [InvokeChannel.searchProgressiveReview]: defineInvoke(
     InvokeChannel.searchProgressiveReview,
     ReviewSessionSearchRequest,
-    Schema.Array(ReviewSessionSearchPublication).pipe(Schema.check(Schema.isMaxLength(256))),
+    Schema.Array(ReviewSessionSearchPublication).pipe(Schema.check(Schema.isMaxLength(1))),
     { maxRequestBytes: 16 * KIB, maxResponseBytes: 384 * KIB },
   ),
   [InvokeChannel.startWalkthroughOperation]: defineInvoke(

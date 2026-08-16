@@ -47,7 +47,7 @@ import {
 const encoder = new TextEncoder()
 
 /** Default hard bound for one complete persisted hunk block. */
-export const CORE_SNAPSHOT_MAX_BLOCK_BYTES = 512 * 1024
+export const CORE_SNAPSHOT_MAX_BLOCK_BYTES = 320 * 1024
 
 /** Exact source-derived key required before a file's first hunk can be persisted. */
 export interface CoreSnapshotFileDeltaKeySource {

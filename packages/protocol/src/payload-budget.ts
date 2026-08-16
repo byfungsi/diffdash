@@ -16,7 +16,7 @@ export interface PayloadStructureLimits {
   readonly maxNodes: number
 }
 
-/** Returns the exact UTF-8 bytes of a bounded JSON-safe payload. */
+/** Returns bounded encoded bytes for a JSON-safe payload with structured-clone binary leaves. */
 export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
   value: Value,
   limits: PayloadStructureLimits = DEFAULT_PAYLOAD_STRUCTURE_LIMITS,
@@ -28,6 +28,7 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
     { value, depth: 0 },
   ]
   const seen = new WeakSet()
+  let binaryBytes = 0
   let nodes = 0
 
   while (pending.length > 0) {
@@ -48,6 +49,10 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
     }
     if (!Predicate.isObjectOrArray(item)) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
+    }
+    if (item instanceof Uint8Array) {
+      binaryBytes += item.byteLength
+      continue
     }
     if (seen.has(item)) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must not contain cycles.")
@@ -80,7 +85,9 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
 
   let serialized: string
   try {
-    const result = JSON.stringify(value)
+    const result = JSON.stringify(value, (_key, item: unknown) =>
+      item instanceof Uint8Array ? null : item,
+    )
     if (result === undefined) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
     }
@@ -89,7 +96,7 @@ export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
     if (Schema.is(TransportError)(error)) throw error
     throw transportError("INVALID_PAYLOAD", "IPC payload could not be serialized safely.")
   }
-  return utf8ByteLength(serialized)
+  return utf8ByteLength(serialized) + binaryBytes
 }
 
 /** Rejects a JSON-safe payload whose aggregate UTF-8 representation exceeds the byte budget. */

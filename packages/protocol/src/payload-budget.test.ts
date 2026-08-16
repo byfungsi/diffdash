@@ -23,6 +23,17 @@ describe("IPC payload budgets", () => {
     )
   })
 
+  it("measures structured-clone binary leaves without treating them as plain objects", () => {
+    const payload = { bytes: new Uint8Array([1, 2, 3]) }
+    const expected = new TextEncoder().encode(JSON.stringify({ bytes: null })).byteLength + 3
+
+    expect(jsonSafeUtf8ByteLength(payload)).toBe(expected)
+    expect(assertJsonPayloadWithinBudget(payload, expected)).toBe(expected)
+    expect(() => assertJsonPayloadWithinBudget(payload, expected - 1)).toThrowError(
+      expect.objectContaining({ code: "PAYLOAD_TOO_LARGE" }),
+    )
+  })
+
   it("bounds structural depth before serialization", () => {
     let payload: { child?: unknown } = {}
     const root = payload

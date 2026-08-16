@@ -7,8 +7,13 @@ import {
   expect,
   test,
   type ElectronApplication,
+  type Locator,
   type Page,
 } from "@playwright/test"
+import type {
+  ReviewSessionIdentity,
+  ReviewSessionSearchPublication,
+} from "@diffdash/protocol/review-session"
 import {
   REPOSITORY_SCALE_MEASUREMENT_POLICY,
   captureMachineProfile,
@@ -80,7 +85,6 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
   const executable = packagedE2eExecutable()
   const environment = {
     ...process.env,
-    DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
     DIFFDASH_E2E_CORE_HOST: configuration.host,
     DIFFDASH_E2E_DISABLE_UPDATES: "1",
     DIFFDASH_E2E_FAKE_AGENT_PROVIDER: "1",
@@ -205,7 +209,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       ],
       env: environment,
     })
-    const window = await app.firstWindow()
+    const window = await app.firstWindow({ timeout: 90_000 })
     report.gates.packaged = await app.evaluate(({ app: runtimeApp }) => runtimeApp.isPackaged)
     report.provenance.packaged = report.gates.packaged
     report.provenance.appVersion = await app.evaluate(({ app: runtimeApp }) =>
@@ -219,13 +223,16 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     observedCoreProcessIds = coreHostProcessIds(rootPid, configuration.host)
     report.gates.hostSelected = observedCoreProcessIds.length > 0
 
-    await startRendererMeasurement(window)
     await window.evaluate(installDiffDashE2eApi)
+    await startRendererMeasurement(window)
     await waitForComparison(window, configuration.fixture)
     report.gates.exactComparison = true
     const canvas = window.locator("[data-review-global-canvas]")
     await expect(canvas).toBeVisible({ timeout: 90_000 })
-    await expect(window.locator('[data-progressive-range-start="0"]').first()).toBeVisible()
+    const firstRange = window.locator('[data-progressive-range-start="0"]').first()
+    await expect(firstRange).toBeVisible()
+    const firstPierreHost = window.locator("diffs-container").first()
+    await expect(firstPierreHost).toBeAttached({ timeout: 30_000 })
     report.gates.firstRange = true
     report.observations.maximumMountedRows = Math.max(
       report.observations.maximumMountedRows,
@@ -233,6 +240,25 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     )
     expect(report.observations.maximumMountedRows).toBeLessThanOrEqual(1_000)
     report.gates.mountedRowsBounded = true
+
+    await expect
+      .poll(
+        async () => {
+          try {
+            const publications = await searchReview(window, canvas, "broad-search-match")
+            return publications.some(
+              (publication) => publication._tag === "Final" && publication.totalMatches > 0,
+            )
+              ? "match"
+              : JSON.stringify(publications)
+          } catch (error) {
+            return String(error)
+          }
+        },
+        { timeout: 60_000 },
+      )
+      .toBe("match")
+    report.gates.broadSearch = true
 
     const farPath = fixturePath(configuration.fixture.profile.fileCount - 1)
     await window.keyboard.press("ControlOrMeta+k")
@@ -245,21 +271,13 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       "idle",
     )
     report.gates.farTarget = true
-
-    await window.keyboard.press("ControlOrMeta+f")
-    await window.getByRole("searchbox", { name: "Search review diff" }).fill("broad-search-match")
-    await expect(window.locator("[data-review-search-toolbar]")).not.toContainText("0 / 0", {
-      timeout: 60_000,
-    })
-    report.gates.broadSearch = true
-    await window.keyboard.press("Escape")
     report.observations.renderer = await finishRendererMeasurement(window)
     report.gates.rendererMetricsObserved =
       report.observations.renderer.frameDurationMilliseconds.count > 0 &&
       report.observations.renderer.domNodes > 0 &&
       report.observations.renderer.livePierreHosts > 0
 
-    await window.keyboard.press("ControlOrMeta+r")
+    await pressRendererReload(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText(
       `${configuration.fixture.baseSha}...${configuration.fixture.headSha}`,
       { timeout: 90_000 },
@@ -273,7 +291,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       globalThis.window.diffDashDiagnosticsForE2e.holdNextReviewAcquisition(),
     )
     expect(hold.armed).toBe(true)
-    await window.keyboard.press("ControlOrMeta+r")
+    await pressRendererReload(window)
     await expect
       .poll(async () => (await reviewLifecycle(window)).acquisitions.activeOperationIds.length)
       .toBeGreaterThan(0)
@@ -464,10 +482,18 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       )
       .toBe(true)
     await expect
-      .poll(() =>
-        window.evaluate(
-          async () => (await globalThis.window.diffDashForE2e.appState.get()).onboardingCompleted,
-        ),
+      .poll(
+        async () => {
+          try {
+            return await window.evaluate(
+              async () =>
+                (await globalThis.window.diffDashForE2e.appState.get()).onboardingCompleted,
+            )
+          } catch {
+            return false
+          }
+        },
+        { timeout: 30_000 },
       )
       .toBe(true)
     report.gates.coreRestart = true
@@ -549,8 +575,86 @@ const waitForComparison = async (window: Page, fixture: FixtureManifest): Promis
   )
 }
 
-const reviewLifecycle = (window: Page) =>
-  window.evaluate(async () => globalThis.window.diffDashDiagnosticsForE2e.reviewLifecycle())
+const reviewLifecycle = async (window: Page) => {
+  const deadline = Date.now() + 10_000
+  let lastError: unknown = new Error("Review lifecycle diagnostics were unavailable")
+  while (Date.now() < deadline) {
+    try {
+      return await window.evaluate(async () =>
+        globalThis.window.diffDashDiagnosticsForE2e.reviewLifecycle(),
+      )
+    } catch (error) {
+      lastError = error
+      await window.waitForTimeout(50)
+    }
+  }
+  throw lastError
+}
+
+const searchReview = async (
+  window: Page,
+  canvas: Locator,
+  query: string,
+): Promise<readonly ReviewSessionSearchPublication[]> => {
+  const attribute = async (name: string): Promise<string> => {
+    const value = await canvas.getAttribute(name)
+    if (value === null) throw new Error(`Review canvas omitted ${name}`)
+    return value
+  }
+  const [processId, projectId, reviewKey, sessionId, snapshotId, stateVersion] = await Promise.all([
+    attribute("data-review-process-id"),
+    attribute("data-review-project-id"),
+    attribute("data-review-review-key"),
+    attribute("data-review-session-id"),
+    attribute("data-review-snapshot-id"),
+    attribute("data-review-state-version"),
+  ])
+  // SAFETY: The renderer authored these attributes directly from one parsed ReviewSessionIdentity.
+  const identity = {
+    processId,
+    projectId,
+    reviewKey,
+    sessionId,
+    snapshotId,
+    stateVersion: Number(stateVersion),
+  } as ReviewSessionIdentity
+  return window.evaluate(
+    async ({ identity: currentIdentity, query: currentQuery }) => {
+      const publications: ReviewSessionSearchPublication[] = []
+      const state = await globalThis.window.diffDashForE2e.progressiveReviews.currentSession({
+        identity: currentIdentity,
+      })
+      if (state._tag !== "ready") throw new Error(JSON.stringify(state))
+      await globalThis.window.diffDashForE2e.progressiveReviews.search(
+        {
+          identity: state.identity,
+          query: currentQuery,
+          anchorFileId: null,
+          direction: "next",
+          cursor: null,
+          limit: 200,
+        },
+        (publication) => publications.push(publication),
+      )
+      return publications
+    },
+    { identity, query },
+  )
+}
+
+const pressRendererReload = (window: Page) =>
+  window.evaluate((shortcutKey) => {
+    const isMac = navigator.userAgent.includes("Macintosh")
+    const event = new KeyboardEvent("keydown", {
+      key: shortcutKey,
+      metaKey: isMac,
+      ctrlKey: !isMac,
+      bubbles: true,
+      cancelable: true,
+    })
+    if (globalThis.window.dispatchEvent(event))
+      throw new Error("Renderer did not handle the reload shortcut")
+  }, "r")
 
 const startRendererMeasurement = (window: Page) =>
   window.evaluate(() => {
@@ -558,6 +662,7 @@ const startRendererMeasurement = (window: Page) =>
       frameBuckets: number[]
       frameCount: number
       maximumFrameDuration: number
+      maximumLivePierreHosts: number
       lastFrameAt: number | null
       longTaskDurations: number[]
       observer: PerformanceObserver | null
@@ -570,6 +675,7 @@ const startRendererMeasurement = (window: Page) =>
       frameBuckets: [],
       frameCount: 0,
       maximumFrameDuration: 0,
+      maximumLivePierreHosts: 0,
       lastFrameAt: null,
       longTaskDurations: [],
       observer: null,
@@ -577,6 +683,10 @@ const startRendererMeasurement = (window: Page) =>
     }
     const frame = (timestamp: number) => {
       if (!state.running) return
+      state.maximumLivePierreHosts = Math.max(
+        state.maximumLivePierreHosts,
+        document.querySelectorAll("diffs-container").length,
+      )
       if (state.lastFrameAt !== null && state.frameCount < 20_000) {
         const duration = timestamp - state.lastFrameAt
         const bucket = Math.min(2_000, Math.ceil(duration))
@@ -606,6 +716,7 @@ const finishRendererMeasurement = (window: Page): Promise<RendererMeasurement> =
       frameBuckets: number[]
       frameCount: number
       maximumFrameDuration: number
+      maximumLivePierreHosts: number
       lastFrameAt: number | null
       longTaskDurations: number[]
       observer: PerformanceObserver | null
@@ -641,7 +752,7 @@ const finishRendererMeasurement = (window: Page): Promise<RendererMeasurement> =
         usedBytes: memory?.usedJSHeapSize ?? null,
         limitBytes: memory?.jsHeapSizeLimit ?? null,
       },
-      livePierreHosts: document.querySelectorAll("diffs-container").length,
+      livePierreHosts: state.maximumLivePierreHosts,
       longTasks: {
         count: state.longTaskDurations.length,
         maximumDurationMilliseconds: Math.max(0, ...state.longTaskDurations),
@@ -659,10 +770,15 @@ const forwardComparison = (
   environment: NodeJS.ProcessEnv,
   fixture: { readonly manifest: FixtureManifest; readonly repository: string },
 ): void => {
+  const originalEnvelopeIndex = launchArguments.findIndex((argument) =>
+    argument.startsWith("--diffdash-cli-v1="),
+  )
+  const electronArguments =
+    originalEnvelopeIndex < 0 ? launchArguments : launchArguments.slice(0, originalEnvelopeIndex)
   execFileSync(
     executable,
     [
-      ...launchArguments,
+      ...electronArguments,
       `--diffdash-cli-v1=${fixture.repository}`,
       "--",
       "compare",

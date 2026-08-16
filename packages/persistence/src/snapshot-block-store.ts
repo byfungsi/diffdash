@@ -703,6 +703,9 @@ export class SnapshotBlockStore extends Context.Service<
             yield* database.transaction(
               Effect.gen(function* () {
                 const source = sourceColumns(input.source)
+                yield* database.run("DELETE FROM review_snapshot_manifests WHERE id = ?", [
+                  input.id,
+                ])
                 yield* database.run(
                   `INSERT INTO review_snapshot_manifests (
                     id, project_id, review_key, base_revision, head_revision, semantic_identity, source_kind,

@@ -98,11 +98,11 @@ export const defineReviewHandlers = (
   handlers.define(
     InvokeChannel.searchProgressiveReview,
     async (_event, request) => {
-      const publications: ReviewSessionSearchPublication[] = []
-      await runtime.progressiveReviews.search(request, (publication) =>
-        publications.push(publication),
-      )
-      return publications
+      let finalPublication: ReviewSessionSearchPublication | null = null
+      await runtime.progressiveReviews.search(request, (publication) => {
+        if (publication._tag === "Final") finalPublication = publication
+      })
+      return finalPublication === null ? [] : [finalPublication]
     },
     progressiveError,
   )
