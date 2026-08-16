@@ -115,28 +115,6 @@ export const reviewAgentOperationsLayer = Layer.effect(
   }),
 )
 
-/** Embedded composition without a connected Core event transport. */
-export const reviewAgentOperationsWithoutEventsLayer = Layer.effect(
-  ReviewAgentOperationsService,
-  Effect.gen(function* () {
-    const turns = yield* ReviewTurnStore
-    const reviewAgents = yield* ReviewAgentService
-    const operations = yield* makeReviewAgentOperations<
-      RunReviewAgentTurnInput,
-      ReviewAgentOperationError
-    >({
-      store: turns,
-      accept: (input) =>
-        reviewAgents
-          .acceptThreadTurn(input)
-          .pipe(
-            Effect.map(({ operation, worker }) => ({ operation, worker: Effect.asVoid(worker) })),
-          ),
-    })
-    return ReviewAgentOperationsService.of(operations)
-  }),
-)
-
 type WorkerExit<Failure> = Exit.Exit<void, Failure>
 
 /** Creates an active-only `FiberMap` coordinator over a persistence-owned lifecycle. */

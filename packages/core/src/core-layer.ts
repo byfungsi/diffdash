@@ -46,7 +46,7 @@ import {
   coreProgressiveReviewServiceLayer,
 } from "./core-review-session-rpc-handlers"
 import { generatedCoreReviewDataWorkerLayer } from "./generated-review-data-worker"
-import { reviewAgentOperationsWithoutEventsLayer } from "./operations/review-agent-operations"
+import { reviewAgentOperationsLayer } from "./operations/review-agent-operations"
 import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
 import type { CoreProviderComposition } from "./provider-composition"
 import { AgentProviders } from "./services/agent-providers"
@@ -243,7 +243,7 @@ export const createStandaloneCoreLayer = (
     Layer.provideMerge(reviewTurnStoreLayer),
     Layer.provideMerge(hostedReviewWorkspacePoolLayer),
   )
-  const reviewAgentOperationsLayer = reviewAgentOperationsWithoutEventsLayer.pipe(
+  const reviewAgentOperationServiceLayer = reviewAgentOperationsLayer.pipe(
     Layer.provideMerge(reviewAgentLayer),
     Layer.provideMerge(reviewTurnStoreLayer),
   )
@@ -415,7 +415,7 @@ export const createStandaloneCoreLayer = (
     WalkthroughOperationStore.layer,
     WalkthroughStore.layer,
     reviewAgentLayer,
-    reviewAgentOperationsLayer,
+    reviewAgentOperationServiceLayer,
     threadAnchorMapperLayer,
   ).pipe(
     Layer.provide(databaseLayer),
