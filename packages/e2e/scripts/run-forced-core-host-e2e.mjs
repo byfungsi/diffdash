@@ -2,6 +2,13 @@ import { spawnSync } from "node:child_process"
 import { withDesktopBuildLease } from "./desktop-build-lease.mjs"
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
+const criticalFlowPattern = [
+  "routes a hosted review through the non-GitHub fixture provider",
+  "opens local working tree review from CLI argument",
+  "reports an explicit Claude walkthrough failure through contextBridge and clipboard",
+  "FUN-133 AC: runs a fixture review turn through codex",
+  "opens and forwards immutable repository comparisons through Electron",
+].join("|")
 
 await withDesktopBuildLease(async () => {
   run(pnpm, ["--filter", "@diffdash/desktop", "build:e2e"])
@@ -15,7 +22,7 @@ await withDesktopBuildLease(async () => {
         "test",
         "--project=desktop",
         "--grep",
-        "reports an explicit Claude walkthrough failure through contextBridge and clipboard",
+        criticalFlowPattern,
       ],
       {
         DIFFDASH_E2E_CORE_HOST: host,
