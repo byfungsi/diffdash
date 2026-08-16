@@ -141,6 +141,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
           codeThemes: settings.codeThemes,
           diffViewMode: settings.diffViewMode,
           git: fixtureGit,
+          claude: catalog.providers.find(({ id }) => id === "claude"),
+          codex: catalog.providers.find(({ id }) => id === "codex"),
           opencode: catalog.providers.find(({ id }) => id === "opencode"),
           repository: repositories.find(
             ({ source }) => source._tag === "hosted" && source.locator.providerId === "fixture",
@@ -164,6 +166,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         id: "fixture",
         displayName: "Fixture Forge",
         capabilities: expect.objectContaining({ reviewDecisions: false }),
+      }),
+      claude: expect.objectContaining({
+        id: "claude",
+        capabilities: {
+          walkthrough: expect.objectContaining({ _tag: "Ready" }),
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        },
+      }),
+      codex: expect.objectContaining({
+        id: "codex",
+        capabilities: {
+          walkthrough: expect.objectContaining({ _tag: "Ready" }),
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        },
       }),
       opencode: expect.objectContaining({
         id: "opencode",

@@ -541,19 +541,20 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   expect(realGit(linkedRepo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus)
 })
 
-test("opens local working tree review from CLI argument", async ({
+test("runs an explicit Claude walkthrough successfully", async ({
   browserName: _browserName,
 }, testInfo) => {
   const fakeBin = testInfo.outputPath("fake-bin")
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
   await mkdir(fakeBin, { recursive: true })
   await mkdir(localRepo, { recursive: true })
   await mkdir(xdgConfigHome, { recursive: true })
   await mkdir(userData, { recursive: true })
   await installFakeCli(fakeBin)
-  await installCodexSettings(xdgConfigHome)
+  await installAgentSettings(xdgConfigHome, "claude")
 
   const app = await electron.launch({
     args: [
@@ -565,6 +566,7 @@ test("opens local working tree review from CLI argument", async ({
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -582,6 +584,7 @@ test("opens local working tree review from CLI argument", async ({
     await window.getByRole("button", { name: "Walkthrough" }).click()
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    expect(await countLogLines(claudeRunLog)).toBe(1)
   } finally {
     await app.close()
   }
@@ -594,6 +597,8 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  const codexRunLog = testInfo.outputPath("codex-walkthrough-runs.log")
   await Promise.all([
     mkdir(fakeBin, { recursive: true }),
     mkdir(localRepo, { recursive: true }),
@@ -613,7 +618,9 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
       FAKE_CLAUDE_WALKTHROUGH_INVALID: "1",
+      FAKE_CODEX_WALKTHROUGH_LOG: codexRunLog,
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -629,8 +636,197 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     await expect(window.getByText("Walkthrough unavailable")).toBeHidden()
+    expect(await countLogLines(claudeRunLog)).toBe(2)
+    expect(await countLogLines(codexRunLog)).toBe(1)
   } finally {
     await app.close()
+  }
+})
+
+test("skips unavailable Claude and falls back to Codex in Auto mode", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  const codexRunLog = testInfo.outputPath("codex-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "auto")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_CLAUDE_UNAVAILABLE: "1",
+      FAKE_CODEX_WALKTHROUGH_LOG: codexRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+
+    await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    expect(await countLogLines(claudeRunLog)).toBe(0)
+    expect(await countLogLines(codexRunLog)).toBe(1)
+  } finally {
+    await app.close()
+  }
+})
+
+test("recovers a running walkthrough after renderer reload", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(45_000)
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_DELAY_MS: "2500",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await expect.poll(() => countLogLines(claudeRunLog)).toBe(1)
+
+    await window.reload()
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible({
+      timeout: 20_000,
+    })
+    expect(await countLogLines(claudeRunLog)).toBe(1)
+  } finally {
+    await app.close()
+  }
+})
+
+test("kills the provider child and persists interruption after a Core crash", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(45_000)
+  const forcedCoreHost = readForcedCoreHost()
+  test.skip(forcedCoreHost === null, "This scenario requires a forced standalone Core host")
+  if (forcedCoreHost === null) return
+
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_CORE_HOST: forcedCoreHost,
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_DELAY_MS: "30000",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const mainProcessId = app.process().pid
+    if (mainProcessId === undefined) throw new Error("Electron main process PID is unavailable")
+    let coreProcessId = 0
+    await expect
+      .poll(() => {
+        coreProcessId = coreHostProcessIds(mainProcessId, forcedCoreHost)[0] ?? 0
+        return coreProcessId
+      })
+      .toBeGreaterThan(0)
+
+    const window = await app.firstWindow()
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await expect.poll(() => readProviderRunProcessId(claudeRunLog)).toBeGreaterThan(0)
+    const providerProcessId = await readProviderRunProcessId(claudeRunLog)
+
+    process.kill(coreProcessId, "SIGKILL")
+    await expect.poll(() => processIsAlive(providerProcessId), { timeout: 10_000 }).toBe(false)
+    await expect
+      .poll(
+        () =>
+          coreHostProcessIds(mainProcessId, forcedCoreHost).some(
+            (processId) => processId !== coreProcessId,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true)
+    await expect
+      .poll(() => readLatestWalkthroughOperationState(join(userData, "diffdash.sqlite")), {
+        timeout: 15_000,
+      })
+      .toBe("interrupted")
+    expect(await countLogLines(claudeRunLog)).toBe(1)
+  } finally {
+    await app.close().catch(() => undefined)
   }
 })
 
@@ -687,6 +883,26 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const rawFailurePromise = window.evaluate(
+      async ({ rootPath }) => {
+        const result = await Reflect.apply(
+          globalThis.window.diffDash.localWalkthroughs.generate,
+          undefined,
+          [{ kind: "local", rootPath, comparison: { _tag: "workingTree" } }],
+        )
+        if (!("error" in result)) throw new Error("Expected the raw bridge call to fail")
+        return {
+          envelopeIsPlain: Object.getPrototypeOf(result) === Object.prototype,
+          errorIsPlain: Object.getPrototypeOf(result.error) === Object.prototype,
+          tag: Reflect.get(result, "_tag"),
+          errorTag: Reflect.get(result.error, "_tag"),
+          code: result.error.code,
+          operation: result.error.operation,
+          providerFailure: result.error.providerFailure,
+        }
+      },
+      { rootPath: localRepo },
+    )
     await window.getByRole("button", { name: "Walkthrough" }).click()
 
     await expect(
@@ -696,6 +912,25 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     ).toBeVisible()
     await window.getByRole("button", { name: "Copy error details" }).first().click()
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
+
+    const rawFailure = await rawFailurePromise
+    expect(rawFailure).toMatchObject({
+      envelopeIsPlain: true,
+      errorIsPlain: true,
+      tag: "Failure",
+      errorTag: "TransportError",
+      code: forcedCoreHost === null ? "AgentProviderAuthenticationError" : "AGENT_PROVIDER_EXIT",
+      operation: "localWalkthroughs:generate",
+    })
+    if (forcedCoreHost !== null) {
+      expect(rawFailure.providerFailure).toMatchObject({
+        code: "AGENT_PROVIDER_EXIT",
+        method: "Walkthroughs.start",
+        providerId: "claude",
+        modelId: "claude-sonnet-5",
+        retryClass: "userAction",
+      })
+    }
 
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
     if (forcedCoreHost === null) {
@@ -1339,6 +1574,33 @@ const countLogLines = async (path: string) => {
   }
 }
 
+const readProviderRunProcessId = async (path: string): Promise<number> => {
+  try {
+    const firstLine = (await readFile(path, "utf8")).split("\n").find(Boolean)
+    const processId = Number(firstLine?.split(" ")[1])
+    return Number.isInteger(processId) && processId > 0 ? processId : 0
+  } catch {
+    return 0
+  }
+}
+
+const readLatestWalkthroughOperationState = (databasePath: string): string | null => {
+  try {
+    const database = new DatabaseSync(databasePath, { readOnly: true })
+    try {
+      const row = database
+        .prepare("SELECT state FROM walkthrough_operations ORDER BY accepted_at DESC LIMIT 1")
+        .get()
+      if (typeof row !== "object" || row === null || !("state" in row)) return null
+      return typeof row.state === "string" ? row.state : null
+    } finally {
+      database.close()
+    }
+  } catch {
+    return null
+  }
+}
+
 const readReviewPersistenceSnapshot = (databasePath: string) => {
   const database = new DatabaseSync(databasePath, { readOnly: true })
   try {
@@ -1748,6 +2010,9 @@ if (!args.includes("exec")) {
     }, 500)
 } else {
   for await (const chunk of process.stdin) void chunk
+  if (process.env.FAKE_CODEX_WALKTHROUGH_LOG) {
+    appendFileSync(process.env.FAKE_CODEX_WALKTHROUGH_LOG, "run\\n")
+  }
   const output = JSON.stringify({
     title: "Review path",
     summary: "Review the app entry point first.",
@@ -1773,9 +2038,12 @@ if (!args.includes("exec")) {
 `
 
 const fakeClaudeScript = `#!/usr/bin/env node
+import { appendFileSync } from "node:fs"
+import { setTimeout as delay } from "node:timers/promises"
 const args = process.argv.slice(2)
 
 if (args[0] === "--version") {
+  if (process.env.FAKE_CLAUDE_UNAVAILABLE === "1") process.exit(1)
   console.log("claude 0.1.0")
   process.exit(0)
 }
@@ -1798,6 +2066,11 @@ if (args.includes("stream-json")) {
 }
 
 if (args.includes("--print")) {
+  if (process.env.FAKE_CLAUDE_RUN_LOG) {
+    appendFileSync(process.env.FAKE_CLAUDE_RUN_LOG, "run " + process.pid + "\\n")
+  }
+  const delayMilliseconds = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? "0")
+  if (Number.isFinite(delayMilliseconds) && delayMilliseconds > 0) await delay(delayMilliseconds)
   if (process.env.FAKE_CLAUDE_WALKTHROUGH_FAILURE === "1") {
     console.error([
       "Claude authentication failed at /Users/example/secret-repository",

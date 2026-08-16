@@ -4,8 +4,12 @@ import { withDesktopBuildLease } from "./desktop-build-lease.mjs"
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
 const criticalFlowPattern = [
   "routes a hosted review through the non-GitHub fixture provider",
-  "opens local working tree review from CLI argument",
+  "runs an explicit Claude walkthrough successfully",
   "reports an explicit Claude walkthrough failure through contextBridge and clipboard",
+  "falls back from invalid Claude walkthrough output to Codex in Auto mode",
+  "skips unavailable Claude and falls back to Codex in Auto mode",
+  "recovers a running walkthrough after renderer reload",
+  "kills the provider child and persists interruption after a Core crash",
   "FUN-133 AC: runs a fixture review turn through codex",
   "opens and forwards immutable repository comparisons through Electron",
 ].join("|")
@@ -14,21 +18,10 @@ await withDesktopBuildLease(async () => {
   run(pnpm, ["--filter", "@diffdash/desktop", "build:e2e"])
 
   for (const host of ["bun", "utility"]) {
-    run(
-      pnpm,
-      [
-        "exec",
-        "playwright",
-        "test",
-        "--project=desktop",
-        "--grep",
-        criticalFlowPattern,
-      ],
-      {
-        DIFFDASH_E2E_CORE_HOST: host,
-        DIFFDASH_E2E_FORCED_CORE_HOST_GATE: "1",
-      },
-    )
+    run(pnpm, ["exec", "playwright", "test", "--project=desktop", "--grep", criticalFlowPattern], {
+      DIFFDASH_E2E_CORE_HOST: host,
+      DIFFDASH_E2E_FORCED_CORE_HOST_GATE: "1",
+    })
   }
 })
 
