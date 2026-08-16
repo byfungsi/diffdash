@@ -85,6 +85,10 @@ describe("progressive review session protocol", () => {
           oldPath: null,
           additions: 1,
           deletions: 0,
+          status: "modified",
+          visibility: { _tag: "Visible" },
+          patchHash: "file-patch:test",
+          hunkCount: 1,
         },
         blocks: [
           {

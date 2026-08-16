@@ -4,7 +4,8 @@ import { isAbsolute, relative, resolve, sep } from "node:path"
 import { Context, Effect, Layer, Option, Predicate, Schema } from "effect"
 import * as SqlClient from "effect/unstable/sql/SqlClient"
 
-import { DiffFileStatus } from "@diffdash/domain/diff"
+import { DiffFileStatus, type DiffFileVisibility } from "@diffdash/domain/diff"
+import { ReviewFilePatchHash, ReviewProjectId } from "@diffdash/domain/review-identity"
 import { type Database, makeDatabase, toError } from "./database"
 import {
   CatalogResourceId,
@@ -89,6 +90,10 @@ export interface SnapshotFilePlacement {
   readonly oldPath: string | null
   readonly additions: number
   readonly deletions: number
+  readonly status: typeof DiffFileStatus.Type
+  readonly visibility: DiffFileVisibility
+  readonly patchHash: ReviewFilePatchHash
+  readonly hunkCount: number
 }
 
 /** Sparse seek metadata into a snapshot's ordered block sequence. */
@@ -104,6 +109,7 @@ export interface SnapshotCheckpoint {
 /** Complete SQLite-authoritative snapshot manifest publication input. */
 export interface PublishSnapshotInput {
   readonly id: StoredSnapshotId
+  readonly projectId: ReviewProjectId
   readonly reviewKey: string
   readonly baseRevision: string
   readonly headRevision: string
@@ -188,6 +194,7 @@ export interface DeleteSnapshotResult {
 /** Parsed snapshot manifest, ordering, and sparse checkpoints loaded from SQLite. */
 export interface StoredSnapshot {
   readonly id: StoredSnapshotId
+  readonly projectId: ReviewProjectId
   readonly reviewKey: string
   readonly baseRevision: string
   readonly headRevision: string
@@ -336,6 +343,7 @@ export class SnapshotBlockStore extends Context.Service<
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SnapshotManifestRow)))
           return {
             id: manifest.id,
+            projectId: manifest.project_id,
             reviewKey: manifest.review_key,
             baseRevision: manifest.base_revision,
             headRevision: manifest.head_revision,
@@ -644,12 +652,13 @@ export class SnapshotBlockStore extends Context.Service<
                 const source = sourceColumns(input.source)
                 yield* database.run(
                   `INSERT INTO review_snapshot_manifests (
-                    id, review_key, base_revision, head_revision, semantic_identity, source_kind,
+                    id, project_id, review_key, base_revision, head_revision, semantic_identity, source_kind,
                     spool_resource_id, repository_identity, base_object, head_object,
                     diff_policy_identity, created_at_ms
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                   [
                     input.id,
+                    input.projectId,
                     input.reviewKey,
                     input.baseRevision,
                     input.headRevision,
@@ -666,8 +675,9 @@ export class SnapshotBlockStore extends Context.Service<
                 for (const file of input.files)
                   yield* database.run(
                     `INSERT INTO review_snapshot_files (
-                      snapshot_id, ordinal, delta_id, file_id, path, old_path, additions, deletions
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                      snapshot_id, ordinal, delta_id, file_id, path, old_path, additions, deletions,
+                      status, visibility, hidden_reason, patch_hash, hunk_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
                       input.id,
                       file.ordinal,
@@ -677,6 +687,11 @@ export class SnapshotBlockStore extends Context.Service<
                       file.oldPath,
                       file.additions,
                       file.deletions,
+                      file.status,
+                      file.visibility._tag,
+                      file.visibility._tag === "Hidden" ? file.visibility.reason : null,
+                      file.patchHash,
+                      file.hunkCount,
                     ],
                   )
                 for (const [ordinal, blockId] of input.blockIds.entries())
@@ -742,15 +757,7 @@ export class SnapshotBlockStore extends Context.Service<
             )
             return {
               ...manifest,
-              files: files.map((file) => ({
-                ordinal: file.ordinal,
-                deltaId: file.delta_id,
-                fileId: file.file_id,
-                path: file.path,
-                oldPath: file.old_path,
-                additions: file.additions,
-                deletions: file.deletions,
-              })),
+              files: files.map(toSnapshotFilePlacement),
               blockIds: placements.map(({ block_id }) => block_id),
               checkpoints: checkpoints.map((checkpoint) => ({
                 ordinal: checkpoint.ordinal,
@@ -980,6 +987,7 @@ const CollectionRow = Schema.Struct({
 
 const SnapshotManifestRow = Schema.Struct({
   id: StoredSnapshotId,
+  project_id: ReviewProjectId,
   review_key: Schema.String,
   base_revision: Schema.String,
   head_revision: Schema.String,
@@ -1002,6 +1010,11 @@ const SnapshotFileRow = Schema.Struct({
   old_path: Schema.NullOr(Schema.String),
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
+  status: DiffFileStatus,
+  visibility: Schema.Literals(["Visible", "Hidden"]),
+  hidden_reason: Schema.NullOr(Schema.Literals(["binary", "lockfile", "vendored", "generated"])),
+  patch_hash: ReviewFilePatchHash,
+  hunk_count: NonNegativeInt,
 })
 
 const StoredHunkRow = Schema.Struct({
@@ -1044,6 +1057,13 @@ const toSnapshotFilePlacement = (file: typeof SnapshotFileRow.Type): SnapshotFil
   oldPath: file.old_path,
   additions: file.additions,
   deletions: file.deletions,
+  status: file.status,
+  visibility:
+    file.visibility === "Visible"
+      ? { _tag: "Visible" as const }
+      : { _tag: "Hidden" as const, reason: file.hidden_reason ?? "generated" },
+  patchHash: file.patch_hash,
+  hunkCount: file.hunk_count,
 })
 
 const loadPendingBlock = Effect.fn("SnapshotBlockStore.loadPendingBlock")(function* (

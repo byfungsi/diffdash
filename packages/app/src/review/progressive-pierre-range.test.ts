@@ -1,6 +1,7 @@
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -46,6 +47,10 @@ describe("loadProgressivePierreRange", () => {
         oldPath: null,
         additions: 1,
         deletions: 0,
+        status: "modified" as const,
+        visibility: { _tag: "Visible" as const },
+        patchHash: ReviewFilePatchHash.make("file-patch:test"),
+        hunkCount: 1,
       },
       blocks: [
         {

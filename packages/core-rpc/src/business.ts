@@ -69,7 +69,6 @@ export const AppStateBusinessRpcs = RpcGroup.make(AppStateGetRpc)
 export const AppStateUpdateRpcs = RpcGroup.make(AppStateUpdateRpc)
 
 /** Authoritative Electron-to-Core business RPC audience catalog. */
-export const CoreBusinessRpcs =
-  AppStateBusinessRpcs.merge(AppStateUpdateRpcs)
-    .merge(WalkthroughBusinessRpcs)
-    .merge(ReviewAgentBusinessRpcs)
+export const CoreBusinessRpcs = AppStateBusinessRpcs.merge(AppStateUpdateRpcs)
+  .merge(WalkthroughBusinessRpcs)
+  .merge(ReviewAgentBusinessRpcs)

@@ -1,5 +1,6 @@
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -61,6 +62,10 @@ const file = {
   oldPath: null,
   additions: 1,
   deletions: 0,
+  status: "modified",
+  visibility: { _tag: "Visible" },
+  patchHash: ReviewFilePatchHash.make("file-patch:test"),
+  hunkCount: 1,
 } as const
 const ready = CoreReviewSessionState.cases.Ready.make({ identity: nativeIdentity })
 

@@ -5,6 +5,7 @@ import { CoreStateDeliveryRpcs } from "./event-rpc"
 import { WalkthroughBusinessRpcs } from "./walkthrough-rpc"
 import { ReviewAgentBusinessRpcs, ReviewAgentStartRpc } from "./review-agent-rpc"
 import { CoreApplicationRpcs } from "./application-rpc"
+import { CoreProgressiveReviewRpcs } from "./review-session-rpc"
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup"
 
 /** Private native RPC header carrying the one-time Core transport credential. */
@@ -79,6 +80,11 @@ export const AuthenticatedReviewAgentBusinessRpcs = ReviewAgentBusinessRpcs.midd
   CoreTransportAuthenticationMiddleware,
 )
 
+/** Authenticated progressive review methods backed by Core-owned snapshot storage. */
+export const AuthenticatedProgressiveReviewRpcs = CoreProgressiveReviewRpcs.middleware(
+  CoreTransportAuthenticationMiddleware,
+)
+
 /** Authenticated control and durable review-agent server group. */
 export const AuthenticatedCoreReviewAgentServerRpcs = AuthenticatedCoreControlRpcs.merge(
   AuthenticatedReviewAgentBusinessRpcs,
@@ -97,6 +103,7 @@ export const AuthenticatedCoreApplicationRpcs = AuthenticatedCoreControlRpcs.mer
   .merge(AuthenticatedAppStateUpdateRpcs)
   .merge(AuthenticatedWalkthroughBusinessRpcs)
   .merge(AuthenticatedReviewAgentBusinessRpcs)
+  .merge(AuthenticatedProgressiveReviewRpcs)
   .merge(AuthenticatedCoreStateDeliveryRpcs)
 
 /** Standalone-capable server catalog for control, event replay, and durable commands. */

@@ -123,6 +123,7 @@ const makeLayer = (
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
+            getById: () => Effect.succeed(linkedRepo),
             list: () => Effect.succeed([linkedRepo]),
             findByLocalPath: () => Effect.succeed(existingByPath),
             findHosted: () => Effect.succeed(Option.none()),
@@ -647,6 +648,7 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
+            getById: () => Effect.succeed(options.existing ?? linkedRepo),
             list: () => Effect.succeed(options.listed ?? []),
             findByLocalPath: () => Effect.succeed(Option.fromNullishOr(options.existing)),
             findHosted: () => Effect.succeed(Option.fromNullishOr(options.existing)),

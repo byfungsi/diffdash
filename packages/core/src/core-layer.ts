@@ -1,4 +1,5 @@
 import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
+import { CoreRpcPayloadBytes } from "@diffdash/core-rpc"
 import { DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitProviderRegistry } from "@diffdash/git-provider"
@@ -7,12 +8,14 @@ import { GitService } from "@diffdash/local-git/local-git"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
+import { ResourceCatalog, ResourceRootId } from "@diffdash/persistence/resource-catalog"
 import { RepositoryStore } from "@diffdash/persistence/repository-store"
 import { ReviewThreadStore } from "@diffdash/persistence/review-thread-store"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { ViewedFileStore } from "@diffdash/persistence/viewed-file-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
 import { WalkthroughStore } from "@diffdash/persistence/walkthrough-store"
+import { SnapshotBlockStore } from "@diffdash/persistence/snapshot-block-store"
 import { ProcessService } from "@diffdash/process"
 import { defaultExecutablePath } from "@diffdash/process/executable"
 import { ProcessFileSystem } from "@diffdash/process/file-system"
@@ -24,10 +27,20 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Cause, Effect, Layer } from "effect"
+import { Cause, Clock, Effect, Layer } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
+import {
+  CORE_SNAPSHOT_MAX_BLOCK_BYTES,
+  CoreSnapshotIngestion,
+  coreSnapshotIngestionLayer,
+} from "./core-snapshot-ingestion"
+import {
+  CoreProgressiveReviewService,
+  coreProgressiveReviewServiceLayer,
+} from "./core-review-session-rpc-handlers"
+import { generatedCoreReviewDataWorkerLayer } from "./generated-review-data-worker"
 import { reviewAgentOperationsWithoutEventsLayer } from "./operations/review-agent-operations"
 import { CoreStartupError, type CoreStartupFailure, toCoreStartupError } from "./core-startup-error"
 import type { CoreProviderComposition } from "./provider-composition"
@@ -42,13 +55,48 @@ import { AgentArtifactNormalizer } from "./services/agent-artifact-normalizer"
 import { ReviewAgentRouting, ReviewAgentService } from "./services/review-agent"
 import { ReviewMcpHandlers } from "./services/review-mcp-handlers"
 import { ReviewThreadAnchorMapper } from "./services/review-thread-anchor-mapper"
+import {
+  snapshotGitRangeSourceLayer,
+  snapshotProjectAuthorityLayer,
+} from "./services/snapshot-production-adapters"
+import { SnapshotRepository, snapshotRepositoryLayer } from "./services/snapshot-repository"
+import { SnapshotSearch, snapshotSearchLayer } from "./services/snapshot-search"
 
-/** Builds the runtime-neutral business service graph owned by DiffDash Core. */
-export const createCoreLayer = (
+/** Maximum aggregate exact-Git output reserved by one lazy file regeneration. */
+export const CORE_SNAPSHOT_MAX_LAZY_BYTES = 16 * 1_024 * 1_024
+
+const SNAPSHOT_RESOURCE_ROOT_ID = ResourceRootId.make("core:snapshot-blocks:v1")
+const SNAPSHOT_RESERVATION_LIFETIME_MS = 60_000
+const SNAPSHOT_LEASE_LIFETIME_MS = 30_000
+const SNAPSHOT_MANAGED_QUOTA_BYTES = 4 * 1_024 * 1_024 * 1_024
+
+type StandaloneCoreServices =
+  | CoreOperationService
+  | CoreSnapshotIngestion
+  | CoreProgressiveReviewService
+  | SnapshotRepository
+  | SnapshotSearch
+
+function createCoreLayerInternal(
   configuration: CoreConfiguration,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
   providerComposition: CoreProviderComposition,
-): Layer.Layer<CoreOperationService, CoreStartupFailure> => {
+  includeProgressiveReviews: false,
+): Layer.Layer<CoreOperationService, CoreStartupFailure>
+function createCoreLayerInternal(
+  configuration: CoreConfiguration,
+  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
+  includeProgressiveReviews: true,
+): Layer.Layer<StandaloneCoreServices, CoreStartupFailure>
+function createCoreLayerInternal(
+  configuration: CoreConfiguration,
+  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
+  includeProgressiveReviews: boolean,
+):
+  | Layer.Layer<CoreOperationService, CoreStartupFailure>
+  | Layer.Layer<StandaloneCoreServices, CoreStartupFailure> {
   const executableSearchPath = ExecutableSearchPath.make(
     defaultExecutablePath(configuration.environment.executableSearchPath),
   )
@@ -195,6 +243,67 @@ export const createCoreLayer = (
     Layer.provideMerge(gitProviderLayer),
     Layer.provideMerge(repositoryComparisonSourceLayer),
   )
+  const snapshotRootPath = `${configuration.paths.database}.snapshot-blocks`
+  const snapshotBlockStoreLayer = SnapshotBlockStore.layer({
+    rootId: SNAPSHOT_RESOURCE_ROOT_ID,
+    rootPath: snapshotRootPath,
+  })
+  const snapshotPersistenceLayer = Layer.merge(ResourceCatalog.layer, snapshotBlockStoreLayer)
+  const projectAuthorityLayer = snapshotProjectAuthorityLayer
+  const gitRangeSourceLayer = snapshotGitRangeSourceLayer.pipe(
+    Layer.provide(RepositoryStore.layer),
+    Layer.provide(processLayer),
+  )
+  const snapshotRepositoryServiceLayer = snapshotRepositoryLayer({
+    maximumResponseBytes: CoreRpcPayloadBytes.make(384 * 1_024),
+    maximumBlockBytes: CORE_SNAPSHOT_MAX_BLOCK_BYTES,
+    maximumLazyBlocks: CORE_SNAPSHOT_MAX_LAZY_BYTES / CORE_SNAPSHOT_MAX_BLOCK_BYTES,
+    maximumLazyConcurrency: 1,
+    managedQuotaBytes: SNAPSHOT_MANAGED_QUOTA_BYTES,
+    reservationLifetimeMs: SNAPSHOT_RESERVATION_LIFETIME_MS,
+    leaseLifetimeMs: SNAPSHOT_LEASE_LIFETIME_MS,
+  }).pipe(
+    Layer.provideMerge(snapshotPersistenceLayer),
+    Layer.provide(projectAuthorityLayer),
+    Layer.provide(gitRangeSourceLayer),
+  )
+  const snapshotSearchServiceLayer = snapshotSearchLayer({
+    maximumPageMatches: 200,
+    maximumExcerptBytes: 8 * 1_024,
+  }).pipe(Layer.provideMerge(snapshotRepositoryServiceLayer))
+  const progressiveReviewServiceLayer = coreProgressiveReviewServiceLayer.pipe(
+    Layer.provideMerge(snapshotSearchServiceLayer),
+  )
+  const snapshotIngestionServiceLayer = coreSnapshotIngestionLayer({
+    managedQuotaBytes: SNAPSHOT_MANAGED_QUOTA_BYTES,
+    reservationLifetimeMs: SNAPSHOT_RESERVATION_LIFETIME_MS,
+    maximumBlockBytes: CORE_SNAPSHOT_MAX_BLOCK_BYTES,
+  }).pipe(
+    Layer.provideMerge(snapshotPersistenceLayer),
+    Layer.provide(generatedCoreReviewDataWorkerLayer),
+  )
+  const snapshotStorageStartupLayer = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const fileSystem = yield* ProcessFileSystem
+      const resources = yield* ResourceCatalog
+      const store = yield* SnapshotBlockStore
+      yield* fileSystem.ensureDirectory(snapshotRootPath, { recursive: true, mode: 0o700 })
+      const nowMs = yield* Clock.currentTimeMillis
+      yield* resources.registerRoot({
+        id: SNAPSHOT_RESOURCE_ROOT_ID,
+        path: snapshotRootPath,
+        createdAtMs: nowMs,
+      })
+      yield* store.recoverWrites()
+      yield* resources.expireReservations(nowMs)
+      yield* store.recoverCollections(nowMs)
+    }),
+  ).pipe(Layer.provide(snapshotPersistenceLayer))
+  const progressiveReviewLayer = Layer.mergeAll(
+    progressiveReviewServiceLayer,
+    snapshotIngestionServiceLayer,
+    snapshotStorageStartupLayer,
+  )
   const prerequisitesLayer = Prerequisites.layer({
     appImagePath: configuration.paths.appImageOption,
     diffDashCliPath: configuration.paths.diffDashCli,
@@ -229,10 +338,45 @@ export const createCoreLayer = (
     Layer.provide(ProcessFileSystem.layer),
   )
 
-  return coreOperationLayer.pipe(
+  const operationLayer = coreOperationLayer.pipe(
     Layer.provide(businessServicesLayer),
     Layer.catchCause((cause) =>
       Layer.effect(CoreOperationService, Effect.failCause(Cause.map(cause, toCoreStartupError))),
     ),
   )
+  if (!includeProgressiveReviews) return operationLayer
+
+  const exposedProgressiveReviewLayer = progressiveReviewLayer.pipe(
+    Layer.provide(databaseLayer),
+    Layer.provide(processLayer),
+    Layer.provide(ProcessFileSystem.layer),
+  )
+
+  return Layer.merge(operationLayer, exposedProgressiveReviewLayer).pipe(
+    Layer.catchCause((cause) => {
+      const failure = Effect.failCause(Cause.map(cause, toCoreStartupError))
+      return Layer.mergeAll(
+        Layer.effect(CoreOperationService, failure),
+        Layer.effect(CoreSnapshotIngestion, failure),
+        Layer.effect(CoreProgressiveReviewService, failure),
+        Layer.effect(SnapshotRepository, failure),
+        Layer.effect(SnapshotSearch, failure),
+      )
+    }),
+  )
 }
+
+/** Builds the legacy runtime-neutral business graph without standalone storage acquisition. */
+export const createCoreLayer = (
+  configuration: CoreConfiguration,
+  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
+): Layer.Layer<CoreOperationService, CoreStartupFailure> =>
+  createCoreLayerInternal(configuration, databaseLayer, providerComposition, false)
+
+/** Builds the external Core graph with one SQLite-backed progressive review authority. */
+export const createStandaloneCoreLayer = (
+  configuration: CoreConfiguration,
+  databaseLayer: Layer.Layer<SqlClient.SqlClient, DatabaseError>,
+  providerComposition: CoreProviderComposition,
+) => createCoreLayerInternal(configuration, databaseLayer, providerComposition, true)

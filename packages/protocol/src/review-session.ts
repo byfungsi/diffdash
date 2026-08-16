@@ -1,7 +1,9 @@
 import { NonNegativeInteger, PositiveInteger } from "@diffdash/domain/domain-scalar"
+import { DiffFileStatus, DiffFileVisibility } from "@diffdash/domain/diff"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
@@ -218,6 +220,10 @@ export const ReviewSessionFile = Schema.Struct({
   oldPath: Schema.NullOr(RepositoryRelativePath),
   additions: NonNegativeInteger,
   deletions: NonNegativeInteger,
+  status: DiffFileStatus,
+  visibility: DiffFileVisibility,
+  patchHash: ReviewFilePatchHash,
+  hunkCount: NonNegativeInteger,
 }).annotate({ identifier: "ReviewSessionFile" })
 
 /** Browser-safe changed-file inventory entry. */

@@ -1214,6 +1214,7 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
 
           CREATE TABLE review_snapshot_manifests (
             id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
             review_key TEXT NOT NULL,
             base_revision TEXT NOT NULL,
             head_revision TEXT NOT NULL,
@@ -1243,6 +1244,13 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
             old_path TEXT,
             additions INTEGER NOT NULL CHECK (additions >= 0),
             deletions INTEGER NOT NULL CHECK (deletions >= 0),
+            status TEXT NOT NULL,
+            visibility TEXT NOT NULL CHECK (visibility IN ('Visible', 'Hidden')),
+            hidden_reason TEXT CHECK (hidden_reason IN ('binary', 'lockfile', 'vendored', 'generated')),
+            patch_hash TEXT NOT NULL,
+            hunk_count INTEGER NOT NULL CHECK (hunk_count >= 0),
+            CHECK ((visibility = 'Visible' AND hidden_reason IS NULL) OR
+                   (visibility = 'Hidden' AND hidden_reason IS NOT NULL)),
             PRIMARY KEY (snapshot_id, ordinal),
             UNIQUE (snapshot_id, file_id)
           );

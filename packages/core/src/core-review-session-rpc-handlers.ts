@@ -12,6 +12,7 @@ import {
 import { CoreProgressiveReviewRpcs } from "@diffdash/core-rpc/review-session-rpc"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { ReviewFileId, ReviewHunkId } from "@diffdash/domain/review-identity"
+import type { SnapshotFilePlacement } from "@diffdash/persistence/snapshot-block-store"
 import {
   Cause,
   Context,
@@ -38,6 +39,7 @@ import {
   type SnapshotSearchMatch,
   type SnapshotSearchProvisional,
 } from "./services/snapshot-search"
+import { CoreRuntimeServices } from "./core-runtime-services"
 
 type ProgressiveMethod = CoreReviewSessionFailureType["method"]
 
@@ -165,7 +167,6 @@ export const coreProgressiveReviewRpcHandlersLayer = CoreProgressiveReviewRpcs.t
     const sessions = yield* CoreProgressiveReviewService
     const repository = yield* SnapshotRepository
     const search = yield* SnapshotSearch
-
     return {
       "Reviews.openSession": sessions.open,
       "Reviews.currentSession": sessions.current,
@@ -254,6 +255,24 @@ export const coreProgressiveReviewRpcHandlersLayer = CoreProgressiveReviewRpcs.t
   }),
 )
 
+/** Progressive handlers backed by authorities installed after ownership recovery. */
+export const coreProgressiveReviewRpcHandlersWithRuntimeLayer =
+  coreProgressiveReviewRpcHandlersLayer.pipe(
+    Layer.provide(
+      Layer.effectContext(
+        Effect.gen(function* () {
+          const runtime = yield* CoreRuntimeServices
+          const progressive = yield* runtime.progressiveReviews
+          return Context.empty().pipe(
+            Context.add(CoreProgressiveReviewService, progressive.sessions),
+            Context.add(SnapshotRepository, progressive.repository),
+            Context.add(SnapshotSearch, progressive.search),
+          )
+        }),
+      ),
+    ),
+  )
+
 const requireActive = Effect.fn("CoreProgressiveReviewService.requireActive")(function* (
   active: Ref.Ref<Option.Option<typeof CoreReviewSessionState.Type>>,
   method: ProgressiveMethod,
@@ -317,20 +336,17 @@ const repositoryIdentity = (
   sessionId: SnapshotRepositorySessionId.make(identity.sessionId),
 })
 
-const reviewFile = (file: {
-  readonly ordinal: number
-  readonly fileId: string
-  readonly path: string
-  readonly oldPath: string | null
-  readonly additions: number
-  readonly deletions: number
-}) => ({
+const reviewFile = (file: SnapshotFilePlacement) => ({
   ordinal: file.ordinal,
   fileId: ReviewFileId.make(file.fileId),
   path: RepositoryRelativePath.make(file.path),
   oldPath: file.oldPath === null ? null : RepositoryRelativePath.make(file.oldPath),
   additions: file.additions,
   deletions: file.deletions,
+  status: file.status,
+  visibility: file.visibility,
+  patchHash: file.patchHash,
+  hunkCount: file.hunkCount,
 })
 
 const searchMatch = (match: SnapshotSearchMatch) => ({

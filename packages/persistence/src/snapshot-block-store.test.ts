@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Result } from "effect"
+import { ReviewFilePatchHash, ReviewProjectId } from "@diffdash/domain/review-identity"
 
 import * as DatabaseNode from "./database-node"
 import {
@@ -121,6 +122,7 @@ const publish = Effect.fn("SnapshotBlockStoreTest.publish")(function* (
 ) {
   yield* store.publishSnapshot({
     id: StoredSnapshotId.make(snapshotId),
+    projectId: ReviewProjectId.make("project:snapshot-block-store"),
     reviewKey: "github:fungsi/diffdash#234",
     baseRevision: "base",
     headRevision: "head",
@@ -141,6 +143,10 @@ const publish = Effect.fn("SnapshotBlockStoreTest.publish")(function* (
         oldPath: null,
         additions: 1,
         deletions: 1,
+        status: "modified",
+        visibility: { _tag: "Visible" },
+        patchHash: ReviewFilePatchHash.make("file-patch:test"),
+        hunkCount: 1,
       },
     ],
     blockIds: [blockId],
@@ -290,6 +296,7 @@ describe("SnapshotBlockStore", () => {
         })
         yield* store.publishSnapshot({
           id: StoredSnapshotId.make("snapshot:remote"),
+          projectId: ReviewProjectId.make("project:snapshot-block-store"),
           reviewKey: "github:fungsi/diffdash#234",
           baseRevision: "base",
           headRevision: "head",

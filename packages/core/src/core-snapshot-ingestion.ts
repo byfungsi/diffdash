@@ -181,6 +181,7 @@ export const coreSnapshotIngestionLayer = (
           const nowMs = yield* Clock.currentTimeMillis
           yield* store.publishSnapshot({
             id: StoredSnapshotId.make(input.manifest.snapshotId),
+            projectId: input.manifest.projectId,
             reviewKey: input.manifest.reviewKey,
             baseRevision: input.manifest.baseRevision,
             headRevision: input.manifest.headRevision,
@@ -237,7 +238,7 @@ interface ExpectedBlock {
 }
 
 interface PublicationState {
-  readonly files: ReadonlyArray<SnapshotFilePlacement>
+  readonly files: ReadonlyArray<CoreSnapshotIngestedFile>
   readonly inventory: ReadonlyArray<CoreSnapshotIngestedFile>
   readonly blocks: ReadonlyArray<ExpectedBlock>
   readonly checkpoints: ReadonlyArray<SnapshotCheckpoint>
@@ -246,7 +247,7 @@ interface PublicationState {
 class IngestionState {
   readonly #reviewKey: ReviewKey
   readonly #maximumBlockBytes: number
-  readonly #files: SnapshotFilePlacement[] = []
+  readonly #files: CoreSnapshotIngestedFile[] = []
   readonly #inventory: CoreSnapshotIngestedFile[] = []
   readonly #blocks: ExpectedBlock[] = []
   readonly #checkpoints: SnapshotCheckpoint[] = []
@@ -398,15 +399,16 @@ class IngestionState {
       additions: file.additions,
       deletions: file.deletions,
     }
-    this.#files.push(placement)
-    this.#inventory.push({
+    const inventory = {
       ...placement,
       patchHash,
       reviewKey: this.#reviewKey,
       status: file.status,
       visibility,
       hunkCount: active.hunkCount,
-    })
+    }
+    this.#files.push(inventory)
+    this.#inventory.push(inventory)
     this.#file = null
     return Effect.void
   }

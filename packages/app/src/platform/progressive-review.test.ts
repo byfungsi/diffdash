@@ -1,5 +1,6 @@
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -84,6 +85,10 @@ describe("createProgressiveReviewApi", () => {
       oldPath: null,
       additions: 1,
       deletions: 0,
+      status: "modified",
+      visibility: { _tag: "Visible" },
+      patchHash: ReviewFilePatchHash.make("file-patch:test"),
+      hunkCount: 1,
     } as const
     const publication = {
       _tag: "Provisional" as const,

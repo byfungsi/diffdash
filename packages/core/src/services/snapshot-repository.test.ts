@@ -13,6 +13,7 @@ import {
 } from "@diffdash/core-rpc"
 import {
   ReviewFileId,
+  ReviewFilePatchHash,
   ReviewKey,
   ReviewProjectId,
   ReviewSnapshotId,
@@ -200,6 +201,7 @@ const publish = Effect.fn("SnapshotRepositoryTest.publish")(function* (
   }
   yield* store.publishSnapshot({
     id: StoredSnapshotId.make(snapshotId),
+    projectId,
     reviewKey,
     baseRevision: "base",
     headRevision: "head",
@@ -222,6 +224,10 @@ const publish = Effect.fn("SnapshotRepositoryTest.publish")(function* (
       oldPath: null,
       additions: 1,
       deletions: 1,
+      status: "modified" as const,
+      visibility: { _tag: "Visible" as const },
+      patchHash: ReviewFilePatchHash.make(`file-patch:${ordinal}`),
+      hunkCount: 1,
     })),
     blockIds,
     checkpoints: [],

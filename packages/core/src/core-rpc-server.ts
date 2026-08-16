@@ -29,6 +29,8 @@ import {
   coreStateDeliveryRpcHandlersWithRuntimeLayer,
 } from "./core-state-delivery-rpc-handlers"
 import { coreApplicationRpcHandlersLayer } from "./core-application-rpc-handlers"
+import { coreProgressiveReviewRpcHandlersWithRuntimeLayer } from "./core-review-session-rpc-handlers"
+import { coreProgressiveReviewRpcAdmissionLayer } from "./core-review-session-rpc-admission"
 import { coreRpcAdmissionLayer } from "./core-rpc-admission"
 import {
   CoreAuthenticatedHostSession,
@@ -60,6 +62,8 @@ export const coreApplicationRpcServerLayer = (
         coreWalkthroughRpcHandlersWithRuntimeLayer,
         coreReviewAgentRpcHandlersWithRuntimeLayer,
         coreStateDeliveryRpcHandlersWithRuntimeLayer,
+        coreProgressiveReviewRpcHandlersWithRuntimeLayer,
+        coreProgressiveReviewRpcAdmissionLayer,
         coreRpcAdmissionLayer,
         coreTransportAuthenticationLayer(authentication),
       ),

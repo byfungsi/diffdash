@@ -17,7 +17,7 @@ import { CoreOwnershipRecovery, makeCoreOwnershipRecovery } from "./core-ownersh
 import { coreApplicationRpcSocketHostLayer } from "./core-rpc-socket-host"
 import { nodeDatabaseOwnerInspector, readProcessStartIdentity } from "./node-process-identity"
 import { CoreConfiguration } from "./core-configuration"
-import { createCoreLayer } from "./core-layer"
+import { createStandaloneCoreLayer } from "./core-layer"
 import { type CoreProviderComposition, productionProviderComposition } from "./provider-composition"
 import { CoreLifecycle } from "./core-lifecycle"
 import { coreRuntimeServicesLayer, CoreRuntimeServices } from "./core-runtime-services"
@@ -27,6 +27,9 @@ import {
   CoreDurableCommandService,
 } from "./core-durable-command-coordinator"
 import { CoreOperationService } from "./core-operation-service"
+import { CoreProgressiveReviewService } from "./core-review-session-rpc-handlers"
+import { SnapshotRepository } from "./services/snapshot-repository"
+import { SnapshotSearch } from "./services/snapshot-search"
 import { toCoreStartupError } from "./core-startup-error"
 
 /** Sanitized startup failure that cannot expose the transport credential or private paths. */
@@ -128,7 +131,7 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
                 Layer.provide(eventLayer),
                 Layer.provide(databaseLayer),
               )
-              const operationLayer = createCoreLayer(
+              const operationLayer = createStandaloneCoreLayer(
                 coreConfiguration,
                 databaseLayer,
                 providerComposition,
@@ -142,6 +145,11 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
                 operations,
                 commands: Context.get(runtimeContext, CoreDurableCommandService),
                 events: Context.get(runtimeContext, CoreEventHub),
+                progressiveReviews: {
+                  sessions: Context.get(runtimeContext, CoreProgressiveReviewService),
+                  repository: Context.get(runtimeContext, SnapshotRepository),
+                  search: Context.get(runtimeContext, SnapshotSearch),
+                },
               })
               yield* lifecycle.completeRecovery
               return yield* Effect.never
