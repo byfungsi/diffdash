@@ -464,6 +464,12 @@ export const ReviewDetailView = ({
   const reviewSearchQuery = reviewSearchToolbar.query
   const reviewSearchTotalMatches = reviewSearchToolbar.totalMatches
   const activeReviewSearchIndex = reviewSearchToolbar.activeGlobalIndex
+  const walkthroughOperationId =
+    walkthroughOperations.state.status === "idle"
+      ? undefined
+      : walkthroughOperations.state.status === "accepted"
+        ? walkthroughOperations.state.operationId
+        : walkthroughOperations.state.operation.operationId
   useEffect(() => {
     if (quickNavigationRequestRef.current === quickNavigationRequest) return
     quickNavigationRequestRef.current = quickNavigationRequest
@@ -1773,6 +1779,7 @@ export const ReviewDetailView = ({
                 </div>
 
                 <div
+                  data-walkthrough-operation-id={walkthroughOperationId}
                   className={`min-h-0 flex-1 overscroll-contain py-2 pr-1 ${
                     sidebarTab === "walkthrough" ? "overflow-y-auto" : "overflow-hidden"
                   }`}

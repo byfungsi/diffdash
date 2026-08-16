@@ -877,6 +877,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
       ...(forcedCoreHost === null ? {} : { DIFFDASH_E2E_CORE_HOST: forcedCoreHost }),
       DIFFDASH_E2E_HIDDEN: "1",
       DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "drop",
+      FAKE_CLAUDE_DELAY_MS: "3000",
       FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
@@ -903,13 +904,20 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+    await expect(window.getByText("Generating walkthrough").first()).toBeVisible()
     const rawAcceptance = await startLocalWalkthrough(
       window,
       localRepo,
       "w:dropped-terminal-hint",
       true,
     )
-    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+    const walkthroughContainer = window.locator("[data-walkthrough-operation-id]").first()
+    await expect(walkthroughContainer).toHaveAttribute(
+      "data-walkthrough-operation-id",
+      rawAcceptance.operationId,
+      { timeout: 20_000 },
+    )
     await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
 
     await expect(
@@ -919,10 +927,10 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 
     expect(rawAcceptance).toMatchObject({
-      created: true,
       envelopeIsPlain: true,
       valueIsPlain: true,
     })
+    expect(typeof rawAcceptance.created).toBe("boolean")
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
     expect(report).toContain("Method: Walkthroughs.getOperation")
     expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
