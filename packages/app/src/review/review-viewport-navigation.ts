@@ -41,7 +41,11 @@ export interface ReviewDiffRegistration {
 
 /** Latest React-owned resources read imperatively by one stable viewport bridge. */
 export interface ReviewViewportNavigationBindings {
-  readonly manifest: ReviewSnapshotManifest
+  readonly review: Pick<
+    ReviewSnapshotManifest,
+    "projectId" | "reviewKey" | "baseRevision" | "headRevision"
+  >
+  readonly inventory: readonly ReviewSnapshotFileInventory[]
   readonly containerRef: RefObject<HTMLDivElement | null>
   readonly stickyChromeRef: RefObject<HTMLDivElement | null>
   readonly pages: ProgressiveReviewContentReader
@@ -123,15 +127,15 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const anchor = details?.thread.activeAnchor ?? null
       if (
         details === undefined ||
-        details.thread.repoId !== bindings.manifest.projectId ||
-        details.thread.reviewKey !== bindings.manifest.reviewKey ||
-        details.thread.currentBaseRevision !== bindings.manifest.baseRevision ||
-        details.thread.currentHeadRevision !== bindings.manifest.headRevision ||
+        details.thread.repoId !== bindings.review.projectId ||
+        details.thread.reviewKey !== bindings.review.reviewKey ||
+        details.thread.currentBaseRevision !== bindings.review.baseRevision ||
+        details.thread.currentHeadRevision !== bindings.review.headRevision ||
         anchor === null
       ) {
         throw new ReviewNavigationUnavailableError("targetOutdated")
       }
-      const file = bindings.manifest.files.find(
+      const file = bindings.inventory.find(
         (candidate) => candidate.fileId === anchor.fileId && candidate.path === anchor.filePath,
       )
       if (file === undefined) throw new ReviewNavigationUnavailableError("targetOutdated")
@@ -162,7 +166,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       thread: () => null,
     })
     if (fileTarget === null) throw new ReviewNavigationUnavailableError("targetNotFound")
-    const file = bindings.manifest.files.find((candidate) => candidate.fileId === fileTarget.fileId)
+    const file = bindings.inventory.find((candidate) => candidate.fileId === fileTarget.fileId)
     if (file === undefined) throw new ReviewNavigationUnavailableError("targetNotFound")
     const resolved = {
       target,
@@ -525,14 +529,13 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       this.#throwIfAborted(signal)
       this.#align(anchor, "start", this.#targetStickyHeight(resolved))
       const bindings = this.#current()
-      const targetIndex = bindings.manifest.files.findIndex(
+      const targetIndex = bindings.inventory.findIndex(
         (file) => file.fileId === resolved.file.fileId,
       )
       const precedingLoads = [...bindings.pages.getProjection().loadingFileIds].filter(
-        (fileId) =>
-          bindings.manifest.files.findIndex((file) => file.fileId === fileId) < targetIndex,
+        (fileId) => bindings.inventory.findIndex((file) => file.fileId === fileId) < targetIndex,
       )
-      const eagerIds = eagerPlaceholderFileIds(this.#container(), bindings.manifest.files)
+      const eagerIds = eagerPlaceholderFileIds(this.#container(), bindings.inventory)
       const eagerKey = eagerIds.join("\u0000")
       if (eagerIds.length > 0) {
         await bindings.pages.loadFiles(eagerIds)

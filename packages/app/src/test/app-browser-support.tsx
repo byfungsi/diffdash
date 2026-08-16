@@ -3079,6 +3079,7 @@ scenario("incrementalSnapshotPages", async () => {
     expect(calls.progressiveRange).toHaveBeenCalled()
     expect(getDiffShadowRoot(fixture.paths[0] ?? "")?.textContent).toContain("after")
   })
+  expect(calls.openProgressiveSession).toHaveBeenCalledTimes(1)
   const initiallyLoadedFileIds = new Set(
     calls.progressiveRange.mock.calls.map(([request]) => request.fileId),
   )

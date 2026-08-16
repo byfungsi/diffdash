@@ -130,7 +130,7 @@ import {
 } from "./review-viewport-navigation"
 import { reviewThreadScope, reviewWalkthroughScope } from "./review-subject"
 import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
-import { useProgressiveReviewContent } from "./use-progressive-review-content"
+import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
@@ -162,6 +162,7 @@ export type ReviewDetailEnvironment = {
 /** Ready review state assembled by ReviewScreen after source selection succeeds. */
 export type ReadyReviewDetailState = {
   readonly selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>
+  readonly progressiveContent: ProgressiveReviewContent
   readonly sourceOperations: ReviewSourceOperations
   readonly expandedFileKeys: ReadonlySet<string>
   readonly viewedFileKeys: ReadonlySet<string>
@@ -343,6 +344,7 @@ export const ReviewDetailView = ({
   } = environment
   const {
     selection,
+    progressiveContent,
     sourceOperations,
     expandedFileKeys,
     isReloading,
@@ -470,7 +472,7 @@ export const ReviewDetailView = ({
     identity: progressiveIdentity,
     reader: snapshotPageReader,
     snapshotRefresh,
-  } = useProgressiveReviewContent(manifest, sourceOperations.refresh)
+  } = progressiveContent
   const loadSnapshotFiles = snapshotPageReader.loadFiles
   reviewSearchController.updateRuntime({
     navigator: reviewNavigator,
@@ -492,7 +494,7 @@ export const ReviewDetailView = ({
       }),
   )
   useEffect(() => {
-    const releases = manifest.files.map((file) =>
+    const releases = progressiveInventory.map((file) =>
       reviewNavigationAnchors.registerDescriptor({
         anchorKey: reviewFileAnchorKey(file.fileId),
         fileId: file.fileId,
@@ -501,7 +503,7 @@ export const ReviewDetailView = ({
     return () => {
       for (const release of releases) release()
     }
-  }, [manifest.files, manifest.snapshotId, reviewNavigationAnchors])
+  }, [manifest.snapshotId, progressiveInventory, reviewNavigationAnchors])
   const setDiffScrollContainer = useStableCallback<(node: HTMLDivElement | null) => void>(
     (node) => {
       diffScrollContainerRef.current = node
@@ -922,7 +924,13 @@ export const ReviewDetailView = ({
     },
   )
   reviewViewportBridge.update({
-    manifest: { ...manifest, files: progressiveInventory },
+    review: {
+      projectId: manifest.projectId,
+      reviewKey: manifest.reviewKey,
+      baseRevision: manifest.baseRevision,
+      headRevision: manifest.headRevision,
+    },
+    inventory: progressiveInventory,
     containerRef: diffScrollContainerRef,
     stickyChromeRef: stickyReviewChromeRef,
     pages: snapshotPageReader,

@@ -14,6 +14,7 @@ import {
 } from "./review-detail-view"
 import type { ReviewSelectionProjection } from "./review-selection"
 import type { ReviewSourceOperationProjection } from "./use-review-source-operations"
+import { useProgressiveReviewContent } from "./use-progressive-review-content"
 import { useViewedFileMutations } from "./use-viewed-file-mutations"
 
 /** Branches once over normalized selection and directly composes ready review detail. */
@@ -112,8 +113,9 @@ const ReadyReviewScreen = ({
   readonly operations: ReadyReviewDetailState["sourceOperations"]
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
 }) => {
-  const viewedFiles = useViewedFileMutations(selection, operations)
-  const inventory = selection.review.manifest.files
+  const content = useProgressiveReviewContent(selection.review.manifest, operations.refresh)
+  const inventory = content.inventory
+  const viewedFiles = useViewedFileMutations(selection, operations, inventory)
   const [selectedPath, setSelectedPath] = useState<string | null>(inventory[0]?.path ?? null)
   const [isReloading, setIsReloading] = useState(false)
 
@@ -130,14 +132,28 @@ const ReadyReviewScreen = ({
     return () => window.clearTimeout(timer)
   }, [isReloading, selection.refreshing, selection.review.manifest.snapshotId])
 
+  const emptyInventoryStatus = Match.valueTags(selection.review, {
+    hosted: () => null,
+    local: (review) => `No local changes in ${review.manifest.detail.repoName}`,
+    repositoryComparison: () => null,
+  })
+
   const ready: ReadyReviewDetailState = {
     selection,
+    progressiveContent: content,
     sourceOperations: operations,
     expandedFileKeys: viewedFiles.expandedFileKeys,
     viewedFileKeys: viewedFiles.viewedFileKeys,
     selectedPath,
     isReloading: isReloading || selection.refreshing,
-    status: viewedFiles.error ?? selection.status,
+    status:
+      viewedFiles.error ??
+      (emptyInventoryStatus !== null &&
+      !content.inventoryLoading &&
+      content.inventoryError === null &&
+      inventory.length === 0
+        ? emptyInventoryStatus
+        : selection.status),
     operationError: viewedFiles.error,
     onReload: () => {
       setIsReloading(true)

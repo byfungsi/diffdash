@@ -176,7 +176,7 @@ describe("review selection projection", () => {
         repositoryLabel: "/workspace/diffdash",
         title: "Local changes",
       },
-      status: "No local changes in diffdash",
+      status: "Opened local changes in diffdash",
     })
   })
 
