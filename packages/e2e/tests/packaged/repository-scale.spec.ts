@@ -38,6 +38,24 @@ type FixtureManifest = {
   readonly scenarios: { readonly broadSearch: string }
 }
 
+type RendererMeasurement = {
+  readonly domNodes: number
+  readonly frameDurationMilliseconds: {
+    readonly count: number
+    readonly p50: number
+    readonly p95: number
+    readonly p99: number
+    readonly maximum: number
+  }
+  readonly heap: { readonly usedBytes: number | null; readonly limitBytes: number | null }
+  readonly livePierreHosts: number
+  readonly longTasks: {
+    readonly count: number
+    readonly maximumDurationMilliseconds: number
+    readonly totalDurationMilliseconds: number
+  }
+}
+
 test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", async () => {
   const configuration = await readConfiguration()
   test.setTimeout(configuration.profile === "full" ? 20 * 60_000 : 3 * 60_000)
@@ -109,6 +127,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       farTarget: false,
       broadSearch: false,
       mountedRowsBounded: false,
+      rendererMetricsObserved: false,
       rapidSwitches: false,
       coreRestart: false,
       processTeardown: false,
@@ -127,6 +146,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
         readonly superseded: number
         readonly drained: number
       },
+      renderer: null as RendererMeasurement | null,
     },
     blocked: [
       {
@@ -199,6 +219,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     report.gates.hostSelected = observedCoreProcessIds.length > 0
 
     const window = await app.firstWindow()
+    await startRendererMeasurement(window)
     await window.evaluate(installDiffDashE2eApi)
     await waitForComparison(window, configuration.fixture)
     report.gates.exactComparison = true
@@ -232,6 +253,11 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     })
     report.gates.broadSearch = true
     await window.keyboard.press("Escape")
+    report.observations.renderer = await finishRendererMeasurement(window)
+    report.gates.rendererMetricsObserved =
+      report.observations.renderer.frameDurationMilliseconds.count > 0 &&
+      report.observations.renderer.domNodes > 0 &&
+      report.observations.renderer.livePierreHosts > 0
 
     await window.keyboard.press("ControlOrMeta+r")
     await expect(window.locator("[data-review-editor-header]")).toContainText(
@@ -464,6 +490,7 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     farTarget: true,
     broadSearch: true,
     mountedRowsBounded: true,
+    rendererMetricsObserved: true,
     rapidSwitches: true,
     coreRestart: true,
     processTeardown: true,
@@ -524,6 +551,107 @@ const waitForComparison = async (window: Page, fixture: FixtureManifest): Promis
 
 const reviewLifecycle = (window: Page) =>
   window.evaluate(async () => globalThis.window.diffDashDiagnosticsForE2e.reviewLifecycle())
+
+const startRendererMeasurement = (window: Page) =>
+  window.evaluate(() => {
+    type MeasurementState = {
+      frameBuckets: number[]
+      frameCount: number
+      maximumFrameDuration: number
+      lastFrameAt: number | null
+      longTaskDurations: number[]
+      observer: PerformanceObserver | null
+      running: boolean
+    }
+    const target = globalThis as typeof globalThis & {
+      diffdashRepositoryScaleMeasurement?: MeasurementState
+    }
+    const state: MeasurementState = {
+      frameBuckets: [],
+      frameCount: 0,
+      maximumFrameDuration: 0,
+      lastFrameAt: null,
+      longTaskDurations: [],
+      observer: null,
+      running: true,
+    }
+    const frame = (timestamp: number) => {
+      if (!state.running) return
+      if (state.lastFrameAt !== null && state.frameCount < 20_000) {
+        const duration = timestamp - state.lastFrameAt
+        const bucket = Math.min(2_000, Math.ceil(duration))
+        state.frameBuckets[bucket] = (state.frameBuckets[bucket] ?? 0) + 1
+        state.frameCount += 1
+        state.maximumFrameDuration = Math.max(state.maximumFrameDuration, duration)
+      }
+      state.lastFrameAt = timestamp
+      requestAnimationFrame(frame)
+    }
+    if (PerformanceObserver.supportedEntryTypes.includes("longtask")) {
+      state.observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) state.longTaskDurations.push(entry.duration)
+      })
+      state.observer.observe({ entryTypes: ["longtask"] })
+    }
+    target.diffdashRepositoryScaleMeasurement = state
+    requestAnimationFrame(frame)
+  })
+
+const finishRendererMeasurement = (window: Page): Promise<RendererMeasurement> =>
+  window.evaluate(() => {
+    type ChromiumPerformance = Performance & {
+      readonly memory?: { readonly usedJSHeapSize: number; readonly jsHeapSizeLimit: number }
+    }
+    type MeasurementState = {
+      frameBuckets: number[]
+      frameCount: number
+      maximumFrameDuration: number
+      lastFrameAt: number | null
+      longTaskDurations: number[]
+      observer: PerformanceObserver | null
+      running: boolean
+    }
+    const target = globalThis as typeof globalThis & {
+      diffdashRepositoryScaleMeasurement?: MeasurementState
+    }
+    const state = target.diffdashRepositoryScaleMeasurement
+    if (state === undefined) throw new Error("Renderer measurement was not started")
+    state.running = false
+    state.observer?.disconnect()
+    const framePercentile = (fraction: number) => {
+      const targetCount = Math.max(1, Math.ceil(state.frameCount * fraction))
+      let observed = 0
+      for (let duration = 0; duration < state.frameBuckets.length; duration += 1) {
+        observed += state.frameBuckets[duration] ?? 0
+        if (observed >= targetCount) return duration
+      }
+      return 0
+    }
+    const memory = (performance as ChromiumPerformance).memory
+    return {
+      domNodes: document.querySelectorAll("*").length,
+      frameDurationMilliseconds: {
+        count: state.frameCount,
+        p50: framePercentile(0.5),
+        p95: framePercentile(0.95),
+        p99: framePercentile(0.99),
+        maximum: state.maximumFrameDuration,
+      },
+      heap: {
+        usedBytes: memory?.usedJSHeapSize ?? null,
+        limitBytes: memory?.jsHeapSizeLimit ?? null,
+      },
+      livePierreHosts: document.querySelectorAll("diffs-container").length,
+      longTasks: {
+        count: state.longTaskDurations.length,
+        maximumDurationMilliseconds: Math.max(0, ...state.longTaskDurations),
+        totalDurationMilliseconds: state.longTaskDurations.reduce(
+          (total, duration) => total + duration,
+          0,
+        ),
+      },
+    }
+  })
 
 const forwardComparison = (
   executable: string,

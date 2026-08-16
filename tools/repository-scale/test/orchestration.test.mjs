@@ -56,6 +56,7 @@ const passingReport = () => ({
     farTarget: true,
     broadSearch: true,
     mountedRowsBounded: true,
+    rendererMetricsObserved: true,
     rapidSwitches: true,
     coreRestart: true,
     processTeardown: true,
@@ -70,6 +71,19 @@ const passingReport = () => ({
     supersededOperationId: "core:operation-prior",
     drainedOperationId: "core:operation-prior",
     acquisitionCounters: { started: 2, superseded: 1, drained: 1 },
+    renderer: {
+      domNodes: 500,
+      frameDurationMilliseconds: {
+        count: 120,
+        p50: 16.7,
+        p95: 18.2,
+        p99: 24.1,
+        maximum: 32,
+      },
+      heap: { usedBytes: 64 * 1024 * 1024, limitBytes: 4 * 1024 * 1024 * 1024 },
+      livePierreHosts: 4,
+      longTasks: { count: 0, maximumDurationMilliseconds: 0, totalDurationMilliseconds: 0 },
+    },
   },
   blocked: [],
   switchReports: [],
@@ -198,6 +212,17 @@ test("fails nonzero-worthy objective gates without inventing measurements", () =
       error.summary.passed === false &&
       error.summary.failedGates.includes("broadSearch") &&
       error.summary.memory === null,
+  )
+})
+
+test("rejects renderer gates without measured heap, DOM, frame, and long-task evidence", () => {
+  const report = passingReport()
+  report.observations.renderer.frameDurationMilliseconds.count = 0
+  assert.throws(
+    () => summarizeOrchestrationReport(report),
+    (error) =>
+      error instanceof OrchestrationGateError &&
+      error.summary.failedGates.includes("rendererEvidence"),
   )
 })
 

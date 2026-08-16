@@ -156,6 +156,7 @@ export const summarizeOrchestrationReport = (report) => {
     "farTarget",
     "broadSearch",
     "mountedRowsBounded",
+    "rendererMetricsObserved",
     "rapidSwitches",
     "coreRestart",
     "processTeardown",
@@ -167,6 +168,34 @@ export const summarizeOrchestrationReport = (report) => {
     failedGates.push("blockedScenarios")
   }
   const lifecycle = report.observations ?? {}
+  const renderer = lifecycle.renderer
+  const frameDurations = renderer?.frameDurationMilliseconds
+  const longTasks = renderer?.longTasks
+  if (
+    !isRecord(renderer) ||
+    !Number.isSafeInteger(renderer.domNodes) ||
+    renderer.domNodes <= 0 ||
+    !Number.isSafeInteger(renderer.livePierreHosts) ||
+    renderer.livePierreHosts <= 0 ||
+    !isRecord(frameDurations) ||
+    !Number.isSafeInteger(frameDurations.count) ||
+    frameDurations.count <= 0 ||
+    ![frameDurations.p50, frameDurations.p95, frameDurations.p99, frameDurations.maximum].every(
+      (value) => Number.isFinite(value) && value >= 0,
+    ) ||
+    !isRecord(longTasks) ||
+    !Number.isSafeInteger(longTasks.count) ||
+    longTasks.count < 0 ||
+    ![longTasks.maximumDurationMilliseconds, longTasks.totalDurationMilliseconds].every(
+      (value) => Number.isFinite(value) && value >= 0,
+    ) ||
+    !isRecord(renderer.heap) ||
+    ![renderer.heap.usedBytes, renderer.heap.limitBytes].every(
+      (value) => value === null || (Number.isSafeInteger(value) && value >= 0),
+    )
+  ) {
+    failedGates.push("rendererEvidence")
+  }
   if (
     !isLifecycleIdentity(lifecycle.disposedSessionId) ||
     !isLifecycleIdentity(lifecycle.replacementSessionId) ||
@@ -233,6 +262,7 @@ export const summarizeOrchestrationReport = (report) => {
       supersededOperationId: report.observations?.supersededOperationId ?? null,
       drainedOperationId: report.observations?.drainedOperationId ?? null,
       acquisitionCounters: report.observations?.acquisitionCounters ?? null,
+      renderer: report.observations?.renderer ?? null,
     },
     blocked: Array.isArray(report.blocked) ? report.blocked : [],
     switchMeasurements: Array.isArray(report.switchReports)
