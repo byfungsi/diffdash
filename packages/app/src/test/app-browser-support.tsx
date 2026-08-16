@@ -77,10 +77,12 @@ import {
 import {
   makeReviewDiffIdentity,
   makeReviewSnapshotId,
+  type ReviewFileId,
   ReviewDiffIdentity,
   ReviewKey,
   ReviewProjectId,
   ReviewRevision,
+  type ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
 import {
   CompletedAgentReviewThreadMessage,
@@ -157,17 +159,8 @@ import {
   SetupRequirementKey,
 } from "@diffdash/protocol/prerequisites"
 import {
-  ReviewSnapshotExpired,
-  ReviewSnapshotPageAvailable,
-  ReviewSnapshotPageCursor,
-  type ReviewSnapshotPageRequest,
-  type ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchAvailable,
-  ReviewSnapshotSearchCursor,
   ReviewSnapshotSearchMatch,
   ReviewSnapshotSearchMatchId,
-  type ReviewSnapshotSearchRequest,
-  type ReviewSnapshotSearchResponse,
 } from "@diffdash/protocol/review-snapshot"
 import { toTransportError, transportError } from "@diffdash/protocol/transport-error"
 import { legacyBridgeTransportError } from "@diffdash/protocol/testing"
@@ -183,12 +176,23 @@ import { App } from "../app"
 import { lineReviewAnchor } from "../review/thread-annotations"
 import "../styles.css"
 
-type LegacyReviewSnapshotPage = (
-  request: ReviewSnapshotPageRequest,
-) => Promise<ReviewSnapshotPageResponse>
-type LegacyReviewSnapshotSearch = (
-  request: ReviewSnapshotSearchRequest,
-) => Promise<ReviewSnapshotSearchResponse>
+interface ReviewSearchFixtureRequest {
+  readonly snapshotId: ReviewSnapshotId
+  readonly query: string
+  readonly cursor: string | null
+  readonly limit: number
+  readonly anchor: { readonly fileId: ReviewFileId } | null
+}
+
+interface ReviewSearchFixtureResponse {
+  readonly matches: ReadonlyArray<ReviewSnapshotSearchMatch>
+  readonly totalMatches: number
+  readonly nextCursor: string | null
+}
+
+type ReviewSearchFixture = (
+  request: ReviewSearchFixtureRequest,
+) => Promise<ReviewSearchFixtureResponse>
 
 const repo = Repo.make({
   createdAt: "2026-07-07T00:00:00Z",
@@ -2898,11 +2902,8 @@ scenario("reviewNavigationLifecycle", async () => {
     pullRequestDetail: fixture.manyDetail,
     pullRequestDiff: fixture.manyDiff,
     reviewRequests: [fixture.manyPullRequest],
-    beforeReviewSnapshotPage: async (request) => {
-      const wait = request.fileIds.flatMap((fileId) => {
-        const pending = waits.get(fileId)
-        return pending === undefined ? [] : [pending]
-      })[0]
+    beforeProgressiveReviewRange: async (request) => {
+      const wait = waits.get(request.fileId)
       if (wait !== undefined) await wait
     },
   })
@@ -4512,7 +4513,6 @@ scenario("snapshotPageResidency", async () => {
         }),
       ],
     }),
-    snapshotPageFileLimit: 1,
   })
   renderApp({ strictMode: true })
 
@@ -6956,16 +6956,6 @@ const setInputValue = (input: HTMLInputElement, value: string) => {
   setter?.call(input, value)
 }
 
-const stableBrowserCursorHash = (parts: readonly string[]) => {
-  const value = parts.join("\u0000")
-  let hash = 2_166_136_261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16_777_619)
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0")
-}
-
 const makeReviewSearchMatch = (
   file: ParsedDiffFile,
   input: {
@@ -7030,7 +7020,7 @@ const requireParsedFile = (files: readonly ParsedDiffFile[], path: string) => {
 const reviewSnapshotSearchFixture =
   (
     matchesByQuery: Readonly<Record<string, readonly ReviewSnapshotSearchMatch[]>>,
-  ): LegacyReviewSnapshotSearch =>
+  ): ReviewSearchFixture =>
   async (request) => {
     const unanchored = matchesByQuery[request.query] ?? []
     const anchorIndex =
@@ -7045,27 +7035,25 @@ const reviewSnapshotSearchFixture =
       request.cursor === null ? null : /^search:v1:([0-9]+):00000000$/u.exec(request.cursor)
     const offset = request.cursor === null ? 0 : Number(cursorMatch?.[1])
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > matches.length) {
-      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "mismatched" })
+      throw new Error("Mismatched review search cursor")
     }
     const end = Math.min(matches.length, offset + request.limit)
-    return ReviewSnapshotSearchAvailable.make({
-      snapshotId: request.snapshotId,
+    return {
       matches: matches.slice(offset, end),
       totalMatches: matches.length,
-      nextCursor:
-        end < matches.length ? ReviewSnapshotSearchCursor.make(`search:v1:${end}:00000000`) : null,
-    })
+      nextCursor: end < matches.length ? `search:v1:${end}:00000000` : null,
+    }
   }
 
 const installDiffDashApi = (
   options: {
     readonly appState?: AppState
     readonly agentProviderCatalog?: AgentProviderCatalog
-    readonly beforeReviewSnapshotPage?: (
-      request: Parameters<LegacyReviewSnapshotPage>[0],
+    readonly beforeProgressiveReviewRange?: (
+      request: Parameters<DiffDashApi["progressiveReviews"]["readRange"]>[0],
     ) => Promise<void>
     readonly beforeReviewSnapshotSearch?: (
-      request: Parameters<LegacyReviewSnapshotSearch>[0],
+      request: Parameters<ReviewSearchFixture>[0],
     ) => Promise<void>
     readonly cliInstallResult?: { readonly path: string; readonly pathSetupCommand: string | null }
     readonly diagnostics?: AppPrerequisites
@@ -7082,8 +7070,7 @@ const installDiffDashApi = (
     readonly repositories?: readonly Repo[]
     readonly reviewThreadDetails?: readonly ReviewThreadDetails[]
     readonly reviewRequests?: readonly HostedReviewSummary[]
-    readonly searchReviewSnapshot?: LegacyReviewSnapshotSearch
-    readonly snapshotPageFileLimit?: number
+    readonly searchReviewSnapshot?: ReviewSearchFixture
     readonly setViewedFile?: DiffDashApi["viewedFiles"]["set"]
     readonly setLocalViewedFile?: DiffDashApi["viewedFiles"]["setLocal"]
     readonly settings?: AISettings
@@ -7394,84 +7381,16 @@ const installDiffDashApi = (
       return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(repo.id))
     },
   )
-  const getReviewSnapshotPage = vi.fn<LegacyReviewSnapshotPage>(async (request) => {
-    await options.beforeReviewSnapshotPage?.(request)
-    const snapshot = snapshots.get(request.snapshotId)
-    if (expireNextSnapshotPage) {
-      expireNextSnapshotPage = false
-      snapshots.delete(request.snapshotId)
-      return ReviewSnapshotExpired.make({ snapshotId: request.snapshotId, reason: "evicted" })
-    }
-    if (snapshot === undefined) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "evicted",
-      })
-    }
-    const selected =
-      request.fileIds.length === 0
-        ? snapshot.parsedDiff.files
-        : request.fileIds.flatMap((fileId) => {
-            const file = snapshot.parsedDiff.files.find((candidate) => candidate.fileId === fileId)
-            return file === undefined ? [] : [file]
-          })
-    if (request.fileIds.length > 0 && selected.length !== request.fileIds.length) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "mismatched",
-      })
-    }
-    const pageFileLimit = options.snapshotPageFileLimit
-    if (pageFileLimit !== undefined) {
-      const selectionHash = stableBrowserCursorHash(selected.map((file) => file.fileId))
-      const cursorMatch =
-        request.cursor === null ? null : /^page:v1:([0-9]+):([0-9a-f]{8})$/u.exec(request.cursor)
-      if (request.cursor !== null && cursorMatch?.[2] !== selectionHash) {
-        return ReviewSnapshotExpired.make({
-          snapshotId: request.snapshotId,
-          reason: "mismatched",
-        })
-      }
-      const offset = cursorMatch === null ? 0 : Number(cursorMatch[1])
-      if (!Number.isSafeInteger(offset) || offset < 0 || offset > selected.length) {
-        return ReviewSnapshotExpired.make({
-          snapshotId: request.snapshotId,
-          reason: "mismatched",
-        })
-      }
-      const nextOffset = Math.min(selected.length, offset + pageFileLimit)
-      return ReviewSnapshotPageAvailable.make({
-        snapshotId: request.snapshotId,
-        files: selected.slice(offset, nextOffset),
-        nextCursor:
-          nextOffset < selected.length
-            ? ReviewSnapshotPageCursor.make(`page:v1:${nextOffset}:${selectionHash}`)
-            : null,
-      })
-    }
-    if (request.cursor !== null) {
-      return ReviewSnapshotExpired.make({
-        snapshotId: request.snapshotId,
-        reason: "mismatched",
-      })
-    }
-    return ReviewSnapshotPageAvailable.make({
-      snapshotId: request.snapshotId,
-      files: selected,
-      nextCursor: null,
-    })
-  })
-  const searchReviewSnapshot = vi.fn<LegacyReviewSnapshotSearch>(async (request) => {
+  const searchReviewSnapshot = vi.fn<ReviewSearchFixture>(async (request) => {
     await options.beforeReviewSnapshotSearch?.(request)
     if (options.searchReviewSnapshot !== undefined) {
       return options.searchReviewSnapshot(request)
     }
-    return ReviewSnapshotSearchAvailable.make({
-      snapshotId: request.snapshotId,
+    return {
       matches: [],
       totalMatches: 0,
       nextCursor: null,
-    })
+    }
   })
   const progressiveSessions = new Map<string, ReviewSessionIdentity>()
   const invalidatedProgressiveSnapshots = new Set<string>()
@@ -7532,6 +7451,7 @@ const installDiffDashApi = (
   )
   const progressiveRange = vi.fn<DiffDashApi["progressiveReviews"]["readRange"]>(
     async (request) => {
+      await options.beforeProgressiveReviewRange?.(request)
       if (expireNextSnapshotPage) {
         expireNextSnapshotPage = false
         invalidatedProgressiveSnapshots.add(request.identity.snapshotId)
@@ -7660,12 +7580,8 @@ const installDiffDashApi = (
           query: request.query,
           cursor: cursorKey === null ? null : (progressiveSearchCursors.get(cursorKey) ?? null),
           limit: request.limit,
-          anchor:
-            request.anchorFileId === null
-              ? null
-              : { _tag: "file" as const, fileId: request.anchorFileId },
+          anchor: request.anchorFileId === null ? null : { fileId: request.anchorFileId },
         })
-        if (response._tag === "expired") throw new Error("Progressive review session expired")
         const nextCursor =
           response.nextCursor === null
             ? null
@@ -7821,7 +7737,6 @@ const installDiffDashApi = (
   return {
     ...calls,
     getHostedReviewSnapshot,
-    getReviewSnapshotPage,
     openProgressiveSession,
     currentProgressiveSession,
     closeProgressiveSession,

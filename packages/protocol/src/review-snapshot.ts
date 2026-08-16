@@ -1,4 +1,3 @@
-import { ParsedDiffFile } from "@diffdash/domain/diff"
 import { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
@@ -8,47 +7,15 @@ import {
   HostedReviewSnapshotManifest,
   LocalReviewSnapshotManifest,
   RepositoryComparisonSnapshotManifest,
-  ReviewSnapshotFileInventory,
 } from "@diffdash/domain/review-context"
 import {
   ReviewFileId,
   ReviewHunkFingerprint,
   ReviewHunkId,
   ReviewKey,
-  ReviewSnapshotId,
 } from "@diffdash/domain/review-identity"
-import { Effect, Schema } from "effect"
+import { Schema } from "effect"
 import { OpenRepositoryComparisonCommand } from "./cli-navigation"
-
-/** Maximum files that one explicit renderer page request may select. */
-export const REVIEW_SNAPSHOT_PAGE_FILE_LIMIT = 8
-
-/** Maximum encoded page-state bytes before the Electron success envelope is added. */
-export const REVIEW_SNAPSHOT_PAGE_MAX_BYTES = 512 * 1_024
-
-/** Maximum search matches requested from one server-side result page. */
-export const REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT = 200
-
-/** Maximum encoded server-side search page bytes before its success envelope is added. */
-export const REVIEW_SNAPSHOT_SEARCH_MAX_BYTES = 256 * 1_024
-
-/** Opaque stable cursor for a bounded parsed-diff file page. */
-export const ReviewSnapshotPageCursor = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^page:v1:[0-9]+:[0-9a-f]{8}$/)),
-  Schema.brand("ReviewSnapshotPageCursor"),
-)
-
-/** Opaque stable cursor for a bounded parsed-diff file page. */
-export type ReviewSnapshotPageCursor = typeof ReviewSnapshotPageCursor.Type
-
-/** Opaque stable cursor for a bounded revision-keyed search page. */
-export const ReviewSnapshotSearchCursor = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^search:v1:[0-9]+:[0-9a-f]{8}$/)),
-  Schema.brand("ReviewSnapshotSearchCursor"),
-)
-
-/** Opaque stable cursor for a bounded revision-keyed search page. */
-export type ReviewSnapshotSearchCursor = typeof ReviewSnapshotSearchCursor.Type
 
 /** Stable identity for one exact literal occurrence in an immutable review snapshot. */
 export const ReviewSnapshotSearchMatchId = Schema.String.pipe(
@@ -58,12 +25,6 @@ export const ReviewSnapshotSearchMatchId = Schema.String.pipe(
 
 /** Stable identity for one exact literal occurrence in an immutable review snapshot. */
 export type ReviewSnapshotSearchMatchId = typeof ReviewSnapshotSearchMatchId.Type
-
-/** Reason a renderer must reacquire its review manifest. */
-export const ReviewSnapshotExpiredReason = Schema.Literals(["expired", "evicted", "mismatched"])
-
-/** Reason a renderer must reacquire its review manifest. */
-export type ReviewSnapshotExpiredReason = typeof ReviewSnapshotExpiredReason.Type
 
 /** Renderer request for a hosted review manifest backed by an immutable cached snapshot. */
 export class AcquireHostedReviewSnapshotRequest extends Schema.Class<AcquireHostedReviewSnapshotRequest>(
@@ -78,29 +39,6 @@ export class AcquireLocalReviewSnapshotRequest extends Schema.Class<AcquireLocal
 )({
   target: LocalReviewTarget,
 }) {}
-
-/** Renderer request for a bounded parsed-file page. */
-export class ReviewSnapshotPageRequest extends Schema.Class<ReviewSnapshotPageRequest>(
-  "ReviewSnapshotPageRequest",
-)({
-  snapshotId: ReviewSnapshotId,
-  cursor: Schema.NullOr(ReviewSnapshotPageCursor),
-  fileIds: Schema.Array(ReviewFileId).pipe(
-    Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
-  ),
-}) {}
-
-/** Parsed files returned without truncation under one response budget. */
-export class ReviewSnapshotPageAvailable extends Schema.TaggedClass<ReviewSnapshotPageAvailable>()(
-  "available",
-  {
-    snapshotId: ReviewSnapshotId,
-    files: Schema.Array(ParsedDiffFile).pipe(
-      Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)),
-    ),
-    nextCursor: Schema.NullOr(ReviewSnapshotPageCursor),
-  },
-) {}
 
 /** Exact saved repository and immutable target resolved from one CLI command. */
 export class ResolvedRepositoryComparison extends Schema.Class<ResolvedRepositoryComparison>(
@@ -140,32 +78,6 @@ export class RepositoryComparisonWalkthroughRequest extends Schema.Class<Reposit
   regenerate: Schema.Boolean,
 }) {}
 
-/** Typed state for a single parsed file that cannot fit one complete response. */
-export class ReviewSnapshotFileTooLarge extends Schema.TaggedClass<ReviewSnapshotFileTooLarge>()(
-  "fileTooLarge",
-  {
-    snapshotId: ReviewSnapshotId,
-    file: ReviewSnapshotFileInventory,
-    maxResponseBytes: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
-  },
-) {}
-
-/** Typed stale state instructing the renderer to reacquire the review. */
-export class ReviewSnapshotExpired extends Schema.TaggedClass<ReviewSnapshotExpired>()("expired", {
-  snapshotId: ReviewSnapshotId,
-  reason: ReviewSnapshotExpiredReason,
-}) {}
-
-/** Bounded parsed-file page, explicit too-large-file state, or stale snapshot state. */
-export const ReviewSnapshotPageResponse = Schema.Union([
-  ReviewSnapshotPageAvailable,
-  ReviewSnapshotFileTooLarge,
-  ReviewSnapshotExpired,
-])
-
-/** Bounded parsed-file page, explicit too-large-file state, or stale snapshot state. */
-export type ReviewSnapshotPageResponse = typeof ReviewSnapshotPageResponse.Type
-
 /** Starts review search at the beginning of one file in snapshot order. */
 export class ReviewSnapshotSearchFileAnchor extends Schema.TaggedClass<ReviewSnapshotSearchFileAnchor>()(
   "file",
@@ -173,25 +85,6 @@ export class ReviewSnapshotSearchFileAnchor extends Schema.TaggedClass<ReviewSna
     fileId: ReviewFileId,
   },
 ) {}
-
-/** Bounded revision-keyed literal search request. */
-export class ReviewSnapshotSearchRequest extends Schema.Class<ReviewSnapshotSearchRequest>(
-  "ReviewSnapshotSearchRequest",
-)({
-  snapshotId: ReviewSnapshotId,
-  query: Schema.String.pipe(
-    Schema.check(Schema.isMinLength(1)),
-    Schema.check(Schema.isMaxLength(512)),
-  ),
-  cursor: Schema.NullOr(ReviewSnapshotSearchCursor),
-  limit: Schema.Int.pipe(
-    Schema.check(Schema.isBetween({ minimum: 1, maximum: REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT })),
-  ),
-  anchor: Schema.NullOr(ReviewSnapshotSearchFileAnchor).pipe(
-    Schema.withConstructorDefault(Effect.succeed(null)),
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-}) {}
 
 /** Semantic side occupied by one immutable parsed-diff search match. */
 export const ReviewSnapshotSearchSide = Schema.Literals(["additions", "context", "deletions"])
@@ -217,28 +110,6 @@ export class ReviewSnapshotSearchMatch extends Schema.Class<ReviewSnapshotSearch
   start: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
   end: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
-
-/** One bounded search page plus the complete revision-keyed match count. */
-export class ReviewSnapshotSearchAvailable extends Schema.TaggedClass<ReviewSnapshotSearchAvailable>()(
-  "available",
-  {
-    snapshotId: ReviewSnapshotId,
-    matches: Schema.Array(ReviewSnapshotSearchMatch).pipe(
-      Schema.check(Schema.isMaxLength(REVIEW_SNAPSHOT_SEARCH_RESULT_LIMIT)),
-    ),
-    totalMatches: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
-    nextCursor: Schema.NullOr(ReviewSnapshotSearchCursor),
-  },
-) {}
-
-/** Bounded search result page or stale snapshot state. */
-export const ReviewSnapshotSearchResponse = Schema.Union([
-  ReviewSnapshotSearchAvailable,
-  ReviewSnapshotExpired,
-])
-
-/** Bounded search result page or stale snapshot state. */
-export type ReviewSnapshotSearchResponse = typeof ReviewSnapshotSearchResponse.Type
 
 /** Hosted or local manifest returned by the acquisition channels. */
 export const AcquiredReviewSnapshotManifest = Schema.Union([
