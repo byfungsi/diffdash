@@ -322,7 +322,9 @@ describe("SnapshotSearch", () => {
         expect(unicode.matches.map(({ newLineNumber }) => newLineNumber)).toEqual([1, 1])
         const overlap = yield* search.scan(input("aa"), () => Effect.void)
         expect(overlap.matches.map(({ start }) => start)).toEqual([0, 2])
-        const metadata = yield* search.scan(input("needle"), () => Effect.void)
+        const caseInsensitive = yield* search.scan(input("needle"), () => Effect.void)
+        expect(caseInsensitive.matches.map(({ start, end }) => [start, end])).toEqual([[0, 6]])
+        const metadata = yield* search.scan(input("metadata"), () => Effect.void)
         expect(metadata.totalMatches).toBe(0)
       }).pipe(Effect.provide(makeLayer(directory)))
     }),

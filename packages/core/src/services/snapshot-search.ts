@@ -182,6 +182,7 @@ const scanCommittedSnapshot = Effect.fn("SnapshotSearch.scanCommittedSnapshot")(
   let previousWindow: Array<{ readonly match: SnapshotSearchMatch; readonly index: number }> = []
   let totalMatches = 0
   let cursorFound = input.cursor === null
+  const literalPattern = new RegExp(escapeRegExp(input.query), "giu")
 
   const visitMatch = (match: SnapshotSearchMatch): void => {
     const index = totalMatches
@@ -236,11 +237,19 @@ const scanCommittedSnapshot = Effect.fn("SnapshotSearch.scanCommittedSnapshot")(
       for (const patchLine of splitPatchLines(text)) {
         const line = projectLine(hunkState, patchLine)
         if (line === null) continue
-        for (let start = line.content.indexOf(input.query); start >= 0; ) {
+        literalPattern.lastIndex = 0
+        for (let match = literalPattern.exec(line.content); match !== null; ) {
           visitMatch(
-            makeMatch(file, hunkState.hunk, line, start, input.query.length, maximumExcerptBytes),
+            makeMatch(
+              file,
+              hunkState.hunk,
+              line,
+              match.index,
+              match[0].length,
+              maximumExcerptBytes,
+            ),
           )
-          start = line.content.indexOf(input.query, start + input.query.length)
+          match = literalPattern.exec(line.content)
         }
       }
       const provisionalMatches =
@@ -323,6 +332,8 @@ const scanCommittedSnapshot = Effect.fn("SnapshotSearch.scanCommittedSnapshot")(
     wrapped: input.anchorFileId !== null && anchorOrdinal > 0,
   } satisfies SnapshotSearchFinal
 })
+
+const escapeRegExp = (literal: string): string => literal.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 
 interface HunkState {
   readonly hunk: StoredHunk
