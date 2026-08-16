@@ -13,9 +13,10 @@ const execFilePromise = promisify(execFile)
 test("generates every scale scenario without network access", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "diffdash-synthetic-scale-"))
   context.after(() => rm(root, { recursive: true, force: true }))
+  const profile = { fileCount: 5, rowCount: 14, enormousFileRows: 5, wrappedLineBytes: 64 }
   const result = await generateSyntheticFixture({
     directory: join(root, "repository"),
-    profile: { fileCount: 5, rowCount: 14, enormousFileRows: 5, wrappedLineBytes: 64 },
+    profile,
   })
 
   assert.equal(result.manifest.profile.rowCount, 14)
@@ -36,5 +37,12 @@ test("generates every scale scenario without network access", async (context) =>
     .split("\n")
     .reduce((total, line) => total + Number(line.split("\t", 1)[0]), 0)
   assert.equal(addedRows, 14)
+  assert.match(result.manifest.id, /^pathological-[a-f0-9]{16}$/u)
   assert.match(await readFile(result.manifestPath, "utf8"), /synthetic-repository-scale/)
+
+  const repeated = await generateSyntheticFixture({
+    directory: join(root, "repeated-repository"),
+    profile,
+  })
+  assert.deepEqual(repeated.manifest, result.manifest)
 })

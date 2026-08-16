@@ -1,8 +1,17 @@
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 
 const FIXTURE_DATE = "2026-01-01T00:00:00Z"
+
+const fixtureId = (profile, baseSha, headSha, revisionSha) => {
+  const digest = createHash("sha256")
+    .update(JSON.stringify({ profile, baseSha, headSha, revisionSha }))
+    .digest("hex")
+    .slice(0, 16)
+  return `pathological-${digest}`
+}
 
 /** Default deterministic pathological comparison required by the M21 scale benchmark. */
 export const repositoryScaleProfile = {
@@ -122,6 +131,7 @@ export const generateSyntheticFixture = async ({ directory, profile = repository
 
   const manifest = {
     version: 1,
+    id: fixtureId(profile, baseSha, headSha, revisionSha),
     kind: "synthetic-repository-scale",
     baseSha,
     headSha,

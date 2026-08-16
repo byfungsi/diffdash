@@ -35,12 +35,13 @@ warm-up:
 ```sh
 pnpm repository-scale:measure -- \
   --pid=<pid> \
-  --fixture=<fixture-id> \
+  --manifest=tools/repository-scale/.cache/fixtures/<fixture-id>/manifest.json \
   --session=linux-baseline \
   --switch=1
 ```
 
-The JSON report contains no command lines or repository paths. It records peak RSS by Electron,
+The manifest pins every report to the exact fixture ID and base/head revisions. The JSON report
+contains no command lines or repository paths. It records peak RSS by Electron,
 renderer, Core/worker, and child ownership. Linux also reports exact private RSS, swap, and benchmark
 I/O deltas from `/proc`; unsupported macOS fields remain `null`. Each sample records a final ten-second
 steady window, but the switch gate is authoritative. After switch ten, evaluate the session:

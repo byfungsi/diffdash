@@ -17,7 +17,7 @@ const defaultCacheDirectory = resolve(packageRoot, ".cache")
 const usage = `Usage:
   pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
-  pnpm repository-scale:measure -- --pid=<electron-pid> --fixture=<fixture-id> --session=<name> --switch=<1-10>
+  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --session=<name> --switch=<1-10>
   pnpm repository-scale:evaluate -- --session=<name>
 `
 
@@ -26,7 +26,7 @@ const commandOptions = {
   prepare: new Set(["source", "base", "head", "name"]),
   measure: new Set([
     "pid",
-    "fixture",
+    "manifest",
     "session",
     "switch",
     "duration-ms",
@@ -84,6 +84,10 @@ const safeName = (options, name) => {
   return value
 }
 
+const isString = (value) => Object.prototype.toString.call(value) === "[object String]"
+
+const isRecord = (value) => value !== null && Object.getPrototypeOf(value) === Object.prototype
+
 const prepare = async (options) => {
   const result = await prepareGitFixture({
     source: required(options, "source"),
@@ -105,6 +109,21 @@ const prepare = async (options) => {
   )
 }
 
+const readFixtureManifest = async (options) => {
+  const manifestPath = resolve(required(options, "manifest"))
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+  if (
+    !isRecord(manifest) ||
+    !isString(manifest.id) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(manifest.id) ||
+    !isString(manifest.baseSha) ||
+    !isString(manifest.headSha)
+  ) {
+    throw new Error("Fixture manifest must contain a safe id and pinned base/head revisions")
+  }
+  return manifest
+}
+
 const measure = async (options) => {
   const pid = positiveNumber(options, "pid", null)
   if (pid === null || !Number.isSafeInteger(pid)) throw new Error("--pid must be a process ID")
@@ -112,7 +131,7 @@ const measure = async (options) => {
   if (switchIndex === null || !Number.isSafeInteger(switchIndex) || switchIndex > 10) {
     throw new Error("--switch must be an integer from 1 through 10")
   }
-  const fixtureId = safeName(options, "fixture")
+  const fixture = await readFixtureManifest(options)
   const session = safeName(options, "session")
   const measurement = await measureProcessTree({
     rootPid: pid,
@@ -121,7 +140,13 @@ const measure = async (options) => {
     plateauWindowMs: positiveNumber(options, "plateau-window-ms", 10_000),
     plateauThreshold: positiveNumber(options, "plateau-threshold", 0.05),
   })
-  const report = { ...measurement, fixtureId, session, switchIndex }
+  const report = {
+    ...measurement,
+    fixtureId: fixture.id,
+    fixtureManifest: fixture,
+    session,
+    switchIndex,
+  }
   const output = resolve(
     defaultCacheDirectory,
     "reports",

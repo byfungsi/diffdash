@@ -15,7 +15,7 @@ test("rejects misspelled command options instead of silently using defaults", as
       "measure",
       "--",
       "--pid=123",
-      "--fixture=linux-test",
+      "--manifest=/tmp/fixture.json",
       "--session=baseline",
       "--switch=1",
       "--duraton-ms=1",
