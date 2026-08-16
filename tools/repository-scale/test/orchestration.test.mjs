@@ -36,6 +36,8 @@ const passingReport = () => ({
     rapidSwitches: true,
     coreRestart: true,
     processTeardown: true,
+    disposalComplete: true,
+    rescanCancellation: true,
   },
   observations: { maximumMountedRows: 180, switchCount: 4 },
   blocked: [],
@@ -107,6 +109,23 @@ test("fails nonzero-worthy objective gates without inventing measurements", () =
       error.summary.passed === false &&
       error.summary.failedGates.includes("broadSearch") &&
       error.summary.memory === null,
+  )
+})
+
+test("rejects reports that only describe missing lifecycle evidence", () => {
+  const report = passingReport()
+  report.gates.disposalComplete = false
+  report.gates.rescanCancellation = false
+  report.blocked = [
+    { scenario: "foreground disposal completion", reason: "No lifecycle signal." },
+    { scenario: "rescan cancellation counters", reason: "No lifecycle signal." },
+  ]
+  assert.throws(
+    () => summarizeOrchestrationReport(report),
+    (error) =>
+      error instanceof OrchestrationGateError &&
+      error.summary.failedGates.includes("disposalComplete") &&
+      error.summary.failedGates.includes("rescanCancellation"),
   )
 })
 

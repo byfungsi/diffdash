@@ -123,6 +123,8 @@ export const summarizeOrchestrationReport = (report) => {
     "rapidSwitches",
     "coreRestart",
     "processTeardown",
+    "disposalComplete",
+    "rescanCancellation",
   ]
   const failedGates = requiredGates.filter((gate) => report.gates?.[gate] !== true)
   let memory = null

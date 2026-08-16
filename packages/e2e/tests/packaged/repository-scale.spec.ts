@@ -82,6 +82,8 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
       rapidSwitches: false,
       coreRestart: false,
       processTeardown: false,
+      disposalComplete: false,
+      rescanCancellation: false,
     },
     observations: { maximumMountedRows: 0, switchCount: 0 },
     blocked: [
@@ -264,6 +266,8 @@ test("FUN-214/FUN-240 deterministic packaged repository-scale orchestration", as
     rapidSwitches: true,
     coreRestart: true,
     processTeardown: true,
+    disposalComplete: false,
+    rescanCancellation: false,
   })
 })
 
