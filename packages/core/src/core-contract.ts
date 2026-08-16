@@ -29,7 +29,7 @@ import {
   WalkthroughValidationError,
 } from "@diffdash/domain/walkthrough"
 import type { GitProviderOperationError, UnknownGitProviderError } from "@diffdash/git-provider"
-import type { LocalReviewTargetError } from "@diffdash/local-git/local-git"
+import type { LocalReviewChangedError, LocalReviewTargetError } from "@diffdash/local-git/local-git"
 import type { ProjectWorkspaceStoreError } from "@diffdash/persistence/project-workspace-store"
 import type { ReviewThreadStoreError } from "@diffdash/persistence/review-thread-store"
 import type {
@@ -293,7 +293,10 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.agentProvidersGetCatalog]: never
   readonly [CoreMethod.appDiagnostics]: never
   readonly [CoreMethod.appInstallDiffDashCli]: PrerequisiteInstallError
-  readonly [CoreMethod.appOpenLocalRepositoryFile]: ProcessExecutionError
+  readonly [CoreMethod.appOpenLocalRepositoryFile]:
+    | LocalReviewChangedError
+    | LocalReviewTargetError
+    | ProcessExecutionError
   readonly [CoreMethod.appOpenRepositoryComparisonFile]: CoreGitProviderFailure
   readonly [CoreMethod.appOpenRepositoryFile]: RepositoryLinkError | CoreGitProviderFailure
   readonly [CoreMethod.appStateGet]: AppStateError
@@ -307,7 +310,11 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.searchHostedRepositories]: CoreGitProviderFailure
   readonly [CoreMethod.resolveLocalBranch]: ProcessExecutionError | LocalReviewTargetError
   readonly [CoreMethod.resolveLastCommit]: ProcessExecutionError | LocalReviewTargetError
-  readonly [CoreMethod.resolveRepositoryComparison]: RepositoryComparisonSourceError
+  readonly [CoreMethod.resolveRepositoryComparison]:
+    | LocalReviewTargetError
+    | ProcessExecutionError
+    | RepositoryComparisonSourceError
+    | RepositoryLinkError
   readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
   readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError
   readonly [CoreMethod.acquireRepositoryComparisonSnapshot]: RepositoryComparisonSourceError

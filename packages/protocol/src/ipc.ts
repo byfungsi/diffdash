@@ -191,7 +191,11 @@ export const InvokeContract = {
   ),
   [InvokeChannel.appOpenLocalRepositoryFile]: defineInvoke(
     InvokeChannel.appOpenLocalRepositoryFile,
-    Schema.Struct({ rootPath: RepositoryCheckoutPath, filePath: RepositoryRelativePath }),
+    Schema.Struct({
+      rootPath: RepositoryCheckoutPath,
+      filePath: RepositoryRelativePath,
+      target: Schema.NullOr(LocalReviewTarget),
+    }),
     EmptyResponse,
   ),
   [InvokeChannel.appOpenRepositoryFile]: defineInvoke(

@@ -268,7 +268,7 @@ describe("protocol boundaries", () => {
     )({ localPath: "relative/repository", selectedRepository: null })
     const traversingFile = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.appOpenLocalRepositoryFile].request,
-    )({ rootPath: "/workspace/diffdash", filePath: "../secret.txt" })
+    )({ rootPath: "/workspace/diffdash", filePath: "../secret.txt", target: null })
     const emptyFavorite = Schema.decodeUnknownResult(
       InvokeContract[InvokeChannel.setRepositoryFavorite].request,
     )({ id: "", isFavorite: true })

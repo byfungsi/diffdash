@@ -38,15 +38,17 @@ export const makeApplicationOperationHandlers: Effect.Effect<
     [CoreMethod.agentProvidersGetCatalog]: () => agentProviders.catalog,
     [CoreMethod.appDiagnostics]: () => prerequisites.get,
     [CoreMethod.appInstallDiffDashCli]: () => prerequisites.installDiffDashCli,
-    [CoreMethod.appOpenLocalRepositoryFile]: ({ rootPath, filePath }) =>
-      git.detectRoot(rootPath).pipe(
-        Effect.map((canonicalRootPath) =>
-          CoreLocalFileOpenIntent.make({
-            rootPath: CoreAbsolutePath.make(canonicalRootPath),
-            filePath,
-          }),
-        ),
-      ),
+    [CoreMethod.appOpenLocalRepositoryFile]: ({ rootPath, filePath, target }) =>
+      Effect.gen(function* () {
+        const canonicalRootPath =
+          target === null
+            ? yield* git.detectRoot(rootPath)
+            : (yield* git.validateLocalReviewTarget(target)).rootPath
+        return CoreLocalFileOpenIntent.make({
+          rootPath: CoreAbsolutePath.make(canonicalRootPath),
+          filePath,
+        })
+      }),
     [CoreMethod.appOpenRepositoryComparisonFile]: ({ target, filePath }) =>
       gitProvider
         .fileUrl(target.repository, filePath, GitFileRevision.make(target.headSha))
