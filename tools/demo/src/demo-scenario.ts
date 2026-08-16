@@ -4,7 +4,6 @@ import {
   BranchRevision,
   ChangedFile,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewSummary,
   HostedRepositorySource,
   ProviderActor,
@@ -243,11 +242,19 @@ export interface DemoScenarioAssets {
   }
 }
 
+/** Raw authored patch asset retained only by the deterministic demo fixture. */
+export interface DemoReviewDiff {
+  readonly locator: HostedReviewSummary["locator"]
+  readonly headRevision: string | null
+  readonly diff: string
+  readonly fetchedAt: string
+}
+
 /** One coherent, fully materialized pull-request revision. */
 export interface MaterializedDemoRevision {
   readonly id: string
   readonly detail: HostedReviewDetail
-  readonly diff: HostedReviewDiff
+  readonly diff: DemoReviewDiff
   readonly parsedDiff: ParsedDiff
   readonly manifest: HostedReviewSnapshotManifest
   readonly walkthrough: StoredWalkthrough
@@ -478,12 +485,12 @@ const materializeRevision = (
         }),
       ),
     })
-    const diff = HostedReviewDiff.make({
+    const diff: DemoReviewDiff = {
       locator,
       headRevision: revision.headSha,
       diff: rawDiff ?? "",
       fetchedAt: revision.fetchedAt,
-    })
+    }
     const scope = walkthroughHostedReviewScope(locator)
     const hunkDigest = buildWalkthroughHunkDigest(parsedDiff.files, scope)
     const source = yield* Schema.decodeUnknownEffect(DemoWalkthroughSource)(walkthroughSource).pipe(

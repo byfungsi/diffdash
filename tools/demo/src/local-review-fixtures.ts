@@ -3,7 +3,6 @@ import type { ParsedDiff } from "@diffdash/domain/diff"
 import {
   BranchComparison,
   LocalReviewDetail,
-  LocalReviewDiff,
   LocalReviewTarget,
   workingTreeReviewTarget,
 } from "@diffdash/domain/local-review"
@@ -50,13 +49,24 @@ export interface DemoLocalReviewFixture {
   readonly id: "working-tree" | "branch"
   readonly target: LocalReviewTarget
   readonly manifest: LocalReviewSnapshotManifest
-  readonly diff: LocalReviewDiff
+  readonly diff: DemoLocalReviewDiff
   readonly parsedDiff: ParsedDiff
   readonly walkthrough: StoredWalkthrough
   readonly threads: readonly ReviewThreadDetails[]
   readonly initiallyViewedFileKeys: readonly string[]
   readonly comparisonTargetSha: string | null
   readonly excludedTargetOnlyPaths: readonly string[]
+}
+
+/** Raw authored local patch retained only by the deterministic demo fixture. */
+export interface DemoLocalReviewDiff {
+  readonly rootPath: RepositoryCheckoutPath
+  readonly comparison: LocalReviewTarget["comparison"]
+  readonly baseSha: string
+  readonly headSha: string
+  readonly diffHash: string
+  readonly diff: string
+  readonly fetchedAt: string
 }
 
 /** Builds isolated working-tree and merge-base branch fixtures from coherent authored revisions. */
@@ -139,7 +149,7 @@ const makeFixture = (input: {
     ),
     fetchedAt: input.revision.diff.fetchedAt,
   })
-  const diff = LocalReviewDiff.make({
+  const diff: DemoLocalReviewDiff = {
     rootPath,
     comparison: input.target.comparison,
     baseSha: baseRevision,
@@ -147,7 +157,7 @@ const makeFixture = (input: {
     diffHash: diffIdentity,
     diff: input.revision.diff.diff,
     fetchedAt: input.revision.diff.fetchedAt,
-  })
+  }
   const manifest = LocalReviewSnapshotManifest.make({
     projectId: input.scenario.repository.id,
     snapshotId: makeReviewSnapshotId({
