@@ -904,21 +904,24 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
-    await expect(window.getByText("Generating walkthrough").first()).toBeVisible()
     const rawAcceptance = await startLocalWalkthrough(
       window,
       localRepo,
       "w:dropped-terminal-hint",
       true,
     )
+    await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
+
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     const walkthroughContainer = window.locator("[data-walkthrough-operation-id]").first()
     await expect(walkthroughContainer).toHaveAttribute(
       "data-walkthrough-operation-id",
       rawAcceptance.operationId,
       { timeout: 20_000 },
     )
-    await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
+    const uiOperationId = await walkthroughContainer.getAttribute("data-walkthrough-operation-id")
+    if (uiOperationId === null) throw new Error("UI walkthrough operation ID is unavailable")
+    await waitForWalkthroughOperation(window, uiOperationId, "failed")
 
     await expect(
       window.getByText("DiffDash could not complete this walkthrough operation.").first(),
@@ -934,7 +937,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
     expect(report).toContain("Method: Walkthroughs.getOperation")
     expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
-    expect(report).toContain(`Operation ID: ${rawAcceptance.operationId}`)
+    expect(report).toContain(`Operation ID: ${uiOperationId}`)
     expect(report).toContain("Error code: AGENT_PROVIDER_FAILURE")
     expect(report).toContain("Provider: none")
     expect(report).toContain("Model: none")
