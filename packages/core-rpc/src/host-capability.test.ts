@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import * as RpcTest from "effect/unstable/rpc/RpcTest"
 
 import {
@@ -29,15 +29,19 @@ describe("Core host capability RPCs", () => {
       "Host.openPath",
     ])
     expect([...CoreHostCapabilityAllowlist]).toEqual([...CoreHostCapabilityRpcs.requests.keys()])
-    expect(() =>
-      Schema.decodeUnknownSync(HostOpenExternalRequest)({
-        context: { ...context, requestId: "h:not-core-originated" },
-        url: "https://usediffdash.com",
-      }),
-    ).toThrow()
-    expect(() =>
-      Schema.decodeUnknownSync(HostOpenPathRequest)({ context, path: "relative/path" }),
-    ).toThrow()
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(HostOpenExternalRequest)({
+          context: { ...context, requestId: "h:not-core-originated" },
+          url: "https://usediffdash.com",
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      Result.isFailure(
+        Schema.decodeUnknownResult(HostOpenPathRequest)({ context, path: "relative/path" }),
+      ),
+    ).toBe(true)
   })
 
   it.effect("executes an allowlisted native capability through Effect RPC", () => {
