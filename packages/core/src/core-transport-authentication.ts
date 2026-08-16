@@ -1,7 +1,7 @@
 import { CoreTransportAuthenticationMiddleware } from "@diffdash/core-rpc/admission"
 import { CoreTransportAuthenticationFailure } from "@diffdash/core-rpc/failure"
 import { CORE_TRANSPORT_TOKEN_HEADER } from "@diffdash/core-rpc/transport"
-import { Context, Deferred, Effect, Layer, Option, Redacted, Ref } from "effect"
+import { Context, Deferred, Effect, Layer, Match, Option, Redacted, Ref } from "effect"
 import * as Headers from "effect/unstable/http/Headers"
 import { timingSafeEqual } from "node:crypto"
 
@@ -77,9 +77,7 @@ export const coreAuthenticatedHostSessionLayer = Layer.effect(
       authenticated,
       disconnected,
       isAuthenticated: (clientId) =>
-        Ref.get(state).pipe(
-          Effect.map((current) => Option.contains(current.clientId, clientId)),
-        ),
+        Ref.get(state).pipe(Effect.map((current) => Option.contains(current.clientId, clientId))),
       awaitDeath: Deferred.await(death),
     })
   }),
@@ -119,7 +117,10 @@ export const coreTransportAuthenticationLayer = (options: CoreTransportAuthentic
       const healthCompleted = yield* Ref.make<ReadonlySet<number>>(new Set())
 
       return (effect, request) => {
-        const isHealth = request.rpc._tag === "Core.health"
+        const isHealth = Match.value(request.rpc).pipe(
+          Match.tag("Core.health", () => true),
+          Match.orElse(() => false),
+        )
         const authenticate = Effect.gen(function* () {
           if (!isHealth) {
             const bound = yield* hostSession.isAuthenticated(request.client.id)
