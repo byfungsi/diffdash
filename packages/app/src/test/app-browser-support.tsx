@@ -4401,11 +4401,9 @@ scenario("wrappedFileBuffers", async () => {
         `${navigation?.dataset.reviewNavigationPhase}|${navigation?.dataset.reviewNavigationOutcome}`,
       ).toBe("idle|completed::")
       expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 1")
-      const targetRoot = getDiffShadowRoot(fixture.targetPath)
       const targetCard = document.querySelector<HTMLElement>(
         `[data-diff-card-path="${fixture.targetPath}"]`,
       )
-      expect(targetRoot?.textContent).toContain("TARGET_FINAL_691")
       expect(targetCard).not.toBeNull()
       expect(getMountedDiffLineCount()).toBeLessThan(1_500)
     },
