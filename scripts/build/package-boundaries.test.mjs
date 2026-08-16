@@ -765,7 +765,7 @@ test("the workspace resolves one Effect runtime", () => {
   assert.doesNotMatch(lockfile, /^  ['"]?@effect\/schema@/m)
 })
 
-test("Core remains runtime-neutral and owns the only application ManagedRuntime", () => {
+test("Core remains runtime-neutral and production has no embedded ManagedRuntime", () => {
   const coreDirectory = resolve(root, "packages/core")
   const coreSourceFiles = sourceFiles(join(coreDirectory, "src"))
   const coreSource = coreSourceFiles.map((file) => readFileSync(file, "utf8")).join("\n")
@@ -791,7 +791,7 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
         readFileSync(file, "utf8").includes("ManagedRuntime.make("),
     )
   })
-  assert.deepEqual(managedRuntimeOwners, [resolve(root, "packages/core/src/embedded-core.ts")])
+  assert.deepEqual(managedRuntimeOwners, [])
 
   const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
   assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
@@ -799,7 +799,7 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
 
   const coreContract = readFileSync(join(coreDirectory, "src/core-contract.ts"), "utf8")
   assert.match(coreContract, /interface CoreOperationFailureMap/)
-  assert.match(coreContract, /CoreResult<\s*CoreOperationOutput<Method>/)
+  assert.doesNotMatch(coreContract, /EmbeddedCore|CoreResult/)
 
   for (const sourceFile of coreSourceFiles.filter(
     (candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate),

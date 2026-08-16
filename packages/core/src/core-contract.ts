@@ -57,7 +57,6 @@ import {
 import { Schema } from "effect"
 import { CoreAbsolutePath, CoreWebUrl } from "./core-configuration"
 import * as CoreDefectBoundary from "./core-defect-boundary"
-import type { CoreStartupFailure } from "./core-startup-error"
 import type { PrerequisiteInstallError } from "./services/prerequisites"
 import { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 import { RepositoryLinkError } from "./services/repository-linker"
@@ -220,31 +219,6 @@ export type CoreOperationOutput<Method extends CoreMethod> = Method extends
   ? CoreFileOpenIntent
   : CoreMethodOutput<Method>
 
-/** Explicit success or expected failure returned across the embedded Core boundary. */
-export type CoreResult<Value, Failure> =
-  | { readonly ok: true; readonly value: Value }
-  | { readonly ok: false; readonly error: Failure }
-
-/** Lifecycle states in which the embedded Core cannot accept requested work. */
-export const CoreUnavailableState = Schema.Literals([
-  "notStarted",
-  "starting",
-  "disposing",
-  "disposed",
-])
-
-/** Lifecycle states in which the embedded Core cannot accept requested work. */
-export type CoreUnavailableState = typeof CoreUnavailableState.Type
-
-/** A requested operation is invalid for the current embedded Core lifecycle. */
-export class CoreLifecycleError extends Schema.TaggedError<CoreLifecycleError>()(
-  "CoreLifecycleError",
-  {
-    state: CoreUnavailableState,
-    message: Schema.String,
-  },
-) {}
-
 /** Expected failures from selecting or invoking one hosted Git provider. */
 export type CoreGitProviderFailure = UnknownGitProviderError | GitProviderOperationError
 
@@ -353,12 +327,6 @@ export interface CoreOperationFailureMap {
 
 /** Expected failure returned by one named Core business operation. */
 export type CoreOperationFailure<Method extends CoreMethod> = CoreOperationFailureMap[Method]
-
-/** Startup acquisition can fail before any requested Core operation executes. */
-export type CoreBoundaryFailure<Failure> = CoreLifecycleError | CoreStartupFailure | Failure
-
-/** Expected failures while starting the Core application lifecycle. */
-export type CoreStartFailure = CoreBoundaryFailure<never>
 
 /** Expected failures while loading an already-persisted walkthrough. */
 export type CoreGetStoredWalkthroughFailure = CoreThreadResolutionFailure | WalkthroughStoreError
@@ -479,31 +447,6 @@ export interface GetStoredWalkthrough {
   readonly expectedHeadRevision: ReviewRevision | null
 }
 
-/** Durable walkthrough operation seam implemented in-process during the embedded migration. */
-export interface CoreWalkthroughs {
-  readonly start: (
-    request: StartWalkthroughOperation,
-  ) => Promise<
-    CoreResult<WalkthroughOperationAccepted, CoreBoundaryFailure<CoreWalkthroughStartFailure>>
-  >
-  readonly getOperation: (
-    operationId: WalkthroughOperationId,
-  ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
-  >
-  readonly cancel: (
-    operationId: WalkthroughOperationId,
-  ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
-  >
-  /** Preserves nullable absence for the existing host and IPC transport contract. */
-  readonly getStored: (
-    request: GetStoredWalkthrough,
-  ) => Promise<
-    CoreResult<StoredWalkthrough | null, CoreBoundaryFailure<CoreGetStoredWalkthroughFailure>>
-  >
-}
-
 /** Expected failures while resolving and durably accepting walkthrough work. */
 export type CoreWalkthroughStartFailure =
   | CoreThreadResolutionFailure
@@ -517,24 +460,3 @@ export type CoreWalkthroughOperationFailure =
   | WalkthroughStoreError
   | WalkthroughOperationStateUnavailable
   | WalkthroughOperationArtifactUnavailable
-
-/** Lifecycle and closed operation surface exposed to a native DiffDash host. */
-export interface EmbeddedCore {
-  /** Acquires Core resources and completes startup recovery. */
-  readonly start: () => Promise<CoreResult<void, CoreStartFailure>>
-
-  /** Executes one named Core operation without exposing internal Effect services. */
-  readonly execute: <Method extends CoreMethod>(
-    method: Method,
-    input: CoreMethodInput<Method>,
-    options?: CoreOperationOptions,
-  ) => Promise<
-    CoreResult<CoreOperationOutput<Method>, CoreBoundaryFailure<CoreOperationFailure<Method>>>
-  >
-
-  /** Provider-neutral walkthrough operation boundary owned by Core. */
-  readonly walkthroughs: CoreWalkthroughs
-
-  /** Releases every resource owned by Core. */
-  readonly dispose: () => Promise<void>
-}
