@@ -1186,7 +1186,7 @@ const reconcilePublishedRange = (
         )
       }
     })
-  }, 16)
+  }, 0)
 }
 
 const mountedDiffLineCount = (container: HTMLElement): number =>
