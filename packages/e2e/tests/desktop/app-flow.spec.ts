@@ -1136,7 +1136,7 @@ for (const fixture of [
       const gutterNumber = diffCard
         .locator('diffs-container [data-line-type="change-addition"][data-column-number]:visible')
         .last()
-      const composer = await openGutterThreadComposer(window, gutterNumber, diffCard)
+      const composer = await openGutterThreadComposer(window, gutterNumber)
       await composer.fill("Review this line")
       await window.getByRole("button", { name: "Comment" }).click()
       await expect(window.getByText(fixture.response)).toBeVisible({ timeout: 20_000 })
@@ -1531,21 +1531,23 @@ const dismissOnboardingIfPresent = async (
   }
 }
 
-const openGutterThreadComposer = async (
-  window: Page,
-  gutterNumber: Locator,
-  utilityScope = window.locator("body"),
-) => {
-  const utility = utilityScope.locator("diffs-container [data-utility-button]").first()
+const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
   const composer = window.getByRole("textbox", { name: "Thread message" })
   await expect
     .poll(
       async () => {
         if (await composer.isVisible()) return true
         try {
-          await gutterNumber.hover({ force: true, timeout: 1_000 })
-          if (!(await utility.isVisible())) return false
-          await utility.evaluate((button) => {
+          await gutterNumber.evaluate((gutter) => {
+            gutter.dispatchEvent(
+              new PointerEvent("pointermove", {
+                bubbles: true,
+                composed: true,
+                pointerType: "mouse",
+              }),
+            )
+            const utility = gutter.querySelector("[data-utility-button]")
+            if (utility === null) return
             const init = {
               bubbles: true,
               button: 0,
@@ -1553,8 +1555,8 @@ const openGutterThreadComposer = async (
               pointerId: 1,
               pointerType: "mouse",
             }
-            button.dispatchEvent(new PointerEvent("pointerdown", init))
-            button.dispatchEvent(new PointerEvent("pointerup", init))
+            utility.dispatchEvent(new PointerEvent("pointerdown", init))
+            document.dispatchEvent(new PointerEvent("pointerup", init))
           })
           return composer.isVisible()
         } catch {
