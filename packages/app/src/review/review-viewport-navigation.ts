@@ -799,8 +799,17 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (alignment === "start") drift = targetRect.top - visibleTop
     else if (alignment === "center") {
       drift = targetRect.top + targetRect.height / 2 - (visibleTop + visibleBottom) / 2
-    } else if (targetRect.top < visibleTop) drift = targetRect.top - visibleTop
-    else if (targetRect.bottom > visibleBottom) drift = targetRect.bottom - visibleBottom
+    } else {
+      const nearestInset = Math.min(
+        targetRect.height,
+        Math.max(0, (visibleBottom - visibleTop - targetRect.height) / 2),
+      )
+      if (targetRect.top < visibleTop + nearestInset) {
+        drift = targetRect.top - visibleTop - nearestInset
+      } else if (targetRect.bottom > visibleBottom - nearestInset) {
+        drift = targetRect.bottom - visibleBottom + nearestInset
+      }
+    }
     if (Math.abs(drift) <= 0.5) return drift
 
     const previousScrollTop = container.scrollTop
