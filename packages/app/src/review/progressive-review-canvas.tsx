@@ -1059,11 +1059,17 @@ const reconcilePublishedRange = (
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
-    if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) return
+    if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
+      reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      return
+    }
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) return
+      if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
+        reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+        return
+      }
       if (
         mountedDiffLineCount(scrollContainer) > D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows
       ) {
