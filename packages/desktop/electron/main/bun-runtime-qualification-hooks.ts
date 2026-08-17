@@ -18,6 +18,7 @@ import {
 import type { VerifiedCoreArtifact } from "./core-artifact"
 
 const PROCESS_TIMEOUT_MILLISECONDS = 3_000
+const CORE_HEALTH_TIMEOUT_MILLISECONDS = 10_000
 const PROCESS_OUTPUT_LIMIT_BYTES = 4_096
 const SAFE_MESSAGE = "A Bun runtime probe failed." as const
 const CORE_HEALTH_ATTEMPTS = 3
@@ -160,7 +161,7 @@ export const retryBunCoreHealthProbe = <Error>(
 ): Effect.Effect<void, Error | BunRuntimeProbeError> =>
   probe.pipe(
     Effect.timeoutOrElse({
-      duration: PROCESS_TIMEOUT_MILLISECONDS,
+      duration: CORE_HEALTH_TIMEOUT_MILLISECONDS,
       orElse: () => Effect.fail(probeError()),
     }),
     Effect.retry({ times: CORE_HEALTH_ATTEMPTS - 1 }),
@@ -297,7 +298,7 @@ const makeSystemExecutor = (
                   environment: options.environment,
                   statePath,
                   coreConfiguration: configuration,
-                  listenTimeout: PROCESS_TIMEOUT_MILLISECONDS,
+                  listenTimeout: CORE_HEALTH_TIMEOUT_MILLISECONDS,
                 }).pipe(Effect.asVoid),
             })
           }),

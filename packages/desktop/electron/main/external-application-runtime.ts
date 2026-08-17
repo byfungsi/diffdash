@@ -294,17 +294,26 @@ export const createExternalApplicationRuntime = (
         const privateRuntimeDirectory = tmpdir()
         const bootstrap = (
           startTransport: Parameters<typeof bootstrapCoreHost>[0]["startTransport"],
-        ): CoreHostCandidate["start"] =>
-          bootstrapCoreHost({
+        ): CoreHostCandidate["start"] => {
+          const options = {
             artifact,
             applicationInstanceId,
             temporaryDirectory: privateRuntimeDirectory,
             startTransport,
-          }).pipe(
+          }
+          return bootstrapCoreHost(
+            process.env.DIFFDASH_E2E_CORE_HOST === undefined
+              ? options
+              : {
+                  ...options,
+                  onStateChange: (state) => Effect.log(`[core:bootstrap] ${state}`),
+                },
+          ).pipe(
             Effect.provideService(Scope.Scope, scope),
             Effect.provide(platformLayer),
             Effect.mapError(() => coreHostStartupCandidateError()),
           )
+        }
         const utilityCandidate: CoreHostCandidate = {
           host: "utility",
           qualify: Effect.void,

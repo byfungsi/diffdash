@@ -39,6 +39,9 @@ import type { CoreRpcHealthVerificationError } from "./core-rpc-client"
 import { revalidateCoreArtifact, type VerifiedCoreArtifact } from "./core-artifact"
 import type { CoreProcessLaunchError } from "./core-process-launcher"
 
+const CORE_AUTHENTICATION_ATTEMPT_TIMEOUT = "1 second"
+const CORE_AUTHENTICATION_ATTEMPTS = 10
+
 /** Private Electron-side state while establishing one Core process epoch. */
 export const CoreHostBootstrapState = Schema.Literals([
   "idle",
@@ -185,10 +188,14 @@ export const bootstrapCoreHost = (
         requestId: options.generateRequestId?.() ?? HostRequestId.make(`h:${randomUUID()}`),
       })
       const health = yield* client.health(request).pipe(
-        Effect.timeoutOrElse({
-          duration: "3 seconds",
-          orElse: () => Effect.fail(bootstrapFailure("authenticating")),
+        Effect.timeout(CORE_AUTHENTICATION_ATTEMPT_TIMEOUT),
+        Effect.retry({
+          times: CORE_AUTHENTICATION_ATTEMPTS - 1,
+          while: Cause.isTimeoutError,
         }),
+        Effect.mapError((error) =>
+          Cause.isTimeoutError(error) ? bootstrapFailure("authenticating") : error,
+        ),
       )
       if (health.lifecycle !== "awaitingOwnership") {
         return yield* Effect.fail(bootstrapFailure("authenticating"))

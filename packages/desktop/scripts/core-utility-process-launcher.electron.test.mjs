@@ -54,7 +54,14 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
   delete environment.ELECTRON_RUN_AS_NODE
   const result = await run(
     electronPath,
-    [fixtureEntrypoint, artifactDirectory, temporaryDirectory, statePath, manifest.buildId],
+    [
+      ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+      fixtureEntrypoint,
+      artifactDirectory,
+      temporaryDirectory,
+      statePath,
+      manifest.buildId,
+    ],
     { env: environment, timeout: 20_000 },
   )
 
