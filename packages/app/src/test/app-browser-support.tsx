@@ -3301,7 +3301,7 @@ scenario("fastScrollPerformance", async () => {
       })
     : null
   longTaskObserver?.observe({ entryTypes: ["longtask"] })
-  const warmupFrameDurations = await runContinuousReviewScroll(diffPane, 12)
+  const warmupFrameDurations = await runContinuousReviewScroll(diffPane, frameCount)
   diffPane.scrollTop = 0
   await waitForAnimationFrames(8)
   longTaskObserver?.takeRecords().forEach((entry) => warmupLongTaskDurations.push(entry.duration))
