@@ -88,6 +88,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     string,
     { readonly generation: number; readonly passes: number }
   >()
+  #layoutReconciliationGeneration = 0
   #bindings: ReviewViewportNavigationBindings | null = null
   #focusedNavigation: {
     readonly expiresAt: number
@@ -299,6 +300,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     signal: AbortSignal,
   ) => {
     this.#throwIfAborted(signal)
+    this.#layoutReconciliationGeneration += 1
+    this.#focusedNavigation = null
     const resolved = this.#localTarget(target)
     this.#current().prepareFile(resolved.file, input, resolved.persistedTarget)
     await nextFrame(signal)
@@ -437,6 +440,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
       currentAnchor.focus?.()
       const expiresAt = performance.now() + LATE_LAYOUT_RECONCILIATION_MS
+      const reconciliationGeneration = ++this.#layoutReconciliationGeneration
       this.#focusedNavigation = {
         expiresAt,
         input,
@@ -447,6 +451,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         input.behavior.alignment,
         this.#targetStickyHeight(resolved),
         expiresAt,
+        reconciliationGeneration,
       )
     }
     this.#current().searchHighlights.refresh()
@@ -458,9 +463,12 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     alignment: ReviewNavigationInput["behavior"]["alignment"],
     stickyHeight: number,
     expiresAt: number,
+    generation: number,
   ): void => {
-    if (performance.now() >= expiresAt) return
+    if (generation !== this.#layoutReconciliationGeneration || performance.now() >= expiresAt)
+      return
     window.requestAnimationFrame(() => {
+      if (generation !== this.#layoutReconciliationGeneration) return
       if (anchor.isConnected()) {
         const active = deepActiveElement()
         const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
@@ -468,7 +476,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         this.#align(anchor, alignment, stickyHeight)
         if (active === document.body) anchor.focus?.()
       }
-      this.#reconcileAfterLayout(anchor, alignment, stickyHeight, expiresAt)
+      this.#reconcileAfterLayout(anchor, alignment, stickyHeight, expiresAt, generation)
     })
   }
 
