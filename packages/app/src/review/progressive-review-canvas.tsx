@@ -250,12 +250,12 @@ export const ProgressiveReviewCanvas = ({
             nextViewport.revision > current.revision ? nextViewport : current,
           ),
         )
-        clearTimeout(retirementTimeout)
-        retirementTimeout = setTimeout(() => {
-          setViewport(viewportRef.current)
-          setSettledViewportRevision((revision) => revision + 1)
-        }, 100)
       }
+      clearTimeout(retirementTimeout)
+      retirementTimeout = setTimeout(() => {
+        setViewport(viewportRef.current)
+        setSettledViewportRevision((revision) => revision + 1)
+      }, 100)
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
         container.scrollTop = canvas.offsetTop + position.physicalTop
