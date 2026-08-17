@@ -1089,7 +1089,22 @@ const reconcilePublishedRange = (
       reconcileDemandedRange(instance, 8)
       return
     }
-    if (scrollingRef.current) return
+    if (scrollingRef.current) {
+      window.setTimeout(
+        () =>
+          reconcilePublishedRange(
+            instance,
+            virtualizer,
+            scrollContainer,
+            isNavigationActive,
+            scrollingRef,
+            remainingFrames - 1,
+            heightReconcileRequested,
+          ),
+        16,
+      )
+      return
+    }
     if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
