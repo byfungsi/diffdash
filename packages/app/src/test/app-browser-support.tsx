@@ -3282,7 +3282,7 @@ scenario("fastScrollPerformance", async () => {
     expect(getMountedDiffLineCount()).toBeGreaterThan(0)
     return pane!
   })
-  await waitForAnimationFrames(16)
+  await waitForAnimationFrames(8)
 
   type InstrumentedVirtualizer = {
     readonly markDOMDirty: () => void
@@ -6729,7 +6729,6 @@ const runContinuousReviewScroll = (pane: HTMLElement, frameCount: number) =>
       previousTime = time
       frame += 1
       pane.scrollTop = targetScrollTop * (frame / frameCount)
-      pane.dispatchEvent(new Event("scroll", { bubbles: true }))
       if (frame < frameCount) {
         window.requestAnimationFrame(scrollFrame)
         return

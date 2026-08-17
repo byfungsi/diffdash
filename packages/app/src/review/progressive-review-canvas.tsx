@@ -587,7 +587,7 @@ const ProgressiveRangeCard = ({
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
           )
           if (demandedStartLine !== null) {
-            reconcileDemandedRange(publication.renderer.getVirtualizedInstance(), 12)
+            reconcileDemandedRange(publication.renderer.getVirtualizedInstance(), 4)
           }
         },
         onHeightChange: () => undefined,
