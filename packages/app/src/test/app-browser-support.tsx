@@ -3285,6 +3285,7 @@ scenario("fastScrollPerformance", async () => {
   await waitForAnimationFrames(8)
 
   type InstrumentedVirtualizer = {
+    readonly getWindowSpecs: () => { readonly bottom: number; readonly top: number }
     readonly markDOMDirty: () => void
     readonly requestHeightReconcile: (instance: object) => void
   }
@@ -3344,9 +3345,29 @@ scenario("fastScrollPerformance", async () => {
   expect(metrics.searchHighlightRemovals).toBe(0)
   expect(metrics.searchHighlightReplacements).toBe(0)
   expect(maximumScrollTop).toBeGreaterThan(0)
-  await vi.waitFor(() => expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000), {
-    timeout: 5_000,
-  })
+  try {
+    await vi.waitFor(() => expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000), {
+      timeout: 5_000,
+    })
+  } catch (cause) {
+    const canvas = document.querySelector<HTMLElement>("[data-review-global-canvas]")
+    const mountedLines = [...document.querySelectorAll("diffs-container")].flatMap((element) => [
+      ...(element.shadowRoot?.querySelectorAll<HTMLElement>("[data-line]") ?? []),
+    ])
+    console.warn("Settled review mount diagnostics", {
+      lineCount: getMountedDiffLineCount(),
+      lineIndexes: mountedLines
+        .map((line) => Number(line.dataset.lineIndex))
+        .filter(Number.isFinite)
+        .sort((left, right) => left - right)
+        .filter((_, index, lines) => index === 0 || index === lines.length - 1),
+      pierreWindow: virtualizer.getWindowSpecs(),
+      scrollTop: diffPane.scrollTop,
+      settledRevision: canvas?.dataset.reviewSettledViewportRevision,
+      viewportTop: canvas?.dataset.reviewViewportTop,
+    })
+    throw cause
+  }
   expect(window.scrollY).toBe(0)
 })
 

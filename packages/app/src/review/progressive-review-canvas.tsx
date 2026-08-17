@@ -368,6 +368,7 @@ export const ProgressiveReviewCanvas = ({
       data-review-state-version={identity.stateVersion}
       data-review-logical-height={resources.virtualizer.layout.logicalHeight}
       data-review-mounted-rows={mount.mountedRows}
+      data-review-settled-viewport-revision={settledViewportRevision}
       data-review-viewport-top={viewport.logicalTop}
       style={{ height: pageHeight, position: "relative" }}
     >
