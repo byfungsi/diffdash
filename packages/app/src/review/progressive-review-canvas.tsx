@@ -398,6 +398,7 @@ export const ProgressiveReviewCanvas = ({
               file={file}
               identity={identity}
               mode={mode}
+              navigationActive={navigationActive}
               demandedStartLine={
                 navigationRangeTarget?.fileId === file.fileId
                   ? navigationRangeTarget.startLine
@@ -480,6 +481,7 @@ const ProgressiveRangeCard = ({
   file,
   identity,
   mode,
+  navigationActive,
   options,
   reader,
   reviewThreads,
@@ -516,6 +518,7 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
+  readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
   readonly settledViewportRevision: number
@@ -626,8 +629,12 @@ const ProgressiveRangeCard = ({
     if (instance === null || scrollContainer === null) return
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
+    if (navigationActive) {
+      reconcileDemandedRange(instance, 4)
+      return
+    }
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
-  }, [diffVirtualizer, scrollContainerRef, settledViewportRevision])
+  }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
   useLayoutEffect(() => {
     const card = cardRef.current
