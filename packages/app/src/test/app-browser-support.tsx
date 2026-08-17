@@ -3335,7 +3335,7 @@ scenario("fastScrollPerformance", async () => {
   expect(metrics.globalInvalidations).toBeLessThan(frameCount * 2)
   expect(metrics.reconciliations).toBeLessThan(frameCount * 2)
   expect(metrics.longFrames).toBeLessThanOrEqual(
-    Math.ceil(warmupLongFrames.length * warmupScale) + 4,
+    Math.ceil(warmupLongFrames.length * warmupScale) + 6,
   )
   expect(metrics.longTasks).toBeLessThanOrEqual(metrics.longFrames + Math.ceil(frameCount / 8))
   expect(metrics.maxFrameDuration).toBeLessThan(

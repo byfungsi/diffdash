@@ -491,7 +491,12 @@ const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyA
 const processIsAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
-    return true
+    if (process.platform === "win32") return true
+    const status = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    return status.length > 0 && !status.startsWith("Z")
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "EPERM"
   }
