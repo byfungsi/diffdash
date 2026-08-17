@@ -57,6 +57,7 @@ const FILE_GAP = 16
 const ESTIMATED_ROW_HEIGHT = 20
 const OVERSCAN = 1_200
 const RANGE_OUTPUT_RESERVATION = 4 * 1_024 * 1_024
+const VIEWPORT_SETTLEMENT_DELAY_MS = 320
 /** Pierre overscan shared by the production review virtualizer and its settlement check. */
 export const REVIEW_DIFF_PIERRE_OVERSCAN = 500
 const REVIEW_RANGE_METRICS = {
@@ -258,7 +259,7 @@ export const ProgressiveReviewCanvas = ({
         retirementTimeout = setTimeout(() => {
           setViewport(viewportRef.current)
           setSettledViewportRevision((revision) => revision + 1)
-        }, 100)
+        }, VIEWPORT_SETTLEMENT_DELAY_MS)
       }
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
