@@ -52,16 +52,18 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
 
   const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
+  const requiresVirtualDisplay = process.platform === "linux" && environment.DISPLAY === undefined
+  const electronArguments = [
+    ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+    fixtureEntrypoint,
+    artifactDirectory,
+    temporaryDirectory,
+    statePath,
+    manifest.buildId,
+  ]
   const result = await run(
-    electronPath,
-    [
-      ...(process.platform === "linux" ? ["--headless", "--no-sandbox"] : []),
-      fixtureEntrypoint,
-      artifactDirectory,
-      temporaryDirectory,
-      statePath,
-      manifest.buildId,
-    ],
+    requiresVirtualDisplay ? "xvfb-run" : electronPath,
+    requiresVirtualDisplay ? ["-a", electronPath, ...electronArguments] : electronArguments,
     { env: environment, timeout: 20_000 },
   )
 
