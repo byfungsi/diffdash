@@ -1084,7 +1084,7 @@ const reconcilePublishedRange = (
         scrollContainer,
         isNavigationActive,
         remainingFrames - 1,
-        heightReconcileCooldown <= 0 ? 3 : heightReconcileCooldown - 1,
+        heightReconcileCooldown <= 0 ? 7 : heightReconcileCooldown - 1,
       )
       return
     }
