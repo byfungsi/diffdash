@@ -388,9 +388,16 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .filter({ hasText: "new" })
       .first()
     await expect(addedLine).toBeVisible({ timeout: 15_000 })
+    const removedLine = window
+      .locator('diffs-container [data-line-type="change-deletion"][data-line]')
+      .filter({ hasText: "old" })
+      .first()
+    const removedLineIndex = await removedLine.getAttribute("data-line-index")
+    if (removedLineIndex === null) throw new Error("Review deletion line has no rendered index")
     const gutterNumber = window
-      .locator("diffs-container [data-column-number]:visible")
-      .filter({ hasText: "1" })
+      .locator(
+        `diffs-container [data-line-type="change-deletion"][data-line-index="${removedLineIndex}"][data-column-number]`,
+      )
       .first()
     const initialComposer = await openGutterThreadComposer(window, gutterNumber)
     await initialComposer.fill("Why was this line changed?")
