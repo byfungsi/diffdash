@@ -677,7 +677,10 @@ const ProgressiveRangeCard = ({
             reconcileDemandedRange(instance, 8)
           } else {
             const scrollContainer = scrollContainerRef.current
-            if (scrollContainer !== null) {
+            if (
+              scrollContainer !== null &&
+              isCurrentPierreWindow(diffVirtualizer.getWindowSpecs(), scrollContainer)
+            ) {
               reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
             }
           }
