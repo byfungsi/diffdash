@@ -334,6 +334,18 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       return anchor
     }
 
+    const currentContentAnchor = this.#mountContentAnchor(resolved)
+    if (currentContentAnchor !== null) {
+      const release = this.#anchors.registerAnchor(resolved.anchorKey, currentContentAnchor)
+      const anchor = this.#anchors.getAnchor(resolved.anchorKey)
+      if (anchor !== null) {
+        this.#resolvedAnchors.set(anchor, resolved)
+        signal.addEventListener("abort", release, { once: true })
+        return anchor
+      }
+      release()
+    }
+
     const fileAnchor = await this.#anchors.waitForAnchor(
       reviewFileAnchorKey(resolved.file.fileId),
       signal,
