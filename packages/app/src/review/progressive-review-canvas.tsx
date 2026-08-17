@@ -146,6 +146,7 @@ export const ProgressiveReviewCanvas = ({
     pageOrigin: 0,
     revision: 0,
   })
+  const [settledViewportRevision, setSettledViewportRevision] = useState(0)
   const viewportRef = useRef(viewport)
   const renderedViewportRef = useRef(viewport)
   useLayoutEffect(() => {
@@ -250,7 +251,10 @@ export const ProgressiveReviewCanvas = ({
           ),
         )
         clearTimeout(retirementTimeout)
-        retirementTimeout = setTimeout(() => setViewport(viewportRef.current), 100)
+        retirementTimeout = setTimeout(() => {
+          setViewport(viewportRef.current)
+          setSettledViewportRevision((revision) => revision + 1)
+        }, 100)
       }
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
@@ -398,6 +402,7 @@ export const ProgressiveReviewCanvas = ({
               reviewThreads={reviewThreads}
               scheduler={resources.scheduler}
               selected={selectedPath === file.path}
+              settledViewportRevision={settledViewportRevision}
               shells={resources.shells}
               viewed={viewedFileKeys.has(file.reviewKey)}
               onDiffRendered={onDiffRendered}
@@ -473,6 +478,7 @@ const ProgressiveRangeCard = ({
   reviewThreads,
   scheduler,
   selected,
+  settledViewportRevision,
   shells,
   viewed,
   onDiffRendered,
@@ -503,6 +509,7 @@ const ProgressiveRangeCard = ({
   readonly file: ReviewSnapshotFileInventory
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
+  readonly settledViewportRevision: number
   readonly shells: ReturnType<typeof createPierreRangeShellPool<ReviewThreadAnnotation>>
   readonly viewed: boolean
 }) => {
@@ -513,6 +520,7 @@ const ProgressiveRangeCard = ({
   const requestRef = useRef(0)
   const optionsRef = useRef(options)
   const rangeFileRef = useRef<ReturnType<typeof parseProgressiveRangeFile> | null>(null)
+  const virtualizedInstanceRef = useRef<VirtualizedFileDiff<ReviewThreadAnnotation> | null>(null)
   const annotationRootsRef = useRef<
     Map<
       string,
@@ -604,6 +612,10 @@ const ProgressiveRangeCard = ({
   }, [demandedStartLine])
 
   useLayoutEffect(() => {
+    reconcileDemandedRange(virtualizedInstanceRef.current, 4)
+  }, [settledViewportRevision])
+
+  useLayoutEffect(() => {
     const card = cardRef.current
     const focus = focusRef.current
     if (card === null || focus === null) return undefined
@@ -632,6 +644,7 @@ const ProgressiveRangeCard = ({
       {
         onPrimeShell: () => undefined,
         onPublish: (publication: PierreRangePublication<ReviewThreadAnnotation>) => {
+          virtualizedInstanceRef.current = publication.renderer.getVirtualizedInstance()
           host.replaceChildren(publication.container)
           setRenderPhase(
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
@@ -707,6 +720,7 @@ const ProgressiveRangeCard = ({
           }
     adapter.request(request)
     return () => {
+      virtualizedInstanceRef.current = null
       adapter.dispose()
     }
   }, [
