@@ -50,7 +50,7 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
     target: "node22",
   })
 
-  const environment = { ...process.env }
+  const environment = { ...process.env, DIFFDASH_CORE_UTILITY_PROCESS_DIAGNOSTICS: "1" }
   delete environment.ELECTRON_RUN_AS_NODE
   const requiresVirtualDisplay = process.platform === "linux" && environment.DISPLAY === undefined
   const electronArguments = [
