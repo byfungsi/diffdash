@@ -700,6 +700,10 @@ const ProgressiveRangeCard = ({
           const instance = publication.renderer.getVirtualizedInstance()
           virtualizedInstanceRef.current = instance
           host.replaceChildren(publication.container)
+          if (publication.phase === "highlighted") {
+            instance?.syncVirtualizedTop()
+            instance?.rerender()
+          }
           setRenderPhase(
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
           )
@@ -1182,7 +1186,7 @@ const reconcilePublishedRange = (
         )
       }
     })
-  }, 16)
+  }, 0)
 }
 
 const mountedDiffLineCount = (container: HTMLElement): number =>
