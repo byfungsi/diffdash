@@ -68,7 +68,8 @@ jobs:
           pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run src/review/review-virtualization.browser.test.tsx -t "navigates to exact matches in virtualized lines"
           pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run src/review/review-virtualization.browser.test.tsx -t "converges on distant matches after wrapped lines change virtual heights"
           pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run src/home/home.browser.test.tsx
-          pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run --exclude src/review/review-virtualization.browser.test.tsx --exclude src/home/home.browser.test.tsx
+          pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run src/review/review.browser.test.tsx
+          pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run --exclude src/review/review-virtualization.browser.test.tsx --exclude src/home/home.browser.test.tsx --exclude src/review/review.browser.test.tsx
 
       - name: Run download worker checks
         run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test
