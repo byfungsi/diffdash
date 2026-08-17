@@ -632,7 +632,7 @@ const ProgressiveRangeCard = ({
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
     if (navigationActive) {
-      reconcileDemandedRange(instance, 8)
+      reconcileDemandedRange(instance, scrollContainer, 8)
     }
   }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
@@ -681,7 +681,8 @@ const ProgressiveRangeCard = ({
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
           )
           if (navigationActiveRef.current) {
-            reconcileDemandedRange(instance, 8)
+            const scrollContainer = scrollContainerRef.current
+            if (scrollContainer !== null) reconcileDemandedRange(instance, scrollContainer, 8)
           } else {
             const scrollContainer = scrollContainerRef.current
             if (scrollContainer !== null) {
@@ -1009,13 +1010,15 @@ const sameFileWindow = (left: Uint32Array, right: Uint32Array): boolean =>
 
 const reconcileDemandedRange = (
   instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
+  scrollContainer: HTMLElement,
   remainingFrames: number,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
+    if (hasFocusedThreadComposer(scrollContainer)) return
     instance.syncVirtualizedTop()
     instance.rerender()
-    reconcileDemandedRange(instance, remainingFrames - 1)
+    reconcileDemandedRange(instance, scrollContainer, remainingFrames - 1)
   })
 }
 
