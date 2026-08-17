@@ -533,6 +533,7 @@ const ProgressiveRangeCard = ({
   const optionsRef = useRef(options)
   const rangeFileRef = useRef<ReturnType<typeof parseProgressiveRangeFile> | null>(null)
   const virtualizedInstanceRef = useRef<VirtualizedFileDiff<ReviewThreadAnnotation> | null>(null)
+  const navigationActiveRef = useRef(navigationActive)
   const annotationRootsRef = useRef<
     Map<
       string,
@@ -610,6 +611,7 @@ const ProgressiveRangeCard = ({
     },
     onPostRender: (node, instance, phase) => onDiffRendered(file.reviewKey, node, instance, phase),
   }
+  navigationActiveRef.current = navigationActive
   selectedRef.current = selected
 
   useEffect(
@@ -665,13 +667,19 @@ const ProgressiveRangeCard = ({
       {
         onPrimeShell: () => undefined,
         onPublish: (publication: PierreRangePublication<ReviewThreadAnnotation>) => {
-          virtualizedInstanceRef.current = publication.renderer.getVirtualizedInstance()
+          const instance = publication.renderer.getVirtualizedInstance()
+          virtualizedInstanceRef.current = instance
           host.replaceChildren(publication.container)
           setRenderPhase(
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
           )
-          if (demandedStartLine !== null) {
-            reconcileDemandedRange(publication.renderer.getVirtualizedInstance(), 4)
+          if (navigationActiveRef.current) {
+            reconcileDemandedRange(instance, 8)
+          } else {
+            const scrollContainer = scrollContainerRef.current
+            if (scrollContainer !== null) {
+              reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
+            }
           }
         },
         onHeightChange: () => undefined,
@@ -746,7 +754,7 @@ const ProgressiveRangeCard = ({
     }
   }, [
     caches,
-    demandedStartLine,
+    diffVirtualizer,
     expanded,
     expandedLineAnchor,
     file,
@@ -756,6 +764,7 @@ const ProgressiveRangeCard = ({
     reader,
     reviewThreads.details,
     scheduler,
+    scrollContainerRef,
     shells,
     startLine,
     workerManager,
