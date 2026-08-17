@@ -216,6 +216,7 @@ export const makeReviewSourceOperations = (
               api.openLocalRepositoryFile(
                 RepositoryCheckoutPath.make(detail.rootPath),
                 RepositoryRelativePath.make(path),
+                target,
               ),
             ),
           ),

@@ -757,7 +757,10 @@ export function AppShell() {
           const comparison = await projectSession.openRepositoryComparison(openRepositoryComparison)
           applyProjectProjection(comparison.projection)
           await comparison.persistence
-          captureAnalytics({ event: "review_opened", reviewType: "repository_comparison" })
+          captureAnalytics({
+            event: "review_opened",
+            reviewType: comparison.reviewType ?? "repository_comparison",
+          })
         } catch (error) {
           const message = formatError(error, "Could not open repository comparison")
           setActionStatus(message)

@@ -310,7 +310,7 @@ describe("GitService", () => {
       const targetSha = "dddddddddddddddddddddddddddddddddddddddd"
       const mergeBaseSha = "cccccccccccccccccccccccccccccccccccccccc"
       const calls: string[][] = []
-      const processesLayer = makeProcessLayer((_command, args) => {
+      const processesLayer = makeProcessLayer((command, args, request) => {
         calls.push([...args])
         const joined = args.join(" ")
         if (joined.includes("rev-parse --show-toplevel")) {
@@ -321,6 +321,26 @@ describe("GitService", () => {
         }
         if (joined.includes("check-ref-format --branch dev")) {
           return Effect.succeed(makeProcessResult("dev\n", args))
+        }
+        if (
+          joined.includes("refs/heads/dev^{commit}") ||
+          joined.includes("refs/tags/dev^{commit}")
+        ) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command,
+              args: [...args],
+              cwd: request.cwd,
+              exitCode: 128,
+              signal: null,
+              stdout: "",
+              stderr: "unknown revision",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Unknown revision",
+            }),
+          )
         }
         if (joined.includes(" fetch --no-tags origin ")) {
           return Effect.succeed(makeProcessResult("", args))
@@ -467,6 +487,26 @@ describe("GitService", () => {
         }
         if (joined.includes("check-ref-format --branch dev")) {
           return Effect.succeed(makeProcessResult("dev\n", args))
+        }
+        if (
+          joined.includes("refs/heads/dev^{commit}") ||
+          joined.includes("refs/tags/dev^{commit}")
+        ) {
+          return Effect.fail(
+            ProcessExitError.make({
+              command,
+              args: [...args],
+              cwd: request.cwd,
+              exitCode: 128,
+              signal: null,
+              stdout: "",
+              stderr: "unknown revision",
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              outputTruncated: false,
+              message: "Unknown revision",
+            }),
+          )
         }
         if (joined.includes(" fetch --no-tags origin ")) {
           return Effect.succeed(makeProcessResult("", args))

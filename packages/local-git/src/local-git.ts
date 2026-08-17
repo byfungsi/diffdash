@@ -11,6 +11,8 @@ import {
   LastCommitComparison,
   type LocalReviewComparison,
   LocalReviewTarget,
+  RevisionComparison,
+  RevisionRangeComparison,
 } from "@diffdash/domain/local-review"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
@@ -22,6 +24,13 @@ import {
 import { gitProcessRequest } from "./git-environment"
 
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+/** The local review changed after its immutable coordinates were resolved. */
+export class LocalReviewChangedError extends Schema.TaggedError<LocalReviewChangedError>()(
+  "LocalReviewChangedError",
+  { rootPath: RepositoryCheckoutPath },
+) {}
+
 /** A requested local comparison branch could not be resolved safely. */
 export class LocalReviewTargetError extends Schema.TaggedError<LocalReviewTargetError>()(
   "LocalReviewTargetError",
@@ -58,9 +67,17 @@ export class GitService extends Context.Service<
       localPath: RepositoryCheckoutPath,
       branchName: RepositoryComparisonRef | null,
     ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
+    readonly resolveRevisionRangeComparison: (
+      localPath: RepositoryCheckoutPath,
+      baseRef: RepositoryComparisonRef,
+      headRef: RepositoryComparisonRef,
+    ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
     readonly resolveLastCommit: (
       localPath: RepositoryCheckoutPath,
     ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewTargetError>
+    readonly validateLocalReviewTarget: (
+      target: LocalReviewTarget,
+    ) => Effect.Effect<LocalReviewTarget, ProcessExecutionError | LocalReviewChangedError>
   }
 >()("@diffdash/GitService") {
   static readonly layer = Layer.effect(
@@ -120,18 +137,69 @@ export class GitService extends Context.Service<
       ) {
         const rootPath = yield* detectRoot(localPath)
         const checkedOutBranch = yield* currentBranch(rootPath)
+        const directRevision =
+          requestedBranchName === null
+            ? Option.none<GitCommitSha>()
+            : yield* resolveDirectRevision(rootPath, requestedBranchName).pipe(
+                Effect.provideService(ProcessService, processes),
+              )
+        if (requestedBranchName !== null && Option.isSome(directRevision)) {
+          const baseSha = yield* resolveMergeBaseSha(
+            rootPath,
+            requestedBranchName,
+            directRevision.value,
+          ).pipe(Effect.provideService(ProcessService, processes))
+          return LocalReviewTarget.make({
+            kind: "local",
+            rootPath,
+            comparison: RevisionComparison.make({
+              revision: requestedBranchName,
+              baseSha: ReviewRevision.make(baseSha),
+            }),
+          })
+        }
         const branchName = yield* requestedBranchName === null
           ? defaultOriginBranch(rootPath).pipe(Effect.provideService(ProcessService, processes))
           : validateBranchName(rootPath, requestedBranchName).pipe(
               Effect.provideService(ProcessService, processes),
             )
-        const baseRef = RepositoryComparisonRef.make(
+        let baseRef = RepositoryComparisonRef.make(
           checkedOutBranch === branchName
             ? `refs/heads/${branchName}`
             : `refs/remotes/origin/${branchName}`,
         )
 
-        if (checkedOutBranch !== branchName) {
+        let targetSha = Option.none<GitCommitSha>()
+        if (requestedBranchName !== null && checkedOutBranch !== branchName) {
+          const localRef = RepositoryComparisonRef.make(`refs/heads/${branchName}`)
+          targetSha = yield* resolveOptionalCommitSha(rootPath, localRef).pipe(
+            Effect.provideService(ProcessService, processes),
+          )
+          if (Option.isSome(targetSha)) baseRef = localRef
+          if (Option.isNone(targetSha)) {
+            const tagRef = RepositoryComparisonRef.make(`refs/tags/${branchName}`)
+            const tagSha = yield* resolveOptionalCommitSha(rootPath, tagRef).pipe(
+              Effect.provideService(ProcessService, processes),
+            )
+            if (Option.isSome(tagSha)) {
+              const baseSha = yield* resolveMergeBaseSha(
+                rootPath,
+                requestedBranchName,
+                tagSha.value,
+              ).pipe(Effect.provideService(ProcessService, processes))
+              return LocalReviewTarget.make({
+                kind: "local",
+                rootPath,
+                comparison: RevisionComparison.make({
+                  revision: requestedBranchName,
+                  baseSha: ReviewRevision.make(baseSha),
+                }),
+              })
+            }
+          }
+        }
+
+        if (checkedOutBranch !== branchName && Option.isNone(targetSha)) {
           yield* processes.run(
             gitProcessRequest(
               [
@@ -145,13 +213,24 @@ export class GitService extends Context.Service<
               { timeoutMs: 60_000 },
             ),
           )
+          targetSha = Option.some(
+            yield* resolveCommitSha(rootPath, baseRef).pipe(
+              Effect.provideService(ProcessService, processes),
+            ),
+          )
         }
-        const targetSha = yield* resolveCommitSha(rootPath, baseRef).pipe(
-          Effect.provideService(ProcessService, processes),
-        )
-        const baseSha = yield* resolveMergeBaseSha(rootPath, branchName, targetSha).pipe(
-          Effect.provideService(ProcessService, processes),
-        )
+        if (Option.isNone(targetSha)) {
+          targetSha = Option.some(
+            yield* resolveCommitSha(rootPath, baseRef).pipe(
+              Effect.provideService(ProcessService, processes),
+            ),
+          )
+        }
+        const baseSha = yield* resolveMergeBaseSha(
+          rootPath,
+          branchName,
+          Option.getOrThrow(targetSha),
+        ).pipe(Effect.provideService(ProcessService, processes))
 
         return LocalReviewTarget.make({
           kind: "local",
@@ -163,6 +242,39 @@ export class GitService extends Context.Service<
           }),
         })
       })
+
+      const resolveRevisionRangeComparison = Effect.fn("GitService.resolveRevisionRangeComparison")(
+        function* (
+          localPath: RepositoryCheckoutPath,
+          baseRef: RepositoryComparisonRef,
+          headRef: RepositoryComparisonRef,
+        ) {
+          const rootPath = yield* detectRoot(localPath)
+          const baseSha = yield* resolveRequiredRevision(rootPath, baseRef).pipe(
+            Effect.provideService(ProcessService, processes),
+          )
+          const headSha = yield* resolveRequiredRevision(rootPath, headRef).pipe(
+            Effect.provideService(ProcessService, processes),
+          )
+          yield* ensureRevisionRangeCheckout(rootPath, headSha).pipe(
+            Effect.provideService(ProcessService, processes),
+          )
+          const mergeBaseSha = yield* resolveMergeBaseSha(rootPath, baseRef, baseSha, headSha).pipe(
+            Effect.provideService(ProcessService, processes),
+          )
+          return LocalReviewTarget.make({
+            kind: "local",
+            rootPath,
+            comparison: RevisionRangeComparison.make({
+              baseRef,
+              headRef,
+              baseSha: ReviewRevision.make(baseSha),
+              headSha: ReviewRevision.make(headSha),
+              mergeBaseSha: ReviewRevision.make(mergeBaseSha),
+            }),
+          })
+        },
+      )
 
       const resolveLastCommit = Effect.fn("GitService.resolveLastCommit")(function* (
         localPath: RepositoryCheckoutPath,
@@ -186,6 +298,22 @@ export class GitService extends Context.Service<
         })
       })
 
+      const validateLocalReviewTarget = Effect.fn("GitService.validateLocalReviewTarget")(
+        function* (target: LocalReviewTarget) {
+          const rootPath = yield* detectRoot(target.rootPath)
+          const canonical = LocalReviewTarget.make({ ...target, rootPath })
+          if (Schema.is(RevisionRangeComparison)(canonical.comparison)) {
+            yield* ensureRevisionRangeCheckout(rootPath, canonical.comparison.headSha).pipe(
+              Effect.catchTag("LocalReviewTargetError", () =>
+                LocalReviewChangedError.make({ rootPath }),
+              ),
+              Effect.provideService(ProcessService, processes),
+            )
+          }
+          return canonical
+        },
+      )
+
       return GitService.of({
         detectRepository: Effect.fn("GitService.detectRepository")(function* (
           localPath: RepositoryCheckoutPath,
@@ -203,7 +331,9 @@ export class GitService extends Context.Service<
         currentBranch,
         listRemotes,
         resolveBranchComparison,
+        resolveRevisionRangeComparison,
         resolveLastCommit,
+        validateLocalReviewTarget,
       })
     }),
   )
@@ -266,15 +396,45 @@ const resolveCommitSha = (rootPath: RepositoryCheckoutPath, ref: RepositoryCompa
     return yield* parseCommitSha(result)
   })
 
+const resolveOptionalCommitSha = (rootPath: RepositoryCheckoutPath, ref: RepositoryComparisonRef) =>
+  resolveCommitSha(rootPath, ref).pipe(
+    Effect.map(Option.some),
+    Effect.catchTag("ProcessExitError", () => Effect.succeed(Option.none<GitCommitSha>())),
+  )
+
+const resolveRequiredRevision = (rootPath: RepositoryCheckoutPath, ref: RepositoryComparisonRef) =>
+  resolveCommitSha(rootPath, ref).pipe(
+    Effect.mapError((cause) =>
+      LocalReviewTargetError.make({
+        operation: "revision.resolve",
+        reason: `Revision ${ref} was not found in the local repository`,
+        cause,
+      }),
+    ),
+  )
+
+const resolveDirectRevision = (
+  rootPath: RepositoryCheckoutPath,
+  ref: RepositoryComparisonRef,
+): Effect.Effect<
+  Option.Option<GitCommitSha>,
+  LocalReviewTargetError | ProcessExecutionError,
+  ProcessService
+> =>
+  ref === "HEAD" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(ref) || ref.startsWith("refs/")
+    ? resolveRequiredRevision(rootPath, ref).pipe(Effect.map(Option.some))
+    : Effect.succeed(Option.none())
+
 const resolveMergeBaseSha = (
   rootPath: RepositoryCheckoutPath,
   branchName: RepositoryComparisonRef,
   targetSha: GitCommitSha,
+  headRevision: GitCommitSha | "HEAD" = "HEAD",
 ) =>
   Effect.gen(function* () {
     const processes = yield* ProcessService
     const result = yield* processes
-      .run(gitProcessRequest(["-C", rootPath, "merge-base", targetSha, "HEAD"]))
+      .run(gitProcessRequest(["-C", rootPath, "merge-base", targetSha, headRevision]))
       .pipe(
         Effect.catchTag("ProcessExitError", (cause) =>
           Effect.fail<ProcessExecutionError | LocalReviewTargetError>(
@@ -297,6 +457,23 @@ const resolveMergeBaseSha = (
         }),
       ),
     )
+  })
+
+const ensureRevisionRangeCheckout = (rootPath: RepositoryCheckoutPath, headSha: string) =>
+  Effect.gen(function* () {
+    const processes = yield* ProcessService
+    const checkoutHead = yield* resolveCommitSha(rootPath, RepositoryComparisonRef.make("HEAD"))
+    const status = yield* processes.run(
+      gitProcessRequest(["-C", rootPath, "status", "--porcelain", "--untracked-files=all"]),
+    )
+    if (checkoutHead !== headSha || status.stdout.trim().length > 0) {
+      return yield* LocalReviewTargetError.make({
+        operation: "revisionRange.checkout",
+        reason:
+          "Local repository comparisons require the requested head to be checked out with no local changes",
+        cause: null,
+      })
+    }
   })
 
 const validateBranchName = (
@@ -382,6 +559,15 @@ export const makeLocalReviewKey = (
         const refHash = createHash("sha256").update(branch.baseRef).digest("hex")
         return `local:${rootHash}:base:${refHash}`
       }),
+      Match.tag("revision", (revision) => {
+        const refHash = createHash("sha256").update(revision.revision).digest("hex")
+        return `local:${rootHash}:revision:${refHash}`
+      }),
+      Match.tag(
+        "revisionRange",
+        (range) =>
+          `local:${rootHash}:range:${range.baseSha}:${range.headSha}:${range.mergeBaseSha}`,
+      ),
       Match.tag("lastCommit", (commit) => `local:${rootHash}:commit:${commit.headSha}`),
       Match.exhaustive,
     ),

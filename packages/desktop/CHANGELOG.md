@@ -1,5 +1,17 @@
 # DiffDash Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- [#81](https://github.com/byfungsi/diffdash/pull/81) [`65cce5b`](https://github.com/byfungsi/diffdash/commit/65cce5b7e09953eb5ba1805534b3e077420b9c9f) Thanks [@hanipcode](https://github.com/hanipcode)! - Prevent local review thread loading from repeatedly refreshing, and keep E2E desktop windows hidden.
+
+## 0.9.0
+
+### Minor Changes
+
+- [#79](https://github.com/byfungsi/diffdash/pull/79) [`39902f8`](https://github.com/byfungsi/diffdash/commit/39902f8886700f247d2d9da546b8b9e2b342aa43) Thanks [@hanipcode](https://github.com/hanipcode)! - Review branches, tags, commit SHAs, and HEAD from local repositories, including immutable comparisons without a hosted remote.
+
 ## 0.8.1
 
 ### Patch Changes

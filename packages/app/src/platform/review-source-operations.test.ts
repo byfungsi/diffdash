@@ -91,7 +91,8 @@ describe("review source operations", () => {
 
   it("maps local operations without exposing review decisions", async () => {
     const fixture = makeApi()
-    const operations = makeReviewSourceOperations(fixture.api, readyLocalSelection().review)
+    const ready = readyLocalSelection()
+    const operations = makeReviewSourceOperations(fixture.api, ready.review)
 
     await operations.setViewedFile({
       reviewKey: ReviewKey.make("src/app.ts"),
@@ -103,6 +104,10 @@ describe("review source operations", () => {
     expect(operations.decision).toEqual({ _tag: "unsupported" })
     expect(fixture.setLocal).toHaveBeenCalledOnce()
     expect(fixture.setHosted).not.toHaveBeenCalled()
-    expect(fixture.openLocal).toHaveBeenCalledWith("/workspace/diffdash", "src/app.ts")
+    expect(fixture.openLocal).toHaveBeenCalledWith(
+      "/workspace/diffdash",
+      "src/app.ts",
+      ready.review.target,
+    )
   })
 })

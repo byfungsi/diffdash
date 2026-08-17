@@ -1,10 +1,6 @@
 import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
-import {
-  BranchComparison,
-  LocalReviewTarget,
-  WorkingTreeComparison,
-} from "@diffdash/domain/local-review"
+import { type LocalReviewTarget, localReviewTargetKey } from "@diffdash/domain/local-review"
 import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import {
   REVIEW_AGENT_PROGRESS_LABELS,
@@ -36,8 +32,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
   useEffect,
+  useEffectEvent,
   useId,
-  useMemo,
   useRef,
   useState,
 } from "react"
@@ -124,42 +120,13 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const baseRevision = scope.baseRevision
   const headRevision = scope.headRevision
   const hostedReview = scope.kind === "hosted" ? scope.review : null
-  const localRootPath = scope.kind === "local" ? scope.target.rootPath : null
+  const localTarget = scope.kind === "local" ? scope.target : null
   const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
-  const localComparison =
-    scope.kind === "local"
-      ? Match.valueTags(scope.target.comparison, {
-          branch: (comparison) => comparison,
-          lastCommit: () => null,
-          workingTree: () => null,
-        })
-      : null
-  const localBranchName = localComparison?.branchName ?? null
-  const localBaseRef = localComparison?.baseRef ?? null
-  const localBaseSha = localComparison?.baseSha ?? null
-  const localTarget = useMemo(
-    () =>
-      localRootPath === null
-        ? null
-        : LocalReviewTarget.make({
-            kind: "local",
-            rootPath: localRootPath,
-            comparison:
-              localBranchName === null || localBaseRef === null || localBaseSha === null
-                ? WorkingTreeComparison.make({})
-                : BranchComparison.make({
-                    branchName: localBranchName,
-                    baseRef: localBaseRef,
-                    baseSha: localBaseSha,
-                  }),
-          }),
-    [localBaseRef, localBaseSha, localBranchName, localRootPath],
-  )
-  const localTargetKey =
-    localRootPath === null
-      ? null
-      : `${localRootPath}\u0000${localBaseRef ?? "workingTree"}\u0000${localBaseSha ?? ""}`
+  const localTargetKey = localTarget === null ? null : localReviewTargetKey(localTarget)
   const available = baseRevision !== null && headRevision !== null
+  const listThreadDetails = useEffectEvent(() =>
+    automation.threads.listDetails(reviewThreadTarget(hostedReview, localTarget, comparisonTarget)),
+  )
 
   const load = async () => {
     if (!available) {
@@ -211,11 +178,7 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     setAgentErrors({})
     setLoading(true)
     setError(null)
-    runRendererPromise(
-      automation.threads.listDetails(
-        reviewThreadTarget(hostedReview, localTarget, comparisonTarget),
-      ),
-    )
+    runRendererPromise(listThreadDetails())
       .then((loaded) => {
         if (!cancelled) setDetails(sortThreadDetails(loaded))
         return undefined
@@ -236,7 +199,6 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
     comparisonTarget,
     headRevision,
     hostedReview,
-    localTarget,
     localTargetKey,
     automation,
   ])

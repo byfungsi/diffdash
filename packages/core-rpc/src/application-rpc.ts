@@ -245,7 +245,7 @@ const OpenRepositoryComparisonCommand = Schema.TaggedStruct("openRepositoryCompa
 })
 const ResolvedRepositoryComparison = Schema.Struct({
   repo: Repo,
-  target: RepositoryComparisonTarget,
+  target: Schema.Union([RepositoryComparisonTarget, LocalReviewTarget]),
 })
 const ViewedFileRecord = Schema.Struct({ reviewKey: ReviewKey, patchHash: ReviewFilePatchHash })
 
@@ -374,7 +374,11 @@ export const PrerequisitesInstallDiffDashCliRpc = applicationRpc(
 )
 export const ResolveLocalRepositoryFileRpc = applicationRpc(
   "FileNavigation.resolveLocalRepositoryFile",
-  withContext({ rootPath: RepositoryCheckoutPath, filePath: RepositoryRelativePath }),
+  withContext({
+    rootPath: RepositoryCheckoutPath,
+    filePath: RepositoryRelativePath,
+    target: Schema.NullOr(LocalReviewTarget),
+  }),
   CoreFileOpenIntent,
   read(10_000, 16 * KIB),
 )

@@ -39,7 +39,11 @@ import {
   type ReviewDiffSource,
 } from "@diffdash/git-provider"
 import { makeLocalReviewDiffSource } from "@diffdash/local-git/local-review-diff-source"
-import { GitService, makeLocalReviewKey } from "@diffdash/local-git/local-git"
+import {
+  GitService,
+  type LocalReviewChangedError,
+  makeLocalReviewKey,
+} from "@diffdash/local-git/local-git"
 import { makeRepositoryComparisonReviewDiffSource } from "@diffdash/local-git/repository-comparison-review-diff-source"
 import {
   CatalogResourceId,
@@ -228,8 +232,11 @@ export const coreSnapshotAcquisitionLayer = (
       })
 
       const acquireLocalOnce = Effect.fn("CoreSnapshotAcquisition.acquireLocalOnce")(function* (
-        target: LocalReviewTarget,
+        requestedTarget: LocalReviewTarget,
       ) {
+        const target = yield* git
+          .validateLocalReviewTarget(requestedTarget)
+          .pipe(Effect.mapError(reviewFailure("local.snapshot")))
         const project = yield* repositories.ensureLocal(target.rootPath)
         const reviewKey = makeLocalReviewKey(target.rootPath, target.comparison)
         const source = yield* makeLocalReviewDiffSource({
@@ -289,6 +296,11 @@ export const coreSnapshotAcquisitionLayer = (
         const title = Match.value(target.comparison).pipe(
           Match.tag("workingTree", () => "Local changes"),
           Match.tag("branch", (comparison) => `Changes vs ${comparison.branchName}`),
+          Match.tag("revision", (comparison) => `Changes vs ${comparison.revision}`),
+          Match.tag(
+            "revisionRange",
+            (comparison) => `${comparison.baseRef}...${comparison.headRef}`,
+          ),
           Match.tag("lastCommit", () => "Last commit"),
           Match.exhaustive,
         )
@@ -417,6 +429,11 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
             headObject: comparison.headSha,
             diffPolicyIdentity: "local-git-unified-v1",
           })),
+          Match.tag("revisionRange", (comparison) => ({
+            baseObject: comparison.mergeBaseSha,
+            headObject: comparison.headSha,
+            diffPolicyIdentity: "local-git-unified-v1",
+          })),
           Match.orElse(() => null),
         ),
       ),
@@ -454,6 +471,8 @@ const sourceMaterialization = Effect.fn("CoreSnapshotAcquisition.sourceMateriali
       Match.tag("workingTree", () => "HEAD"),
       Match.tagsExhaustive({
         branch: ({ baseSha }) => baseSha,
+        revision: ({ baseSha }) => baseSha,
+        revisionRange: ({ mergeBaseSha }) => mergeBaseSha,
         lastCommit: ({ baseSha }) => baseSha,
       }),
     )
@@ -772,6 +791,8 @@ const localBaseRevision = (
 ): Effect.Effect<ReviewRevision, ProcessExecutionError> =>
   Match.value(target.comparison).pipe(
     Match.tag("branch", (comparison) => Effect.succeed(comparison.baseSha)),
+    Match.tag("revision", (comparison) => Effect.succeed(comparison.baseSha)),
+    Match.tag("revisionRange", (comparison) => Effect.succeed(comparison.mergeBaseSha)),
     Match.tag("lastCommit", (comparison) => Effect.succeed(comparison.baseSha)),
     Match.tag("workingTree", () =>
       processes
@@ -838,6 +859,7 @@ const rawStatus = (status: string): FileDeltaIdentity["status"] => {
 type CoreSnapshotAcquisitionInternalFailure =
   | CoreSnapshotIngestionFailure
   | GitProviderCallError
+  | LocalReviewChangedError
   | ProcessExecutionError
   | ResourceCatalogError
   | ReviewDiffSourceFailure

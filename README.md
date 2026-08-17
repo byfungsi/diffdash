@@ -52,7 +52,7 @@ pnpm preview
 
 ## CLI
 
-After building from source, run `pnpm exec diffdash [path]` to open that project in DiffDash with its local changes and hosted pull requests in one workspace. When `[path]` is omitted, the CLI uses the current directory. If DiffDash is already running, the existing window is focused and navigated to the project's Reviews ribbon. Use `diffdash diff [branch-name]` when you want to open an explicit local branch comparison directly.
+After building from source, run `pnpm exec diffdash [path]` to open that project in DiffDash with its local changes and hosted pull requests in one workspace. When `[path]` is omitted, the CLI uses the current directory. If DiffDash is already running, the existing window is focused and navigated to the project's Reviews ribbon. Use `diffdash diff [revision]` when you want to open an explicit local comparison directly.
 
 DiffDash identifies a project from its resolved Git `origin`, not the checkout folder name. Provider resolution follows hosted repository renames and stores the provider's stable repository ID, so renamed repositories and multiple local checkouts converge into one project. Run `diffdash repair` to retry offline resolution and restore legacy local aliases without rewriting existing review records. The command opens or focuses DiffDash, runs the repair there, and reports the result in the app.
 
@@ -60,11 +60,11 @@ Run `diffdash install [path]` to link a GitHub repository checkout to DiffDash. 
 
 Run `diffdash pr` inside a GitHub checkout to save it as a favorite and open its pull request list. Pass a positive pull request number, such as `diffdash pr 123`, to open that review directly.
 
-Run `diffdash diff [branch-name]` to review the current branch and local changes relative to another branch. When the target differs from the checked-out branch, DiffDash fetches the target from `origin` without checking it out, finds its merge base with the current `HEAD`, and shows current-branch commits plus staged, unstaged, and untracked changes. Changes that exist only on the target branch are excluded. With no branch name, DiffDash uses the default branch reported by `origin/HEAD`.
+Run `diffdash diff [revision]` to review the current branch and local changes relative to a branch, tag, full commit SHA, or `HEAD`. DiffDash finds the revision's merge base with the current `HEAD` and shows current-branch commits plus staged, unstaged, and untracked changes. Remote branches are fetched from `origin`; local revisions work without a remote. Changes that exist only on the target revision are excluded. With no revision, DiffDash uses the default branch reported by `origin/HEAD`.
 
 Run `diffdash last-commit` or `diffdash lc` to review the current `HEAD` commit against its first parent. Root commits are compared with Git's empty tree, and staged, unstaged, and untracked changes are excluded.
 
-Run `diffdash compare <base> <head>` inside a Git checkout to review an immutable merge-base-to-head comparison from that repository. Both revisions may be branch names, tags, or full commit SHAs. Use `--repository=<namespace/name>` to select a different saved or linked repository. The unqualified `namespace/name` shorthand is accepted only when exactly one configured provider matches; DiffDash never assumes GitHub. Qualify ambiguous repositories explicitly, for example `diffdash compare v6.0 v6.1 --repository=github:torvalds/linux`.
+Run `diffdash compare <base> <head>` inside a Git checkout to review an immutable merge-base-to-head comparison from that repository. Both revisions may be branch names, tags, or full commit SHAs. A local-only checkout does not need a hosted remote when `<head>` resolves to its clean checked-out `HEAD`, which keeps file navigation and review agents pinned to the rendered content. Use `--repository=<namespace/name>` to select a different saved or linked repository. The unqualified `namespace/name` shorthand is accepted only when exactly one configured provider matches; DiffDash never assumes GitHub. Qualify ambiguous repositories explicitly, for example `diffdash compare v6.0 v6.1 --repository=github:torvalds/linux`.
 
 Linux `.deb` packages install the desktop executable as `diffdash-desktop` and install `/usr/bin/diffdash` as the terminal CLI. The CLI opens the current directory by default and forwards to the running DiffDash window when one is already open.
 

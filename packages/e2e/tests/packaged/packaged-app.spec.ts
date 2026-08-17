@@ -312,6 +312,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
         .toBe(false)
     }
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 5_000 }).toBe(true)
     const database = await stat(join(userData, "diffdash.sqlite"))
     expect(database.size).toBeGreaterThan(0)
 
@@ -409,7 +410,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await persistedReviewDisclosure.click()
     await expect(restartedWindow.getByText("Fixture review response")).toBeVisible()
 
+    const restartedRootPid = app.process().pid
+    const restartedCoreProcessIds =
+      forcedCoreHost === null || restartedRootPid === undefined
+        ? []
+        : coreHostProcessIds(restartedRootPid, forcedCoreHost)
     await app.close()
+    if (forcedCoreHost !== null) {
+      expect(restartedRootPid).toBeDefined()
+      expect(restartedCoreProcessIds.length).toBeGreaterThan(0)
+      await expect
+        .poll(() => restartedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+        .toBe(false)
+    }
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 5_000 }).toBe(true)
     app = await electron.launch({
       ...launchOptions,
       args: [
@@ -477,6 +491,15 @@ const processIsAlive = (pid: number): boolean => {
     return true
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+const databaseOwnershipIsReleased = async (userData: string): Promise<boolean> => {
+  try {
+    await access(join(userData, "diffdash.sqlite.owner"))
+    return false
+  } catch {
+    return true
   }
 }
 

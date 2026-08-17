@@ -156,17 +156,16 @@ export class ProjectSession {
   ): Promise<OpenedProjectSession> {
     this.cancelRestore()
     const comparison = await this.dependencies.resolveRepositoryComparison(command)
-    const projection = projectProjection(
-      comparison.repo,
-      "files",
-      { kind: "repositoryComparison", target: comparison.target },
-      null,
-    )
+    const selectedReview: SelectedReviewTarget =
+      comparison.target.kind === "local"
+        ? { kind: "localDiff", target: comparison.target }
+        : { kind: "repositoryComparison", target: comparison.target }
+    const projection = projectProjection(comparison.repo, "files", selectedReview, null)
     return {
       _tag: "opened",
       projection,
       persistence: this.persist(projection),
-      reviewType: null,
+      reviewType: comparison.target.kind === "local" ? "local_diff" : null,
     }
   }
 

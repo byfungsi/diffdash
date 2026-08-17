@@ -68,7 +68,8 @@ export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(
 ): Effect.fn.Return<ReviewDiffSource, ReviewDiffSourceFailure, ProcessService> {
   const processes = yield* ProcessService
   const target = input.target
-  const immutable = target.comparison._tag === "lastCommit"
+  const immutable =
+    target.comparison._tag === "lastCommit" || target.comparison._tag === "revisionRange"
   const exactObjects = immutable
     ? yield* resolveExactObjects(target, processes).pipe(Effect.mapError(sourceCreationFailure))
     : null
@@ -76,7 +77,9 @@ export const makeLocalReviewDiffSource = Effect.fn("makeLocalReviewDiffSource")(
   if (exactObjects !== null) {
     const digest = yield* digestDiff(target, processes).pipe(Effect.mapError(sourceCreationFailure))
     const comparison = target.comparison
-    if (comparison._tag !== "lastCommit") return yield* Effect.die("Expected last commit")
+    if (comparison._tag !== "lastCommit" && comparison._tag !== "revisionRange") {
+      return yield* Effect.die("Expected immutable local comparison")
+    }
     return makeSource({
       input,
       processes,
@@ -200,6 +203,24 @@ const comparisonHash = (target: LocalReviewTarget) => {
         .update(comparison.baseSha)
         .update("\0"),
     ),
+    Match.tag("revision", (comparison) =>
+      hash
+        .update("revision\0")
+        .update(comparison.revision)
+        .update("\0")
+        .update(comparison.baseSha)
+        .update("\0"),
+    ),
+    Match.tag("revisionRange", (comparison) =>
+      hash
+        .update("revisionRange\0")
+        .update(comparison.baseSha)
+        .update("\0")
+        .update(comparison.headSha)
+        .update("\0")
+        .update(comparison.mergeBaseSha)
+        .update("\0"),
+    ),
     Match.tag("workingTree", () => hash),
     Match.tag("lastCommit", (comparison) =>
       hash
@@ -217,7 +238,7 @@ const diffBytes = (
   target: LocalReviewTarget,
   processes: ProcessService["Service"],
 ): Stream.Stream<Uint8Array, ProcessExecutionError | ReviewDiffSourceFailure> =>
-  target.comparison._tag === "lastCommit"
+  target.comparison._tag === "lastCommit" || target.comparison._tag === "revisionRange"
     ? processStdout(
         processes,
         [
@@ -226,7 +247,9 @@ const diffBytes = (
           "diff",
           "--no-ext-diff",
           "--no-color",
-          target.comparison.baseSha,
+          target.comparison._tag === "lastCommit"
+            ? target.comparison.baseSha
+            : target.comparison.mergeBaseSha,
           target.comparison.headSha,
           "--",
         ],
@@ -241,7 +264,9 @@ const diffBytes = (
             "diff",
             "--no-ext-diff",
             "--no-color",
-            ...(target.comparison._tag === "branch" ? [target.comparison.baseSha] : ["HEAD"]),
+            ...(target.comparison._tag === "branch" || target.comparison._tag === "revision"
+              ? [target.comparison.baseSha]
+              : ["HEAD"]),
             "--",
           ],
           target.rootPath,
@@ -327,10 +352,16 @@ const resolveExactObjects = Effect.fn("LocalReviewDiffSource.resolveExactObjects
   target: LocalReviewTarget,
   processes: ProcessService["Service"],
 ): Effect.fn.Return<ExactObjects, ProcessExecutionError> {
-  if (target.comparison._tag !== "lastCommit") return yield* Effect.die("Expected last commit")
+  if (target.comparison._tag !== "lastCommit" && target.comparison._tag !== "revisionRange") {
+    return yield* Effect.die("Expected immutable local comparison")
+  }
+  const baseRevision =
+    target.comparison._tag === "lastCommit"
+      ? target.comparison.baseSha
+      : target.comparison.mergeBaseSha
   const [base, head, commonDirectory] = yield* Effect.all(
     [
-      resolveObject(target.rootPath, target.comparison.baseSha, processes),
+      resolveObject(target.rootPath, baseRevision, processes),
       resolveObject(target.rootPath, target.comparison.headSha, processes),
       processes.run(
         gitProcessRequest([

@@ -119,6 +119,7 @@ export interface DiffDashApi {
   readonly openLocalRepositoryFile: (
     rootPath: RepositoryCheckoutPath,
     filePath: RepositoryRelativePath,
+    target: LocalReviewTarget | null,
   ) => Promise<void>
   readonly repositories: {
     readonly list: (query?: string) => Promise<readonly Repo[]>

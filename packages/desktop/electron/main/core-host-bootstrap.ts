@@ -241,9 +241,10 @@ export const coreHostBootstrapLayer = (options: CoreHostBootstrapOptions) =>
       const fileSystem = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const scope = yield* Effect.scope
-      const result = yield* Deferred.make<CoreHostBootstrapSession, CoreHostBootstrapError>()
+      const result = yield* Ref.make<
+        Option.Option<Deferred.Deferred<CoreHostBootstrapSession, CoreHostBootstrapError>>
+      >(Option.none())
       const startLock = yield* Semaphore.make(1)
-      const started = yield* Ref.make(false)
       const acquisition = bootstrapCoreHost(options).pipe(
         Effect.provideService(TempResources, tempResources),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -251,15 +252,20 @@ export const coreHostBootstrapLayer = (options: CoreHostBootstrapOptions) =>
         Effect.provideService(Scope.Scope, scope),
       )
       const launch = startLock.withPermits(1)(
-        Ref.getAndSet(started, true).pipe(
-          Effect.flatMap((alreadyStarted) =>
-            alreadyStarted
-              ? Effect.void
-              : Deferred.complete(result, acquisition).pipe(Effect.forkIn(scope), Effect.asVoid),
-          ),
-        ),
+        Effect.gen(function* () {
+          const current = yield* Ref.get(result)
+          if (Option.isSome(current)) return current.value
+
+          const pending = yield* Deferred.make<CoreHostBootstrapSession, CoreHostBootstrapError>()
+          yield* Ref.set(result, Option.some(pending))
+          yield* Deferred.complete(
+            pending,
+            acquisition.pipe(Effect.tapError(() => Ref.set(result, Option.none()))),
+          ).pipe(Effect.forkIn(scope))
+          return pending
+        }),
       )
-      const start = launch.pipe(Effect.andThen(Deferred.await(result)))
+      const start = launch.pipe(Effect.flatMap(Deferred.await))
       return CoreHostBootstrap.of({ start })
     }),
   )

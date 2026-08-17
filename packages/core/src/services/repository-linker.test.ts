@@ -75,7 +75,9 @@ const makeLayer = (
             detectRoot: () => Effect.succeed(linkedRepoLocalPath),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
+            resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
+            validateLocalReviewTarget: () => unavailable(),
           }),
         ),
         Layer.succeed(
@@ -606,7 +608,9 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             detectRoot: () => Effect.succeed(RepositoryCheckoutPath.make("/workspace/diffdash")),
             currentBranch: () => unavailable(),
             resolveBranchComparison: () => unavailable(),
+            resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
+            validateLocalReviewTarget: () => unavailable(),
           }),
         ),
         Layer.succeed(

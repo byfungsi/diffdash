@@ -33,7 +33,6 @@ const source = {
     DIFFDASH_E2E_FAKE_GIT_REMOTE: "/fixtures/remote.git",
     DIFFDASH_E2E_FAKE_GIT_BASE_SHA: "a".repeat(40),
     DIFFDASH_E2E_FAKE_GIT_HEAD_SHA: "b".repeat(40),
-    DIFFDASH_E2E_HIDDEN: "1",
     DIFFDASH_REMOTE_WORKTREE_POOL_PATH: "/custom/remote-pool",
     DIFFDASH_WORKTREE_POOL_PATH: "/custom/worktree-pool",
     ELECTRON_RENDERER_URL: "http://localhost:5173",
@@ -104,7 +103,7 @@ describe("desktop host configuration", () => {
     }),
   )
 
-  it.effect("honors E2E environment flags only through the E2E startup configuration", () =>
+  it.effect("keeps E2E windows hidden and honors fixture environment flags", () =>
     Effect.gen(function* () {
       const configuration = yield* makeDesktopHostConfiguration(
         source,

@@ -354,6 +354,55 @@ describe("Core host bootstrap", () => {
     }),
   )
 
+  it.effect("relaunches after a failed shared bootstrap", () =>
+    Effect.gen(function* () {
+      const temporaryDirectory = mkdtempSync(join(tmpdir(), "dd-bootstrap-parent-"))
+      const starts = yield* Ref.make(0)
+      const layer = coreHostBootstrapLayer({
+        ...options,
+        temporaryDirectory,
+        startTransport: () =>
+          Ref.updateAndGet(starts, (count) => count + 1).pipe(
+            Effect.flatMap((count) =>
+              count === 1
+                ? CoreHostBootstrapError.make({
+                    stage: "transportListening",
+                    safeMessage: "DiffDash could not establish its private Core connection.",
+                  })
+                : Effect.void,
+            ),
+          ),
+        makeClientLayer: () =>
+          Layer.succeed(
+            CoreRpcClient,
+            CoreRpcClient.of({
+              ...unusedApplicationMethods,
+              authorizeDatabaseOwnership: (request) =>
+                Effect.succeed({ ...request, lifecycle: "recovering" as const }),
+              health: () =>
+                Effect.succeed(
+                  CoreHealth.make({
+                    applicationInstanceId,
+                    processEpoch,
+                    lifecycle: "awaitingOwnership",
+                  }),
+                ),
+            }),
+          ),
+      }).pipe(Layer.provide(bootstrapDependencies))
+
+      return yield* Effect.gen(function* () {
+        const bootstrap = yield* CoreHostBootstrap
+        yield* bootstrap.start.pipe(Effect.flip)
+        const session = yield* bootstrap.start
+
+        expect(session.health.lifecycle).toBe("awaitingOwnership")
+        expect(yield* Ref.get(starts)).toBe(2)
+        expect(readdirSync(temporaryDirectory)).toHaveLength(1)
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   it.effect("does not launch Core until the first start request", () =>
     Effect.gen(function* () {
       const temporaryDirectory = mkdtempSync(join(tmpdir(), "dd-bootstrap-parent-"))

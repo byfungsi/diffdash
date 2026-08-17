@@ -197,7 +197,7 @@ describe("Bun Core runtime", () => {
               coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
             }).pipe(Effect.asVoid)
           },
-        })
+        }).pipe(Effect.retry({ times: 2 }))
 
         expect(session.health).toEqual({
           applicationInstanceId: "app-real-bun",

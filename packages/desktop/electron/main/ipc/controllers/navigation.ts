@@ -87,10 +87,11 @@ export const defineNavigationHandlers = (
 
   handlers.define(
     InvokeChannel.appOpenLocalRepositoryFile,
-    async (_event, { rootPath, filePath }): Promise<void> => {
+    async (_event, { rootPath, filePath, target }): Promise<void> => {
       const intent = await runtime.core.appOpenLocalRepositoryFile({
         rootPath,
         filePath: normalizeReviewFilePath(filePath),
+        target,
       })
       await openIntent(intent)
     },

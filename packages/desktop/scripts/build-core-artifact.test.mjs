@@ -11,6 +11,9 @@ import { Worker } from "node:worker_threads"
 import { buildCoreArtifact } from "./build-core-artifact.mjs"
 
 const execFilePromise = promisify(execFile)
+const desktopVersion = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+).version
 
 const buildIn = async (parent, name, mode) => {
   const outputDirectory = resolve(parent, name)
@@ -29,6 +32,7 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
   const manifestText = await readFile(resolve(production.outputDirectory, "manifest.json"), "utf8")
   const manifest = JSON.parse(manifestText)
   const e2eManifestText = await readFile(resolve(e2e.outputDirectory, "manifest.json"), "utf8")
+  const e2eManifest = JSON.parse(e2eManifestText)
   const productionInputs = Object.keys(production.metafile.inputs).join("\n")
   const e2eInputs = Object.keys(e2e.metafile.inputs).join("\n")
 
@@ -44,15 +48,12 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
     manifestText,
     await readFile(resolve(repeated.outputDirectory, "manifest.json"), "utf8"),
   )
-  assert.match(
-    manifestText,
-    new RegExp(
-      `"buildId": "core-0\\.8\\.1-production-${process.platform}-${process.arch}-[a-f0-9]{40}"`,
-      "u",
-    ),
+  assert.equal(
+    manifest.buildId,
+    `core-${desktopVersion}-production-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 40)}`,
   )
   assert.deepEqual(manifest.desktop, {
-    version: "0.8.1",
+    version: desktopVersion,
     mode: "production",
     platform: process.platform,
     architecture: process.arch,
@@ -79,12 +80,9 @@ test("builds deterministic runtime-neutral production and E2E Core artifacts", a
       assert.doesNotMatch(worker.toString("utf8"), /(?:node|bun):sqlite|child_process/u)
     }),
   )
-  assert.match(
-    e2eManifestText,
-    new RegExp(
-      `"buildId": "core-0\\.8\\.1-e2e-${process.platform}-${process.arch}-[a-f0-9]{40}"`,
-      "u",
-    ),
+  assert.equal(
+    e2eManifest.buildId,
+    `core-${desktopVersion}-e2e-${process.platform}-${process.arch}-${e2eManifest.entrypointSha256.slice(0, 40)}`,
   )
   assert.match(
     manifestText,

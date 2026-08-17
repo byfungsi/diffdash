@@ -225,7 +225,9 @@ const gitLayer = Layer.succeed(GitService, {
   currentBranch: () => Effect.succeed(RepositoryComparisonRef.make("feature")),
   listRemotes: () => Effect.die("unused"),
   resolveBranchComparison: () => Effect.die("unused"),
+  resolveRevisionRangeComparison: () => Effect.die("unused"),
   resolveLastCommit: () => Effect.die("unused"),
+  validateLocalReviewTarget: Effect.succeed,
 })
 
 const repositoriesLayer = Layer.succeed(RepositoryLinker, {

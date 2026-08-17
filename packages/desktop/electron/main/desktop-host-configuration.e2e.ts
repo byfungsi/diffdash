@@ -14,7 +14,7 @@ export const makeE2EDesktopStartupConfiguration = (
   environment: Readonly<Record<string, string | undefined>>,
 ): DesktopStartupConfiguration => ({
   coreHostMode: coreHostMode(environment.DIFFDASH_E2E_CORE_HOST),
-  hiddenWindow: environment.DIFFDASH_E2E_HIDDEN === "1",
+  hiddenWindow: true,
   updatesDisabled: environment.DIFFDASH_E2E_DISABLE_UPDATES === "1",
   fixtures: {
     agentProviderEnabled: environment.DIFFDASH_E2E_FAKE_AGENT_PROVIDER === "1",
