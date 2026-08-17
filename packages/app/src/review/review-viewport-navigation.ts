@@ -132,6 +132,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     signal: AbortSignal,
   ): Promise<LocalResolvedReviewNavigationTarget> => {
     this.#throwIfAborted(signal)
+    this.#layoutReconciliationGeneration += 1
+    this.#focusedNavigation = null
     const bindings = this.#current()
     if (
       Match.valueTags(target, {
@@ -300,8 +302,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     signal: AbortSignal,
   ) => {
     this.#throwIfAborted(signal)
-    this.#layoutReconciliationGeneration += 1
-    this.#focusedNavigation = null
     const resolved = this.#localTarget(target)
     this.#current().prepareFile(resolved.file, input, resolved.persistedTarget)
     await nextFrame(signal)
@@ -468,14 +468,12 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (generation !== this.#layoutReconciliationGeneration || performance.now() >= expiresAt)
       return
     window.requestAnimationFrame(() => {
-      if (generation !== this.#layoutReconciliationGeneration) return
-      if (anchor.isConnected()) {
-        const active = deepActiveElement()
-        const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
-        if (active !== document.body && !ownsFocus) return
-        this.#align(anchor, alignment, stickyHeight)
-        if (active === document.body) anchor.focus?.()
-      }
+      if (generation !== this.#layoutReconciliationGeneration || !anchor.isConnected()) return
+      const active = deepActiveElement()
+      const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
+      if (active !== document.body && !ownsFocus) return
+      this.#align(anchor, alignment, stickyHeight)
+      if (active === document.body) anchor.focus?.()
       this.#reconcileAfterLayout(anchor, alignment, stickyHeight, expiresAt, generation)
     })
   }
