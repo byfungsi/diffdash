@@ -334,17 +334,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       return anchor
     }
 
-    const currentContentAnchor = this.#mountContentAnchor(resolved)
-    if (currentContentAnchor !== null) {
-      const release = this.#anchors.registerAnchor(resolved.anchorKey, currentContentAnchor)
-      const anchor = this.#anchors.getAnchor(resolved.anchorKey)
-      if (anchor !== null) {
-        this.#resolvedAnchors.set(anchor, resolved)
-        signal.addEventListener("abort", release, { once: true })
-        return anchor
-      }
-      release()
-    }
+    const currentContentAnchor = this.#registerCurrentContentAnchor(resolved, signal)
+    if (currentContentAnchor !== null) return currentContentAnchor
 
     const fileAnchor = await this.#anchors.waitForAnchor(
       reviewFileAnchorKey(resolved.file.fileId),
@@ -353,17 +344,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     this.#align(fileAnchor, "start", this.#globalStickyHeight())
     for (;;) {
       this.#throwIfAborted(signal)
-      const mounted = this.#mountContentAnchor(resolved)
-      if (mounted !== null) {
-        const release = this.#anchors.registerAnchor(resolved.anchorKey, mounted)
-        const anchor = this.#anchors.getAnchor(resolved.anchorKey)
-        if (anchor !== null) {
-          this.#resolvedAnchors.set(anchor, resolved)
-          signal.addEventListener("abort", release, { once: true })
-          return anchor
-        }
-        release()
-      }
+      const anchor = this.#registerCurrentContentAnchor(resolved, signal)
+      if (anchor !== null) return anchor
       this.#primeContentAnchor(resolved)
       await nextFrame(signal)
     }
@@ -432,6 +414,19 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     while (stableFrames < STABLE_FRAME_COUNT) {
       this.#throwIfAborted(signal)
       if (!currentAnchor.isConnected()) {
+        if (resolved.anchorKey !== reviewFileAnchorKey(resolved.file.fileId)) {
+          const replacement = this.#registerCurrentContentAnchor(resolved, signal)
+          if (replacement === null) {
+            stableFrames = 0
+            this.#primeContentAnchor(resolved)
+            await nextFrame(signal)
+            continue
+          }
+          currentAnchor = replacement
+          await this.position(currentAnchor, input, signal)
+          if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
+          continue
+        }
         currentAnchor = await this.waitForAnchor(resolved, signal)
         await this.position(currentAnchor, input, signal)
         if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
@@ -658,6 +653,23 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     }
 
     return resolvingFocusableAnchor(resolveLine, line)
+  }
+
+  readonly #registerCurrentContentAnchor = (
+    resolved: LocalResolvedReviewNavigationTarget,
+    signal: AbortSignal,
+  ): MountedReviewAnchor | null => {
+    const mounted = this.#mountContentAnchor(resolved)
+    if (mounted === null) return null
+    const release = this.#anchors.registerAnchor(resolved.anchorKey, mounted)
+    const anchor = this.#anchors.getAnchor(resolved.anchorKey)
+    if (anchor === null) {
+      release()
+      return null
+    }
+    this.#resolvedAnchors.set(anchor, resolved)
+    signal.addEventListener("abort", release, { once: true })
+    return anchor
   }
 
   readonly #primeContentAnchor = (resolved: LocalResolvedReviewNavigationTarget) => {
