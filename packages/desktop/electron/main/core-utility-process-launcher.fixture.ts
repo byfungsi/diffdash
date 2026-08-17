@@ -10,7 +10,7 @@ import { bootstrapCoreHost } from "./core-host-bootstrap"
 import { startCoreUtilityProcess } from "./core-utility-process-launcher"
 import { makeCoreProcessFixtureConfiguration } from "./core-process-configuration.fixture"
 
-const [artifactDirectory, temporaryDirectory, statePath, expectedBuildId] = process.argv.slice(2)
+const [artifactDirectory, temporaryDirectory, statePath, expectedBuildId] = process.argv.slice(-4)
 const platformLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const dependencies = Layer.merge(
   TempResources.layer.pipe(Layer.provide(platformLayer)),
@@ -37,7 +37,6 @@ const probe = Effect.gen(function* () {
         databasePath: `${statePath}.sqlite`,
         statePath,
         coreConfiguration: makeCoreProcessFixtureConfiguration(`${statePath}.sqlite`, statePath),
-        listenTimeout: 20_000,
       }),
   })
   console.info(`DIFFDASH_CORE_UTILITY_PROBE_READY:${session.health.lifecycle}`)

@@ -13,19 +13,14 @@ import type { CoreConfiguration } from "@diffdash/core"
 
 const utilityProcessSpawner: CoreProcessSpawner = {
   spawn: ({ entrypointPath, encodedStartupConfiguration }) => {
-    const diagnosticsEnabled = process.env.DIFFDASH_CORE_UTILITY_PROCESS_DIAGNOSTICS === "1"
     const child = utilityProcess.fork(entrypointPath, [], {
       env: {
         ...process.env,
         [CORE_PROCESS_STARTUP_ENV]: encodedStartupConfiguration,
       },
       serviceName: "DiffDash Core",
-      stdio: diagnosticsEnabled ? "pipe" : "ignore",
+      stdio: "ignore",
     })
-    if (diagnosticsEnabled) {
-      child.stdout?.pipe(process.stdout)
-      child.stderr?.pipe(process.stderr)
-    }
     const exited = new Promise<number>((resolve) => child.once("exit", resolve))
     return {
       awaitExit: Effect.promise(() => exited),

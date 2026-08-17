@@ -50,7 +50,7 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
     target: "node22",
   })
 
-  const environment = { ...process.env, DIFFDASH_CORE_UTILITY_PROCESS_DIAGNOSTICS: "1" }
+  const environment = { ...process.env }
   delete environment.ELECTRON_RUN_AS_NODE
   const requiresVirtualDisplay = process.platform === "linux" && environment.DISPLAY === undefined
   const electronArguments = [
@@ -64,7 +64,7 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
   const result = await run(
     requiresVirtualDisplay ? "xvfb-run" : electronPath,
     requiresVirtualDisplay ? ["-a", electronPath, ...electronArguments] : electronArguments,
-    { env: environment, timeout: 30_000 },
+    { env: environment, timeout: 20_000 },
   )
 
   assert.match(result.stdout, /DIFFDASH_CORE_UTILITY_PROBE_READY:awaitingOwnership/u)
