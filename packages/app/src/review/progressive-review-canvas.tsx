@@ -396,7 +396,6 @@ export const ProgressiveReviewCanvas = ({
               file={file}
               identity={identity}
               mode={mode}
-              navigationActive={navigationActive}
               demandedStartLine={
                 navigationRangeTarget?.fileId === file.fileId
                   ? navigationRangeTarget.startLine
@@ -479,7 +478,6 @@ const ProgressiveRangeCard = ({
   file,
   identity,
   mode,
-  navigationActive,
   options,
   reader,
   reviewThreads,
@@ -515,7 +513,6 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
-  readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
   readonly settledViewportRevision: number
@@ -625,16 +622,8 @@ const ProgressiveRangeCard = ({
     if (instance === null) return
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
-    if (navigationActive) {
-      reconcileDemandedRange(instance, 4)
-      return
-    }
-    instance.setVisibility(false)
-    window.requestAnimationFrame(() => {
-      instance.setVisibility(true)
-      reconcileDemandedRange(instance, 4)
-    })
-  }, [diffVirtualizer, navigationActive, settledViewportRevision])
+    reconcileSettledRange(instance, 2)
+  }, [diffVirtualizer, settledViewportRevision])
 
   useLayoutEffect(() => {
     const card = cardRef.current
@@ -994,6 +983,21 @@ const reconcileDemandedRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     reconcileDemandedRange(instance, remainingFrames - 1)
+  })
+}
+
+const reconcileSettledRange = (
+  instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
+  remainingQuietFrames: number,
+): void => {
+  if (instance === null) return
+  window.requestAnimationFrame(() => {
+    if (remainingQuietFrames > 1) {
+      reconcileSettledRange(instance, remainingQuietFrames - 1)
+      return
+    }
+    instance.syncVirtualizedTop()
+    instance.rerender()
   })
 }
 
