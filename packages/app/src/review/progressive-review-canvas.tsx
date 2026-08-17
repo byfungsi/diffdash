@@ -400,7 +400,6 @@ export const ProgressiveReviewCanvas = ({
               expandedLineAnchor={expandedLineAnchor}
               file={file}
               identity={identity}
-              isScrolling={() => scrollingRef.current}
               mode={mode}
               navigationActive={navigationActive}
               demandedStartLine={
@@ -415,6 +414,7 @@ export const ProgressiveReviewCanvas = ({
               selected={selectedPath === file.path}
               settledViewportRevision={settledViewportRevision}
               shells={resources.shells}
+              scrollingRef={scrollingRef}
               viewed={viewedFileKeys.has(file.reviewKey)}
               onDiffRendered={onDiffRendered}
               onFileAnchorChange={onFileAnchorChange}
@@ -484,7 +484,6 @@ const ProgressiveRangeCard = ({
   expandedLineAnchor,
   file,
   identity,
-  isScrolling,
   mode,
   navigationActive,
   options,
@@ -495,6 +494,7 @@ const ProgressiveRangeCard = ({
   selected,
   settledViewportRevision,
   shells,
+  scrollingRef,
   viewed,
   onDiffRendered,
   onFileAnchorChange,
@@ -523,12 +523,12 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
-  readonly isScrolling: () => boolean
   readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
   readonly settledViewportRevision: number
   readonly shells: ReturnType<typeof createPierreRangeShellPool<ReviewThreadAnnotation>>
+  readonly scrollingRef: RefObject<boolean>
   readonly viewed: boolean
 }) => {
   const workerManager = useWorkerPool()
@@ -701,7 +701,7 @@ const ProgressiveRangeCard = ({
                 diffVirtualizer,
                 scrollContainer,
                 () => navigationActiveRef.current,
-                isScrolling,
+                scrollingRef,
                 32,
               )
             }
@@ -790,6 +790,7 @@ const ProgressiveRangeCard = ({
     reviewThreads.details,
     scheduler,
     scrollContainerRef,
+    scrollingRef,
     shells,
     startLine,
     workerManager,
@@ -1078,7 +1079,7 @@ const reconcilePublishedRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   isNavigationActive: () => boolean,
-  isScrolling: () => boolean,
+  scrollingRef: RefObject<boolean>,
   remainingFrames: number,
   heightReconcileRequested = false,
 ): void => {
@@ -1088,7 +1089,7 @@ const reconcilePublishedRange = (
       reconcileDemandedRange(instance, 8)
       return
     }
-    if (isScrolling()) return
+    if (scrollingRef.current) return
     if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
@@ -1097,7 +1098,7 @@ const reconcilePublishedRange = (
         virtualizer,
         scrollContainer,
         isNavigationActive,
-        isScrolling,
+        scrollingRef,
         remainingFrames - 1,
         true,
       )
@@ -1106,7 +1107,11 @@ const reconcilePublishedRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (isNavigationActive() || isScrolling() || scrollContainer.contains(document.activeElement))
+      if (
+        isNavigationActive() ||
+        scrollingRef.current ||
+        scrollContainer.contains(document.activeElement)
+      )
         return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
         reconcilePublishedRange(
@@ -1114,7 +1119,7 @@ const reconcilePublishedRange = (
           virtualizer,
           scrollContainer,
           isNavigationActive,
-          isScrolling,
+          scrollingRef,
           remainingFrames - 1,
         )
         return
@@ -1127,7 +1132,7 @@ const reconcilePublishedRange = (
           virtualizer,
           scrollContainer,
           isNavigationActive,
-          isScrolling,
+          scrollingRef,
           remainingFrames - 1,
         )
       }
