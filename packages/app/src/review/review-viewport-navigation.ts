@@ -74,6 +74,7 @@ interface LocalResolvedReviewNavigationTarget extends ResolvedReviewNavigationTa
 }
 
 const STABLE_FRAME_COUNT = 3
+const LATE_LAYOUT_RECONCILIATION_MS = 8_000
 
 /** Imperative DOM/Pierre execution plane for the renderer-local review navigator. */
 export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
@@ -435,7 +436,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     }
     if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
       currentAnchor.focus?.()
-      const expiresAt = performance.now() + 2_000
+      const expiresAt = performance.now() + LATE_LAYOUT_RECONCILIATION_MS
       this.#focusedNavigation = {
         expiresAt,
         input,

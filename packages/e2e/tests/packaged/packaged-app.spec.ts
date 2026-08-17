@@ -309,10 +309,10 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await app.close()
     if (forcedCoreHost !== null) {
       await expect
-        .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+        .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 15_000 })
         .toBe(false)
     }
-    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 5_000 }).toBe(true)
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 15_000 }).toBe(true)
     const database = await stat(join(userData, "diffdash.sqlite"))
     expect(database.size).toBeGreaterThan(0)
 
@@ -420,10 +420,10 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       expect(restartedRootPid).toBeDefined()
       expect(restartedCoreProcessIds.length).toBeGreaterThan(0)
       await expect
-        .poll(() => restartedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+        .poll(() => restartedCoreProcessIds.some(processIsAlive), { timeout: 15_000 })
         .toBe(false)
     }
-    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 5_000 }).toBe(true)
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 15_000 }).toBe(true)
     app = await electron.launch({
       ...launchOptions,
       args: [

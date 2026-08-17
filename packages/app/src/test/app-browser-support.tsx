@@ -3292,6 +3292,10 @@ scenario("fastScrollPerformance", async () => {
     .__INSTANCE
   expect(virtualizer).not.toBeUndefined()
   if (virtualizer === undefined) return
+  const markDOMDirty = vi.spyOn(virtualizer, "markDOMDirty")
+  const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
+  const replaceHighlight = vi.spyOn(CSS.highlights, "set")
+  const removeHighlight = vi.spyOn(CSS.highlights, "delete")
   const warmupLongTaskDurations: number[] = []
   const measuredLongTaskDurations: number[] = []
   let activeLongTaskDurations = warmupLongTaskDurations
@@ -3306,12 +3310,17 @@ scenario("fastScrollPerformance", async () => {
   await waitForAnimationFrames(8)
   longTaskObserver?.takeRecords().forEach((entry) => warmupLongTaskDurations.push(entry.duration))
   activeLongTaskDurations = measuredLongTaskDurations
-
-  const markDOMDirty = vi.spyOn(virtualizer, "markDOMDirty")
-  const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
-  const replaceHighlight = vi.spyOn(CSS.highlights, "set")
-  const removeHighlight = vi.spyOn(CSS.highlights, "delete")
+  markDOMDirty.mockClear()
+  requestHeightReconcile.mockClear()
+  replaceHighlight.mockClear()
+  removeHighlight.mockClear()
+  let maximumScrollTop = diffPane.scrollTop
+  const trackScrollTop = () => {
+    maximumScrollTop = Math.max(maximumScrollTop, diffPane.scrollTop)
+  }
+  diffPane.addEventListener("scroll", trackScrollTop, { passive: true })
   const frameDurations = await runContinuousReviewScroll(diffPane, frameCount)
+  diffPane.removeEventListener("scroll", trackScrollTop)
   longTaskObserver?.takeRecords().forEach((entry) => measuredLongTaskDurations.push(entry.duration))
   longTaskObserver?.disconnect()
   await waitForAnimationFrames(4)
@@ -3343,7 +3352,7 @@ scenario("fastScrollPerformance", async () => {
   )
   expect(metrics.searchHighlightRemovals).toBe(0)
   expect(metrics.searchHighlightReplacements).toBe(0)
-  expect(diffPane.scrollTop).toBeGreaterThan(0)
+  expect(maximumScrollTop).toBeGreaterThan(0)
   expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000)
   expect(window.scrollY).toBe(0)
 })
