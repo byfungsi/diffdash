@@ -630,7 +630,7 @@ const ProgressiveRangeCard = ({
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
     if (navigationActive) {
-      reconcileDemandedRange(instance, 4)
+      reconcileDemandedRange(instance, 8)
       return
     }
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
