@@ -142,6 +142,7 @@ export const ProgressiveReviewCanvas = ({
   const pageOriginRef = useRef(0)
   const previousLogicalTopRef = useRef(0)
   const viewportRevisionRef = useRef(0)
+  const scrollingRef = useRef(false)
   const [viewport, setViewport] = useState({
     logicalTop: 0,
     height: 800,
@@ -254,8 +255,10 @@ export const ProgressiveReviewCanvas = ({
         )
       }
       if (settle) {
+        scrollingRef.current = true
         clearTimeout(retirementTimeout)
         retirementTimeout = setTimeout(() => {
+          scrollingRef.current = false
           setViewport(viewportRef.current)
           setSettledViewportRevision((revision) => revision + 1)
         }, 100)
@@ -397,6 +400,7 @@ export const ProgressiveReviewCanvas = ({
               expandedLineAnchor={expandedLineAnchor}
               file={file}
               identity={identity}
+              isScrolling={() => scrollingRef.current}
               mode={mode}
               navigationActive={navigationActive}
               demandedStartLine={
@@ -480,6 +484,7 @@ const ProgressiveRangeCard = ({
   expandedLineAnchor,
   file,
   identity,
+  isScrolling,
   mode,
   navigationActive,
   options,
@@ -518,6 +523,7 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
+  readonly isScrolling: () => boolean
   readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
@@ -695,6 +701,7 @@ const ProgressiveRangeCard = ({
                 diffVirtualizer,
                 scrollContainer,
                 () => navigationActiveRef.current,
+                isScrolling,
                 32,
               )
             }
@@ -1071,6 +1078,7 @@ const reconcilePublishedRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   isNavigationActive: () => boolean,
+  isScrolling: () => boolean,
   remainingFrames: number,
   heightReconcileRequested = false,
 ): void => {
@@ -1080,6 +1088,7 @@ const reconcilePublishedRange = (
       reconcileDemandedRange(instance, 8)
       return
     }
+    if (isScrolling()) return
     if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
@@ -1088,6 +1097,7 @@ const reconcilePublishedRange = (
         virtualizer,
         scrollContainer,
         isNavigationActive,
+        isScrolling,
         remainingFrames - 1,
         true,
       )
@@ -1096,13 +1106,15 @@ const reconcilePublishedRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (isNavigationActive() || scrollContainer.contains(document.activeElement)) return
+      if (isNavigationActive() || isScrolling() || scrollContainer.contains(document.activeElement))
+        return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
         reconcilePublishedRange(
           instance,
           virtualizer,
           scrollContainer,
           isNavigationActive,
+          isScrolling,
           remainingFrames - 1,
         )
         return
@@ -1115,6 +1127,7 @@ const reconcilePublishedRange = (
           virtualizer,
           scrollContainer,
           isNavigationActive,
+          isScrolling,
           remainingFrames - 1,
         )
       }
