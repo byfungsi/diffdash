@@ -541,6 +541,7 @@ const ProgressiveRangeCard = ({
     >
   >(new Map())
   const selectedRef = useRef(selected)
+  const demandedStartLineRef = useRef(demandedStartLine)
   const [startLine, setStartLine] = useState(() => demandedStartLine ?? 0)
   const [nextStartLine, setNextStartLine] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -611,6 +612,7 @@ const ProgressiveRangeCard = ({
     },
     onPostRender: (node, instance, phase) => onDiffRendered(file.reviewKey, node, instance, phase),
   }
+  demandedStartLineRef.current = demandedStartLine
   navigationActiveRef.current = navigationActive
   selectedRef.current = selected
 
@@ -631,10 +633,16 @@ const ProgressiveRangeCard = ({
     if (instance === null || scrollContainer === null) return
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
-    if (navigationActive) {
+    if (navigationActive && demandedStartLine !== null) {
       reconcileDemandedRange(instance, scrollContainer, 8)
     }
-  }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
+  }, [
+    demandedStartLine,
+    diffVirtualizer,
+    navigationActive,
+    scrollContainerRef,
+    settledViewportRevision,
+  ])
 
   useEffect(() => {
     if (navigationActive) return
@@ -680,7 +688,7 @@ const ProgressiveRangeCard = ({
           setRenderPhase(
             Math.max(file.additions, file.deletions) > 5_000 ? publication.phase : "highlighted",
           )
-          if (navigationActiveRef.current) {
+          if (navigationActiveRef.current && demandedStartLineRef.current !== null) {
             const scrollContainer = scrollContainerRef.current
             if (scrollContainer !== null) reconcileDemandedRange(instance, scrollContainer, 8)
           } else {
