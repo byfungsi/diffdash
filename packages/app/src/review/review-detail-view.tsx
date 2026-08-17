@@ -125,7 +125,7 @@ import {
   reviewNavigationStatusAtom,
 } from "./review-navigation"
 import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-navigation-anchors"
-import { ProgressiveReviewCanvas } from "./progressive-review-canvas"
+import { ProgressiveReviewCanvas, REVIEW_DIFF_PIERRE_OVERSCAN } from "./progressive-review-canvas"
 import { ReviewSearchHighlightManager } from "./review-search-highlights"
 import { ReviewSearchController } from "./review-search-state"
 import { ReviewSearchToolbar } from "./review-search-toolbar"
@@ -296,7 +296,7 @@ const REVIEW_DIFF_OPTIONS = {
 
 const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
   intersectionObserverMargin: 1_500,
-  overscrollSize: 500,
+  overscrollSize: REVIEW_DIFF_PIERRE_OVERSCAN,
 } as const
 
 const REVIEW_DIFF_WORKER_POOL_OPTIONS = {

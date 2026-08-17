@@ -57,6 +57,8 @@ const FILE_GAP = 16
 const ESTIMATED_ROW_HEIGHT = 20
 const OVERSCAN = 1_200
 const RANGE_OUTPUT_RESERVATION = 4 * 1_024 * 1_024
+/** Pierre overscan shared by the production review virtualizer and its settlement check. */
+export const REVIEW_DIFF_PIERRE_OVERSCAN = 500
 const REVIEW_RANGE_METRICS = {
   diffHeaderHeight: 0,
   hunkLineCount: 10,
@@ -997,9 +999,7 @@ const reconcileSettledRange = (
   if (instance === null || remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
     const windowSpecs = virtualizer.getWindowSpecs()
-    const viewportTop = scrollContainer.scrollTop
-    const viewportBottom = viewportTop + scrollContainer.clientHeight
-    if (windowSpecs.top > viewportTop || windowSpecs.bottom < viewportBottom) {
+    if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
       virtualizer.requestHeightReconcile(instance)
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
@@ -1007,6 +1007,27 @@ const reconcileSettledRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
   })
+}
+
+const isCurrentPierreWindow = (
+  windowSpecs: { readonly bottom: number; readonly top: number },
+  scrollContainer: HTMLElement,
+): boolean => {
+  const height = scrollContainer.clientHeight
+  const scrollHeight = scrollContainer.scrollHeight
+  const scrollTop = Math.max(0, Math.min(scrollContainer.scrollTop, scrollHeight - height))
+  const windowHeight = height + REVIEW_DIFF_PIERRE_OVERSCAN * 2
+  if (windowHeight >= scrollHeight) {
+    const expectedBottom = Math.min(scrollTop + windowHeight, scrollHeight)
+    return windowSpecs.top === scrollTop && windowSpecs.bottom === expectedBottom
+  }
+
+  const rawTop = scrollTop - REVIEW_DIFF_PIERRE_OVERSCAN
+  const expectedTop = Math.floor(Math.max(rawTop, 0))
+  const expectedBottom = Math.ceil(
+    Math.max(Math.min(rawTop + windowHeight, scrollHeight), expectedTop),
+  )
+  return windowSpecs.top === expectedTop && windowSpecs.bottom === expectedBottom
 }
 
 const diffLineNumberFromEventPath = (path: readonly EventTarget[]): number | null => {

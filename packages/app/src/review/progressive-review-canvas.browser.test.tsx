@@ -13,7 +13,7 @@ import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ProgressiveReviewCanvas } from "./progressive-review-canvas"
+import { ProgressiveReviewCanvas, REVIEW_DIFF_PIERRE_OVERSCAN } from "./progressive-review-canvas"
 import { DiffVirtualizer } from "./pierre"
 import type {
   ProgressiveReviewContentProjection,
@@ -101,7 +101,7 @@ const CanvasHarness = ({
   return (
     <div ref={scrollRef} style={{ height: 600, overflowY: "auto" }}>
       <ProgressiveReviewCanvas
-        diffVirtualizer={new DiffVirtualizer({})}
+        diffVirtualizer={new DiffVirtualizer({ overscrollSize: REVIEW_DIFF_PIERRE_OVERSCAN })}
         files={files}
         expandedFileKeys={new Set(files.map((file) => file.reviewKey))}
         expandedLineAnchor={null}
