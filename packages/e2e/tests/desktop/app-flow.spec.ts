@@ -1536,29 +1536,16 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
   await expect
     .poll(
       async () => {
-        if (await composer.isVisible()) return true
+        if (await composer.isVisible()) {
+          await composer.focus()
+          return true
+        }
         try {
-          await gutterNumber.evaluate((gutter) => {
-            gutter.dispatchEvent(
-              new PointerEvent("pointermove", {
-                bubbles: true,
-                composed: true,
-                pointerType: "mouse",
-              }),
-            )
-            const utility = gutter.querySelector("[data-utility-button]")
-            if (utility === null) return
-            const init = {
-              bubbles: true,
-              button: 0,
-              composed: true,
-              pointerId: 1,
-              pointerType: "mouse",
-            }
-            utility.dispatchEvent(new PointerEvent("pointerdown", init))
-            document.dispatchEvent(new PointerEvent("pointerup", init))
-          })
-          return composer.isVisible()
+          await gutterNumber.hover({ force: true, timeout: 1_000 })
+          await gutterNumber.locator("[data-utility-button]").click({ force: true, timeout: 1_000 })
+          if (!(await composer.isVisible())) return false
+          await composer.focus()
+          return true
         } catch {
           return false
         }
