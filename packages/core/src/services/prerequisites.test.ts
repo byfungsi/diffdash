@@ -105,7 +105,7 @@ const withHome = (path: string) =>
   )
 
 const waitForFile = async (path: string, attempts = 500): Promise<void> => {
-  if (existsSync(path) || attempts === 0) return
+  if ((existsSync(path) && statSync(path).size > 0) || attempts === 0) return
   await new Promise((resolveWait) => setTimeout(resolveWait, 10))
   return waitForFile(path, attempts - 1)
 }
