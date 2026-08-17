@@ -681,7 +681,7 @@ const ProgressiveRangeCard = ({
               scrollContainer !== null &&
               isCurrentPierreWindow(diffVirtualizer.getWindowSpecs(), scrollContainer)
             ) {
-              reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
+              reconcilePublishedRange(instance, diffVirtualizer, scrollContainer, 32)
             }
           }
         },
@@ -1048,6 +1048,28 @@ const verifySettledRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+  })
+}
+
+const reconcilePublishedRange = (
+  instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
+  virtualizer: DiffVirtualizer,
+  scrollContainer: HTMLElement,
+  remainingFrames: number,
+): void => {
+  if (instance === null || remainingFrames <= 0) return
+  window.requestAnimationFrame(() => {
+    if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) return
+    instance.syncVirtualizedTop()
+    instance.rerender()
+    window.requestAnimationFrame(() => {
+      if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) return
+      if (
+        mountedDiffLineCount(scrollContainer) > D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows
+      ) {
+        reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      }
+    })
   })
 }
 
