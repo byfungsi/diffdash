@@ -368,7 +368,6 @@ export const ProgressiveReviewCanvas = ({
       data-review-state-version={identity.stateVersion}
       data-review-logical-height={resources.virtualizer.layout.logicalHeight}
       data-review-mounted-rows={mount.mountedRows}
-      data-review-settled-viewport-revision={settledViewportRevision}
       data-review-viewport-top={viewport.logicalTop}
       style={{ height: pageHeight, position: "relative" }}
     >
@@ -397,6 +396,7 @@ export const ProgressiveReviewCanvas = ({
               file={file}
               identity={identity}
               mode={mode}
+              navigationActive={navigationActive}
               demandedStartLine={
                 navigationRangeTarget?.fileId === file.fileId
                   ? navigationRangeTarget.startLine
@@ -479,6 +479,7 @@ const ProgressiveRangeCard = ({
   file,
   identity,
   mode,
+  navigationActive,
   options,
   reader,
   reviewThreads,
@@ -514,6 +515,7 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
+  readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
   readonly settledViewportRevision: number
@@ -620,10 +622,10 @@ const ProgressiveRangeCard = ({
 
   useLayoutEffect(() => {
     const instance = virtualizedInstanceRef.current
-    if (instance === null) return
+    if (instance === null || navigationActive) return
     diffVirtualizer.markDOMDirty()
-    diffVirtualizer.requestHeightReconcile(instance)
-  }, [diffVirtualizer, settledViewportRevision])
+    reconcileDemandedRange(instance, 4)
+  }, [diffVirtualizer, navigationActive, settledViewportRevision])
 
   useLayoutEffect(() => {
     const card = cardRef.current
