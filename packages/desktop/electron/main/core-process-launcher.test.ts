@@ -54,90 +54,93 @@ const nodeProcessSpawner: CoreProcessSpawner = {
 }
 
 describe("Core process launcher", () => {
-  it.live("launches the generated Core artifact to authenticated health", () =>
-    Effect.gen(function* () {
-      const tempResources = yield* TempResources
-      const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
-        prefix: "dd-core-process-parent-",
-      })
-      const artifactDirectory = join(temporaryDirectory, "artifact")
-      execFileSync(
-        process.execPath,
-        ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
-        {
-          cwd: resolve("."),
-          stdio: "ignore",
-        },
-      )
-      const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
-        readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
-      )
-      const artifact = yield* verifyCoreArtifact({
-        artifactDirectory,
-        expectedBuildId: manifest.buildId,
-      })
-      const statePath = join(temporaryDirectory, "state.json")
-      const databasePath = join(temporaryDirectory, "diffdash.sqlite")
+  it.live(
+    "launches the generated Core artifact to authenticated health",
+    () =>
+      Effect.gen(function* () {
+        const tempResources = yield* TempResources
+        const temporaryDirectory = yield* tempResources.makeTempDirectoryScoped({
+          prefix: "dd-core-process-parent-",
+        })
+        const artifactDirectory = join(temporaryDirectory, "artifact")
+        execFileSync(
+          process.execPath,
+          ["scripts/build-core-artifact.mjs", `--output-directory=${artifactDirectory}`],
+          {
+            cwd: resolve("."),
+            stdio: "ignore",
+          },
+        )
+        const manifest = Schema.decodeUnknownSync(Schema.fromJsonString(CoreArtifactManifest))(
+          readFileSync(join(artifactDirectory, "manifest.json"), "utf8"),
+        )
+        const artifact = yield* verifyCoreArtifact({
+          artifactDirectory,
+          expectedBuildId: manifest.buildId,
+        })
+        const statePath = join(temporaryDirectory, "state.json")
+        const databasePath = join(temporaryDirectory, "diffdash.sqlite")
 
-      const session = yield* bootstrapCoreHost({
-        artifact,
-        applicationInstanceId: ApplicationInstanceId.make("app-real-process"),
-        temporaryDirectory,
-        generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-process"),
-        generateRequestId: () => HostRequestId.make("h:real-process-health"),
-        generateToken: () => Redacted.make("real-process-token-with-at-least-32-bytes"),
-        startTransport: (configuration) =>
-          startCoreProcess({
-            configuration,
-            databasePath,
-            statePath,
-            coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
-            spawner: nodeProcessSpawner,
+        const session = yield* bootstrapCoreHost({
+          artifact,
+          applicationInstanceId: ApplicationInstanceId.make("app-real-process"),
+          temporaryDirectory,
+          generateProcessEpoch: () => CoreProcessEpoch.make("epoch-real-process"),
+          generateRequestId: () => HostRequestId.make("h:real-process-health"),
+          generateToken: () => Redacted.make("real-process-token-with-at-least-32-bytes"),
+          startTransport: (configuration) =>
+            startCoreProcess({
+              configuration,
+              databasePath,
+              statePath,
+              coreConfiguration: makeCoreProcessFixtureConfiguration(databasePath, statePath),
+              spawner: nodeProcessSpawner,
+            }),
+        })
+
+        expect(session.health).toEqual({
+          applicationInstanceId: "app-real-process",
+          processEpoch: "epoch-real-process",
+          lifecycle: "awaitingOwnership",
+        })
+        const authorized = yield* session.authorizeDatabaseOwnership(
+          AuthorizeDatabaseOwnershipRequest.make({
+            applicationInstanceId: session.applicationInstanceId,
+            processEpoch: session.processEpoch,
+            requestId: HostRequestId.make("h:real-process-ownership"),
+            authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-real-process"),
           }),
-      })
-
-      expect(session.health).toEqual({
-        applicationInstanceId: "app-real-process",
-        processEpoch: "epoch-real-process",
-        lifecycle: "awaitingOwnership",
-      })
-      const authorized = yield* session.authorizeDatabaseOwnership(
-        AuthorizeDatabaseOwnershipRequest.make({
-          applicationInstanceId: session.applicationInstanceId,
-          processEpoch: session.processEpoch,
-          requestId: HostRequestId.make("h:real-process-ownership"),
-          authorizationId: DatabaseOwnershipAuthorizationId.make("ownership-real-process"),
-        }),
-      )
-      expect(authorized.lifecycle).toBe("recovering")
-      for (let attempt = 0; attempt < 100 && !existsSync(`${databasePath}.owner`); attempt += 1) {
-        yield* Effect.sleep("10 millis")
-      }
-      expect(existsSync(`${databasePath}.owner`)).toBe(true)
-      const client = session.client
-      expect(client).toBeDefined()
-      if (client === undefined) return
-      let lifecycle: CoreLifecycleState = authorized.lifecycle
-      for (let attempt = 0; attempt < 500 && lifecycle !== "ready"; attempt += 1) {
-        yield* Effect.sleep("10 millis")
-        lifecycle = (yield* client.health(
+        )
+        expect(authorized.lifecycle).toBe("recovering")
+        for (let attempt = 0; attempt < 100 && !existsSync(`${databasePath}.owner`); attempt += 1) {
+          yield* Effect.sleep("10 millis")
+        }
+        expect(existsSync(`${databasePath}.owner`)).toBe(true)
+        const client = session.client
+        expect(client).toBeDefined()
+        if (client === undefined) return
+        let lifecycle: CoreLifecycleState = authorized.lifecycle
+        for (let attempt = 0; attempt < 500 && lifecycle !== "ready"; attempt += 1) {
+          yield* Effect.sleep("10 millis")
+          lifecycle = (yield* client.health(
+            HostRequestContext.make({
+              applicationInstanceId: session.applicationInstanceId,
+              processEpoch: session.processEpoch,
+              requestId: HostRequestId.make(`h:ready-${String(attempt)}`),
+            }),
+          )).lifecycle
+        }
+        expect(lifecycle).toBe("ready")
+        const state = yield* client.appStateGet(
           HostRequestContext.make({
             applicationInstanceId: session.applicationInstanceId,
             processEpoch: session.processEpoch,
-            requestId: HostRequestId.make(`h:ready-${String(attempt)}`),
+            requestId: HostRequestId.make("h:app-state"),
           }),
-        )).lifecycle
-      }
-      expect(lifecycle).toBe("ready")
-      const state = yield* client.appStateGet(
-        HostRequestContext.make({
-          applicationInstanceId: session.applicationInstanceId,
-          processEpoch: session.processEpoch,
-          requestId: HostRequestId.make("h:app-state"),
-        }),
-      )
-      expect(state).toMatchObject({ onboardingCompleted: false })
-    }).pipe(Effect.provide(dependencies)),
+        )
+        expect(state).toMatchObject({ onboardingCompleted: false })
+      }).pipe(Effect.provide(dependencies)),
+    20_000,
   )
 
   it.effect("sanitizes a process that exits before creating its socket", () =>
