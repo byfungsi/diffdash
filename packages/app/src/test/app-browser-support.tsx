@@ -3339,7 +3339,7 @@ scenario("fastScrollPerformance", async () => {
   )
   expect(metrics.longTasks).toBeLessThanOrEqual(metrics.longFrames + Math.ceil(frameCount / 8))
   expect(metrics.maxFrameDuration).toBeLessThan(
-    Math.max(150, Math.max(...warmupFrameDurations) + 100),
+    Math.min(300, Math.max(150, Math.max(...warmupFrameDurations) + 100)),
   )
   expect(metrics.searchHighlightRemovals).toBe(0)
   expect(metrics.searchHighlightReplacements).toBe(0)
@@ -6743,17 +6743,17 @@ const runContinuousReviewScroll = (pane: HTMLElement, frameCount: number) =>
     const frameDurations: number[] = []
     const targetScrollTop = Math.min(30_000, Math.max(0, pane.scrollHeight - pane.clientHeight))
     let frame = 0
-    let previousTime = performance.now()
+    let previousTime: number | null = null
     const scrollFrame = (time: number) => {
-      frameDurations.push(time - previousTime)
+      if (previousTime !== null) frameDurations.push(time - previousTime)
+      if (frame === frameCount) {
+        resolve(frameDurations)
+        return
+      }
       previousTime = time
       frame += 1
       pane.scrollTop = targetScrollTop * (frame / frameCount)
-      if (frame < frameCount) {
-        window.requestAnimationFrame(scrollFrame)
-        return
-      }
-      window.requestAnimationFrame(() => resolve(frameDurations))
+      window.requestAnimationFrame(scrollFrame)
     }
     window.requestAnimationFrame(scrollFrame)
   })
