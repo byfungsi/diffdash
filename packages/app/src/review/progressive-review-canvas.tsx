@@ -209,7 +209,19 @@ export const ProgressiveReviewCanvas = ({
     const container = scrollContainerRef.current
     const canvas = canvasRef.current
     if (container === null || canvas === null) return undefined
+    let retirementFrame: number | undefined
     let retirementTimeout: ReturnType<typeof setTimeout> | undefined
+    const retireViewport = (revision: number, remainingFrames: number) => {
+      retirementFrame = window.requestAnimationFrame(() => {
+        if (revision !== viewportRevisionRef.current) return
+        if (remainingFrames > 1) {
+          retireViewport(revision, remainingFrames - 1)
+          return
+        }
+        setViewport(viewportRef.current)
+        setSettledViewportRevision((settledRevision) => settledRevision + 1)
+      })
+    }
     const update = (settle: boolean) => {
       const physicalTop = Math.max(0, container.scrollTop - canvas.offsetTop)
       const position = resources.virtualizer.scroller.updatePhysical(physicalTop)
@@ -254,10 +266,10 @@ export const ProgressiveReviewCanvas = ({
         )
       }
       if (settle) {
+        if (retirementFrame !== undefined) window.cancelAnimationFrame(retirementFrame)
         clearTimeout(retirementTimeout)
         retirementTimeout = setTimeout(() => {
-          setViewport(viewportRef.current)
-          setSettledViewportRevision((revision) => revision + 1)
+          retireViewport(viewportRevisionRef.current, 2)
         }, 100)
       }
       if (position.pageOrigin !== pageOriginRef.current) {
@@ -271,6 +283,7 @@ export const ProgressiveReviewCanvas = ({
     const observer = new ResizeObserver(() => update(false))
     observer.observe(container)
     return () => {
+      if (retirementFrame !== undefined) window.cancelAnimationFrame(retirementFrame)
       clearTimeout(retirementTimeout)
       container.removeEventListener("scroll", onScroll)
       observer.disconnect()
