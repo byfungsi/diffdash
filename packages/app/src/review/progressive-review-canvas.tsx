@@ -396,7 +396,6 @@ export const ProgressiveReviewCanvas = ({
               file={file}
               identity={identity}
               mode={mode}
-              navigationActive={navigationActive}
               demandedStartLine={
                 navigationRangeTarget?.fileId === file.fileId
                   ? navigationRangeTarget.startLine
@@ -479,11 +478,11 @@ const ProgressiveRangeCard = ({
   file,
   identity,
   mode,
-  navigationActive,
   options,
   reader,
   reviewThreads,
   scheduler,
+  scrollContainerRef,
   selected,
   settledViewportRevision,
   shells,
@@ -515,7 +514,6 @@ const ProgressiveRangeCard = ({
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
-  readonly navigationActive: boolean
   readonly scheduler: ReviewLoadScheduler
   readonly selected: boolean
   readonly settledViewportRevision: number
@@ -622,15 +620,12 @@ const ProgressiveRangeCard = ({
 
   useLayoutEffect(() => {
     const instance = virtualizedInstanceRef.current
-    if (instance === null) return
+    const scrollContainer = scrollContainerRef.current
+    if (instance === null || scrollContainer === null) return
     diffVirtualizer.markDOMDirty()
     diffVirtualizer.requestHeightReconcile(instance)
-    if (navigationActive) {
-      reconcileDemandedRange(instance, 4)
-      return
-    }
-    reconcileSettledRange(instance, 2)
-  }, [diffVirtualizer, navigationActive, settledViewportRevision])
+    reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
+  }, [diffVirtualizer, scrollContainerRef, settledViewportRevision])
 
   useLayoutEffect(() => {
     const card = cardRef.current
@@ -995,12 +990,18 @@ const reconcileDemandedRange = (
 
 const reconcileSettledRange = (
   instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
-  remainingQuietFrames: number,
+  virtualizer: DiffVirtualizer,
+  scrollContainer: HTMLElement,
+  remainingFrames: number,
 ): void => {
-  if (instance === null) return
+  if (instance === null || remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
-    if (remainingQuietFrames > 1) {
-      reconcileSettledRange(instance, remainingQuietFrames - 1)
+    const windowSpecs = virtualizer.getWindowSpecs()
+    const viewportTop = scrollContainer.scrollTop
+    const viewportBottom = viewportTop + scrollContainer.clientHeight
+    if (windowSpecs.top > viewportTop || windowSpecs.bottom < viewportBottom) {
+      virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
     }
     instance.syncVirtualizedTop()
