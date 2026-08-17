@@ -141,7 +141,9 @@ export const ProgressiveReviewCanvas = ({
   const viewportRef = useRef(viewport)
   const renderedViewportRef = useRef(viewport)
   viewportRef.current = viewport
-  renderedViewportRef.current = viewport
+  useLayoutEffect(() => {
+    renderedViewportRef.current = viewport
+  }, [viewport])
   const inventoryKey = files
     .map((file) => `${file.fileId}\u0001${estimatedRows(file)}`)
     .join("\u0000")
