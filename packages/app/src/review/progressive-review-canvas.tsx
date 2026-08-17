@@ -641,7 +641,7 @@ const ProgressiveRangeCard = ({
     const instance = virtualizedInstanceRef.current
     const scrollContainer = scrollContainerRef.current
     if (instance === null || scrollContainer === null) return
-    if (scrollContainer.contains(document.activeElement)) return
+    if (hasFocusedThreadComposer(scrollContainer)) return
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
   }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
@@ -1025,12 +1025,11 @@ const reconcileSettledRange = (
   scrollContainer: HTMLElement,
   remainingFrames: number,
 ): void => {
-  if (instance === null || remainingFrames <= 0 || scrollContainer.contains(document.activeElement))
-    return
+  if (instance === null || remainingFrames <= 0 || hasFocusedThreadComposer(scrollContainer)) return
   const windowSpecs = virtualizer.getWindowSpecs()
   if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
     window.requestAnimationFrame(() => {
-      if (scrollContainer.contains(document.activeElement)) return
+      if (hasFocusedThreadComposer(scrollContainer)) return
       virtualizer.requestHeightReconcile(instance)
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
     })
@@ -1049,7 +1048,7 @@ const verifySettledRange = (
 ): void => {
   if (remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
-    if (scrollContainer.contains(document.activeElement)) return
+    if (hasFocusedThreadComposer(scrollContainer)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       virtualizer.requestHeightReconcile(instance)
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
@@ -1075,7 +1074,7 @@ const reconcilePublishedRange = (
   if (instance === null || remainingFrames <= 0) return
   window.setTimeout(() => {
     if (isNavigationActive()) return
-    if (scrollContainer.contains(document.activeElement)) return
+    if (hasFocusedThreadComposer(scrollContainer)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (heightReconcileCooldown <= 0) virtualizer.requestHeightReconcile(instance)
       reconcilePublishedRange(
@@ -1091,7 +1090,7 @@ const reconcilePublishedRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (isNavigationActive() || scrollContainer.contains(document.activeElement)) return
+      if (isNavigationActive() || hasFocusedThreadComposer(scrollContainer)) return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
         reconcilePublishedRange(
           instance,
@@ -1127,6 +1126,16 @@ const mountedDiffLineCount = (container: HTMLElement): number =>
     }
     return count + (columns.size > 1 ? Math.max(...columns.values()) : lines.length)
   }, 0)
+
+const hasFocusedThreadComposer = (container: HTMLElement): boolean => {
+  const active = document.activeElement
+  return (
+    isHTMLElement(active) &&
+    active.tagName === "TEXTAREA" &&
+    container.contains(active) &&
+    active.closest("[data-review-thread-annotation]") !== null
+  )
+}
 
 const isCurrentPierreWindow = (
   windowSpecs: { readonly bottom: number; readonly top: number },
