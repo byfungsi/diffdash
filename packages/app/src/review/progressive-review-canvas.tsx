@@ -621,6 +621,7 @@ const ProgressiveRangeCard = ({
     const instance = virtualizedInstanceRef.current
     if (instance === null) return
     diffVirtualizer.markDOMDirty()
+    diffVirtualizer.requestHeightReconcile(instance)
     reconcileDemandedRange(instance, 4)
   }, [diffVirtualizer, settledViewportRevision])
 
