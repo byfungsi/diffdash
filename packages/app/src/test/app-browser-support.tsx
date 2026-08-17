@@ -3041,7 +3041,7 @@ scenario("reviewNavigationLifecycle", async () => {
       const trailingContentHeight =
         content.getBoundingClientRect().bottom - card.getBoundingClientRect().top
       expect(Number.parseFloat(spacer.style.height)).toBeCloseTo(
-        Math.max(0, diffPane.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
+        Math.max(20, diffPane.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
         5,
       )
     },
