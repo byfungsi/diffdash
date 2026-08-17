@@ -193,6 +193,7 @@ export const ProgressiveReviewCanvas = ({
     const container = scrollContainerRef.current
     const canvas = canvasRef.current
     if (container === null || canvas === null) return undefined
+    let retirementTimeout: ReturnType<typeof setTimeout> | undefined
     const update = () => {
       const physicalTop = Math.max(0, container.scrollTop - canvas.offsetTop)
       const position = resources.virtualizer.scroller.updatePhysical(physicalTop)
@@ -229,6 +230,8 @@ export const ProgressiveReviewCanvas = ({
         !sameFileWindow(renderedWindow.files, nextWindow.files)
       ) {
         startTransition(() => setViewport(nextViewport))
+        clearTimeout(retirementTimeout)
+        retirementTimeout = setTimeout(() => setViewport(viewportRef.current), 100)
       }
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
@@ -240,6 +243,7 @@ export const ProgressiveReviewCanvas = ({
     const observer = new ResizeObserver(update)
     observer.observe(container)
     return () => {
+      clearTimeout(retirementTimeout)
       container.removeEventListener("scroll", update)
       observer.disconnect()
     }
