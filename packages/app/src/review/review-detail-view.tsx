@@ -760,7 +760,7 @@ export const ReviewDetailView = ({
         content.getBoundingClientRect().bottom - lastCard.getBoundingClientRect().top,
       )
       setScrollPastEndHeight(
-        Math.max(0, container.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
+        Math.max(20, container.clientHeight - stickyChrome.offsetHeight - trailingContentHeight),
       )
     }
     update()
