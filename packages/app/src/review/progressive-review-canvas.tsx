@@ -140,7 +140,6 @@ export const ProgressiveReviewCanvas = ({
   const [viewport, setViewport] = useState({ logicalTop: 0, height: 800, pageOrigin: 0 })
   const viewportRef = useRef(viewport)
   const renderedViewportRef = useRef(viewport)
-  viewportRef.current = viewport
   useLayoutEffect(() => {
     renderedViewportRef.current = viewport
   }, [viewport])
