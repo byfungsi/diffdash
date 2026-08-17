@@ -411,7 +411,9 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const resolved = this.#resolved(anchor)
     let currentAnchor = anchor
     let stableFrames = 0
+    let verificationFrames = 0
     while (stableFrames < STABLE_FRAME_COUNT) {
+      verificationFrames += 1
       this.#throwIfAborted(signal)
       if (!currentAnchor.isConnected()) {
         if (resolved.anchorKey !== reviewFileAnchorKey(resolved.file.fileId)) {
@@ -445,6 +447,21 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
       const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
+      if (verificationFrames % 120 === 0) {
+        const container = this.#container()
+        console.warn("Review navigation verification pending", {
+          alignment: input.behavior.alignment,
+          anchorConnected: currentAnchor.isConnected(),
+          clientHeight: container.clientHeight,
+          focusMatches,
+          geometryMatches,
+          rect: currentAnchor.measure().toJSON(),
+          scrollHeight: container.scrollHeight,
+          scrollTop: container.scrollTop,
+          stableFrames,
+          verificationFrames,
+        })
+      }
       await nextFrame(signal)
       if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
         stableFrames = STABLE_FRAME_COUNT - 1
