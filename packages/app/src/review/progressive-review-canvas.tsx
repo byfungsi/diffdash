@@ -1011,9 +1011,44 @@ const reconcileSettledRange = (
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
     }
-    reconcileDemandedRange(instance, 4)
+    instance.syncVirtualizedTop()
+    instance.rerender()
+    verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
   })
 }
+
+const verifySettledRange = (
+  instance: VirtualizedFileDiff<ReviewThreadAnnotation>,
+  virtualizer: DiffVirtualizer,
+  scrollContainer: HTMLElement,
+  remainingFrames: number,
+): void => {
+  if (remainingFrames <= 0) return
+  window.requestAnimationFrame(() => {
+    if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
+      virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      return
+    }
+    if (mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows) {
+      return
+    }
+    instance.syncVirtualizedTop()
+    instance.rerender()
+    verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+  })
+}
+
+const mountedDiffLineCount = (container: HTMLElement): number =>
+  [...container.querySelectorAll("diffs-container")].reduce((count, element) => {
+    const lines = [...(element.shadowRoot?.querySelectorAll<HTMLElement>("[data-line]") ?? [])]
+    const columns = new Map<string, number>()
+    for (const line of lines) {
+      const column = line.dataset.columnNumber
+      if (column !== undefined) columns.set(column, (columns.get(column) ?? 0) + 1)
+    }
+    return count + (columns.size > 1 ? Math.max(...columns.values()) : lines.length)
+  }, 0)
 
 const isCurrentPierreWindow = (
   windowSpecs: { readonly bottom: number; readonly top: number },
