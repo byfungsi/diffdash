@@ -57,7 +57,6 @@ const FILE_GAP = 16
 const ESTIMATED_ROW_HEIGHT = 20
 const OVERSCAN = 1_200
 const RANGE_OUTPUT_RESERVATION = 4 * 1_024 * 1_024
-const VIEWPORT_SETTLEMENT_DELAY_MS = 320
 /** Pierre overscan shared by the production review virtualizer and its settlement check. */
 export const REVIEW_DIFF_PIERRE_OVERSCAN = 500
 const REVIEW_RANGE_METRICS = {
@@ -259,7 +258,7 @@ export const ProgressiveReviewCanvas = ({
         retirementTimeout = setTimeout(() => {
           setViewport(viewportRef.current)
           setSettledViewportRevision((revision) => revision + 1)
-        }, VIEWPORT_SETTLEMENT_DELAY_MS)
+        }, 100)
       }
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
@@ -1036,20 +1035,33 @@ const reconcileSettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
+  heightReconcileCooldown = 0,
 ): void => {
   if (instance === null || remainingFrames <= 0 || hasFocusedThreadComposer(scrollContainer)) return
   const windowSpecs = virtualizer.getWindowSpecs()
   if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
     window.requestAnimationFrame(() => {
       if (hasFocusedThreadComposer(scrollContainer)) return
-      virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      if (heightReconcileCooldown <= 0) virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(
+        instance,
+        virtualizer,
+        scrollContainer,
+        remainingFrames - 1,
+        heightReconcileCooldown <= 0 ? 3 : heightReconcileCooldown - 1,
+      )
     })
     return
   }
   instance.syncVirtualizedTop()
   instance.rerender()
-  verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+  verifySettledRange(
+    instance,
+    virtualizer,
+    scrollContainer,
+    remainingFrames - 1,
+    heightReconcileCooldown,
+  )
 }
 
 const verifySettledRange = (
@@ -1057,13 +1069,20 @@ const verifySettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
+  heightReconcileCooldown: number,
 ): void => {
   if (remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
     if (hasFocusedThreadComposer(scrollContainer)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-      virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      if (heightReconcileCooldown <= 0) virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(
+        instance,
+        virtualizer,
+        scrollContainer,
+        remainingFrames - 1,
+        heightReconcileCooldown <= 0 ? 3 : heightReconcileCooldown - 1,
+      )
       return
     }
     if (mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows) {
@@ -1071,7 +1090,13 @@ const verifySettledRange = (
     }
     instance.syncVirtualizedTop()
     instance.rerender()
-    verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+    verifySettledRange(
+      instance,
+      virtualizer,
+      scrollContainer,
+      remainingFrames - 1,
+      Math.max(0, heightReconcileCooldown - 1),
+    )
   })
 }
 
