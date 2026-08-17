@@ -6872,12 +6872,25 @@ const revealGutterUtility = async (
   gutterNumber.dispatchEvent(
     new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
   )
-  return vi.waitFor(() => {
-    const utility = shadowRoot.querySelector<HTMLButtonElement>("[data-utility-button]")
-    expect(utility).not.toBeNull()
-    if (utility === null) throw new Error("Missing diff gutter utility")
-    return utility
-  })
+  return vi.waitFor(
+    () => {
+      const currentGutter = [
+        ...shadowRoot.querySelectorAll<HTMLElement>("[data-column-number]"),
+      ].find(
+        (candidate) =>
+          candidate.getAttribute("data-column-number") === lineNumber &&
+          candidate.getAttribute("data-line-index") === lineIndex,
+      )
+      currentGutter?.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, composed: true, pointerType: "mouse" }),
+      )
+      const utility = shadowRoot.querySelector<HTMLButtonElement>("[data-utility-button]")
+      expect(utility).not.toBeNull()
+      if (utility === null) throw new Error("Missing diff gutter utility")
+      return utility
+    },
+    { timeout: 5_000 },
+  )
 }
 
 const getHighlightTexts = (name: string) =>
