@@ -68,12 +68,13 @@ export interface ReviewViewportNavigationBindings {
 interface LocalResolvedReviewNavigationTarget extends ResolvedReviewNavigationTarget {
   readonly file: ReviewSnapshotFileInventory
   readonly linePoint: ReviewLinePoint | null
+  readonly navigationGeneration: number
   readonly threadAnchor: ReviewThreadAnchor | null
   readonly threadId: string | null
   readonly persistedTarget: ResolvedReviewSessionTarget | null
 }
 
-const STABLE_FRAME_COUNT = 3
+const STABLE_FRAME_COUNT = 8
 const LATE_LAYOUT_RECONCILIATION_MS = 8_000
 
 /** Imperative DOM/Pierre execution plane for the renderer-local review navigator. */
@@ -121,7 +122,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         navigation.input.behavior.alignment,
         this.#targetStickyHeight(navigation.target),
       )
-      if (deepActiveElement() !== document.body) return
+      if (navigation.input.behavior.focus !== "target" || deepActiveElement() !== document.body)
+        return
       anchor.focus?.()
     })
   }
@@ -132,7 +134,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     signal: AbortSignal,
   ): Promise<LocalResolvedReviewNavigationTarget> => {
     this.#throwIfAborted(signal)
-    this.#layoutReconciliationGeneration += 1
+    const navigationGeneration = ++this.#layoutReconciliationGeneration
     this.#focusedNavigation = null
     const bindings = this.#current()
     if (
@@ -198,6 +200,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
           side: anchor.side,
           lineNumber: anchor.lineNumber,
         },
+        navigationGeneration,
         threadAnchor: anchor,
         threadId: threadTarget.threadId,
         persistedTarget,
@@ -252,6 +255,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       fileId: file.fileId,
       anchorKey: targetAnchorKey(fileTarget),
       linePoint,
+      navigationGeneration,
       threadAnchor: null,
       threadId: null,
       persistedTarget,
@@ -437,10 +441,14 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         stableFrames = STABLE_FRAME_COUNT - 1
       }
     }
-    if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
-      currentAnchor.focus?.()
+    if (
+      currentAnchor.isConnected() &&
+      resolved.navigationGeneration === this.#layoutReconciliationGeneration &&
+      (input.behavior.focus === "target" || resolved.linePoint !== null)
+    ) {
+      if (input.behavior.focus === "target") currentAnchor.focus?.()
+      const preserveFocus = input.behavior.focus === "preserve"
       const expiresAt = performance.now() + LATE_LAYOUT_RECONCILIATION_MS
-      const reconciliationGeneration = ++this.#layoutReconciliationGeneration
       this.#focusedNavigation = {
         expiresAt,
         input,
@@ -451,7 +459,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         input.behavior.alignment,
         this.#targetStickyHeight(resolved),
         expiresAt,
-        reconciliationGeneration,
+        resolved.navigationGeneration,
+        preserveFocus,
       )
     }
     this.#current().searchHighlights.refresh()
@@ -464,6 +473,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     stickyHeight: number,
     expiresAt: number,
     generation: number,
+    preserveFocus = false,
   ): void => {
     if (generation !== this.#layoutReconciliationGeneration || performance.now() >= expiresAt)
       return
@@ -471,10 +481,17 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       if (generation !== this.#layoutReconciliationGeneration || !anchor.isConnected()) return
       const active = deepActiveElement()
       const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
-      if (active !== document.body && !ownsFocus) return
+      if (!preserveFocus && active !== document.body && !ownsFocus) return
       this.#align(anchor, alignment, stickyHeight)
-      if (active === document.body) anchor.focus?.()
-      this.#reconcileAfterLayout(anchor, alignment, stickyHeight, expiresAt, generation)
+      if (!preserveFocus && active === document.body) anchor.focus?.()
+      this.#reconcileAfterLayout(
+        anchor,
+        alignment,
+        stickyHeight,
+        expiresAt,
+        generation,
+        preserveFocus,
+      )
     })
   }
 

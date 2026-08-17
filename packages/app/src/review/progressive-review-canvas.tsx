@@ -77,6 +77,7 @@ export interface ProgressiveReviewCanvasProps {
   readonly mode: "unified" | "split"
   readonly navigationSeekGeneration: number
   readonly navigationActive: boolean
+  readonly navigationTargetFileId: ReviewFileId | null
   readonly navigationRangeTarget: {
     readonly fileId: ReviewFileId
     readonly startLine: number
@@ -116,6 +117,7 @@ export const ProgressiveReviewCanvas = ({
   mode,
   navigationSeekGeneration,
   navigationActive,
+  navigationTargetFileId,
   navigationRangeTarget,
   options,
   priorityFileId,
@@ -137,7 +139,13 @@ export const ProgressiveReviewCanvas = ({
   const canvasRef = useRef<HTMLDivElement>(null)
   const pageOriginRef = useRef(0)
   const previousLogicalTopRef = useRef(0)
-  const [viewport, setViewport] = useState({ logicalTop: 0, height: 800, pageOrigin: 0 })
+  const viewportRevisionRef = useRef(0)
+  const [viewport, setViewport] = useState({
+    logicalTop: 0,
+    height: 800,
+    pageOrigin: 0,
+    revision: 0,
+  })
   const viewportRef = useRef(viewport)
   const renderedViewportRef = useRef(viewport)
   useLayoutEffect(() => {
@@ -172,13 +180,18 @@ export const ProgressiveReviewCanvas = ({
     }
   }, [diffVirtualizer, files.length, inventoryKey, workerManager])
   const selectedFileIndex =
-    navigationRangeTarget === null
-      ? priorityFileId === null
-        ? selectedPath === null
-          ? undefined
-          : files.findIndex((file) => file.path === selectedPath)
-        : files.findIndex((file) => file.fileId === priorityFileId)
-      : files.findIndex((file) => file.fileId === navigationRangeTarget.fileId)
+    priorityFileId === null
+      ? selectedPath === null
+        ? undefined
+        : files.findIndex((file) => file.path === selectedPath)
+      : files.findIndex((file) => file.fileId === priorityFileId)
+  const navigationFileIndex =
+    navigationTargetFileId === null
+      ? -1
+      : files.findIndex((file) => file.fileId === navigationTargetFileId)
+  const forceNavigationTarget =
+    navigationFileIndex >= 0 && (navigationActive || priorityFileId === navigationTargetFileId)
+  const mountPriorityFileIndex = forceNavigationTarget ? navigationFileIndex : selectedFileIndex
 
   useEffect(
     () => () => {
@@ -203,10 +216,12 @@ export const ProgressiveReviewCanvas = ({
         Math.abs(position.logicalTop - previousLogicalTopRef.current) > container.clientHeight * 3
       resources.scheduler.updateDemand(direction, farSeek)
       previousLogicalTopRef.current = position.logicalTop
+      viewportRevisionRef.current += 1
       const nextViewport = {
         logicalTop: position.logicalTop,
         height: Math.max(1, container.clientHeight),
         pageOrigin: position.pageOrigin,
+        revision: viewportRevisionRef.current,
       }
       viewportRef.current = nextViewport
       const renderedViewport = renderedViewportRef.current
@@ -214,22 +229,26 @@ export const ProgressiveReviewCanvas = ({
         renderedViewport.logicalTop,
         renderedViewport.height,
         OVERSCAN,
-        selectedFileIndex === -1 ? undefined : selectedFileIndex,
-        navigationActive && navigationRangeTarget !== null,
+        mountPriorityFileIndex === -1 ? undefined : mountPriorityFileIndex,
+        forceNavigationTarget,
       )
       const nextWindow = resources.virtualizer.window(
         nextViewport.logicalTop,
         nextViewport.height,
         OVERSCAN,
-        selectedFileIndex === -1 ? undefined : selectedFileIndex,
-        navigationActive && navigationRangeTarget !== null,
+        mountPriorityFileIndex === -1 ? undefined : mountPriorityFileIndex,
+        forceNavigationTarget,
       )
       if (
         nextViewport.height !== renderedViewport.height ||
         nextViewport.pageOrigin !== renderedViewport.pageOrigin ||
         !sameFileWindow(renderedWindow.files, nextWindow.files)
       ) {
-        startTransition(() => setViewport(nextViewport))
+        startTransition(() =>
+          setViewport((current) =>
+            nextViewport.revision > current.revision ? nextViewport : current,
+          ),
+        )
         clearTimeout(retirementTimeout)
         retirementTimeout = setTimeout(() => setViewport(viewportRef.current), 100)
       }
@@ -247,7 +266,7 @@ export const ProgressiveReviewCanvas = ({
       container.removeEventListener("scroll", update)
       observer.disconnect()
     }
-  }, [navigationActive, navigationRangeTarget, resources, scrollContainerRef, selectedFileIndex])
+  }, [forceNavigationTarget, mountPriorityFileIndex, resources, scrollContainerRef])
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current
@@ -279,10 +298,12 @@ export const ProgressiveReviewCanvas = ({
         ) {
           container.scrollTop = canvas.offsetTop + position.physicalTop
         }
+        viewportRevisionRef.current += 1
         const nextViewport = {
           logicalTop: position.logicalTop,
           height: Math.max(1, container.clientHeight),
           pageOrigin: position.pageOrigin,
+          revision: viewportRevisionRef.current,
         }
         viewportRef.current = nextViewport
         setViewport(nextViewport)
@@ -294,10 +315,6 @@ export const ProgressiveReviewCanvas = ({
     return () => observer.disconnect()
   })
 
-  const navigationFileIndex =
-    navigationRangeTarget === null
-      ? files.findIndex((file) => file.path === selectedPath)
-      : files.findIndex((file) => file.fileId === navigationRangeTarget.fileId)
   useLayoutEffect(() => {
     const container = scrollContainerRef.current
     const canvas = canvasRef.current
@@ -308,10 +325,12 @@ export const ProgressiveReviewCanvas = ({
     )
     previousLogicalTopRef.current = position.logicalTop
     pageOriginRef.current = position.pageOrigin
+    viewportRevisionRef.current += 1
     const nextViewport = {
       logicalTop: position.logicalTop,
       height: Math.max(1, container.clientHeight),
       pageOrigin: position.pageOrigin,
+      revision: viewportRevisionRef.current,
     }
     viewportRef.current = nextViewport
     setViewport(nextViewport)
@@ -322,8 +341,8 @@ export const ProgressiveReviewCanvas = ({
     viewport.logicalTop,
     viewport.height,
     OVERSCAN,
-    selectedFileIndex === -1 ? undefined : selectedFileIndex,
-    navigationActive && navigationRangeTarget !== null,
+    mountPriorityFileIndex === -1 ? undefined : mountPriorityFileIndex,
+    forceNavigationTarget,
   )
   const pageHeight = Math.min(
     D12_REVIEW_VIRTUALIZER_LIMITS.browserPageHeight,
@@ -393,10 +412,12 @@ export const ProgressiveReviewCanvas = ({
                   const canvas = canvasRef.current
                   if (container !== null && canvas !== null) {
                     const position = resources.virtualizer.scroller.seekFile(fileIndex)
+                    viewportRevisionRef.current += 1
                     const nextViewport = {
                       logicalTop: position.logicalTop,
                       height: Math.max(1, container.clientHeight),
                       pageOrigin: position.pageOrigin,
+                      revision: viewportRevisionRef.current,
                     }
                     previousLogicalTopRef.current = position.logicalTop
                     pageOriginRef.current = position.pageOrigin
@@ -470,6 +491,7 @@ const ProgressiveRangeCard = ({
   | "files"
   | "navigationSeekGeneration"
   | "navigationActive"
+  | "navigationTargetFileId"
   | "navigationRangeTarget"
   | "priorityFileId"
   | "selectedPath"

@@ -430,6 +430,7 @@ export const ReviewDetailView = ({
     null,
   )
   const [navigationSeekGeneration, setNavigationSeekGeneration] = useState(0)
+  const [navigationTargetFileId, setNavigationTargetFileId] = useState<ReviewFileId | null>(null)
   const [navigationRangeTarget, setNavigationRangeTarget] = useState<{
     readonly fileId: ReviewFileId
     readonly startLine: number
@@ -1022,6 +1023,7 @@ export const ReviewDetailView = ({
           ? null
           : { fileId: file.fileId, startLine: persistedTarget.firstLine },
       )
+      setNavigationTargetFileId(file.fileId)
       setNavigationSeekGeneration((generation) => generation + 1)
       setActivePane("diff")
       if (input.origin === "thread-detail") {
@@ -2040,6 +2042,7 @@ export const ReviewDetailView = ({
                     mode={resolvedDiffViewMode}
                     navigationActive={navigationLocked}
                     navigationSeekGeneration={navigationSeekGeneration}
+                    navigationTargetFileId={navigationTargetFileId}
                     navigationRangeTarget={navigationRangeTarget}
                     options={reviewDiffOptions}
                     priorityFileId={activeReviewSearchOccurrence?.fileId ?? null}

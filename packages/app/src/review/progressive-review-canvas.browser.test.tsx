@@ -110,6 +110,7 @@ const CanvasHarness = ({
         mode="unified"
         navigationActive={false}
         navigationSeekGeneration={0}
+        navigationTargetFileId={null}
         navigationRangeTarget={null}
         options={{ disableFileHeader: true, overflow: "wrap" }}
         priorityFileId={null}
