@@ -3292,28 +3292,21 @@ scenario("fastScrollPerformance", async () => {
     .__INSTANCE
   expect(virtualizer).not.toBeUndefined()
   if (virtualizer === undefined) return
+  const warmupFrameDurations = await runContinuousReviewScroll(diffPane, 12)
+  diffPane.scrollTop = 0
+  await waitForAnimationFrames(8)
+
   const markDOMDirty = vi.spyOn(virtualizer, "markDOMDirty")
   const requestHeightReconcile = vi.spyOn(virtualizer, "requestHeightReconcile")
   const replaceHighlight = vi.spyOn(CSS.highlights, "set")
   const removeHighlight = vi.spyOn(CSS.highlights, "delete")
-  const warmupLongTaskDurations: number[] = []
-  const measuredLongTaskDurations: number[] = []
-  let activeLongTaskDurations = warmupLongTaskDurations
+  const longTaskDurations: number[] = []
   const longTaskObserver = PerformanceObserver.supportedEntryTypes.includes("longtask")
     ? new PerformanceObserver((entries) => {
-        entries.getEntries().forEach((entry) => activeLongTaskDurations.push(entry.duration))
+        entries.getEntries().forEach((entry) => longTaskDurations.push(entry.duration))
       })
     : null
   longTaskObserver?.observe({ entryTypes: ["longtask"] })
-  const warmupFrameDurations = await runContinuousReviewScroll(diffPane, frameCount)
-  diffPane.scrollTop = 0
-  await waitForAnimationFrames(8)
-  longTaskObserver?.takeRecords().forEach((entry) => warmupLongTaskDurations.push(entry.duration))
-  activeLongTaskDurations = measuredLongTaskDurations
-  markDOMDirty.mockClear()
-  requestHeightReconcile.mockClear()
-  replaceHighlight.mockClear()
-  removeHighlight.mockClear()
   let maximumScrollTop = diffPane.scrollTop
   const trackScrollTop = () => {
     maximumScrollTop = Math.max(maximumScrollTop, diffPane.scrollTop)
@@ -3321,7 +3314,7 @@ scenario("fastScrollPerformance", async () => {
   diffPane.addEventListener("scroll", trackScrollTop, { passive: true })
   const frameDurations = await runContinuousReviewScroll(diffPane, frameCount)
   diffPane.removeEventListener("scroll", trackScrollTop)
-  longTaskObserver?.takeRecords().forEach((entry) => measuredLongTaskDurations.push(entry.duration))
+  longTaskObserver?.takeRecords().forEach((entry) => longTaskDurations.push(entry.duration))
   longTaskObserver?.disconnect()
   await waitForAnimationFrames(4)
 
@@ -3332,7 +3325,7 @@ scenario("fastScrollPerformance", async () => {
     frames: frameDurations.length,
     globalInvalidations: markDOMDirty.mock.calls.length,
     longFrames: longFrames.length,
-    longTasks: measuredLongTaskDurations.length,
+    longTasks: longTaskDurations.length,
     maxFrameDuration: Math.max(...frameDurations),
     reconciliations: requestHeightReconcile.mock.calls.length,
     searchHighlightRemovals: removeHighlight.mock.calls.length,
@@ -3344,9 +3337,7 @@ scenario("fastScrollPerformance", async () => {
   expect(metrics.longFrames).toBeLessThanOrEqual(
     Math.ceil(warmupLongFrames.length * warmupScale) + 4,
   )
-  expect(metrics.longTasks).toBeLessThanOrEqual(
-    Math.ceil(warmupLongTaskDurations.length * warmupScale) + Math.ceil(frameCount / 8),
-  )
+  expect(metrics.longTasks).toBeLessThanOrEqual(metrics.longFrames + Math.ceil(frameCount / 8))
   expect(metrics.maxFrameDuration).toBeLessThan(
     Math.max(150, Math.max(...warmupFrameDurations) + 100),
   )

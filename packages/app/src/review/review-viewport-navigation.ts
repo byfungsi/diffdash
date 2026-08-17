@@ -74,7 +74,7 @@ interface LocalResolvedReviewNavigationTarget extends ResolvedReviewNavigationTa
 }
 
 const STABLE_FRAME_COUNT = 3
-const LATE_LAYOUT_RECONCILIATION_MS = 8_000
+const LATE_LAYOUT_RECONCILIATION_MS = 2_000
 
 /** Imperative DOM/Pierre execution plane for the renderer-local review navigator. */
 export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
