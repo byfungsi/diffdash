@@ -1072,6 +1072,7 @@ const reconcilePublishedRange = (
   scrollContainer: HTMLElement,
   isNavigationActive: () => boolean,
   remainingFrames: number,
+  heightReconcileRequested = false,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   window.setTimeout(() => {
@@ -1079,21 +1080,23 @@ const reconcilePublishedRange = (
       reconcileDemandedRange(instance, 8)
       return
     }
+    if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-      virtualizer.requestHeightReconcile(instance)
+      if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
       reconcilePublishedRange(
         instance,
         virtualizer,
         scrollContainer,
         isNavigationActive,
         remainingFrames - 1,
+        true,
       )
       return
     }
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (isNavigationActive()) return
+      if (isNavigationActive() || scrollContainer.contains(document.activeElement)) return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
         reconcilePublishedRange(
           instance,
