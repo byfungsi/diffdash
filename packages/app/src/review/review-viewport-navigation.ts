@@ -407,12 +407,15 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const resolved = this.#resolved(anchor)
     let currentAnchor = anchor
     let stableFrames = 0
+    let previousRenderGeneration: number | null = null
     while (stableFrames < STABLE_FRAME_COUNT) {
       this.#throwIfAborted(signal)
       if (!currentAnchor.isConnected()) {
         currentAnchor = await this.waitForAnchor(resolved, signal)
         await this.position(currentAnchor, input, signal)
         if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
+        stableFrames = 0
+        previousRenderGeneration = null
         continue
       }
       const stickyHeight = this.#targetStickyHeight(resolved)
@@ -426,11 +429,18 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       }
       const geometryMatches =
         this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
-      const stable = geometryMatches && focusMatches
+      const renderGeneration =
+        this.#current().diffRegistrations.get(resolved.file.reviewKey)?.generation ?? null
+      const stable =
+        geometryMatches &&
+        focusMatches &&
+        (renderGeneration === null || renderGeneration === previousRenderGeneration)
       stableFrames = stable ? stableFrames + 1 : 0
+      previousRenderGeneration = renderGeneration
       await nextFrame(signal)
       if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
         stableFrames = STABLE_FRAME_COUNT - 1
+        previousRenderGeneration = null
       }
     }
     if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
