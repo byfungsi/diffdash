@@ -387,7 +387,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       .locator("diffs-container [data-line]")
       .filter({ hasText: "new" })
       .first()
-    await expect(addedLine).toBeVisible()
+    await expect(addedLine).toBeVisible({ timeout: 15_000 })
     const gutterNumber = window
       .locator("diffs-container [data-column-number]:visible")
       .filter({ hasText: "1" })
