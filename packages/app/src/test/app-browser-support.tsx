@@ -3282,7 +3282,7 @@ scenario("fastScrollPerformance", async () => {
     expect(getMountedDiffLineCount()).toBeGreaterThan(0)
     return pane!
   })
-  await waitForAnimationFrames(8)
+  await waitForAnimationFrames(16)
 
   type InstrumentedVirtualizer = {
     readonly markDOMDirty: () => void
