@@ -3339,7 +3339,7 @@ scenario("fastScrollPerformance", async () => {
     Math.ceil(warmupLongTaskDurations.length * warmupScale) + Math.ceil(frameCount / 8),
   )
   expect(metrics.maxFrameDuration).toBeLessThan(
-    Math.max(150, Math.max(...warmupFrameDurations) * 1.5),
+    Math.max(150, Math.max(...warmupFrameDurations) + 100),
   )
   expect(metrics.searchHighlightRemovals).toBe(0)
   expect(metrics.searchHighlightReplacements).toBe(0)

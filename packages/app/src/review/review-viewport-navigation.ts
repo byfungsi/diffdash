@@ -407,15 +407,12 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const resolved = this.#resolved(anchor)
     let currentAnchor = anchor
     let stableFrames = 0
-    let previousRenderGeneration: number | null = null
     while (stableFrames < STABLE_FRAME_COUNT) {
       this.#throwIfAborted(signal)
       if (!currentAnchor.isConnected()) {
         currentAnchor = await this.waitForAnchor(resolved, signal)
         await this.position(currentAnchor, input, signal)
         if (input.behavior.focus === "target") await this.focus(currentAnchor, signal)
-        stableFrames = 0
-        previousRenderGeneration = null
         continue
       }
       const stickyHeight = this.#targetStickyHeight(resolved)
@@ -429,31 +426,49 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       }
       const geometryMatches =
         this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
-      const renderGeneration =
-        this.#current().diffRegistrations.get(resolved.file.reviewKey)?.generation ?? null
-      const stable =
-        geometryMatches &&
-        focusMatches &&
-        (renderGeneration === null || renderGeneration === previousRenderGeneration)
+      const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
-      previousRenderGeneration = renderGeneration
       await nextFrame(signal)
       if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
         stableFrames = STABLE_FRAME_COUNT - 1
-        previousRenderGeneration = null
       }
     }
     if (input.behavior.focus === "target" && currentAnchor.isConnected()) {
       currentAnchor.focus?.()
+      const expiresAt = performance.now() + 2_000
       this.#focusedNavigation = {
-        expiresAt: performance.now() + 2_000,
+        expiresAt,
         input,
         target: resolved,
       }
-      refocusAfterLayout(currentAnchor, 3)
+      this.#reconcileAfterLayout(
+        currentAnchor,
+        input.behavior.alignment,
+        this.#targetStickyHeight(resolved),
+        expiresAt,
+      )
     }
     this.#current().searchHighlights.refresh()
     this.#reconciliations.delete(resolved.anchorKey)
+  }
+
+  readonly #reconcileAfterLayout = (
+    anchor: MountedReviewAnchor,
+    alignment: ReviewNavigationInput["behavior"]["alignment"],
+    stickyHeight: number,
+    expiresAt: number,
+  ): void => {
+    if (performance.now() >= expiresAt) return
+    window.requestAnimationFrame(() => {
+      if (anchor.isConnected()) {
+        const active = deepActiveElement()
+        const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
+        if (active !== document.body && !ownsFocus) return
+        this.#align(anchor, alignment, stickyHeight)
+        if (active === document.body) anchor.focus?.()
+      }
+      this.#reconcileAfterLayout(anchor, alignment, stickyHeight, expiresAt)
+    })
   }
 
   readonly #validateParsedTarget = (
@@ -961,11 +976,3 @@ const nextFrame = (signal: AbortSignal) =>
     }
     signal.addEventListener("abort", onAbort, { once: true })
   })
-
-const refocusAfterLayout = (anchor: MountedReviewAnchor, remainingFrames: number): void => {
-  if (remainingFrames <= 0) return
-  window.requestAnimationFrame(() => {
-    if (anchor.isConnected()) anchor.focus?.()
-    refocusAfterLayout(anchor, remainingFrames - 1)
-  })
-}
