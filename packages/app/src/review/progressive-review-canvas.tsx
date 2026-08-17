@@ -633,8 +633,14 @@ const ProgressiveRangeCard = ({
     diffVirtualizer.requestHeightReconcile(instance)
     if (navigationActive) {
       reconcileDemandedRange(instance, 8)
-      return
     }
+  }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
+
+  useEffect(() => {
+    if (navigationActive) return
+    const instance = virtualizedInstanceRef.current
+    const scrollContainer = scrollContainerRef.current
+    if (instance === null || scrollContainer === null) return
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
   }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
@@ -1016,17 +1022,17 @@ const reconcileSettledRange = (
   remainingFrames: number,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
-  window.setTimeout(() => {
-    const windowSpecs = virtualizer.getWindowSpecs()
-    if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
+  const windowSpecs = virtualizer.getWindowSpecs()
+  if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
+    window.requestAnimationFrame(() => {
       virtualizer.requestHeightReconcile(instance)
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
-      return
-    }
-    instance.syncVirtualizedTop()
-    instance.rerender()
-    verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
-  }, 0)
+    })
+    return
+  }
+  instance.syncVirtualizedTop()
+  instance.rerender()
+  verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
 }
 
 const verifySettledRange = (
