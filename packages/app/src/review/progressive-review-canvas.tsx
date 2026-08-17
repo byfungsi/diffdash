@@ -1016,17 +1016,17 @@ const reconcileSettledRange = (
   remainingFrames: number,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
-  window.requestAnimationFrame(() => {
-    const windowSpecs = virtualizer.getWindowSpecs()
-    if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
+  const windowSpecs = virtualizer.getWindowSpecs()
+  if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
+    window.requestAnimationFrame(() => {
       virtualizer.requestHeightReconcile(instance)
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
-      return
-    }
-    instance.syncVirtualizedTop()
-    instance.rerender()
-    verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
-  })
+    })
+    return
+  }
+  instance.syncVirtualizedTop()
+  instance.rerender()
+  verifySettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
 }
 
 const verifySettledRange = (
