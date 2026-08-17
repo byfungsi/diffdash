@@ -142,7 +142,6 @@ export const ProgressiveReviewCanvas = ({
   const pageOriginRef = useRef(0)
   const previousLogicalTopRef = useRef(0)
   const viewportRevisionRef = useRef(0)
-  const scrollingRef = useRef(false)
   const [viewport, setViewport] = useState({
     logicalTop: 0,
     height: 800,
@@ -255,10 +254,8 @@ export const ProgressiveReviewCanvas = ({
         )
       }
       if (settle) {
-        scrollingRef.current = true
         clearTimeout(retirementTimeout)
         retirementTimeout = setTimeout(() => {
-          scrollingRef.current = false
           setViewport(viewportRef.current)
           setSettledViewportRevision((revision) => revision + 1)
         }, 100)
@@ -414,7 +411,6 @@ export const ProgressiveReviewCanvas = ({
               selected={selectedPath === file.path}
               settledViewportRevision={settledViewportRevision}
               shells={resources.shells}
-              scrollingRef={scrollingRef}
               viewed={viewedFileKeys.has(file.reviewKey)}
               onDiffRendered={onDiffRendered}
               onFileAnchorChange={onFileAnchorChange}
@@ -494,7 +490,6 @@ const ProgressiveRangeCard = ({
   selected,
   settledViewportRevision,
   shells,
-  scrollingRef,
   viewed,
   onDiffRendered,
   onFileAnchorChange,
@@ -528,7 +523,6 @@ const ProgressiveRangeCard = ({
   readonly selected: boolean
   readonly settledViewportRevision: number
   readonly shells: ReturnType<typeof createPierreRangeShellPool<ReviewThreadAnnotation>>
-  readonly scrollingRef: RefObject<boolean>
   readonly viewed: boolean
 }) => {
   const workerManager = useWorkerPool()
@@ -647,12 +641,7 @@ const ProgressiveRangeCard = ({
     const instance = virtualizedInstanceRef.current
     const scrollContainer = scrollContainerRef.current
     if (instance === null || scrollContainer === null) return
-    if (
-      isCurrentPierreWindow(diffVirtualizer.getWindowSpecs(), scrollContainer) &&
-      mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows
-    ) {
-      return
-    }
+    if (scrollContainer.contains(document.activeElement)) return
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
   }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
@@ -701,7 +690,6 @@ const ProgressiveRangeCard = ({
                 diffVirtualizer,
                 scrollContainer,
                 () => navigationActiveRef.current,
-                scrollingRef,
                 32,
               )
             }
@@ -790,7 +778,6 @@ const ProgressiveRangeCard = ({
     reviewThreads.details,
     scheduler,
     scrollContainerRef,
-    scrollingRef,
     shells,
     startLine,
     workerManager,
@@ -1037,13 +1024,14 @@ const reconcileSettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
+  heightReconcileRequested = false,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   const windowSpecs = virtualizer.getWindowSpecs()
   if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
     window.requestAnimationFrame(() => {
-      virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1, true)
     })
     return
   }
@@ -1057,12 +1045,13 @@ const verifySettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
+  heightReconcileRequested = false,
 ): void => {
   if (remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-      virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1, true)
       return
     }
     if (mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows) {
@@ -1079,32 +1068,12 @@ const reconcilePublishedRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   isNavigationActive: () => boolean,
-  scrollingRef: RefObject<boolean>,
   remainingFrames: number,
   heightReconcileRequested = false,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   window.setTimeout(() => {
-    if (isNavigationActive()) {
-      reconcileDemandedRange(instance, 8)
-      return
-    }
-    if (scrollingRef.current) {
-      window.setTimeout(
-        () =>
-          reconcilePublishedRange(
-            instance,
-            virtualizer,
-            scrollContainer,
-            isNavigationActive,
-            scrollingRef,
-            remainingFrames - 1,
-            heightReconcileRequested,
-          ),
-        16,
-      )
-      return
-    }
+    if (isNavigationActive()) return
     if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
@@ -1113,7 +1082,6 @@ const reconcilePublishedRange = (
         virtualizer,
         scrollContainer,
         isNavigationActive,
-        scrollingRef,
         remainingFrames - 1,
         true,
       )
@@ -1122,19 +1090,13 @@ const reconcilePublishedRange = (
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
-      if (
-        isNavigationActive() ||
-        scrollingRef.current ||
-        scrollContainer.contains(document.activeElement)
-      )
-        return
+      if (isNavigationActive() || scrollContainer.contains(document.activeElement)) return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
         reconcilePublishedRange(
           instance,
           virtualizer,
           scrollContainer,
           isNavigationActive,
-          scrollingRef,
           remainingFrames - 1,
         )
         return
@@ -1147,7 +1109,6 @@ const reconcilePublishedRange = (
           virtualizer,
           scrollContainer,
           isNavigationActive,
-          scrollingRef,
           remainingFrames - 1,
         )
       }
