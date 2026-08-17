@@ -1024,14 +1024,15 @@ const reconcileSettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
-  heightReconcileRequested = false,
 ): void => {
-  if (instance === null || remainingFrames <= 0) return
+  if (instance === null || remainingFrames <= 0 || scrollContainer.contains(document.activeElement))
+    return
   const windowSpecs = virtualizer.getWindowSpecs()
   if (!isCurrentPierreWindow(windowSpecs, scrollContainer)) {
     window.requestAnimationFrame(() => {
-      if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1, true)
+      if (scrollContainer.contains(document.activeElement)) return
+      virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
     })
     return
   }
@@ -1045,13 +1046,13 @@ const verifySettledRange = (
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
   remainingFrames: number,
-  heightReconcileRequested = false,
 ): void => {
   if (remainingFrames <= 0) return
   window.requestAnimationFrame(() => {
+    if (scrollContainer.contains(document.activeElement)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-      if (!heightReconcileRequested) virtualizer.requestHeightReconcile(instance)
-      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1, true)
+      virtualizer.requestHeightReconcile(instance)
+      reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
     }
     if (mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows) {
