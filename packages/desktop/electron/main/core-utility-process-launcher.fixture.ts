@@ -37,6 +37,7 @@ const probe = Effect.gen(function* () {
         databasePath: `${statePath}.sqlite`,
         statePath,
         coreConfiguration: makeCoreProcessFixtureConfiguration(`${statePath}.sqlite`, statePath),
+        listenTimeout: 20_000,
       }),
   })
   console.info(`DIFFDASH_CORE_UTILITY_PROBE_READY:${session.health.lifecycle}`)

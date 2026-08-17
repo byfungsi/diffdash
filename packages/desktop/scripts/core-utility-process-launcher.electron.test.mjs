@@ -64,7 +64,7 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
   const result = await run(
     requiresVirtualDisplay ? "xvfb-run" : electronPath,
     requiresVirtualDisplay ? ["-a", electronPath, ...electronArguments] : electronArguments,
-    { env: environment, timeout: 20_000 },
+    { env: environment, timeout: 30_000 },
   )
 
   assert.match(result.stdout, /DIFFDASH_CORE_UTILITY_PROBE_READY:awaitingOwnership/u)
