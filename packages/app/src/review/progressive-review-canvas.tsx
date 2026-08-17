@@ -3,7 +3,7 @@ import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ReviewThreadAnchor, ReviewThreadDetails } from "@diffdash/domain/review-thread"
 import type { ReviewSessionIdentity } from "@diffdash/protocol/review-session"
 import type { RefObject } from "react"
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
 import { ChevronDown, ChevronRight, Copy, MessageSquare } from "lucide-react"
@@ -139,7 +139,9 @@ export const ProgressiveReviewCanvas = ({
   const previousLogicalTopRef = useRef(0)
   const [viewport, setViewport] = useState({ logicalTop: 0, height: 800, pageOrigin: 0 })
   const viewportRef = useRef(viewport)
+  const renderedViewportRef = useRef(viewport)
   viewportRef.current = viewport
+  renderedViewportRef.current = viewport
   const inventoryKey = files
     .map((file) => `${file.fileId}\u0001${estimatedRows(file)}`)
     .join("\u0000")
@@ -168,6 +170,14 @@ export const ProgressiveReviewCanvas = ({
       ),
     }
   }, [diffVirtualizer, files.length, inventoryKey, workerManager])
+  const selectedFileIndex =
+    navigationRangeTarget === null
+      ? priorityFileId === null
+        ? selectedPath === null
+          ? undefined
+          : files.findIndex((file) => file.path === selectedPath)
+        : files.findIndex((file) => file.fileId === priorityFileId)
+      : files.findIndex((file) => file.fileId === navigationRangeTarget.fileId)
 
   useEffect(
     () => () => {
@@ -197,7 +207,28 @@ export const ProgressiveReviewCanvas = ({
         pageOrigin: position.pageOrigin,
       }
       viewportRef.current = nextViewport
-      setViewport(nextViewport)
+      const renderedViewport = renderedViewportRef.current
+      const renderedWindow = resources.virtualizer.window(
+        renderedViewport.logicalTop,
+        renderedViewport.height,
+        OVERSCAN,
+        selectedFileIndex === -1 ? undefined : selectedFileIndex,
+        navigationActive && navigationRangeTarget !== null,
+      )
+      const nextWindow = resources.virtualizer.window(
+        nextViewport.logicalTop,
+        nextViewport.height,
+        OVERSCAN,
+        selectedFileIndex === -1 ? undefined : selectedFileIndex,
+        navigationActive && navigationRangeTarget !== null,
+      )
+      if (
+        nextViewport.height !== renderedViewport.height ||
+        nextViewport.pageOrigin !== renderedViewport.pageOrigin ||
+        !sameFileWindow(renderedWindow.files, nextWindow.files)
+      ) {
+        startTransition(() => setViewport(nextViewport))
+      }
       if (position.pageOrigin !== pageOriginRef.current) {
         pageOriginRef.current = position.pageOrigin
         container.scrollTop = canvas.offsetTop + position.physicalTop
@@ -211,7 +242,7 @@ export const ProgressiveReviewCanvas = ({
       container.removeEventListener("scroll", update)
       observer.disconnect()
     }
-  }, [resources, scrollContainerRef])
+  }, [navigationActive, navigationRangeTarget, resources, scrollContainerRef, selectedFileIndex])
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current
@@ -282,14 +313,6 @@ export const ProgressiveReviewCanvas = ({
     container.scrollTop = canvas.offsetTop + position.physicalTop
   }, [navigationFileIndex, navigationSeekGeneration, resources, scrollContainerRef])
 
-  const selectedFileIndex =
-    navigationRangeTarget === null
-      ? priorityFileId === null
-        ? selectedPath === null
-          ? undefined
-          : files.findIndex((file) => file.path === selectedPath)
-        : files.findIndex((file) => file.fileId === priorityFileId)
-      : files.findIndex((file) => file.fileId === navigationRangeTarget.fileId)
   const mount = resources.virtualizer.window(
     viewport.logicalTop,
     viewport.height,
@@ -896,6 +919,9 @@ const estimatedRows = (file: ReviewSnapshotFileInventory): number =>
 
 const estimateHeight = (_file: number, rows: number): number =>
   FILE_HEADER_HEIGHT + Math.max(1, rows) * ESTIMATED_ROW_HEIGHT + FILE_GAP
+
+const sameFileWindow = (left: Uint32Array, right: Uint32Array): boolean =>
+  left.length === right.length && left.every((file, index) => file === right[index])
 
 const reconcileDemandedRange = (
   instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
