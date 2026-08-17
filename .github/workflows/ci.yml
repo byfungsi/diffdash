@@ -62,7 +62,9 @@ jobs:
         run: pnpm test:boundaries
 
       - name: Run browser tests
-        run: pnpm test:browser
+        run: |
+          pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run src/review/review-virtualization.browser.test.tsx
+          pnpm --filter @diffdash/app exec vitest --config vitest.browser.config.ts run --exclude src/review/review-virtualization.browser.test.tsx
 
       - name: Run download worker checks
         run: pnpm --filter @diffdash/download-worker check && pnpm --filter @diffdash/download-worker test

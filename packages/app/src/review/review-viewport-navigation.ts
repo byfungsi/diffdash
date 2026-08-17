@@ -115,6 +115,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       return
     }
     window.requestAnimationFrame(() => {
+      if (this.#focusedNavigation !== navigation || performance.now() > navigation.expiresAt) return
       const anchor = this.#mountContentAnchor(navigation.target)
       if (anchor === null) return
       this.#align(
@@ -122,6 +123,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         navigation.input.behavior.alignment,
         this.#targetStickyHeight(navigation.target),
       )
+      this.#current().searchHighlights.refresh()
       if (navigation.input.behavior.focus !== "target" || deepActiveElement() !== document.body)
         return
       anchor.focus?.()
@@ -468,7 +470,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
   }
 
   readonly #reconcileAfterLayout = (
-    anchor: MountedReviewAnchor,
+    anchor: Omit<MountedReviewAnchor, "generation">,
     alignment: ReviewNavigationInput["behavior"]["alignment"],
     stickyHeight: number,
     expiresAt: number,
@@ -478,14 +480,33 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     if (generation !== this.#layoutReconciliationGeneration || performance.now() >= expiresAt)
       return
     window.requestAnimationFrame(() => {
-      if (generation !== this.#layoutReconciliationGeneration || !anchor.isConnected()) return
+      if (generation !== this.#layoutReconciliationGeneration) return
+      let currentAnchor = anchor
+      if (!currentAnchor.isConnected()) {
+        const navigation = this.#focusedNavigation
+        if (navigation === null || navigation.target.navigationGeneration !== generation) return
+        const replacement = this.#mountContentAnchor(navigation.target)
+        if (replacement === null) {
+          this.#reconcileAfterLayout(
+            currentAnchor,
+            alignment,
+            stickyHeight,
+            expiresAt,
+            generation,
+            preserveFocus,
+          )
+          return
+        }
+        currentAnchor = replacement
+      }
       const active = deepActiveElement()
-      const ownsFocus = anchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(anchor, active)
+      const ownsFocus =
+        currentAnchor.ownsFocus?.(active) ?? anchorOwnsDeepFocus(currentAnchor, active)
       if (!preserveFocus && active !== document.body && !ownsFocus) return
-      this.#align(anchor, alignment, stickyHeight)
-      if (!preserveFocus && active === document.body) anchor.focus?.()
+      this.#align(currentAnchor, alignment, stickyHeight)
+      if (!preserveFocus && active === document.body) currentAnchor.focus?.()
       this.#reconcileAfterLayout(
-        anchor,
+        currentAnchor,
         alignment,
         stickyHeight,
         expiresAt,
@@ -966,7 +987,10 @@ const deepActiveElement = (): Element | null => {
   return active
 }
 
-const anchorOwnsDeepFocus = (anchor: MountedReviewAnchor, active: Element | null) => {
+const anchorOwnsDeepFocus = (
+  anchor: Omit<MountedReviewAnchor, "generation">,
+  active: Element | null,
+) => {
   if (active === null) return false
   const rect = anchor.measure()
   const activeRect = active.getBoundingClientRect()

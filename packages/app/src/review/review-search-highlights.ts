@@ -16,6 +16,8 @@ export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
 /** CSS Custom Highlight registry key for the active review search match. */
 export const REVIEW_SEARCH_ACTIVE_HIGHLIGHT = "diffdash-review-search-active"
 
+const ACTIVE_REBUILD_RETRY_FRAMES = 8
+
 /** A virtualized line target relative to its Pierre host. */
 type ReviewSearchScrollTarget = {
   readonly height: number
@@ -40,6 +42,7 @@ export class ReviewSearchHighlightManager {
   private readonly registrations = new Map<string, SearchDiffRegistration>()
   private occurrencesByFile = new Map<string, readonly ReviewSnapshotSearchMatch[]>()
   private rebuildFrame: number | null = null
+  private activeRebuildRetries = 0
   private highlightsRegistered = false
 
   /** Updates the ranges painted in every currently mounted diff. */
@@ -57,6 +60,7 @@ export class ReviewSearchHighlightManager {
     this.activeOccurrenceId = activeOccurrenceId
     this.activeElement = null
     this.activeRange = null
+    this.activeRebuildRetries = 0
     if (occurrencesByFile.size === 0) {
       this.cancelScheduledRebuild()
       this.clearHighlights()
@@ -131,6 +135,7 @@ export class ReviewSearchHighlightManager {
 
   /** Rebuilds search ranges after imperative navigation settles a virtualized row. */
   refresh(): void {
+    this.activeRebuildRetries = ACTIVE_REBUILD_RETRY_FRAMES
     this.scheduleRebuild()
   }
 
@@ -141,6 +146,7 @@ export class ReviewSearchHighlightManager {
     this.occurrencesByFile.clear()
     this.activeElement = null
     this.activeRange = null
+    this.activeRebuildRetries = 0
     this.clearHighlights()
   }
 
@@ -149,6 +155,16 @@ export class ReviewSearchHighlightManager {
     this.rebuildFrame = window.requestAnimationFrame(() => {
       this.rebuildFrame = null
       this.rebuildHighlights()
+      if (
+        this.activeOccurrenceId !== null &&
+        this.activeRange === null &&
+        this.activeRebuildRetries > 0
+      ) {
+        this.activeRebuildRetries -= 1
+        this.scheduleRebuild()
+      } else {
+        this.activeRebuildRetries = 0
+      }
     })
   }
 
