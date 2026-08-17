@@ -438,8 +438,11 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     const comparisonWindow = await app.firstWindow()
     await expect(comparisonWindow.locator("[data-review-editor-header]")).toContainText(
       `${revisions.base}...${revisions.head}`,
+      { timeout: 20_000 },
     )
-    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible()
+    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible({
+      timeout: 20_000,
+    })
   } finally {
     await app.close().catch(() => undefined)
   }

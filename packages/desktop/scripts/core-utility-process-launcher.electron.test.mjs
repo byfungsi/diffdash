@@ -55,7 +55,7 @@ test("launches the generated Core artifact through Electron utilityProcess", asy
   const result = await run(
     electronPath,
     [
-      ...(process.platform === "linux" ? ["--no-sandbox"] : []),
+      ...(process.platform === "linux" ? ["--headless", "--no-sandbox"] : []),
       fixtureEntrypoint,
       artifactDirectory,
       temporaryDirectory,
