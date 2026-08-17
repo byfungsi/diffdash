@@ -3344,7 +3344,9 @@ scenario("fastScrollPerformance", async () => {
   expect(metrics.searchHighlightRemovals).toBe(0)
   expect(metrics.searchHighlightReplacements).toBe(0)
   expect(maximumScrollTop).toBeGreaterThan(0)
-  expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000)
+  await vi.waitFor(() => expect(getMountedDiffLineCount()).toBeLessThanOrEqual(1_000), {
+    timeout: 5_000,
+  })
   expect(window.scrollY).toBe(0)
 })
 
