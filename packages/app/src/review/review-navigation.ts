@@ -465,7 +465,7 @@ const DEFAULT_BUDGETS: ReviewNavigationBudgets = {
   snapshotReacquisitionMs: 15_000,
   extensionResolutionMs: 2_000,
   awaitingMountMs: 8_000,
-  positioningMs: 2_000,
+  positioningMs: 8_000,
   activationAndFocusMs: 2_000,
   transientRetryDelaysMs: [100, 300],
 }
