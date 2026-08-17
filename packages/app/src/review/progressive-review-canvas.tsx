@@ -387,6 +387,7 @@ export const ProgressiveReviewCanvas = ({
           >
             <ProgressiveRangeCard
               caches={resources.caches}
+              diffVirtualizer={diffVirtualizer}
               expanded={expanded}
               expandedLineAnchor={expandedLineAnchor}
               file={file}
@@ -468,6 +469,7 @@ export const ProgressiveReviewCanvas = ({
 const ProgressiveRangeCard = ({
   caches,
   demandedStartLine,
+  diffVirtualizer,
   expanded,
   expandedLineAnchor,
   file,
@@ -504,6 +506,7 @@ const ProgressiveRangeCard = ({
   | "viewedFileKeys"
 > & {
   readonly caches: ReviewRendererCaches
+  readonly diffVirtualizer: DiffVirtualizer
   readonly demandedStartLine: number | null
   readonly expanded: boolean
   readonly file: ReviewSnapshotFileInventory
@@ -612,8 +615,11 @@ const ProgressiveRangeCard = ({
   }, [demandedStartLine])
 
   useLayoutEffect(() => {
-    reconcileDemandedRange(virtualizedInstanceRef.current, 4)
-  }, [settledViewportRevision])
+    const instance = virtualizedInstanceRef.current
+    if (instance === null) return
+    diffVirtualizer.markDOMDirty()
+    diffVirtualizer.requestHeightReconcile(instance)
+  }, [diffVirtualizer, settledViewportRevision])
 
   useLayoutEffect(() => {
     const card = cardRef.current
