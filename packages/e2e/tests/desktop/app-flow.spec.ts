@@ -433,6 +433,13 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "true")
     await expect(followUpComposer).toBeFocused()
     await expect(addedLine).toBeVisible()
+    await expect(window.locator("[data-review-navigation-locked]")).toHaveCount(0, {
+      timeout: 10_000,
+    })
+    await expect(window.locator("[data-review-diff-scroll-container]")).toHaveAttribute(
+      "data-review-navigation-outcome",
+      "completed::",
+    )
 
     const diffCard = window.locator('[data-diff-card-path="src/app.tsx"]')
     const viewedCheckbox = diffCard.getByRole("checkbox")
@@ -444,7 +451,6 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await window.getByRole("menuitem", { name: /Approve/ }).click()
     await window.getByRole("button", { name: "Review actions" }).click()
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeVisible()
-    await expect(window.locator("[data-review-navigation-locked]")).toHaveCount(0)
     await window.keyboard.press("Escape")
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeHidden()
 

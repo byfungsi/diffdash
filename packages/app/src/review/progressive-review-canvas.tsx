@@ -1064,7 +1064,7 @@ const reconcilePublishedRange = (
   remainingFrames: number,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
-  window.requestAnimationFrame(() => {
+  window.setTimeout(() => {
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
@@ -1082,7 +1082,7 @@ const reconcilePublishedRange = (
         reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       }
     })
-  })
+  }, 0)
 }
 
 const mountedDiffLineCount = (container: HTMLElement): number =>
