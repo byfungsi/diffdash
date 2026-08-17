@@ -641,6 +641,12 @@ const ProgressiveRangeCard = ({
     const instance = virtualizedInstanceRef.current
     const scrollContainer = scrollContainerRef.current
     if (instance === null || scrollContainer === null) return
+    if (
+      isCurrentPierreWindow(diffVirtualizer.getWindowSpecs(), scrollContainer) &&
+      mountedDiffLineCount(scrollContainer) <= D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows
+    ) {
+      return
+    }
     reconcileSettledRange(instance, diffVirtualizer, scrollContainer, 32)
   }, [diffVirtualizer, navigationActive, scrollContainerRef, settledViewportRevision])
 
@@ -683,11 +689,14 @@ const ProgressiveRangeCard = ({
             reconcileDemandedRange(instance, 8)
           } else {
             const scrollContainer = scrollContainerRef.current
-            if (
-              scrollContainer !== null &&
-              isCurrentPierreWindow(diffVirtualizer.getWindowSpecs(), scrollContainer)
-            ) {
-              reconcilePublishedRange(instance, diffVirtualizer, scrollContainer, 32)
+            if (scrollContainer !== null) {
+              reconcilePublishedRange(
+                instance,
+                diffVirtualizer,
+                scrollContainer,
+                () => navigationActiveRef.current,
+                32,
+              )
             }
           }
         },
@@ -1061,25 +1070,50 @@ const reconcilePublishedRange = (
   instance: VirtualizedFileDiff<ReviewThreadAnnotation> | null,
   virtualizer: DiffVirtualizer,
   scrollContainer: HTMLElement,
+  isNavigationActive: () => boolean,
   remainingFrames: number,
 ): void => {
   if (instance === null || remainingFrames <= 0) return
   window.setTimeout(() => {
+    if (isNavigationActive()) {
+      reconcileDemandedRange(instance, 8)
+      return
+    }
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-      reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+      virtualizer.requestHeightReconcile(instance)
+      reconcilePublishedRange(
+        instance,
+        virtualizer,
+        scrollContainer,
+        isNavigationActive,
+        remainingFrames - 1,
+      )
       return
     }
     instance.syncVirtualizedTop()
     instance.rerender()
     window.requestAnimationFrame(() => {
+      if (isNavigationActive()) return
       if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
-        reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+        reconcilePublishedRange(
+          instance,
+          virtualizer,
+          scrollContainer,
+          isNavigationActive,
+          remainingFrames - 1,
+        )
         return
       }
       if (
         mountedDiffLineCount(scrollContainer) > D12_REVIEW_VIRTUALIZER_LIMITS.maximumMountedRows
       ) {
-        reconcilePublishedRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
+        reconcilePublishedRange(
+          instance,
+          virtualizer,
+          scrollContainer,
+          isNavigationActive,
+          remainingFrames - 1,
+        )
       }
     })
   }, 0)
