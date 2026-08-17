@@ -1011,8 +1011,7 @@ const reconcileSettledRange = (
       reconcileSettledRange(instance, virtualizer, scrollContainer, remainingFrames - 1)
       return
     }
-    instance.syncVirtualizedTop()
-    instance.rerender()
+    reconcileDemandedRange(instance, 4)
   })
 }
 
