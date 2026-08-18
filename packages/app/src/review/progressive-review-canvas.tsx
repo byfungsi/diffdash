@@ -296,6 +296,11 @@ export const ProgressiveReviewCanvas = ({
     if (container === null || canvas === null) return undefined
     const fileIndexes = new Map<string, number>(files.map((file, index) => [file.fileId, index]))
     const observer = new ResizeObserver((entries) => {
+      const physicalTop = Math.max(0, container.scrollTop - canvas.offsetTop)
+      const current = resources.virtualizer.scroller.updatePhysical(physicalTop)
+      const anchorFile = resources.virtualizer.layout.fileAt(current.logicalTop)
+      let position = current
+      let measurementChanged = false
       for (const entry of entries) {
         if (!isHTMLElement(entry.target)) continue
         const fileId = entry.target.dataset.reviewFileId
@@ -304,32 +309,30 @@ export const ProgressiveReviewCanvas = ({
         const nextHeight = entry.target.getBoundingClientRect().height + FILE_GAP
         if (Math.abs(resources.virtualizer.layout.heightOf(fileIndex) - nextHeight) <= 0.5) continue
 
-        const current = viewportRef.current
-        const anchorFile = resources.virtualizer.layout.fileAt(current.logicalTop)
-        const position = resources.virtualizer.correctMeasurement(
-          current.logicalTop,
+        position = resources.virtualizer.correctMeasurement(
+          position.logicalTop,
           anchorFile,
           fileIndex,
           nextHeight,
         )
-        previousLogicalTopRef.current = position.logicalTop
-        pageOriginRef.current = position.pageOrigin
-        if (
-          position.logicalTop !== current.logicalTop ||
-          position.pageOrigin !== current.pageOrigin
-        ) {
-          container.scrollTop = canvas.offsetTop + position.physicalTop
-        }
-        viewportRevisionRef.current += 1
-        const nextViewport = {
-          logicalTop: position.logicalTop,
-          height: Math.max(1, container.clientHeight),
-          pageOrigin: position.pageOrigin,
-          revision: viewportRevisionRef.current,
-        }
-        viewportRef.current = nextViewport
-        setViewport(nextViewport)
+        measurementChanged = true
       }
+      if (!measurementChanged) return
+
+      previousLogicalTopRef.current = position.logicalTop
+      pageOriginRef.current = position.pageOrigin
+      if (position.logicalTop !== current.logicalTop || position.pageOrigin !== current.pageOrigin) {
+        container.scrollTop = canvas.offsetTop + position.physicalTop
+      }
+      viewportRevisionRef.current += 1
+      const nextViewport = {
+        logicalTop: position.logicalTop,
+        height: Math.max(1, container.clientHeight),
+        pageOrigin: position.pageOrigin,
+        revision: viewportRevisionRef.current,
+      }
+      viewportRef.current = nextViewport
+      setViewport(nextViewport)
     })
     canvas
       .querySelectorAll<HTMLElement>("[data-review-file-id]")

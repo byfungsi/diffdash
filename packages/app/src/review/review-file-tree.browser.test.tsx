@@ -117,6 +117,39 @@ afterEach(() => {
 })
 
 describe("ReviewFileTree", () => {
+  it("does not navigate when the tree applies its initial controlled selection", async () => {
+    const onSelectPath = vi.fn()
+    const container = document.createElement("div")
+    container.style.height = "320px"
+    container.style.width = "320px"
+    document.body.append(container)
+    root = createRoot(container)
+    flushSync(() => {
+      root?.render(
+        <ReviewFileTree
+          files={files}
+          selectedPath={STATUS_PATHS.modified}
+          onSelectPath={onSelectPath}
+        />,
+      )
+    })
+
+    const selected = await vi.waitFor(() => {
+      const row = document
+        .querySelector("file-tree-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(
+          `[data-item-path="${STATUS_PATHS.modified}"][data-item-selected]`,
+        )
+      expect(row).not.toBeNull()
+      return row
+    })
+    expect(onSelectPath).not.toHaveBeenCalled()
+
+    selected?.click()
+    expect(onSelectPath).toHaveBeenCalledTimes(1)
+    expect(onSelectPath).toHaveBeenCalledWith(STATUS_PATHS.modified)
+  })
+
   it("colors file names and status labels while retaining the selected-row treatment", async () => {
     document.documentElement.style.setProperty("--review-success-text", STATUS_COLORS.added)
     document.documentElement.style.setProperty("--review-danger-text", STATUS_COLORS.deleted)

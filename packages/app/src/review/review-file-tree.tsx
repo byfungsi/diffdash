@@ -106,9 +106,7 @@ export const ReviewFileTree = ({
   readonly selectedPath: string | null
   readonly onSelectPath: (path: string) => void
 }) => {
-  const appliedSelectedPathRef = useRef<string | null>(null)
-  const applyingSelectionRef = useRef(false)
-  const selectionReleaseFrameRef = useRef<number | null>(null)
+  const appliedSelectedPathRef = useRef<string | null>(selectedPath)
   const availablePathsRef = useRef<ReadonlySet<string>>(new Set())
   const onSelectPathRef = useRef(onSelectPath)
   const treeInput = buildReviewFileTreeInput(files, true)
@@ -128,7 +126,7 @@ export const ReviewFileTree = ({
     itemHeight: 26,
     onSelectionChange: (paths) => {
       if (
-        applyingSelectionRef.current &&
+        paths.length > 0 &&
         paths.every((candidate) => candidate === appliedSelectedPathRef.current)
       ) {
         return
@@ -152,7 +150,6 @@ export const ReviewFileTree = ({
   useEffect(() => {
     const nextSelectedPath =
       selectedPath !== null && availablePathsRef.current.has(selectedPath) ? selectedPath : null
-    applyingSelectionRef.current = true
     appliedSelectedPathRef.current = nextSelectedPath
     for (const path of model.getSelectedPaths()) {
       if (path !== nextSelectedPath) model.getItem(path)?.deselect()
@@ -163,23 +160,7 @@ export const ReviewFileTree = ({
     if (nextSelectedPath !== null) {
       model.scrollToPath(nextSelectedPath, { focus: false, offset: "nearest" })
     }
-    if (selectionReleaseFrameRef.current !== null) {
-      window.cancelAnimationFrame(selectionReleaseFrameRef.current)
-    }
-    selectionReleaseFrameRef.current = window.requestAnimationFrame(() => {
-      selectionReleaseFrameRef.current = null
-      applyingSelectionRef.current = false
-    })
   }, [model, selectedPath, treeInputKey])
-
-  useEffect(
-    () => () => {
-      if (selectionReleaseFrameRef.current !== null) {
-        window.cancelAnimationFrame(selectionReleaseFrameRef.current)
-      }
-    },
-    [],
-  )
 
   return (
     <div
