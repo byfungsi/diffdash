@@ -848,7 +848,19 @@ test("kills the provider child and persists interruption after a Core crash", as
     await expect.poll(() => readProviderRunProcessId(claudeRunLog)).toBeGreaterThan(0)
     const providerProcessId = await readProviderRunProcessId(claudeRunLog)
 
-    process.kill(coreProcessId, "SIGKILL")
+    await expect
+      .poll(() => {
+        const processId = coreHostProcessIds(mainProcessId, forcedCoreHost).find(processIsAlive)
+        if (processId === undefined) return false
+        try {
+          process.kill(processId, "SIGKILL")
+          coreProcessId = processId
+          return true
+        } catch {
+          return false
+        }
+      })
+      .toBe(true)
     await expect.poll(() => processIsAlive(providerProcessId), { timeout: 10_000 }).toBe(false)
     await expect
       .poll(
