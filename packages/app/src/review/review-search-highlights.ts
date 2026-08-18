@@ -277,18 +277,30 @@ export class ReviewSearchHighlightManager {
       })
     })
 
-    this.clearHighlights()
+    if (CSS.highlights.get(REVIEW_SEARCH_MATCH_HIGHLIGHT) === this.matchHighlight) {
+      CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
+    }
+    this.matchHighlight = null
     if (matchRanges.length > 0) {
       this.matchHighlight = new Highlight(...matchRanges)
       CSS.highlights.set(REVIEW_SEARCH_MATCH_HIGHLIGHT, this.matchHighlight)
     }
     if (activeRanges.length > 0) {
+      if (CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight) {
+        CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+      }
       const activeHighlight = new Highlight(...activeRanges)
       activeHighlight.priority = 1
       this.activeHighlight = activeHighlight
       CSS.highlights.set(REVIEW_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
+    } else if (
+      this.activeOccurrenceId === null &&
+      CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight
+    ) {
+      CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+      this.activeHighlight = null
     }
-    this.highlightsRegistered = matchRanges.length > 0 || activeRanges.length > 0
+    this.highlightsRegistered = this.matchHighlight !== null || this.activeHighlight !== null
   }
 }
 
