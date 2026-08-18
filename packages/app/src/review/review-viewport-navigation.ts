@@ -441,8 +441,19 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       if (!focusMatches && input.behavior.focus === "target") {
         focusMatches = currentAnchor.focus?.() === true
       }
-      const geometryMatches =
-        this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
+      const alignmentDrift = this.#alignmentDrift(
+        currentAnchor,
+        input.behavior.alignment,
+        stickyHeight,
+      )
+      const geometryMatches = alignmentDrift <= 1
+      if (import.meta.env.MODE === "e2e") {
+        this.#container().dataset.reviewNavigationVerification = JSON.stringify({
+          alignmentDrift,
+          focusMatches,
+          stableFrames,
+        })
+      }
       const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
       await nextFrame(signal)
@@ -473,6 +484,7 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       )
     }
     this.#current().searchHighlights.refresh()
+    delete this.#container().dataset.reviewNavigationVerification
     this.#reconciliations.delete(resolved.anchorKey)
   }
 
