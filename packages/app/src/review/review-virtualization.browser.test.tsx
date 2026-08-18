@@ -7,7 +7,7 @@ describe("Review virtualization budgets and navigation", () => {
     await appBrowserScenario("fastScrollPerformance")()
   }, 30_000)
 
-  it("removes stale trailing buffers after navigating across many wrapped files", async () => {
+  it("keeps wrapped eager diffs bounded across navigation", async () => {
     expect.hasAssertions()
     await appBrowserScenario("wrappedFileBuffers")()
   }, 45_000)

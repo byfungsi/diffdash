@@ -140,7 +140,7 @@ import {
 import { reviewThreadScope, reviewWalkthroughScope } from "./review-subject"
 import { type ReviewThreadAnnotation, sameReviewThreadLine } from "./thread-annotations"
 import type { ProgressiveReviewContent } from "./use-progressive-review-content"
-import { useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
+import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
 
@@ -436,6 +436,9 @@ export const ReviewDetailView = ({
   const [activeWalkthroughStepIndex, setActiveWalkthroughStepIndex] = useState(0)
   const [visitedWalkthroughStepIndexes, setVisitedWalkthroughStepIndexes] = useState<
     ReadonlySet<number>
+  >(() => new Set())
+  const [collapsedWalkthroughFileKeys, setCollapsedWalkthroughFileKeys] = useState<
+    ReadonlySet<string>
   >(() => new Set())
   const [showHiddenFiles, setShowHiddenFiles] = useState(false)
   const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
@@ -1475,6 +1478,32 @@ export const ReviewDetailView = ({
       },
     })
   }
+  const toggleVisibleDiffCard = (reviewKey: string) => {
+    const container = diffScrollContainerRef.current
+    const stickyChrome = stickyReviewChromeRef.current
+    const card = document.getElementById(diffCardDomId(reviewKey))
+    if (container !== null && stickyChrome !== null && card !== null) {
+      const visibleTop = container.getBoundingClientRect().top + stickyChrome.offsetHeight
+      const cardRect = card.getBoundingClientRect()
+      if (cardRect.top < visibleTop && cardRect.bottom > visibleTop) {
+        const requested = container.scrollTop + cardRect.top - visibleTop
+        const max = Math.max(0, container.scrollHeight - container.clientHeight)
+        container.scrollTop = Math.min(Math.max(0, requested), max)
+        container.dispatchEvent(new Event("scroll"))
+      }
+    }
+
+    if (sidebarTab !== "walkthrough" || activeWalkthroughStep === null) {
+      onToggleExpanded(reviewKey)
+      return
+    }
+    setCollapsedWalkthroughFileKeys((keys) => {
+      const nextKeys = new Set(keys)
+      if (nextKeys.has(reviewKey)) nextKeys.delete(reviewKey)
+      else nextKeys.add(reviewKey)
+      return nextKeys
+    })
+  }
 
   const markActiveWalkthroughStepComplete = () => {
     if (activeWalkthroughStep === null) return
@@ -2033,7 +2062,11 @@ export const ReviewDetailView = ({
                         <OpenDiffCard
                           key={file.reviewKey}
                           diffOptions={reviewDiffOptions}
-                          expanded={expandedFileKeys.has(file.reviewKey)}
+                          expanded={
+                            sidebarTab === "walkthrough" && activeWalkthroughStep !== null
+                              ? !collapsedWalkthroughFileKeys.has(file.reviewKey)
+                              : expandedFileKeys.has(file.reviewKey)
+                          }
                           expandedLineAnchor={navigationThreadAnchor ?? expandedLineAnchor}
                           file={parsedFile}
                           forceExpanded={forceExpandedFileKeys.has(file.reviewKey)}
@@ -2056,7 +2089,7 @@ export const ReviewDetailView = ({
                             setViewedPreservingViewport(file.reviewKey, viewed)
                           }
                           onToggleLine={toggleExpandedLine}
-                          onToggleExpanded={() => onToggleExpanded(file.reviewKey)}
+                          onToggleExpanded={() => toggleVisibleDiffCard(file.reviewKey)}
                         />
                       )
                     })}

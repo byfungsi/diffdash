@@ -32,7 +32,7 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("longReviewPaths")()
   })
 
-  it("loads bounded snapshot pages incrementally and fetches selected files on demand", async () => {
+  it("eagerly loads complete review files through the Core session", async () => {
     expect.hasAssertions()
     await appBrowserScenario("incrementalSnapshotPages")()
   })
@@ -67,12 +67,12 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("stickyDiffCardHeaders")()
   }, 30_000)
 
-  it("wraps search backward across many virtualized file placeholders", async () => {
+  it("wraps search backward across eagerly retained files", async () => {
     expect.hasAssertions()
     await appBrowserScenario("multiFileSearchWrap")()
   }, 45_000)
 
-  it("keeps the active search file resident while paginated files cross the cache bound", async () => {
+  it("keeps eager review files resident across navigation", async () => {
     expect.hasAssertions()
     await appBrowserScenario("snapshotPageResidency")()
   }, 45_000)

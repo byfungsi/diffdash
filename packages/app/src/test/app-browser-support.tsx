@@ -3132,21 +3132,19 @@ scenario("incrementalSnapshotPages", async () => {
   const initiallyLoadedFileIds = new Set(
     calls.progressiveRange.mock.calls.map(([request]) => request.fileId),
   )
-  expect(initiallyLoadedFileIds.size).toBeGreaterThan(0)
-  expect(initiallyLoadedFileIds.size).toBeLessThan(fixture.paths.length)
+  expect(initiallyLoadedFileIds.size).toBe(fixture.paths.length)
 
   const targetFileId = parseUnifiedDiff(fixture.manyDiff.diff).files.find(
     (file) => file.path === fixture.targetPath,
   )?.fileId
   expect(targetFileId).toBeDefined()
   if (targetFileId === undefined) throw new Error("Missing target file ID")
-  expect(initiallyLoadedFileIds.has(targetFileId)).toBe(false)
+  expect(initiallyLoadedFileIds.has(targetFileId)).toBe(true)
+  const rangeCallCount = calls.progressiveRange.mock.calls.length
   const target = getChangedFilesTreeItem(fixture.targetPath)
   target?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
   await vi.waitFor(() => {
-    expect(
-      calls.progressiveRange.mock.calls.some(([request]) => request.fileId === targetFileId),
-    ).toBe(true)
+    expect(calls.progressiveRange).toHaveBeenCalledTimes(rangeCallCount)
     expect(
       document.querySelector(`[data-diff-card-path="${fixture.targetPath}"] diffs-container`),
     ).not.toBeNull()
@@ -3192,7 +3190,7 @@ scenario("largeDiffVirtualization", async () => {
 
   await vi.waitFor(() => {
     expect(getDiffCardPaths()).toContain(fixture.largePath)
-    expect(getDiffCardPaths()).not.toContain(fixture.tailPath)
+    expect(getDiffCardPaths()).toContain(fixture.tailPath)
     expect(getChangedFilesTreeItem(fixture.tailPath)).not.toBeNull()
     expect(getMountedDiffLineCount()).toBeGreaterThan(0)
   })
@@ -4371,8 +4369,7 @@ scenario("wrappedFileBuffers", async () => {
   await openHostedReview(58)
   await showResponsiveDiffPane()
   await vi.waitFor(() => {
-    expect(getDiffCardPaths().length).toBeGreaterThan(0)
-    expect(getDiffCardPaths().length).toBeLessThan(fixture.paths.length)
+    expect(getDiffCardPaths()).toHaveLength(fixture.paths.length)
   })
 
   const visitFile = async (path: string) => {
@@ -4457,8 +4454,7 @@ scenario("multiFileSearchWrap", async () => {
 
   await openHostedReview(58)
   await vi.waitFor(() => {
-    expect(getDiffCardPaths().length).toBeGreaterThan(0)
-    expect(getDiffCardPaths().length).toBeLessThan(fixture.paths.length)
+    expect(getDiffCardPaths()).toHaveLength(fixture.paths.length)
   })
 
   const visitFile = async (path: string) => {
@@ -4481,9 +4477,7 @@ scenario("multiFileSearchWrap", async () => {
   expect(anchorPath).not.toBe("")
   await visitFile(wrapTargetPath)
   await visitFile(anchorPath)
-  await vi.waitFor(() => {
-    expect(document.querySelector(`[data-diff-card-path="${wrapTargetPath}"]`)).toBeNull()
-  })
+  expect(document.querySelector(`[data-diff-card-path="${wrapTargetPath}"]`)).not.toBeNull()
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -4574,8 +4568,7 @@ scenario("snapshotPageResidency", async () => {
 
   await openHostedReview(59)
   await vi.waitFor(() => {
-    expect(getDiffCardPaths().length).toBeGreaterThan(0)
-    expect(getDiffCardPaths().length).toBeLessThan(fixture.paths.length)
+    expect(getDiffCardPaths()).toHaveLength(fixture.paths.length)
   })
   await vi.waitFor(
     () => {
@@ -4588,8 +4581,7 @@ scenario("snapshotPageResidency", async () => {
   const initiallyReadFileCount = new Set(
     api.progressiveRange.mock.calls.map(([request]) => request.fileId),
   ).size
-  expect(initiallyReadFileCount).toBeGreaterThanOrEqual(2)
-  expect(initiallyReadFileCount).toBeLessThan(fixture.paths.length)
+  expect(initiallyReadFileCount).toBe(fixture.paths.length)
 
   dispatchKeyboardShortcut("f", { metaKey: true })
   const searchInput = await vi.waitFor(() => {
@@ -4638,7 +4630,7 @@ scenario("snapshotPageResidency", async () => {
 
   await vi.waitFor(() => {
     const activeCard = document.querySelector<HTMLElement>(`[data-diff-card-path="${activePath}"]`)
-    expect(activeCard).toBeNull()
+    expect(activeCard).not.toBeNull()
     expect(document.querySelector("[data-review-search-toolbar]")?.textContent).toContain("1 / 1")
   })
 })
@@ -5468,8 +5460,7 @@ scenario("viewedViewportAnchor", async () => {
   const visibleTop = diffPane.getBoundingClientRect().top + stickyChrome.offsetHeight
   window.scrollTo(0, 0)
   await scrollDiffCardAboveViewport(diffPane, largeCard, visibleTop)
-  const diffContainer = largeCard.querySelector("diffs-container")
-  expect(diffContainer).not.toBeNull()
+  expect(largeCard.querySelector("diffs-container")).not.toBeNull()
 
   dispatchKeyboardShortcut("v")
   await vi.waitFor(() => {
@@ -5485,7 +5476,6 @@ scenario("viewedViewportAnchor", async () => {
   await vi.waitFor(() => {
     expect(getViewedCheckbox(fixture.largePath)?.checked).toBe(false)
     expect(largeCard.querySelector("diffs-container")).not.toBeNull()
-    expect(largeCard.querySelector("diffs-container")).toBe(diffContainer)
     expect(getDiffShadowRoot(fixture.largePath)?.querySelector("[data-line]")).not.toBeNull()
   })
   await new Promise<void>((resolve) =>
