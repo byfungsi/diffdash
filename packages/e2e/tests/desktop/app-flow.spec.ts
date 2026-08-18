@@ -442,10 +442,13 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "true")
     await expect(followUpComposer).toBeFocused()
     await expect(addedLine).toBeVisible()
-    await expect(window.locator("[data-review-navigation-locked]")).toHaveCount(0, {
-      timeout: 10_000,
-    })
-    await expect(window.locator("[data-review-diff-scroll-container]")).toHaveAttribute(
+    const reviewScrollContainer = window.locator("[data-review-diff-scroll-container]")
+    await expect
+      .poll(() => reviewScrollContainer.getAttribute("data-review-navigation-phase"), {
+        timeout: 10_000,
+      })
+      .toBe("idle")
+    await expect(reviewScrollContainer).toHaveAttribute(
       "data-review-navigation-outcome",
       "completed::",
     )
