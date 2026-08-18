@@ -27,9 +27,6 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
     ) =>
       runtime.operations.pipe(
         Effect.flatMap((operations) => invoke(operations.methods)),
-        Effect.tapError((cause) =>
-          Effect.sync(() => console.error(`[DEBUG-dev-review] ${method}`, cause)),
-        ),
         Effect.mapError(() => ({
           _tag: "CoreApplicationFailure" as const,
           applicationInstanceId: request.applicationInstanceId,
