@@ -373,9 +373,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByRole("button", { name: "Collapse sidebar" })).toBeVisible()
     await expect(window.locator("[data-review-activity-rail]")).toHaveCSS("width", "52px")
     await commandCenter.click()
-    await expect(window.getByPlaceholder("Search files")).toBeVisible()
-    await window.keyboard.press("Escape")
-    await expect(window.getByPlaceholder("Search files")).toBeHidden()
+    const fileSearch = window.getByPlaceholder("Search files")
+    await expect(fileSearch).toBeVisible()
+    await fileSearch.press("Escape")
+    await expect(fileSearch).toBeHidden()
     await expect(window.getByText("Link a checkout for isolated agent review")).toHaveCount(0)
     await expect(window.getByText("src/app.tsx").first()).toBeVisible()
     await expect(window.getByText("Viewed").first()).toBeVisible()
@@ -383,18 +384,19 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("-1").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Request changes" })).toBeHidden()
 
-    const addedLine = window
+    const reviewFileCard = window.locator('[data-diff-card-path="src/app.tsx"]')
+    const addedLine = reviewFileCard
       .locator("diffs-container [data-line]")
       .filter({ hasText: "new" })
       .first()
     await expect(addedLine).toBeVisible({ timeout: 15_000 })
-    const removedLine = window
+    const removedLine = reviewFileCard
       .locator('diffs-container [data-line-type="change-deletion"][data-line]')
       .filter({ hasText: "old" })
       .first()
     const removedLineIndex = await removedLine.getAttribute("data-line-index")
     if (removedLineIndex === null) throw new Error("Review deletion line has no rendered index")
-    const gutterNumber = window
+    const gutterNumber = reviewFileCard
       .locator(
         `diffs-container [data-line-type="change-deletion"][data-line-index="${removedLineIndex}"][data-column-number]`,
       )
@@ -1540,26 +1542,17 @@ const dismissOnboardingIfPresent = async (
 
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
   const composer = window.getByRole("textbox", { name: "Thread message" })
-  await expect
-    .poll(
-      async () => {
-        if (await composer.isVisible()) {
-          await composer.focus()
-          return true
-        }
-        try {
-          await gutterNumber.hover({ force: true, timeout: 1_000 })
-          await gutterNumber.locator("[data-utility-button]").click({ force: true, timeout: 1_000 })
-          if (!(await composer.isVisible())) return false
-          await composer.focus()
-          return true
-        } catch {
-          return false
-        }
-      },
-      { timeout: 15_000 },
-    )
-    .toBe(true)
+  await gutterNumber.evaluate((element) => element.scrollIntoView({ block: "center" }))
+  await gutterNumber.dispatchEvent("pointermove", {
+    bubbles: true,
+    composed: true,
+    pointerType: "mouse",
+  })
+  const utilityButton = gutterNumber.locator("[data-utility-button]")
+  await expect(utilityButton).toBeVisible()
+  await utilityButton.click()
+  await expect(composer).toBeVisible()
+  await composer.focus()
   return composer
 }
 
