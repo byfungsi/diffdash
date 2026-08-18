@@ -183,8 +183,6 @@ export class PierreLoadedRangeRenderer<Annotation> {
     const instance = this.virtualizedInstance
     if (instance === null) return
     instance.setVisibility(true)
-    // Pierre's visibility setter does not replace a placeholder rendered while detached.
-    instance.rerender()
   }
 
   /** Disconnects measured-height observation without otherwise changing the shell. */

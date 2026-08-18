@@ -106,7 +106,16 @@ export class ReviewSearchHighlightManager {
       }
     })
     // Pierre can publish token DOM after its range render callback has completed.
-    const observer = new MutationObserver(() => this.scheduleRebuild())
+    const observer = new MutationObserver(() => {
+      if (
+        this.activeOccurrenceId !== null &&
+        (this.activeRange === null || !this.activeRange.startContainer.isConnected)
+      ) {
+        this.rebuildHighlights()
+        return
+      }
+      this.scheduleRebuild()
+    })
     const shadowRoot = host.shadowRoot
     if (shadowRoot !== null) {
       observer.observe(shadowRoot, { characterData: true, childList: true, subtree: true })

@@ -1558,7 +1558,18 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
         )
         const root = element.getRootNode()
         if (!(root instanceof ShadowRoot)) return false
-        const utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
+        let utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
+        if (utilityButton === null) {
+          element.dispatchEvent(
+            new PointerEvent("pointerdown", {
+              bubbles: true,
+              composed: true,
+              pointerId: 1,
+              pointerType: "touch",
+            }),
+          )
+          utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
+        }
         if (utilityButton === null) return false
         const init = {
           bubbles: true,
