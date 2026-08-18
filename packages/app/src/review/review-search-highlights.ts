@@ -28,6 +28,7 @@ type ReviewSearchScrollTarget = {
 type SearchDiffRegistration = {
   readonly host: HTMLElement
   readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
+  readonly observer: MutationObserver
 }
 
 type PierrePostRenderInstance = Parameters<
@@ -82,6 +83,7 @@ export class ReviewSearchHighlightManager {
         queueMicrotask(() => {
           const current = this.registrations.get(reviewKey)
           if (current?.host === host && !host.isConnected) {
+            current.observer.disconnect()
             this.registrations.delete(reviewKey)
           }
           this.scheduleRebuild()
@@ -91,12 +93,25 @@ export class ReviewSearchHighlightManager {
     }
 
     if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
+    const current = this.registrations.get(reviewKey)
+    if (current?.host === host && current.instance === instance) {
+      this.scheduleRebuild()
+      return
+    }
+    current?.observer.disconnect()
     this.registrations.forEach((registration, registeredReviewKey) => {
       if (registeredReviewKey !== reviewKey && registration.host === host) {
+        registration.observer.disconnect()
         this.registrations.delete(registeredReviewKey)
       }
     })
-    this.registrations.set(reviewKey, { host, instance })
+    // Pierre can publish token DOM after its range render callback has completed.
+    const observer = new MutationObserver(() => this.scheduleRebuild())
+    const shadowRoot = host.shadowRoot
+    if (shadowRoot !== null) {
+      observer.observe(shadowRoot, { characterData: true, childList: true, subtree: true })
+    }
+    this.registrations.set(reviewKey, { host, instance, observer })
     this.scheduleRebuild()
   }
 
@@ -142,6 +157,7 @@ export class ReviewSearchHighlightManager {
   /** Removes all registered hosts and document-level highlight ranges. */
   dispose() {
     this.cancelScheduledRebuild()
+    this.registrations.forEach(({ observer }) => observer.disconnect())
     this.registrations.clear()
     this.occurrencesByFile.clear()
     this.activeElement = null
