@@ -1400,7 +1400,11 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
   browserName: _browserName,
 }, testInfo) => {
   const userData = testInfo.outputPath("user-data")
-  await mkdir(userData, { recursive: true })
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  await Promise.all([
+    mkdir(userData, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+  ])
   const unavailableRendererUrl = "http://127.0.0.1:1"
   const app = await electron.launch({
     args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
@@ -1409,6 +1413,7 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       ELECTRON_RENDERER_URL: unavailableRendererUrl,
+      XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
 
