@@ -301,13 +301,8 @@ export const startCoreBunProcess = Effect.fn("startCoreBunProcess")(function* (
         env: command.environment,
         stdio: "pipe",
       })
-      if (options.environment.DIFFDASH_E2E_CORE_HOST === undefined) {
-        child.stdout?.resume()
-        child.stderr?.resume()
-      } else {
-        child.stdout?.pipe(process.stdout)
-        child.stderr?.pipe(process.stderr)
-      }
+      child.stdout?.pipe(process.stdout)
+      child.stderr?.pipe(process.stderr)
       const exited = new Promise<number>((resolve) =>
         child.once("exit", (code) => resolve(code ?? -1)),
       )

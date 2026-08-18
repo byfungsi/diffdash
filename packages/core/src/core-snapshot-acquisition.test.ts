@@ -357,7 +357,11 @@ describe("CoreSnapshotAcquisition", () => {
           path: join(directory, "managed"),
           createdAtMs: 0,
         })
-        const manifest = yield* acquisition.acquireHosted(review)
+        const [manifest, concurrentManifest] = yield* Effect.all(
+          [acquisition.acquireHosted(review), acquisition.acquireHosted(review)],
+          { concurrency: "unbounded" },
+        )
+        expect(concurrentManifest).toEqual(manifest)
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.fileCount).toBe(1)
         expect(manifest.detail).toEqual({ summary: detail.summary })

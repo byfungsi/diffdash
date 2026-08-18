@@ -106,6 +106,23 @@ describe("Core host selection", () => {
     }),
   )
 
+  it.effect("auto tries every Bun path after the fallback latch is closed", () =>
+    Effect.gen(function* () {
+      const { latch } = yield* makeLatch(false)
+      const selected = yield* selectCoreHost(
+        "auto",
+        [
+          candidate("bun", Effect.fail(candidateFailure)),
+          candidate("bun"),
+          candidate("utility", Effect.die("must not run")),
+        ],
+        latch,
+      )
+
+      expect(selected.host).toBe("bun")
+    }),
+  )
+
   it.effect("forced utility preserves the utility candidate without probing Bun", () =>
     Effect.gen(function* () {
       const { latch } = yield* makeLatch()

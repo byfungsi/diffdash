@@ -110,6 +110,12 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
   let lastQualificationCapability: BunQualificationCapability | null = null
 
   for (const candidate of eligible) {
+    if (mode === "auto" && lastHost !== null && candidate.host !== lastHost) {
+      if (!(yield* fallbackLatch.fallbackAllowed)) {
+        lastReason = "fallback-disabled"
+        break
+      }
+    }
     lastHost = candidate.host
     const qualified = yield* candidate.qualify.pipe(
       Effect.as({ ok: true } as const),
@@ -118,12 +124,6 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
     if (!qualified.ok) {
       lastReason = "qualification-failed"
       lastQualificationCapability = qualified.error.qualificationCapability
-      if (mode === "auto") {
-        if (!(yield* fallbackLatch.fallbackAllowed)) {
-          lastReason = "fallback-disabled"
-          break
-        }
-      }
       continue
     }
 
@@ -153,12 +153,6 @@ export const selectCoreHost = Effect.fn("selectCoreHost")(function* (
     }
     lastReason = "startup-failed"
     lastQualificationCapability = null
-    if (mode === "auto") {
-      if (!(yield* fallbackLatch.fallbackAllowed)) {
-        lastReason = "fallback-disabled"
-        break
-      }
-    }
   }
 
   return yield* CoreHostSelectionError.make({
