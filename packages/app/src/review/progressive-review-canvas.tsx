@@ -641,23 +641,6 @@ const ProgressiveRangeCard = ({
     if (demandedStartLine !== null) setStartLine(demandedStartLine)
   }, [demandedStartLine])
 
-  useLayoutEffect(() => {
-    const instance = virtualizedInstanceRef.current
-    const scrollContainer = scrollContainerRef.current
-    if (instance === null || scrollContainer === null) return
-    diffVirtualizer.markDOMDirty()
-    diffVirtualizer.requestHeightReconcile(instance)
-    if (navigationActive && demandedStartLine !== null) {
-      reconcileDemandedRange(instance, scrollContainer, 8)
-    }
-  }, [
-    demandedStartLine,
-    diffVirtualizer,
-    navigationActive,
-    scrollContainerRef,
-    settledViewportRevision,
-  ])
-
   useEffect(() => {
     if (navigationActive) return
     const instance = virtualizedInstanceRef.current
@@ -1070,12 +1053,14 @@ const reconcileSettledRange = (
     window.requestAnimationFrame(() => {
       if (hasFocusedThreadComposer(scrollContainer)) return
       if (heightReconcileCooldown <= 0) virtualizer.requestHeightReconcile(instance)
+      instance.syncVirtualizedTop()
+      instance.rerender()
       reconcileSettledRange(
         instance,
         virtualizer,
         scrollContainer,
         remainingFrames - 1,
-        heightReconcileCooldown <= 0 ? 3 : heightReconcileCooldown - 1,
+        heightReconcileCooldown <= 0 ? 7 : heightReconcileCooldown - 1,
       )
     })
     return
@@ -1103,12 +1088,14 @@ const verifySettledRange = (
     if (hasFocusedThreadComposer(scrollContainer)) return
     if (!isCurrentPierreWindow(virtualizer.getWindowSpecs(), scrollContainer)) {
       if (heightReconcileCooldown <= 0) virtualizer.requestHeightReconcile(instance)
+      instance.syncVirtualizedTop()
+      instance.rerender()
       reconcileSettledRange(
         instance,
         virtualizer,
         scrollContainer,
         remainingFrames - 1,
-        heightReconcileCooldown <= 0 ? 3 : heightReconcileCooldown - 1,
+        heightReconcileCooldown <= 0 ? 7 : heightReconcileCooldown - 1,
       )
       return
     }

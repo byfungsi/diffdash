@@ -89,7 +89,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     string,
     { readonly generation: number; readonly passes: number }
   >()
-  #diagnosticPrimes = 0
   #layoutReconciliationGeneration = 0
   #bindings: ReviewViewportNavigationBindings | null = null
   #focusedNavigation: {
@@ -412,23 +411,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const resolved = this.#resolved(anchor)
     let currentAnchor = anchor
     let stableFrames = 0
-    let verificationFrames = 0
     while (stableFrames < STABLE_FRAME_COUNT) {
-      verificationFrames += 1
       this.#throwIfAborted(signal)
-      if (verificationFrames % 120 === 0) {
-        const container = this.#container()
-        console.error("Review navigation verification pending", {
-          alignment: input.behavior.alignment,
-          anchorConnected: currentAnchor.isConnected(),
-          clientHeight: container.clientHeight,
-          rect: currentAnchor.measure().toJSON(),
-          scrollHeight: container.scrollHeight,
-          scrollTop: container.scrollTop,
-          stableFrames,
-          verificationFrames,
-        })
-      }
       if (!currentAnchor.isConnected()) {
         if (resolved.anchorKey !== reviewFileAnchorKey(resolved.file.fileId)) {
           const replacement = this.#registerCurrentContentAnchor(resolved, signal)
@@ -726,17 +710,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
         container.getBoundingClientRect().top +
         container.scrollTop
       const top = hostTop + position.top - stickyHeight - (viewportHeight - position.height) / 2
-      this.#diagnosticPrimes += 1
-      if (this.#diagnosticPrimes % 30 === 0) {
-        console.error("Review navigation semantic prime", {
-          hostRect: positionHost.getBoundingClientRect().toJSON(),
-          hostTop,
-          position,
-          scrollHeight: container.scrollHeight,
-          scrollTop: container.scrollTop,
-          top,
-        })
-      }
       setProgrammaticScrollTop(container, top)
     }
     const reconciliation = this.#reconciliations.get(resolved.anchorKey)
