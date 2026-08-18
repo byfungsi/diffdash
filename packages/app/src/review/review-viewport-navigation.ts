@@ -441,25 +441,11 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       if (!focusMatches && input.behavior.focus === "target") {
         focusMatches = currentAnchor.focus?.() === true
       }
-      const alignmentDrift = this.#alignmentDrift(
-        currentAnchor,
-        input.behavior.alignment,
-        stickyHeight,
-      )
-      const geometryMatches = alignmentDrift <= 1
-      if (import.meta.env.MODE === "e2e") {
-        this.#container().dataset.reviewNavigationVerification = JSON.stringify({
-          alignmentDrift,
-          focusMatches,
-          stableFrames,
-        })
-      }
+      const geometryMatches =
+        this.#alignmentDrift(currentAnchor, input.behavior.alignment, stickyHeight) <= 1
       const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
       await nextFrame(signal)
-      if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
-        stableFrames = STABLE_FRAME_COUNT - 1
-      }
     }
     if (
       currentAnchor.isConnected() &&
@@ -484,7 +470,6 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       )
     }
     this.#current().searchHighlights.refresh()
-    delete this.#container().dataset.reviewNavigationVerification
     this.#reconciliations.delete(resolved.anchorKey)
   }
 
@@ -830,10 +815,8 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const atScrollBoundary =
       container.scrollTop <= 0 ||
       container.scrollTop >= container.scrollHeight - container.clientHeight - 1
-    // Exact centering is impossible at a scroll boundary; intersection is the stable outcome.
-    return atScrollBoundary &&
-      targetRect.bottom >= visibleTop - 1 &&
-      targetRect.top <= visibleBottom + 1
+    // Exact centering is impossible at a scroll boundary; full visibility is the stable outcome.
+    return atScrollBoundary && targetRect.top >= visibleTop && targetRect.bottom <= visibleBottom
       ? 0
       : residualDrift
   }
@@ -1051,9 +1034,7 @@ const anchorOwnsDeepFocus = (
 
 const setProgrammaticScrollTop = (container: HTMLElement, requested: number) => {
   const max = Math.max(0, container.scrollHeight - container.clientHeight)
-  const nextScrollTop = Math.min(Math.max(0, requested), max)
-  if (Math.abs(nextScrollTop - container.scrollTop) <= 0.5) return
-  container.scrollTop = nextScrollTop
+  container.scrollTop = Math.min(Math.max(0, requested), max)
   container.dispatchEvent(new Event("scroll"))
 }
 

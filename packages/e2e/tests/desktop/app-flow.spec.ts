@@ -444,17 +444,9 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(addedLine).toBeVisible()
     const reviewScrollContainer = window.locator("[data-review-diff-scroll-container]")
     await expect
-      .poll(
-        async () => {
-          const phase = await reviewScrollContainer.getAttribute("data-review-navigation-phase")
-          if (phase !== "verifying") return phase
-          const verification = await reviewScrollContainer.getAttribute(
-            "data-review-navigation-verification",
-          )
-          return `${phase}:${verification}`
-        },
-        { timeout: 10_000 },
-      )
+      .poll(() => reviewScrollContainer.getAttribute("data-review-navigation-phase"), {
+        timeout: 10_000,
+      })
       .toBe("idle")
     await expect(reviewScrollContainer).toHaveAttribute(
       "data-review-navigation-outcome",
