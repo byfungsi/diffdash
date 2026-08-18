@@ -80,23 +80,29 @@ describe("ProgressiveReviewContentSession", () => {
       patchHash: parsedFile.patchHash,
       hunkCount: parsedFile.hunks.length,
     } as const
-    const bytes = new TextEncoder().encode(patch)
-    const waitForRange = vi.fn<ProgressiveReviewApi["waitForRange"]>(async () => ({
-      identity,
-      file,
-      blocks: [
-        {
-          id: "block-1",
-          hunkId: null,
-          ordinal: 0,
-          firstLine: 0,
-          lineCount: patch.split("\n").length,
-          bytes,
-        },
-      ],
-      byteCount: bytes.byteLength,
-      complete: true,
-    }))
+    const lines = patch.split("\n")
+    const firstBytes = new TextEncoder().encode(`${lines.slice(0, 6).join("\n")}\n`)
+    const finalBytes = new TextEncoder().encode(lines.slice(6).join("\n"))
+    const waitForRange = vi.fn<ProgressiveReviewApi["waitForRange"]>(async (request) => {
+      const firstRange = request.startLine === 0
+      const bytes = firstRange ? firstBytes : finalBytes
+      return {
+        identity,
+        file,
+        blocks: [
+          {
+            id: firstRange ? "block-1" : "block-2",
+            hunkId: null,
+            ordinal: firstRange ? 0 : 1,
+            firstLine: request.startLine,
+            lineCount: firstRange ? 6 : 2,
+            bytes,
+          },
+        ],
+        byteCount: bytes.byteLength,
+        complete: !firstRange,
+      }
+    })
     const api: ProgressiveReviewApi = {
       openSession: async () => ReadyReviewSession.make({ identity }),
       currentSession: async () => ReadyReviewSession.make({ identity }),
@@ -133,7 +139,7 @@ describe("ProgressiveReviewContentSession", () => {
 
     expect(session.getFile(file.fileId)?.patch).toBe(parsedFile.patch)
     expect(session.getProjection().files.map((entry) => entry.fileId)).toEqual([file.fileId])
-    expect(waitForRange).toHaveBeenCalledTimes(1)
+    expect(waitForRange.mock.calls.map(([request]) => request.startLine)).toEqual([0, 6])
     session.dispose()
   })
 })

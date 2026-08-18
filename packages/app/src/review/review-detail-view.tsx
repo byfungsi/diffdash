@@ -616,6 +616,16 @@ export const ReviewDetailView = ({
     progressiveInventory.length === 0 ||
     (loadingFileIds.size === 0 &&
       loadedFilesById.size + fileErrors.size >= progressiveInventory.length)
+  const snapshotRefreshFailure = Match.valueTags(snapshotRefresh, {
+    failed: ({ message }) => message,
+    idle: () => null,
+    refreshing: () => null,
+  })
+  const snapshotRefreshing = Match.valueTags(snapshotRefresh, {
+    failed: () => false,
+    idle: () => false,
+    refreshing: () => true,
+  })
   const normalizedReviewSearchIndex = activeReviewSearchIndex
   const activeReviewSearchOccurrence = reviewSearchOpen ? activeReviewSearchMatch : null
   const hiddenFileCount = changedFiles.filter((file) =>
@@ -2041,6 +2051,19 @@ export const ReviewDetailView = ({
                 !eagerLoadSettled ? (
                   <EmptyState>Loading review files...</EmptyState>
                 ) : null}
+                {progressiveIdentity === null && snapshotRefreshing ? (
+                  <EmptyState>Refreshing review files...</EmptyState>
+                ) : null}
+                {progressiveIdentity === null && snapshotRefreshFailure !== null ? (
+                  <EmptyState>
+                    <div className="space-y-3">
+                      <p role="alert">{snapshotRefreshFailure}</p>
+                      <Button variant="outline" onClick={onReload}>
+                        Retry
+                      </Button>
+                    </div>
+                  </EmptyState>
+                ) : null}
                 {progressiveIdentity === null || !eagerLoadSettled
                   ? null
                   : renderedChangedFiles.map((file) => {
@@ -2048,15 +2071,12 @@ export const ReviewDetailView = ({
                       return parsedFile === undefined ? (
                         <ReviewPagePlaceholder
                           key={file.reviewKey}
-                          error={fileErrors.get(file.fileId) ?? null}
+                          error={fileErrors.get(file.fileId) ?? "Could not load this diff"}
                           file={file}
-                          loading={loadingFileIds.has(file.fileId)}
-                          snapshotRefresh={snapshotRefresh}
                           onFileAnchorChange={(element, focusElement) =>
                             registerFileNavigationAnchor(file.fileId, element, focusElement)
                           }
                           onRetry={() => void loadSnapshotFiles([file.fileId])}
-                          onRefresh={onReload}
                         />
                       ) : (
                         <OpenDiffCard

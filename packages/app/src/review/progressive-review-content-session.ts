@@ -28,6 +28,7 @@ import type { ReviewSessionGateway } from "./progressive-review-session"
 
 const LOAD_ERROR_FALLBACK = "Could not load this diff"
 const INVENTORY_ERROR_FALLBACK = "Could not load changed files"
+const EAGER_FILE_LOAD_CONCURRENCY = 8
 
 /** Terminal state for one progressive file load. */
 export type ProgressiveReviewFileLoadStatus = "loaded" | "failed" | "expired" | "cancelled"
@@ -197,12 +198,14 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     const snapshotId = this.#manifest.snapshotId
     const statuses = new Map<ReviewFileId, ProgressiveReviewFileLoadStatus>()
     const failureCauses = new Map<ReviewFileId, Error>()
-    await Promise.all(
-      fileIds.map(async (fileId) => {
-        if (this.#files.has(fileId)) {
-          statuses.set(fileId, "loaded")
-          return
-        }
+    let nextIndex = 0
+    const loadNext = async (): Promise<void> => {
+      const fileId = fileIds[nextIndex]
+      nextIndex += 1
+      if (fileId === undefined) return
+      if (this.#files.has(fileId)) {
+        statuses.set(fileId, "loaded")
+      } else {
         const existing = this.#inFlight.get(fileId)
         try {
           const status = await (existing ?? this.#startFileLoad(fileId))
@@ -212,7 +215,11 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
           statuses.set(fileId, "failed")
           failureCauses.set(fileId, error)
         }
-      }),
+      }
+      return loadNext()
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(EAGER_FILE_LOAD_CONCURRENCY, fileIds.length) }, loadNext),
     )
     return { snapshotId, statuses, failureCauses }
   }
@@ -466,21 +473,20 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
   ): Promise<ParsedDiffFile | null> => {
     const decoder = new TextDecoder("utf-8", { fatal: true })
     const chunks: string[] = []
-    let startLine = 0
-    while (this.#isIdentityCurrent(generation, identity) && !signal.aborted) {
-      // oxlint-disable-next-line eslint/no-await-in-loop -- Persisted ranges must be consumed in line order.
+    const readNext = async (startLine: number): Promise<boolean> => {
+      if (!this.#isIdentityCurrent(generation, identity) || signal.aborted) return false
       const range = await this.#api.waitForRange({ identity, fileId, startLine })
       if (!this.#isIdentityCurrent(generation, identity) || !sameIdentity(range.identity, identity))
-        return null
+        return false
       for (const block of range.blocks) chunks.push(decoder.decode(block.bytes, { stream: true }))
-      if (range.complete) break
+      if (range.complete) return true
       const last = range.blocks.at(-1)
       if (last === undefined || last.firstLine + last.lineCount <= startLine) {
         throw new Error("Progressive review returned an incomplete range")
       }
-      startLine = last.firstLine + last.lineCount
+      return readNext(last.firstLine + last.lineCount)
     }
-    if (signal.aborted || !this.#isIdentityCurrent(generation, identity)) return null
+    if (!(await readNext(0))) return null
     chunks.push(decoder.decode())
     const parsed = parseUnifiedDiff(chunks.join("")).files[0]
     if (parsed === undefined || parsed.fileId !== fileId) {
