@@ -1543,57 +1543,21 @@ const dismissOnboardingIfPresent = async (
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
   const composer = window.getByRole("textbox", { name: "Thread message" })
   await gutterNumber.evaluate((element) => element.scrollIntoView({ block: "center" }))
-  await expect
-    .poll(() =>
-      gutterNumber.evaluate((element) => {
-        element
-          .closest("pre")
-          ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
-        const root = element.getRootNode()
-        if (!(root instanceof ShadowRoot)) return false
-        const otherGutter = [...root.querySelectorAll<HTMLElement>("[data-column-number]")].find(
-          (candidate) => candidate !== element,
-        )
-        otherGutter?.dispatchEvent(
-          new PointerEvent("pointermove", {
-            bubbles: true,
-            composed: true,
-            pointerType: "mouse",
-          }),
-        )
-        element.dispatchEvent(
-          new PointerEvent("pointermove", {
-            bubbles: true,
-            composed: true,
-            pointerType: "mouse",
-          }),
-        )
-        let utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
-        if (utilityButton === null) {
-          element.dispatchEvent(
-            new PointerEvent("pointerdown", {
-              bubbles: true,
-              composed: true,
-              pointerId: 1,
-              pointerType: "touch",
-            }),
-          )
-          utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
-        }
-        if (utilityButton === null) return false
-        const init = {
-          bubbles: true,
-          button: 0,
-          composed: true,
-          pointerId: 1,
-          pointerType: "mouse",
-        }
-        utilityButton.dispatchEvent(new PointerEvent("pointerdown", init))
-        utilityButton.dispatchEvent(new PointerEvent("pointerup", init))
-        return true
-      }),
+  await gutterNumber.evaluate((element) => {
+    const lineIndex = element.getAttribute("data-line-index")
+    const lineType = element.getAttribute("data-line-type")
+    const root = element.getRootNode()
+    if (!(root instanceof ShadowRoot) || lineIndex === null || lineType === null) {
+      throw new Error("Review gutter has no corresponding rendered line")
+    }
+    const line = [...root.querySelectorAll<HTMLElement>("[data-line]")].find(
+      (candidate) =>
+        candidate.getAttribute("data-line-index") === lineIndex &&
+        candidate.getAttribute("data-line-type") === lineType,
     )
-    .toBe(true)
+    if (line === undefined) throw new Error("Review gutter has no corresponding rendered line")
+    line.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  })
   await expect(composer).toBeVisible()
   await composer.focus()
   return composer
