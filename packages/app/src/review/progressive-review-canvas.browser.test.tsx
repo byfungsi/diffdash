@@ -93,9 +93,9 @@ describe("ProgressiveReviewCanvas", () => {
 
   it("keeps rendered ranges when an equivalent session identity is reconstructed", async () => {
     const file = inventoryFile(0)
-    const readRange = vi.fn(async (requested: ReviewSnapshotFileInventory, startLine: number) =>
-      range(requested, startLine, true),
-    )
+    const readRange = vi.fn<
+      (requested: ReviewSnapshotFileInventory, startLine: number) => Promise<ReviewSessionRange>
+    >(async (requested, startLine) => range(requested, startLine, true))
     const reader = makeReader([file], readRange)
     render(<CanvasHarness files={[file]} identity={identity} reader={reader} />)
 

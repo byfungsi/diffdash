@@ -118,7 +118,7 @@ afterEach(() => {
 
 describe("ReviewFileTree", () => {
   it("does not navigate when the tree applies its initial controlled selection", async () => {
-    const onSelectPath = vi.fn()
+    const onSelectPath = vi.fn<(path: string) => void>()
     const container = document.createElement("div")
     container.style.height = "320px"
     container.style.width = "320px"
