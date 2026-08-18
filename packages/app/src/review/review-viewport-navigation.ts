@@ -818,10 +818,10 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
     const atScrollBoundary =
       container.scrollTop <= 0 ||
       container.scrollTop >= container.scrollHeight - container.clientHeight - 1
-    // Exact centering is impossible at a scroll boundary; full visibility is the stable outcome.
+    // Exact centering is impossible at a scroll boundary; intersection is the stable outcome.
     return atScrollBoundary &&
-      targetRect.top >= visibleTop - 1 &&
-      targetRect.bottom <= visibleBottom + 1
+      targetRect.bottom >= visibleTop - 1 &&
+      targetRect.top <= visibleBottom + 1
       ? 0
       : residualDrift
   }
