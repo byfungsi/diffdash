@@ -101,6 +101,14 @@ export class ReviewSearchHighlightManager {
     if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
     const current = this.registrations.get(reviewKey)
     if (current?.host === host && current.instance === instance) {
+      const shadowRoot = host.shadowRoot
+      if (shadowRoot !== null) {
+        current.observer.observe(shadowRoot, {
+          characterData: true,
+          childList: true,
+          subtree: true,
+        })
+      }
       this.scheduleRebuild()
       return
     }
