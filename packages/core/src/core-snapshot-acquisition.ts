@@ -136,6 +136,7 @@ export const coreSnapshotAcquisitionLayer = (
       const repositories = yield* RepositoryLinker
       const resources = yield* ResourceCatalog
       const resourceCollection = yield* ResourceCollection
+      const hostedCompleted = new Map<string, HostedReviewSnapshotManifest>()
       const hostedInFlight = new Map<
         string,
         Deferred.Deferred<HostedReviewSnapshotManifest, HostedSnapshotAcquisitionFailure>
@@ -202,13 +203,26 @@ export const coreSnapshotAcquisitionLayer = (
         review: HostedReviewLocator,
       ) {
         const project = yield* repositories.ensureHosted(review.repository, "preserve")
+        const key = JSON.stringify(review)
+        const detail = yield* providers
+          .getHostedReviewDetail(review)
+          .pipe(Effect.mapError(reviewFailure("hosted.detailAfter")))
+        const cached = hostedCompleted.get(key)
+        if (
+          cached !== undefined &&
+          detail.summary.base.revision !== null &&
+          detail.summary.head.revision !== null &&
+          cached.baseRevision === detail.summary.base.revision &&
+          cached.headRevision === detail.summary.head.revision
+        ) {
+          return HostedReviewSnapshotManifest.make({
+            ...cached,
+            detail: { summary: detail.summary },
+          })
+        }
         const source = yield* providers
           .getReviewDiffSource(review)
           .pipe(Effect.mapError(reviewFailure("hosted.diff")))
-        const detail = yield* providers.getHostedReviewDetail(review).pipe(
-          Effect.mapError(reviewFailure("hosted.detailAfter")),
-          Effect.onError(() => source.close.pipe(Effect.ignore)),
-        )
         const revisions = yield* hostedRevisions(detail, source).pipe(
           Effect.onError(() => source.close.pipe(Effect.ignore)),
         )
@@ -229,10 +243,12 @@ export const coreSnapshotAcquisitionLayer = (
           repositoryPath: project.localPath,
           statusByPath: changedFileStatuses(detail.files),
         }).pipe(Effect.mapError(reviewFailure("hosted.snapshot")))
-        return HostedReviewSnapshotManifest.make({
+        const manifest = HostedReviewSnapshotManifest.make({
           ...manifestIdentity(result, revisions.base, source.offer.expectedRevision),
           detail: { summary: detail.summary },
         })
+        hostedCompleted.set(key, manifest)
+        return manifest
       })
 
       const acquireHosted = Effect.fn("CoreSnapshotAcquisition.acquireHosted")(function* (

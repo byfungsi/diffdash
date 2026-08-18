@@ -362,6 +362,7 @@ describe("CoreSnapshotAcquisition", () => {
           { concurrency: "unbounded" },
         )
         expect(concurrentManifest).toEqual(manifest)
+        expect(yield* acquisition.acquireHosted(review)).toEqual(manifest)
         expect(manifest.projectId).toBe(projectId)
         expect(manifest.fileCount).toBe(1)
         expect(manifest.detail).toEqual({ summary: detail.summary })
