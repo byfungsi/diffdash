@@ -850,8 +850,12 @@ test("kills the provider child and persists interruption after a Core crash", as
 
     await expect
       .poll(() => {
-        const processId = coreHostProcessIds(mainProcessId, forcedCoreHost).find(processIsAlive)
-        if (processId === undefined) return false
+        const processId = coreHostAncestorProcessId(
+          mainProcessId,
+          providerProcessId,
+          forcedCoreHost,
+        )
+        if (processId === null) return false
         try {
           process.kill(processId, "SIGKILL")
           coreProcessId = processId
@@ -1036,6 +1040,30 @@ const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyA
         : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
     return matches ? [row.pid] : []
   })
+}
+
+const coreHostAncestorProcessId = (
+  rootPid: number,
+  descendantPid: number,
+  host: "bun" | "utility",
+): number | null => {
+  const hostProcessIds = new Set(coreHostProcessIds(rootPid, host))
+  let processId = descendantPid
+  while (processId !== rootPid && processId > 1) {
+    if (hostProcessIds.has(processId)) return processId
+    try {
+      const parent = Number(
+        execFileSync("ps", ["-o", "ppid=", "-p", String(processId)], {
+          encoding: "utf8",
+        }).trim(),
+      )
+      if (!Number.isInteger(parent) || parent === processId) return null
+      processId = parent
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 const processIsAlive = (pid: number): boolean => {
