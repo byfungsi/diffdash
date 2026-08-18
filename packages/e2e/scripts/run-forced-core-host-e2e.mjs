@@ -27,6 +27,7 @@ await withDesktopBuildLease(async () => {
         "playwright",
         "test",
         "--project=desktop",
+        `--output=test-results/forced-${host}`,
         "--grep",
         criticalFlowPattern,
       ],
