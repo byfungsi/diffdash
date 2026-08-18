@@ -1543,14 +1543,36 @@ const dismissOnboardingIfPresent = async (
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
   const composer = window.getByRole("textbox", { name: "Thread message" })
   await gutterNumber.evaluate((element) => element.scrollIntoView({ block: "center" }))
-  await gutterNumber.dispatchEvent("pointermove", {
-    bubbles: true,
-    composed: true,
-    pointerType: "mouse",
-  })
-  const utilityButton = gutterNumber.locator("[data-utility-button]")
-  await expect(utilityButton).toBeVisible()
-  await utilityButton.click()
+  await expect
+    .poll(() =>
+      gutterNumber.evaluate((element) => {
+        element
+          .closest("pre")
+          ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
+        element.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            composed: true,
+            pointerType: "mouse",
+          }),
+        )
+        const root = element.getRootNode()
+        if (!(root instanceof ShadowRoot)) return false
+        const utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
+        if (utilityButton === null) return false
+        const init = {
+          bubbles: true,
+          button: 0,
+          composed: true,
+          pointerId: 1,
+          pointerType: "mouse",
+        }
+        utilityButton.dispatchEvent(new PointerEvent("pointerdown", init))
+        utilityButton.dispatchEvent(new PointerEvent("pointerup", init))
+        return true
+      }),
+    )
+    .toBe(true)
   await expect(composer).toBeVisible()
   await composer.focus()
   return composer
