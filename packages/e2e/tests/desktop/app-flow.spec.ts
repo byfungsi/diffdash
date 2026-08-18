@@ -1549,6 +1549,18 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
         element
           .closest("pre")
           ?.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }))
+        const root = element.getRootNode()
+        if (!(root instanceof ShadowRoot)) return false
+        const otherGutter = [...root.querySelectorAll<HTMLElement>("[data-column-number]")].find(
+          (candidate) => candidate !== element,
+        )
+        otherGutter?.dispatchEvent(
+          new PointerEvent("pointermove", {
+            bubbles: true,
+            composed: true,
+            pointerType: "mouse",
+          }),
+        )
         element.dispatchEvent(
           new PointerEvent("pointermove", {
             bubbles: true,
@@ -1556,8 +1568,6 @@ const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => 
             pointerType: "mouse",
           }),
         )
-        const root = element.getRootNode()
-        if (!(root instanceof ShadowRoot)) return false
         let utilityButton = root.querySelector<HTMLButtonElement>("[data-utility-button]")
         if (utilityButton === null) {
           element.dispatchEvent(
