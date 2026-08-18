@@ -1,4 +1,5 @@
 import type { ParsedDiffFile } from "@diffdash/domain/diff"
+import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
 import {
   ReviewSnapshotFileInventory,
   type ReviewSnapshotManifest,
@@ -104,6 +105,7 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
   readonly #gateway: ReviewSessionGateway
   readonly #projectionAtom: Atom.Writable<ProgressiveReviewContentProjection>
   readonly #releases: Array<() => void> = []
+  readonly #files = new Map<ReviewFileId, ParsedDiffFile>()
   readonly #inFlight = new Map<ReviewFileId, Promise<ProgressiveReviewFileLoadStatus>>()
   readonly #abortControllers = new Set<AbortController>()
   readonly #manifestWaiters = new Set<ManifestWaiter>()
@@ -167,6 +169,7 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     this.#generation += 1
     this.#cancelOperations()
     void this.#closeConnection()
+    this.#files.clear()
     this.#inventoryLoaded = false
     this.#inventoryRequestActive = false
     this.#publish(emptyProjection(manifest))
@@ -179,8 +182,9 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     void this.#open(this.#generation)
   }
 
-  /** Complete parsed files are intentionally not retained by progressive production sessions. */
-  readonly getFile = (_fileId: ReviewFileId): ParsedDiffFile | null => null
+  /** Returns the complete parsed file retained for this review session. */
+  readonly getFile = (fileId: ReviewFileId): ParsedDiffFile | null =>
+    this.#files.get(fileId) ?? null
 
   /** Returns the current immutable projection. */
   readonly getProjection = (): ProgressiveReviewContentProjection =>
@@ -195,6 +199,10 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     const failureCauses = new Map<ReviewFileId, Error>()
     await Promise.all(
       fileIds.map(async (fileId) => {
+        if (this.#files.has(fileId)) {
+          statuses.set(fileId, "loaded")
+          return
+        }
         const existing = this.#inFlight.get(fileId)
         try {
           const status = await (existing ?? this.#startFileLoad(fileId))
@@ -414,9 +422,16 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
       loadingFileIds: new Set([...this.getProjection().loadingFileIds, fileId]),
       fileErrors: withoutKey(this.getProjection().fileErrors, fileId),
     })
-    const promise = this.readRange({ fileId, startLine: 0 }, true, controller.signal)
-      .then(() => {
-        if (!this.#isIdentityCurrent(generation, identity)) return "cancelled" as const
+    const promise = this.#readFile(generation, identity, fileId, controller.signal)
+      .then((file) => {
+        if (file === null) return "cancelled" as const
+        this.#files.set(fileId, file)
+        const inventory = this.getProjection().inventory
+        const files = inventory.flatMap((entry) => {
+          const retained = this.#files.get(entry.fileId)
+          return retained === undefined ? [] : [retained]
+        })
+        this.#publish({ ...this.getProjection(), files })
         return "loaded" as const
       })
       .catch((cause) => {
@@ -443,10 +458,49 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     return promise
   }
 
+  readonly #readFile = async (
+    generation: number,
+    identity: ReviewSessionIdentity,
+    fileId: ReviewFileId,
+    signal: AbortSignal,
+  ): Promise<ParsedDiffFile | null> => {
+    const decoder = new TextDecoder("utf-8", { fatal: true })
+    const chunks: string[] = []
+    let startLine = 0
+    while (this.#isIdentityCurrent(generation, identity) && !signal.aborted) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- Persisted ranges must be consumed in line order.
+      const range = await this.#api.waitForRange({ identity, fileId, startLine })
+      if (!this.#isIdentityCurrent(generation, identity) || !sameIdentity(range.identity, identity))
+        return null
+      for (const block of range.blocks) chunks.push(decoder.decode(block.bytes, { stream: true }))
+      if (range.complete) break
+      const last = range.blocks.at(-1)
+      if (last === undefined || last.firstLine + last.lineCount <= startLine) {
+        throw new Error("Progressive review returned an incomplete range")
+      }
+      startLine = last.firstLine + last.lineCount
+    }
+    if (signal.aborted || !this.#isIdentityCurrent(generation, identity)) return null
+    chunks.push(decoder.decode())
+    const parsed = parseUnifiedDiff(chunks.join("")).files[0]
+    if (parsed === undefined || parsed.fileId !== fileId) {
+      throw new Error("Progressive review range did not match its inventory file")
+    }
+    const inventory = this.getProjection().inventory.find((file) => file.fileId === fileId)
+    if (inventory === undefined) {
+      throw new Error("Progressive review inventory is missing the loaded file")
+    }
+    if (parsed.hunks.length !== inventory.hunkCount) {
+      throw new Error("Progressive review range metadata did not match persisted inventory")
+    }
+    return { ...parsed, ...inventory, hunks: parsed.hunks, patch: parsed.patch }
+  }
+
   readonly #expire = async (generation: number): Promise<void> => {
     if (!this.#isGenerationCurrent(generation)) return
     this.#generation += 1
     this.#cancelOperations()
+    this.#files.clear()
     this.#publish({
       ...this.getProjection(),
       identity: null,

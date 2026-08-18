@@ -33,7 +33,6 @@ import {
   EMPTY_AGENT_PROVIDER_CATALOG,
 } from "@diffdash/protocol/agent-providers"
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
-import type { ResolvedReviewSessionTarget } from "@diffdash/protocol/review-session"
 import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
 import { Match } from "effect"
@@ -104,6 +103,7 @@ import {
   type WalkthroughState,
   walkthroughReviewSteps,
 } from "@/walkthrough/walkthrough-panel"
+import { OpenDiffCard } from "./diff-card"
 import {
   createDiffsWorker,
   DiffVirtualizer,
@@ -125,7 +125,7 @@ import {
   reviewNavigationStatusAtom,
 } from "./review-navigation"
 import { ReviewNavigationAnchorRegistry, reviewFileAnchorKey } from "./review-navigation-anchors"
-import { ProgressiveReviewCanvas, REVIEW_DIFF_PIERRE_OVERSCAN } from "./progressive-review-canvas"
+import { ReviewPagePlaceholder } from "./review-page-placeholder"
 import { ReviewSearchHighlightManager } from "./review-search-highlights"
 import { ReviewSearchController } from "./review-search-state"
 import { ReviewSearchToolbar } from "./review-search-toolbar"
@@ -296,7 +296,7 @@ const REVIEW_DIFF_OPTIONS = {
 
 const REVIEW_DIFF_VIRTUALIZER_CONFIG = {
   intersectionObserverMargin: 1_500,
-  overscrollSize: REVIEW_DIFF_PIERRE_OVERSCAN,
+  overscrollSize: 1_000,
 } as const
 
 const REVIEW_DIFF_WORKER_POOL_OPTIONS = {
@@ -429,12 +429,6 @@ export const ReviewDetailView = ({
   const [navigationSelectedFileId, setNavigationSelectedFileId] = useState<ReviewFileId | null>(
     null,
   )
-  const [navigationSeekGeneration, setNavigationSeekGeneration] = useState(0)
-  const [navigationTargetFileId, setNavigationTargetFileId] = useState<ReviewFileId | null>(null)
-  const [navigationRangeTarget, setNavigationRangeTarget] = useState<{
-    readonly fileId: ReviewFileId
-    readonly startLine: number
-  } | null>(null)
   const sidebarTab = projectRibbonToSidebarTab(activeRibbon)
   const setSidebarTab = (tab: ReviewSidebarTab) =>
     onActiveRibbonChange(sidebarTabToProjectRibbon(tab))
@@ -491,11 +485,14 @@ export const ReviewDetailView = ({
   }, [sidebarExpanded, sidebarTab])
   const {
     files: snapshotFiles,
+    fileErrors,
     inventory: progressiveInventory,
     inventoryError,
     inventoryLoading,
     identity: progressiveIdentity,
+    loadingFileIds,
     reader: snapshotPageReader,
+    snapshotRefresh,
   } = progressiveContent
   const loadSnapshotFiles = snapshotPageReader.loadFiles
   reviewSearchController.updateRuntime({
@@ -612,6 +609,10 @@ export const ReviewDetailView = ({
     const loaded = loadedFilesById.get(file.fileId)
     return loaded === undefined ? [] : [loaded]
   })
+  const eagerLoadSettled =
+    progressiveInventory.length === 0 ||
+    (loadingFileIds.size === 0 &&
+      loadedFilesById.size + fileErrors.size >= progressiveInventory.length)
   const normalizedReviewSearchIndex = activeReviewSearchIndex
   const activeReviewSearchOccurrence = reviewSearchOpen ? activeReviewSearchMatch : null
   const hiddenFileCount = changedFiles.filter((file) =>
@@ -871,22 +872,8 @@ export const ReviewDetailView = ({
     handleViewedDiffRendered(reviewKey, phase)
   })
   useEffect(() => {
-    const initialFileIds = progressiveInventory.slice(0, 3).map((file) => file.fileId)
-    void loadSnapshotFiles(initialFileIds)
+    void loadSnapshotFiles(progressiveInventory.map((file) => file.fileId))
   }, [loadSnapshotFiles, manifest.snapshotId, progressiveInventory])
-  useEffect(() => {
-    if (selectedPath === null) return
-    const file = progressiveInventory.find((candidate) => candidate.path === selectedPath)
-    if (file !== undefined) void loadSnapshotFiles([file.fileId])
-  }, [loadSnapshotFiles, progressiveInventory, selectedPath])
-  useEffect(() => {
-    if (activeWalkthrough === null) return
-    const hunkIds = walkthroughReviewSteps(activeWalkthrough).flatMap((step) => step.hunkIds)
-    const fileIds = progressiveInventory
-      .filter((file) => hunkIds.some((hunkId) => hunkId.startsWith(`${file.path}:`)))
-      .map((file) => file.fileId)
-    void loadSnapshotFiles(fileIds)
-  }, [activeWalkthrough, loadSnapshotFiles, progressiveInventory])
   const moveReviewSearch = useStableCallback((direction: -1 | 1) => {
     reviewSearchController.move(direction)
   })
@@ -998,11 +985,7 @@ export const ReviewDetailView = ({
     )
   })
   const prepareNavigationFile = useStableCallback(
-    (
-      file: ReviewSnapshotFileInventory,
-      input: ReviewNavigationInput,
-      persistedTarget: ResolvedReviewSessionTarget | null,
-    ) => {
+    (file: ReviewSnapshotFileInventory, input: ReviewNavigationInput) => {
       if (input.behavior.selection === "update") onSelectPath(file.path)
       if (input.behavior.selection === "update") setNavigationSelectedFileId(file.fileId)
       const threadId = Match.valueTags(input.location.target, {
@@ -1018,13 +1001,6 @@ export const ReviewDetailView = ({
           ?.thread.activeAnchor
         if (anchor !== null && anchor !== undefined) setExpandedLineAnchor(anchor)
       }
-      setNavigationRangeTarget(
-        persistedTarget === null
-          ? null
-          : { fileId: file.fileId, startLine: persistedTarget.firstLine },
-      )
-      setNavigationTargetFileId(file.fileId)
-      setNavigationSeekGeneration((generation) => generation + 1)
       setActivePane("diff")
       if (input.origin === "thread-detail") {
         setThreadSidebarState({ _tag: "collapsed" })
@@ -2031,40 +2007,59 @@ export const ReviewDetailView = ({
                 {normalizedFileFilter.length > 0 && renderedChangedFiles.length === 0 ? (
                   <EmptyState>No files match this filter.</EmptyState>
                 ) : null}
-                {progressiveIdentity === null || renderedChangedFiles.length === 0 ? null : (
-                  <ProgressiveReviewCanvas
-                    diffVirtualizer={diffVirtualizer}
-                    files={renderedChangedFiles}
-                    expandedFileKeys={expandedFileKeys}
-                    expandedLineAnchor={navigationThreadAnchor ?? expandedLineAnchor}
-                    forceExpandedFileKeys={forceExpandedFileKeys}
-                    identity={progressiveIdentity}
-                    mode={resolvedDiffViewMode}
-                    navigationActive={navigationLocked}
-                    navigationSeekGeneration={navigationSeekGeneration}
-                    navigationTargetFileId={navigationTargetFileId}
-                    navigationRangeTarget={navigationRangeTarget}
-                    options={reviewDiffOptions}
-                    priorityFileId={activeReviewSearchOccurrence?.fileId ?? null}
-                    reader={snapshotPageReader}
-                    reviewThreads={reviewThreads}
-                    scrollContainerRef={diffScrollContainerRef}
-                    selectedPath={selectedVisiblePath}
-                    viewedFileKeys={viewedFileKeys}
-                    onFileAnchorChange={(fileId, element, focusElement) =>
-                      registerFileNavigationAnchor(fileId, element, focusElement)
-                    }
-                    onDiffRendered={handleDiffRendered}
-                    onOpenFile={(path) => void openRepositoryFile(path)}
-                    onOpenThread={openReviewThreadDetail}
-                    onSelect={selectPathAndScroll}
-                    onSetViewed={(reviewKey, viewed) =>
-                      setViewedPreservingViewport(reviewKey, viewed)
-                    }
-                    onToggleExpanded={onToggleExpanded}
-                    onToggleLine={toggleExpandedLine}
-                  />
-                )}
+                {progressiveIdentity !== null &&
+                renderedChangedFiles.length > 0 &&
+                !eagerLoadSettled ? (
+                  <EmptyState>Loading review files...</EmptyState>
+                ) : null}
+                {progressiveIdentity === null || !eagerLoadSettled
+                  ? null
+                  : renderedChangedFiles.map((file) => {
+                      const parsedFile = loadedFilesById.get(file.fileId)
+                      return parsedFile === undefined ? (
+                        <ReviewPagePlaceholder
+                          key={file.reviewKey}
+                          error={fileErrors.get(file.fileId) ?? null}
+                          file={file}
+                          loading={loadingFileIds.has(file.fileId)}
+                          snapshotRefresh={snapshotRefresh}
+                          onFileAnchorChange={(element, focusElement) =>
+                            registerFileNavigationAnchor(file.fileId, element, focusElement)
+                          }
+                          onRetry={() => void loadSnapshotFiles([file.fileId])}
+                          onRefresh={onReload}
+                        />
+                      ) : (
+                        <OpenDiffCard
+                          key={file.reviewKey}
+                          diffOptions={reviewDiffOptions}
+                          expanded={expandedFileKeys.has(file.reviewKey)}
+                          expandedLineAnchor={navigationThreadAnchor ?? expandedLineAnchor}
+                          file={parsedFile}
+                          forceExpanded={forceExpandedFileKeys.has(file.reviewKey)}
+                          reviewThreads={reviewThreads}
+                          selected={
+                            activeSearchReviewKey === file.reviewKey ||
+                            selectedVisiblePath === file.path
+                          }
+                          viewed={viewedFileKeys.has(file.reviewKey)}
+                          onDiffRendered={(node, instance, phase) =>
+                            handleDiffRendered(file.reviewKey, node, instance, phase)
+                          }
+                          onFileAnchorChange={(element, focusElement) =>
+                            registerFileNavigationAnchor(file.fileId, element, focusElement)
+                          }
+                          onOpenFile={() => void openRepositoryFile(file.path)}
+                          onOpenThread={openReviewThreadDetail}
+                          onSelect={() => selectPathAndScroll(file.path)}
+                          onSetViewed={(viewed) =>
+                            setViewedPreservingViewport(file.reviewKey, viewed)
+                          }
+                          onToggleLine={toggleExpandedLine}
+                          onToggleExpanded={() => onToggleExpanded(file.reviewKey)}
+                        />
+                      )
+                    })}
               </main>
               <div
                 data-review-scroll-past-end
