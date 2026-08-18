@@ -603,9 +603,7 @@ test("runs an explicit Claude walkthrough successfully", async ({
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await expect(window.getByText("src/local.ts").first()).toBeVisible()
     await expect(window.getByText("notes.txt").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Approve" })).toBeHidden()
@@ -667,9 +665,7 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-invalid-claude")
     await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
@@ -725,9 +721,7 @@ test("skips unavailable Claude and falls back to Codex in Auto mode", async ({
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-unavailable-claude")
     await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
@@ -780,9 +774,7 @@ test("recovers a running walkthrough after renderer reload", async ({
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:renderer-reload")
     await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     await expect.poll(() => countLogLines(claudeRunLog)).toBe(1)
@@ -851,9 +843,7 @@ test("kills the provider child and persists interruption after a Core crash", as
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const accepted = await startLocalWalkthrough(window, localRepo, "w:core-crash")
     await expect.poll(() => readProviderRunProcessId(claudeRunLog)).toBeGreaterThan(0)
     const providerProcessId = await readProviderRunProcessId(claudeRunLog)
@@ -931,9 +921,7 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
         .toBeGreaterThan(0)
     }
     await dismissOnboardingIfPresent(window)
-    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-      timeout: 20_000,
-    })
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     const rawAcceptance = await startLocalWalkthrough(
       window,
       localRepo,
@@ -1154,9 +1142,7 @@ for (const fixture of [
     try {
       const window = await app.firstWindow()
       await dismissOnboardingIfPresent(window)
-      await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes", {
-        timeout: 20_000,
-      })
+      await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
       const diffCard = window.locator('[data-diff-card-path="src/local.ts"]')
       await expect(diffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
       const gutterNumber = diffCard
@@ -1361,7 +1347,6 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     const window = await app.firstWindow()
     await expect(window.locator("[data-review-editor-header]")).toContainText(
       "comparison-base...comparison-head",
-      { timeout: 20_000 },
     )
     await expect(window.getByText("src/comparison.ts").first()).toBeVisible()
     await expect(window.getByRole("menuitem", { name: /Approve/ })).toHaveCount(0)
