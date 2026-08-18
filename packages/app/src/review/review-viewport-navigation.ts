@@ -74,7 +74,7 @@ interface LocalResolvedReviewNavigationTarget extends ResolvedReviewNavigationTa
   readonly persistedTarget: ResolvedReviewSessionTarget | null
 }
 
-const STABLE_FRAME_COUNT = 8
+const STABLE_FRAME_COUNT = 3
 const LATE_LAYOUT_RECONCILIATION_MS = 8_000
 
 /** Imperative DOM/Pierre execution plane for the renderer-local review navigator. */
@@ -446,6 +446,9 @@ export class ReviewViewportNavigationBridge implements ReviewViewportBridge {
       const stable = geometryMatches && focusMatches
       stableFrames = stable ? stableFrames + 1 : 0
       await nextFrame(signal)
+      if (!currentAnchor.isConnected() && stableFrames >= STABLE_FRAME_COUNT) {
+        stableFrames = STABLE_FRAME_COUNT - 1
+      }
     }
     if (
       currentAnchor.isConnected() &&
