@@ -564,6 +564,10 @@ const ProgressiveRangeCard = ({
     readonly line: number
     readonly copyStatus: "idle" | "copying" | "failed"
   } | null>(null)
+  const projectId = identity.projectId
+  const processId = identity.processId
+  const snapshotId = identity.snapshotId
+  const sessionId = identity.sessionId
   optionsRef.current = {
     ...options,
     onGutterUtilityClick: ({ side, start }) => {
@@ -662,10 +666,10 @@ const ProgressiveRangeCard = ({
     if (host === null) return undefined
     const requestId = `${file.fileId}:${++requestRef.current}:${startLine}`
     const rangeIdentity: PierreRangeIdentity = {
-      projectId: identity.projectId,
-      processEpoch: identity.processId,
-      snapshotGeneration: identity.snapshotId,
-      sessionEpoch: identity.sessionId,
+      projectId,
+      processEpoch: processId,
+      snapshotGeneration: snapshotId,
+      sessionEpoch: sessionId,
       rangeKey: `${file.fileId}:${startLine}`,
       requestId,
       width: Math.max(1, host.getBoundingClientRect().width),
@@ -789,14 +793,17 @@ const ProgressiveRangeCard = ({
     expanded,
     expandedLineAnchor,
     file,
-    identity,
     mode,
     onDiffRendered,
+    processId,
+    projectId,
     reader,
     reviewThreads.details,
     scheduler,
     scrollContainerRef,
     shells,
+    sessionId,
+    snapshotId,
     startLine,
     workerManager,
   ])

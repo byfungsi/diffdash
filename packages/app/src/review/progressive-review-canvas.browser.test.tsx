@@ -30,6 +30,8 @@ const identity = ReviewSessionIdentity.make({
 })
 
 let root: Root | null = null
+const noReviewThreadDetails = [] as const
+const ignoreDiffRendered = () => undefined
 
 afterEach(() => {
   root?.unmount()
@@ -88,25 +90,50 @@ describe("ProgressiveReviewCanvas", () => {
         ?.getAttribute("data-progressive-range-start"),
     ).toBe("2")
   })
+
+  it("keeps rendered ranges when an equivalent session identity is reconstructed", async () => {
+    const file = inventoryFile(0)
+    const readRange = vi.fn(async (requested: ReviewSnapshotFileInventory, startLine: number) =>
+      range(requested, startLine, true),
+    )
+    const reader = makeReader([file], readRange)
+    render(<CanvasHarness files={[file]} identity={identity} reader={reader} />)
+
+    await vi.waitFor(() => expect(readRange).toHaveBeenCalledTimes(1))
+    const equivalentIdentity = ReviewSessionIdentity.make({ ...identity })
+    flushSync(() =>
+      root?.render(
+        <CanvasHarness files={[file]} identity={equivalentIdentity} reader={reader} />,
+      ),
+    )
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+
+    expect(readRange).toHaveBeenCalledTimes(1)
+  })
 })
 
 const CanvasHarness = ({
   files,
+  identity: sessionIdentity = identity,
   reader,
 }: {
   readonly files: readonly ReviewSnapshotFileInventory[]
+  readonly identity?: ReviewSessionIdentity
   readonly reader: ProgressiveReviewContentReader
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const diffVirtualizerRef = useRef(
+    new DiffVirtualizer({ overscrollSize: REVIEW_DIFF_PIERRE_OVERSCAN }),
+  )
   return (
     <div ref={scrollRef} style={{ height: 600, overflowY: "auto" }}>
       <ProgressiveReviewCanvas
-        diffVirtualizer={new DiffVirtualizer({ overscrollSize: REVIEW_DIFF_PIERRE_OVERSCAN })}
+        diffVirtualizer={diffVirtualizerRef.current}
         files={files}
         expandedFileKeys={new Set(files.map((file) => file.reviewKey))}
         expandedLineAnchor={null}
         forceExpandedFileKeys={new Set()}
-        identity={identity}
+        identity={sessionIdentity}
         mode="unified"
         navigationActive={false}
         navigationSeekGeneration={0}
@@ -116,7 +143,7 @@ const CanvasHarness = ({
         priorityFileId={null}
         reader={reader}
         reviewThreads={{
-          details: [],
+          details: noReviewThreadDetails,
           error: null,
           loading: false,
           available: true,
@@ -133,7 +160,7 @@ const CanvasHarness = ({
         selectedPath={files[0]?.path ?? null}
         viewedFileKeys={new Set()}
         onFileAnchorChange={() => () => undefined}
-        onDiffRendered={() => undefined}
+        onDiffRendered={ignoreDiffRendered}
         onOpenFile={() => undefined}
         onOpenThread={() => undefined}
         onSelect={() => undefined}
