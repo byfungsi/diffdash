@@ -788,7 +788,7 @@ test("recovers a running walkthrough after renderer reload", async ({
   }
 })
 
-test("kills the provider child and persists interruption after a Core crash", async ({
+test("kills the provider child and persists interruption after Core termination", async ({
   browserName: _browserName,
 }, testInfo) => {
   testInfo.setTimeout(45_000)
@@ -857,7 +857,7 @@ test("kills the provider child and persists interruption after a Core crash", as
         )
         if (processId === null) return false
         try {
-          process.kill(processId, "SIGKILL")
+          process.kill(processId, "SIGTERM")
           coreProcessId = processId
           return true
         } catch {

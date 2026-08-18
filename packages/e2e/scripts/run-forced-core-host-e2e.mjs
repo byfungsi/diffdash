@@ -9,7 +9,7 @@ const criticalFlowPattern = [
   "falls back from invalid Claude walkthrough output to Codex in Auto mode",
   "skips unavailable Claude and falls back to Codex in Auto mode",
   "recovers a running walkthrough after renderer reload",
-  "kills the provider child and persists interruption after a Core crash",
+  "kills the provider child and persists interruption after Core termination",
   "FUN-133 AC: runs a fixture review turn through codex",
   "opens and forwards immutable repository comparisons through Electron",
 ].join("|")
