@@ -18,10 +18,23 @@ await withDesktopBuildLease(async () => {
   run(pnpm, ["--filter", "@diffdash/desktop", "build:e2e"])
 
   for (const host of ["bun", "utility"]) {
-    run(pnpm, ["exec", "playwright", "test", "--project=desktop", "--grep", criticalFlowPattern], {
-      DIFFDASH_E2E_CORE_HOST: host,
-      DIFFDASH_E2E_FORCED_CORE_HOST_GATE: "1",
-    })
+    run(
+      pnpm,
+      [
+        "--filter",
+        "@diffdash/e2e",
+        "exec",
+        "playwright",
+        "test",
+        "--project=desktop",
+        "--grep",
+        criticalFlowPattern,
+      ],
+      {
+        DIFFDASH_E2E_CORE_HOST: host,
+        DIFFDASH_E2E_FORCED_CORE_HOST_GATE: "1",
+      },
+    )
   }
 })
 
