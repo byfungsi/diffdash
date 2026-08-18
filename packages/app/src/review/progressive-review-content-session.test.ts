@@ -29,8 +29,7 @@ index 1111111..2222222 100644
 +++ b/src/app.ts
 @@ -1 +1 @@
 -export const value = 1
-+export const value = 2
-`
++export const value = 2`
 
 describe("ProgressiveReviewContentSession", () => {
   it("assembles and retains complete files for the active review", async () => {
@@ -80,7 +79,7 @@ describe("ProgressiveReviewContentSession", () => {
       patchHash: parsedFile.patchHash,
       hunkCount: parsedFile.hunks.length,
     } as const
-    const lines = patch.split("\n")
+    const lines = `${patch}\n`.split("\n")
     const firstBytes = new TextEncoder().encode(`${lines.slice(0, 6).join("\n")}\n`)
     const finalBytes = new TextEncoder().encode(lines.slice(6).join("\n"))
     const waitForRange = vi.fn<ProgressiveReviewApi["waitForRange"]>(async (request) => {
@@ -138,6 +137,7 @@ describe("ProgressiveReviewContentSession", () => {
     await session.loadFiles([file.fileId])
 
     expect(session.getFile(file.fileId)?.patch).toBe(parsedFile.patch)
+    expect(session.getFile(file.fileId)?.hunks).toEqual(parsedFile.hunks)
     expect(session.getProjection().files.map((entry) => entry.fileId)).toEqual([file.fileId])
     expect(waitForRange.mock.calls.map(([request]) => request.startLine)).toEqual([0, 6])
     session.dispose()

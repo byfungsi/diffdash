@@ -488,7 +488,8 @@ export class ProgressiveReviewContentSession implements ProgressiveReviewContent
     }
     if (!(await readNext(0))) return null
     chunks.push(decoder.decode())
-    const parsed = parseUnifiedDiff(chunks.join("")).files[0]
+    const patch = chunks.join("").replace(/\r?\n$/, "")
+    const parsed = parseUnifiedDiff(patch).files[0]
     if (parsed === undefined || parsed.fileId !== fileId) {
       throw new Error("Progressive review range did not match its inventory file")
     }
