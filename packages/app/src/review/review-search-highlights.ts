@@ -62,6 +62,10 @@ export class ReviewSearchHighlightManager {
       }
     })
     this.occurrencesByFile = occurrencesByFile
+    this.registrations.forEach((registration, reviewKey) => {
+      registration.observer.disconnect()
+      if (occurrencesByFile.has(reviewKey)) this.observeRegistration(registration)
+    })
     this.activeOccurrenceId = activeOccurrenceId
     this.activeElement = null
     this.activeRange = null
@@ -101,14 +105,7 @@ export class ReviewSearchHighlightManager {
     if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
     const current = this.registrations.get(reviewKey)
     if (current?.host === host && current.instance === instance) {
-      const shadowRoot = host.shadowRoot
-      if (shadowRoot !== null) {
-        current.observer.observe(shadowRoot, {
-          characterData: true,
-          childList: true,
-          subtree: true,
-        })
-      }
+      if (this.occurrencesByFile.has(reviewKey)) this.observeRegistration(current)
       this.scheduleRebuild()
       return
     }
@@ -133,7 +130,7 @@ export class ReviewSearchHighlightManager {
       }
     })
     const shadowRoot = host.shadowRoot
-    if (shadowRoot !== null) {
+    if (shadowRoot !== null && this.occurrencesByFile.has(reviewKey)) {
       observer.observe(shadowRoot, { characterData: true, childList: true, subtree: true })
     }
     this.registrations.set(reviewKey, { host, instance, observer })
@@ -227,6 +224,16 @@ export class ReviewSearchHighlightManager {
     this.matchHighlight = null
     this.activeHighlight = null
     this.highlightsRegistered = false
+  }
+
+  private observeRegistration(registration: SearchDiffRegistration) {
+    const shadowRoot = registration.host.shadowRoot
+    if (shadowRoot === null) return
+    registration.observer.observe(shadowRoot, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    })
   }
 
   private rebuildHighlights() {
