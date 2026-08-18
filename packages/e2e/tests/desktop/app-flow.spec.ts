@@ -1069,7 +1069,10 @@ const coreHostAncestorProcessId = (
 const processIsAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
-    return true
+    const state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+    }).trim()
+    return state.length > 0 && !state.startsWith("Z")
   } catch (error) {
     return error instanceof Error && "code" in error && error.code === "EPERM"
   }
