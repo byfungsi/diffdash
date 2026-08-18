@@ -1039,7 +1039,9 @@ const anchorOwnsDeepFocus = (
 
 const setProgrammaticScrollTop = (container: HTMLElement, requested: number) => {
   const max = Math.max(0, container.scrollHeight - container.clientHeight)
-  container.scrollTop = Math.min(Math.max(0, requested), max)
+  const nextScrollTop = Math.min(Math.max(0, requested), max)
+  if (Math.abs(nextScrollTop - container.scrollTop) <= 0.5) return
+  container.scrollTop = nextScrollTop
   container.dispatchEvent(new Event("scroll"))
 }
 
