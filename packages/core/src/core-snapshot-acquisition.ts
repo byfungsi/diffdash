@@ -136,6 +136,10 @@ export const coreSnapshotAcquisitionLayer = (
       const repositories = yield* RepositoryLinker
       const resources = yield* ResourceCatalog
       const resourceCollection = yield* ResourceCollection
+      const hostedInFlight = new Map<
+        string,
+        Deferred.Deferred<HostedReviewSnapshotManifest, HostedSnapshotAcquisitionFailure>
+      >()
       const localInFlight = new Map<
         string,
         Deferred.Deferred<LocalReviewSnapshotManifest, LocalSnapshotAcquisitionFailure>
@@ -194,7 +198,7 @@ export const coreSnapshotAcquisitionLayer = (
         )
       })
 
-      const acquireHosted = Effect.fn("CoreSnapshotAcquisition.acquireHosted")(function* (
+      const acquireHostedOnce = Effect.fn("CoreSnapshotAcquisition.acquireHostedOnce")(function* (
         review: HostedReviewLocator,
       ) {
         const project = yield* repositories.ensureHosted(review.repository, "preserve")
@@ -229,6 +233,30 @@ export const coreSnapshotAcquisitionLayer = (
           ...manifestIdentity(result, revisions.base, source.offer.expectedRevision),
           detail: { summary: detail.summary },
         })
+      })
+
+      const acquireHosted = Effect.fn("CoreSnapshotAcquisition.acquireHosted")(function* (
+        review: HostedReviewLocator,
+      ) {
+        const key = JSON.stringify(review)
+        const candidate = yield* Deferred.make<
+          HostedReviewSnapshotManifest,
+          HostedSnapshotAcquisitionFailure
+        >()
+        const pending = yield* Effect.sync(() => {
+          const current = hostedInFlight.get(key)
+          if (current !== undefined) return current
+          hostedInFlight.set(key, candidate)
+          return candidate
+        })
+        if (pending !== candidate) return yield* Deferred.await(pending)
+
+        const exit = yield* Effect.exit(acquireHostedOnce(review))
+        yield* Deferred.done(candidate, exit)
+        yield* Effect.sync(() => {
+          if (hostedInFlight.get(key) === candidate) hostedInFlight.delete(key)
+        })
+        return yield* Deferred.await(candidate)
       })
 
       const acquireLocalOnce = Effect.fn("CoreSnapshotAcquisition.acquireLocalOnce")(function* (
