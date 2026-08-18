@@ -1725,7 +1725,7 @@ const waitForWalkthroughOperation = async (
   timeout = 20_000,
 ): Promise<WalkthroughOperationSummary> => {
   await expect
-    .poll(() => getWalkthroughOperation(window, operationId), { timeout })
+    .poll(() => getWalkthroughOperation(window, operationId).catch(() => null), { timeout })
     .toMatchObject({
       state,
     })
