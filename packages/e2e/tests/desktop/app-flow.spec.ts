@@ -1382,7 +1382,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
   await writeFile(join(localRepo, "README.md"), "comparison checkout\n")
   realGit(localRepo, "add", ".")
   commit(localRepo, "local checkout")
-  realGit(localRepo, "remote", "add", "origin", remoteRepo)
+  realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
 
   const appEnvironment = {
     ...process.env,
