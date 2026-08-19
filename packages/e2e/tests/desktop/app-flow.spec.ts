@@ -1097,6 +1097,7 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
   await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'base'\n")
   realGit(localRepo, "add", ".")
   commit(localRepo, "working tree base")
+  realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
   await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'changed'\n")
 
   const app = await electron.launch({
