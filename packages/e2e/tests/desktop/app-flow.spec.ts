@@ -1127,10 +1127,10 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
     )
     const workingTree = window.getByRole("button", { name: "Open working tree review" })
     await expect(workingTree).toContainText("1 changed file", { timeout: 15_000 })
+    await expect(window.getByRole("heading", { name: "Open pull requests" })).toBeVisible()
     await workingTree.click()
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await expect(window.getByText("working-tree.ts").first()).toBeVisible()
-    await expect(window.getByRole("heading", { name: "Open pull requests" })).toBeVisible()
   } finally {
     await app.close()
   }
