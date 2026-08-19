@@ -1230,6 +1230,16 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
   await mkdir(userData, { recursive: true })
   await installFakeCli(fakeBin)
   await installCodexSettings(xdgConfigHome)
+  await mkdir(join(localRepo, "src"), { recursive: true })
+  realGit(localRepo, "init")
+  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'dev'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "dev base")
+  realGit(localRepo, "branch", "dev")
+  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'feature'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "feature work")
+  realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
 
   const app = await electron.launch({
     args: [
@@ -1246,7 +1256,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: prependExecutablePath(fakeBin),
+      PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -1373,9 +1383,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     DIFFDASH_E2E_FAKE_GIT_REMOTE: remoteRepo,
     DIFFDASH_E2E_HIDDEN: "1",
     DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
-    FAKE_USE_REAL_GIT: "1",
-    PATH: prependExecutablePath(fakeBin),
-    REAL_GIT_PATH: "/usr/bin/git",
+    PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const launchArgs = [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`]
