@@ -2,14 +2,19 @@ import { Match, Schema } from "effect"
 import { AgentRunId } from "./agent-run-id"
 import { NonNegativeInteger, PositiveInteger, UtcIsoTimestamp } from "./domain-scalar"
 import { AgentProviderFailure } from "./provider-failure"
-import { CompletedAgentRun, FailedAgentRun, RunningAgentRun } from "./agent-run"
+import {
+  CancelledAgentRun,
+  CompletedAgentRun,
+  FailedAgentRun,
+  InterruptedAgentRun,
+  RunningAgentRun,
+} from "./agent-run"
 import { ReviewThreadId } from "./review-thread-id"
 
 import { LocalReviewTarget } from "./local-review"
 import { HostedReviewLocator } from "./git-provider"
 import { RepositoryComparisonTarget } from "./repository-comparison"
 import { RepositoryRelativePath } from "./repository-path"
-import { findProjectedDiffHunkLine, projectDiffHunkLines } from "./diff-hunk-lines"
 
 export { LocalReviewTarget } from "./local-review"
 
@@ -21,7 +26,6 @@ import {
   ReviewProjectId,
   ReviewRevision,
 } from "./review-identity"
-import type { ParsedDiff } from "./diff"
 
 export { ReviewThreadId } from "./review-thread-id"
 
@@ -248,12 +252,32 @@ export class FailedAgentReviewTurn extends Schema.TaggedClass<FailedAgentReviewT
   run: FailedAgentRun,
 }) {}
 
+/** A cancelled agent conversation entry with its linked terminal response. */
+export class CancelledAgentReviewTurn extends Schema.TaggedClass<CancelledAgentReviewTurn>()(
+  "Cancelled",
+  {
+    message: FailedAgentReviewThreadMessage,
+    run: CancelledAgentRun,
+  },
+) {}
+
+/** An interrupted agent conversation entry with its linked terminal response. */
+export class InterruptedAgentReviewTurn extends Schema.TaggedClass<InterruptedAgentReviewTurn>()(
+  "Interrupted",
+  {
+    message: FailedAgentReviewThreadMessage,
+    run: InterruptedAgentRun,
+  },
+) {}
+
 /** One authoritative conversation projection joining a message to its run when applicable. */
 export const ReviewTurn = Schema.Union([
   UserReviewTurn,
   PendingAgentReviewTurn,
   CompletedAgentReviewTurn,
   FailedAgentReviewTurn,
+  CancelledAgentReviewTurn,
+  InterruptedAgentReviewTurn,
 ])
 
 /** One authoritative conversation projection joining a message to its run when applicable. */
@@ -338,30 +362,3 @@ export class ReviewThreadAnchorInvalidError extends Schema.TaggedError<ReviewThr
   "ReviewThreadAnchorInvalidError",
   { reviewKey: ReviewKey },
 ) {}
-
-/** Checks that an anchor still identifies exact content in a coherent parsed review snapshot. */
-export const isReviewAnchorInParsedDiff = (anchor: ReviewThreadAnchor, diff: ParsedDiff) => {
-  const file = diff.files.find(
-    (candidate) =>
-      candidate.fileId === anchor.fileId &&
-      candidate.path === anchor.filePath &&
-      candidate.oldPath === anchor.oldPath,
-  )
-  if (file === undefined) return false
-  const hunk = file.hunks.find(
-    (candidate) =>
-      candidate.id === anchor.hunkId && candidate.fingerprint === anchor.hunkFingerprint,
-  )
-  if (hunk === undefined) return false
-  return hunk.header === anchor.hunkHeader && hunkContainsLine(hunk, anchor)
-}
-
-const hunkContainsLine = (
-  hunk: ParsedDiff["files"][number]["hunks"][number],
-  anchor: LineReviewAnchor,
-) =>
-  findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
-    side: anchor.side,
-    lineNumber: anchor.lineNumber,
-    content: anchor.lineContent,
-  }) !== null

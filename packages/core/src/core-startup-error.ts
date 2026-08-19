@@ -8,6 +8,9 @@ const CoreStartupOperation = Schema.Literals([
   "acquireRuntime",
   "createTemporaryDirectory",
   "recoverInterruptedReviewTurns",
+  "inspectActiveWalkthroughOperations",
+  "reconcileWalkthroughArtifact",
+  "completeRecoveredWalkthroughOperation",
   "recoverInterruptedWalkthroughOperations",
 ])
 
@@ -27,7 +30,7 @@ export class CoreStartupError extends Schema.TaggedError<CoreStartupError>()("Co
   cause: CoreExpectedCause,
 }) {}
 
-/** Complete expected failure union while acquiring the embedded Core runtime. */
+/** Complete expected failure union while acquiring the Core runtime. */
 export type CoreStartupFailure = CoreConfigurationError | CoreStartupError
 
 /** Normalizes dependency-owned acquisition failures at the Core boundary. */

@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -158,6 +159,7 @@ describe("database-node", () => {
         expect(tables.map(({ name }) => name)).toEqual([
           "agent_run_artifacts",
           "agent_runs",
+          "core_commands",
           "diffdash_capabilities",
           "hosted_viewed_files",
           "local_viewed_files",
@@ -168,9 +170,21 @@ describe("database-node", () => {
           "repository_checkouts",
           "repository_identities",
           "repository_identity_jobs",
+          "resource_leases",
+          "resource_reservations",
+          "resource_roots",
+          "resources",
+          "review_block_placements",
+          "review_diff_blocks",
+          "review_file_deltas",
+          "review_hunks",
+          "review_snapshot_checkpoints",
+          "review_snapshot_files",
+          "review_snapshot_manifests",
           "review_thread_messages",
           "review_threads",
           "thread_memory",
+          "walkthrough_operation_acceptances",
           "walkthrough_operations",
           "walkthroughs",
         ])
@@ -243,7 +257,45 @@ describe("database-node", () => {
         )
         expect(localViewedFilesTable.sql).toContain("'repositoryComparison'")
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("installs durable walkthrough acceptance evidence without bumping user_version", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.scoped(Effect.void.pipe(Effect.provide(makeLayer(databasePath))))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        yield* database.run("DROP TABLE walkthrough_operation_acceptances")
+        yield* database.run(
+          "DELETE FROM diffdash_capabilities WHERE name = 'walkthrough-operation-acceptance'",
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+
+      yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const acceptanceTable = decodeTableSqlRow(
+          yield* database.get(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'walkthrough_operation_acceptances'",
+          ),
+        )
+
+        expect(acceptanceTable.sql).toContain("idempotency_key TEXT NOT NULL UNIQUE")
+        expect(acceptanceTable.sql).toContain("CHECK (json_valid(evidence_json))")
+        expect(acceptanceTable.sql).toContain("ON DELETE CASCADE")
+        expect(
+          Option.getOrThrow(
+            yield* database.get(
+              "SELECT version FROM diffdash_capabilities WHERE name = 'walkthrough-operation-acceptance'",
+            ),
+          ),
+        ).toEqual({ version: 1 })
+        expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -362,7 +414,7 @@ describe("database-node", () => {
           ]),
         )
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -592,7 +644,7 @@ describe("database-node", () => {
       sqlite.exec(
         "CREATE TABLE future_marker (value TEXT NOT NULL); INSERT INTO future_marker VALUES ('preserve-me')",
       )
-      sqlite.exec("PRAGMA user_version = 14")
+      sqlite.exec("PRAGMA user_version = 15")
       sqlite.close()
 
       const result = yield* Effect.result(
@@ -606,12 +658,12 @@ describe("database-node", () => {
       )
       if (Result.isFailure(result)) {
         expect(String(result.failure.cause)).toContain(
-          "Database schema version 14 is newer than supported version 13",
+          "Database schema version 15 is newer than supported version 14",
         )
       }
 
       const reopened = new DatabaseSync(databasePath, { readOnly: true })
-      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 })
+      expect(reopened.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 })
       expect(reopened.prepare("SELECT value FROM future_marker").get()).toEqual({
         value: "preserve-me",
       })
@@ -647,7 +699,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
         const agentRunsSql = decodeTableSqlRow(
           yield* database.get(
@@ -662,6 +714,21 @@ describe("database-node", () => {
           ),
         ).sql
         expect(messagesSql).toContain("FOREIGN KEY(agent_run_id, thread_id)")
+        expect(
+          yield* database.all(
+            `SELECT kind, policy_class, state, bytes, location_kind, location_value
+             FROM resources WHERE kind = 'migrationBackup'`,
+          ),
+        ).toEqual([
+          {
+            kind: "migrationBackup",
+            policy_class: "migrationBackup",
+            state: "ready",
+            bytes: statSync(join(directory, backups[0] ?? "")).size,
+            location_kind: "filesystem",
+            location_value: backups[0],
+          },
+        ])
         yield* database.run(
           `INSERT INTO agent_runs (
             id, thread_id, review_key, base_sha, head_sha, provider, model, prompt_version,
@@ -820,7 +887,7 @@ describe("database-node", () => {
       yield* Effect.gen(function* () {
         const database = makeDatabase(yield* SqlClient.SqlClient)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
         expect(
           Option.getOrThrow(
@@ -848,7 +915,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(memory)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
@@ -867,7 +934,7 @@ describe("database-node", () => {
 
         expect(Option.isNone(row)).toBe(true)
         expect(decodeUserVersionRow(yield* database.get("PRAGMA user_version")).user_version).toBe(
-          13,
+          14,
         )
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),

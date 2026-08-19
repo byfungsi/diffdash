@@ -10,7 +10,6 @@ import {
   ReviewPaneSettings,
 } from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
-import { projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -42,7 +41,7 @@ import {
   ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
 import { AgentPromptVersion, CompletedAgentRun, RunningAgentRun } from "@diffdash/domain/agent-run"
-import { makeReviewSnapshotManifest, type ReviewSnapshot } from "@diffdash/domain/review-context"
+import type { ReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import {
   ReviewProjectId,
   type ReviewFilePatchHash,
@@ -65,6 +64,11 @@ import {
 } from "@diffdash/domain/review-thread"
 import { WebUrl } from "@diffdash/domain/web-url"
 import {
+  WalkthroughOperationId,
+  WalkthroughOperationStateVersion,
+  WalkthroughOperationTimestamp,
+} from "@diffdash/domain/walkthrough-operation"
+import {
   AgentProviderAutoCandidates,
   AgentProviderCapabilityStatus,
   AgentProviderCatalog,
@@ -75,6 +79,15 @@ import {
   AgentProviderStatus,
 } from "@diffdash/protocol/agent-providers"
 import type { DiffDashApi } from "@diffdash/protocol/api"
+import {
+  WalkthroughApplicationInstanceId,
+  WalkthroughProcessEpoch,
+  WalkthroughRequestId,
+} from "@diffdash/protocol/walkthrough-operation"
+import type {
+  WalkthroughBridgeOperationSnapshot,
+  WalkthroughOperationBridgeHint,
+} from "@diffdash/protocol/walkthrough-operation-state"
 import {
   type CliNavigationCommand,
   OpenBranchDiffCommand,
@@ -94,15 +107,16 @@ import {
 } from "@diffdash/protocol/prerequisites"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
-  REVIEW_SNAPSHOT_PAGE_FILE_LIMIT,
-  ReviewSnapshotExpired,
-  ReviewSnapshotPageAvailable,
-  ReviewSnapshotPageCursor,
-  ReviewSnapshotSearchAvailable,
-  ReviewSnapshotSearchMatch,
-  ReviewSnapshotSearchMatchId,
-} from "@diffdash/protocol/review-snapshot"
-import type { MaterializedDemoScenario } from "./demo-scenario"
+  DisposedReviewSession,
+  ReadyReviewSession,
+  ReviewSessionId,
+  ReviewSessionIdentity,
+  ReviewSessionProcessId,
+  ReviewSessionSearchPublication,
+  ReviewSessionStateVersion,
+} from "@diffdash/protocol/review-session"
+import { Match } from "effect"
+import { makeDemoReviewSnapshotFileInventory, type MaterializedDemoScenario } from "./demo-scenario"
 import { createDemoLocalReviewFixtures, type DemoLocalReviewFixture } from "./local-review-fixtures"
 
 /** One deterministic renderer action recorded by the demo runtime. */
@@ -143,6 +157,11 @@ interface PendingAgentRun {
   readonly reject: (cause: Error) => void
 }
 
+type CompletedWalkthroughOperation = Extract<
+  WalkthroughBridgeOperationSnapshot,
+  { readonly state: "completed" }
+>
+
 /** Creates a fresh, fully in-memory DiffDash runtime for one materialized scenario. */
 export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRuntime => {
   const firstRevision = scenario.revisions[0]
@@ -155,9 +174,10 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   const progressListeners = new Set<(progress: ReviewAgentProgress) => void>()
   const updateListeners = new Set<(state: AppUpdateState) => void>()
   const navigationListeners = new Set<() => void>()
+  const walkthroughHintListeners = new Set<(hint: WalkthroughOperationBridgeHint) => void>()
   const actions: DemoAction[] = []
   const pendingRuns = new Map<string, PendingAgentRun>()
-  const snapshotCache = new Map<string, ReviewSnapshot>()
+  const manifestCache = new Map<string, ReviewSnapshotManifest>()
   const projectWorkspaceStates = new Map<ReviewProjectId, ProjectWorkspaceState>()
   let repositories: Repo[] = []
   let currentRevision = firstRevision
@@ -175,6 +195,16 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
   let createdThreadCounter = 0
   let createdMessageCounter = 0
   let navigationCommands: CliNavigationCommand[] = []
+  let walkthroughOperationCounter = 0
+  let walkthroughHintSequence = 0
+  const walkthroughOperations = new Map<
+    WalkthroughOperationId,
+    WalkthroughBridgeOperationSnapshot
+  >()
+  const walkthroughIdempotency = new Map<string, WalkthroughOperationId>()
+  const walkthroughHintTimers = new Set<ReturnType<typeof setTimeout>>()
+  const walkthroughApplicationInstanceId = WalkthroughApplicationInstanceId.make("demo-app")
+  const walkthroughProcessEpoch = WalkthroughProcessEpoch.make("demo-process")
   const provider = GitProviderDescriptor.make({
     id: GitProviderId.make("github"),
     kind: GitProviderKind.make("github"),
@@ -209,9 +239,9 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     }
     pendingRuns.clear()
     currentRevision = firstRevision
-    snapshotCache.clear()
+    manifestCache.clear()
     projectWorkspaceStates.clear()
-    snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
+    manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
     repositories = [scenario.repository]
     approved = false
     settings = cloneSettings(DEFAULT_AI_SETTINGS)
@@ -229,7 +259,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       localReviewFixtures.map((fixture) => [
         localReviewTargetKey(fixture.target),
         new Map(
-          fixture.snapshot.parsedDiff.files
+          fixture.parsedDiff.files
             .filter((file) => fixture.initiallyViewedFileKeys.includes(file.reviewKey))
             .map((file) => [file.reviewKey, file.patchHash]),
         ),
@@ -245,8 +275,8 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           ReviewThreadDetails.make({
             thread: ReviewThread.make({
               ...details.thread,
-              currentBaseRevision: firstRevision.snapshot.baseRevision,
-              currentHeadRevision: firstRevision.snapshot.headRevision,
+              currentBaseRevision: firstRevision.manifest.baseRevision,
+              currentHeadRevision: firstRevision.manifest.headRevision,
               currentAnchor: CurrentReviewAnchor.cases.Active.make({
                 anchor: details.thread.originalAnchor,
               }),
@@ -263,6 +293,12 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     createdThreadCounter = 0
     createdMessageCounter = 0
     navigationCommands = []
+    walkthroughOperationCounter = 0
+    walkthroughHintSequence = 0
+    for (const timer of walkthroughHintTimers) clearTimeout(timer)
+    walkthroughHintTimers.clear()
+    walkthroughOperations.clear()
+    walkthroughIdempotency.clear()
   }
 
   const setUpdateState = (state: AppUpdateState) => {
@@ -308,10 +344,53 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
     target.kind === "hosted"
       ? scenario.reviewKey
       : target.kind === "local"
-        ? requireLocalFixture(target).snapshot.reviewKey
+        ? requireLocalFixture(target).manifest.reviewKey
         : (() => {
             throw new Error("Repository comparisons are unavailable in the demo runtime")
           })()
+
+  const targetWalkthrough = (target: ReviewThreadTarget) => {
+    if (target.kind === "hosted") {
+      requireTarget(target)
+      return { manifest: currentRevision.manifest, stored: currentRevision.walkthrough }
+    }
+    if (target.kind === "local") {
+      const fixture = requireLocalFixture(target)
+      return { manifest: fixture.manifest, stored: fixture.walkthrough }
+    }
+    throw new Error("Repository comparisons are unavailable in the demo runtime")
+  }
+
+  const bridgeStoredWalkthrough = (
+    target: ReviewThreadTarget,
+  ): CompletedWalkthroughOperation["stored"] => {
+    const { manifest, stored } = targetWalkthrough(target)
+    return {
+      reviewGeneration: {
+        kind: target.kind,
+        projectId: manifest.projectId,
+        snapshotId: manifest.snapshotId,
+        reviewKey: manifest.reviewKey,
+        baseRevision: manifest.baseRevision,
+        headRevision: manifest.headRevision,
+      },
+      promptVersion: stored.promptVersion,
+      walkthrough: stored.walkthrough,
+      createdAt: WalkthroughOperationTimestamp.make(new Date(stored.createdAt).toISOString()),
+    }
+  }
+
+  const parsedDiffForSnapshot = (snapshotId: string) => {
+    const hostedRevision = scenario.revisions.find(
+      (revision) => revision.manifest.snapshotId === snapshotId,
+    )
+    const localFixture = localReviewFixtures.find(
+      (fixture) => fixture.manifest.snapshotId === snapshotId,
+    )
+    const parsedDiff = hostedRevision?.parsedDiff ?? localFixture?.parsedDiff
+    if (parsedDiff === undefined) throw new Error("Demo review snapshot is unavailable")
+    return parsedDiff
+  }
 
   const requireThread = (threadId: ReviewThreadId) => {
     const details = threadDetails.get(threadId)
@@ -336,7 +415,7 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       record("timeline.release", { checkpointId })
       if (checkpointId === "revision-updated") {
         currentRevision = scenario.currentRevision
-        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
+        manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
         for (const sourceDetails of scenario.threads) {
           const current = threadDetails.get(sourceDetails.thread.id)
           if (current === undefined) continue
@@ -888,83 +967,157 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
           request.review.repository.name,
           request.review.number,
         )
-        snapshotCache.set(currentRevision.snapshot.snapshotId, currentRevision.snapshot)
-        return makeReviewSnapshotManifest(
-          currentRevision.snapshot,
-          ReviewProjectId.make(scenario.repository.id),
-        )
+        manifestCache.set(currentRevision.manifest.snapshotId, currentRevision.manifest)
+        return currentRevision.manifest
       },
       acquireLocal: async (target) => {
-        const snapshot = requireLocalFixture(target).snapshot
-        snapshotCache.set(snapshot.snapshotId, snapshot)
-        return makeReviewSnapshotManifest(snapshot, ReviewProjectId.make(scenario.repository.id))
+        const manifest = requireLocalFixture(target).manifest
+        manifestCache.set(manifest.snapshotId, manifest)
+        return manifest
       },
       acquireRepositoryComparison: async () => {
         throw new Error("Repository comparisons are unavailable in the demo runtime")
       },
-      getPage: async (request) => {
-        const snapshot = snapshotCache.get(request.snapshotId)
-        if (snapshot === undefined) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "evicted",
-          })
+    },
+    progressiveReviews: {
+      openSession: async (request) =>
+        ReadyReviewSession.make({
+          identity: ReviewSessionIdentity.make({
+            ...request,
+            processId: ReviewSessionProcessId.make("demo-process"),
+            sessionId: ReviewSessionId.make(`demo:${request.snapshotId}`),
+            stateVersion: ReviewSessionStateVersion.make(1),
+          }),
+        }),
+      currentSession: async (request) => ReadyReviewSession.make({ identity: request.identity }),
+      closeSession: async (request) =>
+        DisposedReviewSession.make({ identity: request.identity, reason: "closed" }),
+      inventory: async (request) => {
+        if (!manifestCache.has(request.identity.snapshotId)) {
+          throw new Error("Demo review snapshot is unavailable")
         }
-        const files =
-          request.fileIds.length === 0
-            ? snapshot.parsedDiff.files
-            : request.fileIds.flatMap((fileId) => {
-                const file = snapshot.parsedDiff.files.find(
-                  (candidate) => candidate.fileId === fileId,
-                )
-                return file === undefined ? [] : [file]
-              })
-        if (request.fileIds.length > 0 && files.length !== request.fileIds.length) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
+        const inventory = parsedDiffForSnapshot(request.identity.snapshotId).files.map(
+          makeDemoReviewSnapshotFileInventory,
+        )
+        const files = inventory.slice(request.offset, request.offset + request.limit)
+        const nextOffset = request.offset + files.length
+        return {
+          identity: request.identity,
+          files: files.map((file, index) => ({
+            ordinal: request.offset + index,
+            fileId: file.fileId,
+            path: file.path,
+            oldPath: file.oldPath,
+            additions: file.additions,
+            deletions: file.deletions,
+            status: file.status,
+            visibility: file.visibility,
+            patchHash: file.patchHash,
+            hunkCount: file.hunkCount,
+          })),
+          nextOffset: nextOffset < inventory.length ? nextOffset : null,
         }
-        const cursorMatch =
-          request.cursor === null ? null : /^page:v1:([0-9]+):00000000$/.exec(request.cursor)
-        if (request.cursor !== null && cursorMatch === null) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
-        }
-        const offset = cursorMatch === null ? 0 : Number(cursorMatch[1])
-        if (!Number.isSafeInteger(offset) || offset < 0 || offset > files.length) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: "mismatched",
-          })
-        }
-        const nextOffset = Math.min(files.length, offset + REVIEW_SNAPSHOT_PAGE_FILE_LIMIT)
-        return ReviewSnapshotPageAvailable.make({
-          snapshotId: request.snapshotId,
-          files: files.slice(offset, nextOffset),
-          nextCursor:
-            nextOffset < files.length
-              ? ReviewSnapshotPageCursor.make(`page:v1:${nextOffset}:00000000`)
-              : null,
-        })
       },
-      search: async (request) => {
-        const snapshot = snapshotCache.get(request.snapshotId)
-        if (snapshot === undefined || request.cursor !== null) {
-          return ReviewSnapshotExpired.make({
-            snapshotId: request.snapshotId,
-            reason: snapshot === undefined ? "evicted" : "mismatched",
-          })
+      readRange: async (request) => {
+        const manifest = manifestCache.get(request.identity.snapshotId)
+        if (manifest === undefined) throw new Error("Demo review snapshot is unavailable")
+        const parsedDiff = parsedDiffForSnapshot(request.identity.snapshotId)
+        const file = parsedDiff.files.find(({ fileId }) => fileId === request.fileId)
+        const ordinal = parsedDiff.files.findIndex(({ fileId }) => fileId === request.fileId)
+        if (file === undefined || ordinal < 0) throw new Error("Demo review file is unavailable")
+        const bytes = new TextEncoder().encode(file.patch)
+        return {
+          identity: request.identity,
+          file: {
+            ordinal,
+            fileId: file.fileId,
+            path: file.path,
+            oldPath: file.oldPath,
+            additions: file.additions,
+            deletions: file.deletions,
+            status: file.status,
+            visibility: file.visibility,
+            patchHash: file.patchHash,
+            hunkCount: file.hunks.length,
+          },
+          blocks: [
+            {
+              id: `demo:${file.fileId}`,
+              hunkId: null,
+              ordinal: 0,
+              firstLine: 0,
+              lineCount: Math.max(1, file.patch.split("\n").length),
+              bytes,
+            },
+          ],
+          byteCount: bytes.byteLength,
+          complete: true,
         }
-        const matches = searchSnapshot(snapshot, request.query)
-        return ReviewSnapshotSearchAvailable.make({
-          snapshotId: request.snapshotId,
-          matches: matches.slice(0, request.limit),
-          totalMatches: matches.length,
-          nextCursor: null,
+      },
+      waitForRange: async (request) => api.progressiveReviews.readRange(request),
+      resolveTarget: async (request) => {
+        const findFile = async (
+          offset: number,
+        ): Promise<
+          Awaited<ReturnType<typeof api.progressiveReviews.inventory>>["files"][number] | undefined
+        > => {
+          const page = await api.progressiveReviews.inventory({
+            identity: request.identity,
+            offset,
+            limit: 8,
+          })
+          const found = page.files.find(({ fileId }) => fileId === request.fileId)
+          return found ?? (page.nextOffset === null ? undefined : findFile(page.nextOffset))
+        }
+        const file = await findFile(0)
+        if (file === undefined) throw new Error("Demo review target is unavailable")
+        const parsedFile = parsedDiffForSnapshot(request.identity.snapshotId).files.find(
+          ({ fileId }) => fileId === request.fileId,
+        )
+        if (parsedFile === undefined) throw new Error("Demo review target is unavailable")
+        const resolvedLine = Match.valueTags(request.target, {
+          HunkLine: ({ hunkId, line: hunkLine }) => {
+            if (hunkId === null) return hunkLine
+            const hunk = parsedFile.hunks.find(({ id }) => id === hunkId)
+            if (hunk === undefined || hunkLine >= hunk.lines.length) {
+              throw new Error("Demo review target is unavailable")
+            }
+            return hunkLine
+          },
+          SideLine: ({ hunkId, side, lineNumber }) => {
+            const hunk = parsedFile.hunks.find(({ id }) => id === hunkId)
+            const start = side === "old" ? hunk?.oldStart : hunk?.newStart
+            const count = side === "old" ? hunk?.oldLines : hunk?.newLines
+            if (
+              start === undefined ||
+              count === undefined ||
+              lineNumber < start ||
+              lineNumber >= start + count
+            ) {
+              throw new Error("Demo review target is unavailable")
+            }
+            return lineNumber
+          },
         })
+        return {
+          identity: request.identity,
+          file,
+          blockOrdinal: 0,
+          firstLine: 0,
+          line: resolvedLine,
+        }
+      },
+      search: async (request, onPublication) => {
+        onPublication(
+          ReviewSessionSearchPublication.cases.Final.make({
+            identity: request.identity,
+            totalMatches: 0,
+            matches: [],
+            previousCursor: null,
+            nextCursor: null,
+            wrapped: false,
+          }),
+        )
       },
     },
     viewedFiles: {
@@ -1016,43 +1169,119 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       listRepositoryComparison: async () => [],
       setRepositoryComparison: async () => undefined,
     },
-    walkthroughs: {
-      get: async (request) => {
-        requireReview(
-          request.review.repository.namespace,
-          request.review.repository.name,
-          request.review.number,
-        )
-        return request.baseRevision === currentRevision.snapshot.baseRevision &&
-          request.headRevision === currentRevision.snapshot.headRevision
-          ? currentRevision.walkthrough
-          : null
+    walkthroughOperations: {
+      start: async (request) => {
+        const existingOperationId = walkthroughIdempotency.get(request.idempotencyKey)
+        if (existingOperationId !== undefined) {
+          const existing = walkthroughOperations.get(existingOperationId)
+          if (existing === undefined) throw new Error("Demo walkthrough operation is unavailable")
+          return {
+            _tag: "Success",
+            value: {
+              applicationInstanceId: walkthroughApplicationInstanceId,
+              processEpoch: walkthroughProcessEpoch,
+              requestId: existing.acceptedRequest.requestId,
+              operationId: existing.operationId,
+              stateVersion: existing.stateVersion,
+              created: false,
+            },
+          }
+        }
+
+        const stored = bridgeStoredWalkthrough(request.target)
+        const operationNumber = ++walkthroughOperationCounter
+        const operationId = WalkthroughOperationId.make(`demo-walkthrough-${operationNumber}`)
+        const requestId = WalkthroughRequestId.make(`h:demo-walkthrough-${operationNumber}`)
+        const stateVersion = WalkthroughOperationStateVersion.make(2)
+        const operation: WalkthroughBridgeOperationSnapshot = {
+          acceptedRequest: {
+            applicationInstanceId: walkthroughApplicationInstanceId,
+            processEpoch: walkthroughProcessEpoch,
+            requestId,
+          },
+          operationId,
+          stateVersion,
+          idempotencyKey: request.idempotencyKey,
+          reviewGeneration: stored.reviewGeneration,
+          promptVersion: stored.promptVersion,
+          configuredRoute: { mode: "auto", quality: "balanced" },
+          candidatePlanFingerprint: `walkthrough-plan:v1:${"0".repeat(64)}`,
+          attempts: [],
+          acceptedAt: stored.createdAt,
+          updatedAt: stored.createdAt,
+          state: "completed",
+          stored,
+          terminalAt: stored.createdAt,
+        }
+        walkthroughOperations.set(operationId, operation)
+        walkthroughIdempotency.set(request.idempotencyKey, operationId)
+        if (request.target.kind === "hosted") {
+          record(request.regenerate ? "walkthroughs.regenerate" : "walkthroughs.generate", {
+            number: request.target.review.number,
+          })
+        }
+        const timer = setTimeout(() => {
+          walkthroughHintTimers.delete(timer)
+          if (!walkthroughOperations.has(operationId)) return
+          const hint: WalkthroughOperationBridgeHint = {
+            applicationInstanceId: walkthroughApplicationInstanceId,
+            processEpoch: walkthroughProcessEpoch,
+            sequence: walkthroughHintSequence++,
+            operationId,
+            stateVersion,
+            kind: "operationTerminal",
+          }
+          for (const listener of walkthroughHintListeners) listener(hint)
+        }, 0)
+        walkthroughHintTimers.add(timer)
+        return {
+          _tag: "Success",
+          value: {
+            applicationInstanceId: walkthroughApplicationInstanceId,
+            processEpoch: walkthroughProcessEpoch,
+            requestId,
+            operationId,
+            stateVersion,
+            created: true,
+          },
+        }
       },
-      generate: async (request) => {
-        const { number } = request.review
-        requireReview(request.review.repository.namespace, request.review.repository.name, number)
-        record(request.regenerate ? "walkthroughs.regenerate" : "walkthroughs.generate", { number })
-        return currentRevision.walkthrough
+      getOperation: async (request) => {
+        const operation = walkthroughOperations.get(request.operationId)
+        if (operation === undefined) throw new Error("Demo walkthrough operation is unavailable")
+        return {
+          _tag: "Success",
+          value: {
+            applicationInstanceId: walkthroughApplicationInstanceId,
+            processEpoch: walkthroughProcessEpoch,
+            requestId: WalkthroughRequestId.make("h:demo-get-operation"),
+            operationId: request.operationId,
+            operation,
+          },
+        }
       },
-    },
-    localWalkthroughs: {
-      get: async (target, baseSha, headSha) => {
-        const fixture = requireLocalFixture(target)
-        return baseSha === fixture.snapshot.baseRevision &&
-          headSha === fixture.snapshot.headRevision
-          ? fixture.walkthrough
-          : null
+      cancel: async (request) => {
+        const operation = walkthroughOperations.get(request.operationId)
+        if (operation === undefined) throw new Error("Demo walkthrough operation is unavailable")
+        return {
+          _tag: "Success",
+          value: {
+            applicationInstanceId: walkthroughApplicationInstanceId,
+            processEpoch: walkthroughProcessEpoch,
+            requestId: WalkthroughRequestId.make("h:demo-cancel-operation"),
+            operationId: request.operationId,
+            status: "alreadyCompleted",
+            operation,
+          },
+        }
       },
-      generate: async (target) => requireLocalFixture(target).walkthrough,
-      regenerate: async (target) => requireLocalFixture(target).walkthrough,
-    },
-    repositoryComparisonWalkthroughs: {
-      get: async () => null,
-      generate: async () => {
-        throw new Error("Repository comparisons are unavailable in the demo runtime")
-      },
-      regenerate: async () => {
-        throw new Error("Repository comparisons are unavailable in the demo runtime")
+      getStored: async (request) => ({
+        _tag: "Success",
+        value: { status: "found", stored: bridgeStoredWalkthrough(request.target) },
+      }),
+      onHint: (listener) => {
+        walkthroughHintListeners.add(listener)
+        return () => walkthroughHintListeners.delete(listener)
       },
     },
   }
@@ -1143,47 +1372,3 @@ const cloneSettings = (settings: AISettings) =>
     }),
     selections: { ...settings.selections },
   })
-
-const searchSnapshot = (snapshot: ReviewSnapshot, query: string) => {
-  const expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
-  const matches: ReviewSnapshotSearchMatch[] = []
-  for (const file of snapshot.parsedDiff.files) {
-    for (const hunk of file.hunks) {
-      for (const line of projectDiffHunkLines(hunk)) {
-        if (line.kind === "metadata") continue
-        expression.lastIndex = 0
-        for (
-          let match = expression.exec(line.content);
-          match !== null;
-          match = expression.exec(line.content)
-        ) {
-          matches.push(
-            ReviewSnapshotSearchMatch.make({
-              id: ReviewSnapshotSearchMatchId.make(
-                `${file.fileId}:${hunk.id}:${line.index}:${match.index}`,
-              ),
-              fileId: file.fileId,
-              filePath: file.path,
-              reviewKey: file.reviewKey,
-              hunkId: hunk.id,
-              hunkFingerprint: hunk.fingerprint,
-              hunkLineIndex: line.index,
-              newLineNumber: line.newLineNumber,
-              oldLineNumber: line.oldLineNumber,
-              side:
-                line.kind === "context"
-                  ? "context"
-                  : line.kind === "deletion"
-                    ? "deletions"
-                    : "additions",
-              text: line.content,
-              start: match.index,
-              end: match.index + match[0].length,
-            }),
-          )
-        }
-      }
-    }
-  }
-  return matches
-}

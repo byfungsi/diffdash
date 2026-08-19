@@ -45,6 +45,7 @@ const browserSafePackages = new Set([
 const concreteProviderPattern = /^@diffdash\/(?:agent-provider|git-provider)-/
 const strictProductionPackages = new Set([
   "@diffdash/domain",
+  "@diffdash/core-rpc",
   "@diffdash/protocol",
   "@diffdash/agent-provider",
   "@diffdash/agents",
@@ -56,6 +57,7 @@ const strictProductionPackages = new Set([
 const explicitUnknownBoundaryFiles = new Set(["packages/agent-provider/src/provider-json.ts"])
 const documentedPackageDependencies = new Map([
   ["@diffdash/domain", []],
+  ["@diffdash/core-rpc", ["@diffdash/domain"]],
   ["@diffdash/agent-provider", ["@diffdash/domain"]],
   ["@diffdash/protocol", ["@diffdash/domain"]],
   ["@diffdash/app", ["@diffdash/domain", "@diffdash/protocol"]],
@@ -75,6 +77,7 @@ const documentedPackageDependencies = new Map([
       "@diffdash/agent-provider-codex",
       "@diffdash/agent-provider-fixture",
       "@diffdash/agent-provider-opencode",
+      "@diffdash/core-rpc",
       "@diffdash/domain",
       "@diffdash/git-provider",
       "@diffdash/git-provider-fixture",
@@ -84,32 +87,29 @@ const documentedPackageDependencies = new Map([
       "@diffdash/persistence",
       "@diffdash/process",
       "@diffdash/protocol",
+      "@diffdash/review-data-worker",
       "@diffdash/settings",
     ],
   ],
-  ["@diffdash/desktop", ["@diffdash/app", "@diffdash/core", "@diffdash/protocol"]],
+  [
+    "@diffdash/desktop",
+    [
+      "@diffdash/app",
+      "@diffdash/core",
+      "@diffdash/core-rpc",
+      "@diffdash/process",
+      "@diffdash/protocol",
+    ],
+  ],
   ["@diffdash/e2e", ["@diffdash/desktop"]],
   ["@diffdash/web", []],
   ["@diffdash/download-worker", []],
   ["@diffdash/demo", ["@diffdash/domain", "@diffdash/protocol"]],
   ["@diffdash/demo-video", ["@diffdash/app", "@diffdash/demo", "@diffdash/protocol"]],
   ["@diffdash/repository-scale", []],
+  ["@diffdash/review-data-worker", ["@diffdash/domain", "@diffdash/git-provider"]],
 ])
 const desktopErrorAdapterDependencies = new Map([
-  [
-    "packages/desktop/electron/main/ipc/walkthrough-public-error.ts",
-    new Set([
-      "@diffdash/agent-provider",
-      "@diffdash/agents",
-      "@diffdash/domain",
-      "@diffdash/persistence",
-      "@diffdash/process",
-    ]),
-  ],
-  [
-    "packages/desktop/electron/main/ipc/review-thread-public-error.ts",
-    new Set(["@diffdash/agent-provider"]),
-  ],
   ["packages/desktop/electron/main/ipc/public-error.ts", new Set(["@diffdash/domain"])],
 ])
 
@@ -119,7 +119,11 @@ const sourceFiles = (directory) =>
     .filter((file) => lstatSync(file).isFile())
     .toSorted()
 
-const workspaceImportPattern = /(?:from\s*|import\s*\()(["'])(@diffdash\/[^/"']+)(?:\/[^"']*)?\1/g
+const workspaceImportPattern =
+  /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)(["'])(@diffdash\/[^/"']+)(?:\/[^"']*)?\1/g
+
+const workspaceImports = (source) =>
+  [...source.matchAll(workspaceImportPattern)].map((match) => match[2])
 
 const exportedUnknownOutputPatterns = [
   /\bexport\s+(?:default\s+)?(?:async\s+)?function\s*([\w$]*)[^;{}]*?\)\s*:\s*[^;{=]*\bunknown\b[^;{=]*\s*\{/g,
@@ -159,6 +163,25 @@ test("exported unknown output detection distinguishes inputs from erased outputs
       export function erasedReturn(): unknown { return "value" }
     `),
     ["erasedValue", "erasedPromise", "erasedReturn"],
+  )
+})
+
+test("workspace import detection covers static, dynamic, side-effect, re-export, and CommonJS forms", () => {
+  assert.deepEqual(
+    workspaceImports(`
+      import { value } from "@diffdash/static/subpath"
+      import "@diffdash/side-effect"
+      export * from "@diffdash/re-export"
+      const dynamic = import("@diffdash/dynamic")
+      const commonJs = require("@diffdash/commonjs/subpath")
+    `),
+    [
+      "@diffdash/static",
+      "@diffdash/side-effect",
+      "@diffdash/re-export",
+      "@diffdash/dynamic",
+      "@diffdash/commonjs",
+    ],
   )
 })
 
@@ -226,8 +249,7 @@ test("source package imports follow the documented package dependency allowlist"
     for (const file of files.filter((candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate))) {
       const relativeFile = relative(root, file)
       const adapterDependencies = desktopErrorAdapterDependencies.get(relativeFile) ?? new Set()
-      for (const match of readFileSync(file, "utf8").matchAll(workspaceImportPattern)) {
-        const dependency = match[2]
+      for (const dependency of workspaceImports(readFileSync(file, "utf8"))) {
         assert.ok(
           allowedDependencies.has(dependency) || adapterDependencies.has(dependency),
           `${relativeFile} imports undocumented package dependency ${dependency}`,
@@ -238,9 +260,7 @@ test("source package imports follow the documented package dependency allowlist"
 
   for (const [file, dependencies] of desktopErrorAdapterDependencies) {
     const importedDependencies = new Set(
-      [...readFileSync(resolve(root, file), "utf8").matchAll(workspaceImportPattern)].map(
-        (match) => match[2],
-      ),
+      workspaceImports(readFileSync(resolve(root, file), "utf8")),
     )
     assert.ok(
       [...dependencies].every((dependency) => importedDependencies.has(dependency)),
@@ -418,6 +438,30 @@ test("protocol depends only on browser-safe domain contracts", () => {
     .map((file) => readFileSync(file, "utf8"))
     .join("\n")
   assert.doesNotMatch(source, /["']@diffdash\/agent-provider(?:-[^"']+)?(?:\/[^"']*)?["']/)
+})
+
+test("Core RPC contracts remain runtime-neutral and inaccessible to the renderer", () => {
+  const coreRpc = manifests.find(({ manifest }) => manifest.name === "@diffdash/core-rpc")
+  const app = manifests.find(({ manifest }) => manifest.name === "@diffdash/app")
+  assert.ok(coreRpc, "@diffdash/core-rpc must exist")
+  assert.ok(app, "@diffdash/app must exist")
+  assert.deepEqual(Object.keys(coreRpc.manifest.dependencies), ["@diffdash/domain", "effect"])
+  assert.equal(app.manifest.dependencies["@diffdash/core-rpc"], undefined)
+
+  const source = sourceFiles(join(coreRpc.directory, "src"))
+    .filter((file) => !/\.test\.[cm]?[jt]sx?$/.test(file))
+    .map((file) => readFileSync(file, "utf8"))
+    .join("\n")
+  assert.doesNotMatch(
+    source,
+    /(?:from\s*|import\s*\()(["'])(?:electron|react|@diffdash\/(?:app|core|desktop|persistence|process|protocol|settings))(?:\/[^"']*)?\1/,
+    "@diffdash/core-rpc cannot import renderer, host, transport, or infrastructure packages",
+  )
+  assert.doesNotMatch(
+    source,
+    /\b(?:CoreRpcEnvelope|CoreRpcRequest|CoreRpcResponse|CoreProtocolVersion|CoreSchemaFingerprint|CoreCompatibility)\b/,
+    "@diffdash/core-rpc cannot define migration aliases, custom envelopes, or compatibility negotiation",
+  )
 })
 
 test("provider manifests remain platform-neutral leaves", () => {
@@ -707,7 +751,7 @@ test("the workspace resolves one Effect runtime", () => {
   assert.doesNotMatch(lockfile, /^  ['"]?@effect\/schema@/m)
 })
 
-test("Core remains runtime-neutral and owns the only application ManagedRuntime", () => {
+test("Core remains runtime-neutral and production has no embedded ManagedRuntime", () => {
   const coreDirectory = resolve(root, "packages/core")
   const coreSourceFiles = sourceFiles(join(coreDirectory, "src"))
   const coreSource = coreSourceFiles.map((file) => readFileSync(file, "utf8")).join("\n")
@@ -733,7 +777,7 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
         readFileSync(file, "utf8").includes("ManagedRuntime.make("),
     )
   })
-  assert.deepEqual(managedRuntimeOwners, [resolve(root, "packages/core/src/embedded-core.ts")])
+  assert.deepEqual(managedRuntimeOwners, [])
 
   const stableCoreEntry = readFileSync(join(coreDirectory, "src/core.ts"), "utf8")
   assert.doesNotMatch(stableCoreEntry, /runLegacy|ManagedRuntime|Layer/)
@@ -741,7 +785,7 @@ test("Core remains runtime-neutral and owns the only application ManagedRuntime"
 
   const coreContract = readFileSync(join(coreDirectory, "src/core-contract.ts"), "utf8")
   assert.match(coreContract, /interface CoreOperationFailureMap/)
-  assert.match(coreContract, /CoreResult<\s*CoreOperationOutput<Method>/)
+  assert.doesNotMatch(coreContract, /EmbeddedCore|CoreResult/)
 
   for (const sourceFile of coreSourceFiles.filter(
     (candidate) => !/\.test\.[cm]?[jt]sx?$/.test(candidate),
@@ -794,6 +838,24 @@ test("persistence stores depend only on the generic Effect SQL client", () => {
   assert.doesNotMatch(coreLayer, /@diffdash\/persistence\/database-(?:node|bun)/)
 })
 
+test("review acquisition and walkthrough APIs retain no legacy reconstruction path", () => {
+  const reviewContext = readFileSync(resolve(root, "packages/domain/src/review-context.ts"), "utf8")
+  assert.doesNotMatch(
+    reviewContext,
+    /class (?:Hosted|Local|RepositoryComparison)ReviewSnapshot\b|makeReviewSnapshotManifest/,
+  )
+  for (const directory of [
+    resolve(root, "packages/app/src"),
+    resolve(root, "packages/desktop/electron"),
+    resolve(root, "packages/protocol/src"),
+  ]) {
+    for (const file of sourceFiles(directory)) {
+      if (/\.test\.[cm]?[jt]sx?$/.test(file)) continue
+      assert.doesNotMatch(readFileSync(file, "utf8"), /localWalkthroughs|walkthroughs:generate/)
+    }
+  }
+})
+
 test("Electron controllers consume only the closed Core operation boundary", () => {
   const desktopDirectory = resolve(root, "packages/desktop")
   const desktopSource = [
@@ -801,7 +863,13 @@ test("Electron controllers consume only the closed Core operation boundary", () 
     ...sourceFiles(join(desktopDirectory, "electron")),
   ]
   for (const file of desktopSource) {
-    assert.doesNotMatch(readFileSync(file, "utf8"), /@diffdash\/core\/legacy|runLegacy/)
+    const source = readFileSync(file, "utf8")
+    assert.doesNotMatch(source, /@diffdash\/core\/legacy|runLegacy/)
+    assert.doesNotMatch(
+      source,
+      /\b(?:runtime|client)\.execute\s*\(/,
+      `${relative(desktopDirectory, file)} uses generic Core operation dispatch`,
+    )
   }
 
   const controllerDirectory = join(desktopDirectory, "electron/main/ipc/controllers")

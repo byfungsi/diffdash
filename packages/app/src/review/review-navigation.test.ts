@@ -325,6 +325,30 @@ describe("ReviewNavigatorController", () => {
     })
   })
 
+  it("gives verification a fresh bounded stabilization window", async () => {
+    vi.useFakeTimers()
+    const delay = (durationMs: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, durationMs))
+    const bridge = immediateBridge()
+    const { controller } = makeController({
+      budgets: { requestMs: 1_000, positioningMs: 250 },
+      scheduler: fakeTimerScheduler(),
+    })
+    controller.attach(
+      { projectId, snapshotId },
+      {
+        ...bridge,
+        position: async () => delay(200),
+        verify: async () => delay(200),
+      },
+    )
+
+    const navigation = controller.navigate(inputFor(fileId))
+    await vi.advanceTimersByTimeAsync(400)
+
+    await expect(navigation).resolves.toMatchObject({ _tag: "completed" })
+  })
+
   it("reacquires an expired snapshot exactly once and retries only the exact ID", async () => {
     const bridge = immediateBridge()
     const loadTarget = vi

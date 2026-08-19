@@ -8,7 +8,6 @@ import {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
 } from "@diffdash/domain/review-thread"
-import { ReviewSnapshotSearchResultTooLargeError } from "@diffdash/core"
 import { Match, Option, Schema } from "effect"
 
 type TransportFailure = Schema.Json | object | bigint | symbol | undefined
@@ -31,12 +30,14 @@ export const toPublicIpcError = <A>(error: A, operation: string) => {
         operation,
       ),
     ),
-    Match.when(Schema.is(ReviewSnapshotSearchResultTooLargeError), () =>
-      transportError(
-        "PAYLOAD_TOO_LARGE",
-        "One review search result exceeds the bounded response size.",
-        operation,
+    Match.when(
+      Schema.is(
+        Schema.Struct({
+          code: Schema.String,
+          safeMessage: Schema.String,
+        }),
       ),
+      (failure) => transportError(failure.code, failure.safeMessage, operation),
     ),
     Match.orElse((value) => {
       const domainFailure = safeDomainFailure(value)

@@ -32,6 +32,7 @@ describe("ReviewViewportNavigationBridge", () => {
       readonly linePoint: null
       readonly threadAnchor: null
       readonly threadId: null
+      readonly persistedTarget: null
     } = {
       target,
       file,
@@ -40,6 +41,7 @@ describe("ReviewViewportNavigationBridge", () => {
       linePoint: null,
       threadAnchor: null,
       threadId: null,
+      persistedTarget: null,
     }
     const anchors = new ReviewNavigationAnchorRegistry()
     const bridge = new ReviewViewportNavigationBridge(anchors)

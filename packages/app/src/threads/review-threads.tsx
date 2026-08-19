@@ -1,13 +1,16 @@
 import type { HostedReviewLocator } from "@diffdash/domain/git-provider"
 import type { AgentProviderFailure } from "@diffdash/domain/provider-failure"
 import { type LocalReviewTarget, localReviewTargetKey } from "@diffdash/domain/local-review"
-import type { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
+import {
+  makeRepositoryComparisonReviewKey,
+  type RepositoryComparisonTarget,
+} from "@diffdash/domain/repository-comparison"
 import {
   REVIEW_AGENT_PROGRESS_LABELS,
   ReviewAgentProgress,
   type ReviewAgentProgressStage,
 } from "@diffdash/domain/review-agent"
-import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
+import { makeReviewKey, ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { Array as EffectArray, Match, Order } from "effect"
 import {
@@ -122,7 +125,10 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   const hostedReview = scope.kind === "hosted" ? scope.review : null
   const localTarget = scope.kind === "local" ? scope.target : null
   const comparisonTarget = scope.kind === "repositoryComparison" ? scope.target : null
+  const hostedReviewKey = hostedReview === null ? null : makeReviewKey(hostedReview)
   const localTargetKey = localTarget === null ? null : localReviewTargetKey(localTarget)
+  const comparisonTargetKey =
+    comparisonTarget === null ? null : makeRepositoryComparisonReviewKey(comparisonTarget)
   const available = baseRevision !== null && headRevision !== null
   const listThreadDetails = useEffectEvent(() =>
     automation.threads.listDetails(reviewThreadTarget(hostedReview, localTarget, comparisonTarget)),
@@ -196,9 +202,9 @@ export function useReviewThreads(scope: ReviewThreadScope): ReviewThreadsControl
   }, [
     available,
     baseRevision,
-    comparisonTarget,
+    comparisonTargetKey,
     headRevision,
-    hostedReview,
+    hostedReviewKey,
     localTargetKey,
     automation,
   ])

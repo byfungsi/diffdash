@@ -6,7 +6,6 @@ import {
   GitProviderId,
   GitProviderKind,
   GitProviderTerminology,
-  HostedReviewDetail,
   HostedReviewSummary,
   makeHostedReviewLocator,
   ProviderActor,
@@ -63,8 +62,8 @@ const hostedManifest = HostedReviewSnapshotManifest.make({
   reviewKey: ReviewKey.make("github:fungsi/diffdash#12"),
   baseRevision: ReviewRevision.make("base"),
   headRevision: ReviewRevision.make("head"),
-  detail: HostedReviewDetail.make({ summary, commits: [], files: [] }),
-  files: [],
+  fileCount: 0,
+  detail: { summary },
 })
 const localTarget = workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/diffdash"))
 const localManifest = LocalReviewSnapshotManifest.make({
@@ -73,6 +72,7 @@ const localManifest = LocalReviewSnapshotManifest.make({
   reviewKey: ReviewKey.make("local:/workspace/diffdash"),
   baseRevision: ReviewRevision.make("base"),
   headRevision: ReviewRevision.make("head"),
+  fileCount: 0,
   detail: LocalReviewDetail.make({
     rootPath: RepositoryCheckoutPath.make("/workspace/diffdash"),
     repoName: "diffdash",
@@ -85,7 +85,6 @@ const localManifest = LocalReviewSnapshotManifest.make({
     files: [],
     fetchedAt: "2026-07-19T00:00:00Z",
   }),
-  files: [],
 })
 const provider = GitProviderDescriptor.make({
   id: GitProviderId.make("github"),
@@ -176,7 +175,7 @@ describe("review selection projection", () => {
         repositoryLabel: "/workspace/diffdash",
         title: "Local changes",
       },
-      status: "No local changes in diffdash",
+      status: "Opened local changes in diffdash",
     })
   })
 

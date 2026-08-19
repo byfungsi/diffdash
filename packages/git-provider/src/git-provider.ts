@@ -9,7 +9,6 @@ import {
   HostedRepositoryLocator,
   ResolvedHostedRepository,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewSummary,
   ReviewDecision,
@@ -21,6 +20,13 @@ import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+import { makeReviewKey } from "@diffdash/domain/review-identity"
+import {
+  HostedReviewDiffSourceTarget,
+  ReviewDiffSourceOffer,
+  validateReviewDiffSourceOffer,
+  type ReviewDiffSource,
+} from "./review-diff-source"
 
 export {
   BranchRevision,
@@ -36,7 +42,6 @@ export {
   ProviderRepositoryId,
   ResolvedHostedRepository,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
@@ -60,6 +65,8 @@ export { DiffFileStatus } from "@diffdash/domain/diff"
 export { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 export { WebUrl } from "@diffdash/domain/web-url"
 export { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
+export { makeReviewKey, ReviewKey } from "@diffdash/domain/review-identity"
+export * from "./review-diff-source"
 
 /** Provider-owned checkout instructions consumed by local workspace management. */
 export class HostedReviewCheckoutSpec extends Schema.Class<HostedReviewCheckoutSpec>(
@@ -153,9 +160,10 @@ export interface GitProviderRegistration {
   readonly getReview: (
     review: HostedReviewLocator,
   ) => Effect.Effect<HostedReviewDetail, GitProviderOperationError>
-  readonly getReviewDiff: (
+  /** Opens the bounded source for one hosted review without materializing a complete diff string. */
+  readonly getReviewDiffSource: (
     review: HostedReviewLocator,
-  ) => Effect.Effect<HostedReviewDiff, GitProviderOperationError>
+  ) => Effect.Effect<ReviewDiffSource, GitProviderOperationError>
   readonly getReviewDecision: (
     review: HostedReviewLocator,
   ) => Effect.Effect<ReviewDecision, GitProviderOperationError>
@@ -309,6 +317,50 @@ const validateRegistration = (registration: GitProviderRegistration) =>
     const listSearchScopes = registration.listSearchScopes
     const listAssignedReviews = registration.listAssignedReviews
     const resolveRepository = registration.resolveRepository
+    type OptionalRegistrationMethod =
+      | "resolveRepository"
+      | "listSearchScopes"
+      | "listAssignedReviews"
+    const optionalRegistration: {
+      [Key in OptionalRegistrationMethod]?: Exclude<GitProviderRegistration[Key], undefined>
+    } = {}
+    if (resolveRepository !== undefined) {
+      optionalRegistration.resolveRepository = (repository) =>
+        requireRepositoryProvider(providerId, "resolveRepository", repository).pipe(
+          Effect.andThen(
+            invokeProvider(providerId, "resolveRepository", () => resolveRepository(repository)),
+          ),
+          Effect.flatMap((result) =>
+            decodeResult(providerId, "resolveRepository", ResolvedHostedRepository, result),
+          ),
+          Effect.flatMap((result) =>
+            result.locator.providerId === providerId
+              ? Effect.succeed(result)
+              : wrongProviderResult(providerId, "resolveRepository"),
+          ),
+        )
+    }
+    if (listSearchScopes !== undefined) {
+      optionalRegistration.listSearchScopes = () =>
+        invokeProvider(providerId, "listSearchScopes", listSearchScopes).pipe(
+          Effect.flatMap((results) =>
+            decodeResult(providerId, "listSearchScopes", SearchScopeResults, results),
+          ),
+        )
+    }
+    if (listAssignedReviews !== undefined) {
+      optionalRegistration.listAssignedReviews = () =>
+        invokeProvider(providerId, "listAssignedReviews", listAssignedReviews).pipe(
+          Effect.flatMap((results) =>
+            decodeResult(providerId, "listAssignedReviews", ReviewSummaryResults, results),
+          ),
+          Effect.flatMap((results) =>
+            results.every(({ locator }) => locator.repository.providerId === providerId)
+              ? Effect.succeed(results)
+              : wrongProviderResult(providerId, "listAssignedReviews"),
+          ),
+        )
+    }
 
     return {
       descriptor,
@@ -334,26 +386,7 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongProviderResult(providerId, "parseRemote"),
           ),
         ),
-      ...(resolveRepository === undefined
-        ? {}
-        : {
-            resolveRepository: (repository) =>
-              requireRepositoryProvider(providerId, "resolveRepository", repository).pipe(
-                Effect.andThen(
-                  invokeProvider(providerId, "resolveRepository", () =>
-                    resolveRepository(repository),
-                  ),
-                ),
-                Effect.flatMap((result) =>
-                  decodeResult(providerId, "resolveRepository", ResolvedHostedRepository, result),
-                ),
-                Effect.flatMap((result) =>
-                  result.locator.providerId === providerId
-                    ? Effect.succeed(result)
-                    : wrongProviderResult(providerId, "resolveRepository"),
-                ),
-              ),
-          }),
+      ...optionalRegistration,
       searchRepositories: (input) =>
         invokeProvider(providerId, "searchRepositories", () =>
           registration.searchRepositories(input),
@@ -367,31 +400,6 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongProviderResult(providerId, "searchRepositories"),
           ),
         ),
-      ...(listSearchScopes === undefined
-        ? {}
-        : {
-            listSearchScopes: () =>
-              invokeProvider(providerId, "listSearchScopes", listSearchScopes).pipe(
-                Effect.flatMap((results) =>
-                  decodeResult(providerId, "listSearchScopes", SearchScopeResults, results),
-                ),
-              ),
-          }),
-      ...(listAssignedReviews === undefined
-        ? {}
-        : {
-            listAssignedReviews: () =>
-              invokeProvider(providerId, "listAssignedReviews", listAssignedReviews).pipe(
-                Effect.flatMap((results) =>
-                  decodeResult(providerId, "listAssignedReviews", ReviewSummaryResults, results),
-                ),
-                Effect.flatMap((results) =>
-                  results.every(({ locator }) => locator.repository.providerId === providerId)
-                    ? Effect.succeed(results)
-                    : wrongProviderResult(providerId, "listAssignedReviews"),
-                ),
-              ),
-          }),
       listReviews: (repository) =>
         requireRepositoryProvider(providerId, "listReviews", repository).pipe(
           Effect.andThen(
@@ -420,18 +428,34 @@ const validateRegistration = (registration: GitProviderRegistration) =>
               : wrongTargetResult(providerId, "getReview"),
           ),
         ),
-      getReviewDiff: (review) =>
-        requireReviewProvider(providerId, "getReviewDiff", review).pipe(
+      getReviewDiffSource: (review) =>
+        requireReviewProvider(providerId, "getReviewDiffSource", review).pipe(
           Effect.andThen(
-            invokeProvider(providerId, "getReviewDiff", () => registration.getReviewDiff(review)),
+            invokeProvider(providerId, "getReviewDiffSource", () =>
+              registration.getReviewDiffSource(review),
+            ),
           ),
-          Effect.flatMap((result) =>
-            decodeResult(providerId, "getReviewDiff", HostedReviewDiff, result),
-          ),
-          Effect.flatMap((result) =>
-            sameHostedReview(result.locator, review)
-              ? Effect.succeed(result)
-              : wrongTargetResult(providerId, "getReviewDiff"),
+          Effect.flatMap((source) =>
+            decodeResult(
+              providerId,
+              "getReviewDiffSource.offer",
+              ReviewDiffSourceOffer,
+              source.offer,
+            ).pipe(
+              Effect.flatMap((offer) =>
+                validateReviewDiffSourceOffer(offer).pipe(
+                  Effect.mapError(() => malformedResult(providerId, "getReviewDiffSource.offer")),
+                ),
+              ),
+              Effect.flatMap((offer) =>
+                Schema.is(HostedReviewDiffSourceTarget)(offer.target) &&
+                offer.target.reviewKey === makeReviewKey(review) &&
+                sameHostedReview(offer.target.review, review)
+                  ? Effect.succeed(source)
+                  : wrongTargetResult(providerId, "getReviewDiffSource"),
+              ),
+              Effect.onError(() => source.close.pipe(Effect.ignore)),
+            ),
           ),
         ),
       getReviewDecision: (review) =>

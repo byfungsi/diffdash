@@ -465,7 +465,7 @@ const DEFAULT_BUDGETS: ReviewNavigationBudgets = {
   snapshotReacquisitionMs: 15_000,
   extensionResolutionMs: 2_000,
   awaitingMountMs: 8_000,
-  positioningMs: 2_000,
+  positioningMs: 8_000,
   activationAndFocusMs: 2_000,
   transientRetryDelaysMs: [100, 300],
 }
@@ -767,10 +767,14 @@ export class ReviewNavigatorController implements ReviewNavigator {
       }
 
       phase = "verifying"
+      const verificationDeadlineAt = Math.min(
+        operation.deadlineAt,
+        this.#scheduler.now() + this.#budgets.positioningMs,
+      )
       await this.#runPhase(
         operation,
         phase,
-        Math.max(0, layoutDeadlineAt - this.#scheduler.now()),
+        Math.max(0, verificationDeadlineAt - this.#scheduler.now()),
         "positioningFailed",
         true,
         signal,
@@ -1129,48 +1133,32 @@ const assertNavigationBudgets = (budgets: ReviewNavigationBudgets): void => {
   }
 }
 
-const isReviewNavigationUnavailableError = (
-  value: object,
-): value is ReviewNavigationUnavailableError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) =>
-        "name" in value &&
-        value.name === "ReviewNavigationUnavailableError" &&
-        "reason" in value &&
-        Predicate.isString(value.reason),
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationUnavailableError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationUnavailableError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationUnavailableError" &&
+  "reason" in value &&
+  Predicate.isString(value.reason)
 
-const isReviewNavigationSnapshotExpiredError = (
-  value: object,
-): value is ReviewNavigationSnapshotExpiredError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) => "name" in value && value.name === "ReviewNavigationSnapshotExpiredError",
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationSnapshotExpiredError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationSnapshotExpiredError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationSnapshotExpiredError"
 
-const isReviewNavigationOperationalError = (
-  value: object,
-): value is ReviewNavigationOperationalError =>
-  Match.value(value).pipe(
-    Match.when(
-      Predicate.isObject,
-      (value) =>
-        "name" in value &&
-        value.name === "ReviewNavigationOperationalError" &&
-        "reason" in value &&
-        Predicate.isString(value.reason) &&
-        "retryable" in value &&
-        Predicate.isBoolean(value.retryable),
-    ),
-    Match.orElse(() => false),
-  )
+const isReviewNavigationOperationalError = <Value>(
+  value: Value,
+): value is Value & ReviewNavigationOperationalError =>
+  Predicate.isObject(value) &&
+  "name" in value &&
+  value.name === "ReviewNavigationOperationalError" &&
+  "reason" in value &&
+  Predicate.isString(value.reason) &&
+  "retryable" in value &&
+  Predicate.isBoolean(value.retryable)
 
 const isExtensionNavigationTarget = (target: ReviewNavigationTarget): boolean =>
   Match.valueTags(target, {

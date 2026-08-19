@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import { constants } from "node:fs"
 import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises"
-import { delimiter, join, resolve as resolvePath } from "node:path"
+import { delimiter, join, resolve as resolvePath, sep } from "node:path"
 import { _electron as electron, expect, test } from "@playwright/test"
 import { installDiffDashE2eApi } from "../helpers/diffdash-bridge"
 import { installExecutableFixture, prependExecutablePath } from "../helpers/executable-fixture"
@@ -16,7 +17,7 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   const fakeBin = testInfo.outputPath("fake-bin")
   const home = testInfo.outputPath("home")
   const openCodeBin = join(home, ".opencode", "bin")
-  const gitLog = testInfo.outputPath("git-runs.log")
+  const gitLog = join(home, ".diffdash-e2e-git.log")
   const sourceRepo = testInfo.outputPath("source-repo")
   const remoteRepo = testInfo.outputPath("fixture.git")
   const worktreePool = testInfo.outputPath("worktree-pool")
@@ -30,6 +31,14 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
   ])
   await installPackagedFakeCli(fakeBin, openCodeBin)
   const revisions = await installFixtureRepository(sourceRepo, remoteRepo)
+  execGit(
+    home,
+    "config",
+    "--file",
+    join(home, ".gitconfig"),
+    `url.${remoteRepo}.insteadOf`,
+    "https://git.fixture.test/platform/backend/service",
+  )
   await writeFile(
     join(xdgConfigHome, "diffdash", "state.json"),
     JSON.stringify({ onboardingCompleted: true }),
@@ -70,9 +79,21 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   }
+  const forcedCoreHost = readForcedPackagedCoreHost()
+  let forcedCoreProcessIds: ReadonlyArray<number> = []
   let app = await electron.launch(launchOptions)
 
   try {
+    if (forcedCoreHost !== null) {
+      const rootPid = app.process().pid
+      if (rootPid === undefined) throw new Error("Packaged Electron process has no PID")
+      await expect
+        .poll(() => coreHostProcessIds(rootPid, forcedCoreHost).length, {
+          timeout: 10_000,
+        })
+        .toBeGreaterThan(0)
+      forcedCoreProcessIds = coreHostProcessIds(rootPid, forcedCoreHost)
+    }
     expect(
       await app.evaluate(({ app: runtimeApp }) => ({
         appPath: runtimeApp.getAppPath(),
@@ -128,6 +149,8 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
           codeThemes: settings.codeThemes,
           diffViewMode: settings.diffViewMode,
           git: fixtureGit,
+          claude: catalog.providers.find(({ id }) => id === "claude"),
+          codex: catalog.providers.find(({ id }) => id === "codex"),
           opencode: catalog.providers.find(({ id }) => id === "opencode"),
           repository: repositories.find(
             ({ source }) => source._tag === "hosted" && source.locator.providerId === "fixture",
@@ -151,6 +174,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
         id: "fixture",
         displayName: "Fixture Forge",
         capabilities: expect.objectContaining({ reviewDecisions: false }),
+      }),
+      claude: expect.objectContaining({
+        id: "claude",
+        capabilities: {
+          walkthrough: expect.objectContaining({ _tag: "Ready" }),
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        },
+      }),
+      codex: expect.objectContaining({
+        id: "codex",
+        capabilities: {
+          walkthrough: expect.objectContaining({ _tag: "Ready" }),
+          "review-thread": expect.objectContaining({ _tag: "Ready" }),
+        },
       }),
       opencode: expect.objectContaining({
         id: "opencode",
@@ -196,6 +233,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     })
     await expect(fixtureProject).toBeVisible()
     await fixtureProject.click()
+    await window.evaluate(
+      async ({ localPath }) =>
+        Reflect.apply(globalThis.window.diffDashForE2e.repositories.link, undefined, [
+          {
+            repository: {
+              providerId: "fixture",
+              namespace: "platform/backend",
+              name: "service",
+            },
+            localPath,
+          },
+        ]),
+      { localPath: sourceRepo },
+    )
 
     const fixtureReview = window.getByRole("button", {
       name: /Open review #73: Fixture merge request flow/,
@@ -207,19 +258,61 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     )
     await expect(window.getByText("src/fixture.ts").first()).toBeVisible()
 
-    const addedLine = window
+    const fixtureDiffCard = window.locator('[data-diff-card-path="src/fixture.ts"]')
+    await expect(fixtureDiffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
+    const addedLine = fixtureDiffCard
       .locator('diffs-container [data-content] > [data-line-type="change-addition"]')
       .filter({ hasText: "new fixture" })
       .first()
     await expect(addedLine).toBeVisible()
-    await addedLine.click()
+    const lineIndex = await addedLine.getAttribute("data-line-index")
+    if (lineIndex === null) throw new Error("Fixture addition line has no rendered index")
+    const gutterNumber = fixtureDiffCard
+      .locator(
+        `diffs-container [data-line-type="change-addition"][data-line-index="${lineIndex}"][data-column-number]`,
+      )
+      .last()
     const composer = window.getByRole("textbox", { name: "Thread message" })
-    await expect(composer).toBeVisible()
+    await expect
+      .poll(
+        async () => {
+          if (await composer.isVisible()) return true
+          await gutterNumber.evaluate((gutter) => {
+            gutter.dispatchEvent(
+              new PointerEvent("pointermove", {
+                bubbles: true,
+                composed: true,
+                pointerType: "mouse",
+              }),
+            )
+            const utility = gutter.querySelector("[data-utility-button]")
+            if (utility === null) return
+            const init = {
+              bubbles: true,
+              button: 0,
+              composed: true,
+              pointerId: 1,
+              pointerType: "mouse",
+            }
+            utility.dispatchEvent(new PointerEvent("pointerdown", init))
+            document.dispatchEvent(new PointerEvent("pointerup", init))
+          })
+          return composer.isVisible()
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true)
     await composer.fill("Review fixture line")
     await window.getByRole("button", { name: "Comment" }).click()
     await expect(window.getByText("Fixture review response")).toBeVisible({ timeout: 20_000 })
 
     await app.close()
+    if (forcedCoreHost !== null) {
+      await expect
+        .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 15_000 })
+        .toBe(false)
+    }
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 15_000 }).toBe(true)
     const database = await stat(join(userData, "diffdash.sqlite"))
     expect(database.size).toBeGreaterThan(0)
 
@@ -317,7 +410,20 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     await persistedReviewDisclosure.click()
     await expect(restartedWindow.getByText("Fixture review response")).toBeVisible()
 
+    const restartedRootPid = app.process().pid
+    const restartedCoreProcessIds =
+      forcedCoreHost === null || restartedRootPid === undefined
+        ? []
+        : coreHostProcessIds(restartedRootPid, forcedCoreHost)
     await app.close()
+    if (forcedCoreHost !== null) {
+      expect(restartedRootPid).toBeDefined()
+      expect(restartedCoreProcessIds.length).toBeGreaterThan(0)
+      await expect
+        .poll(() => restartedCoreProcessIds.some(processIsAlive), { timeout: 15_000 })
+        .toBe(false)
+    }
+    await expect.poll(() => databaseOwnershipIsReleased(userData), { timeout: 15_000 }).toBe(true)
     app = await electron.launch({
       ...launchOptions,
       args: [
@@ -332,12 +438,78 @@ test("FUN-141 AC: verifies final packaged composition and provider persistence",
     const comparisonWindow = await app.firstWindow()
     await expect(comparisonWindow.locator("[data-review-editor-header]")).toContainText(
       `${revisions.base}...${revisions.head}`,
+      { timeout: 20_000 },
     )
-    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible()
+    await expect(comparisonWindow.getByText("src/fixture.ts").first()).toBeVisible({
+      timeout: 20_000,
+    })
   } finally {
     await app.close().catch(() => undefined)
   }
 })
+
+const readForcedPackagedCoreHost = (): "bun" | "utility" | null => {
+  if (process.env.DIFFDASH_E2E_PACKAGED_FORCED_CORE_HOST_GATE !== "1") return null
+  const host = process.env.DIFFDASH_E2E_CORE_HOST
+  if (host === "bun" || host === "utility") return host
+  throw new Error("The packaged Core host gate requires DIFFDASH_E2E_CORE_HOST=bun or utility")
+}
+
+const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyArray<number> => {
+  if (process.platform === "win32") {
+    throw new Error("Packaged Core host process verification is not implemented on Windows")
+  }
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line)
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] ?? "" }]
+    })
+  const descendants = new Set([rootPid])
+  let discovered = true
+  while (discovered) {
+    discovered = false
+    for (const row of rows) {
+      if (descendants.has(row.parentPid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid)
+        discovered = true
+      }
+    }
+  }
+  return rows.flatMap((row) => {
+    if (!descendants.has(row.pid) || row.pid === rootPid) return []
+    const matches =
+      host === "bun"
+        ? row.command.includes("core-bun.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+        : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
+    return matches ? [row.pid] : []
+  })
+}
+
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    if (process.platform === "win32") return true
+    const status = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    return status.length > 0 && !status.startsWith("Z")
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
+
+const databaseOwnershipIsReleased = async (userData: string): Promise<boolean> => {
+  try {
+    await access(join(userData, "diffdash.sqlite.owner"))
+    return false
+  } catch {
+    return true
+  }
+}
 
 type PackagedAppPaths = {
   readonly executable: string
@@ -382,19 +554,102 @@ const packagedAppPaths = (): PackagedAppPaths => {
 }
 
 const verifyPackagedResources = async (packaged: PackagedAppPaths) => {
+  const coreDirectory = join(packaged.resources, "core")
+  const coreEntrypoint = join(coreDirectory, "core.mjs")
+  const coreManifest = join(coreDirectory, "manifest.json")
   await Promise.all([
     assertFile(packaged.executable),
     assertFile(join(packaged.resources, "app.asar")),
     assertFile(join(packaged.resources, "app-update.yml")),
+    assertFile(coreEntrypoint),
+    assertFile(coreManifest),
     ...(packaged.cli === null ? [] : [assertFile(packaged.cli)]),
     ...(packaged.icon === null ? [] : [assertFile(packaged.icon)]),
   ])
   if (packaged.cli !== null) await access(packaged.cli, constants.X_OK)
 
+  const manifest = parseCoreArtifactManifest(await readFile(coreManifest, "utf8"))
+  const entrypoint = await readFile(coreEntrypoint)
+  const bunEntrypointPath = join(coreDirectory, manifest.bunEntrypoint)
+  await assertFile(bunEntrypointPath)
+  const bunEntrypoint = await readFile(bunEntrypointPath)
+  const version = await desktopPackageVersion()
+  expect(manifest.buildId).toBe(
+    `core-${version}-e2e-${process.platform}-${process.arch}-${manifest.entrypointSha256.slice(0, 40)}`,
+  )
+  expect(manifest.entrypoint).toBe("core.mjs")
+  expect(manifest.entrypointSha256).toBe(createHash("sha256").update(entrypoint).digest("hex"))
+  expect(manifest.bunEntrypointSha256).toBe(
+    createHash("sha256").update(bunEntrypoint).digest("hex"),
+  )
+  expect(resolvePath(coreDirectory).startsWith(`${resolvePath(packaged.resources)}${sep}`)).toBe(
+    true,
+  )
+  expect(resolvePath(coreDirectory)).not.toContain("app.asar")
+
   const updateConfig = await readFile(join(packaged.resources, "app-update.yml"), "utf8")
   expect(updateConfig).toMatch(/^provider:\s*generic\s*$/m)
   expect(updateConfig).toMatch(/^url:\s*https:\/\/download\.usediffdash\.com\/updates\/stable\s*$/m)
   expect(updateConfig).toMatch(/^updaterCacheDirName:\s*\S+\s*$/m)
+}
+
+const desktopPackageVersion = async (): Promise<string> => {
+  const value: unknown = JSON.parse(
+    await readFile(join(process.cwd(), "../desktop/package.json"), "utf8"),
+  )
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("version" in value) ||
+    typeof value.version !== "string" ||
+    value.version.length === 0
+  ) {
+    throw new Error("Desktop package version is invalid")
+  }
+  return value.version
+}
+
+const parseCoreArtifactManifest = (text: string) => {
+  const value: unknown = JSON.parse(text)
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("schemaVersion" in value) ||
+    value.schemaVersion !== 1 ||
+    !("buildId" in value) ||
+    typeof value.buildId !== "string" ||
+    !("entrypoint" in value) ||
+    value.entrypoint !== "core.mjs" ||
+    !("entrypointSha256" in value) ||
+    typeof value.entrypointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.entrypointSha256) ||
+    !("runtime" in value) ||
+    typeof value.runtime !== "object" ||
+    value.runtime === null ||
+    !("utility" in value.runtime) ||
+    value.runtime.utility !== true ||
+    !("bun" in value.runtime) ||
+    typeof value.runtime.bun !== "object" ||
+    value.runtime.bun === null ||
+    !("minimumVersion" in value.runtime.bun) ||
+    typeof value.runtime.bun.minimumVersion !== "string" ||
+    !("architecture" in value.runtime.bun) ||
+    typeof value.runtime.bun.architecture !== "string" ||
+    !("entrypoint" in value.runtime.bun) ||
+    value.runtime.bun.entrypoint !== "core-bun.mjs" ||
+    !("entrypointSha256" in value.runtime.bun) ||
+    typeof value.runtime.bun.entrypointSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.runtime.bun.entrypointSha256)
+  ) {
+    throw new Error("Packaged Core manifest is invalid.")
+  }
+  return {
+    buildId: value.buildId,
+    entrypoint: value.entrypoint,
+    entrypointSha256: value.entrypointSha256,
+    bunEntrypoint: value.runtime.bun.entrypoint,
+    bunEntrypointSha256: value.runtime.bun.entrypointSha256,
+  }
 }
 
 const assertFile = async (path: string) => {
@@ -485,10 +740,11 @@ process.exit(1)
 
 const fakeGitScript = `import { appendFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
+import { join } from "node:path"
 const args = process.argv.slice(2)
-if (!process.env.FAKE_GIT_LOG || !process.env.REAL_GIT_PATH) process.exit(1)
-appendFileSync(process.env.FAKE_GIT_LOG, args.join(" ") + "\\n")
-const result = spawnSync(process.env.REAL_GIT_PATH, args, {
+const logPath = process.env.FAKE_GIT_LOG ?? (process.env.HOME ? join(process.env.HOME, ".diffdash-e2e-git.log") : null)
+if (logPath) appendFileSync(logPath, args.join(" ") + "\\n")
+const result = spawnSync(process.env.REAL_GIT_PATH ?? ${JSON.stringify(realGitPath)}, args, {
   env: process.env,
   stdio: "inherit"
 })

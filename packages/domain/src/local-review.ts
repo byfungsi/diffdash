@@ -75,20 +75,6 @@ export class LocalReviewDetail extends Schema.Class<LocalReviewDetail>("LocalRev
   fetchedAt: Schema.String,
 }) {}
 
-/** Raw unified diff output and cache metadata for local working tree changes. */
-export class LocalReviewDiff extends Schema.Class<LocalReviewDiff>("LocalReviewDiff")({
-  rootPath: RepositoryCheckoutPath,
-  comparison: LocalReviewComparison.pipe(
-    Schema.withConstructorDefault(Effect.succeed(WorkingTreeComparison.make({}))),
-    Schema.withDecodingDefault(Effect.succeed(WorkingTreeComparison.make({}))),
-  ),
-  baseSha: ReviewRevision,
-  headSha: ReviewRevision,
-  diffHash: ReviewDiffIdentity,
-  diff: Schema.String,
-  fetchedAt: Schema.String,
-}) {}
-
 /** Creates the legacy working-tree-versus-HEAD review target. */
 export const workingTreeReviewTarget = (rootPath: RepositoryCheckoutPath) =>
   LocalReviewTarget.make({

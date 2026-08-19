@@ -2,6 +2,10 @@ import type { DiffDashBridgeApi } from "@diffdash/protocol/api"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
 import { Match } from "effect"
 import { contextBridge, ipcRenderer } from "electron"
+import {
+  createDiffDashE2eDiagnosticsBridgeApi,
+  type DiffDashE2eDiagnosticsBridgeApi,
+} from "./e2e-review-lifecycle"
 import { createRendererTransport } from "./transport"
 
 const transport = createRendererTransport({
@@ -36,6 +40,10 @@ const api: DiffDashBridgeApi = {
       ),
   },
   diagnostics: () => transport.invoke(InvokeChannel.appDiagnostics, {}),
+  resources: {
+    diagnostics: () => transport.invoke(InvokeChannel.resourceDiagnostics, {}),
+    clearDisposable: () => transport.invoke(InvokeChannel.clearDisposableResources, {}),
+  },
   agentProviders: {
     getCatalog: () => transport.invoke(InvokeChannel.agentProvidersGetCatalog, {}),
   },
@@ -125,8 +133,29 @@ const api: DiffDashBridgeApi = {
       transport.invoke(InvokeChannel.acquireLocalReviewSnapshot, { target }),
     acquireRepositoryComparison: (target) =>
       transport.invoke(InvokeChannel.acquireRepositoryComparisonSnapshot, { target }),
-    getPage: (request) => transport.invoke(InvokeChannel.getReviewSnapshotPage, request),
-    search: (request) => transport.invoke(InvokeChannel.searchReviewSnapshot, request),
+  },
+  progressiveReviews: {
+    openSession: (request) => transport.invoke(InvokeChannel.openProgressiveReviewSession, request),
+    currentSession: (request) =>
+      transport.invoke(InvokeChannel.getProgressiveReviewSession, request),
+    closeSession: (request) =>
+      transport.invoke(InvokeChannel.closeProgressiveReviewSession, request),
+    inventory: (request) => transport.invoke(InvokeChannel.getProgressiveReviewInventory, request),
+    readRange: (request) => transport.invoke(InvokeChannel.readProgressiveReviewRange, request),
+    waitForRange: (request) =>
+      transport.invoke(InvokeChannel.waitForProgressiveReviewRange, request),
+    resolveTarget: (request) =>
+      transport.invoke(InvokeChannel.resolveProgressiveReviewTarget, request),
+    search: async (request, onPublication) => {
+      const result = await transport.invoke(InvokeChannel.searchProgressiveReview, request)
+      return Match.valueTags(result, {
+        Failure: (failure) => failure,
+        Success: (success) => {
+          for (const publication of success.value) onPublication(publication)
+          return { _tag: "Success" as const, value: undefined }
+        },
+      })
+    },
   },
   viewedFiles: {
     list: (request) => transport.invoke(InvokeChannel.listViewedFiles, request),
@@ -138,39 +167,20 @@ const api: DiffDashBridgeApi = {
     setRepositoryComparison: (request) =>
       transport.invoke(InvokeChannel.setRepositoryComparisonViewedFile, request),
   },
-  walkthroughs: {
-    get: (request) => transport.invoke(InvokeChannel.getWalkthrough, request),
-    generate: (request) => transport.invoke(InvokeChannel.generateWalkthrough, request),
-  },
-  localWalkthroughs: {
-    get: (target, baseSha, headSha) =>
-      transport.invoke(InvokeChannel.getLocalWalkthrough, {
-        target,
-        baseSha,
-        headSha,
-      }),
-    generate: (target) =>
-      transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: false }),
-    regenerate: (target) =>
-      transport.invoke(InvokeChannel.generateLocalWalkthrough, { target, regenerate: true }),
-  },
-  repositoryComparisonWalkthroughs: {
-    get: (target) =>
-      transport.invoke(InvokeChannel.getRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: false,
-      }),
-    generate: (target) =>
-      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: false,
-      }),
-    regenerate: (target) =>
-      transport.invoke(InvokeChannel.generateRepositoryComparisonWalkthrough, {
-        target,
-        regenerate: true,
-      }),
+  walkthroughOperations: {
+    start: (request) => transport.invoke(InvokeChannel.startWalkthroughOperation, request),
+    getOperation: (request) => transport.invoke(InvokeChannel.getWalkthroughOperation, request),
+    cancel: (request) => transport.invoke(InvokeChannel.cancelWalkthroughOperation, request),
+    getStored: (request) => transport.invoke(InvokeChannel.getStoredWalkthrough, request),
+    onHint: (listener) => transport.subscribe(EventChannel.walkthroughOperationHint, listener),
   },
 }
 
 contextBridge.exposeInMainWorld("diffDash", api)
+
+export type { DiffDashE2eDiagnosticsBridgeApi }
+
+if (process.env.DIFFDASH_E2E_BUILD === "1") {
+  const e2eApi = createDiffDashE2eDiagnosticsBridgeApi(transport)
+  contextBridge.exposeInMainWorld("diffDashE2eDiagnostics", e2eApi)
+}

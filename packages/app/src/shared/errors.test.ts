@@ -6,7 +6,7 @@ import { formatError } from "./errors"
 describe("formatError", () => {
   it("decodes protocol errors after a contextBridge-style clone", () => {
     const encoded = legacyBridgeTransportError(
-      transportError("EXPECTED", "Safe renderer message", "walkthroughs:generate"),
+      transportError("EXPECTED", "Safe renderer message", "Walkthroughs.start"),
     )
 
     expect(formatError({ message: encoded.message }, "Fallback")).toBe("Safe renderer message")

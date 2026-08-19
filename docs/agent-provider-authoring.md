@@ -1,8 +1,8 @@
 # Agent Provider Authoring
 
 Agent providers adapt one agent runtime to the capability-neutral contracts in
-`@diffdash/agent-provider`. Providers are built into DiffDash initially and run as trusted Electron
-main-process code; package isolation is not runtime sandboxing.
+`@diffdash/agent-provider`. Providers are built into DiffDash initially and run as trusted external
+Core code; package isolation is not runtime sandboxing, and Electron does not execute providers.
 
 ## Package Template
 

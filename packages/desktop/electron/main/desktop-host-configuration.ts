@@ -2,14 +2,77 @@ import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { CoreConfiguration, CoreConfigurationError } from "@diffdash/core"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { app } from "electron"
 import type { ApplicationIdentity } from "./application-identity"
 import { decodeCoreConfiguration } from "./core-configuration"
+import type { CoreHostMode } from "./core-host-selection"
 import { resolveApplicationPaths, type ApplicationPaths } from "./paths"
 
 const optionalEnvironmentValue = (value: string | undefined): string | null =>
   value === undefined || value.length === 0 ? null : value
+
+const PackagedRendererUrl = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter(
+      (value) => {
+        try {
+          return new URL(value).protocol === "file:"
+        } catch {
+          return false
+        }
+      },
+      { message: "Expected a file URL" },
+    ),
+  ),
+  Schema.brand("PackagedRendererUrl"),
+)
+
+const DevelopmentRendererUrl = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter(
+      (value) => {
+        try {
+          const url = new URL(value)
+          return url.protocol === "http:" || url.protocol === "https:"
+        } catch {
+          return false
+        }
+      },
+      { message: "Expected an HTTP or HTTPS URL" },
+    ),
+  ),
+  Schema.brand("DevelopmentRendererUrl"),
+)
+
+/** Packaged renderer document selected as the desktop renderer entry. */
+export class PackagedRendererEntry extends Schema.TaggedClass<PackagedRendererEntry>()(
+  "PackagedRendererEntry",
+  { url: PackagedRendererUrl },
+) {}
+
+/** Development server selected as the desktop renderer entry. */
+export class DevelopmentRendererEntry extends Schema.TaggedClass<DevelopmentRendererEntry>()(
+  "DevelopmentRendererEntry",
+  { url: DevelopmentRendererUrl },
+) {}
+
+/** Closed renderer entry state selected and decoded at the environment boundary. */
+export const RendererEntry = Schema.Union([PackagedRendererEntry, DevelopmentRendererEntry])
+
+/** Closed renderer entry state selected and decoded at the environment boundary. */
+export type RendererEntry = typeof RendererEntry.Type
+
+/** A recoverable failure while decoding Electron renderer configuration. */
+export class RendererConfigurationError extends Schema.TaggedError<RendererConfigurationError>()(
+  "RendererConfigurationError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+/** Complete expected failure union while constructing desktop host configuration. */
+export type DesktopHostConfigurationError = CoreConfigurationError | RendererConfigurationError
 
 /** Electron facts and policies captured once after application identity setup. */
 export interface DesktopHostConfiguration {
@@ -22,15 +85,13 @@ export interface DesktopHostConfiguration {
   }
   readonly policies: {
     readonly allowMultipleInstances: boolean
+    readonly coreHostMode: CoreHostMode
     readonly debugOnboarding: boolean
     readonly hiddenWindow: boolean
     readonly updatesDisabled: boolean
   }
   readonly paths: ApplicationPaths
-  readonly renderer: {
-    readonly developmentUrl: string | undefined
-    readonly packagedUrl: string
-  }
+  readonly renderer: RendererEntry
   readonly updater: {
     readonly appImagePath: string | null
   }
@@ -39,6 +100,7 @@ export interface DesktopHostConfiguration {
 
 /** Build-selected behavior that must be supplied by a concrete desktop entrypoint. */
 export interface DesktopStartupConfiguration {
+  readonly coreHostMode: CoreHostMode
   readonly hiddenWindow: boolean
   readonly updatesDisabled: boolean
   readonly fixtures: {
@@ -54,6 +116,7 @@ export interface DesktopStartupConfiguration {
 
 /** Production startup behavior, independent of all E2E environment switches. */
 export const productionDesktopStartupConfiguration: DesktopStartupConfiguration = {
+  coreHostMode: "auto",
   hiddenWindow: false,
   updatesDisabled: false,
   fixtures: {
@@ -82,17 +145,21 @@ export interface DesktopHostConfigurationSource {
 export const makeDesktopHostConfiguration = (
   source: DesktopHostConfigurationSource,
   startup: DesktopStartupConfiguration,
-): Effect.Effect<DesktopHostConfiguration, CoreConfigurationError> => {
-  const paths = resolveApplicationPaths({
+): Effect.Effect<DesktopHostConfiguration, DesktopHostConfigurationError> => {
+  const pathSource = {
     environment: source.environment,
-    ...(source.homeDirectory === undefined ? {} : { homeDirectory: source.homeDirectory }),
     identity: source.identity,
     moduleDirectory: source.moduleDirectory,
     packaged: source.packaged,
     resourcesPath: source.resourcesPath,
     temporaryDirectory: source.temporaryDirectory,
     userDataDirectory: source.userDataDirectory,
-  })
+  }
+  const paths = resolveApplicationPaths(
+    source.homeDirectory === undefined
+      ? pathSource
+      : { ...pathSource, homeDirectory: source.homeDirectory },
+  )
   const core = {
     application: {
       version: source.version,
@@ -121,22 +188,39 @@ export const makeDesktopHostConfiguration = (
     },
     fixtures: startup.fixtures,
   }
+  const rendererInput =
+    source.packaged || source.environment.ELECTRON_RENDERER_URL === undefined
+      ? {
+          _tag: "PackagedRendererEntry",
+          url: pathToFileURL(paths.rendererHtmlPath).href,
+        }
+      : {
+          _tag: "DevelopmentRendererEntry",
+          url: source.environment.ELECTRON_RENDERER_URL,
+        }
 
-  return decodeCoreConfiguration(core).pipe(
-    Effect.map((decodedCore) => ({
+  return Effect.all({
+    core: decodeCoreConfiguration(core),
+    renderer: Schema.decodeUnknownEffect(RendererEntry)(rendererInput).pipe(
+      Effect.mapError(() =>
+        RendererConfigurationError.make({
+          message: "DiffDash renderer configuration is invalid.",
+        }),
+      ),
+    ),
+  }).pipe(
+    Effect.map(({ core: decodedCore, renderer }) => ({
       identity: source.identity,
       application: core.application,
       policies: {
         allowMultipleInstances: source.environment.DIFFDASH_ALLOW_MULTIPLE_INSTANCES === "1",
+        coreHostMode: startup.coreHostMode,
         debugOnboarding: !source.packaged && source.environment.DEBUG_ONBOARD === "1",
         hiddenWindow: startup.hiddenWindow,
         updatesDisabled: startup.updatesDisabled,
       },
       paths,
-      renderer: {
-        developmentUrl: source.packaged ? undefined : source.environment.ELECTRON_RENDERER_URL,
-        packagedUrl: pathToFileURL(paths.rendererHtmlPath).href,
-      },
+      renderer,
       updater: {
         appImagePath: optionalEnvironmentValue(source.environment.APPIMAGE),
       },
@@ -149,7 +233,7 @@ export const makeDesktopHostConfiguration = (
 export const resolveDesktopHostConfiguration = (
   identity: ApplicationIdentity,
   startup: DesktopStartupConfiguration,
-): Effect.Effect<DesktopHostConfiguration, CoreConfigurationError> =>
+): Effect.Effect<DesktopHostConfiguration, DesktopHostConfigurationError> =>
   makeDesktopHostConfiguration(
     {
       identity,

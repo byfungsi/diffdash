@@ -59,6 +59,33 @@ export const invokePreload = <Channel extends InvokeChannel, Value>(
     }),
   )
 
+/** Invokes a preload-owned aggregate operation whose internal IPC response is not renderer-visible. */
+export const invokePreloadVoid = (
+  operation: string,
+  invoke: () => Promise<BridgeResult<void>>,
+): Effect.Effect<void, RendererApiError> =>
+  Effect.tryPromise({
+    try: invoke,
+    catch: (error) => rendererApiError(operation, error),
+  }).pipe(
+    Effect.flatMap((response) => {
+      const decoded = Schema.decodeUnknownResult(boundaryBridgeResultSchema)(response)
+      if (Result.isFailure(decoded)) {
+        return Effect.fail(
+          transportError("INVALID_RESPONSE", `Invalid response for ${operation}`, operation),
+        )
+      }
+      return Match.valueTags(decoded.success, {
+        Failure: (failure) =>
+          Effect.fail(
+            decodeTransportError(rendererFailureInput(failure.error)) ??
+              transportError("INVALID_RESPONSE", `Invalid response for ${operation}`, operation),
+          ),
+        Success: () => Effect.void,
+      })
+    }),
+  )
+
 /** Restores and scopes one callback-based preload event as a renderer-local stream. */
 export const preloadEventStream = <Channel extends EventChannel>(
   channel: Channel,

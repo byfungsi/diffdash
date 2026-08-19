@@ -203,30 +203,19 @@ describe("RepositoryComparisonSource", () => {
     }),
   )
 
-  it.effect("acquires snapshot content and workspaces only from pinned revisions", () => {
+  it.effect("uses workspaces only from pinned revisions", () => {
     const readInputs: PinnedRepositoryComparisonInput[] = []
     const options: TestOptions = {
       repositories: [],
       findHosted: Option.some(repository({ localPath: "/repos/linux" })),
-      diff: `diff --git a/kernel.c b/kernel.c
---- a/kernel.c
-+++ b/kernel.c
-@@ -1 +1 @@
--old
-+new`,
       onRead: (input) => readInputs.push(input),
     }
     return Effect.gen(function* () {
       const source = yield* RepositoryComparisonSource
       const target = yield* source.resolve(command("github"))
-      const snapshot = yield* source.acquire(target)
       const workspace = yield* source.useWorkspace(target, (localPath) => Effect.succeed(localPath))
 
-      expect(snapshot.baseRevision).toBe(mergeBaseSha)
-      expect(snapshot.headRevision).toBe(headSha)
-      expect(snapshot.detail.title).toBe("v6.0...v6.1")
-      expect(snapshot.parsedDiff.files.map(({ path }) => path)).toEqual(["kernel.c"])
-      expect(readInputs).toHaveLength(2)
+      expect(readInputs).toHaveLength(1)
       expect(readInputs[0]).toMatchObject({ baseSha, headSha, mergeBaseSha })
       expect(workspace).toBe("/comparison-workspace")
     }).pipe(Effect.provide(testLayer(options)))
@@ -243,7 +232,6 @@ interface TestOptions {
   readonly onOpenProject?: (localPath: string) => void
   readonly onPin?: (input: HostedRepositoryComparisonInput) => void
   readonly onRead?: (input: PinnedRepositoryComparisonInput) => void
-  readonly diff?: string
 }
 
 const resolve = (input: OpenRepositoryComparisonCommand, options: TestOptions) =>
@@ -291,7 +279,8 @@ const testLayer = (options: TestOptions) =>
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            acquireHostedReviewSnapshot: () => unavailable(),
+            getReviewDiffSource: () => unavailable(),
+            getHostedReviewDetail: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -310,7 +299,7 @@ const testLayer = (options: TestOptions) =>
             readComparisonDiff: (input) =>
               Effect.sync(() => {
                 options.onRead?.(input)
-                return options.diff ?? ""
+                return ""
               }),
             useComparison: (input, run) =>
               Effect.sync(() => options.onRead?.(input)).pipe(

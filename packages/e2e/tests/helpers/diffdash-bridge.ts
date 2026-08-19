@@ -19,6 +19,8 @@ type UnwrapBridgeMember<Value> = Value extends (
 
 type DiffDashE2eApi = UnwrapBridgeMember<Window["diffDash"]>
 
+type DiffDashE2eDiagnosticsApi = UnwrapBridgeMember<Window["diffDashE2eDiagnostics"]>
+
 type BridgeResult<Value> =
   | { readonly _tag: "Success"; readonly value: Value }
   | { readonly _tag: "Failure"; readonly error: { readonly message: string } }
@@ -26,6 +28,15 @@ type BridgeResult<Value> =
 declare global {
   interface Window {
     readonly diffDashForE2e: DiffDashE2eApi
+    readonly diffDashE2eDiagnostics: {
+      readonly reviewLifecycle: () => Promise<
+        import("@diffdash/protocol/e2e-review-lifecycle").E2eReviewLifecycleDiagnostics
+      >
+      readonly holdNextReviewAcquisition: () => Promise<
+        import("@diffdash/protocol/e2e-review-lifecycle").E2eReviewLifecycleHold
+      >
+    }
+    readonly diffDashDiagnosticsForE2e: DiffDashE2eDiagnosticsApi
   }
 }
 
@@ -68,5 +79,9 @@ export const installDiffDashE2eApi = (): void => {
   Object.defineProperty(globalThis.window, "diffDashForE2e", {
     configurable: true,
     value: proxy(globalThis.window.diffDash),
+  })
+  Object.defineProperty(globalThis.window, "diffDashDiagnosticsForE2e", {
+    configurable: true,
+    value: proxy(globalThis.window.diffDashE2eDiagnostics),
   })
 }

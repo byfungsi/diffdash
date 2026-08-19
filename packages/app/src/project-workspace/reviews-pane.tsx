@@ -184,9 +184,9 @@ const renderLocalLifecycle = (
     ready: ({ data, refresh }) =>
       localReviewContent(
         repo,
-        data.files.length === 0
+        data.fileCount === 0
           ? "Clean working tree"
-          : `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
+          : `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
         refresh === "refreshing",
         null,
         null,
@@ -214,7 +214,7 @@ const renderLocalLifecycle = (
     stale: ({ data, reason, refresh }) =>
       localReviewContent(
         repo,
-        `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
+        `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
         refresh === "refreshing",
         reason,
         onRefresh,
@@ -225,7 +225,7 @@ const renderLocalLifecycle = (
     degraded: ({ data, issues, refresh }) =>
       localReviewContent(
         repo,
-        `${data.files.length} changed file${data.files.length === 1 ? "" : "s"}`,
+        `${data.fileCount} changed file${data.fileCount === 1 ? "" : "s"}`,
         refresh === "refreshing",
         issues.join(" "),
         onRefresh,

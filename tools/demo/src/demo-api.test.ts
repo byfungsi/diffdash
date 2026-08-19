@@ -3,7 +3,7 @@ import { Effect } from "effect"
 
 import { HostedReviewTarget, MarkdownBody } from "@diffdash/domain/review-thread"
 import { ProjectWorkspaceStateInput } from "@diffdash/domain/project-workspace"
-import { ReviewProjectId } from "@diffdash/domain/review-identity"
+import { ReviewHunkId, ReviewProjectId } from "@diffdash/domain/review-identity"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import {
@@ -25,8 +25,8 @@ import {
   HostedReviewNumber,
   RepositoryNamespace,
 } from "@diffdash/domain/git-provider"
-import { ReviewSnapshotPageRequest } from "@diffdash/protocol/review-snapshot"
 import { LocalViewedFilesRequest } from "@diffdash/protocol/viewed-files"
+import { WalkthroughBridgeIdempotencyKey } from "@diffdash/protocol/walkthrough-operation"
 import { buildWalkthroughHunkDigest, walkthroughLocalDiffScope } from "@diffdash/domain/walkthrough"
 import { createDemoLocalReviewFixtures } from "./local-review-fixtures"
 
@@ -86,28 +86,80 @@ describe("scenario-backed DiffDash API", () => {
       const manifest = yield* Effect.promise(() =>
         api.reviewSnapshots.acquireHosted(HostedReviewRequest.make({ review })),
       )
+      const session = yield* Effect.promise(() =>
+        api.progressiveReviews.openSession({
+          projectId: manifest.projectId,
+          reviewKey: manifest.reviewKey,
+          snapshotId: manifest.snapshotId,
+        }),
+      )
+      if (session._tag !== "ready") return
       const page = yield* Effect.promise(() =>
-        api.reviewSnapshots.getPage(
-          ReviewSnapshotPageRequest.make({
-            snapshotId: manifest.snapshotId,
-            cursor: null,
-            fileIds: [],
-          }),
-        ),
+        api.progressiveReviews.inventory({ identity: session.identity, offset: 0, limit: 8 }),
+      )
+      const range = yield* Effect.promise(() =>
+        api.progressiveReviews.readRange({
+          identity: session.identity,
+          fileId: page.files[0]?.fileId ?? scenario.currentRevision.parsedDiff.files[0]!.fileId,
+          startLine: 0,
+        }),
+      )
+      const laterFile = scenario.currentRevision.parsedDiff.files
+        .slice(8)
+        .find((file) => file.hunks.length > 0)
+      expect(laterFile).toBeDefined()
+      if (laterFile === undefined) return
+      const resolved = yield* Effect.promise(() =>
+        api.progressiveReviews.resolveTarget({
+          identity: session.identity,
+          fileId: laterFile.fileId,
+          target: { _tag: "HunkLine", hunkId: laterFile.hunks[0]?.id ?? null, line: 0 },
+        }),
       )
 
       expect(repositories.map((repository) => repository.id)).toEqual(["github:emberline/dispatch"])
       expect(reviewRequests[0]?.title).toBe("Make webhook replay claims atomic")
       expect(manifest.detail.summary.head.revision).toBe("c8a4f38d5f31dd16f39a6f42c4a8e44bed782e69")
-      expect(page["_tag"]).toBe("available")
-      if (page["_tag"] === "available") {
-        expect(page.files).toHaveLength(8)
-        expect(page.nextCursor).not.toBeNull()
-        expect(page.files.map((file) => file.patch).join("\n")).toContain(
-          "WHERE replay_claim.claimed_until < excluded.claimed_at",
-        )
-      }
+      expect(page.files).toHaveLength(8)
+      expect(page.nextOffset).not.toBeNull()
+      expect(resolved.file.fileId).toBe(laterFile.fileId)
+      yield* Effect.promise(() =>
+        expect(
+          api.progressiveReviews.resolveTarget({
+            identity: session.identity,
+            fileId: laterFile.fileId,
+            target: {
+              _tag: "HunkLine",
+              hunkId: ReviewHunkId.make("missing-demo-hunk"),
+              line: 0,
+            },
+          }),
+        ).rejects.toThrow("Demo review target is unavailable"),
+      )
+      expect(new TextDecoder().decode(range.blocks[0]?.bytes)).toContain("diff --git")
       expect(timeline.getState().revisionId).toBe("01-initial")
+    }),
+  )
+
+  it.effect("cancels pending walkthrough hints when the scenario resets", () =>
+    Effect.gen(function* () {
+      const scenario = yield* loadAtomicWebhookReplayScenario
+      const { api, timeline } = createDemoRuntime(scenario)
+      const hints: unknown[] = []
+      const unsubscribe = api.walkthroughOperations.onHint((hint) => hints.push(hint))
+
+      yield* Effect.promise(() =>
+        api.walkthroughOperations.start({
+          target: HostedReviewTarget.make({ kind: "hosted", review }),
+          regenerate: false,
+          idempotencyKey: WalkthroughBridgeIdempotencyKey.make("w:demo-reset"),
+        }),
+      )
+      yield* Effect.promise(() => timeline.reset(scenario.manifest.id))
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+      unsubscribe()
+
+      expect(hints).toEqual([])
     }),
   )
 
@@ -243,22 +295,20 @@ describe("scenario-backed DiffDash API", () => {
 
       expect(branch.target.comparison["_tag"]).toBe("branch")
       if (branch.target.comparison["_tag"] === "branch") {
-        expect(branch.target.comparison.baseSha).toBe(branch.snapshot.baseRevision)
+        expect(branch.target.comparison.baseSha).toBe(branch.manifest.baseRevision)
         expect(branch.target.comparison.baseSha).not.toBe(branch.comparisonTargetSha)
       }
       expect(branch.excludedTargetOnlyPaths).toEqual(["docs/dev-release-notes.md"])
       expect(
-        branch.snapshot.parsedDiff.files.some((file) =>
-          branch.excludedTargetOnlyPaths.includes(file.path),
-        ),
+        branch.parsedDiff.files.some((file) => branch.excludedTargetOnlyPaths.includes(file.path)),
       ).toBe(false)
-      expect(working.snapshot.diff.diff).not.toBe(branch.snapshot.diff.diff)
-      expect(working.snapshot.reviewKey).not.toBe(branch.snapshot.reviewKey)
-      expect(working.snapshot.snapshotId).not.toBe(branch.snapshot.snapshotId)
+      expect(working.diff.diff).not.toBe(branch.diff.diff)
+      expect(working.manifest.reviewKey).not.toBe(branch.manifest.reviewKey)
+      expect(working.manifest.snapshotId).not.toBe(branch.manifest.snapshotId)
       expect(workingManifest.snapshotId).not.toBe(branchManifest.snapshotId)
       expect(workingThreads.map(({ id }) => id)).not.toEqual(branchThreads.map(({ id }) => id))
-      expect(workingThreads[0]?.reviewKey).toBe(working.snapshot.reviewKey)
-      expect(branchThreads[0]?.reviewKey).toBe(branch.snapshot.reviewKey)
+      expect(workingThreads[0]?.reviewKey).toBe(working.manifest.reviewKey)
+      expect(branchThreads[0]?.reviewKey).toBe(branch.manifest.reviewKey)
       expect(workingViewed.map(({ reviewKey }) => reviewKey)).not.toEqual(
         branchViewed.map(({ reviewKey }) => reviewKey),
       )
@@ -266,8 +316,8 @@ describe("scenario-backed DiffDash API", () => {
       for (const fixture of [working, branch]) {
         const localHunkIds = new Set(
           buildWalkthroughHunkDigest(
-            fixture.snapshot.parsedDiff.files,
-            walkthroughLocalDiffScope(fixture.snapshot.headRevision),
+            fixture.parsedDiff.files,
+            walkthroughLocalDiffScope(fixture.manifest.headRevision),
           ).map(({ id }) => id),
         )
         const walkthroughHunkIds = [

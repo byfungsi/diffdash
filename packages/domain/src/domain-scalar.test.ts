@@ -39,6 +39,7 @@ describe("domain scalar schemas", () => {
     rejects(UtcIsoTimestamp, [
       "2026-08-10T00:00:00",
       "2026-08-10T00:00:00+00:00",
+      "2026-08-10T00:00:00.1234567890Z",
       "2026-02-30T00:00:00Z",
       "not-a-date",
     ])

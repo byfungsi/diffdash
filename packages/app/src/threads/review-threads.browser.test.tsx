@@ -36,8 +36,9 @@ import {
 import type { ReactNode } from "react"
 import { flushSync } from "react-dom"
 import { createRoot, type Root } from "react-dom/client"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { page, userEvent } from "vitest/browser"
+import { installDiffDashApi } from "../test/app-browser-support"
 import { ReviewThreadListPane } from "./review-thread-sidebar"
 import {
   ReviewMarkdown,
@@ -49,6 +50,10 @@ import {
 } from "./review-threads"
 
 let root: Root | null = null
+
+beforeEach(() => {
+  installDiffDashApi()
+})
 
 const lineAnchor = LineReviewAnchor.make({
   fileId: ReviewFileId.make("file-browser"),

@@ -10,7 +10,10 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { Schema } from "effect"
 import { describe, expect, it, vi } from "vitest"
+import { RendererEntry } from "./desktop-host-configuration"
+import type { RendererEntry as RendererEntryType } from "./desktop-host-configuration"
 import {
   createDiffDashBrowserWindowOptions,
   createRendererNavigationHandlers,
@@ -55,11 +58,8 @@ describe("Electron policy", () => {
     ).not.toHaveProperty("icon")
   })
 
-  it("ignores the development URL in packaged mode and trusts only the exact document", () => {
-    const policy = securityPolicy({
-      developmentRendererUrl: "http://localhost:5173",
-      isPackaged: true,
-    })
+  it("trusts only the exact packaged document", () => {
+    const policy = securityPolicy()
 
     expect(policy.rendererEntryUrl).toBe(packagedRendererUrl)
     expect(policy.isRendererNavigationAllowed(packagedRendererUrl)).toBe(true)
@@ -73,7 +73,6 @@ describe("Electron policy", () => {
   it("trusts only the configured development origin while unpackaged", () => {
     const policy = securityPolicy({
       developmentRendererUrl: "http://localhost:5173/app",
-      isPackaged: false,
     })
 
     expect(policy.rendererEntryUrl).toBe("http://localhost:5173/app")
@@ -84,18 +83,6 @@ describe("Electron policy", () => {
     expect(policy.isRendererNavigationAllowed("http://review.localhost:5173/review")).toBe(false)
     expect(policy.isRendererNavigationAllowed("blob:http://localhost:5173/review")).toBe(false)
     expect(policy.isRendererNavigationAllowed(packagedRendererUrl)).toBe(false)
-  })
-
-  it("requires valid mode-specific renderer protocols", () => {
-    expect(() => securityPolicy({ packagedRendererUrl: "https://example.com/index.html" })).toThrow(
-      "Packaged renderer URL must use the file protocol",
-    )
-    expect(() =>
-      securityPolicy({ developmentRendererUrl: "file:///tmp/index.html", isPackaged: false }),
-    ).toThrow("Development renderer URL must use HTTP or HTTPS")
-    expect(() => securityPolicy({ packagedRendererUrl: "not a URL" })).toThrow(
-      "Invalid packaged renderer URL",
-    )
   })
 
   it("requires the trusted top frame, exact sender URL, and canonical renderer URL for IPC", () => {
@@ -111,14 +98,12 @@ describe("Electron policy", () => {
       senderIsTrusted({
         developmentRendererUrl: "http://localhost:5173",
         frameUrl: "http://localhost:5173/review",
-        isPackaged: false,
       }),
     ).toBe(true)
     expect(
       senderIsTrusted({
         developmentRendererUrl: "http://localhost:5173",
         frameUrl: "http://127.0.0.1:5173/review",
-        isPackaged: false,
       }),
     ).toBe(false)
   })
@@ -226,30 +211,31 @@ describe("Electron policy", () => {
 
 const securityPolicy = ({
   developmentRendererUrl,
-  isPackaged = true,
   isTrustedWebContents = () => true,
   openExternal = async () => undefined,
   packagedRendererUrl: packagedUrl = packagedRendererUrl,
 }: {
   readonly developmentRendererUrl?: string
-  readonly isPackaged?: boolean
   readonly isTrustedWebContents?: (webContents: RendererWebContentsIdentity) => boolean
   readonly openExternal?: (url: string) => Promise<void>
   readonly packagedRendererUrl?: string
-} = {}) =>
-  createRendererSecurityPolicy({
-    developmentRendererUrl,
-    isPackaged,
+} = {}) => {
+  const rendererEntry: RendererEntryType = Schema.decodeUnknownSync(RendererEntry)(
+    developmentRendererUrl === undefined
+      ? { _tag: "PackagedRendererEntry", url: packagedUrl }
+      : { _tag: "DevelopmentRendererEntry", url: developmentRendererUrl },
+  )
+  return createRendererSecurityPolicy({
     isTrustedWebContents,
     openExternal,
-    packagedRendererUrl: packagedUrl,
+    rendererEntry,
   })
+}
 
 const senderIsTrusted = ({
   developmentRendererUrl,
   destroyed = false,
   frameUrl = packagedRendererUrl,
-  isPackaged = true,
   senderFrame = "main",
   senderUrl = frameUrl,
   trustedIdentity = true,
@@ -257,7 +243,6 @@ const senderIsTrusted = ({
   readonly developmentRendererUrl?: string
   readonly destroyed?: boolean
   readonly frameUrl?: string
-  readonly isPackaged?: boolean
   readonly senderFrame?: "main" | "missing" | "subframe"
   readonly senderUrl?: string
   readonly trustedIdentity?: boolean
@@ -270,7 +255,6 @@ const senderIsTrusted = ({
   }
   const policy = securityPolicy({
     ...(developmentRendererUrl === undefined ? {} : { developmentRendererUrl }),
-    isPackaged,
     isTrustedWebContents: (candidate) => trustedIdentity && candidate === sender,
   })
   const invokedFrame =

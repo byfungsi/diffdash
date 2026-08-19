@@ -7,6 +7,6 @@ export const defineAnalyticsHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.defineCore(CoreMethod.analyticsStart, runtime.execute)
-  handlers.defineCore(CoreMethod.analyticsCapture, runtime.execute)
+  handlers.defineCore(CoreMethod.analyticsStart, runtime.core.analyticsStart)
+  handlers.defineCore(CoreMethod.analyticsCapture, runtime.core.analyticsCapture)
 }

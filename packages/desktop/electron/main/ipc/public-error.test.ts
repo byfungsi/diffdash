@@ -1,19 +1,36 @@
-import { ReviewSnapshotSearchResultTooLargeError } from "@diffdash/core"
-import { InvokeChannel } from "@diffdash/protocol/channels"
 import { describe, expect, it } from "vitest"
+
 import { toPublicIpcError } from "./public-error"
 
 describe("toPublicIpcError", () => {
-  it("maps Core-owned response budget failures at the Electron boundary", () => {
-    const result = toPublicIpcError(
-      ReviewSnapshotSearchResultTooLargeError.make({ maxResponseBytes: 1 }),
-      InvokeChannel.searchReviewSnapshot,
-    )
+  it("projects source-safe Core RPC failures without importing Core error classes", () => {
+    expect(
+      toPublicIpcError(
+        {
+          _tag: "ReviewAgentOperationFailure",
+          code: "REVIEW_AGENT_PROVIDER_FAILURE",
+          safeMessage: "DiffDash could not complete this review-agent operation.",
+          internalCause: "/Users/example/.config/provider-token",
+        },
+        "reviewThreads:runAgent",
+      ),
+    ).toMatchObject({
+      _tag: "TransportError",
+      code: "REVIEW_AGENT_PROVIDER_FAILURE",
+      message: "DiffDash could not complete this review-agent operation.",
+      operation: "reviewThreads:runAgent",
+    })
+  })
 
-    expect(result).toMatchObject({
-      code: "PAYLOAD_TOO_LARGE",
-      message: "One review search result exceeds the bounded response size.",
-      operation: InvokeChannel.searchReviewSnapshot,
+  it("does not disclose error-like values that lack a source-safe RPC message", () => {
+    expect(
+      toPublicIpcError(
+        { code: "REVIEW_AGENT_PROVIDER_FAILURE", message: "secret provider output" },
+        "reviewThreads:runAgent",
+      ),
+    ).toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "DiffDash could not complete the request.",
     })
   })
 })

@@ -68,11 +68,11 @@ export class IpcControllerRegistry {
   /** Defines a protocol handler that directly forwards its decoded request to one Core method. */
   readonly defineCore = <Method extends CoreMethod>(
     method: Method,
-    execute: (method: Method, input: CoreMethodInput<Method>) => Promise<CoreMethodOutput<Method>>,
+    handler: (input: CoreMethodInput<Method>) => Promise<CoreMethodOutput<Method>>,
     errorAdapter: ControllerErrorAdapter = toPublicIpcError,
   ) => {
     const channel = CoreMethodChannel[method]
-    this.define(channel, async (_event, request) => execute(method, request), errorAdapter)
+    this.define(channel, async (_event, request) => handler(request), errorAdapter)
   }
 
   /** Defines a handler whose state mutation occurs only after its response passes encoding. */
@@ -142,12 +142,19 @@ export class IpcControllerRegistry {
       }
 
       try {
-        const encoded = Schema.encodeUnknownSync(successEnvelope(InvokeContract[channel].response))(
-          {
+        const envelope = successEnvelope(InvokeContract[channel].response)
+        let encoded
+        try {
+          encoded = Schema.encodeUnknownSync(envelope)({
             _tag: "Success",
             value: prepared.response,
-          },
-        )
+          })
+        } catch {
+          const response = Schema.decodeUnknownSync(InvokeContract[channel].response)(
+            prepared.response,
+          )
+          encoded = Schema.encodeUnknownSync(envelope)({ _tag: "Success", value: response })
+        }
         assertJsonPayloadWithinBudget(encoded, InvokeContract[channel].maxResponseBytes, channel)
         prepared.commit?.()
         return encoded

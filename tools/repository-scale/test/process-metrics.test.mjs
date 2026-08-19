@@ -1,16 +1,67 @@
 import assert from "node:assert/strict"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
 import {
   classifyProcess,
   evaluateSwitchMemoryPlateau,
+  measureManagedStorage,
   measureProcessTree,
   parseLinuxIo,
   parseLinuxSmaps,
   parseLinuxStatus,
   parseProcessList,
+  REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
 } from "../src/process-metrics.mjs"
+
+test("reports database, managed, and free-space bytes without paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "diffdash-scale-storage-"))
+  try {
+    const snapshotBlocksRoot = join(root, "diffdash.sqlite.snapshot-blocks")
+    const snapshotSpoolsRoot = join(snapshotBlocksRoot, "spools")
+    const worktreePoolRoot = join(root, "worktree-pool")
+    const remoteWorktreePoolRoot = join(root, "remote-worktree-pool")
+    const databasePath = join(root, "diffdash.sqlite")
+    await Promise.all([
+      mkdir(snapshotSpoolsRoot, { recursive: true }),
+      mkdir(worktreePoolRoot, { recursive: true }),
+      mkdir(remoteWorktreePoolRoot, { recursive: true }),
+    ])
+    await Promise.all([
+      writeFile(databasePath, Buffer.alloc(17)),
+      writeFile(`${databasePath}-wal`, Buffer.alloc(19)),
+      writeFile(`${databasePath}-shm`, Buffer.alloc(29)),
+      writeFile(join(snapshotBlocksRoot, "block"), Buffer.alloc(23)),
+      writeFile(join(snapshotSpoolsRoot, "spool"), Buffer.alloc(31)),
+      writeFile(join(worktreePoolRoot, "checkout"), Buffer.alloc(37)),
+      writeFile(join(remoteWorktreePoolRoot, "checkout"), Buffer.alloc(41)),
+    ])
+
+    const measured = await measureManagedStorage({
+      databasePath,
+      snapshotBlocksRoot,
+      snapshotSpoolsRoot,
+      worktreePoolRoot,
+      remoteWorktreePoolRoot,
+    })
+    assert.equal(measured.databaseBytes, 65)
+    assert.equal(measured.managedBytes, 132)
+    assert.deepEqual(measured.managedRoots, {
+      snapshotBlockBytes: 23,
+      snapshotSpoolBytes: 31,
+      worktreePoolBytes: 37,
+      remoteWorktreePoolBytes: 41,
+    })
+    assert.ok(measured.filesystemFreeBytes > 0)
+    assert.ok(measured.filesystemTotalBytes >= measured.filesystemFreeBytes)
+    assert.equal(JSON.stringify(measured).includes(root), false)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 test("parses process lists and classifies DiffDash ownership", () => {
   const processes = parseProcessList(`
@@ -19,11 +70,13 @@ test("parses process lists and classifies DiffDash ownership", () => {
   102 100 512 diffdash-core
   103 100 256 git diff
   104 100 128 /Applications/DiffDash --type=utility --utility-sub-type=network.mojom.NetworkService
+  105 100 768 /opt/diffdash/core/bun core-bun.mjs
+  106 100 640 /Applications/DiffDash --type=utility --utility-sub-type=node.mojom.NodeService core.mjs
 `)
   assert.equal(processes[0].rssBytes, 2_097_152)
   assert.deepEqual(
     processes.map((process) => classifyProcess(process, 100)),
-    ["electron", "renderer", "coreWorker", "child", "child"],
+    ["electron", "renderer", "coreWorker", "child", "child", "coreWorker", "coreWorker"],
   )
 })
 
@@ -109,6 +162,10 @@ test("reports process peaks, I/O deltas, and a complete steady window", async ()
   assert.equal(report.peaks.electron.writeBytes, 15)
   assert.equal(report.totalPeakRssBytes, 111)
   assert.equal(report.totalFinalRssBytes, 111)
+  assert.deepEqual(
+    report.samples.map(({ elapsedMs }) => elapsedMs),
+    [0, 1, 2, 3],
+  )
   assert.equal(report.steadyWindow.reached, true)
 })
 
@@ -169,16 +226,111 @@ test("evaluates ten switches with warm-up, absolute tolerance, and growth detect
 
 test("rejects stale, incomplete, and mixed switch reports", () => {
   const reports = Array.from({ length: 10 }, (_, index) => ({
-    version: 1,
+    version: 2,
+    appVersion: "0.8.1",
+    bunVersion: null,
+    coreHost: "utility",
+    coreIdentity: {
+      host: "utility",
+      session: "baseline",
+      switchIndex: index + 1,
+      reviewSessionId: `review:${index + 1}`,
+    },
+    diffdashCommit: "c".repeat(40),
+    disposalComplete: true,
     fixtureId: "linux-test",
+    fixtureManifest: {
+      id: "linux-test",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      revisionSha: "d".repeat(40),
+      version: 2,
+      kind: "synthetic-repository-scale",
+    },
     session: "baseline",
     switchIndex: index + 1,
     platform: "linux",
+    packaged: true,
+    packagedArtifactDigest: "e".repeat(64),
+    scenario: index % 2 === 0 ? "pathological" : "small",
+    storage: {
+      before: {
+        databaseBytes: 1_000,
+        managedBytes: 2_000,
+        managedRoots: {
+          snapshotBlockBytes: 500,
+          snapshotSpoolBytes: 500,
+          worktreePoolBytes: 500,
+          remoteWorktreePoolBytes: 500,
+        },
+        filesystemFreeBytes: 10_000,
+        filesystemTotalBytes: 20_000,
+      },
+      after: {
+        databaseBytes: 1_010,
+        managedBytes: 2_020,
+        managedRoots: {
+          snapshotBlockBytes: 510,
+          snapshotSpoolBytes: 500,
+          worktreePoolBytes: 500,
+          remoteWorktreePoolBytes: 510,
+        },
+        filesystemFreeBytes: 9_970,
+        filesystemTotalBytes: 20_000,
+      },
+      databaseDeltaBytes: 10,
+      managedDeltaBytes: 20,
+      freeSpaceDeltaBytes: -30,
+    },
+    machineProfile: {
+      platform: "linux",
+      architecture: "x64",
+      operatingSystemRelease: "6.8.0-test",
+      logicalCpuCount: 8,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      nodeVersion: "v22.20.0",
+    },
     totalFinalRssBytes: 500 * 1024 * 1024,
-    steadyWindow: { reached: true },
+    final: Object.fromEntries(
+      ["electron", "renderer", "coreWorker", "child"].map((role) => [
+        role,
+        {
+          processCount: role === "child" ? 0 : 1,
+          rssBytes: role === "child" ? 0 : 100,
+          privateBytes: role === "child" ? null : 80,
+          swapBytes: role === "child" ? null : 0,
+        },
+      ]),
+    ),
+    peaks: Object.fromEntries(
+      ["electron", "renderer", "coreWorker", "child"].map((role) => [
+        role,
+        {
+          rssBytes: role === "child" ? null : 100,
+          privateBytes: role === "child" ? null : 80,
+          swapBytes: role === "child" ? null : 0,
+          readBytes: role === "child" ? null : 10,
+          writeBytes: role === "child" ? null : 20,
+        },
+      ]),
+    ),
+    durationMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
+    intervalMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
+    steadyWindow: {
+      reached: true,
+      windowMs: REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauWindowMs,
+      threshold: REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold,
+    },
   }))
   assert.deepEqual(validateSwitchReports(reports, "baseline"), {
+    appVersion: "0.8.1",
+    bunVersion: null,
+    coreHost: "utility",
+    diffdashCommit: "c".repeat(40),
     fixtureId: "linux-test",
+    machineProfile: reports[0].machineProfile,
+    packagedArtifactDigest: "e".repeat(64),
+    fixtureManifest: reports[0].fixtureManifest,
     platform: "linux",
   })
   assert.throws(
@@ -196,5 +348,76 @@ test("rejects stale, incomplete, and mixed switch reports", () => {
   assert.throws(
     () => validateSwitchReports(reports.with(9, { ...reports[9], platform: "darwin" }), "baseline"),
     /same platform/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(0, { ...reports[0], durationMs: 1 }), "baseline"),
+    /approved measurement policy/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(4, { ...reports[4], diffdashCommit: "d".repeat(40) }),
+        "baseline",
+      ),
+    /same DiffDash commit/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(2, {
+          ...reports[2],
+          machineProfile: { ...reports[2].machineProfile, logicalCpuCount: 16 },
+        }),
+        "baseline",
+      ),
+    /same machine profile/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(5, { ...reports[5], scenario: reports[4].scenario }),
+        "baseline",
+      ),
+    /did not alternate/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(9, { ...reports[9], disposalComplete: false }),
+        "baseline",
+      ),
+    /before disposal completed/,
+  )
+  assert.throws(
+    () => validateSwitchReports(reports.with(3, { ...reports[3], storage: null }), "baseline"),
+    /incomplete managed storage/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(6, {
+          ...reports[6],
+          final: {
+            ...reports[6].final,
+            renderer: { ...reports[6].final.renderer, privateBytes: null },
+          },
+        }),
+        "baseline",
+      ),
+    /incomplete Linux renderer process evidence/,
+  )
+  assert.throws(
+    () =>
+      validateSwitchReports(
+        reports.with(1, {
+          ...reports[1],
+          peaks: {
+            ...reports[1].peaks,
+            coreWorker: { ...reports[1].peaks.coreWorker, readBytes: null },
+          },
+        }),
+        "baseline",
+      ),
+    /incomplete Linux coreWorker process evidence/,
   )
 })

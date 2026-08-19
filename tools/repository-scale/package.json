@@ -5,11 +5,14 @@
   "type": "module",
   "exports": {},
   "scripts": {
-    "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/process-metrics.mjs",
+    "benchmark:generate": "node src/cli.mjs generate",
+    "build": "node --check src/cli.mjs && node --check src/git-fixture.mjs && node --check src/orchestration.mjs && node --check src/process-metrics.mjs && node --check src/synthetic-fixture.mjs",
     "typecheck": "pnpm build",
     "benchmark:prepare": "node src/cli.mjs prepare",
     "measure": "node src/cli.mjs measure",
     "evaluate": "node src/cli.mjs evaluate",
+    "smoke": "node src/cli.mjs smoke",
+    "run": "node src/cli.mjs run",
     "test": "node --test test/*.test.mjs",
     "lint": "oxlint src test --no-error-on-unmatched-pattern"
   },

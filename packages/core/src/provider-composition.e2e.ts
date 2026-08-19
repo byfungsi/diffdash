@@ -1,6 +1,9 @@
 import { agentAutoRoutingPolicies } from "@diffdash/agent-provider/registry"
 import { makeFixtureAgentProvider } from "@diffdash/agent-provider-fixture"
-import { createFixtureGitProvider } from "@diffdash/git-provider-fixture"
+import {
+  createFixtureGitProvider,
+  type FixtureGitProviderConfig,
+} from "@diffdash/git-provider-fixture"
 import { Effect, Option } from "effect"
 import { type ProcessRunner, processRequest } from "@diffdash/process"
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
@@ -21,16 +24,14 @@ export const createAgentProviderComposition = (
   },
 ): AgentProviderComposition => {
   const production = createProductionAgentProviderComposition(dependencies)
-  const registrations = [
-    ...production.registrations,
-    ...(Option.isSome(dependencies.fixture)
-      ? [
-          makeFixtureAgentProvider({
-            walkthroughNeverCompletes: dependencies.fixture.value.walkthroughNeverCompletes,
-          }),
-        ]
-      : []),
-  ]
+  const registrations = [...production.registrations]
+  if (Option.isSome(dependencies.fixture)) {
+    registrations.push(
+      makeFixtureAgentProvider({
+        walkthroughNeverCompletes: dependencies.fixture.value.walkthroughNeverCompletes,
+      }),
+    )
+  }
   return { registrations, policies: agentAutoRoutingPolicies(registrations) }
 }
 
@@ -45,26 +46,29 @@ export const createGitProviderComposition = (
 ): readonly GitProviderRegistration[] => {
   const production = createProductionGitProviderComposition(processes)
   if (Option.isNone(fixture)) return production
-  return [
-    ...production,
-    createFixtureGitProvider({
-      remoteUrl: fixture.value.remoteUrl,
-      ...(Option.isNone(fixture.value.baseRevision)
-        ? {}
-        : { baseRevision: fixture.value.baseRevision.value }),
-      ...(Option.isNone(fixture.value.headRevision)
-        ? {}
-        : { headRevision: fixture.value.headRevision.value }),
-      bootstrapBareRepository: (destination) =>
-        processes
-          .run(
-            processRequest("git", ["clone", "--bare", "--", fixture.value.remoteUrl, destination], {
-              timeoutMs: 120_000,
-            }),
-          )
-          .pipe(Effect.asVoid),
-    }),
-  ]
+  const bootstrapBareRepository: FixtureGitProviderConfig["bootstrapBareRepository"] = (
+    destination,
+  ) =>
+    processes
+      .run(
+        processRequest("git", ["clone", "--bare", "--", fixture.value.remoteUrl, destination], {
+          timeoutMs: 120_000,
+        }),
+      )
+      .pipe(Effect.asVoid)
+  const fixtureConfiguration: {
+    -readonly [Key in keyof FixtureGitProviderConfig]: FixtureGitProviderConfig[Key]
+  } = {
+    remoteUrl: fixture.value.remoteUrl,
+    bootstrapBareRepository,
+  }
+  if (Option.isSome(fixture.value.baseRevision)) {
+    fixtureConfiguration.baseRevision = fixture.value.baseRevision.value
+  }
+  if (Option.isSome(fixture.value.headRevision)) {
+    fixtureConfiguration.headRevision = fixture.value.headRevision.value
+  }
+  return [...production, createFixtureGitProvider(fixtureConfiguration)]
 }
 
 /** E2E provider composition extending production providers with deterministic fixtures. */

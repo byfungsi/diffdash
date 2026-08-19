@@ -6,7 +6,12 @@
   "exports": {
     "./agent-run-artifact-store": "./src/agent-run-artifact-store.ts",
     "./database": "./src/database.ts",
+    "./database-ownership": "./src/database-ownership.ts",
+    "./core-command-store": "./src/core-command-store.ts",
+    "./resource-catalog": "./src/resource-catalog.ts",
+    "./snapshot-block-store": "./src/snapshot-block-store.ts",
     "./database-node": "./src/database-node.ts",
+    "./database-bun": "./src/database-bun.ts",
     "./project-workspace-store": "./src/project-workspace-store.ts",
     "./repository-store": "./src/repository-store.ts",
     "./review-thread-store": "./src/review-thread-store.ts",
@@ -20,7 +25,7 @@
     "fixtures:database-v8": "node scripts/generate-database-v8-fixture.mjs",
     "test:bun": "bun scripts/database-bun-conformance.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && bun scripts/database-bun-conformance.ts",
     "lint": "oxlint src --no-error-on-unmatched-pattern"
   },
   "dependencies": {

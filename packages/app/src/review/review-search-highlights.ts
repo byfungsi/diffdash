@@ -1,19 +1,23 @@
 import {
+  type FileDiffOptions,
   isVirtualizedFileDiff,
   type PostRenderPhase,
   type SelectionSide,
   VirtualizedFileDiff,
 } from "./pierre"
 import { findRenderedDiffLine } from "./review-rendered-line"
+import type { ReviewThreadAnnotation } from "./thread-annotations"
 import { isTextNode } from "@/shared/dom"
 import type { ReviewSnapshotSearchMatch } from "@diffdash/protocol/review-snapshot"
-import type { TransportError } from "@diffdash/protocol/transport-error"
 
 /** CSS Custom Highlight registry key for non-active review search matches. */
 export const REVIEW_SEARCH_MATCH_HIGHLIGHT = "diffdash-review-search-match"
 
 /** CSS Custom Highlight registry key for the active review search match. */
 export const REVIEW_SEARCH_ACTIVE_HIGHLIGHT = "diffdash-review-search-active"
+
+const ACTIVE_REBUILD_RETRY_FRAMES = 8
+let highlightOwner: object | null = null
 
 /** A virtualized line target relative to its Pierre host. */
 type ReviewSearchScrollTarget = {
@@ -24,18 +28,27 @@ type ReviewSearchScrollTarget = {
 
 type SearchDiffRegistration = {
   readonly host: HTMLElement
-  readonly instance: VirtualizedFileDiff<TransportError>
+  readonly instance: VirtualizedFileDiff<ReviewThreadAnnotation>
+  readonly observer: MutationObserver
 }
+
+type PierrePostRenderInstance = Parameters<
+  NonNullable<FileDiffOptions<ReviewThreadAnnotation>["onPostRender"]>
+>[1]
 
 /** Bridges parsed review occurrences to Pierre's virtualized shadow-DOM lines. */
 export class ReviewSearchHighlightManager {
+  private readonly highlightOwner = {}
   private activeElement: HTMLElement | null = null
   private activeRange: StaticRange | null = null
+  private activeHighlight: Highlight | null = null
   private activeOccurrenceId: string | null = null
   private readonly registrations = new Map<string, SearchDiffRegistration>()
   private occurrencesByFile = new Map<string, readonly ReviewSnapshotSearchMatch[]>()
   private rebuildFrame: number | null = null
+  private activeRebuildRetries = 0
   private highlightsRegistered = false
+  private matchHighlight: Highlight | null = null
 
   /** Updates the ranges painted in every currently mounted diff. */
   setSearch(occurrences: readonly ReviewSnapshotSearchMatch[], activeOccurrenceId: string | null) {
@@ -49,25 +62,38 @@ export class ReviewSearchHighlightManager {
       }
     })
     this.occurrencesByFile = occurrencesByFile
+    this.registrations.forEach((registration, reviewKey) => {
+      registration.observer.disconnect()
+      if (occurrencesByFile.has(reviewKey)) this.observeRegistration(registration)
+    })
     this.activeOccurrenceId = activeOccurrenceId
     this.activeElement = null
     this.activeRange = null
+    this.activeRebuildRetries = 0
     if (occurrencesByFile.size === 0) {
+      if (highlightOwner === this.highlightOwner) highlightOwner = null
       this.cancelScheduledRebuild()
       this.clearHighlights()
       return
     }
+    highlightOwner = this.highlightOwner
     this.scheduleRebuild()
   }
 
   /** Tracks a Pierre host as virtualization mounts, updates, or removes its rows. */
-  handlePostRender(reviewKey: string, host: HTMLElement, instance: object, phase: PostRenderPhase) {
+  handlePostRender(
+    reviewKey: string,
+    host: HTMLElement,
+    instance: PierrePostRenderInstance,
+    phase: PostRenderPhase,
+  ) {
     if (phase === "unmount") {
       const registration = this.registrations.get(reviewKey)
       if (registration?.host === host) {
         queueMicrotask(() => {
           const current = this.registrations.get(reviewKey)
           if (current?.host === host && !host.isConnected) {
+            current.observer.disconnect()
             this.registrations.delete(reviewKey)
           }
           this.scheduleRebuild()
@@ -76,8 +102,38 @@ export class ReviewSearchHighlightManager {
       return
     }
 
-    if (!isVirtualizedFileDiff<TransportError>(instance)) return
-    this.registrations.set(reviewKey, { host, instance })
+    if (!isVirtualizedFileDiff<ReviewThreadAnnotation>(instance)) return
+    const current = this.registrations.get(reviewKey)
+    if (current?.host === host && current.instance === instance) {
+      if (this.occurrencesByFile.has(reviewKey)) this.observeRegistration(current)
+      this.scheduleRebuild()
+      return
+    }
+    current?.observer.disconnect()
+    this.registrations.forEach((registration, registeredReviewKey) => {
+      if (registeredReviewKey !== reviewKey && registration.host === host) {
+        registration.observer.disconnect()
+        this.registrations.delete(registeredReviewKey)
+      }
+    })
+    // Pierre can publish token DOM after its range render callback has completed.
+    const observer = new MutationObserver(() => {
+      if (highlightOwner !== this.highlightOwner) return
+      if (
+        this.activeOccurrenceId !== null &&
+        (this.activeRange === null ||
+          !this.activeRange.startContainer.isConnected ||
+          this.activeHighlight === null ||
+          CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) !== this.activeHighlight)
+      ) {
+        this.rebuildHighlights()
+      }
+    })
+    const shadowRoot = host.shadowRoot
+    if (shadowRoot !== null && this.occurrencesByFile.has(reviewKey)) {
+      observer.observe(shadowRoot, { characterData: true, childList: true, subtree: true })
+    }
+    this.registrations.set(reviewKey, { host, instance, observer })
     this.scheduleRebuild()
   }
 
@@ -114,13 +170,22 @@ export class ReviewSearchHighlightManager {
     return this.activeElement?.isConnected === true ? this.activeElement : null
   }
 
+  /** Rebuilds search ranges after imperative navigation settles a virtualized row. */
+  refresh(): void {
+    this.activeRebuildRetries = ACTIVE_REBUILD_RETRY_FRAMES
+    this.scheduleRebuild()
+  }
+
   /** Removes all registered hosts and document-level highlight ranges. */
   dispose() {
     this.cancelScheduledRebuild()
+    if (highlightOwner === this.highlightOwner) highlightOwner = null
+    this.registrations.forEach(({ observer }) => observer.disconnect())
     this.registrations.clear()
     this.occurrencesByFile.clear()
     this.activeElement = null
     this.activeRange = null
+    this.activeRebuildRetries = 0
     this.clearHighlights()
   }
 
@@ -129,6 +194,16 @@ export class ReviewSearchHighlightManager {
     this.rebuildFrame = window.requestAnimationFrame(() => {
       this.rebuildFrame = null
       this.rebuildHighlights()
+      if (
+        this.activeOccurrenceId !== null &&
+        this.activeRange === null &&
+        this.activeRebuildRetries > 0
+      ) {
+        this.activeRebuildRetries -= 1
+        this.scheduleRebuild()
+      } else {
+        this.activeRebuildRetries = 0
+      }
     })
   }
 
@@ -140,12 +215,35 @@ export class ReviewSearchHighlightManager {
 
   private clearHighlights() {
     if (!this.highlightsRegistered) return
-    clearRegisteredHighlights()
+    if (CSS.highlights.get(REVIEW_SEARCH_MATCH_HIGHLIGHT) === this.matchHighlight) {
+      CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
+    }
+    if (CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight) {
+      CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+    }
+    this.matchHighlight = null
+    this.activeHighlight = null
     this.highlightsRegistered = false
   }
 
+  private observeRegistration(registration: SearchDiffRegistration) {
+    const shadowRoot = registration.host.shadowRoot
+    if (shadowRoot === null) return
+    registration.observer.observe(shadowRoot, {
+      characterData: true,
+      childList: true,
+      subtree: true,
+    })
+  }
+
   private rebuildHighlights() {
-    if (!supportsCustomHighlights() || this.occurrencesByFile.size === 0) return
+    if (
+      highlightOwner !== this.highlightOwner ||
+      !supportsCustomHighlights() ||
+      this.occurrencesByFile.size === 0
+    ) {
+      return
+    }
 
     const matchRanges: StaticRange[] = []
     const activeRanges: StaticRange[] = []
@@ -165,7 +263,7 @@ export class ReviewSearchHighlightManager {
           if (
             row === null ||
             seenRows.has(row) ||
-            !renderedTextMatchesSource(row, occurrence.text)
+            !renderedTextMatchesSource(row, occurrence.text, occurrence.start, occurrence.end)
           ) {
             continue
           }
@@ -186,16 +284,30 @@ export class ReviewSearchHighlightManager {
       })
     })
 
-    clearRegisteredHighlights()
+    if (CSS.highlights.get(REVIEW_SEARCH_MATCH_HIGHLIGHT) === this.matchHighlight) {
+      CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
+    }
+    this.matchHighlight = null
     if (matchRanges.length > 0) {
-      CSS.highlights.set(REVIEW_SEARCH_MATCH_HIGHLIGHT, new Highlight(...matchRanges))
+      this.matchHighlight = new Highlight(...matchRanges)
+      CSS.highlights.set(REVIEW_SEARCH_MATCH_HIGHLIGHT, this.matchHighlight)
     }
     if (activeRanges.length > 0) {
+      if (CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight) {
+        CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+      }
       const activeHighlight = new Highlight(...activeRanges)
       activeHighlight.priority = 1
+      this.activeHighlight = activeHighlight
       CSS.highlights.set(REVIEW_SEARCH_ACTIVE_HIGHLIGHT, activeHighlight)
+    } else if (
+      this.activeOccurrenceId === null &&
+      CSS.highlights.get(REVIEW_SEARCH_ACTIVE_HIGHLIGHT) === this.activeHighlight
+    ) {
+      CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
+      this.activeHighlight = null
     }
-    this.highlightsRegistered = matchRanges.length > 0 || activeRanges.length > 0
+    this.highlightsRegistered = this.matchHighlight !== null || this.activeHighlight !== null
   }
 }
 
@@ -214,9 +326,15 @@ const renderedSearchCoordinates = (
         ],
       ]
 
-const renderedTextMatchesSource = (row: HTMLElement, source: string) => {
+const renderedTextMatchesSource = (
+  row: HTMLElement,
+  source: string,
+  start: number,
+  end: number,
+) => {
   const rendered = row.textContent ?? ""
-  return rendered === source || (rendered.endsWith("\n") && rendered.slice(0, -1) === source)
+  const normalized = rendered.endsWith("\n") ? rendered.slice(0, -1) : rendered
+  return normalized === source || normalized.slice(start, end) === source
 }
 
 const createStaticTextRange = (
@@ -258,10 +376,4 @@ const supportsCustomHighlights = () => {
   return (
     css !== undefined && "highlights" in css && highlight !== undefined && staticRange !== undefined
   )
-}
-
-const clearRegisteredHighlights = () => {
-  if (!supportsCustomHighlights()) return
-  CSS.highlights.delete(REVIEW_SEARCH_MATCH_HIGHLIGHT)
-  CSS.highlights.delete(REVIEW_SEARCH_ACTIVE_HIGHLIGHT)
 }

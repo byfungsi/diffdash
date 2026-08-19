@@ -1,37 +1,65 @@
 #!/usr/bin/env node
+import { execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 
 import { prepareGitFixture } from "./git-fixture.mjs"
+import { generateSyntheticFixture } from "./synthetic-fixture.mjs"
+import { parseOrchestrationOptions, runRepositoryScaleOrchestration } from "./orchestration.mjs"
 import {
+  captureMachineProfile,
   evaluateSwitchMemoryPlateau,
+  measureManagedStorage,
   measureProcessTree,
+  REPOSITORY_SCALE_MEASUREMENT_POLICY,
   validateSwitchReports,
 } from "./process-metrics.mjs"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const workspaceRoot = resolve(packageRoot, "../..")
 const defaultCacheDirectory = resolve(packageRoot, ".cache")
+const execFilePromise = promisify(execFile)
 
 const usage = `Usage:
+  pnpm repository-scale:generate [--name=pathological]
   pnpm repository-scale:prepare -- --source=<local-git-repository> --base=<revision> --head=<revision> [--name=linux]
-  pnpm repository-scale:measure -- --pid=<electron-pid> --fixture=<fixture-id> --session=<name> --switch=<1-10>
+  pnpm repository-scale:measure -- --pid=<electron-pid> --manifest=<fixture-manifest.json> --database=<diffdash.sqlite> --snapshot-root=<diffdash.sqlite.snapshot-blocks> --spool-root=<snapshot-spools> --worktree-root=<worktree-pool> --remote-worktree-root=<remote-worktree-pool> --session=<name> --switch=<1-10> --host=<bun|utility> --scenario=<pathological|small> --app-version=<version> --artifact-digest=<sha256> --review-session-id=<id> [--bun-version=<version>] --packaged=true --disposal-complete=true
   pnpm repository-scale:evaluate -- --session=<name>
+  pnpm --filter @diffdash/repository-scale smoke -- --host=<bun|utility>
+  pnpm --filter @diffdash/repository-scale run -- --host=<bun|utility> --session=<name> [--manifest=<path>]
 `
 
 const commandOptions = {
+  generate: new Set(["name"]),
   prepare: new Set(["source", "base", "head", "name"]),
   measure: new Set([
     "pid",
-    "fixture",
+    "manifest",
     "session",
     "switch",
+    "host",
+    "scenario",
+    "app-version",
+    "packaged",
+    "disposal-complete",
+    "database",
+    "snapshot-root",
+    "spool-root",
+    "worktree-root",
+    "remote-worktree-root",
+    "artifact-digest",
+    "bun-version",
+    "review-session-id",
     "duration-ms",
     "interval-ms",
     "plateau-window-ms",
     "plateau-threshold",
   ]),
   evaluate: new Set(["session"]),
+  smoke: new Set(["host"]),
+  run: new Set(["host", "session", "manifest"]),
 }
 
 const parseOptions = (args) => {
@@ -81,6 +109,21 @@ const safeName = (options, name) => {
   return value
 }
 
+const choice = (options, name, choices) => {
+  const value = required(options, name)
+  if (!choices.includes(value)) throw new Error(`--${name} must be one of ${choices.join(", ")}`)
+  return value
+}
+
+const requiredTrue = (options, name) => {
+  if (required(options, name) !== "true") throw new Error(`--${name} must be true`)
+  return true
+}
+
+const isString = (value) => Object.prototype.toString.call(value) === "[object String]"
+
+const isRecord = (value) => value !== null && Object.getPrototypeOf(value) === Object.prototype
+
 const prepare = async (options) => {
   const result = await prepareGitFixture({
     source: required(options, "source"),
@@ -102,6 +145,21 @@ const prepare = async (options) => {
   )
 }
 
+const readFixtureManifest = async (options) => {
+  const manifestPath = resolve(required(options, "manifest"))
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+  if (
+    !isRecord(manifest) ||
+    !isString(manifest.id) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(manifest.id) ||
+    !isString(manifest.baseSha) ||
+    !isString(manifest.headSha)
+  ) {
+    throw new Error("Fixture manifest must contain a safe id and pinned base/head revisions")
+  }
+  return manifest
+}
+
 const measure = async (options) => {
   const pid = positiveNumber(options, "pid", null)
   if (pid === null || !Number.isSafeInteger(pid)) throw new Error("--pid must be a process ID")
@@ -109,16 +167,91 @@ const measure = async (options) => {
   if (switchIndex === null || !Number.isSafeInteger(switchIndex) || switchIndex > 10) {
     throw new Error("--switch must be an integer from 1 through 10")
   }
-  const fixtureId = safeName(options, "fixture")
+  const fixture = await readFixtureManifest(options)
   const session = safeName(options, "session")
+  const coreHost = choice(options, "host", ["bun", "utility"])
+  const scenario = choice(options, "scenario", ["pathological", "small"])
+  const appVersion = required(options, "app-version")
+  if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u.test(appVersion)) {
+    throw new Error("--app-version must be a semantic version")
+  }
+  const packaged = requiredTrue(options, "packaged")
+  const disposalComplete = requiredTrue(options, "disposal-complete")
+  const packagedArtifactDigest = required(options, "artifact-digest")
+  if (!/^[a-f0-9]{64}$/u.test(packagedArtifactDigest)) {
+    throw new Error("--artifact-digest must be a SHA-256 digest")
+  }
+  const bunVersion = options.get("bun-version") ?? null
+  if (coreHost === "bun" && !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(String(bunVersion))) {
+    throw new Error("--bun-version is required for Bun measurements")
+  }
+  if (coreHost === "utility" && bunVersion !== null) {
+    throw new Error("--bun-version applies only to Bun measurements")
+  }
+  const reviewSessionId = required(options, "review-session-id")
+  const storagePaths = {
+    databasePath: resolve(required(options, "database")),
+    snapshotBlocksRoot: resolve(required(options, "snapshot-root")),
+    snapshotSpoolsRoot: resolve(required(options, "spool-root")),
+    worktreePoolRoot: resolve(required(options, "worktree-root")),
+    remoteWorktreePoolRoot: resolve(required(options, "remote-worktree-root")),
+  }
+  const { stdout: commitOutput } = await execFilePromise("git", ["rev-parse", "--verify", "HEAD"], {
+    cwd: workspaceRoot,
+  })
+  const diffdashCommit = commitOutput.trim()
+  if (!/^[a-f0-9]{40}$/u.test(diffdashCommit)) {
+    throw new Error("Unable to resolve the exact DiffDash commit")
+  }
+  const storageBefore = await measureManagedStorage(storagePaths)
   const measurement = await measureProcessTree({
     rootPid: pid,
-    durationMs: positiveNumber(options, "duration-ms", 60_000),
-    intervalMs: positiveNumber(options, "interval-ms", 500),
-    plateauWindowMs: positiveNumber(options, "plateau-window-ms", 10_000),
-    plateauThreshold: positiveNumber(options, "plateau-threshold", 0.05),
+    durationMs: positiveNumber(
+      options,
+      "duration-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.durationMs,
+    ),
+    intervalMs: positiveNumber(
+      options,
+      "interval-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.intervalMs,
+    ),
+    plateauWindowMs: positiveNumber(
+      options,
+      "plateau-window-ms",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauWindowMs,
+    ),
+    plateauThreshold: positiveNumber(
+      options,
+      "plateau-threshold",
+      REPOSITORY_SCALE_MEASUREMENT_POLICY.plateauThreshold,
+    ),
   })
-  const report = { ...measurement, fixtureId, session, switchIndex }
+  const storageAfter = await measureManagedStorage(storagePaths)
+  const report = {
+    ...measurement,
+    appVersion,
+    bunVersion,
+    coreHost,
+    coreIdentity: { host: coreHost, session, switchIndex, reviewSessionId },
+    diffdashCommit,
+    disposalComplete,
+    fixtureId: fixture.id,
+    fixtureManifest: fixture,
+    machineProfile: captureMachineProfile(),
+    packaged,
+    packagedArtifactDigest,
+    scenario,
+    session,
+    storage: {
+      before: storageBefore,
+      after: storageAfter,
+      databaseDeltaBytes: storageAfter.databaseBytes - storageBefore.databaseBytes,
+      managedDeltaBytes: storageAfter.managedBytes - storageBefore.managedBytes,
+      freeSpaceDeltaBytes: storageAfter.filesystemFreeBytes - storageBefore.filesystemFreeBytes,
+    },
+    switchIndex,
+  }
   const output = resolve(
     defaultCacheDirectory,
     "reports",
@@ -141,15 +274,35 @@ const evaluate = async (options) => {
       ).then(JSON.parse),
     ),
   )
-  const { fixtureId } = validateSwitchReports(reports, session)
+  const provenance = validateSwitchReports(reports, session)
   const evaluation = {
     ...evaluateSwitchMemoryPlateau(reports),
-    fixtureId,
+    ...provenance,
     session,
   }
   const output = resolve(reportDirectory, "evaluation.json")
   await writeFile(output, `${JSON.stringify(evaluation, null, 2)}\n`)
   process.stdout.write(`${output}\n`)
+}
+
+const generate = async (options) => {
+  const name = options.get("name") ?? "pathological"
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new Error("Invalid fixture name")
+  const result = await generateSyntheticFixture({
+    directory: resolve(defaultCacheDirectory, "synthetic", name, "repository"),
+  })
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+}
+
+const orchestrate = async (command, args) => {
+  const profile = command === "smoke" ? "smoke" : "full"
+  const options = parseOrchestrationOptions(args, profile)
+  const result = await runRepositoryScaleOrchestration({
+    ...options,
+    cacheDirectory: defaultCacheDirectory,
+    e2eDirectory: resolve(workspaceRoot, "packages/e2e"),
+  })
+  process.stdout.write(`${result.summaryPath}\n`)
 }
 
 const main = async () => {
@@ -160,8 +313,10 @@ const main = async () => {
   }
   const options = parseOptions(args)
   validateOptions(command, options)
+  if (command === "generate") return generate(options)
   if (command === "prepare") return prepare(options)
   if (command === "measure") return measure(options)
+  if (command === "smoke" || command === "run") return orchestrate(command, args)
   return evaluate(options)
 }
 

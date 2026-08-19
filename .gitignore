@@ -5,6 +5,7 @@ dist/
 release-assets/
 *.tgz
 packages/web/dist/
+packages/desktop/.generated/
 *.tsbuildinfo
 .DS_Store
 *.sqlite

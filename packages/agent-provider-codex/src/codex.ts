@@ -30,9 +30,9 @@ import {
   revealScopedMcpToken,
 } from "@diffdash/agent-provider"
 import {
-  normalizeReviewThreadAgentResponse as normalizeResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
   ReviewThreadAgentResponse,
+  ReviewThreadAgentResponseFromProvider,
 } from "@diffdash/domain/review-agent"
 import {
   parseProviderJsonText as parseJsonText,
@@ -152,11 +152,14 @@ export const resolveCodexExecutable = (
   const guiPath = defaultExecutablePath(options.envPath ?? process.env.PATH ?? "", home)
   const bunBin = home.length > 0 ? join(home, ".bun", "bin") : ""
   const normalizedPath = bunBin.length === 0 ? guiPath : [bunBin, guiPath].join(delimiter)
-  return findExecutableInPath(executable, {
-    envPath: normalizedPath,
-    ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
-    ...(options.platform === undefined ? {} : { platform: options.platform }),
-  })
+  const executableOptions: {
+    envPath: string
+    pathExt?: string
+    platform?: NodeJS.Platform
+  } = { envPath: normalizedPath }
+  if (options.pathExt !== undefined) executableOptions.pathExt = options.pathExt
+  if (options.platform !== undefined) executableOptions.platform = options.platform
+  return findExecutableInPath(executable, executableOptions)
 }
 
 /** Creates the complete Codex SDK registration. */
@@ -206,6 +209,7 @@ const executeWalkthrough = (
             parentDirectory: tempDirectory,
             prefix: "codex-output-",
             fileName: "output.txt",
+            resourceClass: "agentTemp",
           })
           .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
         const result = yield* dependencies.processes
@@ -439,14 +443,13 @@ const executeReview = (
             )
             .pipe(
               Stream.mapError(operationErrors.fromCause("review-thread")),
-              Stream.runForEach((event) => {
-                return Match.value(event).pipe(
-                  Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) =>
-                    consumeCodexLine(state, line.line),
-                  ),
-                  Match.orElse(() => Effect.void),
-                )
-              }),
+              Stream.runForEach((event) =>
+                Match.valueTags(event, {
+                  ProcessLine: (line) =>
+                    line.source === "stdout" ? consumeCodexLine(state, line.line) : Effect.void,
+                  ProcessExit: () => Effect.void,
+                }),
+              ),
             )
 
           if (state.lifecycle.stage !== "TurnCompleted") {
@@ -664,8 +667,8 @@ const consumeCompletedItem = (
 ): Effect.Effect<void, AgentProviderOperationError> =>
   Effect.gen(function* () {
     const completedItem = discriminateCompletedItem(item)
-    yield* Match.value(completedItem).pipe(
-      Match.when({ _tag: "AgentMessage" }, (agentMessage) =>
+    yield* Match.valueTags(completedItem, {
+      AgentMessage: (agentMessage) =>
         Effect.gen(function* () {
           const adapted = yield* adaptAgentMessageItem(agentMessage)
           state.agentMessages.push({
@@ -675,35 +678,28 @@ const consumeCompletedItem = (
           state.nextAgentMessageSequence += 1
           state.artifacts.push(adapted.artifact)
         }),
-      ),
-      Match.when({ _tag: "CommandExecution" }, (commandExecution) =>
+      CommandExecution: (commandExecution) =>
         Effect.sync(() => {
           state.artifacts.push(adaptCommandExecutionItem(commandExecution))
         }),
-      ),
-      Match.when({ _tag: "McpToolCall" }, (mcpToolCall) =>
+      McpToolCall: (mcpToolCall) =>
         Effect.sync(() => {
           state.artifacts.push(adaptMcpToolCallItem(mcpToolCall))
         }),
-      ),
-      Match.when({ _tag: "FileChange" }, () => adaptFileChangeItem()),
-      Match.when({ _tag: "WebSearch" }, (webSearch) =>
+      FileChange: () => adaptFileChangeItem(),
+      WebSearch: (webSearch) =>
         Effect.sync(() => {
           state.artifacts.push(adaptWebSearchItem(webSearch))
         }),
-      ),
-      Match.when({ _tag: "RepositorySearch" }, (repositorySearch) =>
+      RepositorySearch: (repositorySearch) =>
         Effect.sync(() => {
           state.artifacts.push(adaptRepositorySearchItem(repositorySearch))
         }),
-      ),
-      Match.when({ _tag: "Unknown" }, (unknown) =>
+      Unknown: (unknown) =>
         Effect.sync(() => {
           state.artifacts.push(adaptUnknownCompletedItem(unknown))
         }),
-      ),
-      Match.exhaustive,
-    )
+    })
   })
 
 const discriminateCompletedItem = (item: CodexItem): CodexCompletedItem => {
@@ -754,16 +750,16 @@ const adaptAgentMessageItem = (
     )
   }
   const status = extractItemStatus(completedItem.item)
+  const metadata: { itemId?: string; status?: string } = {}
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return Effect.succeed({
     text,
     artifact: {
       type: "provider-message",
       title: "Codex assistant message",
       content: text,
-      metadata: {
-        ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-        ...(status === null ? {} : { status }),
-      },
+      metadata,
     },
   })
 }
@@ -789,16 +785,17 @@ const adaptCommandExecutionItem = (completedItem: CodexCommandExecutionItem): Pe
       completedItem.item.result?.content,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ command, status }, completedItem.item)
+  const metadata: { itemId?: string; command: string; status?: string; exitCode?: number } = {
+    command,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
+  if (exitCode !== null) metadata.exitCode = exitCode
   return {
     type: "shell-output",
     title: boundedArtifactTitle("Codex command", command),
     content,
-    metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-      command,
-      ...(status === null ? {} : { status }),
-      ...(exitCode === null ? {} : { exitCode }),
-    },
+    metadata,
   }
 }
 
@@ -825,16 +822,17 @@ const adaptMcpToolCallItem = (completedItem: CodexMcpToolCallItem): PendingArtif
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ status }, completedItem.item)
+  const metadata: { itemId?: string; server: string; tool: string; status?: string } = {
+    server,
+    tool,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return {
     type: server === "diffdash" ? "mcp-tool-result" : "unknown",
     title: boundedArtifactTitle("Codex MCP", `${server}/${tool}`),
     content,
-    metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-      server,
-      tool,
-      ...(status === null ? {} : { status }),
-    },
+    metadata,
   }
 }
 
@@ -874,31 +872,37 @@ const adaptSearchItem = (
         ?.message,
       completedItem.item.error,
     ]) ?? usefulItemFallback({ query, url, status }, completedItem.item)
+  const metadata: {
+    itemId?: string
+    eventType: string
+    query?: string
+    url?: string
+    status?: string
+  } = { eventType: completedItem.itemType }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (query !== null) metadata.query = query
+  if (url !== null) metadata.url = url
+  if (status !== null) metadata.status = status
   return {
     type,
     title: boundedArtifactTitle(title, query ?? url ?? status),
     content,
-    metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-      eventType: completedItem.itemType,
-      ...(query === null ? {} : { query }),
-      ...(url === null ? {} : { url }),
-      ...(status === null ? {} : { status }),
-    },
+    metadata,
   }
 }
 
 const adaptUnknownCompletedItem = (completedItem: CodexUnknownCompletedItem): PendingArtifact => {
   const status = extractItemStatus(completedItem.item)
+  const metadata: { itemId?: string; eventType: string; status?: string } = {
+    eventType: completedItem.itemType,
+  }
+  if (completedItem.itemId !== null) metadata.itemId = completedItem.itemId
+  if (status !== null) metadata.status = status
   return {
     type: "unknown",
     title: boundedArtifactTitle("Unknown Codex completed item", completedItem.itemType),
     content: jsonContent(completedItem.item),
-    metadata: {
-      ...(completedItem.itemId === null ? {} : { itemId: completedItem.itemId }),
-      eventType: completedItem.itemType,
-      ...(status === null ? {} : { status }),
-    },
+    metadata,
   }
 }
 
@@ -1057,8 +1061,7 @@ const decodeReviewResponse = (
   finalMessage: string | null,
 ): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> => {
   const parsed = finalMessage === null ? null : parseJsonValue(parseJsonText(finalMessage))
-  const candidate = normalizeResponse(parsed)
-  return Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(candidate).pipe(
+  return Schema.decodeUnknownEffect(ReviewThreadAgentResponseFromProvider)(parsed).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,
@@ -1092,11 +1095,21 @@ const withOutputSchemaPath = <A, E, R>(
 ): Effect.Effect<A, E | AgentProviderOperationError, R> =>
   Effect.scoped(
     tempResources
-      .makeTempFileScoped(JSON.stringify(reviewResponseJsonSchema), {
-        ...(tempDirectory === undefined ? {} : { parentDirectory: tempDirectory }),
-        prefix: "diffdash-codex-",
-        fileName: "review-thread-response.schema.json",
-      })
+      .makeTempFileScoped(
+        JSON.stringify(reviewResponseJsonSchema),
+        tempDirectory === undefined
+          ? {
+              prefix: "diffdash-codex-",
+              fileName: "review-thread-response.schema.json",
+              resourceClass: "agentTemp",
+            }
+          : {
+              parentDirectory: tempDirectory,
+              prefix: "diffdash-codex-",
+              fileName: "review-thread-response.schema.json",
+              resourceClass: "agentTemp",
+            },
+      )
       .pipe(Effect.mapError(operationErrors.fromCause("review-thread")), Effect.flatMap(use)),
   )
 

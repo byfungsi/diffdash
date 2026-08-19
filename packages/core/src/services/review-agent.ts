@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto"
 import {
   ReviewThreadAgentEngine,
+  REVIEW_THREAD_PROMPT_CONTEXT_LIMITS,
+  type ReviewPromptFile,
+  type ReviewPromptIdentity,
   type SelectedReviewAgentArtifact,
 } from "@diffdash/agents/review-thread"
 import {
@@ -36,7 +39,13 @@ import {
   UpsertThreadMemoryInput,
 } from "@diffdash/domain/agent-run"
 import { AgentProviderFailure } from "@diffdash/domain/provider-failure"
-import type { ReviewProjectId } from "@diffdash/domain/review-identity"
+import type { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc"
+import {
+  ReviewFileId,
+  ReviewHunkId,
+  type ReviewProjectId,
+  type ReviewSnapshotId,
+} from "@diffdash/domain/review-identity"
 import type { RepositoryCheckoutPath, RepositoryLocalPath } from "@diffdash/domain/repository"
 import {
   ReviewAgentArtifactId,
@@ -44,10 +53,9 @@ import {
   ReviewAgentProviderId,
 } from "@diffdash/domain/review-agent"
 import {
-  HostedReviewSnapshot,
-  LocalReviewSnapshot,
-  RepositoryComparisonSnapshot,
-  type ReviewSnapshot,
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
+  RepositoryComparisonReviewDescriptor,
 } from "@diffdash/domain/review-context"
 import {
   MarkdownBody,
@@ -75,6 +83,18 @@ import { adaptReviewAgentOutcome } from "./review-agent-outcome-adapter"
 import { ReviewMcpHandlers } from "./review-mcp-handlers"
 import { createFallbackThreadMemoryUpdate, selectThreadMemoryWindow } from "./thread-memory"
 import { CoreExpectedCause } from "../core-error-cause"
+import {
+  OPERATION_SNAPSHOT_INVENTORY_LIMIT,
+  OperationSnapshotReader,
+  type OperationSnapshotHandle,
+} from "./operation-snapshot-reader"
+import {
+  decodeSnapshotHunkLines,
+  reviewPromptFile,
+  reviewPromptIdentity,
+  reviewThreadHunkExcerpt,
+} from "./operation-snapshot-projection"
+import { AgentWorkspaceResources } from "../agent-workspace-resources"
 
 const REVIEW_THREAD_PROMPT_VERSION = AgentPromptVersion.make("review-thread-v3")
 const PROVIDER_SUMMARY_ALGORITHM = ThreadMemorySummaryAlgorithm.make("provider-summary")
@@ -92,15 +112,30 @@ export class ReviewAgentRouting extends Context.Service<
 >()("@diffdash/ReviewAgentRouting") {}
 
 /** Immutable resources resolved by main before one local review-agent turn. */
-interface RunReviewAgentTurnInput {
+export interface RunReviewAgentTurnInput {
   readonly threadId: ReviewThreadId
   readonly repoId: ReviewProjectId
   readonly target: ReviewThreadTarget
   readonly mapping: ReviewTurnMappingToken
-  readonly snapshot: ReviewSnapshot
+  readonly snapshotId: ReviewSnapshotId
+  readonly applicationInstanceId: ApplicationInstanceId
+  readonly processEpoch: CoreProcessEpoch
   readonly cwd: RepositoryLocalPath
   readonly walkthrough: Option.Option<StoredWalkthrough>
   readonly onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>
+}
+
+/** Durable review-turn reservation and the scoped provider work that owns it. */
+export interface AcceptedReviewAgentTurn {
+  readonly operation: BegunReviewTurn["run"]
+  readonly worker: Effect.Effect<
+    ReviewThreadDetails,
+    | ReviewAgentServiceError
+    | ReviewAgentFinalizeError
+    | ReviewAgentProviderFailureError
+    | ReviewTurnTargetError
+    | ReviewTurnRejectedError
+  >
 }
 
 /** A recoverable orchestration failure suitable for renderer error state. */
@@ -137,6 +172,15 @@ export class ReviewAgentProviderFailureError extends Schema.TaggedError<ReviewAg
 export class ReviewAgentService extends Context.Service<
   ReviewAgentService,
   {
+    readonly acceptThreadTurn: (
+      input: RunReviewAgentTurnInput,
+    ) => Effect.Effect<
+      AcceptedReviewAgentTurn,
+      | ReviewAgentServiceError
+      | ReviewAgentProviderFailureError
+      | ReviewTurnTargetError
+      | ReviewTurnRejectedError
+    >
     readonly runThreadTurn: (
       input: RunReviewAgentTurnInput,
     ) => Effect.Effect<
@@ -162,56 +206,67 @@ export class ReviewAgentService extends Context.Service<
       const mcpHandlers = yield* ReviewMcpHandlers
       const workspaces = yield* HostedReviewWorkspacePool
       const gitProviders = yield* GitProviderRegistry
+      const snapshotReader = yield* OperationSnapshotReader
+      const workspaceResources = yield* AgentWorkspaceResources
 
-      return ReviewAgentService.of({
-        runThreadTurn: (input) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              yield* validateReviewSnapshot(input)
-              const selection = yield* routing.get
-              const route = providerRoute(selection.selection)
-              const providerCandidates = yield* resolveReviewProviders(
-                providers,
-                selection.selection,
-              )
-              if (Schema.is(LocalReviewSnapshot)(input.snapshot) && input.cwd === null) {
-                return yield* serviceError(
-                  "runThreadTurn.workingDirectory",
-                  new Error("Local review execution requires a working directory"),
-                )
-              }
-              const hostedExecution = yield* prepareHostedExecution(input.snapshot, gitProviders)
-              const comparisonExecution = yield* prepareComparisonExecution(
-                input.snapshot,
-                gitProviders,
-                input.cwd,
-              )
-              const publishingTools = (yield* gitProviders.list).flatMap(
-                (registration) => registration.publishingTools,
-              )
-              const runCandidate = Effect.fn("ReviewAgentService.runCandidate")(function* (
-                provider: ResolvedReviewProvider,
-              ) {
-                const providerId = provider.registration.manifest.descriptor.id
-                const persistedProviderId = ReviewAgentProviderId.make(providerId)
-                const model = provider.model
-                const begun = yield* turns.beginTurn({
-                  threadId: input.threadId,
-                  target: input.target,
-                  repoId: input.repoId,
-                  reviewKey: input.snapshot.reviewKey,
-                  baseRevision: input.snapshot.baseRevision,
-                  headRevision: input.snapshot.headRevision,
-                  mapping: input.mapping,
-                  provider: persistedProviderId,
-                  model,
-                  promptVersion: REVIEW_THREAD_PROMPT_VERSION,
+      const acceptThreadTurnAt = Effect.fn("ReviewAgentService.acceptThreadTurnAt")(
+        (input: RunReviewAgentTurnInput, candidateOffset: number) =>
+          Effect.gen(function* () {
+            yield* validateReviewSnapshot(input)
+            const selection = yield* routing.get
+            const route = providerRoute(selection.selection)
+            const providerCandidates = yield* resolveReviewProviders(providers, selection.selection)
+            const publishingTools = (yield* gitProviders.list).flatMap(
+              (registration) => registration.publishingTools,
+            )
+            const provider = yield* selectReviewProvider(
+              route,
+              providerCandidates.slice(candidateOffset),
+            )
+            const providerId = provider.registration.manifest.descriptor.id
+            const persistedProviderId = ReviewAgentProviderId.make(providerId)
+            const model = provider.model
+            const begun = yield* turns.beginTurn({
+              threadId: input.threadId,
+              target: input.target,
+              repoId: input.repoId,
+              reviewKey: input.mapping.reviewKey,
+              baseRevision: input.mapping.baseRevision,
+              headRevision: input.mapping.headRevision,
+              mapping: input.mapping,
+              provider: persistedProviderId,
+              model,
+              promptVersion: REVIEW_THREAD_PROMPT_VERSION,
+            })
+            const providerRunId =
+              provider.registration.manifest.session.mode === "resume"
+                ? begun.resumableProviderRunId
+                : null
+
+            const worker = Effect.scoped(
+              Effect.gen(function* () {
+                const snapshot = yield* snapshotReader.open({
+                  applicationInstanceId: input.applicationInstanceId,
+                  processEpoch: input.processEpoch,
+                  operationId: begun.run.id,
+                  projectId: input.repoId,
+                  reviewKey: input.mapping.reviewKey,
+                  snapshotId: input.snapshotId,
                 })
-                const providerRunId =
-                  provider.registration.manifest.session.mode === "resume"
-                    ? begun.resumableProviderRunId
-                    : null
-
+                yield* validateSnapshotHandle(input, snapshot)
+                const review = reviewPromptIdentity(snapshot.snapshot)
+                if (Schema.is(LocalReviewDescriptor)(review.descriptor) && input.cwd === null) {
+                  return yield* serviceError(
+                    "runThreadTurn.workingDirectory",
+                    new Error("Local review execution requires a working directory"),
+                  )
+                }
+                const hostedExecution = yield* prepareHostedExecution(review, gitProviders)
+                const comparisonExecution = yield* prepareComparisonExecution(
+                  review,
+                  gitProviders,
+                  input.cwd,
+                )
                 const execute = Effect.gen(function* () {
                   const memoryWindow = selectThreadMemoryWindow({
                     threadId: input.threadId,
@@ -224,6 +279,10 @@ export class ReviewAgentService extends Context.Service<
                     artifacts,
                   )
                   yield* reportProgress(input.onProgress, "preparing-context")
+                  const promptContext = yield* prepareReviewPromptContext(
+                    snapshot,
+                    begun.details.thread,
+                  )
                   const policy = reviewExecutionPolicy(publishingTools)
                   const runProvider = (cwd: RepositoryLocalPath) =>
                     Effect.scoped(
@@ -238,7 +297,8 @@ export class ReviewAgentService extends Context.Service<
                             runId: begun.run.id,
                             threadId: input.threadId,
                             repoId: input.repoId,
-                            snapshot: input.snapshot,
+                            review,
+                            snapshot,
                             localPath: cwd,
                             walkthrough: input.walkthrough,
                           }),
@@ -251,7 +311,9 @@ export class ReviewAgentService extends Context.Service<
                           )
                         }
                         const outcome = yield* engine.run({
-                          snapshot: input.snapshot,
+                          review,
+                          fileInventory: promptContext.fileInventory,
+                          anchorHunk: promptContext.anchorHunk,
                           thread: begun.details.thread,
                           messages: memoryWindow.messages,
                           latestUserMessage: begun.latestUserMessage,
@@ -261,7 +323,7 @@ export class ReviewAgentService extends Context.Service<
                           capability: provider.capability,
                           model,
                           workingDirectory: cwd,
-                          revision: input.snapshot.headRevision,
+                          revision: review.headRevision,
                           timeoutMs: REVIEW_THREAD_TIMEOUT_MS,
                           sessionId:
                             providerRunId === null ? null : AgentSessionId.make(providerRunId),
@@ -281,8 +343,28 @@ export class ReviewAgentService extends Context.Service<
                       }),
                     )
 
+                  const runManagedProvider = (cwd: RepositoryCheckoutPath) =>
+                    workspaceResources
+                      .protect(
+                        {
+                          localPath: cwd,
+                          agentRunId: begun.run.id,
+                          applicationInstanceId: input.applicationInstanceId,
+                          processEpoch: input.processEpoch,
+                        },
+                        runProvider(cwd),
+                      )
+                      .pipe(
+                        Effect.catchTags({
+                          AgentWorkspaceResourceError: (cause) =>
+                            serviceError("runThreadTurn.workspaceResource", cause),
+                          ResourceCatalogError: (cause) =>
+                            serviceError("runThreadTurn.workspaceResource", cause),
+                        }),
+                      )
+
                   if (comparisonExecution !== null) {
-                    return yield* workspaces.useComparison(comparisonExecution, runProvider)
+                    return yield* workspaces.useComparison(comparisonExecution, runManagedProvider)
                   }
                   if (hostedExecution === null) return yield* runProvider(input.cwd)
                   return yield* workspaces.use(
@@ -293,7 +375,7 @@ export class ReviewAgentService extends Context.Service<
                       sourcePath: input.cwd,
                       bootstrapBareRepository: hostedExecution.bootstrapBareRepository,
                     },
-                    (lease) => runProvider(lease.localPath),
+                    (lease) => runManagedProvider(lease.localPath),
                     input.onProgress,
                   )
                 })
@@ -351,51 +433,65 @@ export class ReviewAgentService extends Context.Service<
                     memoryUpdate,
                   })
                   .pipe(Effect.mapError((cause) => finalizeErrorValue("completeTurn", cause)))
-              })
-
-              const runCandidates: (
-                remaining: readonly ResolvedReviewProvider[],
-              ) => Effect.Effect<ReviewThreadDetails, CoreExpectedCause> = Effect.fn(
-                "ReviewAgentService.runCandidates",
-              )(
-                (remaining): Effect.Effect<ReviewThreadDetails, CoreExpectedCause> =>
-                  Effect.gen(function* () {
-                    const [provider, ...rest] = remaining
-                    if (provider === undefined) {
-                      return yield* providerFailureError(
-                        AgentProviderId.make("unavailable"),
-                        "configuration",
-                        new Error("No review agent provider is available"),
-                      )
-                    }
-                    const readiness = yield* provider.ready.pipe(Effect.result)
-                    if (Result.isFailure(readiness)) {
-                      return route.mode === "auto" && rest.length > 0
-                        ? yield* runCandidates(rest)
-                        : yield* Effect.fail(readiness.failure)
-                    }
-                    return yield* runCandidate(provider).pipe(
-                      Effect.catch((cause) =>
-                        route.mode === "auto" &&
-                        rest.length > 0 &&
-                        Schema.is(ReviewAgentProviderFailureError)(cause)
-                          ? runCandidates(rest)
-                          : Effect.fail(cause),
-                      ),
-                    )
-                  }),
-              )
-
-              return yield* runCandidates(providerCandidates)
-            }).pipe(
+              }),
+            ).pipe(
               Effect.mapError((cause) =>
                 isReviewAgentTurnError(cause)
                   ? cause
                   : (publicPreflightFailure(cause) ??
-                    serviceErrorValue("runThreadTurn.preflight", cause)),
+                    serviceErrorValue("runThreadTurn.provider", cause)),
+              ),
+            )
+
+            return { operation: begun.run, worker }
+          }).pipe(
+            Effect.mapError((cause) =>
+              isReviewAgentAcceptanceError(cause)
+                ? cause
+                : (publicPreflightFailure(cause) ??
+                  serviceErrorValue("runThreadTurn.preflight", cause)),
+            ),
+          ),
+      )
+
+      const acceptThreadTurn: ReviewAgentService["Service"]["acceptThreadTurn"] = (input) =>
+        acceptThreadTurnAt(input, 0)
+
+      const runThreadTurn = Effect.fn("ReviewAgentService.runThreadTurn")(function* (
+        input: RunReviewAgentTurnInput,
+      ) {
+        const selection = (yield* routing.get).selection
+        const route = providerRoute(selection)
+        const candidateCount = (yield* resolveReviewProviders(providers, selection).pipe(
+          Effect.mapError(
+            (cause) =>
+              (isReviewAgentAcceptanceError(cause) ? cause : publicPreflightFailure(cause)) ??
+              serviceErrorValue("runThreadTurn.preflight", cause),
+          ),
+        )).length
+        const runAt: (candidateOffset: number) => AcceptedReviewAgentTurn["worker"] = Effect.fn(
+          "ReviewAgentService.runThreadTurnCandidate",
+        )((candidateOffset): AcceptedReviewAgentTurn["worker"] =>
+          acceptThreadTurnAt(input, candidateOffset).pipe(
+            Effect.flatMap(({ worker }) =>
+              worker.pipe(
+                Effect.catch((cause) =>
+                  route.mode === "auto" &&
+                  candidateOffset + 1 < candidateCount &&
+                  Schema.is(ReviewAgentProviderFailureError)(cause)
+                    ? runAt(candidateOffset + 1)
+                    : Effect.fail(cause),
+                ),
               ),
             ),
           ),
+        )
+        return yield* runAt(0)
+      })
+
+      return ReviewAgentService.of({
+        acceptThreadTurn,
+        runThreadTurn,
       })
     }),
   ).pipe(Layer.provide(ReviewThreadAgentEngine.layer))
@@ -404,22 +500,96 @@ export class ReviewAgentService extends Context.Service<
 const validateReviewSnapshot = (input: RunReviewAgentTurnInput) =>
   input.mapping.threadId === input.threadId &&
   input.mapping.repoId === input.repoId &&
-  input.mapping.reviewKey === input.snapshot.reviewKey &&
-  input.mapping.baseRevision === input.snapshot.baseRevision &&
-  input.mapping.headRevision === input.snapshot.headRevision
+  input.mapping.reviewKey.length > 0 &&
+  input.mapping.baseRevision.length > 0 &&
+  input.mapping.headRevision.length > 0
     ? Effect.void
     : ReviewTurnTargetError.make({
         reason: "The review snapshot changed after the review-turn target was checked.",
       })
 
+const validateSnapshotHandle = (input: RunReviewAgentTurnInput, handle: OperationSnapshotHandle) =>
+  handle.snapshot.reviewKey === input.mapping.reviewKey &&
+  handle.snapshot.baseRevision === input.mapping.baseRevision &&
+  handle.snapshot.headRevision === input.mapping.headRevision
+    ? Effect.void
+    : ReviewTurnTargetError.make({
+        reason: "The durable review snapshot does not match the accepted review turn.",
+      })
+
 type GitProviderRegistryService = Context.Service.Shape<typeof GitProviderRegistry>
 
-const prepareHostedExecution = (snapshot: ReviewSnapshot, registry: GitProviderRegistryService) => {
-  if (!Schema.is(HostedReviewSnapshot)(snapshot)) return Effect.succeed(null)
+const prepareReviewPromptContext = Effect.fn("ReviewAgentService.preparePromptContext")(function* (
+  handle: OperationSnapshotHandle,
+  thread: ReviewThreadDetails["thread"],
+) {
+  const files: ReviewPromptFile[] = []
+  let totalFiles = 0
+  let retainInventory = true
+  for (;;) {
+    const page = yield* handle.inventory(totalFiles, OPERATION_SNAPSHOT_INVENTORY_LIMIT)
+    totalFiles += page.length
+    if (retainInventory) {
+      for (const file of page) {
+        if (files.length >= REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxFileInventoryCount) {
+          retainInventory = false
+          break
+        }
+        files.push(reviewPromptFile(file))
+        if (Buffer.byteLength(JSON.stringify({ totalFiles, files }), "utf8") > 12 * 1024) {
+          files.pop()
+          retainInventory = false
+          break
+        }
+      }
+    }
+    if (page.length < OPERATION_SNAPSHOT_INVENTORY_LIMIT) break
+  }
+
+  const anchor = thread.activeAnchor
+  if (anchor === null) return { fileInventory: { totalFiles, files }, anchorHunk: null }
+  const read = yield* handle.readHunk(
+    ReviewFileId.make(anchor.fileId),
+    ReviewHunkId.make(anchor.hunkId),
+  )
+  const lines = yield* decodeSnapshotHunkLines(read.bytes)
+  const excerpt = reviewThreadHunkExcerpt(anchor, read.hunk, lines)
+  if (excerpt === null) return { fileInventory: { totalFiles, files }, anchorHunk: null }
+
+  const maximumLines = REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxAnchorHunkLines
+  let start = Math.max(0, excerpt.anchorLineIndex - Math.floor(maximumLines / 2))
+  let end = Math.min(lines.length, start + maximumLines)
+  start = Math.max(0, end - maximumLines)
+  while (
+    end - start > 1 &&
+    Buffer.byteLength([read.hunk.header, ...lines.slice(start, end)].join("\n"), "utf8") >
+      REVIEW_THREAD_PROMPT_CONTEXT_LIMITS.maxAnchorHunkBytes
+  ) {
+    if (excerpt.anchorLineIndex - start > end - excerpt.anchorLineIndex - 1) start += 1
+    else end -= 1
+  }
+  return {
+    fileInventory: { totalFiles, files },
+    anchorHunk: {
+      ...excerpt,
+      lines: lines.slice(start, end),
+      anchorLineIndex: excerpt.anchorLineIndex - start,
+      omittedBefore: start,
+      omittedAfter: lines.length - end,
+    },
+  }
+})
+
+const prepareHostedExecution = (
+  reviewIdentity: ReviewPromptIdentity,
+  registry: GitProviderRegistryService,
+) => {
+  const descriptor = reviewIdentity.descriptor
+  if (!Schema.is(HostedReviewDescriptor)(descriptor)) return Effect.succeed(null)
   return Effect.gen(function* () {
-    const review = snapshot.detail.summary.locator
+    const review = descriptor.review
     const provider = yield* registry.get(review.repository.providerId)
-    const checkout = yield* provider.checkoutSpec(review, snapshot.headRevision)
+    const checkout = yield* provider.checkoutSpec(review, reviewIdentity.headRevision)
     return {
       checkout,
       bootstrapBareRepository: (destination: RepositoryCheckoutPath) =>
@@ -429,13 +599,14 @@ const prepareHostedExecution = (snapshot: ReviewSnapshot, registry: GitProviderR
 }
 
 const prepareComparisonExecution = (
-  snapshot: ReviewSnapshot,
+  reviewIdentity: ReviewPromptIdentity,
   registry: GitProviderRegistryService,
   sourcePath: RepositoryLocalPath,
 ) => {
-  if (!Schema.is(RepositoryComparisonSnapshot)(snapshot)) return Effect.succeed(null)
+  const descriptor = reviewIdentity.descriptor
+  if (!Schema.is(RepositoryComparisonReviewDescriptor)(descriptor)) return Effect.succeed(null)
   return Effect.gen(function* () {
-    const target = snapshot.detail.target
+    const target = descriptor.target
     const provider = yield* registry.get(target.repository.providerId)
     return {
       repository: target.repository,
@@ -504,6 +675,22 @@ interface ResolvedReviewProvider {
   readonly model: AgentModelId
   readonly ready: Effect.Effect<void, CoreExpectedCause>
 }
+
+const selectReviewProvider = Effect.fn("ReviewAgentService.selectProvider")(function* (
+  route: AgentProviderRoute,
+  candidates: readonly ResolvedReviewProvider[],
+) {
+  for (const candidate of candidates) {
+    const readiness = yield* candidate.ready.pipe(Effect.result)
+    if (Result.isSuccess(readiness)) return candidate
+    if (route.mode === "provider") return yield* Effect.fail(readiness.failure)
+  }
+  return yield* providerFailureError(
+    AgentProviderId.make("unavailable"),
+    "configuration",
+    new Error("No review agent provider is available"),
+  )
+})
 
 const resolveReviewProviders = (
   registry: ProviderRegistry,
@@ -719,6 +906,18 @@ const isReviewAgentTurnError = (
   | ReviewTurnRejectedError =>
   Schema.is(ReviewAgentServiceError)(cause) ||
   Schema.is(ReviewAgentFinalizeError)(cause) ||
+  Schema.is(ReviewAgentProviderFailureError)(cause) ||
+  Schema.is(ReviewTurnTargetError)(cause) ||
+  Schema.is(ReviewTurnRejectedError)(cause)
+
+const isReviewAgentAcceptanceError = (
+  cause: CoreExpectedCause,
+): cause is
+  | ReviewAgentServiceError
+  | ReviewAgentProviderFailureError
+  | ReviewTurnTargetError
+  | ReviewTurnRejectedError =>
+  Schema.is(ReviewAgentServiceError)(cause) ||
   Schema.is(ReviewAgentProviderFailureError)(cause) ||
   Schema.is(ReviewTurnTargetError)(cause) ||
   Schema.is(ReviewTurnRejectedError)(cause)

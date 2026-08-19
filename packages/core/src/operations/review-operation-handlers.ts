@@ -1,87 +1,36 @@
-import { makeReviewSnapshotManifest } from "@diffdash/domain/review-context"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
 import { ProjectOpened } from "@diffdash/domain/project-workspace"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { GitService } from "@diffdash/local-git/local-git"
-import {
-  REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
-  REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
-  ReviewSnapshotExpired,
-  ResolvedRepositoryComparison,
-} from "@diffdash/protocol/review-snapshot"
+import { ResolvedRepositoryComparison } from "@diffdash/protocol/review-snapshot"
 import { Effect, Schema } from "effect"
 
 import { CoreMethod } from "../core-contract"
 import { GitProvider } from "../services/git-provider"
 import { RepositoryComparisonSource } from "../services/repository-comparison-source"
-import { RepositoryLinker } from "../services/repository-linker"
-import { ReviewSnapshotService } from "../services/review-snapshot"
-import {
-  paginateReviewSnapshot,
-  searchReviewSnapshot,
-} from "../services/review-snapshot-pagination"
+import { RepositoryLinker, RepositorySelectionIntent } from "../services/repository-linker"
 import type { OperationHandlersFor } from "./operation-handlers"
 
 type ReviewMethod =
-  | typeof CoreMethod.acquireHostedReviewSnapshot
-  | typeof CoreMethod.acquireLocalReviewSnapshot
-  | typeof CoreMethod.acquireRepositoryComparisonSnapshot
   | typeof CoreMethod.getHostedReviewDecision
-  | typeof CoreMethod.getReviewSnapshotPage
   | typeof CoreMethod.listAssignedHostedReviews
   | typeof CoreMethod.listHostedReviews
   | typeof CoreMethod.resolveRepositoryComparison
-  | typeof CoreMethod.searchReviewSnapshot
   | typeof CoreMethod.submitHostedReviewDecision
 
 /** Acquires review snapshot, comparison, listing, and decision handlers. */
 export const makeReviewOperationHandlers: Effect.Effect<
   OperationHandlersFor<ReviewMethod>,
   never,
-  GitProvider | GitService | RepositoryComparisonSource | RepositoryLinker | ReviewSnapshotService
+  GitProvider | GitService | RepositoryComparisonSource | RepositoryLinker
 > = Effect.gen(function* () {
   const comparisons = yield* RepositoryComparisonSource
   const git = yield* GitService
   const gitProvider = yield* GitProvider
   const repositories = yield* RepositoryLinker
-  const snapshots = yield* ReviewSnapshotService
 
   return {
-    [CoreMethod.acquireHostedReviewSnapshot]: ({ review }) =>
-      Effect.gen(function* () {
-        const project = yield* repositories.ensureHosted(review.repository)
-        const snapshot = yield* snapshots.acquireHosted(review)
-        return makeReviewSnapshotManifest(snapshot, project.id)
-      }),
-    [CoreMethod.acquireLocalReviewSnapshot]: ({ target }) =>
-      Effect.gen(function* () {
-        const snapshot = yield* snapshots.acquireLocal(target)
-        const project = yield* repositories.ensureLocal(
-          RepositoryCheckoutPath.make(snapshot.detail.rootPath),
-        )
-        return makeReviewSnapshotManifest(snapshot, project.id)
-      }),
-    [CoreMethod.acquireRepositoryComparisonSnapshot]: ({ target }) =>
-      Effect.gen(function* () {
-        const repo = yield* comparisons.repository(target)
-        const snapshot = yield* snapshots.acquireComparison(target)
-        return makeReviewSnapshotManifest(snapshot, repo.id)
-      }),
     [CoreMethod.getHostedReviewDecision]: ({ review }) => gitProvider.getReviewDecision(review),
-    [CoreMethod.getReviewSnapshotPage]: (request) =>
-      snapshots.get(request.snapshotId).pipe(
-        Effect.map((snapshot) =>
-          paginateReviewSnapshot(snapshot, request, REVIEW_SNAPSHOT_PAGE_MAX_BYTES),
-        ),
-        Effect.catchTag("ReviewSnapshotUnavailableError", (error) =>
-          Effect.succeed(
-            ReviewSnapshotExpired.make({
-              snapshotId: request.snapshotId,
-              reason: error.reason,
-            }),
-          ),
-        ),
-      ),
     [CoreMethod.listAssignedHostedReviews]: ({ providerId }) =>
       gitProvider.listAssignedReviews(providerId),
     [CoreMethod.listHostedReviews]: ({ repository }) => gitProvider.listHostedReviews(repository),
@@ -90,6 +39,7 @@ export const makeReviewOperationHandlers: Effect.Effect<
         if (command.repository === null) {
           const opened = yield* repositories.openProject(
             RepositoryCheckoutPath.make(command.localPath),
+            RepositorySelectionIntent.Automatic(),
           )
           if (
             Schema.is(ProjectOpened)(opened) &&
@@ -107,20 +57,6 @@ export const makeReviewOperationHandlers: Effect.Effect<
         const repo = yield* comparisons.repository(target)
         return ResolvedRepositoryComparison.make({ repo, target })
       }),
-    [CoreMethod.searchReviewSnapshot]: (request) =>
-      snapshots.get(request.snapshotId).pipe(
-        Effect.flatMap((snapshot) =>
-          searchReviewSnapshot(snapshot, request, REVIEW_SNAPSHOT_SEARCH_MAX_BYTES),
-        ),
-        Effect.catchTag("ReviewSnapshotUnavailableError", (error) =>
-          Effect.succeed(
-            ReviewSnapshotExpired.make({
-              snapshotId: request.snapshotId,
-              reason: error.reason,
-            }),
-          ),
-        ),
-      ),
     [CoreMethod.submitHostedReviewDecision]: ({ review, decision }) =>
       gitProvider.submitReviewDecision(review, decision),
   } satisfies OperationHandlersFor<ReviewMethod>

@@ -43,6 +43,7 @@ import {
   isTransientTransportError,
   safeTransportErrorMessage,
   TransportError,
+  TransportErrorCodec,
   TransportErrorDiagnosticTrace,
   toTransportError,
   transportError,
@@ -139,9 +140,9 @@ describe("protocol boundaries", () => {
     const invokeChannels = Object.values(InvokeChannel)
     const eventChannels = Object.values(EventChannel)
 
-    expect(new Set(invokeChannels).size).toBe(62)
-    expect(new Set(eventChannels).size).toBe(3)
-    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(65)
+    expect(new Set(invokeChannels).size).toBe(70)
+    expect(new Set(eventChannels).size).toBe(4)
+    expect(new Set([...invokeChannels, ...eventChannels]).size).toBe(74)
     expect(invokeChannels).not.toEqual(
       expect.arrayContaining([
         "repositories:addLocal",
@@ -406,6 +407,27 @@ describe("protocol boundaries", () => {
     expect(encoded).not.toHaveProperty("cause")
   })
 
+  it("normalizes structured-clone transport payloads through the schema codec", () => {
+    const decoded = Schema.decodeUnknownSync(TransportErrorCodec)({
+      _tag: "TransportError",
+      code: "unsafe code",
+      message: "Safe reason\nwith control text",
+      operation: "reviewThreads:get\nprivate",
+    })
+
+    expect(decoded).toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "Safe reason with control text",
+      operation: "reviewThreads:get private",
+    })
+    expect(Schema.encodeSync(TransportErrorCodec)(decoded)).toEqual({
+      _tag: "TransportError",
+      code: "INTERNAL_ERROR",
+      message: "Safe reason with control text",
+      operation: "reviewThreads:get private",
+    })
+  })
+
   it("extracts only bounded protocol-owned error messages", () => {
     const explicit = transportError("SAFE", `Safe reason\n${"x".repeat(600)}`)
 
@@ -431,7 +453,7 @@ describe("protocol boundaries", () => {
       transportError(
         "AgentProviderExitError",
         "Provider claude exited before completing the walkthrough.",
-        InvokeChannel.generateRepositoryComparisonWalkthrough,
+        InvokeChannel.startWalkthroughOperation,
         diagnostic,
       ),
     )
@@ -445,7 +467,7 @@ describe("protocol boundaries", () => {
     expect(decodeTransportError(contextBridgeClone)).toMatchObject({
       code: "AgentProviderExitError",
       message: "Provider claude exited before completing the walkthrough.",
-      operation: InvokeChannel.generateRepositoryComparisonWalkthrough,
+      operation: InvokeChannel.startWalkthroughOperation,
       diagnostic,
     })
     expect(safeTransportErrorMessage(contextBridgeClone)).toBe(

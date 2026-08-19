@@ -30,10 +30,20 @@ export class FileStorage extends Context.Service<FileStorage, FileStorageOperati
         return yield* fileSystem.readFileString(path).pipe(
           Effect.catchIf(
             (error) =>
-              Match.value(error.reason).pipe(
-                Match.when({ _tag: "NotFound" }, () => true),
-                Match.orElse(() => false),
-              ),
+              Match.valueTags(error.reason, {
+                AlreadyExists: () => false,
+                BadArgument: () => false,
+                BadResource: () => false,
+                Busy: () => false,
+                InvalidData: () => false,
+                NotFound: () => true,
+                PermissionDenied: () => false,
+                TimedOut: () => false,
+                UnexpectedEof: () => false,
+                Unknown: () => false,
+                WouldBlock: () => false,
+                WriteZero: () => false,
+              }),
             () => Effect.succeed(null),
           ),
         )

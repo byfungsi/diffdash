@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect"
+import { Deferred, Effect, Option, Predicate, Schema, Stream } from "effect"
 
 import {
   BranchRevision,
@@ -14,12 +14,13 @@ import {
   HostedRepositoryName,
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
+  HostedReviewDiffSourceTarget,
   ProviderActor,
   ProviderRepositoryId,
+  REVIEW_DIFF_MAX_CHUNK_BYTES,
   RepositoryComparisonRef,
   RepositoryNamespace,
   RepositoryRelativePath,
@@ -27,23 +28,35 @@ import {
   ChangedFile,
   DiagnosticOperation,
   ReviewCommit,
+  makeReviewKey,
+  ReviewDiffAcquisition,
+  ReviewDiffByteCompletion,
+  ReviewDiffGeneration,
+  ReviewDiffGenerationTracker,
+  ReviewDiffRevisionChanged,
+  ReviewDiffSemanticIdentity,
+  ReviewDiffSourceFacts,
+  ReviewDiffSourceFailure,
+  ReviewDiffSourceOffer,
   ReviewRevision,
+  UnifiedBytesMethod,
   WebUrl,
   type DiffFileStatus,
   type GitProviderRegistration,
+  type ReviewDiffByteChunk,
+  type ReviewDiffSource,
+  type ReviewDiffSourceError,
   type ReviewDecision,
 } from "@diffdash/git-provider"
 import {
+  ProcessExit,
   processRequest,
   type ProcessOutputPolicyInput,
   type ProcessRunner,
 } from "@diffdash/process"
 
-// Four UTF-8 bytes per character keeps complete capture aligned with the 2M-character large-diff policy.
-const COMPLETE_DIFF_STDOUT = {
-  maxBytes: 8_000_000,
-  overflow: "error",
-} satisfies ProcessOutputPolicyInput
+const GH_STREAM_MINIMUM_VERSION = [2, 7, 0] as const
+const GH_STREAM_STDERR_BYTES = 256 * 1024
 
 const GitHubOperation = Schema.Literals([
   "listAccessibleRepositories",
@@ -53,6 +66,7 @@ const GitHubOperation = Schema.Literals([
   "searchRepositories",
   "listReviews",
   "getReviewDiff.metadata",
+  "getReviewDiff.qualify",
   "getReviewDiff",
   "submitReviewDecision",
   "repositoryUrl",
@@ -70,6 +84,8 @@ export interface GitHubProviderConfig {
   readonly id?: string
   readonly host?: string
   readonly displayName?: string
+  /** Qualified `gh` executable path; defaults to PATH discovery. */
+  readonly executable?: string
 }
 
 /** GitHub account or organization available as a repository search scope. */
@@ -186,6 +202,21 @@ const GhSearchScopeJson = Schema.Struct({ login: Schema.String })
 const GhDiffMetadataJson = Schema.Struct({
   headRefOid: Schema.optional(Schema.NullOr(ReviewRevision)),
 })
+
+const sourceFailure = (
+  generation: ReviewDiffGeneration,
+  message: string,
+  cause?: unknown,
+): ReviewDiffSourceFailure => {
+  const taggedCause = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Schema.Struct({ _tag: Schema.String }))(cause),
+  )
+  const causeTag = taggedCause?.["_tag"]
+  const fields = { generation, method: "unifiedBytes" as const, message }
+  return causeTag === undefined
+    ? ReviewDiffSourceFailure.make(fields)
+    : ReviewDiffSourceFailure.make({ ...fields, causeTag })
+}
 const GhViewerApprovalJson = Schema.Struct({
   data: Schema.Struct({
     viewer: GhActorJson,
@@ -287,7 +318,7 @@ const repositoryArgument = (host: string, namespace: string, name: string) =>
 
 const operationError =
   (providerId: ReturnType<typeof GitProviderId.make>, operation: GitHubOperation) =>
-  <A>(cause: A) => {
+  (cause: unknown) => {
     const stderr = Option.getOrNull(
       Schema.decodeUnknownOption(Schema.Struct({ stderr: Schema.String }))(cause),
     )?.stderr
@@ -459,20 +490,225 @@ const versionAtLeast = (version: string, minimum: readonly number[]) => {
   return true
 }
 
+const readDiffMetadata = (
+  processes: ProcessRunner,
+  executable: string,
+  host: string,
+  review: HostedReviewLocator,
+) => {
+  const repo = repositoryArgument(host, review.repository.namespace, review.repository.name)
+  return processes
+    .run(
+      processRequest(
+        executable,
+        ["pr", "view", String(review.number), "--repo", repo, "--json", "headRefOid"],
+        { timeoutMs: 20_000 },
+      ),
+    )
+    .pipe(
+      Effect.flatMap((result) =>
+        decodeJson("getReviewDiff.metadata", result.stdout, GhDiffMetadataJson),
+      ),
+      Effect.flatMap((metadata) =>
+        metadata.headRefOid === null || metadata.headRefOid === undefined
+          ? Effect.fail(new Error("GitHub pull request metadata omitted headRefOid"))
+          : Effect.succeed(metadata.headRefOid),
+      ),
+    )
+}
+
+/** Opens a version-qualified, bounded raw-byte source for one GitHub pull request. */
+export const createGitHubReviewDiffSource = Effect.fn("GitHub.createReviewDiffSource")(function* (
+  config: GitHubProviderConfig,
+  processes: ProcessRunner,
+  review: HostedReviewLocator,
+): Effect.fn.Return<ReviewDiffSource, GitProviderOperationError> {
+  const host = normalizeHost(config.host)
+  const providerId = GitProviderId.make(config.id ?? "github")
+  const executable = config.executable ?? "gh"
+  if (review.repository.providerId !== providerId) {
+    return yield* GitProviderOperationError.make({
+      providerId,
+      operation: DiagnosticOperation.make("getReviewDiff"),
+      message: `Repository belongs to ${review.repository.providerId}, not ${providerId}`,
+    })
+  }
+
+  const qualify = (args: readonly string[]) =>
+    processes
+      .run(processRequest(executable, args, { timeoutMs: 5_000 }))
+      .pipe(Effect.mapError(operationError(providerId, "getReviewDiff.qualify")))
+  const versionOutput = yield* qualify(["--version"])
+  const version = parseGitHubCliVersion(versionOutput.stdout)
+  if (version === null || !versionAtLeast(version, GH_STREAM_MINIMUM_VERSION)) {
+    return yield* GitProviderOperationError.make({
+      providerId,
+      operation: DiagnosticOperation.make("getReviewDiff.qualify"),
+      message: "GitHub CLI does not meet the minimum streaming diff version (2.7.0)",
+    })
+  }
+  const help = yield* qualify(["pr", "diff", "--help"])
+  if (!/(?:^|\s)--color(?:[=\s]|$)/m.test(help.stdout)) {
+    return yield* GitProviderOperationError.make({
+      providerId,
+      operation: DiagnosticOperation.make("getReviewDiff.qualify"),
+      message: "GitHub CLI pr diff does not support explicit color disabling",
+    })
+  }
+
+  const expectedRevision = yield* readDiffMetadata(processes, executable, host, review).pipe(
+    Effect.mapError(operationError(providerId, "getReviewDiff.metadata")),
+  )
+  const cancellation = yield* Deferred.make<void>()
+  const generations = new ReviewDiffGenerationTracker()
+  const repo = repositoryArgument(host, review.repository.namespace, review.repository.name)
+  const semanticIdentity = ReviewDiffSemanticIdentity.make(
+    `github:gh-pr-diff:v1:${host}/${review.repository.namespace}/${review.repository.name}#${review.number}@${expectedRevision}`,
+  )
+  const offer = ReviewDiffSourceOffer.make({
+    target: HostedReviewDiffSourceTarget.make({ review, reviewKey: makeReviewKey(review) }),
+    expectedRevision,
+    semanticIdentity,
+    methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
+    facts: ReviewDiffSourceFacts.make({
+      origin: "remote",
+      revisionKind: "mutable",
+      reproducible: false,
+      complete: true,
+      declaredBytes: null,
+    }),
+  })
+
+  const unifiedBytes = (acquisition: ReviewDiffAcquisition) => {
+    let totalBytes = 0
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        yield* generations.begin(acquisition.generation)
+        if (acquisition.expectedRevision !== expectedRevision) {
+          return yield* ReviewDiffRevisionChanged.make({
+            generation: acquisition.generation,
+            method: "unifiedBytes",
+            message: "GitHub review diff acquisition expected another revision",
+            expectedRevision: acquisition.expectedRevision,
+            actualRevision: expectedRevision,
+          })
+        }
+        const before = yield* readDiffMetadata(processes, executable, host, review).pipe(
+          Effect.mapError((cause) =>
+            sourceFailure(
+              acquisition.generation,
+              "GitHub metadata-before verification failed",
+              cause,
+            ),
+          ),
+        )
+        if (before !== expectedRevision) {
+          return yield* ReviewDiffRevisionChanged.make({
+            generation: acquisition.generation,
+            method: "unifiedBytes",
+            message: "GitHub review revision changed before byte acquisition",
+            expectedRevision,
+            actualRevision: before,
+          })
+        }
+
+        return processes
+          .streamBytes(
+            processRequest(
+              executable,
+              ["pr", "diff", String(review.number), "--repo", repo, "--color", "never"],
+              {
+                timeoutMs: 10 * 60 * 1_000,
+                env: { NO_COLOR: "1", CLICOLOR: "0", CLICOLOR_FORCE: "0", TERM: "dumb" },
+                stdout: { maxBytes: 0, overflow: "truncate" },
+                stderr: { maxBytes: GH_STREAM_STDERR_BYTES, overflow: "error" },
+                maxByteChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES,
+                maxBufferedBytes: 1024 * 1024,
+                maxReservedBytes: 1024 * 1024,
+              },
+            ),
+            { cancellation: Deferred.await(cancellation) },
+          )
+          .pipe(
+            Stream.mapEffect(
+              (
+                event,
+              ): Effect.Effect<
+                ReviewDiffByteChunk | ReviewDiffByteCompletion,
+                ReviewDiffRevisionChanged | ReviewDiffSourceFailure
+              > => {
+                if (!Schema.is(ProcessExit)(event)) {
+                  totalBytes += event.bytes.byteLength
+                  return Effect.succeed({ bytes: event.bytes })
+                }
+                return readDiffMetadata(processes, executable, host, review).pipe(
+                  Effect.mapError((cause) =>
+                    sourceFailure(
+                      acquisition.generation,
+                      "GitHub metadata-after verification failed",
+                      cause,
+                    ),
+                  ),
+                  Effect.flatMap((after) =>
+                    after === expectedRevision
+                      ? Effect.succeed(
+                          ReviewDiffByteCompletion.make({
+                            generation: acquisition.generation,
+                            revision: expectedRevision,
+                            semanticIdentity,
+                            totalBytes,
+                          }),
+                        )
+                      : ReviewDiffRevisionChanged.make({
+                          generation: acquisition.generation,
+                          method: "unifiedBytes",
+                          message: "GitHub review revision changed during byte acquisition",
+                          expectedRevision,
+                          actualRevision: after,
+                        }),
+                  ),
+                )
+              },
+            ),
+            Stream.mapError(
+              (cause): ReviewDiffSourceError =>
+                Schema.is(ReviewDiffRevisionChanged)(cause) ||
+                Schema.is(ReviewDiffSourceFailure)(cause)
+                  ? cause
+                  : sourceFailure(acquisition.generation, "GitHub raw diff stream failed", cause),
+            ),
+          )
+      }),
+    )
+  }
+
+  return {
+    offer,
+    unifiedBytes,
+    close: Deferred.succeed(cancellation, undefined).pipe(
+      Effect.asVoid,
+      Effect.mapError(() =>
+        sourceFailure(ReviewDiffGeneration.make("source-close"), "GitHub source close failed"),
+      ),
+    ),
+  }
+})
+
 /** Inspects installation, authentication, and repository-search support for one GitHub host. */
 export const inspectGitHubCli = (
   processes: ProcessRunner,
-  config: Pick<GitHubProviderConfig, "host"> = {},
+  config: Pick<GitHubProviderConfig, "host" | "executable"> = {},
 ): Effect.Effect<GitHubCliInspection> => {
   const host = normalizeHost(config.host)
-  return processes.run(processRequest("gh", ["--version"], { timeoutMs: 5_000 })).pipe(
+  const executable = config.executable ?? "gh"
+  return processes.run(processRequest(executable, ["--version"], { timeoutMs: 5_000 })).pipe(
     Effect.flatMap((result) => {
       const version = parseGitHubCliVersion(result.stdout)
       return Effect.all(
         [
           processes
             .run(
-              processRequest("gh", ["search", "repos", "--help", ...hostArgs(host)], {
+              processRequest(executable, ["search", "repos", "--help", ...hostArgs(host)], {
                 timeoutMs: 5_000,
               }),
             )
@@ -482,7 +718,7 @@ export const inspectGitHubCli = (
             ),
           processes
             .run(
-              processRequest("gh", ["auth", "status", "--hostname", host], {
+              processRequest(executable, ["auth", "status", "--hostname", host], {
                 timeoutMs: 10_000,
               }),
             )
@@ -521,6 +757,7 @@ export const createGitHubProvider = (
   processes: ProcessRunner,
 ): GitHubProviderRegistration => {
   const host = normalizeHost(config.host)
+  const executable = config.executable ?? "gh"
   const providerId = GitProviderId.make(config.id ?? "github")
   const descriptor = GitProviderDescriptor.make({
     id: providerId,
@@ -549,7 +786,13 @@ export const createGitHubProvider = (
     stdout?: ProcessOutputPolicyInput,
   ) =>
     processes
-      .run(processRequest("gh", args, stdout === undefined ? { timeoutMs } : { timeoutMs, stdout }))
+      .run(
+        processRequest(
+          executable,
+          args,
+          stdout === undefined ? { timeoutMs } : { timeoutMs, stdout },
+        ),
+      )
       .pipe(Effect.mapError(operationError(providerId, operation)))
   const decode = <A, I>(operation: GitHubOperation, output: string, schema: Schema.Codec<A, I>) =>
     decodeJson(operation, output, schema).pipe(
@@ -610,6 +853,9 @@ export const createGitHubProvider = (
     return detail(providerId, review.repository.namespace, review.repository.name, value)
   })
 
+  const getReviewDiffSource = (review: HostedReviewLocator) =>
+    createGitHubReviewDiffSource(config, processes, review)
+
   const getReviewDecision = Effect.fn("GitHub.getReviewDecision")(function* (
     review: HostedReviewLocator,
   ) {
@@ -654,7 +900,7 @@ export const createGitHubProvider = (
   const registration: GitHubProviderRegistration = {
     descriptor,
     publishingTools: ["gh"],
-    diagnose: inspectGitHubCli(processes, { host }).pipe(
+    diagnose: inspectGitHubCli(processes, { host, executable }).pipe(
       Effect.map((inspection) =>
         GitProviderDiagnostic.make({
           providerId,
@@ -742,36 +988,7 @@ export const createGitHubProvider = (
       )
     }),
     getReview,
-    getReviewDiff: Effect.fn("GitHub.getReviewDiff")(function* (review) {
-      yield* requireProvider(review.repository, "getReviewDiff")
-      const repo = repositoryArgument(host, review.repository.namespace, review.repository.name)
-      const metadataResult = yield* run("getReviewDiff.metadata", [
-        "pr",
-        "view",
-        String(review.number),
-        "--repo",
-        repo,
-        "--json",
-        "headRefOid",
-      ])
-      const metadata = yield* decode(
-        "getReviewDiff.metadata",
-        metadataResult.stdout,
-        GhDiffMetadataJson,
-      )
-      const diffResult = yield* run(
-        "getReviewDiff",
-        ["pr", "diff", String(review.number), "--repo", repo],
-        60_000,
-        COMPLETE_DIFF_STDOUT,
-      )
-      return HostedReviewDiff.make({
-        locator: review,
-        headRevision: metadata.headRefOid ?? null,
-        diff: diffResult.stdout,
-        fetchedAt: new Date().toISOString(),
-      })
-    }),
+    getReviewDiffSource,
     getReviewDecision,
     submitReviewDecision: Effect.fn("GitHub.submitReviewDecision")(function* (review, decision) {
       yield* requireProvider(review.repository, "submitReviewDecision")
@@ -790,6 +1007,7 @@ export const createGitHubProvider = (
         repositoryArgument(host, review.repository.namespace, review.repository.name),
         "--approve",
       ])
+      return undefined
     }),
     repositoryUrl: (repositoryLocator) =>
       requireProvider(repositoryLocator, "repositoryUrl").pipe(

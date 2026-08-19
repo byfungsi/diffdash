@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import {
   AgentPromptVersion,
+  type AgentRun,
   CompletedAgentRun,
+  isTerminalAgentRun,
   RunningAgentRun,
   type ThreadMemory,
   ThreadMemory as ThreadMemoryModel,
@@ -117,6 +119,12 @@ export interface BegunReviewTurn {
   readonly resumableProviderRunId: ReviewAgentProviderRunId | null
 }
 
+/** Result of an atomic cancellation compare-and-set against one durable agent run. */
+export interface ReviewAgentOperationTransition {
+  readonly operation: AgentRun
+  readonly won: boolean
+}
+
 /** One normalized artifact with its identity allocated before finalization starts. */
 interface PreparedReviewTurnArtifact {
   readonly id: ReviewAgentArtifactId
@@ -158,6 +166,9 @@ export type ReviewTurnWriteStep =
   | "fail.message"
   | "fail.run"
   | "fail.thread"
+  | "cancel.message"
+  | "cancel.run"
+  | "cancel.thread"
   | "recover.message"
   | "recover.run"
   | "recover.thread"
@@ -219,6 +230,16 @@ export class ReviewTurnStore extends Context.Service<
     readonly failTurn: (
       input: FailReviewTurnInput,
     ) => Effect.Effect<ReviewThreadDetails, ReviewTurnOwnershipError | ReviewTurnStoreError>
+    readonly getOperation: (
+      runId: AgentRunId,
+    ) => Effect.Effect<Option.Option<AgentRun>, ReviewTurnStoreError>
+    readonly requestCancellation: (
+      runId: AgentRunId,
+    ) => Effect.Effect<
+      ReviewAgentOperationTransition,
+      ReviewTurnOwnershipError | ReviewTurnStoreError
+    >
+    readonly recoverInterruptedOperations: Effect.Effect<number, ReviewTurnStoreError>
     readonly recoverInterruptedTurns: Effect.Effect<number, ReviewTurnStoreError>
   }
 >()("@diffdash/ReviewTurnStore") {
@@ -238,8 +259,57 @@ export class ReviewTurnStore extends Context.Service<
             .pipe(mapTargetTransactionError("validateTarget"))
         })
 
+        const getOperation = Effect.fn("ReviewTurnStore.getOperation")((runId: AgentRunId) =>
+          findRun(database, runId).pipe(
+            Effect.mapError((cause) => storeError("getOperation", cause)),
+          ),
+        )
+
+        const recoverInterruptedOperations = database
+          .transaction(
+            Effect.gen(function* () {
+              const running = yield* database
+                .all("SELECT * FROM agent_runs WHERE status = 'running' ORDER BY started_at, id")
+                .pipe(
+                  Effect.flatMap((rows) => Effect.forEach(rows, decodeAgentRunRow)),
+                  Effect.mapError((cause) => storeError("decode.run", cause)),
+                )
+              const now = new Date().toISOString()
+              const diagnostic = "The previous local agent run was interrupted. Retry to try again."
+              for (const run of running) {
+                const message = yield* requirePendingMessageForRun(database, run.id)
+                yield* write(
+                  database,
+                  "recover.message",
+                  `UPDATE review_thread_messages
+                   SET body_markdown = ?, status = 'failed', updated_at = ?
+                   WHERE id = ? AND status = 'pending'`,
+                  [diagnostic, now, message.id],
+                )
+                yield* write(
+                  database,
+                  "recover.run",
+                  `UPDATE agent_runs
+                   SET status = 'interrupted', provider_run_id = NULL, usage_json = NULL,
+                       error = NULL, completed_at = ?
+                   WHERE id = ? AND status = 'running'`,
+                  [now, run.id],
+                )
+                yield* write(
+                  database,
+                  "recover.thread",
+                  "UPDATE review_threads SET updated_at = ? WHERE id = ?",
+                  [now, run.threadId],
+                )
+              }
+              return running.length
+            }),
+          )
+          .pipe(Effect.mapError((cause) => storeError("recoverInterruptedOperations", cause)))
+
         return ReviewTurnStore.of({
           validateTarget,
+          getOperation,
           beginTurn: Effect.fn("ReviewTurnStore.beginTurn")(function (input) {
             return database
               .transaction(
@@ -488,56 +558,44 @@ export class ReviewTurnStore extends Context.Service<
               mapFinalizeTransactionError("failTurn"),
             )
           }),
-          recoverInterruptedTurns: database
-            .transaction(
-              Effect.gen(function* () {
-                const running = yield* database
-                  .all("SELECT * FROM agent_runs WHERE status = 'running' ORDER BY started_at, id")
-                  .pipe(
-                    Effect.flatMap((rows) => Effect.forEach(rows, decodeAgentRunRow)),
-                    Effect.mapError((cause) => storeError("decode.run", cause)),
-                  )
-                const now = new Date().toISOString()
-                const diagnostic =
-                  "The previous local agent run was interrupted. Retry to try again."
-                for (const run of running) {
-                  const row = yield* database.get(
-                    `SELECT * FROM review_thread_messages
-                   WHERE thread_id = ? AND agent_run_id = ? AND author = 'agent' AND status = 'pending'`,
-                    [run.threadId, run.id],
-                  )
-                  if (Option.isNone(row)) {
-                    return yield* storeError(
-                      "recoverInterruptedTurns.missingMessage",
-                      new Error(`Running review turn has no linked pending message: ${run.id}`),
-                    )
-                  }
-                  const message = yield* decodeMessageRowEffect(row.value)
+          requestCancellation: Effect.fn("ReviewTurnStore.requestCancellation")(function (runId) {
+            return database
+              .transaction(
+                Effect.gen(function* () {
+                  const before = yield* getRun(database, runId)
+                  if (isTerminalAgentRun(before)) return { operation: before, won: false }
+                  const message = yield* requirePendingMessageForRun(database, runId)
+                  const now = new Date().toISOString()
                   yield* write(
                     database,
-                    "recover.message",
+                    "cancel.message",
                     `UPDATE review_thread_messages
-                   SET body_markdown = ?, status = 'failed', updated_at = ? WHERE id = ?`,
-                    [diagnostic, now, message.id],
+                     SET body_markdown = ?, status = 'failed', updated_at = ?
+                     WHERE id = ? AND status = 'pending'`,
+                    ["The local agent run was cancelled.", now, message.id],
                   )
                   yield* write(
                     database,
-                    "recover.run",
+                    "cancel.run",
                     `UPDATE agent_runs
-                   SET status = 'failed', error = ?, completed_at = ? WHERE id = ?`,
-                    [diagnostic, now, run.id],
+                     SET status = 'cancelled', provider_run_id = NULL, usage_json = NULL,
+                         error = NULL, completed_at = ?
+                     WHERE id = ? AND status = 'running'`,
+                    [now, runId],
                   )
                   yield* write(
                     database,
-                    "recover.thread",
+                    "cancel.thread",
                     "UPDATE review_threads SET updated_at = ? WHERE id = ?",
-                    [now, run.threadId],
+                    [now, before.threadId],
                   )
-                }
-                return running.length
-              }),
-            )
-            .pipe(Effect.mapError((cause) => storeError("recoverInterruptedTurns", cause))),
+                  return { operation: yield* getRun(database, runId), won: true }
+                }),
+              )
+              .pipe(mapFinalizeTransactionError("requestCancellation"))
+          }),
+          recoverInterruptedOperations,
+          recoverInterruptedTurns: recoverInterruptedOperations,
         })
       }),
     )
@@ -826,6 +884,26 @@ const getRun = (database: Database, runId: AgentRunId) =>
       }),
     )
     return yield* decodeRunRowEffect(runRow)
+  })
+
+const findRun = (database: Database, runId: AgentRunId) =>
+  database
+    .get("SELECT * FROM agent_runs WHERE id = ?", [runId])
+    .pipe(Effect.flatMap((row) => Option.map(row, decodeRunRowEffect).pipe(Effect.transposeOption)))
+
+const requirePendingMessageForRun = (database: Database, runId: AgentRunId) =>
+  Effect.gen(function* () {
+    const row = yield* database.get(
+      `SELECT * FROM review_thread_messages
+       WHERE agent_run_id = ? AND author = 'agent' AND status = 'pending'`,
+      [runId],
+    )
+    const messageRow = yield* Effect.fromOption(row, () =>
+      ReviewTurnOwnershipError.make({
+        reason: "The running agent operation has no linked pending response.",
+      }),
+    )
+    return yield* decodeMessageRowEffect(messageRow)
   })
 
 const getDetails = (database: Database, threadId: ReviewThreadId) =>

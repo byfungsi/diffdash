@@ -26,26 +26,27 @@ import { AgentProviderRegistry } from "@diffdash/agent-provider/registry"
 import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
 import { AIAgentSelection, AIModelId, AIProviderId } from "@diffdash/domain/ai-settings"
 
-import { LocalReviewDetail } from "@diffdash/domain/local-review"
+import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import {
   GitCommitSha,
-  RepositoryComparisonDetail,
   RepositoryComparisonRef,
   RepositoryComparisonTarget,
 } from "@diffdash/domain/repository-comparison"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import { ReviewDiffIdentity, ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewFileId, ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import {
   BranchRevision,
-  ChangedFile,
-  HostedReviewDetail,
   HostedReviewSummary,
   ProviderActor,
-  ReviewCommit,
   makeHostedReviewLocator,
 } from "@diffdash/domain/git-provider"
+import {
+  HostedReviewDescriptor,
+  LocalReviewDescriptor,
+  RepositoryComparisonReviewDescriptor,
+} from "@diffdash/domain/review-context"
 import {
   WalkthroughGenerationDetails,
   WalkthroughHunkId,
@@ -54,6 +55,10 @@ import {
 } from "@diffdash/domain/walkthrough"
 import {
   WalkthroughGenerationInput,
+  WALKTHROUGH_PROMPT_CONTEXT_LIMITS,
+  ReviewPromptFile,
+  ReviewPromptIdentity,
+  WalkthroughGenerationError,
   WalkthroughReviewContext,
   WalkthroughRouting,
   WalkthroughService,
@@ -87,29 +92,41 @@ const summary = HostedReviewSummary.make({
   url: WebUrl.make("https://github.com/fungsi/diffdash/pull/51"),
 })
 
-const hostedReview = HostedReviewDetail.make({
-  summary,
-  commits: [
-    ReviewCommit.make({
-      authoredAt: "2026-07-08T00:00:00Z",
-      title: "Add walkthrough mode",
-      revision: ReviewRevision.make("cccccccccccccccccccccccccccccccccccccccc"),
-    }),
-  ],
-  files: [
-    ChangedFile.make({
-      additions: 10,
-      changeType: "modified",
-      deletions: 2,
-      path: RepositoryRelativePath.make("src/app.tsx"),
-    }),
-    ChangedFile.make({
-      additions: 5,
-      changeType: "modified",
-      deletions: 1,
-      path: RepositoryRelativePath.make("src/service.ts"),
-    }),
-  ],
+const promptFiles = [
+  ReviewPromptFile.make({
+    fileId: ReviewFileId.make("file-app"),
+    additions: 10,
+    status: "modified",
+    deletions: 2,
+    path: RepositoryRelativePath.make("src/app.tsx"),
+    oldPath: null,
+    hunkCount: 1,
+  }),
+  ReviewPromptFile.make({
+    fileId: ReviewFileId.make("file-service"),
+    additions: 5,
+    status: "modified",
+    deletions: 1,
+    path: RepositoryRelativePath.make("src/service.ts"),
+    oldPath: null,
+    hunkCount: 1,
+  }),
+]
+
+const reviewIdentity = ReviewPromptIdentity.make({
+  reviewKey: ReviewKey.make("hosted:github:fungsi/diffdash#51"),
+  baseRevision: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+  headRevision: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+  descriptor: HostedReviewDescriptor.make({
+    review: summary.locator,
+    title: summary.title,
+    authorUsername: summary.author.username,
+    state: summary.state,
+    draft: summary.draft,
+    baseRef: summary.base.name,
+    headRef: summary.head.name,
+    url: summary.url,
+  }),
 })
 
 const generationInput = WalkthroughGenerationInput.make({
@@ -145,48 +162,50 @@ const generationInput = WalkthroughGenerationInput.make({
     totalFolders: 1,
     analyzedFolders: 1,
   }),
-  review: WalkthroughReviewContext.make({ kind: "hosted", hostedReview }),
+  review: WalkthroughReviewContext.make({ review: reviewIdentity, files: promptFiles }),
   promptStats: Option.none(),
   workingDirectory: Option.none(),
 })
 
-const localReview = LocalReviewDetail.make({
-  baseSha: ReviewRevision.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-  branchName: RepositoryComparisonRef.make("feature/walkthrough"),
-  diffHash: ReviewDiffIdentity.make("local-diff-hash"),
-  fetchedAt: "2026-07-08T01:00:00Z",
-  files: hostedReview.files,
-  headSha: ReviewRevision.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-  repoName: "diffdash",
-  rootPath: RepositoryCheckoutPath.make("/workspace/repo"),
-  title: "Local changes in diffdash",
-})
-
 const localGenerationInput = WalkthroughGenerationInput.make({
   ...generationInput,
-  review: WalkthroughReviewContext.make({ kind: "localDiff", localReview }),
+  review: WalkthroughReviewContext.make({
+    review: ReviewPromptIdentity.make({
+      ...reviewIdentity,
+      descriptor: LocalReviewDescriptor.make({
+        target: workingTreeReviewTarget(RepositoryCheckoutPath.make("/workspace/repo")),
+        repoName: "diffdash",
+        branchName: RepositoryComparisonRef.make("feature/walkthrough"),
+        title: "Local changes in diffdash",
+        fetchedAt: "2026-07-08T01:00:00Z",
+      }),
+    }),
+    files: promptFiles,
+  }),
 })
 
-const repositoryComparison = RepositoryComparisonDetail.make({
-  target: RepositoryComparisonTarget.make({
-    kind: "repositoryComparison",
-    repository: summary.locator.repository,
-    baseRef: RepositoryComparisonRef.make("main"),
-    headRef: RepositoryComparisonRef.make("feature/walkthrough"),
-    baseSha: GitCommitSha.make("b".repeat(40)),
-    headSha: GitCommitSha.make("a".repeat(40)),
-    mergeBaseSha: GitCommitSha.make("c".repeat(40)),
-  }),
-  title: "Compare feature/walkthrough with main",
-  files: hostedReview.files,
-  fetchedAt: "2026-07-08T01:00:00Z",
+const repositoryComparisonTarget = RepositoryComparisonTarget.make({
+  kind: "repositoryComparison",
+  repository: summary.locator.repository,
+  baseRef: RepositoryComparisonRef.make("main"),
+  headRef: RepositoryComparisonRef.make("feature/walkthrough"),
+  baseSha: GitCommitSha.make("b".repeat(40)),
+  headSha: GitCommitSha.make("a".repeat(40)),
+  mergeBaseSha: GitCommitSha.make("c".repeat(40)),
 })
 
 const repositoryComparisonGenerationInput = WalkthroughGenerationInput.make({
   ...generationInput,
   review: WalkthroughReviewContext.make({
-    kind: "repositoryComparison",
-    comparison: repositoryComparison,
+    review: ReviewPromptIdentity.make({
+      ...reviewIdentity,
+      descriptor: RepositoryComparisonReviewDescriptor.make({
+        target: repositoryComparisonTarget,
+        title: "Compare feature/walkthrough with main",
+        fetchedAt: "2026-07-08T01:00:00Z",
+      }),
+    }),
+    files: promptFiles,
   }),
   workingDirectory: Option.some("/workspace/comparison"),
 })
@@ -391,6 +410,29 @@ const serviceLayer = (
 }
 
 describe("WalkthroughService", () => {
+  it.effect("captures the configured route and ordered provider/model plan", () => {
+    const primaryModels = [AgentModelId.make("primary-fast"), AgentModelId.make("primary-balanced")]
+    const fallbackModels = [AgentModelId.make("fallback-balanced")]
+    const registrations = [
+      readyWalkthroughRegistration(primaryProviderId, primaryModels, () => Effect.never),
+      readyWalkthroughRegistration(fallbackProviderId, fallbackModels, () => Effect.never),
+    ]
+    return Effect.gen(function* () {
+      const service = yield* WalkthroughService
+      const route = yield* service.prepareRoute
+
+      expect(route.selection).toMatchObject({ _tag: "Automatic", quality: "balanced" })
+      expect(route.candidates).toEqual([
+        { providerId: fallbackProviderId, modelIds: fallbackModels },
+        { providerId: primaryProviderId, modelIds: primaryModels },
+      ])
+    }).pipe(
+      Effect.provide(
+        serviceLayer(registrations, { mode: "auto" }, [fallbackProviderId, primaryProviderId]),
+      ),
+    )
+  })
+
   it("round-trips generation input through its schema", () => {
     const input = WalkthroughGenerationInput.make({
       ...generationInput,
@@ -413,6 +455,63 @@ describe("WalkthroughService", () => {
 
     expect(Schema.decodeUnknownSync(WalkthroughGenerationInput)(encoded)).toEqual(input)
   })
+
+  it("rejects prompt context above the explicit file, hunk, and excerpt limits", () => {
+    const encoded = Schema.encodeSync(WalkthroughGenerationInput)(generationInput)
+    const firstFile = first(encoded.review.files)
+    const firstHunk = first(encoded.hunkDigest)
+
+    expect(() =>
+      Schema.decodeUnknownSync(WalkthroughGenerationInput)({
+        ...encoded,
+        review: {
+          ...encoded.review,
+          files: Array.from(
+            { length: WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxFiles + 1 },
+            () => firstFile,
+          ),
+        },
+      }),
+    ).toThrow(/Expected/u)
+    expect(() =>
+      Schema.decodeUnknownSync(WalkthroughGenerationInput)({
+        ...encoded,
+        hunkDigest: Array.from(
+          { length: WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxHunks + 1 },
+          () => firstHunk,
+        ),
+      }),
+    ).toThrow(/Expected/u)
+    expect(() =>
+      Schema.decodeUnknownSync(WalkthroughGenerationInput)({
+        ...encoded,
+        diff: "x".repeat(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxDiffChars + 1),
+      }),
+    ).toThrow(/Expected/u)
+    expect(() =>
+      Schema.decodeUnknownSync(WalkthroughGenerationInput)({
+        ...encoded,
+        changedFileTree: "x".repeat(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxChangedFileTreeChars + 1),
+      }),
+    ).toThrow(/Expected/u)
+  })
+
+  it.effect("rejects an unbounded direct service input before provider execution", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = makeLayer([validOutput])
+      const error = yield* Effect.gen(function* () {
+        const service = yield* WalkthroughService
+        return yield* service.generate({
+          ...generationInput,
+          diff: "x".repeat(WALKTHROUGH_PROMPT_CONTEXT_LIMITS.maxDiffChars + 1),
+        })
+      }).pipe(Effect.provide(layer), Effect.flip)
+
+      expect(error).toBeInstanceOf(WalkthroughGenerationError)
+      expect(error).toMatchObject({ operation: "validateGenerationInput", output: "" })
+      expect(calls).toHaveLength(0)
+    }),
+  )
 
   it.effect("FUN-48 AC: returns validated walkthrough data from valid generation", () =>
     Effect.gen(function* () {
@@ -449,9 +548,8 @@ describe("WalkthroughService", () => {
       expect(call.prompt).toContain(
         '"files":[{"a":1,"d":1,"p":"src/app.tsx","t":"modified"},{"a":1,"d":0,"p":"src/service.ts","t":"modified"}]',
       )
-      expect(call.prompt).toContain(
-        '"commits":[{"oid":"cccccccccccccccccccccccccccccccccccccccc","msg":"Add walkthrough mode","date":"2026-07-08T00:00:00Z"}]',
-      )
+      expect(call.prompt).not.toContain('"body":')
+      expect(call.prompt).not.toContain('"commits":')
       expect(call.prompt).not.toContain("src/app.tsx:hosted-review:github:fungsi/diffdash#51:h1")
       expect(call.prompt).not.toContain('"alias":')
       expect(call.prompt).not.toContain('"synthetic":')
@@ -781,18 +879,18 @@ describe("WalkthroughService", () => {
     Effect.gen(function* () {
       const { calls, layer } = makeLayer([validOutput])
       const firstHunk = first(generationInput.hunkDigest)
-      const noisyHostedReview = HostedReviewDetail.make({
-        ...hostedReview,
-        files: [
-          ...hostedReview.files,
-          ChangedFile.make({
-            additions: 1_000,
-            changeType: "modified",
-            deletions: 1_000,
-            path: RepositoryRelativePath.make("pnpm-lock.yaml"),
-          }),
-        ],
-      })
+      const noisyFiles = [
+        ...promptFiles,
+        ReviewPromptFile.make({
+          fileId: ReviewFileId.make("file-lock"),
+          additions: 1_000,
+          status: "modified",
+          deletions: 1_000,
+          path: RepositoryRelativePath.make("pnpm-lock.yaml"),
+          oldPath: null,
+          hunkCount: 1,
+        }),
+      ]
 
       yield* Effect.gen(function* () {
         const service = yield* WalkthroughService
@@ -801,8 +899,8 @@ describe("WalkthroughService", () => {
           diff: "### h1 src/app.tsx\n+new bounded excerpt",
           hunkDigest: [firstHunk],
           review: WalkthroughReviewContext.make({
-            kind: "hosted",
-            hostedReview: noisyHostedReview,
+            review: reviewIdentity,
+            files: noisyFiles,
           }),
           promptStats: Option.some({
             hiddenFiles: 1,

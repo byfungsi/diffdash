@@ -32,43 +32,49 @@ import {
   ReviewThreadDetails,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import { ReviewProjectId } from "@diffdash/domain/review-identity"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { Schema, SchemaTransformation } from "effect"
 import { AgentProviderCatalog } from "./agent-providers"
 import { AnalyticsEvent } from "./analytics"
 import { AppUpdateState } from "./app-update"
 import { EventChannel, InvokeChannel } from "./channels"
+import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
-  GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
 import { assertJsonPayloadWithinBudget, jsonSafeUtf8ByteLength } from "./payload-budget"
 import { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import { LinkRepositoryCheckoutRequest } from "./repository-link"
+import { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 import {
   AcquireHostedReviewSnapshotRequest,
   AcquireLocalReviewSnapshotRequest,
   AcquireRepositoryComparisonSnapshotRequest,
   OpenRepositoryComparisonFileRequest,
-  REVIEW_SNAPSHOT_PAGE_MAX_BYTES,
-  REVIEW_SNAPSHOT_SEARCH_MAX_BYTES,
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
   ResolvedRepositoryComparison,
   ResolveRepositoryComparisonRequest,
-  RepositoryComparisonWalkthroughRequest,
 } from "./review-snapshot"
+import {
+  CloseReviewSessionRequest,
+  CurrentReviewSessionRequest,
+  OpenReviewSessionRequest,
+  ResolvedReviewSessionTarget,
+  ReviewSessionInventoryPage,
+  ReviewSessionInventoryRequest,
+  ReviewSessionRange,
+  ReviewSessionRangeRequest,
+  ReviewSessionSearchPublication,
+  ReviewSessionSearchRequest,
+  ReviewSessionState,
+  ReviewSessionTargetRequest,
+} from "./review-session"
 import {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
@@ -76,6 +82,18 @@ import {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import { TransportErrorPayload, transportError, type TransportError } from "./transport-error"
+import {
+  WalkthroughBridgeStartRequest,
+  WalkthroughStartBridgeResult,
+} from "./walkthrough-operation"
+import {
+  WalkthroughBridgeGetStoredRequest,
+  WalkthroughBridgeOperationRequest,
+  WalkthroughCancelBridgeResult,
+  WalkthroughGetOperationBridgeResult,
+  WalkthroughGetStoredBridgeResult,
+  WalkthroughOperationBridgeHint,
+} from "./walkthrough-operation-state"
 import {
   HostedViewedFilesRequest,
   LocalViewedFilesRequest,
@@ -163,6 +181,17 @@ export const InvokeContract = {
     InvokeChannel.analyticsStart,
     EmptyRequest,
     EmptyResponse,
+  ),
+  [InvokeChannel.e2eReviewLifecycleDiagnostics]: defineInvoke(
+    InvokeChannel.e2eReviewLifecycleDiagnostics,
+    EmptyRequest,
+    E2eReviewLifecycleDiagnostics,
+    { maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.e2eHoldNextReviewAcquisition]: defineInvoke(
+    InvokeChannel.e2eHoldNextReviewAcquisition,
+    EmptyRequest,
+    E2eReviewLifecycleHold,
   ),
   [InvokeChannel.agentProvidersGetCatalog]: defineInvoke(
     InvokeChannel.agentProvidersGetCatalog,
@@ -286,43 +315,77 @@ export const InvokeContract = {
     RepositoryComparisonSnapshotManifest,
     { maxRequestBytes: 64 * KIB, maxResponseBytes: 8 * 1_024 * KIB },
   ),
-  [InvokeChannel.getReviewSnapshotPage]: defineInvoke(
-    InvokeChannel.getReviewSnapshotPage,
-    ReviewSnapshotPageRequest,
-    ReviewSnapshotPageResponse,
-    {
-      maxRequestBytes: 64 * KIB,
-      maxResponseBytes: REVIEW_SNAPSHOT_PAGE_MAX_BYTES + KIB,
-    },
+  [InvokeChannel.openProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.openProgressiveReviewSession,
+    OpenReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
   ),
-  [InvokeChannel.searchReviewSnapshot]: defineInvoke(
-    InvokeChannel.searchReviewSnapshot,
-    ReviewSnapshotSearchRequest,
-    ReviewSnapshotSearchResponse,
-    {
-      maxRequestBytes: 64 * KIB,
-      maxResponseBytes: REVIEW_SNAPSHOT_SEARCH_MAX_BYTES + KIB,
-    },
+  [InvokeChannel.getProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.getProgressiveReviewSession,
+    CurrentReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
   ),
-  [InvokeChannel.generateLocalWalkthrough]: defineInvoke(
-    InvokeChannel.generateLocalWalkthrough,
-    Schema.Struct({ target: LocalReviewTarget, regenerate: Schema.Boolean }),
-    StoredWalkthrough,
+  [InvokeChannel.closeProgressiveReviewSession]: defineInvoke(
+    InvokeChannel.closeProgressiveReviewSession,
+    CloseReviewSessionRequest,
+    ReviewSessionState,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
   ),
-  [InvokeChannel.getLocalWalkthrough]: defineInvoke(
-    InvokeChannel.getLocalWalkthrough,
-    Schema.Struct({ target: LocalReviewTarget, baseSha: ReviewRevision, headSha: ReviewRevision }),
-    Schema.NullOr(StoredWalkthrough),
+  [InvokeChannel.getProgressiveReviewInventory]: defineInvoke(
+    InvokeChannel.getProgressiveReviewInventory,
+    ReviewSessionInventoryRequest,
+    ReviewSessionInventoryPage,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
   ),
-  [InvokeChannel.generateRepositoryComparisonWalkthrough]: defineInvoke(
-    InvokeChannel.generateRepositoryComparisonWalkthrough,
-    RepositoryComparisonWalkthroughRequest,
-    StoredWalkthrough,
+  [InvokeChannel.readProgressiveReviewRange]: defineInvoke(
+    InvokeChannel.readProgressiveReviewRange,
+    ReviewSessionRangeRequest,
+    ReviewSessionRange,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
   ),
-  [InvokeChannel.getRepositoryComparisonWalkthrough]: defineInvoke(
-    InvokeChannel.getRepositoryComparisonWalkthrough,
-    RepositoryComparisonWalkthroughRequest,
-    Schema.NullOr(StoredWalkthrough),
+  [InvokeChannel.waitForProgressiveReviewRange]: defineInvoke(
+    InvokeChannel.waitForProgressiveReviewRange,
+    ReviewSessionRangeRequest,
+    ReviewSessionRange,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.resolveProgressiveReviewTarget]: defineInvoke(
+    InvokeChannel.resolveProgressiveReviewTarget,
+    ReviewSessionTargetRequest,
+    ResolvedReviewSessionTarget,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.searchProgressiveReview]: defineInvoke(
+    InvokeChannel.searchProgressiveReview,
+    ReviewSessionSearchRequest,
+    Schema.Array(ReviewSessionSearchPublication).pipe(Schema.check(Schema.isMaxLength(1))),
+    { maxRequestBytes: 16 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.startWalkthroughOperation]: defineInvoke(
+    InvokeChannel.startWalkthroughOperation,
+    WalkthroughBridgeStartRequest,
+    WalkthroughStartBridgeResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 64 * KIB },
+  ),
+  [InvokeChannel.getWalkthroughOperation]: defineInvoke(
+    InvokeChannel.getWalkthroughOperation,
+    WalkthroughBridgeOperationRequest,
+    WalkthroughGetOperationBridgeResult,
+    { maxRequestBytes: 2 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.cancelWalkthroughOperation]: defineInvoke(
+    InvokeChannel.cancelWalkthroughOperation,
+    WalkthroughBridgeOperationRequest,
+    WalkthroughCancelBridgeResult,
+    { maxRequestBytes: 2 * KIB, maxResponseBytes: 384 * KIB },
+  ),
+  [InvokeChannel.getStoredWalkthrough]: defineInvoke(
+    InvokeChannel.getStoredWalkthrough,
+    WalkthroughBridgeGetStoredRequest,
+    WalkthroughGetStoredBridgeResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 384 * KIB },
   ),
   [InvokeChannel.drainNavigationCommands]: defineInvoke(
     InvokeChannel.drainNavigationCommands,
@@ -368,6 +431,18 @@ export const InvokeContract = {
     InvokeChannel.repairRepositoryIdentities,
     EmptyRequest,
     RepositoryIdentityRepairSummary,
+  ),
+  [InvokeChannel.resourceDiagnostics]: defineInvoke(
+    InvokeChannel.resourceDiagnostics,
+    EmptyRequest,
+    ResourceDiagnostics,
+    { maxRequestBytes: 1 * KIB, maxResponseBytes: 16 * KIB },
+  ),
+  [InvokeChannel.clearDisposableResources]: defineInvoke(
+    InvokeChannel.clearDisposableResources,
+    EmptyRequest,
+    ClearDisposableResourcesResult,
+    { maxRequestBytes: 1 * KIB, maxResponseBytes: 16 * KIB },
   ),
   [InvokeChannel.selectLocalFolder]: defineInvoke(
     InvokeChannel.selectLocalFolder,
@@ -470,16 +545,6 @@ export const InvokeContract = {
     SetRepositoryComparisonViewedFileRequest,
     EmptyResponse,
   ),
-  [InvokeChannel.generateWalkthrough]: defineInvoke(
-    InvokeChannel.generateWalkthrough,
-    GenerateHostedWalkthroughRequest,
-    StoredWalkthrough,
-  ),
-  [InvokeChannel.getWalkthrough]: defineInvoke(
-    InvokeChannel.getWalkthrough,
-    HostedWalkthroughRequest,
-    Schema.NullOr(StoredWalkthrough),
-  ),
 } as const
 
 const defineEvent = <Channel extends EventChannel, Payload extends BoundarySchema>(
@@ -501,6 +566,11 @@ export const EventContract = {
   [EventChannel.reviewThreadAgentProgress]: defineEvent(
     EventChannel.reviewThreadAgentProgress,
     ReviewAgentProgress,
+  ),
+  [EventChannel.walkthroughOperationHint]: defineEvent(
+    EventChannel.walkthroughOperationHint,
+    WalkthroughOperationBridgeHint,
+    8 * KIB,
   ),
   [EventChannel.updateStateChanged]: defineEvent(EventChannel.updateStateChanged, AppUpdateState),
 } as const

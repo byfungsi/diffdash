@@ -1,10 +1,10 @@
 import type { SelectionSide, VirtualizedFileDiff } from "./pierre"
-import type { TransportError } from "@diffdash/protocol/transport-error"
+import type { ReviewThreadAnnotation } from "./thread-annotations"
 
 /** Finds a rendered Pierre content row without assuming unified or split DOM structure. */
 export const findRenderedDiffLine = (
   host: HTMLElement,
-  instance: VirtualizedFileDiff<TransportError>,
+  instance: VirtualizedFileDiff<ReviewThreadAnnotation>,
   lineNumber: number,
   side: SelectionSide,
 ): HTMLElement | null => {

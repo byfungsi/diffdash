@@ -16,9 +16,9 @@ export interface PayloadStructureLimits {
   readonly maxNodes: number
 }
 
-/** Returns the exact UTF-8 bytes of a bounded JSON-safe payload. */
-export const jsonSafeUtf8ByteLength = (
-  value: JsonPayloadValue,
+/** Returns bounded encoded bytes for a JSON-safe payload with structured-clone binary leaves. */
+export const jsonSafeUtf8ByteLength = <Value extends JsonPayloadValue>(
+  value: Value,
   limits: PayloadStructureLimits = DEFAULT_PAYLOAD_STRUCTURE_LIMITS,
 ): number => {
   validatePositiveSafeInteger(limits.maxDepth, "maxDepth")
@@ -28,6 +28,7 @@ export const jsonSafeUtf8ByteLength = (
     { value, depth: 0 },
   ]
   const seen = new WeakSet()
+  let binaryBytes = 0
   let nodes = 0
 
   while (pending.length > 0) {
@@ -48,6 +49,10 @@ export const jsonSafeUtf8ByteLength = (
     }
     if (!Predicate.isObjectOrArray(item)) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
+    }
+    if (Schema.is(Schema.Uint8Array)(item)) {
+      binaryBytes += item.byteLength
+      continue
     }
     if (seen.has(item)) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must not contain cycles.")
@@ -80,7 +85,9 @@ export const jsonSafeUtf8ByteLength = (
 
   let serialized: string
   try {
-    const result = JSON.stringify(value)
+    const result = JSON.stringify(value, (_key, item) =>
+      Schema.is(Schema.Uint8Array)(item) ? null : item,
+    )
     if (result === undefined) {
       throw transportError("INVALID_PAYLOAD", "IPC payload must be JSON-safe.")
     }
@@ -89,12 +96,12 @@ export const jsonSafeUtf8ByteLength = (
     if (Schema.is(TransportError)(error)) throw error
     throw transportError("INVALID_PAYLOAD", "IPC payload could not be serialized safely.")
   }
-  return utf8ByteLength(serialized)
+  return utf8ByteLength(serialized) + binaryBytes
 }
 
 /** Rejects a JSON-safe payload whose aggregate UTF-8 representation exceeds the byte budget. */
-export const assertJsonPayloadWithinBudget = (
-  value: JsonPayloadValue,
+export const assertJsonPayloadWithinBudget = <Value extends JsonPayloadValue>(
+  value: Value,
   maxBytes: number,
   operation?: string,
 ): number => {

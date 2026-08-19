@@ -51,6 +51,12 @@ const RepositoryIdentityFields = {
   checkout: RepositoryCheckout,
 } as const
 
+/** Favorite-state intent applied while creating or updating a repository. */
+export const RepositoryFavoriteIntent = Schema.Literals(["preserve", "mark"])
+
+/** Favorite-state intent applied while creating or updating a repository. */
+export type RepositoryFavoriteIntent = typeof RepositoryFavoriteIntent.Type
+
 const RepoFields = Schema.Struct({
   ...RepositoryIdentityFields,
   id: ReviewProjectId,
@@ -90,7 +96,9 @@ export class Repo extends Schema.Class<Repo>("Repo")(RepoFields) {
       return `${this.source.locator.namespace}/${this.source.locator.name}`
     }
     if (this.id.startsWith("local:")) return this.id.slice("local:".length)
-    return this.localPath === null ? this.id : repositoryPathBasename(this.localPath)
+    return Schema.is(LinkedCheckout)(this.checkout)
+      ? repositoryPathBasename(this.checkout.path)
+      : this.id
   }
 
   /** Whether this repository has the supplied hosted identity. */
@@ -104,7 +112,7 @@ export class Repo extends Schema.Class<Repo>("Repo")(RepoFields) {
 
 const UpsertRepositoryFields = Schema.Struct({
   ...RepositoryIdentityFields,
-  isFavorite: Schema.optionalKey(Schema.Boolean),
+  favorite: RepositoryFavoriteIntent,
 }).check(
   Schema.makeFilter(
     ({ source, checkout }) =>
@@ -122,23 +130,23 @@ export class UpsertRepositoryInput extends Schema.Class<UpsertRepositoryInput>(
 export const hostedRepositoryInput = (
   locator: HostedRepositoryLocator,
   checkout: RepositoryCheckout,
-  isFavorite?: boolean,
+  favorite: RepositoryFavoriteIntent,
 ): UpsertRepositoryInput =>
   UpsertRepositoryInput.make({
     source: HostedRepositorySource.make({ locator }),
     checkout,
-    ...(isFavorite === undefined ? {} : { isFavorite }),
+    favorite,
   })
 
 /** Builds schema-validated local repository persistence input. */
 export const localRepositoryInput = (
   checkout: LinkedCheckout,
-  isFavorite?: boolean,
+  favorite: RepositoryFavoriteIntent,
 ): UpsertRepositoryInput =>
   UpsertRepositoryInput.make({
     source: LocalRepositorySource.make(),
     checkout,
-    ...(isFavorite === undefined ? {} : { isFavorite }),
+    favorite,
   })
 
 /** Builds a linked checkout while preserving file and hosted remote URL behavior. */

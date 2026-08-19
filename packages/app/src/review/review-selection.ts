@@ -186,10 +186,7 @@ export const projectReviewSelection = ({
         sourceKey,
         refreshing: ready.refreshing,
         review,
-        status:
-          ready.manifest.files.length === 0
-            ? `No local changes in ${ready.manifest.detail.repoName}`
-            : `Opened local changes in ${ready.manifest.detail.repoName}`,
+        status: `Opened local changes in ${ready.manifest.detail.repoName}`,
       }
     },
   })

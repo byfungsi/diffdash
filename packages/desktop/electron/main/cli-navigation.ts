@@ -343,12 +343,7 @@ const parseRepositorySelector = (input: string): CliRepositorySelector | null =>
 
 /** Reports whether a queued command explicitly requests repository identity repair. */
 export const hasRepositoryIdentityRepairCommand = (commands: readonly CliNavigationCommand[]) =>
-  commands.some((command) =>
-    Match.value(command).pipe(
-      Match.when({ _tag: "repairRepositoryIdentities" }, () => true),
-      Match.orElse(() => false),
-    ),
-  )
+  commands.some(Schema.is(RepairRepositoryIdentitiesCommand))
 
 const parseLegacyPathArg = (argv: readonly string[], cwd: string, argumentName: string) => {
   for (let index = 0; index < argv.length; index += 1) {

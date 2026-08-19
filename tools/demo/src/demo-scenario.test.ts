@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 
 import { DiffFileVisibility } from "@diffdash/domain/diff"
-import { isReviewAnchorInParsedDiff } from "@diffdash/domain/review-thread"
 import { WALKTHROUGH_PROMPT_VERSION } from "@diffdash/domain/walkthrough"
 import initialDiff from "../scenarios/atomic-webhook-replay/revisions/01-initial/unified.diff?raw"
 import initialWalkthrough from "../scenarios/atomic-webhook-replay/revisions/01-initial/walkthrough.json?raw"
@@ -15,6 +14,7 @@ import {
   DemoThreadMessageSource,
   DemoThreadSource,
   DemoWalkthroughSource,
+  isDemoReviewAnchorInParsedDiff,
   materializeDemoScenario,
 } from "./demo-scenario"
 import { makeDemoReviewTurn, validateDemoReviewMessage } from "./review-thread-fixtures"
@@ -62,7 +62,7 @@ describe("atomic webhook replay demo scenario", () => {
       expect(details.thread.activeAnchor).not.toBeNull()
       if (details.thread.activeAnchor !== null) {
         expect(
-          isReviewAnchorInParsedDiff(
+          isDemoReviewAnchorInParsedDiff(
             details.thread.activeAnchor,
             scenario.currentRevision.parsedDiff,
           ),
@@ -80,8 +80,8 @@ describe("atomic webhook replay demo scenario", () => {
       const first = yield* loadAtomicWebhookReplayScenario
       const second = yield* loadAtomicWebhookReplayScenario
 
-      expect(second.currentRevision.snapshot.headRevision).toBe(
-        first.currentRevision.snapshot.headRevision,
+      expect(second.currentRevision.manifest.headRevision).toBe(
+        first.currentRevision.manifest.headRevision,
       )
       expect(second.threads[0]?.thread.id).toBe(first.threads[0]?.thread.id)
       expect(second.threads[0]?.thread.createdAt).toBe(first.threads[0]?.thread.createdAt)

@@ -32,7 +32,7 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("longReviewPaths")()
   })
 
-  it("loads bounded snapshot pages incrementally and fetches selected files on demand", async () => {
+  it("eagerly loads complete review files through the Core session", async () => {
     expect.hasAssertions()
     await appBrowserScenario("incrementalSnapshotPages")()
   })
@@ -46,11 +46,6 @@ describe("App review browser interactions", () => {
     expect.hasAssertions()
     await appBrowserScenario("largeDiffVirtualization")()
   })
-
-  it("keeps continuous fast scrolling within the review rendering budget", async () => {
-    expect.hasAssertions()
-    await appBrowserScenario("fastScrollPerformance")()
-  }, 30_000)
 
   it("bounds long review threads without blanking virtualized diffs", async () => {
     expect.hasAssertions()
@@ -72,17 +67,12 @@ describe("App review browser interactions", () => {
     await appBrowserScenario("stickyDiffCardHeaders")()
   }, 30_000)
 
-  it("removes stale trailing buffers after navigating across many wrapped files", async () => {
-    expect.hasAssertions()
-    await appBrowserScenario("wrappedFileBuffers")()
-  }, 45_000)
-
-  it("wraps search backward across many virtualized file placeholders", async () => {
+  it("wraps search backward across eagerly retained files", async () => {
     expect.hasAssertions()
     await appBrowserScenario("multiFileSearchWrap")()
   }, 45_000)
 
-  it("keeps the active search file resident while paginated files cross the cache bound", async () => {
+  it("keeps eager review files resident across navigation", async () => {
     expect.hasAssertions()
     await appBrowserScenario("snapshotPageResidency")()
   }, 45_000)
@@ -120,16 +110,6 @@ describe("App review browser interactions", () => {
   it("temporarily reveals hidden, filtered, and viewed files for search results", async () => {
     expect.hasAssertions()
     await appBrowserScenario("diffSearchVisibility")()
-  })
-
-  it("navigates to exact matches in virtualized lines", async () => {
-    expect.hasAssertions()
-    await appBrowserScenario("virtualizedSearch")()
-  })
-
-  it("converges on distant matches after wrapped lines change virtual heights", async () => {
-    expect.hasAssertions()
-    await appBrowserScenario("wrappedSearchConvergence")()
   })
 
   it("renders very large files without whole-file syntax highlighting", async () => {

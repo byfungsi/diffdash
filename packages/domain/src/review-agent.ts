@@ -1,4 +1,4 @@
-import { Predicate, Result, Schema } from "effect"
+import { Predicate, Result, Schema, SchemaGetter } from "effect"
 export { AgentRunId } from "./agent-run-id"
 export { ReviewAgentProviderId } from "./review-agent-provider-id"
 export {
@@ -16,8 +16,6 @@ import {
   ReviewAgentProviderRunId,
   ReviewAgentUsage,
 } from "./review-agent-run-data"
-
-type ProviderOwnedValue = Schema.Json | object | bigint | symbol | undefined
 
 /** Provider-neutral lifecycle stages shown while a review agent turn is running. */
 export const ReviewAgentProgressStage = Schema.Literals([
@@ -60,6 +58,42 @@ export class ReviewThreadAgentResponse extends Schema.Class<ReviewThreadAgentRes
   threadSummaryUpdate: Schema.optional(Schema.String.pipe(Schema.check(Schema.isMinLength(1)))),
   referencedAnchors: Schema.optional(Schema.Array(ReviewAnchor)),
 }) {}
+
+const EncodedReviewThreadAgentResponse = Schema.Struct({
+  bodyMarkdown: Schema.String,
+  threadSummary: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  threadSummaryUpdate: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  referencedLocations: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Json))),
+  referencedAnchors: Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.Json))),
+})
+
+/** Provider response codec accepting legacy fields while decoding to the canonical domain shape. */
+export const ReviewThreadAgentResponseFromProvider = EncodedReviewThreadAgentResponse.pipe(
+  Schema.decodeTo(ReviewThreadAgentResponse, {
+    decode: SchemaGetter.transform((value) => {
+      const rawAnchors = value.referencedLocations ?? value.referencedAnchors ?? []
+      const referencedAnchors = rawAnchors.flatMap<ReviewAnchor>((anchor) => {
+        const decoded = decodeReviewAnchor(anchor)
+        return decoded === null ? [] : [decoded]
+      })
+      const threadSummaryUpdate = value.threadSummary ?? value.threadSummaryUpdate
+      const response: {
+        bodyMarkdown: string
+        threadSummaryUpdate?: string
+        referencedAnchors: readonly ReviewAnchor[]
+      } = { bodyMarkdown: value.bodyMarkdown, referencedAnchors }
+      if (threadSummaryUpdate !== null && threadSummaryUpdate !== undefined) {
+        response.threadSummaryUpdate = threadSummaryUpdate
+      }
+      return response
+    }),
+    encode: SchemaGetter.transform((response) => ({
+      bodyMarkdown: response.bodyMarkdown,
+      threadSummaryUpdate: response.threadSummaryUpdate ?? null,
+      referencedAnchors: response.referencedAnchors ?? null,
+    })),
+  }),
+)
 
 /** Strict JSON Schema accepted by every provider's review structured-output API. */
 export const REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA = {
@@ -109,7 +143,7 @@ export const REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA = {
 } as const
 
 /** Decodes a raw or JSON-stringified value into a validated review anchor. */
-export const decodeReviewAnchor = (value: ProviderOwnedValue): ReviewAnchor | null => {
+export const decodeReviewAnchor = <Value>(value: Value): ReviewAnchor | null => {
   const serialized = Predicate.isString(value) ? value : reviewAgentJsonContent(value)
   try {
     const parsed = Schema.decodeUnknownResult(Schema.Json)(JSON.parse(serialized))
@@ -118,28 +152,6 @@ export const decodeReviewAnchor = (value: ProviderOwnedValue): ReviewAnchor | nu
     return Result.isSuccess(decoded) ? decoded.success : null
   } catch {
     return null
-  }
-}
-
-/** Converts current and legacy provider fields into the canonical review-agent response shape. */
-export const normalizeReviewThreadAgentResponse = (
-  value: ProviderOwnedValue,
-): ProviderOwnedValue => {
-  if (!Predicate.isReadonlyObject(value)) return value
-  const rawAnchors = value.referencedLocations ?? value.referencedAnchors ?? []
-  const referencedAnchors = Array.isArray(rawAnchors)
-    ? rawAnchors.flatMap((anchor) => {
-        const decoded = decodeReviewAnchor(anchor)
-        return decoded === null ? [] : [decoded]
-      })
-    : rawAnchors
-  const threadSummaryUpdate = value.threadSummary ?? value.threadSummaryUpdate
-  return {
-    bodyMarkdown: value.bodyMarkdown,
-    ...(threadSummaryUpdate === null || threadSummaryUpdate === undefined
-      ? {}
-      : { threadSummaryUpdate }),
-    referencedAnchors,
   }
 }
 
@@ -155,11 +167,11 @@ function reviewAnchorJsonSchema(
   }
 }
 
-const reviewAgentJsonContent = (value: ProviderOwnedValue): string => {
+const reviewAgentJsonContent = <Value>(value: Value): string => {
   if (Predicate.isString(value)) return value
   const ancestors: object[] = []
   try {
-    const serialized = JSON.stringify(value, function (_key, nestedValue: ProviderOwnedValue) {
+    const serialized = JSON.stringify(value, function (_key, nestedValue) {
       if (Predicate.isBigInt(nestedValue)) return `${nestedValue.toString()}n`
       if (!Predicate.isObjectOrArray(nestedValue)) return nestedValue
       while (ancestors.length > 0 && ancestors.at(-1) !== this) ancestors.pop()

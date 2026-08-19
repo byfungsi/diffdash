@@ -2,6 +2,8 @@
 export const InvokeChannel = {
   analyticsCapture: "analytics:capture",
   analyticsStart: "analytics:start",
+  e2eReviewLifecycleDiagnostics: "e2e:reviewLifecycleDiagnostics",
+  e2eHoldNextReviewAcquisition: "e2e:holdNextReviewAcquisition",
   agentProvidersGetCatalog: "agentProviders:getCatalog",
   appDiagnostics: "app:diagnostics",
   appInstallDiffDashCli: "app:installDiffDashCli",
@@ -25,12 +27,18 @@ export const InvokeChannel = {
   acquireHostedReviewSnapshot: "reviewSnapshots:acquireHosted",
   acquireLocalReviewSnapshot: "reviewSnapshots:acquireLocal",
   acquireRepositoryComparisonSnapshot: "reviewSnapshots:acquireRepositoryComparison",
-  getReviewSnapshotPage: "reviewSnapshots:getPage",
-  searchReviewSnapshot: "reviewSnapshots:search",
-  generateLocalWalkthrough: "localWalkthroughs:generate",
-  getLocalWalkthrough: "localWalkthroughs:get",
-  generateRepositoryComparisonWalkthrough: "repositoryComparisonWalkthroughs:generate",
-  getRepositoryComparisonWalkthrough: "repositoryComparisonWalkthroughs:get",
+  openProgressiveReviewSession: "progressiveReviews:openSession",
+  getProgressiveReviewSession: "progressiveReviews:currentSession",
+  closeProgressiveReviewSession: "progressiveReviews:closeSession",
+  getProgressiveReviewInventory: "progressiveReviews:inventory",
+  readProgressiveReviewRange: "progressiveReviews:readRange",
+  waitForProgressiveReviewRange: "progressiveReviews:waitForRange",
+  resolveProgressiveReviewTarget: "progressiveReviews:resolveTarget",
+  searchProgressiveReview: "progressiveReviews:search",
+  startWalkthroughOperation: "walkthroughOperations:start",
+  getWalkthroughOperation: "walkthroughOperations:getOperation",
+  cancelWalkthroughOperation: "walkthroughOperations:cancel",
+  getStoredWalkthrough: "walkthroughOperations:getStored",
   drainNavigationCommands: "navigation:drainCommands",
   favoriteRemoteRepository: "repositories:favoriteRemote",
   forgetRepository: "repositories:forget",
@@ -39,6 +47,8 @@ export const InvokeChannel = {
   listRepositories: "repositories:list",
   openProject: "repositories:openProject",
   repairRepositoryIdentities: "repositories:repairIdentities",
+  resourceDiagnostics: "resources:diagnostics",
+  clearDisposableResources: "resources:clearDisposable",
   selectLocalFolder: "repositories:selectLocalFolder",
   setRepositoryFavorite: "repositories:setFavorite",
   projectWorkspaceGet: "projectWorkspace:get",
@@ -60,8 +70,6 @@ export const InvokeChannel = {
   setLocalViewedFile: "viewedFiles:setLocal",
   listRepositoryComparisonViewedFiles: "viewedFiles:listRepositoryComparison",
   setRepositoryComparisonViewedFile: "viewedFiles:setRepositoryComparison",
-  generateWalkthrough: "walkthroughs:generate",
-  getWalkthrough: "walkthroughs:get",
 } as const
 
 /** One valid renderer-to-host invoke channel. */
@@ -71,6 +79,7 @@ export type InvokeChannel = (typeof InvokeChannel)[keyof typeof InvokeChannel]
 export const EventChannel = {
   navigationCommandsAvailable: "navigation:commandsAvailable",
   reviewThreadAgentProgress: "reviewThreads:agentProgress",
+  walkthroughOperationHint: "walkthroughOperations:hint",
   updateStateChanged: "updates:stateChanged",
 } as const
 

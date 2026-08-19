@@ -37,9 +37,9 @@ import {
   WebUrl,
 } from "@diffdash/agent-provider"
 import {
-  normalizeReviewThreadAgentResponse as normalizeResponse,
   REVIEW_THREAD_AGENT_RESPONSE_JSON_SCHEMA as reviewResponseJsonSchema,
   ReviewThreadAgentResponse,
+  ReviewThreadAgentResponseFromProvider,
 } from "@diffdash/domain/review-agent"
 import { parseProviderJsonText } from "@diffdash/agent-provider/provider-json"
 import { makeNonMutatingAgentExecutionPolicy } from "@diffdash/agent-provider/policy"
@@ -179,11 +179,14 @@ export const resolveOpenCodeExecutable = (
   const openCodeBin = home.length > 0 ? join(home, ".opencode", "bin") : ""
   const normalizedPath =
     openCodeBin.length === 0 ? guiPath : [openCodeBin, guiPath].filter(Boolean).join(delimiter)
-  return findExecutableInPath(executable, {
-    envPath: normalizedPath,
-    ...(options.pathExt === undefined ? {} : { pathExt: options.pathExt }),
-    ...(options.platform === undefined ? {} : { platform: options.platform }),
-  })
+  const executableOptions: {
+    envPath: string
+    pathExt?: string
+    platform?: NodeJS.Platform
+  } = { envPath: normalizedPath }
+  if (options.pathExt !== undefined) executableOptions.pathExt = options.pathExt
+  if (options.platform !== undefined) executableOptions.platform = options.platform
+  return findExecutableInPath(executable, executableOptions)
 }
 
 /** Creates the complete OpenCode SDK registration. */
@@ -274,11 +277,17 @@ const writePromptFile = (
   prompt: string,
 ) =>
   tempResources
-    .makeTempFileScoped(prompt, {
-      ...(directory === undefined ? {} : { parentDirectory: directory }),
-      prefix: "opencode-prompt-",
-      fileName: "prompt.txt",
-    })
+    .makeTempFileScoped(
+      prompt,
+      directory === undefined
+        ? { prefix: "opencode-prompt-", fileName: "prompt.txt", resourceClass: "agentTemp" }
+        : {
+            parentDirectory: directory,
+            prefix: "opencode-prompt-",
+            fileName: "prompt.txt",
+            resourceClass: "agentTemp",
+          },
+    )
     .pipe(Effect.mapError(operationErrors.fromCause("walkthrough")))
 
 const executeReview = (
@@ -391,17 +400,18 @@ const startOpenCode = (dependencies: OpenCodeProviderDependencies, config: Confi
         }),
       )
       .pipe(
-        Stream.runForEach((event) => {
-          return Match.value(event).pipe(
-            Match.when({ _tag: "ProcessLine", source: "stdout" }, (line) => {
+        Stream.runForEach((event) =>
+          Match.valueTags(event, {
+            ProcessLine: (line) => {
+              if (line.source !== "stdout") return Effect.void
               const match = /^opencode server listening.*on\s+(https?:\/\/[^\s]+)/u.exec(line.line)
               return match?.[1] === undefined
                 ? Effect.void
                 : Deferred.succeed(ready, match[1]).pipe(Effect.asVoid)
-            }),
-            Match.orElse(() => Effect.void),
-          )
-        }),
+            },
+            ProcessExit: () => Effect.void,
+          }),
+        ),
         Effect.mapError(operationErrors.fromCause("review-thread")),
         Effect.tapError((cause) => Deferred.fail(ready, cause).pipe(Effect.ignore)),
         Effect.tap(() =>
@@ -677,7 +687,7 @@ const decodeReviewResponse = (
   output: OpenCodeTurnOutput,
 ): Effect.Effect<ReviewThreadAgentResponse, InvalidAgentProviderResponseError> => {
   const candidate = output.structured === null ? parseTextResponse(output.parts) : output.structured
-  return Schema.decodeUnknownEffect(ReviewThreadAgentResponse)(normalizeResponse(candidate)).pipe(
+  return Schema.decodeUnknownEffect(ReviewThreadAgentResponseFromProvider)(candidate).pipe(
     Effect.mapError((cause) =>
       InvalidAgentProviderResponseError.make({
         providerId,

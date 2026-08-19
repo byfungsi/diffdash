@@ -1,23 +1,9 @@
 import { Context, Effect, Layer, Option, Schema } from "effect"
 
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import {
-  ChangedFile,
-  HostedRepositorySource,
-  makeHostedRepositoryLocator,
-} from "@diffdash/domain/git-provider"
+import { HostedRepositorySource, makeHostedRepositoryLocator } from "@diffdash/domain/git-provider"
 import { ProjectRemoteSelectionRequired } from "@diffdash/domain/project-workspace"
-import {
-  makeRepositoryComparisonReviewKey,
-  RepositoryComparisonDetail,
-  RepositoryComparisonDiff,
-  repositoryComparisonBaseRevision,
-  repositoryComparisonHeadRevision,
-  RepositoryComparisonTarget,
-} from "@diffdash/domain/repository-comparison"
+import { RepositoryComparisonTarget } from "@diffdash/domain/repository-comparison"
 import { RepositoryCheckoutPath, type Repo } from "@diffdash/domain/repository"
-import { RepositoryComparisonSnapshot } from "@diffdash/domain/review-context"
-import { makeReviewDiffIdentity, makeReviewSnapshotId } from "@diffdash/domain/review-identity"
 import {
   HostedReviewWorkspacePool,
   HostedReviewWorkspacePoolError,
@@ -25,10 +11,11 @@ import {
 import type { OpenRepositoryComparisonCommand } from "@diffdash/protocol/cli-navigation"
 import { CoreAbsolutePath } from "../core-configuration"
 import { GitProvider } from "./git-provider"
-import { RepositoryLinker } from "./repository-linker"
+import { RepositoryLinker, RepositorySelectionIntent } from "./repository-linker"
 import { CoreExpectedCause, toCoreExpectedCause } from "../core-error-cause"
 
-const RepositoryComparisonOperation = Schema.String.pipe(
+/** Stable internal operation label retained by repository-comparison failures. */
+export const RepositoryComparisonOperation = Schema.String.pipe(
   Schema.brand("RepositoryComparisonOperation"),
 )
 
@@ -62,9 +49,6 @@ export class RepositoryComparisonSource extends Context.Service<
     readonly repository: (
       target: RepositoryComparisonTarget,
     ) => Effect.Effect<Repo, RepositoryComparisonSourceError>
-    readonly acquire: (
-      target: RepositoryComparisonTarget,
-    ) => Effect.Effect<RepositoryComparisonSnapshot, RepositoryComparisonSourceError>
     readonly useWorkspace: <A, E>(
       target: RepositoryComparisonTarget,
       run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
@@ -173,47 +157,6 @@ export class RepositoryComparisonSource extends Context.Service<
         } as const
       })
 
-      const acquire = Effect.fn("RepositoryComparisonSource.acquire")(function* (
-        target: RepositoryComparisonTarget,
-      ) {
-        const { input } = yield* comparisonInput(target)
-        const diff = yield* workspaces
-          .readComparisonDiff(input)
-          .pipe(Effect.mapError(mapWorkspaceError))
-        const parsedDiff = parseUnifiedDiff(diff)
-        const fetchedAt = new Date().toISOString()
-        const reviewKey = makeRepositoryComparisonReviewKey(target)
-        const baseRevision = repositoryComparisonBaseRevision(target)
-        const headRevision = repositoryComparisonHeadRevision(target)
-        const diffIdentity = makeReviewDiffIdentity(diff)
-        return RepositoryComparisonSnapshot.make({
-          snapshotId: makeReviewSnapshotId({
-            reviewKey,
-            baseRevision,
-            headRevision,
-            diffIdentity,
-          }),
-          reviewKey,
-          baseRevision,
-          headRevision,
-          detail: RepositoryComparisonDetail.make({
-            target,
-            title: `${target.baseRef}...${target.headRef}`,
-            files: parsedDiff.files.map((file) =>
-              ChangedFile.make({
-                path: file.path,
-                additions: file.additions,
-                deletions: file.deletions,
-                changeType: file.status,
-              }),
-            ),
-            fetchedAt,
-          }),
-          diff: RepositoryComparisonDiff.make({ target, diff, fetchedAt }),
-          parsedDiff,
-        })
-      })
-
       const useWorkspace = <A, E>(
         target: RepositoryComparisonTarget,
         run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
@@ -225,7 +168,7 @@ export class RepositoryComparisonSource extends Context.Service<
           ),
         )
 
-      return RepositoryComparisonSource.of({ acquire, repository, resolve, useWorkspace })
+      return RepositoryComparisonSource.of({ repository, resolve, useWorkspace })
     }),
   )
 }
@@ -236,34 +179,39 @@ const resolveSavedRepository = (
 ) => {
   const selector = command.repository
   if (selector === null) {
-    return repositories.openProject(RepositoryCheckoutPath.make(command.localPath)).pipe(
-      Effect.mapError((cause) =>
-        sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
-      ),
-      Effect.flatMap((result) => {
-        if (Schema.is(ProjectRemoteSelectionRequired)(result)) {
-          return sourceError(
-            "repository-ambiguous",
-            "resolve.currentRepository",
-            "The current repository has multiple recognized remotes. Pass --repository=provider:namespace/name.",
-            new Error(
-              `Ambiguous current repository remotes: ${result.candidates
-                .map(({ remoteName }) => remoteName)
-                .join(", ")}`,
-            ),
-          )
-        }
-        if (!Schema.is(HostedRepositorySource)(result.repo.source)) {
-          return sourceError(
-            "repository-not-found",
-            "resolve.currentRepository",
-            "The current repository has no recognized hosted remote. Save a hosted repository and pass --repository=provider:namespace/name.",
-            new Error("Current repository has no hosted identity"),
-          )
-        }
-        return Effect.succeed(result.repo)
-      }),
-    )
+    return repositories
+      .openProject(
+        RepositoryCheckoutPath.make(command.localPath),
+        RepositorySelectionIntent.Automatic(),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          sourceError("acquisition-failed", "resolve.currentRepository", cause.reason, cause),
+        ),
+        Effect.flatMap((result) => {
+          if (Schema.is(ProjectRemoteSelectionRequired)(result)) {
+            return sourceError(
+              "repository-ambiguous",
+              "resolve.currentRepository",
+              "The current repository has multiple recognized remotes. Pass --repository=provider:namespace/name.",
+              new Error(
+                `Ambiguous current repository remotes: ${result.candidates
+                  .map(({ remoteName }) => remoteName)
+                  .join(", ")}`,
+              ),
+            )
+          }
+          if (!Schema.is(HostedRepositorySource)(result.repo.source)) {
+            return sourceError(
+              "repository-not-found",
+              "resolve.currentRepository",
+              "The current repository has no recognized hosted remote. Save a hosted repository and pass --repository=provider:namespace/name.",
+              new Error("Current repository has no hosted identity"),
+            )
+          }
+          return Effect.succeed(result.repo)
+        }),
+      )
   }
   if (selector.providerId !== null) {
     const requested = makeHostedRepositoryLocator(

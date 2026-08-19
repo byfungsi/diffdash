@@ -1,5 +1,4 @@
-import { AgentProviderId } from "@diffdash/agent-provider"
-import { makeAgentProviderOperationErrorFactory } from "@diffdash/agent-provider/runtime"
+import { AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AISettings, DEFAULT_AI_SETTINGS } from "@diffdash/domain/ai-settings"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
 import { LocalRepositorySource } from "@diffdash/domain/git-provider"
@@ -8,7 +7,9 @@ import { LinkedCheckout, Repo, RepositoryCheckoutPath } from "@diffdash/domain/r
 import { ReviewAgentProviderId } from "@diffdash/domain/review-agent-provider-id"
 import { WebUrl } from "@diffdash/domain/web-url"
 import { ReviewProjectId } from "@diffdash/domain/review-identity"
-import { ProcessExitError } from "@diffdash/process"
+import { ReviewKey, ReviewSnapshotId } from "@diffdash/domain/review-identity"
+import { ApplicationInstanceId, CoreProcessEpoch, HostRequestId } from "@diffdash/core-rpc/identity"
+import { CoreReviewSessionFailure } from "@diffdash/core-rpc/review-session"
 import type { AppUpdateState } from "@diffdash/protocol/app-update"
 import { AppUpdateFailed, AppUpdateIdle } from "@diffdash/protocol/app-update"
 import { EventChannel, InvokeChannel } from "@diffdash/protocol/channels"
@@ -23,6 +24,14 @@ import {
 } from "@diffdash/protocol/ipc"
 import type { BridgeResult } from "@diffdash/protocol/ipc"
 import { jsonSafeUtf8ByteLength } from "@diffdash/protocol/payload-budget"
+import { WalkthroughStartBridgeResult } from "@diffdash/protocol/walkthrough-operation"
+import {
+  WalkthroughCancelBridgeResult,
+  WalkthroughGetOperationBridgeFailure,
+  WalkthroughGetOperationBridgeResult,
+  WalkthroughGetStoredBridgeResult,
+  WalkthroughOperationBridgeHint,
+} from "@diffdash/protocol/walkthrough-operation-state"
 import {
   TransportError,
   TransportErrorDiagnosticTrace,
@@ -39,23 +48,14 @@ import { createRendererSecurityPolicy } from "./main/electron-policy"
 import {
   makeDesktopHostConfiguration,
   productionDesktopStartupConfiguration,
+  RendererEntry,
 } from "./main/desktop-host-configuration"
 import { defineIpcHandlers } from "./main/ipc/controllers"
 import { IpcControllerRegistry } from "./main/ipc/controllers/controller-registry"
-import { toPublicWalkthroughError } from "./main/ipc/walkthrough-public-error"
 import { sendProtocolEvent } from "./main/ipc/transport"
 import { createShutdown } from "./main/shutdown"
 import type { RendererIpc } from "./preload/transport"
 import { createRendererTransport } from "./preload/transport"
-
-const claudeOperationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: AgentProviderId.make("claude"),
-  fallbackReason: "Claude execution failed",
-})
-const codexOperationErrors = makeAgentProviderOperationErrorFactory({
-  providerId: AgentProviderId.make("codex"),
-  fallbackReason: "Codex execution failed",
-})
 
 describe("IPC contract", () => {
   it("has one schema contract for every protocol-owned invoke channel", () => {
@@ -68,18 +68,6 @@ describe("IPC contract", () => {
     expect(Object.values(CoreMethodChannel).every((channel) => channel in InvokeContract)).toBe(
       true,
     )
-  })
-
-  it("preserves nullable stored-walkthrough misses at the IPC boundary", () => {
-    const walkthroughChannels = [
-      InvokeChannel.getWalkthrough,
-      InvokeChannel.getLocalWalkthrough,
-      InvokeChannel.getRepositoryComparisonWalkthrough,
-    ] as const
-
-    for (const channel of walkthroughChannels) {
-      expect(Schema.decodeUnknownSync(invokeResponseSchema(channel))(null)).toBeNull()
-    }
   })
 
   it("defines and installs every application handler exactly once", () => {
@@ -102,6 +90,183 @@ describe("IPC contract", () => {
 
     expect([...host.installed.keys()]).toEqual(Object.values(InvokeChannel))
     expect(host.handle).toHaveBeenCalledTimes(Object.values(InvokeChannel).length)
+  })
+
+  it("forwards durable walkthrough commands once and relays correlated hints", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const baseRuntime = testRuntime("Walkthrough operation test must not invoke other handlers")
+    const accepted = Schema.decodeUnknownSync(WalkthroughStartBridgeResult)({
+      _tag: "Success",
+      value: {
+        applicationInstanceId: "app-ipc",
+        processEpoch: "epoch-ipc",
+        requestId: "h:start-ipc",
+        operationId: "operation-ipc",
+        stateVersion: 1,
+        created: true,
+      },
+    })
+    const getError = Schema.decodeUnknownSync(WalkthroughGetOperationBridgeFailure)({
+      _tag: "WalkthroughPublicFailure",
+      applicationInstanceId: "app-ipc",
+      processEpoch: "epoch-ipc",
+      requestId: "h:get-ipc",
+      method: "Walkthroughs.getOperation",
+      operationId: "operation-ipc",
+      code: "WALKTHROUGH_OPERATION_NOT_FOUND",
+      providerId: null,
+      modelId: null,
+      retryClass: "notRetryable",
+      remediation: "none",
+      safeMessage: "The walkthrough operation no longer exists.",
+      attempts: [],
+      diagnostic: null,
+    })
+    const getFailure = Schema.decodeUnknownSync(WalkthroughGetOperationBridgeResult)({
+      _tag: "Failure",
+      error: getError,
+    })
+    const cancelFailure = Schema.decodeUnknownSync(WalkthroughCancelBridgeResult)({
+      _tag: "Failure",
+      error: { ...getError, requestId: "h:cancel-ipc", method: "Walkthroughs.cancel" },
+    })
+    const stored = Schema.decodeUnknownSync(WalkthroughGetStoredBridgeResult)({
+      _tag: "Success",
+      value: { status: "notFound" },
+    })
+    const hint = Schema.decodeUnknownSync(WalkthroughOperationBridgeHint)({
+      applicationInstanceId: "app-ipc",
+      processEpoch: "epoch-ipc",
+      sequence: 2,
+      operationId: "operation-ipc",
+      stateVersion: 3,
+      kind: "operationTerminal",
+    })
+    const start = vi.fn<ApplicationRuntime["walkthroughOperations"]["start"]>(async () => accepted)
+    const getOperation = vi.fn<ApplicationRuntime["walkthroughOperations"]["getOperation"]>(
+      async () => getFailure,
+    )
+    const cancel = vi.fn<ApplicationRuntime["walkthroughOperations"]["cancel"]>(
+      async () => cancelFailure,
+    )
+    const getStored = vi.fn<ApplicationRuntime["walkthroughOperations"]["getStored"]>(
+      async () => stored,
+    )
+    const replayHints = vi.fn<ApplicationRuntime["walkthroughOperations"]["replayHints"]>(
+      async () => [hint],
+    )
+    const runtime: ApplicationRuntime = {
+      ...baseRuntime,
+      walkthroughOperations: { start, getOperation, cancel, getStored, replayHints },
+    }
+    defineIpcHandlers(
+      runtime,
+      testUpdater(),
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() }),
+      testHostConfiguration(),
+    )
+    registry.install()
+    const event = trustedEvent()
+    const startRequest = {
+      target: { kind: "local", rootPath: "/workspace/repo", comparison: { _tag: "workingTree" } },
+      regenerate: false,
+      idempotencyKey: "w:renderer-retained-key",
+    } as const
+
+    const startHandler = host.installed.get(InvokeChannel.startWalkthroughOperation)
+    await expect(startHandler?.(event, startRequest)).resolves.toMatchObject({
+      _tag: "Success",
+      value: { _tag: "Success", value: { created: true, stateVersion: 1 } },
+    })
+    await startHandler?.(event, startRequest)
+    expect(start).toHaveBeenCalledTimes(2)
+    expect(start.mock.calls.map(([request]) => request.idempotencyKey)).toEqual([
+      "w:renderer-retained-key",
+      "w:renderer-retained-key",
+    ])
+    expect(getOperation).not.toHaveBeenCalled()
+
+    await host.installed.get(InvokeChannel.getWalkthroughOperation)?.(event, {
+      operationId: "operation-ipc",
+    })
+    await host.installed.get(InvokeChannel.cancelWalkthroughOperation)?.(event, {
+      operationId: "operation-ipc",
+    })
+    await host.installed.get(InvokeChannel.getStoredWalkthrough)?.(event, {
+      target: startRequest.target,
+    })
+    expect(getOperation).toHaveBeenCalledOnce()
+    expect(cancel).toHaveBeenCalledOnce()
+    expect(getStored).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(replayHints).toHaveBeenCalledTimes(5))
+    expect(event.sender.send).toHaveBeenCalledWith(
+      EventChannel.walkthroughOperationHint,
+      expect.objectContaining({ operationId: "operation-ipc", stateVersion: 3 }),
+    )
+  })
+
+  it("forwards E2E lifecycle diagnostics through dedicated desktop channels", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const baseRuntime = testRuntime("E2E lifecycle test must not invoke other handlers")
+    const lifecycle = {
+      acquisitions: {
+        activeOperationIds: [],
+        started: 1,
+        completed: 0,
+        superseded: 1,
+        drained: 1,
+        failed: 0,
+        lastStartedOperationId: "core:prior",
+        lastSupersededOperationId: "core:prior",
+        lastDrainedOperationId: "core:prior",
+      },
+      sessions: {
+        activeSessionId: "session:replacement",
+        opened: 2,
+        disposed: 1,
+        lastDisposedSessionId: "session:prior",
+      },
+    } as const
+    const runtime: ApplicationRuntime = {
+      ...baseRuntime,
+      core: {
+        ...baseRuntime.core,
+        e2eReviewLifecycleDiagnostics: async () => lifecycle,
+        e2eHoldNextReviewAcquisition: async () => ({ armed: true }),
+      },
+    }
+    const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
+    defineIpcHandlers(
+      runtime,
+      testUpdater(),
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      shutdown,
+      testHostConfiguration(),
+    )
+    registry.install()
+
+    const diagnosticsHandler = host.installed.get(InvokeChannel.e2eReviewLifecycleDiagnostics)
+    const holdHandler = host.installed.get(InvokeChannel.e2eHoldNextReviewAcquisition)
+    if (diagnosticsHandler === undefined || holdHandler === undefined) {
+      throw new Error("E2E lifecycle IPC handlers were not installed")
+    }
+    await expect(diagnosticsHandler(trustedEvent(), {})).resolves.toEqual({
+      _tag: "Success",
+      value: lifecycle,
+    })
+    await expect(holdHandler(trustedEvent(), {})).resolves.toEqual({
+      _tag: "Success",
+      value: { armed: true },
+    })
   })
 
   it("exposes no unknown or prototype-named channels through the installed Electron router", () => {
@@ -239,7 +404,7 @@ describe("IPC contract", () => {
       error: transportError(
         "AgentProviderAuthenticationError",
         "Authentication is required.",
-        "walkthroughs:generate",
+        "Walkthroughs.start",
         diagnostic,
         providerFailure,
       ),
@@ -254,92 +419,11 @@ describe("IPC contract", () => {
       error: {
         code: "AgentProviderAuthenticationError",
         message: "Authentication is required.",
-        operation: "walkthroughs:generate",
+        operation: "Walkthroughs.start",
         diagnostic,
         providerFailure,
       },
     })
-  })
-
-  it.each([
-    {
-      channel: InvokeChannel.generateWalkthrough,
-      request: {
-        review: {
-          repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
-          number: 1,
-        },
-        regenerate: false,
-      },
-    },
-    {
-      channel: InvokeChannel.generateLocalWalkthrough,
-      request: {
-        target: {
-          kind: "local",
-          rootPath: "/workspace/repo",
-          comparison: { _tag: "workingTree" },
-        },
-        regenerate: false,
-      },
-    },
-    {
-      channel: InvokeChannel.generateRepositoryComparisonWalkthrough,
-      request: {
-        target: {
-          kind: "repositoryComparison",
-          repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
-          baseRef: "main",
-          headRef: "feature",
-          baseSha: "a".repeat(40),
-          headSha: "b".repeat(40),
-          mergeBaseSha: "c".repeat(40),
-        },
-        regenerate: false,
-      },
-    },
-  ] as const)("applies safe walkthrough diagnostics to $channel", async ({ channel, request }) => {
-    const host = hostIpc()
-    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [channel])
-    registry.define(
-      channel,
-      async () => {
-        throw claudeOperationErrors.fromCause("walkthrough")(
-          ProcessExitError.make({
-            command: "claude",
-            args: ["--print", "private prompt"],
-            cwd: "/Users/example/secret-repository",
-            exitCode: 9,
-            signal: null,
-            stdout: "private stdout",
-            stderr: "Please sign in before retrying.",
-            stdoutTruncated: false,
-            stderrTruncated: false,
-            outputTruncated: false,
-            message: "Command exited with code 9",
-          }),
-        )
-      },
-      toPublicWalkthroughError,
-    )
-    registry.install()
-
-    const response = await host.handler?.(trustedEvent(), request)
-    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
-
-    expect(envelope.error).toMatchObject({
-      code: "AgentProviderAuthenticationError",
-      operation: channel,
-      diagnostic: {
-        provider: "claude",
-        causeTag: "ProcessExitError",
-        exitCode: 9,
-      },
-    })
-    const serialized = JSON.stringify(envelope)
-    expect(serialized).not.toContain("secret-repository")
-    expect(serialized).not.toContain("private prompt")
-    expect(serialized).not.toContain("private stdout")
   })
 
   it("accepts a failure envelope at the exact preload response boundary and rejects one byte over", async () => {
@@ -531,6 +615,56 @@ describe("IPC contract", () => {
     })
   })
 
+  it("maps typed progressive review failures to safe renderer diagnostics", async () => {
+    const host = hostIpc()
+    const rendererSecurityPolicy = testRendererSecurityPolicy()
+    const registry = new IpcControllerRegistry(rendererSecurityPolicy, host.api)
+    const baseRuntime = testRuntime("Progressive failure test must not invoke other handlers")
+    const failure = CoreReviewSessionFailure.make({
+      applicationInstanceId: ApplicationInstanceId.make("app"),
+      processEpoch: CoreProcessEpoch.make("epoch"),
+      requestId: HostRequestId.make("h:request"),
+      method: "Reviews.openSession",
+      code: "REVIEW_SNAPSHOT_NOT_FOUND",
+      retryClass: "userAction",
+      safeMessage: "The requested review snapshot no longer exists.",
+    })
+    const runtime: ApplicationRuntime = {
+      ...baseRuntime,
+      progressiveReviews: {
+        ...baseRuntime.progressiveReviews,
+        openSession: async () => Promise.reject(failure),
+      },
+    }
+    const shutdown = createShutdown({ dispose: runtime.dispose, quit: vi.fn<() => void>() })
+    defineIpcHandlers(
+      runtime,
+      testUpdater(),
+      registry,
+      { peek: () => [], acknowledge: () => undefined },
+      rendererSecurityPolicy,
+      shutdown,
+      testHostConfiguration(),
+    )
+    registry.install()
+
+    const response = await host.installed.get(InvokeChannel.openProgressiveReviewSession)?.(
+      trustedEvent(),
+      {
+        projectId: ReviewProjectId.make("project"),
+        reviewKey: ReviewKey.make("review"),
+        snapshotId: ReviewSnapshotId.make("snapshot:v1:00000000000000000000000000000001"),
+      },
+    )
+    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
+
+    expect(envelope.error).toMatchObject({
+      code: "REVIEW_SNAPSHOT_NOT_FOUND",
+      message: "The requested review snapshot no longer exists.",
+      operation: InvokeChannel.openProgressiveReviewSession,
+    })
+  })
+
   it("redacts unknown controller errors before encoding the failure envelope", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
@@ -548,71 +682,6 @@ describe("IPC contract", () => {
       code: "INTERNAL_ERROR",
       message: UNKNOWN_TRANSPORT_ERROR_MESSAGE,
     })
-  })
-
-  it("preserves safe walkthrough diagnostics through the controller registry", async () => {
-    const host = hostIpc()
-    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
-      InvokeChannel.generateLocalWalkthrough,
-    ])
-    registry.define(
-      InvokeChannel.generateLocalWalkthrough,
-      async () => {
-        throw codexOperationErrors.fromCause("walkthrough")(
-          new Error("private provider cause in /Users/example/secret-repository"),
-        )
-      },
-      toPublicWalkthroughError,
-    )
-    registry.install()
-
-    const response = await host.handler?.(trustedEvent(), {
-      target: {
-        kind: "local",
-        rootPath: "/workspace/repo",
-        comparison: { _tag: "workingTree" },
-      },
-      regenerate: false,
-    })
-    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
-
-    expect(envelope.error).toMatchObject({
-      code: "AgentProviderOperationError",
-      message: "Provider codex could not complete walkthrough generation.",
-      operation: InvokeChannel.generateLocalWalkthrough,
-    })
-    expect(JSON.stringify(envelope)).not.toContain("private provider cause")
-    expect(JSON.stringify(envelope)).not.toContain("secret-repository")
-  })
-
-  it("applies safe walkthrough diagnostics to hosted generation", async () => {
-    const host = hostIpc()
-    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
-      InvokeChannel.generateWalkthrough,
-    ])
-    registry.define(
-      InvokeChannel.generateWalkthrough,
-      async () => {
-        throw codexOperationErrors.fromReason("walkthrough", "private provider stderr")
-      },
-      toPublicWalkthroughError,
-    )
-    registry.install()
-
-    const response = await host.handler?.(trustedEvent(), {
-      review: {
-        repository: { providerId: "github", namespace: "fungsi", name: "diffdash" },
-        number: 1,
-      },
-      regenerate: false,
-    })
-    const envelope = Schema.decodeUnknownSync(FailureEnvelope)(response)
-
-    expect(envelope.error).toMatchObject({
-      code: "AgentProviderOperationError",
-      operation: InvokeChannel.generateWalkthrough,
-    })
-    expect(JSON.stringify(envelope)).not.toContain("private provider stderr")
   })
 
   it("returns a structured failure when an encoded controller response exceeds its budget", async () => {
@@ -760,6 +829,24 @@ describe("IPC contract", () => {
     expect(envelope.value).toEqual(AppUpdateIdle.make({ currentVersion: "0.3.1" }))
   })
 
+  it("normalizes class responses decoded by the external Core bundle", async () => {
+    const host = hostIpc()
+    const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
+      InvokeChannel.updatesGetState,
+    ])
+    registry.define(InvokeChannel.updatesGetState, async () =>
+      structuredClone(AppUpdateIdle.make({ currentVersion: "0.3.1" })),
+    )
+    registry.install()
+
+    const response = await host.handler?.(trustedEvent(), {})
+
+    expect(response).toEqual({
+      _tag: "Success",
+      value: { _tag: "idle", currentVersion: "0.3.1" },
+    })
+  })
+
   it("encodes successful void responses as JSON null", async () => {
     const host = hostIpc()
     const registry = new IpcControllerRegistry(testRendererSecurityPolicy(), host.api, [
@@ -785,21 +872,12 @@ describe("IPC contract", () => {
       InvokeChannel.analyticsCapture,
     ])
     const execute = vi.fn<
-      (
-        method: typeof CoreMethod.analyticsCapture,
-        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
-      ) => Promise<void>
-    >(
-      async (
-        method: typeof CoreMethod.analyticsCapture,
-        input: InvokeRequest<typeof InvokeChannel.analyticsCapture>,
-      ): Promise<void> => {
-        expect(method).toBe(CoreMethod.analyticsCapture)
-        expect(input).toEqual({
-          event: { event: "review_opened", reviewType: "pull_request" },
-        })
-      },
-    )
+      (input: InvokeRequest<typeof InvokeChannel.analyticsCapture>) => Promise<void>
+    >(async (input: InvokeRequest<typeof InvokeChannel.analyticsCapture>): Promise<void> => {
+      expect(input).toEqual({
+        event: { event: "review_opened", reviewType: "pull_request" },
+      })
+    })
     registry.defineCore(CoreMethod.analyticsCapture, execute)
     registry.install()
 
@@ -869,6 +947,7 @@ const trustedEvent = (url = "http://localhost:5173/") => {
       mainFrame: frame,
       isDestroyed: () => false,
       getURL: () => url,
+      send: vi.fn<(channel: string, payload: object) => void>(),
     },
   }
   // SAFETY: This minimal Electron event fake supplies every property read by sender validation.
@@ -877,11 +956,12 @@ const trustedEvent = (url = "http://localhost:5173/") => {
 
 const testRendererSecurityPolicy = () =>
   createRendererSecurityPolicy({
-    developmentRendererUrl: "http://localhost:5173",
-    isPackaged: false,
     isTrustedWebContents: () => true,
     openExternal: async () => undefined,
-    packagedRendererUrl: "file:///app/renderer/index.html",
+    rendererEntry: Schema.decodeUnknownSync(RendererEntry)({
+      _tag: "DevelopmentRendererEntry",
+      url: "http://localhost:5173",
+    }),
   })
 
 const testHostConfiguration = () =>
@@ -919,24 +999,81 @@ const testUpdater = (): DesktopUpdater => ({
   dispose: () => Effect.void,
 })
 
-const testRuntime = (message: string): ApplicationRuntime => ({
-  start: async () => undefined,
-  dispose: async () => undefined,
-  execute: async () => {
+const testRuntime = (message: string): ApplicationRuntime => {
+  const reject = async (): Promise<never> => {
     throw new Error(message)
-  },
-  walkthroughs: {
-    start: async () => {
-      throw new Error(message)
+  }
+  return {
+    start: async () => undefined,
+    dispose: async () => undefined,
+    core: {
+      analyticsCapture: reject,
+      analyticsStart: reject,
+      agentProvidersGetCatalog: reject,
+      appDiagnostics: reject,
+      appInstallDiffDashCli: reject,
+      appOpenLocalRepositoryFile: reject,
+      appOpenRepositoryComparisonFile: reject,
+      appOpenRepositoryFile: reject,
+      appStateGet: reject,
+      appStateUpdate: reject,
+      e2eReviewLifecycleDiagnostics: reject,
+      e2eHoldNextReviewAcquisition: reject,
+      listProviders: reject,
+      submitHostedReviewDecision: reject,
+      getHostedReviewDecision: reject,
+      listHostedReviews: reject,
+      listAssignedHostedReviews: reject,
+      listHostedRepositorySearchScopes: reject,
+      searchHostedRepositories: reject,
+      resolveLocalBranch: reject,
+      resolveLastCommit: reject,
+      resolveRepositoryComparison: reject,
+      acquireHostedReviewSnapshot: reject,
+      acquireLocalReviewSnapshot: reject,
+      acquireRepositoryComparisonSnapshot: reject,
+      favoriteRemoteRepository: reject,
+      forgetRepository: reject,
+      installRepository: reject,
+      linkRepository: reject,
+      listRepositories: reject,
+      openProject: reject,
+      repairRepositoryIdentities: reject,
+      resourceDiagnostics: reject,
+      clearDisposableResources: reject,
+      setRepositoryFavorite: reject,
+      projectWorkspaceGet: reject,
+      projectWorkspaceSave: reject,
+      addReviewThreadUserMessage: reject,
+      createReviewThread: reject,
+      getReviewThread: reject,
+      listReviewThreads: reject,
+      runReviewThreadAgent: reject,
+      settingsGet: reject,
+      settingsUpdate: reject,
+      listViewedFiles: reject,
+      listLocalViewedFiles: reject,
+      setViewedFile: reject,
+      setLocalViewedFile: reject,
+      listRepositoryComparisonViewedFiles: reject,
+      setRepositoryComparisonViewedFile: reject,
     },
-    getOperation: async () => {
-      throw new Error(message)
+    walkthroughOperations: {
+      start: reject,
+      getOperation: reject,
+      cancel: reject,
+      getStored: reject,
+      replayHints: reject,
     },
-    cancel: async () => {
-      throw new Error(message)
+    progressiveReviews: {
+      openSession: reject,
+      currentSession: reject,
+      closeSession: reject,
+      inventory: reject,
+      readRange: reject,
+      waitForRange: reject,
+      resolveTarget: reject,
+      search: reject,
     },
-    getStored: async () => {
-      throw new Error(message)
-    },
-  },
-})
+  }
+}

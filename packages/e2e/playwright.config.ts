@@ -1,5 +1,8 @@
 import { defineConfig } from "@playwright/test"
 
+// Forced-host matrix scripts override this default to qualify Bun independently.
+process.env.DIFFDASH_E2E_CORE_HOST ??= "utility"
+
 export default defineConfig({
   testDir: "tests",
   outputDir: "test-results",

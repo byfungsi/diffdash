@@ -1,4 +1,3 @@
-import { CoreMethod, type CoreConfiguration, type CoreConfigurationError } from "@diffdash/core"
 import { Effect, Predicate } from "effect"
 import {
   app,
@@ -12,7 +11,10 @@ import type { ApplicationRuntime } from "./application-runtime"
 import { disposeApplicationResources } from "./application-resources"
 import { createApplicationUpdater } from "./application-updater"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
-import type { DesktopHostConfiguration } from "./desktop-host-configuration"
+import type {
+  DesktopHostConfiguration,
+  DesktopHostConfigurationError,
+} from "./desktop-host-configuration"
 import { createRendererSecurityPolicy } from "./electron-policy"
 import type { RendererSecurityPolicy } from "./electron-policy"
 import { installIpcControllers } from "./ipc/controllers"
@@ -99,13 +101,11 @@ const start = async (
   }
 
   const rendererSecurityPolicy = createRendererSecurityPolicy({
-    developmentRendererUrl: configuration.renderer.developmentUrl,
-    isPackaged: configuration.application.packaged,
     isTrustedWebContents: (webContents) => webContents === mainWindow?.webContents,
     openExternal: (url) => shell.openExternal(url),
-    packagedRendererUrl: configuration.renderer.packagedUrl,
+    rendererEntry: configuration.renderer,
   })
-  const applicationRuntime = composition.createApplicationRuntime(configuration.core)
+  const applicationRuntime = composition.createApplicationRuntime(configuration)
   const updater = createApplicationUpdater(configuration)
   const shutdown = createShutdown({
     dispose: () => disposeApplicationResources(updater, applicationRuntime),
@@ -125,8 +125,8 @@ const start = async (
   const shouldRepairOnStartup = !hasRepositoryIdentityRepairCommand(navigation.commands.peek())
   activateMainWindow()
   if (shouldRepairOnStartup) {
-    void applicationRuntime
-      .execute(CoreMethod.repairRepositoryIdentities, {})
+    void applicationRuntime.core
+      .repairRepositoryIdentities({})
       .then((result) => {
         console.info(
           `[repositories:repair] resolved=${result.resolvedCount} unresolved=${result.unresolvedCount} localAliases=${result.localAliasCount}`,
@@ -145,10 +145,10 @@ const start = async (
 
 /** Required runtime wiring selected by the concrete production or E2E entrypoint. */
 export interface DesktopApplicationComposition {
-  readonly createApplicationRuntime: (configuration: CoreConfiguration) => ApplicationRuntime
+  readonly createApplicationRuntime: (configuration: DesktopHostConfiguration) => ApplicationRuntime
   readonly resolveHostConfiguration: (
     identity: ApplicationIdentity,
-  ) => Effect.Effect<DesktopHostConfiguration, CoreConfigurationError>
+  ) => Effect.Effect<DesktopHostConfiguration, DesktopHostConfigurationError>
 }
 
 /** Starts Electron startup and top-level lifecycle handling. */

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Context, Effect, Fiber, Layer, Match, Option, Schema, Stream } from "effect"
+import { Context, Effect, Fiber, Layer, Match, Option, Result, Schema, Stream } from "effect"
 
 import {
   makeHostedRepositoryKey,
@@ -12,7 +12,12 @@ import type { AgentRunId, ReviewAgentProgressStage } from "@diffdash/domain/revi
 import type { ReviewRevision } from "@diffdash/domain/review-identity"
 import type { ReviewThreadId } from "@diffdash/domain/review-thread"
 import type { HostedReviewCheckoutSpec } from "@diffdash/git-provider"
-import { ProcessService, type ProcessResult, type ProcessRunner } from "@diffdash/process"
+import {
+  ProcessExitError,
+  ProcessService,
+  type ProcessResult,
+  type ProcessRunner,
+} from "@diffdash/process"
 import { gitProcessRequest } from "./git-environment"
 import { isProcessAlive, withFileLock } from "./hosted-review-workspace-file-lock"
 import { completeWithFinalizer } from "./hosted-review-workspace-finalizer"
@@ -20,6 +25,7 @@ import {
   type Manifest,
   type Slot,
   mutateManifest,
+  updateManifest,
   updateSlot,
 } from "./hosted-review-workspace-manifest"
 import {
@@ -56,6 +62,10 @@ export interface HostedReviewWorkspaceLease {
   readonly slotId: string
 }
 
+interface PreparedHostedReviewWorkspaceLease extends HostedReviewWorkspaceLease {
+  readonly reviewRef: CreatedReviewRef
+}
+
 /** Input required to pin one immutable repository comparison. */
 export interface HostedRepositoryComparisonInput {
   readonly repository: HostedRepositoryLocator
@@ -73,6 +83,125 @@ export interface PinnedRepositoryComparison {
   readonly baseSha: GitCommitSha
   readonly headSha: GitCommitSha
   readonly mergeBaseSha: GitCommitSha
+}
+
+/** One exact ref created and verified by the hosted-review producer. */
+export interface CreatedReviewRef {
+  readonly repositoryPath: string
+  readonly ref: string
+  readonly targetSha: GitCommitSha
+}
+
+/** Lifecycle authority installed by Core for producer-created review refs. */
+export interface ReviewRefLifecycle {
+  readonly manage: <A, E, R>(
+    refs: readonly CreatedReviewRef[],
+    use: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError, R>
+}
+
+const ReviewRefIdentity = Schema.Struct({
+  version: Schema.Literal(1),
+  repositoryPath: Schema.String,
+  ref: Schema.String,
+  targetSha: GitCommitSha,
+})
+
+/** Encodes an adapter-owned identity for one verified producer-created ref. */
+export const encodeReviewRefIdentity = (resource: CreatedReviewRef): string =>
+  JSON.stringify({ version: 1, ...resource })
+
+/** Git mutation authority for cataloged hosted-review refs. */
+export class ReviewRefMutation extends Context.Service<
+  ReviewRefMutation,
+  {
+    readonly mutate: (
+      operation: "quarantine" | "delete",
+      identity: string,
+    ) => Effect.Effect<void, HostedReviewWorkspacePoolError>
+  }
+>()("@diffdash/ReviewRefMutation") {
+  /** Builds ref mutation constrained to the two configured managed pools. */
+  static readonly layer = (config: {
+    readonly worktreePoolPath: RepositoryCheckoutPath
+    readonly remoteWorktreePoolPath: RepositoryCheckoutPath
+  }) =>
+    Layer.effect(
+      ReviewRefMutation,
+      Effect.gen(function* () {
+        const processes = yield* ProcessService
+        const filesystems = yield* Effect.all([
+          makeManagedWorkspaceFilesystem(config.worktreePoolPath),
+          makeManagedWorkspaceFilesystem(config.remoteWorktreePoolPath),
+        ])
+        return ReviewRefMutation.of({
+          mutate: Effect.fn("ReviewRefMutation.mutate")(function* (operation, identity) {
+            const decoded = yield* Schema.decodeUnknownEffect(ReviewRefIdentity)(
+              yield* Effect.try({
+                try: () => JSON.parse(identity),
+                catch: (cause) =>
+                  poolError(
+                    "filesystem",
+                    "reviewRef.identity",
+                    "A cataloged review ref has an invalid identity.",
+                    toError(cause),
+                  ),
+              }),
+            ).pipe(
+              Effect.mapError((cause) =>
+                poolError(
+                  "filesystem",
+                  "reviewRef.identity",
+                  "A cataloged review ref has an invalid identity.",
+                  cause,
+                ),
+              ),
+            )
+            if (!isManagedReviewRef(decoded.ref)) {
+              yield* poolError(
+                "filesystem",
+                "reviewRef.validate",
+                "A cataloged review ref is outside DiffDash's managed namespaces.",
+                new Error(`Ref is not managed: ${decoded.ref}`),
+              )
+            }
+            const repository = yield* firstManagedRepository(filesystems, decoded.repositoryPath)
+            if (operation === "quarantine") {
+              const current = yield* runManagedGit(
+                repository.filesystem,
+                [repository.path],
+                processes,
+                ["--git-dir", repository.path, "show-ref", "--verify", "--hash", decoded.ref],
+              ).pipe(Effect.result)
+              if (Result.isFailure(current)) {
+                if (
+                  !Schema.is(ProcessExitError)(current.failure.cause) ||
+                  current.failure.cause.exitCode !== 1
+                ) {
+                  yield* current.failure
+                }
+              } else if (current.success.stdout.trim() !== decoded.targetSha) {
+                yield* poolError(
+                  "git",
+                  "reviewRef.quarantine",
+                  "A cataloged review ref changed after DiffDash created it.",
+                  new Error(`Ref target changed: ${decoded.ref}`),
+                )
+              }
+            } else {
+              yield* runManagedGit(repository.filesystem, [repository.path], processes, [
+                "--git-dir",
+                repository.path,
+                "update-ref",
+                "-d",
+                decoded.ref,
+                decoded.targetSha,
+              ])
+            }
+          }),
+        })
+      }),
+    )
 }
 
 /** Input required to read or materialize an already pinned comparison. */
@@ -114,6 +243,7 @@ export class HostedReviewWorkspacePool extends Context.Service<
   static readonly layer = (config: {
     readonly worktreePoolPath: RepositoryCheckoutPath
     readonly remoteWorktreePoolPath: RepositoryCheckoutPath
+    readonly reviewRefs?: ReviewRefLifecycle
   }) =>
     Layer.effect(
       HostedReviewWorkspacePool,
@@ -136,10 +266,17 @@ export class HostedReviewWorkspacePool extends Context.Service<
             Effect.gen(function* () {
               yield* reportProgress(onProgress, "reserving-workspace")
               const lease = yield* restore(
-                reserveAndPrepare(filesystem, instanceId, processes, input, onProgress),
+                reserveAndPrepare(
+                  filesystem,
+                  instanceId,
+                  processes,
+                  input,
+                  config.reviewRefs,
+                  onProgress,
+                ),
               )
               return yield* completeWithFinalizer(
-                restore(run(lease)),
+                manageReviewRefs(config.reviewRefs, [lease.reviewRef], restore(run(lease))),
                 completeWithFinalizer(
                   restoreAndRelease(filesystem, processes, input, lease),
                   restore(reportProgress(onProgress, "restoring-workspace")),
@@ -190,11 +327,17 @@ export class HostedReviewWorkspacePool extends Context.Service<
                     new Error("Repository comparison revisions changed during acquisition"),
                   )
                 }
-                yield* retainComparisonCommits(filesystem, processes, barePath, second)
+                const refs = yield* retainComparisonCommits(
+                  filesystem,
+                  processes,
+                  barePath,
+                  second,
+                  config.reviewRefs,
+                )
                 if (input.sourcePath === null) {
                   yield* recordRemoteRepositoryUse(filesystem, input.repository, false)
                 }
-                return second
+                return yield* manageReviewRefs(config.reviewRefs, refs, Effect.succeed(second))
               }),
             REPOSITORY_LOCK_TIMEOUT_MS,
           )
@@ -213,40 +356,50 @@ export class HostedReviewWorkspacePool extends Context.Service<
               Effect.gen(function* () {
                 const barePath = yield* prepareBareRepository(filesystem, processes, input)
                 yield* verifyPinnedComparison(filesystem, processes, barePath, input)
-                yield* retainComparisonCommits(filesystem, processes, barePath, input)
+                const refs = yield* retainComparisonCommits(
+                  filesystem,
+                  processes,
+                  barePath,
+                  input,
+                  config.reviewRefs,
+                )
                 yield* filesystem.validate(barePath, "comparison.diff.path")
-                return yield* processes
-                  .run(
-                    gitProcessRequest(
-                      [
-                        "--git-dir",
-                        barePath,
-                        "diff",
-                        "--no-ext-diff",
-                        input.mergeBaseSha,
-                        input.headSha,
-                        "--",
-                      ],
-                      {
-                        timeoutMs: GIT_TIMEOUT_MS,
-                        stdout: {
-                          maxBytes: VERY_LARGE_DIFF_CHARACTER_THRESHOLD * 4,
-                          overflow: "error",
+                return yield* manageReviewRefs(
+                  config.reviewRefs,
+                  refs,
+                  processes
+                    .run(
+                      gitProcessRequest(
+                        [
+                          "--git-dir",
+                          barePath,
+                          "diff",
+                          "--no-ext-diff",
+                          input.mergeBaseSha,
+                          input.headSha,
+                          "--",
+                        ],
+                        {
+                          timeoutMs: GIT_TIMEOUT_MS,
+                          stdout: {
+                            maxBytes: VERY_LARGE_DIFF_CHARACTER_THRESHOLD * 4,
+                            overflow: "error",
+                          },
                         },
-                      },
-                    ),
-                  )
-                  .pipe(
-                    Effect.map((result) => result.stdout),
-                    Effect.mapError((cause) =>
-                      poolError(
-                        "git",
-                        "comparison.diff",
-                        "DiffDash could not read the pinned repository comparison.",
-                        cause,
+                      ),
+                    )
+                    .pipe(
+                      Effect.map((result) => result.stdout),
+                      Effect.mapError((cause) =>
+                        poolError(
+                          "git",
+                          "comparison.diff",
+                          "DiffDash could not read the pinned repository comparison.",
+                          cause,
+                        ),
                       ),
                     ),
-                  )
+                )
               }),
             REPOSITORY_LOCK_TIMEOUT_MS,
           )
@@ -266,14 +419,20 @@ export class HostedReviewWorkspacePool extends Context.Service<
 
           return Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-              const barePath = yield* withFileLock(
+              const prepared = yield* withFileLock(
                 filesystem,
                 filesystem.child(repositoryRoot, "repository.lock"),
                 () =>
                   Effect.gen(function* () {
                     const bare = yield* prepareBareRepository(filesystem, processes, input)
                     yield* verifyPinnedComparison(filesystem, processes, bare, input)
-                    yield* retainComparisonCommits(filesystem, processes, bare, input)
+                    const refs = yield* retainComparisonCommits(
+                      filesystem,
+                      processes,
+                      bare,
+                      input,
+                      config.reviewRefs,
+                    )
                     yield* filesystem.ensureDirectory(workspaceRoot, "comparison.workspace.mkdir")
                     yield* recreateWorktree(
                       filesystem,
@@ -282,16 +441,20 @@ export class HostedReviewWorkspacePool extends Context.Service<
                       workspacePath,
                       input.headSha,
                     )
-                    return bare
+                    return { barePath: bare, refs }
                   }),
                 REPOSITORY_LOCK_TIMEOUT_MS,
               )
               return yield* completeWithFinalizer(
-                restore(run(RepositoryCheckoutPath.make(workspacePath))),
+                manageReviewRefs(
+                  config.reviewRefs,
+                  prepared.refs,
+                  restore(run(RepositoryCheckoutPath.make(workspacePath))),
+                ),
                 withFileLock(
                   filesystem,
                   filesystem.child(repositoryRoot, "repository.lock"),
-                  () => removeWorktree(filesystem, processes, barePath, workspacePath),
+                  () => removeWorktree(filesystem, processes, prepared.barePath, workspacePath),
                   REPOSITORY_LOCK_TIMEOUT_MS,
                 ),
               )
@@ -328,6 +491,7 @@ const reserveAndPrepare = (
   instanceId: string,
   processes: ProcessRunner,
   input: HostedReviewWorkspaceInput,
+  reviewRefs: ReviewRefLifecycle | undefined,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
@@ -335,8 +499,15 @@ const reserveAndPrepare = (
       reserveSlot(manifest, instanceId, input),
     )
 
-    const prepared = prepareSlot(filesystem, processes, input, reservation, onProgress).pipe(
-      Effect.flatMap((headSha) =>
+    const prepared = prepareSlot(
+      filesystem,
+      processes,
+      input,
+      reservation,
+      reviewRefs,
+      onProgress,
+    ).pipe(
+      Effect.flatMap(({ headSha, reviewRef }) =>
         mutateManifest(filesystem, (manifest) => ({
           manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
             ...slot,
@@ -348,22 +519,22 @@ const reserveAndPrepare = (
           value: {
             localPath: RepositoryCheckoutPath.make(pathForSlot(filesystem, reservation.slot)),
             headSha,
+            reviewRef,
             slotId: reservation.slot.id,
-          } satisfies HostedReviewWorkspaceLease,
+          } satisfies PreparedHostedReviewWorkspaceLease,
         })),
       ),
     )
 
     const quarantine = (reason: string) =>
-      mutateManifest(filesystem, (manifest) => ({
-        manifest: updateSlot(manifest, reservation.slot.id, (slot) => ({
+      updateManifest(filesystem, (manifest) =>
+        updateSlot(manifest, reservation.slot.id, (slot) => ({
           ...slot,
           state: "quarantined",
           lease: null,
           lastError: reason,
         })),
-        value: undefined,
-      }))
+      )
 
     return yield* prepared.pipe(
       Effect.interruptible,
@@ -379,6 +550,7 @@ const prepareSlot = (
   processes: ProcessRunner,
   input: HostedReviewWorkspaceInput,
   reservation: Reservation,
+  reviewRefs: ReviewRefLifecycle | undefined,
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) => {
   const repositoryKey = makeHostedRepositoryKey(input.checkout.repository)
@@ -414,7 +586,7 @@ const prepareSlot = (
               onProgress,
             )
 
-            const fetchedRef = `refs/diffdash/reviews/${input.checkout.review.number}/head`
+            const fetchedRef = `refs/diffdash/reviews/${input.checkout.review.number}/heads/${randomUUID()}`
             yield* reportProgress(onProgress, "fetching-review-revision")
             yield* runManagedGit(filesystem, [barePath], processes, [
               "--git-dir",
@@ -441,6 +613,8 @@ const prepareSlot = (
                 new Error(`Expected ${input.checkout.revision}, fetched ${fetchedSha}`),
               )
             }
+            const reviewRef = createdReviewRef(barePath, fetchedRef, fetchedSha)
+            yield* manageReviewRefs(reviewRefs, [reviewRef], Effect.void)
 
             yield* reportProgress(onProgress, "checking-out-revision")
             yield* recreateWorktree(
@@ -452,7 +626,7 @@ const prepareSlot = (
             )
             if (input.sourcePath === null)
               yield* recordRemoteRepositoryUse(filesystem, input.checkout.repository, false)
-            return fetchedSha
+            return { headSha: fetchedSha, reviewRef }
           }),
         REPOSITORY_LOCK_TIMEOUT_MS,
       ),
@@ -726,19 +900,61 @@ const retainComparisonCommits = (
   processes: ProcessRunner,
   barePath: ManagedWorkspacePath,
   comparison: PinnedRepositoryComparison,
+  reviewRefs: ReviewRefLifecycle | undefined,
 ) =>
   Effect.forEach(
     [comparison.baseSha, comparison.headSha, comparison.mergeBaseSha],
-    (sha) =>
-      runManagedGit(filesystem, [barePath], processes, [
+    (sha) => {
+      const ref = `${COMPARISON_COMMIT_PREFIX}${sha}/${randomUUID()}`
+      return runManagedGit(filesystem, [barePath], processes, [
         "--git-dir",
         barePath,
         "update-ref",
-        `${COMPARISON_COMMIT_PREFIX}${sha}`,
+        ref,
         sha,
-      ]),
-    { discard: true },
+      ]).pipe(
+        Effect.as(createdReviewRef(barePath, ref, sha)),
+        Effect.tap((capture) => manageReviewRefs(reviewRefs, [capture], Effect.void)),
+      )
+    },
+    { concurrency: 1 },
   )
+
+const createdReviewRef = (
+  repositoryPath: string,
+  ref: string,
+  targetSha: GitCommitSha,
+): CreatedReviewRef => ({ repositoryPath, ref, targetSha })
+
+const manageReviewRefs = <A, E, R>(
+  lifecycle: ReviewRefLifecycle | undefined,
+  refs: readonly CreatedReviewRef[],
+  use: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> =>
+  lifecycle === undefined ? use : lifecycle.manage(refs, use)
+
+const isManagedReviewRef = (ref: string): boolean =>
+  /^refs\/diffdash\/reviews\/[1-9][0-9]*\/heads\/[0-9a-f-]{36}$/u.test(ref) ||
+  /^refs\/diffdash\/comparisons\/commits\/[0-9a-f]{40}(?:[0-9a-f]{24})?\/[0-9a-f-]{36}$/iu.test(ref)
+
+const firstManagedRepository = (
+  filesystems: readonly ManagedWorkspaceFilesystem[],
+  repositoryPath: string,
+) =>
+  Effect.gen(function* () {
+    for (const filesystem of filesystems) {
+      const candidate = yield* filesystem
+        .existingPath(repositoryPath, "reviewRef.repository")
+        .pipe(Effect.option)
+      if (Option.isSome(candidate)) return { filesystem, path: candidate.value }
+    }
+    return yield* poolError(
+      "filesystem",
+      "reviewRef.repository",
+      "A cataloged review ref is outside the configured managed pools.",
+      new Error(`Repository is not managed: ${repositoryPath}`),
+    )
+  })
 
 const verifyPinnedComparison = (
   filesystem: ManagedWorkspaceFilesystem,
@@ -768,10 +984,9 @@ const restoreAndRelease = (
   lease: HostedReviewWorkspaceLease,
 ) =>
   Effect.gen(function* () {
-    yield* mutateManifest(filesystem, (manifest) => ({
-      manifest: updateSlot(manifest, lease.slotId, (slot) => ({ ...slot, state: "cleaning" })),
-      value: undefined,
-    }))
+    yield* updateManifest(filesystem, (manifest) =>
+      updateSlot(manifest, lease.slotId, (slot) => ({ ...slot, state: "cleaning" })),
+    )
     const repositoryRoot = pathForRepository(
       filesystem,
       makeHostedRepositoryKey(input.checkout.repository),
@@ -807,18 +1022,17 @@ const restoreAndRelease = (
     return yield* cleanup.pipe(
       Effect.matchEffect({
         onFailure: (cause) =>
-          mutateManifest(filesystem, (manifest) => ({
-            manifest: updateSlot(manifest, lease.slotId, (slot) => ({
+          updateManifest(filesystem, (manifest) =>
+            updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "quarantined",
               lease: null,
               lastError: cause.reason,
             })),
-            value: undefined,
-          })).pipe(Effect.andThen(Effect.fail(cause))),
+          ).pipe(Effect.andThen(Effect.fail(cause))),
         onSuccess: () =>
-          mutateManifest(filesystem, (manifest) => ({
-            manifest: updateSlot(manifest, lease.slotId, (slot) => ({
+          updateManifest(filesystem, (manifest) =>
+            updateSlot(manifest, lease.slotId, (slot) => ({
               ...slot,
               state: "available",
               lease: null,
@@ -826,8 +1040,7 @@ const restoreAndRelease = (
               lastUsedAt: new Date().toISOString(),
               lastError: null,
             })),
-            value: undefined,
-          })),
+          ),
       }),
     )
   })
@@ -1131,7 +1344,7 @@ const recordRemoteRepositoryUse = (
   repositoryLocator: HostedRepositoryLocator,
   cloned: boolean,
 ) =>
-  mutateManifest(filesystem, (manifest) => {
+  updateManifest(filesystem, (manifest) => {
     const now = new Date().toISOString()
     const repositoryKey = makeHostedRepositoryKey(repositoryLocator)
     const existing = manifest.repositories.find((item) => item.repositoryKey === repositoryKey)
@@ -1142,16 +1355,13 @@ const recordRemoteRepositoryUse = (
       lastUsedAt: now,
     }
     return {
-      manifest: {
-        ...manifest,
-        repositories:
-          existing === undefined
-            ? [...manifest.repositories, repository]
-            : manifest.repositories.map((item) =>
-                item.repositoryKey === repositoryKey ? repository : item,
-              ),
-      },
-      value: undefined,
+      ...manifest,
+      repositories:
+        existing === undefined
+          ? [...manifest.repositories, repository]
+          : manifest.repositories.map((item) =>
+              item.repositoryKey === repositoryKey ? repository : item,
+            ),
     }
   })
 

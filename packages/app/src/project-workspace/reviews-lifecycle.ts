@@ -39,7 +39,7 @@ export const projectLocalReviewsLifecycle = (
   if (AsyncResult.isSuccess(result)) {
     if (result.value === null) return { _tag: "loading" }
     const refresh = AsyncResult.isWaiting(result) ? "refreshing" : "idle"
-    return result.value.files.length === 0
+    return result.value.fileCount === 0
       ? { _tag: "empty", refresh }
       : { _tag: "ready", data: result.value, refresh }
   }

@@ -1,4 +1,15 @@
-import { Context, Effect, Layer, Match, Predicate, Queue, Schema, Stream } from "effect"
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Match,
+  Predicate,
+  Queue,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect"
 
 import {
   BoundedOutput,
@@ -11,6 +22,7 @@ import {
   type ResolvedProcessOptions,
   type NodeProcessTerminal,
   type SpawnProcessInput,
+  type ProcessStreamMetricsTracker,
 } from "./subprocess"
 
 /** Default retained stdout bytes for captured commands and stream diagnostics. */
@@ -39,6 +51,15 @@ export const defaultMaxStreamEvents = 20_000
 
 /** Default number of line events buffered between the process and a stream consumer. */
 export const defaultMaxBufferedEvents = 16
+
+/** Default maximum bytes emitted in one raw subprocess stream chunk. */
+export const defaultMaxByteChunkBytes = 64 * 1024
+
+/** Default resident byte budget for a raw subprocess stream queue. */
+export const defaultMaxBufferedBytes = 1024 * 1024
+
+/** Default downstream byte reservation held between the process queue and stream consumer. */
+export const defaultMaxReservedBytes = 1024 * 1024
 
 /** Identifies the subprocess output channel that produced bytes or a complete line. */
 export const ProcessOutputSource = Schema.Literals(["stdout", "stderr"])
@@ -74,6 +95,9 @@ export interface ProcessRequestOptions {
   readonly maxStreamBytes?: number
   readonly maxStreamEvents?: number
   readonly maxBufferedEvents?: number
+  readonly maxByteChunkBytes?: number
+  readonly maxBufferedBytes?: number
+  readonly maxReservedBytes?: number
 }
 
 /** Complete immutable request for one finite local process execution. */
@@ -94,6 +118,9 @@ export class ProcessRequest extends Schema.Class<ProcessRequest>("ProcessRequest
   maxStreamBytes: Schema.NullOr(Schema.Number),
   maxStreamEvents: Schema.NullOr(Schema.Number),
   maxBufferedEvents: Schema.NullOr(Schema.Number),
+  maxByteChunkBytes: Schema.NullOr(Schema.Number),
+  maxBufferedBytes: Schema.NullOr(Schema.Number),
+  maxReservedBytes: Schema.NullOr(Schema.Number),
 }) {}
 
 /** Creates one process request while preserving optional caller overrides. */
@@ -119,6 +146,9 @@ export const processRequest = (
     maxStreamBytes: options.maxStreamBytes ?? null,
     maxStreamEvents: options.maxStreamEvents ?? null,
     maxBufferedEvents: options.maxBufferedEvents ?? null,
+    maxByteChunkBytes: options.maxByteChunkBytes ?? null,
+    maxBufferedBytes: options.maxBufferedBytes ?? null,
+    maxReservedBytes: options.maxReservedBytes ?? null,
   })
 
 /** Captured output from a completed process. */
@@ -151,6 +181,35 @@ export const ProcessEvent = Schema.Union([ProcessLine, ProcessExit])
 
 /** Ordered line or successful terminal event from a streamed process. */
 export type ProcessEvent = typeof ProcessEvent.Type
+
+/** One bounded raw stdout chunk. The bytes are copied and never alias Node's read buffer. */
+export interface ProcessByteChunk {
+  readonly _tag: "ProcessByteChunk"
+  readonly bytes: Uint8Array
+}
+
+/** Ordered raw stdout chunk or successful terminal event. */
+export type ProcessByteEvent = ProcessByteChunk | ProcessExit
+
+/** Point-in-time byte-stream pressure measurements for diagnostics and scale tests. */
+export interface ProcessStreamMetrics {
+  readonly queueBytes: number
+  readonly queueDepth: number
+  readonly blockedDurationMs: number
+  readonly cancellationAgeMs: number
+  readonly reservedBytes: number
+  readonly reservationCapacityBytes: number
+  readonly reservationUtilization: number
+}
+
+/** Receives pressure changes without becoming part of the subprocess critical path. */
+export type ProcessStreamObserver = (metrics: ProcessStreamMetrics) => void
+
+/** Optional observation and typed cancellation controls for a raw byte stream. */
+export interface ProcessByteStreamOptions {
+  readonly observer?: ProcessStreamObserver
+  readonly cancellation?: Effect.Effect<void>
+}
 
 const diagnosticFields = {
   command: Schema.String,
@@ -201,6 +260,12 @@ export class ProcessTimeoutError extends Schema.TaggedError<ProcessTimeoutError>
   { ...diagnosticFields, timeoutMs: Schema.Number },
 ) {}
 
+/** An explicit byte-stream cancellation request terminated the process tree. */
+export class ProcessCancellationError extends Schema.TaggedError<ProcessCancellationError>()(
+  "ProcessCancellationError",
+  diagnosticFields,
+) {}
+
 /** The process or inherited stdio could not be cleaned up within finite deadlines. */
 export class ProcessCleanupError extends Schema.TaggedError<ProcessCleanupError>()(
   "ProcessCleanupError",
@@ -220,6 +285,7 @@ export type ProcessExecutionError =
   | ProcessStdinError
   | ProcessOutputError
   | ProcessTimeoutError
+  | ProcessCancellationError
   | ProcessCleanupError
   | ProcessExitError
 
@@ -229,6 +295,10 @@ export interface ProcessRunner {
   readonly streamLines: (
     request: ProcessRequest,
   ) => Stream.Stream<ProcessEvent, ProcessExecutionError>
+  readonly streamBytes: (
+    request: ProcessRequest,
+    options?: ProcessByteStreamOptions,
+  ) => Stream.Stream<ProcessByteEvent, ProcessExecutionError>
 }
 
 /** Main-process service for scoped, bounded local process execution. */
@@ -284,14 +354,65 @@ function makeProcessServiceLayer() {
           ),
         )
 
-      return ProcessService.of({ run, streamLines })
+      const streamBytes = (request: ProcessRequest, streamOptions?: ProcessByteStreamOptions) =>
+        Stream.unwrap(
+          resolveRequest(request, "bytes").pipe(
+            Effect.map((resolved) => {
+              const metrics = makeStreamMetricsTracker(
+                resolved.options.maxReservedBytes,
+                resolved.options.maxByteChunkBytes,
+                streamOptions?.observer,
+              )
+              return Stream.callback<ProcessByteEvent, ProcessExecutionError>(
+                (queue) =>
+                  execute(
+                    spawner,
+                    request,
+                    resolved,
+                    undefined,
+                    (bytes) =>
+                      Effect.gen(function* () {
+                        const startedAt = yield* Clock.currentTimeMillis
+                        yield* Queue.offer(queue, { _tag: "ProcessByteChunk", bytes })
+                        const finishedAt = yield* Clock.currentTimeMillis
+                        metrics.blocked(finishedAt - startedAt)
+                      }),
+                    metrics,
+                    streamOptions?.cancellation,
+                  ).pipe(
+                    Effect.flatMap((result) => Queue.offer(queue, ProcessExit.make({ result }))),
+                    Effect.andThen(Queue.end(queue)),
+                    Effect.catch((error) => Queue.fail(queue, error)),
+                    Effect.onInterrupt(() =>
+                      Clock.currentTimeMillis.pipe(
+                        Effect.tap((now) => Effect.sync(() => metrics.cancel(now))),
+                      ),
+                    ),
+                    Effect.forkScoped,
+                  ),
+                { bufferSize: resolved.options.maxReservedEvents, strategy: "suspend" },
+              ).pipe(
+                Stream.tap((event) =>
+                  event["_tag"] === "ProcessExit" ? Effect.void : metrics.release,
+                ),
+                Stream.ensuring(
+                  Clock.currentTimeMillis.pipe(
+                    Effect.tap((now) => Effect.sync(() => metrics.finish(now))),
+                  ),
+                ),
+              )
+            }),
+          ),
+        )
+
+      return ProcessService.of({ run, streamBytes, streamLines })
     }),
   )
 }
 
 const resolveRequest = (
   request: ProcessRequest,
-  mode: "captured" | "streaming",
+  mode: "bytes" | "captured" | "streaming",
 ): Effect.Effect<ResolvedExecution, InvalidProcessOptionsError> =>
   Effect.try({
     try: () => {
@@ -301,6 +422,34 @@ const resolveRequest = (
       if (request.timeoutMs !== null) nonNegativeInteger(request.timeoutMs, "timeoutMs")
       const stdout = request.stdout ?? defaults.stdout
       const stderr = request.stderr ?? defaults.stderr
+      const maxByteChunkBytes = positiveInteger(
+        request.maxByteChunkBytes ?? defaultMaxByteChunkBytes,
+        "maxByteChunkBytes",
+      )
+      const maxBufferedBytes = positiveInteger(
+        request.maxBufferedBytes ?? defaultMaxBufferedBytes,
+        "maxBufferedBytes",
+      )
+      const maxReservedBytes = positiveInteger(
+        request.maxReservedBytes ?? defaultMaxReservedBytes,
+        "maxReservedBytes",
+      )
+      const configuredBufferedEvents = positiveInteger(
+        request.maxBufferedEvents ?? defaultMaxBufferedEvents,
+        "maxBufferedEvents",
+      )
+      if (mode === "bytes" && maxBufferedBytes < maxByteChunkBytes) {
+        throw OptionError.make({
+          option: "maxBufferedBytes",
+          message: "maxBufferedBytes must be at least maxByteChunkBytes",
+        })
+      }
+      if (mode === "bytes" && maxReservedBytes < maxByteChunkBytes) {
+        throw OptionError.make({
+          option: "maxReservedBytes",
+          message: "maxReservedBytes must be at least maxByteChunkBytes",
+        })
+      }
       const options: ResolvedProcessOptions = {
         stdout: resolveOutputPolicy(stdout, "stdout"),
         stderr: resolveOutputPolicy(stderr, "stderr"),
@@ -325,10 +474,14 @@ const resolveRequest = (
           request.maxStreamEvents ?? defaultMaxStreamEvents,
           "maxStreamEvents",
         ),
-        maxBufferedEvents: positiveInteger(
-          request.maxBufferedEvents ?? defaultMaxBufferedEvents,
-          "maxBufferedEvents",
-        ),
+        maxByteChunkBytes,
+        maxBufferedBytes,
+        maxReservedBytes,
+        maxReservedEvents: Math.floor(maxReservedBytes / maxByteChunkBytes),
+        maxBufferedEvents:
+          mode === "bytes"
+            ? Math.floor(maxBufferedBytes / maxByteChunkBytes)
+            : configuredBufferedEvents,
       }
       return {
         spawn: {
@@ -351,6 +504,9 @@ const execute = (
   request: ProcessRequest,
   resolved: ResolvedExecution,
   emitLine?: (event: ProcessLine) => Effect.Effect<void>,
+  emitBytes?: (bytes: Uint8Array) => Effect.Effect<void>,
+  metrics?: ProcessStreamMetricsTracker,
+  cancellation?: Effect.Effect<void>,
 ): Effect.Effect<ProcessResult, ProcessExecutionError> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -363,8 +519,12 @@ const execute = (
               maxStreamBytes: resolved.options.maxStreamBytes,
               maxStreamEvents: resolved.options.maxStreamEvents,
             })
+      const spawnInput: SpawnProcessInput =
+        metrics === undefined
+          ? { ...resolved.spawn, capture }
+          : { ...resolved.spawn, capture, metrics }
       const handle = yield* spawner
-        .spawn({ ...resolved.spawn, capture })
+        .spawn(spawnInput)
         .pipe(
           Effect.mapError((failure) =>
             processSpawnError(request, capture, "Failed to spawn command", failure.cause),
@@ -374,6 +534,9 @@ const execute = (
       const consumeOutput = handle.output.pipe(
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
+            if (emitBytes !== undefined && chunk.source === "stdout") {
+              yield* emitBytes(chunk.bytes)
+            }
             const lines = yield* Effect.try({
               try: () => {
                 return decoder?.write(chunk.source, chunk.bytes) ?? []
@@ -409,11 +572,32 @@ const execute = (
         { concurrency: "unbounded" },
       )
 
+      const cancellableExecution =
+        cancellation === undefined
+          ? execution
+          : Effect.raceFirst(
+              execution,
+              cancellation.pipe(
+                Effect.tap(() =>
+                  Clock.currentTimeMillis.pipe(
+                    Effect.tap((now) => Effect.sync(() => metrics?.cancel(now))),
+                  ),
+                ),
+                Effect.andThen(handle.terminate),
+                Effect.andThen(handle.awaitTerminal),
+                Effect.flatMap((cancelledTerminal) =>
+                  ProcessCancellationError.make({
+                    ...terminalDiagnostics(request, capture, cancelledTerminal),
+                    message: "Command byte stream was cancelled",
+                  }),
+                ),
+              ),
+            )
       const timeoutMs = request.timeoutMs
       const [, , , outputFailure, terminal] = yield* timeoutMs === null
-        ? execution
+        ? cancellableExecution
         : Effect.raceFirst(
-            execution,
+            cancellableExecution,
             Effect.sleep(timeoutMs).pipe(
               Effect.andThen(handle.terminate),
               Effect.andThen(handle.awaitTerminal),
@@ -535,6 +719,79 @@ const resolveOutputPolicy = (policy: ProcessOutputPolicy, source: ProcessOutputS
   overflow: policy.overflow,
 })
 
+const makeStreamMetricsTracker = (
+  reservationCapacityBytes: number,
+  reservationBytesPerEvent: number,
+  observer: ProcessStreamObserver | undefined,
+): ProcessStreamMetricsTracker => {
+  let queueBytes = 0
+  let queueDepth = 0
+  let blockedDurationMs = 0
+  let cancelledAt: number | null = null
+  let cancellationAgeMs = 0
+  let reservedBytes = 0
+  const reservationSlots = Semaphore.makeUnsafe(
+    Math.floor(reservationCapacityBytes / reservationBytesPerEvent),
+  )
+
+  const observe = () => {
+    if (observer === undefined) return
+    try {
+      observer({
+        queueBytes,
+        queueDepth,
+        blockedDurationMs,
+        cancellationAgeMs,
+        reservedBytes,
+        reservationCapacityBytes,
+        reservationUtilization: reservedBytes / reservationCapacityBytes,
+      })
+    } catch {
+      // Diagnostics must not alter subprocess behavior.
+    }
+  }
+
+  return {
+    queued: (bytes, depth) => {
+      queueBytes = bytes
+      queueDepth = depth
+      observe()
+    },
+    blocked: (durationMs) => {
+      blockedDurationMs += Math.max(0, durationMs)
+      observe()
+    },
+    reserve: Effect.gen(function* () {
+      const startedAt = yield* Clock.currentTimeMillis
+      yield* reservationSlots.take(1)
+      const finishedAt = yield* Clock.currentTimeMillis
+      blockedDurationMs += Math.max(0, finishedAt - startedAt)
+      reservedBytes += reservationBytesPerEvent
+      observe()
+    }),
+    release: reservationSlots.release(1).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          reservedBytes = Math.max(0, reservedBytes - reservationBytesPerEvent)
+          observe()
+        }),
+      ),
+      Effect.asVoid,
+    ),
+    cancel: (now) => {
+      cancelledAt ??= now
+      observe()
+    },
+    finish: (now) => {
+      if (cancelledAt !== null) cancellationAgeMs = Math.max(0, now - cancelledAt)
+      queueBytes = 0
+      queueDepth = 0
+      reservedBytes = 0
+      observe()
+    },
+  }
+}
+
 const nonNegativeInteger = (value: number, option: string): number => {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw OptionError.make({
@@ -597,7 +854,7 @@ const terminalDiagnostics = (
   )
 }
 
-const invalidOptionsError = <A>(request: ProcessRequest, cause: A) =>
+const invalidOptionsError = (request: ProcessRequest, cause: unknown) =>
   InvalidProcessOptionsError.make({
     ...diagnostics(request, null, null, null),
     option: Schema.is(OptionError)(cause) ? cause.option : "request",
@@ -605,11 +862,11 @@ const invalidOptionsError = <A>(request: ProcessRequest, cause: A) =>
     cause: toError(cause),
   })
 
-const processSpawnError = <A>(
+const processSpawnError = (
   request: ProcessRequest,
   capture: BoundedOutput,
   message: string,
-  cause: A,
+  cause: unknown,
 ) =>
   ProcessSpawnError.make({
     ...diagnostics(request, capture, null, null),
@@ -631,7 +888,7 @@ const processStdinError = (
 const isNodeProcessIoFailure = (value: unknown): value is NodeProcessIoFailure =>
   Predicate.isTagged("NodeProcessIoFailure")(value)
 
-const processOutputError = <A>(request: ProcessRequest, capture: BoundedOutput, cause: A) => {
+const processOutputError = (request: ProcessRequest, capture: BoundedOutput, cause: unknown) => {
   const details = Match.type<unknown>().pipe(
     Match.when(isNodeProcessIoFailure, (failure) => ({
       limit: "io" as const,
@@ -673,5 +930,5 @@ const processOutputError = <A>(request: ProcessRequest, capture: BoundedOutput, 
   })
 }
 
-const toError = <A>(cause: A): Error =>
+const toError = (cause: unknown): Error =>
   Schema.is(Schema.ErrorInstance())(cause) ? cause : new Error(String(cause))

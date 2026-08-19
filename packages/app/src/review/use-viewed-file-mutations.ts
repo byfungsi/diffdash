@@ -35,10 +35,12 @@ const matchingInventoryFile = (
 export const useViewedFileMutations = (
   selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>,
   operations: ReviewSourceOperations,
+  inventory: readonly ReviewSnapshotFileInventory[],
 ): ViewedFileMutationController => {
   const captureAnalytics = useCaptureAnalytics()
-  const inventory = selection.review.manifest.files
   const initialExpanded = new Set(inventory.map((file) => file.reviewKey))
+  const inventoryRef = useRef(inventory)
+  inventoryRef.current = inventory
   const viewedRef = useRef<ReadonlySet<string>>(new Set())
   const expandedRef = useRef<ReadonlySet<string>>(initialExpanded)
   const [viewedFileKeys, setViewedFileKeys] = useState<ReadonlySet<string>>(new Set())
@@ -75,7 +77,8 @@ export const useViewedFileMutations = (
         setExpandedFileKeys(nextExpanded)
       },
       onError: (write, cause) => {
-        const path = matchingInventoryFile(inventory, write.reviewKey)?.path ?? write.reviewKey
+        const path =
+          matchingInventoryFile(inventoryRef.current, write.reviewKey)?.path ?? write.reviewKey
         setError(
           `${formatError(cause, `Could not save viewed state for ${path}`)} The viewed and expansion state was reverted; retry the action.`,
         )

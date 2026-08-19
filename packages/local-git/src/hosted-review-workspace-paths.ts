@@ -30,6 +30,10 @@ export interface ManagedWorkspaceFilesystem {
   readonly path: (...segments: readonly string[]) => ManagedWorkspacePath
   readonly child: (path: ManagedWorkspacePath, name: string) => ManagedWorkspacePath
   readonly sibling: (path: ManagedWorkspacePath, name: string) => ManagedWorkspacePath
+  readonly existingPath: (
+    path: string,
+    operation: string,
+  ) => Effect.Effect<ManagedWorkspacePath, ReturnType<typeof poolError>>
   readonly validate: (
     path: ManagedWorkspacePath,
     operation: string,
@@ -166,6 +170,24 @@ export const makeManagedWorkspaceFilesystem = (
         path: managedPath,
         child,
         sibling,
+        existingPath: (path, operation) =>
+          Effect.tryPromise({
+            try: async () => {
+              const candidate = resolve(path)
+              assertContained(root, candidate)
+              const managed = ManagedWorkspacePathSchema.make(candidate)
+              if (!(await inspect(managed)))
+                throw new Error(`Managed workspace path is missing: ${path}`)
+              return managed
+            },
+            catch: (cause) =>
+              poolError(
+                "filesystem",
+                operation,
+                "A managed workspace path failed safety validation.",
+                toError(cause),
+              ),
+          }),
         validate: (path, operation) =>
           wrapFilesystemOperation(operation, () => inspect(path)).pipe(Effect.asVoid),
         exists: (path, operation) => wrapFilesystemOperation(operation, () => inspect(path)),

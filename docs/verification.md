@@ -94,15 +94,54 @@ The following requirement IDs are covered by
 | `DIFF-LARGE-001` | `[B]` | Exact 20,000-line and 2,000,000-character boundaries remain eligible for highlighted rendering; values above either boundary use plain mode. |
 | `TREE-SCALE-001` | `[B]` | A deterministic 10,000-file fixture preserves one unique canonical path and status per input file. |
 | `DIFF-SCALE-001` | `[B]` | A deterministic 1,000-file fixture classifies exactly one over-threshold file for plain rendering while retaining 999 highlight-eligible files. |
-| `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and unpacked `better_sqlite3.node`. |
+| `PACKAGE-001` | `[B]` | Unsigned directory output contains ASAR, updater metadata, bundled CLI resources, and the integrity-checked external Core artifacts for utility and Bun hosts. |
 | `PACKAGE-002` | `[B]` | The electron-builder executable boots with `app.isPackaged`, packaged preload, and renderer isolation. |
 | `PACKAGE-003` | `[B]` | The packaged executable opens a deterministic real-Git working-tree review and renders its changed file and line. |
 | `PACKAGE-004` | `[B]` | The packaged shell denies popup creation and closes DevTools immediately after an open attempt. |
-| `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon in addition to ASAR, updater, CLI, and native SQLite resources. |
+| `PACKAGE-005` | `[B]` | Packaged verification requires the configured application icon and external Core manifest in addition to ASAR, updater, and CLI resources. Runtime-specific Node/Bun SQLite adapters require no application-owned native addon. |
 | `PERSIST-PACKAGED-001` | `[B]` | A repository written through packaged preload/IPC persists in packaged SQLite after restart. |
 | `PACKAGE-PROVIDER-001` | `[T]` | The final packaged app discovers fixture Git and agent registrations, routes a hosted review through the host composition, and executes the selected fixture agent. |
 | `PACKAGE-PROVIDER-002` | `[T]` | Fake Git/CLI binaries and local provider fixtures prove packaged workspace bootstrap without credentials or network access. |
 | `PERSIST-PACKAGED-002` | `[T]` | Fixture provider settings, hosted bookmark identity, and completed review response survive a packaged restart. |
+
+## M21 Walkthrough Core Evidence
+
+These FUN-218 requirements are gated together by
+`pnpm --filter @diffdash/core-rpc benchmark:m21`. Production uses the authenticated external host;
+forced Bun and utility E2E additionally verify real process selection and teardown.
+
+| Requirement | Class | Evidence |
+|---|---|---|
+| `M21-RPC-AUTH-001` | `[T]` | `core-walkthrough-rpc-handlers.test.ts` authenticates the private Unix socket and serves the complete walkthrough lifecycle only after database ownership authorization and recovery. |
+| `M21-RPC-POLICY-001` | `[T]` | `core-rpc-transport-policy.test.ts` enforces each walkthrough method's exact MessagePack request and response boundary, duplicate live request IDs, 32-request concurrency, and bounded overflow failures. |
+| `M21-RPC-DEADLINE-001` | `[T]` | `core-walkthrough-rpc-admission.test.ts` applies each walkthrough deadline and bounds uninterruptible cancellations that continue after caller timeout. |
+| `M21-RPC-DISCONNECT-001` | `[T]` | Real-socket tests use controlled operation effects to interrupt reads and starts before handler acceptance, preserve a Core-scoped worker after the acceptance boundary, and finish admitted cancellation during client disconnect and server close; operation and persistence suites separately lock the durable transition ordering. |
+| `M21-RPC-RECOVERY-001` | `[T]` | `walkthrough-operation-store.test.ts` and Core startup recovery tests prove accepted active work becomes interrupted after a dead Core epoch without restarting provider work. |
+| `M21-RPC-PRESSURE-001` | `[T]` | `m21-transport-benchmark.ts` and the dated D-01 artifact lock the 512 KiB frame, 16 MiB aggregate reservation, 32 concurrent unary requests, and zero chunk/ack state. |
+
+## M21 Repository-Scale Evidence
+
+These requirements are mandatory for the external Core release. Deterministic suites establish
+correctness and bounds; only a promoted packaged Ubuntu 24.04 x86_64 report can establish the final
+full-fixture latency, process memory, renderer frame, and reclamation results.
+
+| Requirement | Class | Evidence |
+|---|---|---|
+| `M21-SCALE-FIXTURE-001` | `[T]` | `tools/repository-scale/test` proves an auth-independent fixture with exactly 61,000 changed files and 30,000,000 added rows plus binary, rename, delete, mode-only, no-newline, enormous-file, wrapped-line, dense-thread, annotation, broad-search, and revision-change cases. |
+| `M21-SCALE-INGEST-001` | `[T]` | `core-snapshot-ingestion.test.ts` streams a multi-megabyte single hunk through multiple legal blocks, validates every worker batch, binds final hunk identity transactionally, and reconstructs only through bounded range reads. |
+| `M21-SCALE-READER-001` | `[T]` | Operation snapshot reader and store suites enforce 256-row inventory/hunk pages, bounded targeted hunk/file reads, independent durable-operation leases, shared reachability, and no renderer-session dependency. |
+| `M21-SCALE-SEARCH-001` | `[T]` | Snapshot search suites prove fixed-space, case-insensitive literal scans, non-overlap, UTF-16 coordinates, capped excerpts, directional rescans, provisional/final publications, and interruption. |
+| `M21-SCALE-RENDER-001` | `[T]` | Browser suites prove review-lifetime eager complete-file assembly with eight-file load concurrency, exact canonical hunk identities across multiple ranges, and Pierre per-file line virtualization. They preserve exact thread/search/navigation targets, remove stale trailing buffers while navigating wrapped files, and release review-owned resources after switch. |
+| `M21-SCALE-SWITCH-001` | `[T]` | Repository-scale evaluation rejects non-Linux, mixed commit/machine/host/app provenance, non-packaged runs, incomplete disposal, non-alternating scenarios, missing storage samples, fewer than ten switches, monotonic growth, or a post-warm-up plateau above the five-percent/32-MiB rule. |
+| `M21-SCALE-STORAGE-001` | `[T]` | Every promoted sample records path-free SQLite bytes, managed-resource bytes, filesystem capacity/free bytes, and signed deltas before and after its fixed process sample. |
+| `M21-SCALE-HOST-001` | `[T]` | Forced Bun and utility E2E cover process selection/teardown, explicit success, classified private-stderr failure, Auto invalid-output fallback, unavailable-provider fallback, renderer reload single-flight recovery, controlled Core termination, child termination, persisted interruption, and packaged provider discovery. Hard-`SIGKILL` child cleanup remains part of pending packaged crash evidence. |
+| `M21-SCALE-PACKAGED-001` | `[T]` | Final Ubuntu/macOS packaged gates must verify real Core artifacts, Bun and utility flows, AppImage launch, deb installation, watcher invalidation, Core crash, ENOSPC, and managed-space return. |
+| `M21-SCALE-SLO-001` | `[T]` | D-14 remains pending until a dated packaged report records objective pass/fail thresholds for ingest, first range, far target, provisional/final search, rescan, cancellation, frame/long-task distribution, disposal/collection, and ten-switch memory plateau. |
+
+PR #83 validation at `c8430d3` passed the complete CI matrix in
+[run 32147793618](https://github.com/byfungsi/diffdash/actions/runs/32147793618): formatting,
+affected-package checks, browser tests, Electron E2E, forced Bun and utility Core hosts, packaged
+Electron E2E, dependent provider/protocol integration, and packaged arm64/x64 Core hosts.
 
 ## Classified Product Surface
 
@@ -114,7 +153,7 @@ record migration-sensitive invariants added during M8.
 | `REPOSITORY-DISCOVERY-001` | `[B]` | `github.test.ts` covers authenticated scopes, owner-scoped search, review requests, and provider failures; `app.browser.test.tsx` covers debounce and actionable search errors. |
 | `REPOSITORY-FAVORITES-001` | `[B]` | `repository-store.test.ts` covers favorite state, search, touch, and hosted-to-local identity-preserving upgrade. |
 | `REPOSITORY-LINK-001` | `[B]` | `repository-linker.test.ts` covers canonical matching checkouts, mismatched remotes, unsupported origins, and no-persist failure behavior. |
-| `REVIEW-CAPTURE-001` | `[B]` | `review-context.test.ts` covers stable hosted snapshots, retry after movement, and rejection of continued inconsistency; `git.test.ts` covers coherent local snapshots. |
+| `REVIEW-CAPTURE-001` | `[B]` | Acquisition suites cover stable metadata-only hosted/local/comparison manifests, retry after revision movement, and rejection of continued inconsistency; complete content remains behind paged inventory and bounded range readers. |
 | `REVIEW-CACHE-001` | `[B]` | Viewed files, walkthroughs, and threads are keyed by immutable review revisions in their store suites and restart E2E. |
 | `CLI-PARSE-001` | `[B]` | `cli-navigation.test.ts` covers public working-tree, repository, PR, and branch commands, relative paths, legacy envelopes, and invalid syntax. |
 | `CLI-FORWARD-001` | `[B]` | `diffdash-cli.test.ts` and `prerequisites.test.ts` cover source, macOS, Linux, and AppImage launcher forwarding without launcher-side parsing. |
@@ -161,7 +200,7 @@ record migration-sensitive invariants added during M8.
 | `GAP-WALKTHROUGH-001` | `[G]` | Cached walkthrough without an installed agent, provider/model provenance, stale-generation cancellation, and viewed-state preservation on regeneration are incomplete. |
 | `GAP-THREAD-001` | `[G]` | Persisted thread creation is line-only; review/file/hunk creation and an explicit carried-forward state are not implemented. |
 | `GAP-WORKTREE-001` | `[G]` | PID reuse, malformed-but-valid lock owners, pre-existing symlink containment, and validation before reserving malicious manifest paths remain incomplete. |
-| `GAP-REVIEW-001` | `[G]` | Visible hosted PR rendering fetches detail and diff separately rather than through the coherent snapshot service. |
+| `GAP-REVIEW-001` | `[G]` | Hosted metadata and streamed patch production still originate from separate provider calls, while Core verifies one immutable revision before publishing the progressive session. |
 | `GAP-REVIEW-002` | `[G]` | Recent reviews and navigation history are process-local and do not restore after restart. |
 | `GAP-CLI-001` | `[G]` | Branch comparison intentionally uses merge-base semantics, not exact target-tip comparison. |
 

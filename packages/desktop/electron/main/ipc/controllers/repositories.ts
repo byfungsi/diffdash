@@ -11,14 +11,17 @@ export const defineRepositoryHandlers = (
   runtime: ApplicationRuntime,
   handlers: IpcControllerRegistry,
 ) => {
-  handlers.defineCore(CoreMethod.listRepositories, runtime.execute)
-  handlers.defineCore(CoreMethod.setRepositoryFavorite, runtime.execute)
-  handlers.defineCore(CoreMethod.favoriteRemoteRepository, runtime.execute)
-  handlers.defineCore(CoreMethod.installRepository, runtime.execute)
-  handlers.defineCore(CoreMethod.linkRepository, runtime.execute)
-  handlers.defineCore(CoreMethod.openProject, runtime.execute)
-  handlers.defineCore(CoreMethod.repairRepositoryIdentities, runtime.execute)
-  handlers.defineCore(CoreMethod.forgetRepository, runtime.execute)
+  handlers.defineCore(CoreMethod.listRepositories, runtime.core.listRepositories)
+  handlers.defineCore(CoreMethod.setRepositoryFavorite, runtime.core.setRepositoryFavorite)
+  handlers.defineCore(CoreMethod.favoriteRemoteRepository, runtime.core.favoriteRemoteRepository)
+  handlers.defineCore(CoreMethod.installRepository, runtime.core.installRepository)
+  handlers.defineCore(CoreMethod.linkRepository, runtime.core.linkRepository)
+  handlers.defineCore(CoreMethod.openProject, runtime.core.openProject)
+  handlers.defineCore(
+    CoreMethod.repairRepositoryIdentities,
+    runtime.core.repairRepositoryIdentities,
+  )
+  handlers.defineCore(CoreMethod.forgetRepository, runtime.core.forgetRepository)
 
   handlers.define(InvokeChannel.selectLocalFolder, async () => {
     const result = await dialog.showOpenDialog({
@@ -33,7 +36,10 @@ export const defineRepositoryHandlers = (
         )
   })
 
-  handlers.defineCore(CoreMethod.listProviders, runtime.execute)
-  handlers.defineCore(CoreMethod.searchHostedRepositories, runtime.execute)
-  handlers.defineCore(CoreMethod.listHostedRepositorySearchScopes, runtime.execute)
+  handlers.defineCore(CoreMethod.listProviders, runtime.core.listProviders)
+  handlers.defineCore(CoreMethod.searchHostedRepositories, runtime.core.searchHostedRepositories)
+  handlers.defineCore(
+    CoreMethod.listHostedRepositorySearchScopes,
+    runtime.core.listHostedRepositorySearchScopes,
+  )
 }

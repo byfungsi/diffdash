@@ -13,7 +13,6 @@ import {
   ReviewThreadMessage,
   ReviewThreadMessageId,
   UserReviewThreadMessage,
-  isReviewAnchorInParsedDiff,
 } from "./review-thread"
 import { AgentRunId } from "./agent-run-id"
 
@@ -59,31 +58,6 @@ describe("review thread anchors", () => {
         }),
       ),
     ).toBe(true)
-  })
-
-  it("FUN-80 AC: validates old and new line sides independently", () => {
-    const makeLine = (side: "old" | "new", lineContent: string) =>
-      LineReviewAnchor.make({
-        fileId: file.fileId,
-        filePath: file.path,
-        oldPath: file.oldPath,
-        hunkId: hunk.id,
-        hunkFingerprint: hunk.fingerprint,
-        hunkHeader: hunk.header,
-        side,
-        lineNumber: 2,
-        lineContent,
-      })
-
-    expect(isReviewAnchorInParsedDiff(makeLine("old", 'const value = "old"'), parsedDiff)).toBe(
-      true,
-    )
-    expect(isReviewAnchorInParsedDiff(makeLine("new", 'const value = "new"'), parsedDiff)).toBe(
-      true,
-    )
-    expect(isReviewAnchorInParsedDiff(makeLine("new", 'const value = "old"'), parsedDiff)).toBe(
-      false,
-    )
   })
 })
 

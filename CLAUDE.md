@@ -60,6 +60,9 @@ The pinned package is the compatibility authority because the reference follows 
 - Before creating a new adapter/service, audit existing services and either reuse, extend, or document why a new cohesive capability is justified.
 - Keep repositories/persistence adapters domain-oriented. Parse raw rows before returning from infrastructure services.
 - Avoid `any`, non-null assertions, and unchecked casts. If an interop cast is unavoidable, include a `SAFETY:` comment explaining the invariant.
+- Preserve established type evidence end-to-end. Do not widen inferred or parsed values into `unknown`, `any`, `object`, empty-object, or unsafe dictionary intermediates and later assert them back.
+- Function parameters must use owner-provided contracts or precise generics rather than the broad `object` type.
+- Do not use conditional empty-object spreads to omit properties. Construct the precise object branch or assign an optional property explicitly when omission and `undefined` are equivalent.
 - Prefer `import type` for type-only imports and avoid barrel files by default.
 - Add JSDoc for exported project-owned functions, classes, interfaces, constants, and types. shadcn-generated primitives are exempt unless modified beyond styling/composition.
 - Do not log secrets or raw credentials. Use `Redacted.Redacted` for sensitive config or tokens when introduced.

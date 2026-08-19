@@ -9,15 +9,15 @@ import type {
   RepositoryComparisonSnapshotManifest,
 } from "@diffdash/domain/review-context"
 import type { HostedRepositoryRequest, HostedReviewRequest } from "@diffdash/protocol/hosted-git"
-import type {
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
-} from "@diffdash/protocol/review-snapshot"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import { PreloadClient } from "./preload-client"
 import { invokePreload, type RendererApiError } from "./renderer-api-error"
+import type { ProgressiveReviewApi } from "@diffdash/protocol/review-session"
+import type { ReviewSessionGateway } from "../review/progressive-review-session"
+import {
+  createProgressiveReviewApi,
+  createProgressiveReviewSessionGateway,
+} from "./progressive-review"
 
 /** Renderer review discovery and immutable snapshot page/search capabilities. */
 export class ReviewContent extends Context.Service<
@@ -38,13 +38,9 @@ export class ReviewContent extends Context.Service<
       readonly acquireRepositoryComparison: (
         target: RepositoryComparisonTarget,
       ) => Effect.Effect<RepositoryComparisonSnapshotManifest, RendererApiError>
-      readonly getPage: (
-        request: ReviewSnapshotPageRequest,
-      ) => Effect.Effect<ReviewSnapshotPageResponse, RendererApiError>
-      readonly search: (
-        request: ReviewSnapshotSearchRequest,
-      ) => Effect.Effect<ReviewSnapshotSearchResponse, RendererApiError>
     }
+    readonly progressive: ProgressiveReviewApi
+    readonly progressiveSessions: ReviewSessionGateway
   }
 >()("@diffdash/app/ReviewContent") {}
 
@@ -53,6 +49,7 @@ export const reviewContentLayer = Layer.effect(
   ReviewContent,
   Effect.gen(function* () {
     const api = yield* PreloadClient
+    const progressive = createProgressiveReviewApi(() => api.progressiveReviews)
     return ReviewContent.of({
       hostedReviews: {
         list: (request) =>
@@ -71,15 +68,9 @@ export const reviewContentLayer = Layer.effect(
           invokePreload(InvokeChannel.acquireRepositoryComparisonSnapshot, () =>
             api.reviewSnapshots.acquireRepositoryComparison(target),
           ),
-        getPage: (request) =>
-          invokePreload(InvokeChannel.getReviewSnapshotPage, () =>
-            api.reviewSnapshots.getPage(request),
-          ),
-        search: (request) =>
-          invokePreload(InvokeChannel.searchReviewSnapshot, () =>
-            api.reviewSnapshots.search(request),
-          ),
       },
+      progressive,
+      progressiveSessions: createProgressiveReviewSessionGateway(progressive),
     })
   }),
 )

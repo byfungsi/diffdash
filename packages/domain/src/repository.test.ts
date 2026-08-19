@@ -87,6 +87,7 @@ describe("Repo", () => {
     const input = {
       source: { _tag: "local" },
       checkout: { _tag: "RemoteOnly", remoteUrl: "file:///workspace/diffdash" },
+      favorite: "preserve",
     }
 
     expect(() => Schema.decodeUnknownSync(UpsertRepositoryInput)(input)).toThrow(
@@ -113,8 +114,30 @@ describe("Repo", () => {
           _tag: "RemoteOnly",
           remoteUrl: "https://example.test/bad/repository",
         },
+        favorite: "preserve",
       }),
     ).toThrow(/Expected a string matching.*at \["source"\]\["locator"\]\["providerId"\]/s)
+  })
+
+  it("requires an explicit preserve-or-mark favorite intent", () => {
+    const input = {
+      source: {
+        _tag: "hosted",
+        locator: { providerId: "github", namespace: "fungsi", name: "diffdash" },
+      },
+      checkout: {
+        _tag: "RemoteOnly",
+        remoteUrl: "https://github.com/fungsi/diffdash",
+      },
+    }
+
+    expect(() => Schema.decodeUnknownSync(UpsertRepositoryInput)(input)).toThrow(/favorite/)
+    expect(() =>
+      Schema.decodeUnknownSync(UpsertRepositoryInput)({ ...input, favorite: false }),
+    ).toThrow(/preserve.*mark|mark.*preserve/s)
+    expect(
+      Schema.decodeUnknownSync(UpsertRepositoryInput)({ ...input, favorite: "mark" }).favorite,
+    ).toBe("mark")
   })
 
   it("centralizes hosted equality and display identity", () => {

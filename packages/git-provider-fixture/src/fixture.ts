@@ -1,4 +1,4 @@
-import { Effect, Predicate, Schema } from "effect"
+import { Effect, Predicate, Schema, Stream } from "effect"
 
 import {
   BranchRevision,
@@ -14,10 +14,10 @@ import {
   HostedRepositoryName,
   HostedReviewCheckoutSpec,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewLocator,
   HostedReviewNumber,
   HostedReviewSummary,
+  HostedReviewDiffSourceTarget,
   ProviderActor,
   ProviderActorId,
   RepositoryComparisonRef,
@@ -26,6 +26,14 @@ import {
   ChangedFile,
   DiagnosticOperation,
   ReviewCommit,
+  ReviewDiffByteCompletion,
+  ReviewDiffGenerationTracker,
+  ReviewDiffSemanticIdentity,
+  ReviewDiffSourceFacts,
+  ReviewDiffSourceOffer,
+  UnifiedBytesMethod,
+  REVIEW_DIFF_MAX_CHUNK_BYTES,
+  makeReviewKey,
   ReviewRevision,
   WebUrl,
   sameHostedRepository,
@@ -67,6 +75,15 @@ export const createFixtureGitProvider = (
   const review = HostedReviewLocator.make({ repository, number: reviewNumber })
   const repositoryUrl = WebUrl.make(`https://${host}/${namespace}/${name}`)
   const remoteUrl = config.remoteUrl ?? `${repositoryUrl}.git`
+  const diffText = [
+    "diff --git a/src/fixture.ts b/src/fixture.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/fixture.ts",
+    "+++ b/src/fixture.ts",
+    "@@ -1 +1 @@",
+    "-old fixture",
+    "+new fixture",
+  ].join("\n")
   const summary = HostedReviewSummary.make({
     locator: review,
     title: "Fixture merge request flow",
@@ -178,25 +195,47 @@ export const createFixtureGitProvider = (
           }),
         ),
       ),
-    getReviewDiff: (locator) =>
-      requireReview(locator, "getReviewDiff").pipe(
-        Effect.as(
-          HostedReviewDiff.make({
-            locator: review,
-            headRevision,
-            diff: [
-              "diff --git a/src/fixture.ts b/src/fixture.ts",
-              "index 1111111..2222222 100644",
-              "--- a/src/fixture.ts",
-              "+++ b/src/fixture.ts",
-              "@@ -1 +1 @@",
-              "-old fixture",
-              "+new fixture",
-            ].join("\n"),
-            fetchedAt: "2026-07-16T01:00:00.000Z",
+    getReviewDiffSource: Effect.fn("FixtureGitProvider.getReviewDiffSource")(function* (locator) {
+      yield* requireReview(locator, "getReviewDiffSource")
+      const bytes = new TextEncoder().encode(diffText)
+      const generations = new ReviewDiffGenerationTracker()
+      const semanticIdentity = ReviewDiffSemanticIdentity.make("fixture:diff:v1")
+      return {
+        offer: ReviewDiffSourceOffer.make({
+          target: HostedReviewDiffSourceTarget.make({
+            review,
+            reviewKey: makeReviewKey(review),
           }),
-        ),
-      ),
+          expectedRevision: headRevision,
+          semanticIdentity,
+          methods: [UnifiedBytesMethod.make({ maxChunkBytes: REVIEW_DIFF_MAX_CHUNK_BYTES })],
+          facts: ReviewDiffSourceFacts.make({
+            origin: "remote",
+            revisionKind: "mutable",
+            reproducible: false,
+            complete: true,
+            declaredBytes: bytes.byteLength,
+          }),
+        }),
+        unifiedBytes: (acquisition) =>
+          Stream.unwrap(
+            generations.begin(acquisition.generation).pipe(
+              Effect.as(
+                Stream.make(
+                  { bytes },
+                  ReviewDiffByteCompletion.make({
+                    generation: acquisition.generation,
+                    revision: headRevision,
+                    semanticIdentity,
+                    totalBytes: bytes.byteLength,
+                  }),
+                ),
+              ),
+            ),
+          ),
+        close: Effect.void,
+      }
+    }),
     getReviewDecision: (locator) =>
       requireReview(locator, "getReviewDecision").pipe(Effect.as("none" as const)),
     submitReviewDecision: () =>

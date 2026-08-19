@@ -1,8 +1,10 @@
 import {
   AgentPromptVersion,
   type AgentRun,
+  CancelledAgentRun,
   CompletedAgentRun,
   FailedAgentRun,
+  InterruptedAgentRun,
   RunningAgentRun,
 } from "@diffdash/domain/agent-run"
 import { AgentRunId } from "@diffdash/domain/agent-run-id"
@@ -14,11 +16,13 @@ import {
 } from "@diffdash/domain/review-agent"
 import { ReviewKey, ReviewRevision } from "@diffdash/domain/review-identity"
 import {
+  CancelledAgentReviewTurn,
   CompletedAgentReviewThreadMessage,
   CompletedAgentReviewTurn,
   FailedAgentReviewThreadMessage,
   FailedAgentReviewTurn,
   InternalReviewThreadMessageFailure,
+  InterruptedAgentReviewTurn,
   MarkdownBody,
   PendingAgentReviewThreadMessage,
   PendingAgentReviewTurn,
@@ -60,7 +64,7 @@ export const AgentRunRow = Schema.Struct({
   provider: ReviewAgentProviderId,
   model: Schema.NonEmptyString,
   prompt_version: AgentPromptVersion,
-  status: Schema.Literals(["running", "completed", "failed"]),
+  status: Schema.Literals(["running", "completed", "failed", "cancelled", "interrupted"]),
   provider_run_id: Schema.NullOr(ReviewAgentProviderRunId),
   usage_json: ReviewAgentUsageJson,
   error: Schema.NullOr(Schema.NonEmptyString),
@@ -181,13 +185,27 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
         if (row.error !== null) {
           return invalid("run", row.id, "Completed agent runs cannot contain an error.")
         }
+        const completed: {
+          providerRunId?: ReviewAgentProviderRunId
+          usage?: ReviewAgentUsage
+          completedAt: string
+        } & typeof identity = { ...identity, completedAt: row.completed_at }
+        if (row.provider_run_id !== null) completed.providerRunId = row.provider_run_id
+        if (row.usage_json !== null) completed.usage = row.usage_json
+        return Effect.succeed(CompletedAgentRun.make(completed))
+      }
+      if (row.status === "cancelled" || row.status === "interrupted") {
+        if (row.provider_run_id !== null || row.error !== null || row.usage_json !== null) {
+          return invalid(
+            "run",
+            row.id,
+            "Cancelled and interrupted agent runs cannot contain provider completion fields.",
+          )
+        }
         return Effect.succeed(
-          CompletedAgentRun.make({
-            ...identity,
-            ...(row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }),
-            ...(row.usage_json === null ? {} : { usage: row.usage_json }),
-            completedAt: row.completed_at,
-          }),
+          row.status === "cancelled"
+            ? CancelledAgentRun.make({ ...identity, completedAt: row.completed_at })
+            : InterruptedAgentRun.make({ ...identity, completedAt: row.completed_at }),
         )
       }
       if (row.error === null || row.usage_json !== null) {
@@ -197,14 +215,13 @@ export const decodeAgentRunRow = (input: DatabaseRow) =>
           "Failed agent runs require an error and cannot contain usage.",
         )
       }
-      return Effect.succeed(
-        FailedAgentRun.make({
-          ...identity,
-          ...(row.provider_run_id === null ? {} : { providerRunId: row.provider_run_id }),
-          error: row.error,
-          completedAt: row.completed_at,
-        }),
-      )
+      const failed: {
+        providerRunId?: ReviewAgentProviderRunId
+        error: string
+        completedAt: string
+      } & typeof identity = { ...identity, error: row.error, completedAt: row.completed_at }
+      if (row.provider_run_id !== null) failed.providerRunId = row.provider_run_id
+      return Effect.succeed(FailedAgentRun.make(failed))
     }),
   )
 
@@ -271,11 +288,15 @@ export const projectReviewConversation = (
         Match.tag("Failed", (failed) =>
           Schema.is(FailedAgentRun)(run)
             ? Effect.succeed(FailedAgentReviewTurn.make({ message: failed, run }))
-            : invalid(
-                "conversation",
-                failed.id,
-                "Failed agent response must own a failed agent run.",
-              ),
+            : Schema.is(CancelledAgentRun)(run)
+              ? Effect.succeed(CancelledAgentReviewTurn.make({ message: failed, run }))
+              : Schema.is(InterruptedAgentRun)(run)
+                ? Effect.succeed(InterruptedAgentReviewTurn.make({ message: failed, run }))
+                : invalid(
+                    "conversation",
+                    failed.id,
+                    "Failed agent response must own a failed, cancelled, or interrupted agent run.",
+                  ),
         ),
         Match.exhaustive,
       )

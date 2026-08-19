@@ -99,7 +99,7 @@ describe("invokePreload", () => {
     const failure = transportError(
       "AgentProviderAuthenticationError",
       "Authentication failed",
-      "localWalkthroughs:generate",
+      "Walkthroughs.start",
     )
 
     await expect(runRendererPromise(Effect.fail(failure))).rejects.toBe(failure)

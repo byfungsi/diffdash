@@ -8,7 +8,6 @@ import {
   ChangedFile,
   HostedRepositoryLocator,
   HostedRepositoryName,
-  HostedReviewDiff,
   HostedReviewSummary,
   HostedReviewLocator,
   HostedReviewNumber,
@@ -122,20 +121,13 @@ describe("hosted Git provider identities", () => {
     expect(() => Schema.decodeUnknownSync(HostedReviewNumber)(0)).toThrow(/./)
   })
 
-  it("rejects invalid diff counts and provider timestamps", () => {
+  it("rejects invalid diff counts", () => {
     const changedFile = {
       path: "src/app.ts",
       additions: 0,
       deletions: 1,
       changeType: DiffFileStatus.make("modified"),
     }
-    const diff = {
-      locator: makeHostedReviewLocator("github", "fungsi", "diffdash", 51),
-      headRevision: null,
-      diff: "",
-      fetchedAt: "2026-08-10T00:00:00.000Z",
-    }
-
     expect(Schema.decodeUnknownSync(ChangedFile)(changedFile).additions).toBe(0)
     expect(() => Schema.decodeUnknownSync(ChangedFile)({ ...changedFile, additions: -1 })).toThrow(
       "additions",
@@ -143,11 +135,5 @@ describe("hosted Git provider identities", () => {
     expect(() => Schema.decodeUnknownSync(ChangedFile)({ ...changedFile, deletions: 0.5 })).toThrow(
       "deletions",
     )
-    expect(() =>
-      Schema.decodeUnknownSync(HostedReviewDiff)({
-        ...diff,
-        fetchedAt: "2026-08-10T00:00:00+00:00",
-      }),
-    ).toThrow("fetchedAt")
   })
 })

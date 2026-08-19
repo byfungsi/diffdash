@@ -1,23 +1,18 @@
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
 import { ReviewTurnStore } from "@diffdash/persistence/review-turn-store"
 import { WalkthroughOperationStore } from "@diffdash/persistence/walkthrough-operation-store"
-import { Context, Effect, Layer, type Option } from "effect"
-
 import {
-  type CoreMethod as CoreMethodType,
-  type CoreGetStoredWalkthroughFailure,
-  type CoreMethodInput,
-  type CoreOperationFailure,
-  type CoreOperationOptions,
-  type CoreOperationOutput,
-  type CoreWalkthroughOperationFailure,
-  type CoreWalkthroughStartFailure,
-  type GetStoredWalkthrough,
-  type StartWalkthroughOperation,
-  type WalkthroughOperationAccepted,
-  type WalkthroughOperationId as WalkthroughOperationIdType,
-  type WalkthroughOperationResult,
-} from "./core-contract"
+  WalkthroughStore,
+  type WalkthroughStoreError,
+} from "@diffdash/persistence/walkthrough-store"
+import type { AgentRun } from "@diffdash/domain/agent-run"
+import type { AgentRunId } from "@diffdash/domain/agent-run-id"
+import type { StartReviewAgentOperationRequest } from "@diffdash/core-rpc/review-agent"
+import type { ReviewThreadTarget } from "@diffdash/domain/review-thread"
+import { WalkthroughOperationReviewGeneration } from "@diffdash/domain/walkthrough-operation"
+import { Context, Effect, Layer, Option } from "effect"
+
+import type { CoreThreadResolutionFailure } from "./core-contract"
+import { CoreEventHub } from "./core-event-hub"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
@@ -26,37 +21,52 @@ import {
   type OperationHandlers,
 } from "./operations/operation-handlers"
 import { makeRepositoryOperationHandlers } from "./operations/repository-operation-handlers"
+import { makeResourceOperationHandlers } from "./operations/resource-operation-handlers"
+import { makeReviewAcquisitionOperationHandlers } from "./operations/review-acquisition-operation-handlers"
+import {
+  ReviewAgentOperationsService,
+  type ReviewAgentOperationError,
+} from "./operations/review-agent-operations"
 import { makeReviewOperationHandlers } from "./operations/review-operation-handlers"
 import { makeReviewResolution } from "./operations/review-resolution"
 import { makeSettingsOperationHandlers } from "./operations/settings-operation-handlers"
 import { makeThreadOperationHandlers } from "./operations/thread-operation-handlers"
 import { makeViewedFileOperationHandlers } from "./operations/viewed-file-operation-handlers"
-import { makeWalkthroughOperations } from "./operations/walkthrough-operations"
+import {
+  makeWalkthroughOperations,
+  publishWalkthroughTerminalHint,
+  recoverInterruptedWalkthroughOperations,
+  type WalkthroughOperations,
+} from "./operations/walkthrough-operations"
+
+/** Expected failures while resolving and durably accepting one review-agent request. */
+export type CoreReviewAgentStartError =
+  | ReviewAgentOperationError
+  | CoreThreadResolutionFailure
+  | WalkthroughStoreError
 
 interface CoreOperationServiceShape {
   readonly start: Effect.Effect<void, CoreStartupError>
-  readonly execute: <Method extends CoreMethodType>(
-    method: Method,
-    input: CoreMethodInput<Method>,
-    options?: CoreOperationOptions,
-  ) => Effect.Effect<CoreOperationOutput<Method>, CoreOperationFailure<Method>>
-  readonly walkthroughs: {
+  readonly methods: OperationHandlers
+  readonly walkthroughs: WalkthroughOperations & {
+    readonly resolveGeneration: (
+      target: ReviewThreadTarget,
+    ) => Effect.Effect<WalkthroughOperationReviewGeneration, CoreThreadResolutionFailure>
+  }
+  readonly reviewAgents: {
     readonly start: (
-      request: StartWalkthroughOperation,
-    ) => Effect.Effect<WalkthroughOperationAccepted, CoreWalkthroughStartFailure>
+      input: StartReviewAgentOperationRequest,
+    ) => Effect.Effect<AgentRunId, CoreReviewAgentStartError>
     readonly getOperation: (
-      operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
+      runId: AgentRunId,
+    ) => Effect.Effect<Option.Option<AgentRun>, ReviewAgentOperationError>
     readonly cancel: (
-      operationId: WalkthroughOperationIdType,
-    ) => Effect.Effect<WalkthroughOperationResult, CoreWalkthroughOperationFailure>
-    readonly getStored: (
-      request: GetStoredWalkthrough,
-    ) => Effect.Effect<Option.Option<StoredWalkthrough>, CoreGetStoredWalkthroughFailure>
+      runId: AgentRunId,
+    ) => Effect.Effect<Option.Option<AgentRun>, ReviewAgentOperationError>
   }
 }
 
-/** Internal authority that exposes only cohesive Core operations to the embedded runtime. */
+/** Internal authority that exposes only cohesive operations to the external Core RPC handlers. */
 export class CoreOperationService extends Context.Service<
   CoreOperationService,
   CoreOperationServiceShape
@@ -67,20 +77,65 @@ export const coreOperationLayer = Layer.effect(
   CoreOperationService,
   Effect.gen(function* () {
     const turns = yield* ReviewTurnStore
+    const reviewAgentOperations = yield* ReviewAgentOperationsService
     const walkthroughOperationStore = yield* WalkthroughOperationStore
+    const walkthroughStore = yield* WalkthroughStore
+    const events = yield* CoreEventHub
     const reviews = yield* makeReviewResolution
     const walkthroughs = yield* makeWalkthroughOperations(reviews)
+    const resolveWalkthroughGeneration = Effect.fn("Core.Walkthroughs.resolveGeneration")(
+      function* (target: ReviewThreadTarget) {
+        const { snapshot } = yield* reviews.resolve(target)
+        return WalkthroughOperationReviewGeneration.make({
+          kind: target.kind,
+          projectId: snapshot.projectId,
+          snapshotId: snapshot.snapshotId,
+          reviewKey: snapshot.reviewKey,
+          baseRevision: snapshot.baseRevision,
+          headRevision: snapshot.headRevision,
+        })
+      },
+    )
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
     const applicationHandlers = yield* makeApplicationOperationHandlers
     const repositoryHandlers = yield* makeRepositoryOperationHandlers
+    const resourceHandlers = yield* makeResourceOperationHandlers
+    const reviewAcquisitionHandlers = yield* makeReviewAcquisitionOperationHandlers
     const reviewHandlers = yield* makeReviewOperationHandlers
     const settingsHandlers = yield* makeSettingsOperationHandlers
     const threadHandlers = yield* makeThreadOperationHandlers(reviews, walkthroughs)
     const viewedFileHandlers = yield* makeViewedFileOperationHandlers
+    const startReviewAgent = Effect.fn("Core.ReviewAgents.resolveAndStart")(function* (
+      request: StartReviewAgentOperationRequest,
+    ) {
+      const mapping = yield* turns.validateTarget({
+        threadId: request.threadId,
+        target: request.target,
+        repoId: request.repoId,
+        reviewKey: request.reviewKey,
+        baseRevision: request.expectedBaseRevision,
+        headRevision: request.expectedHeadRevision,
+      })
+      const { repo, snapshot } = yield* reviews.resolve(request.target)
+      const walkthrough = yield* walkthroughs.getCached(repo.id, snapshot)
+      return yield* reviewAgentOperations.start({
+        threadId: request.threadId,
+        repoId: repo.id,
+        target: request.target,
+        mapping,
+        snapshotId: snapshot.snapshotId,
+        applicationInstanceId: request.applicationInstanceId,
+        processEpoch: request.processEpoch,
+        cwd: repo.localPath,
+        walkthrough,
+      })
+    })
     const handlerCapabilities = [
       analyticsHandlers,
       applicationHandlers,
       repositoryHandlers,
+      resourceHandlers,
+      reviewAcquisitionHandlers,
       reviewHandlers,
       settingsHandlers,
       threadHandlers,
@@ -93,26 +148,17 @@ export const coreOperationLayer = Layer.effect(
       ...analyticsHandlers,
       ...applicationHandlers,
       ...repositoryHandlers,
+      ...resourceHandlers,
+      ...reviewAcquisitionHandlers,
       ...reviewHandlers,
       ...settingsHandlers,
       ...threadHandlers,
       ...viewedFileHandlers,
     } satisfies OperationHandlers
 
-    const execute: CoreOperationServiceShape["execute"] = (method, input, options = {}) => {
-      const handler = handlers[method]
-      // SAFETY: OperationHandlers preserves the method/input/output correlation; indexed access
-      // widens that relationship before TypeScript can invoke the selected generic member.
-      // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- SAFETY: The indexed handler retains the method correlation that TypeScript loses during generic lookup.
-      return handler(input as never, options) as Effect.Effect<
-        CoreOperationOutput<typeof method>,
-        CoreOperationFailure<typeof method>
-      >
-    }
-
     return CoreOperationService.of({
       start: Effect.gen(function* () {
-        yield* turns.recoverInterruptedTurns.pipe(
+        yield* reviewAgentOperations.recoverInterrupted.pipe(
           Effect.mapError((cause) =>
             CoreStartupError.make({
               operation: "recoverInterruptedReviewTurns",
@@ -121,7 +167,58 @@ export const coreOperationLayer = Layer.effect(
             }),
           ),
         )
-        yield* walkthroughOperationStore.recoverActiveAsInterrupted.pipe(
+        const activeWalkthroughs = yield* walkthroughOperationStore.listActive.pipe(
+          Effect.mapError((cause) =>
+            CoreStartupError.make({
+              operation: "inspectActiveWalkthroughOperations",
+              message: "DiffDash Core could not inspect active walkthrough operations.",
+              cause,
+            }),
+          ),
+        )
+        for (const operation of activeWalkthroughs) {
+          if (operation.state !== "running") continue
+          const artifact = yield* walkthroughStore
+            .get({
+              repoId: operation.identity.repoId,
+              reviewKey: operation.identity.reviewKey,
+              baseSha: operation.identity.baseRevision,
+              headSha: operation.identity.headRevision,
+              promptVersion: operation.identity.promptVersion,
+            })
+            .pipe(
+              Effect.mapError((cause) =>
+                CoreStartupError.make({
+                  operation: "reconcileWalkthroughArtifact",
+                  message: "DiffDash Core could not reconcile a saved walkthrough artifact.",
+                  cause,
+                }),
+              ),
+            )
+          if (Option.isSome(artifact)) {
+            const transition = yield* walkthroughOperationStore
+              .completeSuccess({
+                operationId: operation.id,
+                expectedStateVersion: operation.stateVersion,
+                artifact: operation.identity,
+              })
+              .pipe(
+                Effect.mapError((cause) =>
+                  CoreStartupError.make({
+                    operation: "completeRecoveredWalkthroughOperation",
+                    message: "DiffDash Core could not finalize a recovered walkthrough operation.",
+                    cause,
+                  }),
+                ),
+              )
+            if (transition.won && transition.operation.state === "completed") {
+              yield* Effect.exit(publishWalkthroughTerminalHint(events, transition.operation))
+            }
+          }
+        }
+        yield* recoverInterruptedWalkthroughOperations(walkthroughOperationStore, (operation) =>
+          publishWalkthroughTerminalHint(events, operation),
+        ).pipe(
           Effect.mapError((cause) =>
             CoreStartupError.make({
               operation: "recoverInterruptedWalkthroughOperations",
@@ -131,8 +228,13 @@ export const coreOperationLayer = Layer.effect(
           ),
         )
       }),
-      execute,
-      walkthroughs,
+      methods: handlers,
+      walkthroughs: { ...walkthroughs, resolveGeneration: resolveWalkthroughGeneration },
+      reviewAgents: {
+        start: startReviewAgent,
+        getOperation: reviewAgentOperations.getOperation,
+        cancel: reviewAgentOperations.cancel,
+      },
     })
   }),
 )

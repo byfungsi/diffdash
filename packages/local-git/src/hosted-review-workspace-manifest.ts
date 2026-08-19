@@ -65,7 +65,22 @@ export type Manifest = typeof WorktreeManifest.Type
 export type Slot = typeof WorktreeSlot.Type
 
 /** Serializes a read-change-atomic-write manifest transaction behind the pool lock. */
-export const mutateManifest = <A>(
+export const mutateManifest = <A extends NonNullable<unknown>>(
+  filesystem: ManagedWorkspaceFilesystem,
+  change: (manifest: Manifest) => { readonly manifest: Manifest; readonly value: A },
+): Effect.Effect<A, HostedReviewWorkspacePoolError> => runManifestTransaction(filesystem, change)
+
+/** Applies a write-only manifest update behind the pool lock. */
+export const updateManifest = (
+  filesystem: ManagedWorkspaceFilesystem,
+  update: (manifest: Manifest) => Manifest,
+): Effect.Effect<void, HostedReviewWorkspacePoolError> =>
+  runManifestTransaction(filesystem, (manifest) => ({
+    manifest: update(manifest),
+    value: undefined,
+  }))
+
+const runManifestTransaction = <A>(
   filesystem: ManagedWorkspaceFilesystem,
   change: (manifest: Manifest) => { readonly manifest: Manifest; readonly value: A },
 ): Effect.Effect<A, HostedReviewWorkspacePoolError> => {

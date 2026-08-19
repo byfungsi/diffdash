@@ -12,6 +12,8 @@ import {
   decodeTransportError,
   safeTransportErrorMessage,
   transportError,
+  TransportErrorCodec,
+  TransportErrorPayload,
 } from "@diffdash/protocol/transport-error"
 import { Predicate, Schema } from "effect"
 
@@ -129,17 +131,14 @@ const rendererTransportError = (
   diagnostic?: TransportErrorDiagnosticTrace,
 ) => transportError(code, `${channel} failed: ${message}`, operation, diagnostic)
 
-const failureResult = <Value>(error: ReturnType<typeof transportError>): BridgeResult<Value> => ({
-  _tag: "Failure",
-  error: {
-    _tag: "TransportError",
-    code: error.code,
-    message: error.message,
-    ...(error.operation === undefined ? {} : { operation: error.operation }),
-    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
-    ...(error.providerFailure === undefined ? {} : { providerFailure: error.providerFailure }),
-  },
-})
+const failureResult = <Value>(error: ReturnType<typeof transportError>): BridgeResult<Value> => {
+  return {
+    _tag: "Failure",
+    error: Schema.decodeUnknownSync(TransportErrorPayload)(
+      Schema.encodeSync(TransportErrorCodec)(error),
+    ),
+  }
+}
 
 const toRendererPayload = <A>(value: A): RendererPayload => {
   if (Schema.is(Schema.Json)(value)) return value

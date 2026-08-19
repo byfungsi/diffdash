@@ -57,6 +57,12 @@
     "diffdash/no-runtime-typeof": "error",
     "diffdash/no-manual-tag-match": "error",
     "diffdash/no-instanceof": "error",
+    "diffdash/no-known-value-widening": "error",
+    "diffdash/no-widen-then-assert": "error",
+    "diffdash/no-unsafe-dictionary-type": "error",
+    "diffdash/no-chained-type-assertions": "error",
+    "diffdash/no-object-parameters": "error",
+    "diffdash/no-conditional-empty-object-spread": "error",
     "import/no-unassigned-import": "off",
     "react/react-in-jsx-scope": "off",
     "react/jsx-key": "error",
@@ -95,6 +101,33 @@
     "react-doctor/rules-of-hooks": "error"
   },
   "overrides": [
+    {
+      "files": [
+        "packages/e2e/**/*.{ts,tsx}",
+        "packages/app/src/test/**/*.{ts,tsx}",
+        "tools/**/*.{ts,tsx}",
+        "scripts/**/*.{ts,tsx,mjs}",
+        "packages/*/scripts/**/*.{ts,tsx,mjs}",
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/test/**/*.{ts,tsx}",
+        "**/tests/**/*.{ts,tsx}",
+        "**/fixtures/**/*.{ts,tsx}",
+        "**/*.config.ts",
+        "**/*.config.tsx",
+        "**/*.config.mjs"
+      ],
+      "rules": {
+        "diffdash/no-known-value-widening": "off",
+        "diffdash/no-widen-then-assert": "off",
+        "diffdash/no-unsafe-dictionary-type": "off",
+        "diffdash/no-chained-type-assertions": "off",
+        "diffdash/no-object-parameters": "off",
+        "diffdash/no-conditional-empty-object-spread": "off"
+      }
+    },
     {
       "files": [
         "packages/desktop/electron/**/*.ts",

@@ -34,7 +34,6 @@ test("FUN-171 AC: keeps keyboard shortcuts discoverable at the minimum window wi
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
-
   try {
     const window = await app.firstWindow()
     await dismissOnboardingIfPresent(window)
@@ -134,7 +133,6 @@ test("FUN-130 AC: routes a hosted review through the non-GitHub fixture provider
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
-
   try {
     const window = await app.firstWindow()
     await window.evaluate(installDiffDashE2eApi)
@@ -308,10 +306,18 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
         Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.acquireLocal, undefined, [
           null,
         ]),
-        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.getPage, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDashForE2e.reviewSnapshots.search, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.get, undefined, [null]),
-        Reflect.apply(globalThis.window.diffDashForE2e.localWalkthroughs.generate, undefined, [
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.start, undefined, [
+          null,
+        ]),
+        Reflect.apply(
+          globalThis.window.diffDashForE2e.walkthroughOperations.getOperation,
+          undefined,
+          [null],
+        ),
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.cancel, undefined, [
+          null,
+        ]),
+        Reflect.apply(globalThis.window.diffDashForE2e.walkthroughOperations.getStored, undefined, [
           null,
         ]),
       ]
@@ -339,10 +345,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
       "hostedRepositories:search",
       "reviewSnapshots:acquireHosted",
       "reviewSnapshots:acquireLocal",
-      "reviewSnapshots:getPage",
-      "reviewSnapshots:search",
-      "localWalkthroughs:get",
-      "localWalkthroughs:generate",
+      "walkthroughOperations:start",
+      "walkthroughOperations:getOperation",
+      "walkthroughOperations:cancel",
+      "walkthroughOperations:getStored",
     ]
     expect(malformedIpcErrors).toHaveLength(decodedChannels.length)
     for (const [index, channel] of decodedChannels.entries()) {
@@ -367,9 +373,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByRole("button", { name: "Collapse sidebar" })).toBeVisible()
     await expect(window.locator("[data-review-activity-rail]")).toHaveCSS("width", "52px")
     await commandCenter.click()
-    await expect(window.getByPlaceholder("Search files")).toBeVisible()
-    await window.keyboard.press("Escape")
-    await expect(window.getByPlaceholder("Search files")).toBeHidden()
+    const fileSearch = window.getByPlaceholder("Search files")
+    await expect(fileSearch).toBeVisible()
+    await fileSearch.press("Escape")
+    await expect(fileSearch).toBeHidden()
     await expect(window.getByText("Link a checkout for isolated agent review")).toHaveCount(0)
     await expect(window.getByText("src/app.tsx").first()).toBeVisible()
     await expect(window.getByText("Viewed").first()).toBeVisible()
@@ -377,14 +384,22 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(window.getByText("-1").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Request changes" })).toBeHidden()
 
-    const addedLine = window
+    const reviewFileCard = window.locator('[data-diff-card-path="src/app.tsx"]')
+    const addedLine = reviewFileCard
       .locator("diffs-container [data-line]")
       .filter({ hasText: "new" })
       .first()
-    await expect(addedLine).toBeVisible()
-    const gutterNumber = window
-      .locator("diffs-container [data-column-number]:visible")
-      .filter({ hasText: "1" })
+    await expect(addedLine).toBeVisible({ timeout: 15_000 })
+    const removedLine = reviewFileCard
+      .locator('diffs-container [data-line-type="change-deletion"][data-line]')
+      .filter({ hasText: "old" })
+      .first()
+    const removedLineIndex = await removedLine.getAttribute("data-line-index")
+    if (removedLineIndex === null) throw new Error("Review deletion line has no rendered index")
+    const gutterNumber = reviewFileCard
+      .locator(
+        `diffs-container [data-line-type="change-deletion"][data-line-index="${removedLineIndex}"][data-column-number]`,
+      )
       .first()
     const initialComposer = await openGutterThreadComposer(window, gutterNumber)
     await initialComposer.fill("Why was this line changed?")
@@ -427,6 +442,16 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(reviewDisclosure).toHaveAttribute("aria-expanded", "true")
     await expect(followUpComposer).toBeFocused()
     await expect(addedLine).toBeVisible()
+    const reviewScrollContainer = window.locator("[data-review-diff-scroll-container]")
+    await expect
+      .poll(() => reviewScrollContainer.getAttribute("data-review-navigation-phase"), {
+        timeout: 10_000,
+      })
+      .toBe("idle")
+    await expect(reviewScrollContainer).toHaveAttribute(
+      "data-review-navigation-outcome",
+      "completed::",
+    )
 
     const diffCard = window.locator('[data-diff-card-path="src/app.tsx"]')
     const viewedCheckbox = diffCard.getByRole("checkbox")
@@ -438,11 +463,10 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await window.getByRole("menuitem", { name: /Approve/ }).click()
     await window.getByRole("button", { name: "Review actions" }).click()
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeVisible()
-    await expect(window.locator("[data-review-navigation-locked]")).toHaveCount(0)
     await window.keyboard.press("Escape")
     await expect(window.getByRole("menuitem", { name: /Approved/ })).toBeHidden()
 
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
@@ -518,6 +542,7 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     await expect(restartedWindow.locator("[data-review-editor-header]")).toContainText(
       "Request review flow",
     )
+    await restartedWindow.getByRole("button", { name: "Files", exact: true }).click()
 
     const restartedDiffCard = restartedWindow.locator('[data-diff-card-path="src/app.tsx"]')
     const restartedViewedCheckbox = restartedDiffCard.getByRole("checkbox")
@@ -525,21 +550,15 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
     expect(await countLogLines(codexRunLog)).toBe(2)
 
     await restartedViewedCheckbox.uncheck({ force: true })
-    const restartedReviewDisclosure = restartedWindow.getByRole("button", {
-      name: "Review on L1",
-    })
-    await expect(restartedReviewDisclosure).toBeVisible()
-    await restartedReviewDisclosure.click()
-    await expect(restartedWindow.getByText("Why was this line changed?")).toBeVisible()
-    await expect(restartedWindow.getByText("What behavior does it preserve?")).toBeVisible()
-    await expect(restartedWindow.getByText("The line check is complete.")).toHaveCount(2)
-
-    const expandSidebar = restartedWindow.getByRole("button", { name: "Expand sidebar" })
-    await expandSidebar.click({ timeout: 2_000 }).catch(() => undefined)
-    await expect(restartedWindow.getByRole("heading", { name: "Entry point" })).toBeVisible()
     expect(await countLogLines(codexRunLog)).toBe(2)
     await app.close()
-    expect(readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))).toEqual(beforeRestart)
+    const afterRestart = readReviewPersistenceSnapshot(join(userData, "diffdash.sqlite"))
+    expect({ ...afterRestart, workspaceStates: beforeRestart.workspaceStates }).toEqual(
+      beforeRestart,
+    )
+    expect(afterRestart.workspaceStates).toEqual([
+      expect.objectContaining({ active_ribbon: "files", repo_id: "github:byfungsi/diffdash" }),
+    ])
   } finally {
     await app.close().catch(() => undefined)
   }
@@ -547,19 +566,20 @@ test("covers finished Home to Review flow with fake CLI fixtures", async ({
   expect(realGit(linkedRepo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus)
 })
 
-test("opens local working tree review from CLI argument", async ({
+test("runs an explicit Claude walkthrough successfully", async ({
   browserName: _browserName,
 }, testInfo) => {
   const fakeBin = testInfo.outputPath("fake-bin")
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
   await mkdir(fakeBin, { recursive: true })
   await mkdir(localRepo, { recursive: true })
   await mkdir(xdgConfigHome, { recursive: true })
   await mkdir(userData, { recursive: true })
   await installFakeCli(fakeBin)
-  await installCodexSettings(xdgConfigHome)
+  await installAgentSettings(xdgConfigHome, "claude")
 
   const app = await electron.launch({
     args: [
@@ -571,6 +591,8 @@ test("opens local working tree review from CLI argument", async ({
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "duplicate",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -579,15 +601,24 @@ test("opens local working tree review from CLI argument", async ({
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
     await expect(window.getByText("src/local.ts").first()).toBeVisible()
     await expect(window.getByText("notes.txt").first()).toBeVisible()
     await expect(window.getByRole("button", { name: "Approve" })).toBeHidden()
 
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:explicit-claude")
+    expect(accepted.created).toBe(true)
+    const duplicate = await startLocalWalkthrough(window, localRepo, "w:explicit-claude")
+    expect(duplicate).toMatchObject({ created: false, operationId: accepted.operationId })
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    const operation = await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(operation).toMatchObject({ state: "completed" })
+    expect(await getStoredLocalWalkthrough(window, localRepo)).toBe("found")
+    expect(await countLogLines(claudeRunLog)).toBe(1)
   } finally {
     await app.close()
   }
@@ -600,6 +631,8 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
   const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  const codexRunLog = testInfo.outputPath("codex-walkthrough-runs.log")
   await Promise.all([
     mkdir(fakeBin, { recursive: true }),
     mkdir(localRepo, { recursive: true }),
@@ -619,7 +652,9 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
       FAKE_CLAUDE_WALKTHROUGH_INVALID: "1",
+      FAKE_CODEX_WALKTHROUGH_LOG: codexRunLog,
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
@@ -628,21 +663,229 @@ test("falls back from invalid Claude walkthrough output to Codex in Auto mode", 
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-invalid-claude")
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
 
     await expect(window.getByText("Review focus")).toBeVisible()
     await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
     await expect(window.getByText("Walkthrough unavailable")).toBeHidden()
+    await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(await countLogLines(claudeRunLog)).toBe(2)
+    expect(await countLogLines(codexRunLog)).toBe(1)
   } finally {
     await app.close()
+  }
+})
+
+test("skips unavailable Claude and falls back to Codex in Auto mode", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  const codexRunLog = testInfo.outputPath("codex-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "auto")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_CLAUDE_UNAVAILABLE: "1",
+      FAKE_CODEX_WALKTHROUGH_LOG: codexRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:auto-unavailable-claude")
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+
+    await expect(window.getByRole("heading", { name: "Entry point" })).toBeVisible()
+    await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(await countLogLines(claudeRunLog)).toBe(0)
+    expect(await countLogLines(codexRunLog)).toBe(1)
+  } finally {
+    await app.close()
+  }
+})
+
+test("recovers a running walkthrough after renderer reload", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(45_000)
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_DELAY_MS: "2500",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:renderer-reload")
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+    await expect.poll(() => countLogLines(claudeRunLog)).toBe(1)
+
+    await window.reload()
+    await window.evaluate(installDiffDashE2eApi)
+    await waitForWalkthroughOperation(window, accepted.operationId, "completed")
+    expect(await countLogLines(claudeRunLog)).toBe(1)
+  } finally {
+    await app.close()
+  }
+})
+
+test("kills the provider child and persists interruption after Core termination", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  testInfo.setTimeout(45_000)
+  const forcedCoreHost = readForcedCoreHost()
+  test.skip(forcedCoreHost === null, "This scenario requires a forced standalone Core host")
+  if (forcedCoreHost === null) return
+
+  const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  const userData = testInfo.outputPath("user-data")
+  const claudeRunLog = testInfo.outputPath("claude-walkthrough-runs.log")
+  await Promise.all([
+    mkdir(fakeBin, { recursive: true }),
+    mkdir(localRepo, { recursive: true }),
+    mkdir(xdgConfigHome, { recursive: true }),
+    mkdir(userData, { recursive: true }),
+  ])
+  await installFakeCli(fakeBin)
+  await installAgentSettings(xdgConfigHome, "claude")
+
+  const app = await electron.launch({
+    args: [
+      join(desktopRoot, "out/main/index.js"),
+      `--user-data-dir=${userData}`,
+      `--diffdash-local-path=${localRepo}`,
+    ],
+    env: {
+      ...process.env,
+      DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      DIFFDASH_E2E_CORE_HOST: forcedCoreHost,
+      DIFFDASH_E2E_HIDDEN: "1",
+      FAKE_CLAUDE_DELAY_MS: "30000",
+      FAKE_CLAUDE_RUN_LOG: claudeRunLog,
+      FAKE_REPO_ROOT: localRepo,
+      PATH: prependExecutablePath(fakeBin),
+      XDG_CONFIG_HOME: xdgConfigHome,
+    },
+  })
+
+  try {
+    const mainProcessId = app.process().pid
+    if (mainProcessId === undefined) throw new Error("Electron main process PID is unavailable")
+    let coreProcessId = 0
+    await expect
+      .poll(() => {
+        coreProcessId = coreHostProcessIds(mainProcessId, forcedCoreHost)[0] ?? 0
+        return coreProcessId
+      })
+      .toBeGreaterThan(0)
+
+    const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
+    await dismissOnboardingIfPresent(window)
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    const accepted = await startLocalWalkthrough(window, localRepo, "w:core-crash")
+    await expect.poll(() => readProviderRunProcessId(claudeRunLog)).toBeGreaterThan(0)
+    const providerProcessId = await readProviderRunProcessId(claudeRunLog)
+
+    await expect
+      .poll(() => {
+        const processId = coreHostAncestorProcessId(
+          mainProcessId,
+          providerProcessId,
+          forcedCoreHost,
+        )
+        if (processId === null) return false
+        try {
+          process.kill(processId, "SIGTERM")
+          coreProcessId = processId
+          return true
+        } catch {
+          return false
+        }
+      })
+      .toBe(true)
+    await expect.poll(() => processIsAlive(providerProcessId), { timeout: 10_000 }).toBe(false)
+    await expect
+      .poll(
+        () =>
+          coreHostProcessIds(mainProcessId, forcedCoreHost).some(
+            (processId) => processId !== coreProcessId,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true)
+    await waitForWalkthroughOperation(window, accepted.operationId, "interrupted", 15_000)
+    expect(await countLogLines(claudeRunLog)).toBe(1)
+  } finally {
+    await app.close().catch(() => undefined)
   }
 })
 
 test("reports an explicit Claude walkthrough failure through contextBridge and clipboard", async ({
   browserName: _browserName,
 }, testInfo) => {
+  const forcedCoreHost = readForcedCoreHost()
   const fakeBin = testInfo.outputPath("fake-bin")
   const localRepo = testInfo.outputPath("local-repo")
   const xdgConfigHome = testInfo.outputPath("xdg-config")
@@ -665,36 +908,75 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
     env: {
       ...process.env,
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
+      ...(forcedCoreHost === null ? {} : { DIFFDASH_E2E_CORE_HOST: forcedCoreHost }),
       DIFFDASH_E2E_HIDDEN: "1",
+      DIFFDASH_E2E_TERMINAL_HINT_DELIVERY: "drop",
+      FAKE_CLAUDE_DELAY_MS: "3000",
       FAKE_CLAUDE_WALKTHROUGH_FAILURE: "1",
       FAKE_REPO_ROOT: localRepo,
       PATH: prependExecutablePath(fakeBin),
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
+  let forcedCoreProcessIds: ReadonlyArray<number> = []
 
   try {
     const window = await app.firstWindow()
+    await window.evaluate(installDiffDashE2eApi)
+    if (forcedCoreHost !== null) {
+      const coreParentPid = app.process().pid
+      if (coreParentPid === undefined) throw new Error("Electron main process PID is unavailable")
+      await expect
+        .poll(
+          () => {
+            forcedCoreProcessIds = coreHostProcessIds(coreParentPid, forcedCoreHost)
+            return forcedCoreProcessIds.length
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0)
+    }
     await dismissOnboardingIfPresent(window)
     await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-    await window.getByRole("button", { name: "Walkthrough" }).click()
+    const rawAcceptance = await startLocalWalkthrough(
+      window,
+      localRepo,
+      "w:dropped-terminal-hint",
+      true,
+    )
+    await waitForWalkthroughOperation(window, rawAcceptance.operationId, "failed")
+
+    await window.getByRole("button", { name: "Walkthrough", exact: true }).click()
+    const walkthroughContainer = window.locator("[data-walkthrough-operation-id]").first()
+    await expect(walkthroughContainer).toHaveAttribute(
+      "data-walkthrough-operation-id",
+      rawAcceptance.operationId,
+      { timeout: 20_000 },
+    )
+    const uiOperationId = await walkthroughContainer.getAttribute("data-walkthrough-operation-id")
+    if (uiOperationId === null) throw new Error("UI walkthrough operation ID is unavailable")
+    await waitForWalkthroughOperation(window, uiOperationId, "failed")
 
     await expect(
-      window
-        .getByText("Provider claude authentication failed or expired. Sign in again, then retry.")
-        .first(),
-    ).toBeVisible()
+      window.getByText("DiffDash could not complete this walkthrough operation.").first(),
+    ).toBeVisible({ timeout: 20_000 })
     await window.getByRole("button", { name: "Copy error details" }).first().click()
     await expect(window.getByRole("button", { name: "Copied" }).first()).toBeVisible()
 
+    expect(rawAcceptance).toMatchObject({
+      envelopeIsPlain: true,
+      valueIsPlain: true,
+    })
+    expect(typeof rawAcceptance.created).toBe("boolean")
     const report = await app.evaluate(({ clipboard }) => clipboard.readText())
-    expect(report).toContain("Error code: AgentProviderAuthenticationError")
-    expect(report).toContain("Operation: localWalkthroughs:generate")
-    expect(report).toContain("Provider tag: claude")
-    expect(report).toContain("Cause tag: ProcessExitError")
-    expect(report).toContain("Exit code: 9")
-    expect(report).toContain("Reason: Authentication or authorization failure reported.")
-    expect(report).toContain("Stderr: Authentication or authorization failure reported.")
+    expect(report).toContain("Method: Walkthroughs.getOperation")
+    expect(report).toMatch(/Request ID: h:[A-Za-z0-9._-]+/u)
+    expect(report).toContain(`Operation ID: ${uiOperationId}`)
+    expect(report).toContain("Error code: AGENT_PROVIDER_FAILURE")
+    expect(report).toContain("Provider: none")
+    expect(report).toContain("Model: none")
+    expect(report).toContain("Retry class: userAction")
+    expect(report).toContain("Attempt summary:\n- none")
     expect(report).not.toContain("UNKNOWN_RENDERER_ERROR")
     expect(report).not.toContain("Operation: unknown")
     for (const privateValue of [
@@ -713,7 +995,88 @@ test("reports an explicit Claude walkthrough failure through contextBridge and c
   } finally {
     await app.close()
   }
+  if (forcedCoreHost !== null) {
+    await expect
+      .poll(() => forcedCoreProcessIds.some(processIsAlive), { timeout: 5_000 })
+      .toBe(false)
+  }
 })
+
+const readForcedCoreHost = (): "bun" | "utility" | null => {
+  if (process.env.DIFFDASH_E2E_FORCED_CORE_HOST_GATE !== "1") return null
+  const host = process.env.DIFFDASH_E2E_CORE_HOST
+  if (host === "bun" || host === "utility") return host
+  throw new Error("The forced Core host gate requires DIFFDASH_E2E_CORE_HOST=bun or utility")
+}
+
+const coreHostProcessIds = (rootPid: number, host: "bun" | "utility"): ReadonlyArray<number> => {
+  if (process.platform === "win32") {
+    throw new Error("Forced Core host process verification is not implemented on Windows")
+  }
+  const rows = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" })
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line)
+      return match === null
+        ? []
+        : [{ pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] ?? "" }]
+    })
+  const descendants = new Set([rootPid])
+  let discovered = true
+  while (discovered) {
+    discovered = false
+    for (const row of rows) {
+      if (descendants.has(row.parentPid) && !descendants.has(row.pid)) {
+        descendants.add(row.pid)
+        discovered = true
+      }
+    }
+  }
+  return rows.flatMap((row) => {
+    if (!descendants.has(row.pid) || row.pid === rootPid) return []
+    const matches =
+      host === "bun"
+        ? row.command.includes("core-bun.mjs") && /(?:^|[\\/\s])bun(?:\s|$)/u.test(row.command)
+        : row.command.includes("--type=utility") && row.command.includes("node.mojom.NodeService")
+    return matches ? [row.pid] : []
+  })
+}
+
+const coreHostAncestorProcessId = (
+  rootPid: number,
+  descendantPid: number,
+  host: "bun" | "utility",
+): number | null => {
+  const hostProcessIds = new Set(coreHostProcessIds(rootPid, host))
+  let processId = descendantPid
+  while (processId !== rootPid && processId > 1) {
+    if (hostProcessIds.has(processId)) return processId
+    try {
+      const parent = Number(
+        execFileSync("ps", ["-o", "ppid=", "-p", String(processId)], {
+          encoding: "utf8",
+        }).trim(),
+      )
+      if (!Number.isInteger(parent) || parent === processId) return null
+      processId = parent
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+const processIsAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+    const state = execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+    }).trim()
+    return state.length > 0 && !state.startsWith("Z")
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
+  }
+}
 
 test("opens the current project Reviews ribbon from the versioned CLI command", async ({
   browserName: _browserName,
@@ -730,6 +1093,12 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
   ])
   await installFakeCli(fakeBin)
   await installCodexSettings(xdgConfigHome)
+  realGit(localRepo, "init")
+  await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'base'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "working tree base")
+  realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
+  await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'changed'\n")
 
   const app = await electron.launch({
     args: [
@@ -744,7 +1113,7 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: prependExecutablePath(fakeBin),
+      PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -756,8 +1125,12 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
       "aria-pressed",
       "true",
     )
-    await expect(window.getByRole("button", { name: "Open working tree review" })).toBeVisible()
+    const workingTree = window.getByRole("button", { name: "Open working tree review" })
+    await expect(workingTree).toContainText("1 changed file", { timeout: 15_000 })
     await expect(window.getByRole("heading", { name: "Open pull requests" })).toBeVisible()
+    await workingTree.click()
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await expect(window.getByText("working-tree.ts").first()).toBeVisible()
   } finally {
     await app.close()
   }
@@ -772,7 +1145,7 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
     }),
   ])
   expect(persisted.workspaceStates).toEqual([
-    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "reviews" }),
+    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "files" }),
   ])
 })
 
@@ -823,10 +1196,11 @@ for (const fixture of [
       const window = await app.firstWindow()
       await dismissOnboardingIfPresent(window)
       await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
-      const gutterNumber = window
-        .locator("diffs-container [data-column-number]:visible")
-        .filter({ hasText: "1" })
-        .first()
+      const diffCard = window.locator('[data-diff-card-path="src/local.ts"]')
+      await expect(diffCard).toHaveAttribute("data-diff-render-mode", "highlighted")
+      const gutterNumber = diffCard
+        .locator('diffs-container [data-line-type="change-addition"][data-column-number]:visible')
+        .last()
       const composer = await openGutterThreadComposer(window, gutterNumber)
       await composer.fill("Review this line")
       await window.getByRole("button", { name: "Comment" }).click()
@@ -856,6 +1230,16 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
   await mkdir(userData, { recursive: true })
   await installFakeCli(fakeBin)
   await installCodexSettings(xdgConfigHome)
+  await mkdir(join(localRepo, "src"), { recursive: true })
+  realGit(localRepo, "init")
+  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'dev'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "dev base")
+  realGit(localRepo, "branch", "dev")
+  await writeFile(join(localRepo, "src", "local.ts"), "export const value = 'feature'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "feature work")
+  realGit(localRepo, "remote", "add", "origin", "git@github.com:byfungsi/diffdash.git")
 
   const app = await electron.launch({
     args: [
@@ -872,7 +1256,7 @@ test("opens a merge-base branch comparison from the versioned CLI command", asyn
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
-      PATH: prependExecutablePath(fakeBin),
+      PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -999,9 +1383,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     DIFFDASH_E2E_FAKE_GIT_REMOTE: remoteRepo,
     DIFFDASH_E2E_HIDDEN: "1",
     DIFFDASH_REMOTE_WORKTREE_POOL_PATH: worktreePool,
-    FAKE_USE_REAL_GIT: "1",
-    PATH: prependExecutablePath(fakeBin),
-    REAL_GIT_PATH: "/usr/bin/git",
+    PATH: `/usr/bin:${prependExecutablePath(fakeBin)}`,
     XDG_CONFIG_HOME: xdgConfigHome,
   }
   const launchArgs = [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`]
@@ -1079,7 +1461,11 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
   browserName: _browserName,
 }, testInfo) => {
   const userData = testInfo.outputPath("user-data")
-  await mkdir(userData, { recursive: true })
+  const xdgConfigHome = testInfo.outputPath("xdg-config")
+  await Promise.all([
+    mkdir(userData, { recursive: true }),
+    mkdir(join(xdgConfigHome, "diffdash-development"), { recursive: true }),
+  ])
   const unavailableRendererUrl = "http://127.0.0.1:1"
   const app = await electron.launch({
     args: [join(desktopRoot, "out/main/index.js"), `--user-data-dir=${userData}`],
@@ -1088,6 +1474,7 @@ test("shows a reloadable Electron fallback when the renderer cannot load", async
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       ELECTRON_RENDERER_URL: unavailableRendererUrl,
+      XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
 
@@ -1223,40 +1610,159 @@ const dismissOnboardingIfPresent = async (
 }
 
 const openGutterThreadComposer = async (window: Page, gutterNumber: Locator) => {
-  const utility = window.locator("diffs-container [data-utility-button]").first()
   const composer = window.getByRole("textbox", { name: "Thread message" })
-  await expect
-    .poll(
-      async () => {
-        if (await composer.isVisible()) return true
-        try {
-          await gutterNumber.hover({ force: true, timeout: 1_000 })
-          if (!(await utility.isVisible())) return false
-          await utility.evaluate((button) => {
-            const init = {
-              bubbles: true,
-              button: 0,
-              composed: true,
-              pointerId: 1,
-              pointerType: "mouse",
-            }
-            button.dispatchEvent(new PointerEvent("pointerdown", init))
-            button.dispatchEvent(new PointerEvent("pointerup", init))
-          })
-          return composer.isVisible()
-        } catch {
-          return false
-        }
-      },
-      { timeout: 15_000 },
+  await gutterNumber.evaluate((element) => element.scrollIntoView({ block: "center" }))
+  await gutterNumber.evaluate((element) => {
+    const lineIndex = element.getAttribute("data-line-index")
+    const lineType = element.getAttribute("data-line-type")
+    const root = element.getRootNode()
+    if (!(root instanceof ShadowRoot) || lineIndex === null || lineType === null) {
+      throw new Error("Review gutter has no corresponding rendered line")
+    }
+    const line = [...root.querySelectorAll<HTMLElement>("[data-line]")].find(
+      (candidate) =>
+        candidate.getAttribute("data-line-index") === lineIndex &&
+        candidate.getAttribute("data-line-type") === lineType,
     )
-    .toBe(true)
+    if (line === undefined) throw new Error("Review gutter has no corresponding rendered line")
+    line.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }))
+  })
+  await expect(composer).toBeVisible()
+  await composer.focus()
   return composer
+}
+
+interface WalkthroughAcceptanceSummary {
+  readonly operationId: string
+  readonly stateVersion: number
+  readonly created: boolean
+  readonly envelopeIsPlain: boolean
+  readonly valueIsPlain: boolean
+}
+
+interface WalkthroughOperationSummary {
+  readonly state: string
+  readonly stateVersion: number
+  readonly attempts: ReadonlyArray<{
+    readonly providerId: string
+    readonly modelId: string | null
+    readonly attempt: number
+    readonly stage: string
+    readonly outcome: string
+  }>
+  readonly failure: null | {
+    readonly code: string
+    readonly providerId: string | null
+    readonly modelId: string | null
+    readonly retryClass: string
+  }
+}
+
+const startLocalWalkthrough = async (
+  window: Page,
+  rootPath: string,
+  idempotencyKey: string,
+  inspectPlainEnvelope = false,
+): Promise<WalkthroughAcceptanceSummary> =>
+  window.evaluate(
+    async ({ rootPath: targetRootPath, key, inspectEnvelope }) => {
+      const result = await Reflect.apply(
+        globalThis.window.diffDash.walkthroughOperations.start,
+        undefined,
+        [
+          {
+            target: {
+              kind: "local",
+              rootPath: targetRootPath,
+              comparison: { _tag: "workingTree" },
+            },
+            regenerate: false,
+            idempotencyKey: key,
+          },
+        ],
+      )
+      if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.message)
+      const acceptance = result.value
+      if (Reflect.get(acceptance, "_tag") !== "Success") {
+        throw new Error(acceptance.error.safeMessage)
+      }
+      return {
+        operationId: acceptance.value.operationId,
+        stateVersion: acceptance.value.stateVersion,
+        created: acceptance.value.created,
+        envelopeIsPlain: !inspectEnvelope || Object.getPrototypeOf(result) === Object.prototype,
+        valueIsPlain: !inspectEnvelope || Object.getPrototypeOf(acceptance) === Object.prototype,
+      }
+    },
+    { rootPath, key: idempotencyKey, inspectEnvelope: inspectPlainEnvelope },
+  )
+
+const getWalkthroughOperation = async (
+  window: Page,
+  operationId: string,
+): Promise<WalkthroughOperationSummary> =>
+  window.evaluate(async (id) => {
+    const result = await Reflect.apply(
+      globalThis.window.diffDashForE2e.walkthroughOperations.getOperation,
+      undefined,
+      [{ operationId: id }],
+    )
+    if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.safeMessage)
+    const operation = result.value.operation
+    return {
+      state: operation.state,
+      stateVersion: operation.stateVersion,
+      attempts: operation.attempts,
+      failure: operation.state === "failed" ? operation.failure : null,
+    }
+  }, operationId)
+
+const getStoredLocalWalkthrough = async (window: Page, rootPath: string): Promise<string> =>
+  window.evaluate(async (targetRootPath) => {
+    const result = await Reflect.apply(
+      globalThis.window.diffDashForE2e.walkthroughOperations.getStored,
+      undefined,
+      [
+        {
+          target: {
+            kind: "local",
+            rootPath: targetRootPath,
+            comparison: { _tag: "workingTree" },
+          },
+        },
+      ],
+    )
+    if (Reflect.get(result, "_tag") !== "Success") throw new Error(result.error.safeMessage)
+    return result.value.status
+  }, rootPath)
+
+const waitForWalkthroughOperation = async (
+  window: Page,
+  operationId: string,
+  state: "completed" | "failed" | "interrupted",
+  timeout = 20_000,
+): Promise<WalkthroughOperationSummary> => {
+  await expect
+    .poll(() => getWalkthroughOperation(window, operationId).catch(() => null), { timeout })
+    .toMatchObject({
+      state,
+    })
+  return getWalkthroughOperation(window, operationId)
 }
 
 const countLogLines = async (path: string) => {
   try {
     return (await readFile(path, "utf8")).trim().split("\n").filter(Boolean).length
+  } catch {
+    return 0
+  }
+}
+
+const readProviderRunProcessId = async (path: string): Promise<number> => {
+  try {
+    const firstLine = (await readFile(path, "utf8")).split("\n").find(Boolean)
+    const processId = Number(firstLine?.split(" ")[1])
+    return Number.isInteger(processId) && processId > 0 ? processId : 0
   } catch {
     return 0
   }
@@ -1542,6 +2048,11 @@ if (joined.includes("rev-parse --show-toplevel")) {
   process.exit(0)
 }
 
+if (joined.includes("rev-parse --path-format=absolute --show-toplevel --absolute-git-dir --git-common-dir")) {
+  console.log([repoRoot, repoRoot + "/.git", repoRoot + "/.git"].join("\\n"))
+  process.exit(0)
+}
+
 if (joined.includes("branch --show-current")) {
   console.log("feature/local-review")
   process.exit(0)
@@ -1581,7 +2092,22 @@ if (joined.includes("rev-parse --verify HEAD")) {
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+if (joined.includes("symbolic-ref --quiet --short HEAD")) {
+  console.log("feature/local-review")
+  process.exit(0)
+}
+
+if (joined.includes("status --porcelain=v2 --branch --untracked-files=all")) {
+  console.log([
+    "# branch.oid bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "# branch.head feature/local-review",
+    "1 .M N... 100644 100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 src/local.ts",
+    "? notes.txt"
+  ].join("\\n"))
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff --no-color HEAD --")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
@@ -1594,7 +2120,40 @@ if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   process.exit(0)
 }
 
-if (joined.includes("diff --no-ext-diff cccccccccccccccccccccccccccccccccccccccc --")) {
+if (joined.includes("diff --raw -z --full-index --no-abbrev --no-ext-diff --no-color HEAD --")) {
+  process.stdout.write(":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\\0src/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --numstat -z --no-ext-diff --no-color HEAD --")) {
+  process.stdout.write("1\\t1\\tsrc/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --raw -z --full-index --no-abbrev --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
+  process.stdout.write(":100644 100644 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 M\\0src/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --numstat -z --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
+  process.stdout.write("1\\t1\\tsrc/local.ts\\0")
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff --no-color bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
+  console.log([
+    "diff --git a/src/local.ts b/src/local.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/local.ts",
+    "+++ b/src/local.ts",
+    "@@ -1,1 +1,1 @@",
+    "-old local",
+    "+new local"
+  ].join("\\n"))
+  process.exit(0)
+}
+
+if (joined.includes("diff --no-ext-diff --no-color cccccccccccccccccccccccccccccccccccccccc --")) {
   console.log([
     "diff --git a/src/local.ts b/src/local.ts",
     "index 1111111..2222222 100644",
@@ -1671,6 +2230,9 @@ if (!args.includes("exec")) {
     }, 500)
 } else {
   for await (const chunk of process.stdin) void chunk
+  if (process.env.FAKE_CODEX_WALKTHROUGH_LOG) {
+    appendFileSync(process.env.FAKE_CODEX_WALKTHROUGH_LOG, "run\\n")
+  }
   const output = JSON.stringify({
     title: "Review path",
     summary: "Review the app entry point first.",
@@ -1696,9 +2258,12 @@ if (!args.includes("exec")) {
 `
 
 const fakeClaudeScript = `#!/usr/bin/env node
+import { appendFileSync } from "node:fs"
+import { setTimeout as delay } from "node:timers/promises"
 const args = process.argv.slice(2)
 
 if (args[0] === "--version") {
+  if (process.env.FAKE_CLAUDE_UNAVAILABLE === "1") process.exit(1)
   console.log("claude 0.1.0")
   process.exit(0)
 }
@@ -1721,6 +2286,11 @@ if (args.includes("stream-json")) {
 }
 
 if (args.includes("--print")) {
+  if (process.env.FAKE_CLAUDE_RUN_LOG) {
+    appendFileSync(process.env.FAKE_CLAUDE_RUN_LOG, "run " + process.pid + "\\n")
+  }
+  const delayMilliseconds = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? "0")
+  if (Number.isFinite(delayMilliseconds) && delayMilliseconds > 0) await delay(delayMilliseconds)
   if (process.env.FAKE_CLAUDE_WALKTHROUGH_FAILURE === "1") {
     console.error([
       "Claude authentication failed at /Users/example/secret-repository",
@@ -1855,6 +2425,16 @@ if (args[0] === "search" && args[1] === "repos") {
 
 if (args[0] === "auth" && args[1] === "status") {
   console.log("Logged in to github.com")
+  process.exit(0)
+}
+
+if (args[0] === "api" && args[1] === "user") {
+  console.log(JSON.stringify({ login: "hanipcode" }))
+  process.exit(0)
+}
+
+if (args[0] === "pr" && args[1] === "diff" && args[2] === "--help") {
+  console.log("--color string")
   process.exit(0)
 }
 

@@ -4,7 +4,6 @@ import {
   BranchRevision,
   ChangedFile,
   HostedReviewDetail,
-  HostedReviewDiff,
   HostedReviewSummary,
   HostedRepositorySource,
   ProviderActor,
@@ -16,10 +15,13 @@ import { RemoteOnly, Repo, RepositorySearchScope } from "@diffdash/domain/reposi
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { WebUrl } from "@diffdash/domain/web-url"
-import type { ParsedDiff } from "@diffdash/domain/diff"
+import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
 import { findProjectedDiffHunkLine, projectDiffHunkLines } from "@diffdash/domain/diff-hunk-lines"
 import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
-import { HostedReviewSnapshot } from "@diffdash/domain/review-context"
+import {
+  HostedReviewSnapshotManifest,
+  ReviewSnapshotFileInventory,
+} from "@diffdash/domain/review-context"
 import {
   makeReviewDiffIdentity,
   makeReviewKey,
@@ -35,7 +37,6 @@ import {
 } from "@diffdash/domain/review-agent"
 import {
   CurrentReviewAnchor,
-  isReviewAnchorInParsedDiff,
   LineReviewAnchor,
   ReviewThread,
   ReviewThreadDetails,
@@ -241,13 +242,21 @@ export interface DemoScenarioAssets {
   }
 }
 
+/** Raw authored patch asset retained only by the deterministic demo fixture. */
+export interface DemoReviewDiff {
+  readonly locator: HostedReviewSummary["locator"]
+  readonly headRevision: string | null
+  readonly diff: string
+  readonly fetchedAt: string
+}
+
 /** One coherent, fully materialized pull-request revision. */
 export interface MaterializedDemoRevision {
   readonly id: string
   readonly detail: HostedReviewDetail
-  readonly diff: HostedReviewDiff
+  readonly diff: DemoReviewDiff
   readonly parsedDiff: ParsedDiff
-  readonly snapshot: HostedReviewSnapshot
+  readonly manifest: HostedReviewSnapshotManifest
   readonly walkthrough: StoredWalkthrough
 }
 
@@ -476,12 +485,12 @@ const materializeRevision = (
         }),
       ),
     })
-    const diff = HostedReviewDiff.make({
+    const diff: DemoReviewDiff = {
       locator,
       headRevision: revision.headSha,
       diff: rawDiff ?? "",
       fetchedAt: revision.fetchedAt,
-    })
+    }
     const scope = walkthroughHostedReviewScope(locator)
     const hunkDigest = buildWalkthroughHunkDigest(parsedDiff.files, scope)
     const source = yield* Schema.decodeUnknownEffect(DemoWalkthroughSource)(walkthroughSource).pipe(
@@ -505,22 +514,45 @@ const materializeRevision = (
     })
     const baseRevision = ReviewRevision.make(revision.baseSha)
     const headRevision = ReviewRevision.make(revision.headSha)
-    const snapshot = HostedReviewSnapshot.make({
-      snapshotId: makeReviewSnapshotId({
-        reviewKey,
-        baseRevision,
-        headRevision,
-        diffIdentity: makeReviewDiffIdentity(diff.diff),
-      }),
+    const snapshotId = makeReviewSnapshotId({
       reviewKey,
       baseRevision,
       headRevision,
+      diffIdentity: makeReviewDiffIdentity(diff.diff),
+    })
+    const snapshotManifest = HostedReviewSnapshotManifest.make({
+      projectId: repository.id,
+      snapshotId,
+      reviewKey,
+      baseRevision,
+      headRevision,
+      fileCount: parsedDiff.files.length,
+      detail,
+    })
+
+    return {
+      id: revision.id,
       detail,
       diff,
       parsedDiff,
-    })
+      manifest: snapshotManifest,
+      walkthrough: storedWalkthrough,
+    }
+  })
 
-    return { id: revision.id, detail, diff, parsedDiff, snapshot, walkthrough: storedWalkthrough }
+/** Projects demo-owned parsed file data into bounded renderer inventory metadata. */
+export const makeDemoReviewSnapshotFileInventory = (file: ParsedDiffFile) =>
+  ReviewSnapshotFileInventory.make({
+    fileId: file.fileId,
+    patchHash: file.patchHash,
+    reviewKey: file.reviewKey,
+    path: file.path,
+    oldPath: file.oldPath,
+    status: file.status,
+    visibility: file.visibility,
+    additions: file.additions,
+    deletions: file.deletions,
+    hunkCount: file.hunks.length,
   })
 
 const materializeWalkthrough = (
@@ -595,14 +627,14 @@ const materializeThread = (
       source.anchorState === "Active"
         ? yield* resolveLineAnchor(manifest.id, currentRevision.parsedDiff, source.locator)
         : null
-    if (!isReviewAnchorInParsedDiff(originalAnchor, originalRevision.parsedDiff)) {
+    if (!isDemoReviewAnchorInParsedDiff(originalAnchor, originalRevision.parsedDiff)) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} original anchor does not match revision ${source.originalRevisionId}.`,
       ])
     }
     if (
       activeAnchor !== null &&
-      !isReviewAnchorInParsedDiff(activeAnchor, currentRevision.parsedDiff)
+      !isDemoReviewAnchorInParsedDiff(activeAnchor, currentRevision.parsedDiff)
     ) {
       return yield* scenarioFailure(manifest.id, [
         `Thread ${source.id} current anchor does not match revision ${source.currentRevisionId}.`,
@@ -621,10 +653,10 @@ const materializeThread = (
       repoId: ReviewProjectId.make(manifest.repository.id),
       reviewKey,
       prNumber: manifest.pullRequest.number,
-      baseRevision: originalRevision.snapshot.baseRevision,
-      headRevision: originalRevision.snapshot.headRevision,
-      currentBaseRevision: currentRevision.snapshot.baseRevision,
-      currentHeadRevision: currentRevision.snapshot.headRevision,
+      baseRevision: originalRevision.manifest.baseRevision,
+      headRevision: originalRevision.manifest.headRevision,
+      currentBaseRevision: currentRevision.manifest.baseRevision,
+      currentHeadRevision: currentRevision.manifest.headRevision,
       originalAnchor,
       currentAnchor:
         activeAnchor !== null
@@ -686,6 +718,33 @@ const hunkContainsLocator = (
     lineNumber: locator.lineNumber,
     content: locator.lineContent,
   }) !== null
+
+/** Checks a demo line anchor against the fixture metadata and projected hunk lines. */
+export const isDemoReviewAnchorInParsedDiff = (
+  anchor: LineReviewAnchor,
+  parsedDiff: ParsedDiff,
+): boolean => {
+  const file = parsedDiff.files.find(
+    (candidate) =>
+      candidate.fileId === anchor.fileId &&
+      candidate.path === anchor.filePath &&
+      candidate.oldPath === anchor.oldPath,
+  )
+  const hunk = file?.hunks.find(
+    (candidate) =>
+      candidate.id === anchor.hunkId &&
+      candidate.fingerprint === anchor.hunkFingerprint &&
+      candidate.header === anchor.hunkHeader,
+  )
+  return (
+    hunk !== undefined &&
+    findProjectedDiffHunkLine(projectDiffHunkLines(hunk), {
+      side: anchor.side,
+      lineNumber: anchor.lineNumber,
+      content: anchor.lineContent,
+    }) !== null
+  )
+}
 
 const validateManifest = (manifest: DemoScenarioManifest) => {
   const details: string[] = []

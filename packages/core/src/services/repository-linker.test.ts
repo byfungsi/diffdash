@@ -22,7 +22,11 @@ import { RepositoryStore, RepositoryStoreError } from "@diffdash/persistence/rep
 import { LinkRepositoryCheckoutRequest } from "@diffdash/protocol/repository-link"
 import { GitService } from "@diffdash/local-git/local-git"
 import { GitProvider, GitProviderRemoteParseError } from "./git-provider"
-import { RepositoryLinkError, RepositoryLinker } from "./repository-linker"
+import {
+  RepositoryLinkError,
+  RepositoryLinker,
+  RepositorySelectionIntent,
+} from "./repository-linker"
 import { CoreWebUrl } from "../core-configuration"
 
 const linkedRepo = Repo.make({
@@ -54,7 +58,7 @@ const makeLayer = (
   existingByPath: Option.Option<Repo> = Option.none(),
 ) => {
   const persisted: Array<{
-    readonly favorite: boolean | undefined
+    readonly favorite: "preserve" | "mark"
     readonly owner: string
     readonly name: string
     readonly path: string | null
@@ -74,7 +78,6 @@ const makeLayer = (
             resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
             validateLocalReviewTarget: () => unavailable(),
-            getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
         Layer.succeed(
@@ -109,7 +112,8 @@ const makeLayer = (
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            acquireHostedReviewSnapshot: () => unavailable(),
+            getReviewDiffSource: () => unavailable(),
+            getHostedReviewDetail: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -120,6 +124,7 @@ const makeLayer = (
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
+            getById: () => Effect.succeed(linkedRepo),
             list: () => Effect.succeed([linkedRepo]),
             findByLocalPath: () => Effect.succeed(existingByPath),
             findHosted: () => Effect.succeed(Option.none()),
@@ -143,7 +148,7 @@ const makeLayer = (
               Effect.sync(() => {
                 const capture = upsertCapture(input)
                 persisted.push({
-                  favorite: input.isFavorite,
+                  favorite: input.favorite,
                   owner: capture.owner,
                   name: capture.name,
                   path: capture.localPath,
@@ -153,7 +158,7 @@ const makeLayer = (
                   ...linkedRepo,
                   source: input.source,
                   checkout: input.checkout,
-                  isFavorite: input.isFavorite === true || linkedRepo.isFavorite,
+                  isFavorite: input.favorite === "mark" || linkedRepo.isFavorite,
                 })
               }),
             setFavorite: (_id, isFavorite) =>
@@ -192,7 +197,7 @@ describe("RepositoryLinker", () => {
       expect(repo.localPath).toBe("/workspace/diffdash")
       expect(persisted).toEqual([
         {
-          favorite: true,
+          favorite: "mark",
           owner: "fungsi",
           name: "diffdash",
           path: "/workspace/diffdash",
@@ -253,19 +258,35 @@ describe("RepositoryLinker", () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.effect("falls back to the first recognized remote when install is ambiguous", () => {
+    const { layer, persisted } = makeOpenProjectLayer({
+      remotes: [
+        { name: "upstream", fetchUrls: [linkedRepo.remoteUrl] },
+        { name: "fork", fetchUrls: ["https://github.com/other/repository.git"] },
+      ],
+    })
+    return Effect.gen(function* () {
+      yield* (yield* RepositoryLinker).install(linkedRepoLocalPath)
+
+      expect(persisted).toEqual([
+        expect.objectContaining({ owner: "fungsi", name: "diffdash", favorite: "mark" }),
+      ])
+    }).pipe(Effect.provide(layer))
+  })
+
   it.effect(
     "resolves hosted URLs while preserving an existing favorite and linked checkout",
     () => {
       const { layer, persisted } = makeLayer()
       return Effect.gen(function* () {
         const linker = yield* RepositoryLinker
-        const repo = yield* linker.ensureHosted(repository("fungsi", "diffdash"))
+        const repo = yield* linker.ensureHosted(repository("fungsi", "diffdash"), "preserve")
 
         expect(repo.localPath).toBe(linkedRepo.localPath)
         expect(repo.isFavorite).toBe(true)
         expect(persisted).toEqual([
           {
-            favorite: undefined,
+            favorite: "preserve",
             owner: "fungsi",
             name: "diffdash",
             path: null,
@@ -284,7 +305,7 @@ describe("RepositoryLinker", () => {
 
       expect(repo.localPath).toBe(linkedRepo.localPath)
       expect(persisted[0]).toMatchObject({
-        favorite: false,
+        favorite: "preserve",
         owner: "fungsi",
         path: "/workspace/diffdash",
         remoteUrl: "https://github.com/fungsi/diffdash",
@@ -316,6 +337,7 @@ describe("RepositoryLinker", () => {
     return Effect.gen(function* () {
       const result = yield* (yield* RepositoryLinker).openProject(
         RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+        RepositorySelectionIntent.Automatic(),
       )
 
       expect(result["_tag"]).toBe("opened")
@@ -337,7 +359,10 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
+      const result = yield* (yield* RepositoryLinker).openProject(
+        linkedRepoLocalPath,
+        RepositorySelectionIntent.Automatic(),
+      )
 
       expect(result["_tag"]).toBe("opened")
       if (result["_tag"] !== "opened") return
@@ -361,11 +386,14 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
+      const result = yield* (yield* RepositoryLinker).openProject(
+        linkedRepoLocalPath,
+        RepositorySelectionIntent.Automatic(),
+      )
 
       expect(result["_tag"]).toBe("opened")
       expect(persisted).toEqual([
-        expect.objectContaining({ owner: "other", name: "repository", isFavorite: false }),
+        expect.objectContaining({ owner: "other", name: "repository", favorite: "preserve" }),
       ])
     }).pipe(Effect.provide(layer))
   })
@@ -377,6 +405,7 @@ describe("RepositoryLinker", () => {
     return Effect.gen(function* () {
       const result = yield* (yield* RepositoryLinker).openProject(
         RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+        RepositorySelectionIntent.Automatic(),
       )
 
       expect(result["_tag"]).toBe("opened")
@@ -399,6 +428,7 @@ describe("RepositoryLinker", () => {
     return Effect.gen(function* () {
       const result = yield* (yield* RepositoryLinker).openProject(
         RepositoryCheckoutPath.make("/workspace/diffdash/src"),
+        RepositorySelectionIntent.Automatic(),
       )
 
       expect(result["_tag"]).toBe("remoteSelectionRequired")
@@ -424,7 +454,9 @@ describe("RepositoryLinker", () => {
       const rejected = yield* Effect.result(
         (yield* RepositoryLinker).openProject(
           RepositoryCheckoutPath.make("/workspace/diffdash/src"),
-          repository("missing", "repository"),
+          RepositorySelectionIntent.Selected({
+            repository: repository("missing", "repository"),
+          }),
         ),
       )
       expect(Result.isFailure(rejected)).toBe(true)
@@ -432,7 +464,9 @@ describe("RepositoryLinker", () => {
 
       const result = yield* (yield* RepositoryLinker).openProject(
         RepositoryCheckoutPath.make("/workspace/diffdash/src"),
-        repository("OTHER", "REPOSITORY"),
+        RepositorySelectionIntent.Selected({
+          repository: repository("OTHER", "REPOSITORY"),
+        }),
       )
 
       expect(result["_tag"]).toBe("opened")
@@ -441,7 +475,7 @@ describe("RepositoryLinker", () => {
           owner: "other",
           name: "repository",
           localPath: "/workspace/diffdash",
-          isFavorite: false,
+          favorite: "preserve",
         }),
       ])
     }).pipe(Effect.provide(layer))
@@ -455,7 +489,10 @@ describe("RepositoryLinker", () => {
       ],
     })
     return Effect.gen(function* () {
-      const result = yield* (yield* RepositoryLinker).openProject(linkedRepoLocalPath)
+      const result = yield* (yield* RepositoryLinker).openProject(
+        linkedRepoLocalPath,
+        RepositorySelectionIntent.Automatic(),
+      )
 
       expect(result["_tag"]).toBe("opened")
       expect(persisted).toHaveLength(1)
@@ -525,15 +562,20 @@ interface UpsertCapture {
   readonly name: string
   readonly remoteUrl: string
   readonly localPath: string | null
-  readonly isFavorite?: boolean
+  readonly favorite: "preserve" | "mark"
 }
 
-const upsertCapture = (input: UpsertRepositoryInput): Omit<UpsertCapture, "isFavorite"> => {
-  const locator = input.source instanceof HostedRepositorySource ? input.source.locator : null
+const upsertCapture = (input: UpsertRepositoryInput): Omit<UpsertCapture, "favorite"> => {
+  const identity =
+    input.source instanceof HostedRepositorySource
+      ? {
+          provider: input.source.locator.providerId,
+          owner: input.source.locator.namespace,
+          name: input.source.locator.name,
+        }
+      : { provider: "local", owner: "local", name: "diffdash" }
   return {
-    provider: locator?.providerId ?? "local",
-    owner: locator?.namespace ?? "local",
-    name: locator?.name ?? "diffdash",
+    ...identity,
     remoteUrl: input.checkout.remoteUrl,
     localPath: input.checkout instanceof LinkedCheckout ? input.checkout.path : null,
   }
@@ -569,7 +611,6 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             resolveRevisionRangeComparison: () => unavailable(),
             resolveLastCommit: () => unavailable(),
             validateLocalReviewTarget: () => unavailable(),
-            getLocalReviewSnapshot: () => unavailable(),
           }),
         ),
         Layer.succeed(
@@ -597,7 +638,8 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
             listSearchScopes: () => unavailable(),
             listHostedReviews: () => unavailable(),
             listAssignedReviews: () => unavailable(),
-            acquireHostedReviewSnapshot: () => unavailable(),
+            getReviewDiffSource: () => unavailable(),
+            getHostedReviewDetail: () => unavailable(),
             getReviewDecision: () => unavailable(),
             submitReviewDecision: () => unavailable(),
             hostedReviewCheckoutSpec: () => unavailable(),
@@ -608,6 +650,7 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
         Layer.succeed(
           RepositoryStore,
           RepositoryStore.of({
+            getById: () => Effect.succeed(options.existing ?? linkedRepo),
             list: () => Effect.succeed(options.listed ?? []),
             findByLocalPath: () => Effect.succeed(Option.fromNullishOr(options.existing)),
             findHosted: () => Effect.succeed(Option.fromNullishOr(options.existing)),
@@ -640,14 +683,14 @@ const makeOpenProjectLayer = (options: OpenProjectLayerOptions = {}) => {
               Effect.sync(() => {
                 const capture = {
                   ...upsertCapture(input),
-                  ...(input.isFavorite === undefined ? {} : { isFavorite: input.isFavorite }),
+                  favorite: input.favorite,
                 }
                 persisted.push(capture)
                 return Repo.make({
                   id: ReviewProjectId.make(`${capture.provider}:${capture.owner}/${capture.name}`),
                   source: input.source,
                   checkout: input.checkout,
-                  isFavorite: input.isFavorite ?? false,
+                  isFavorite: input.favorite === "mark",
                   lastOpenedAt: "2026-08-02T00:00:00.000Z",
                   lastSyncedAt: "2026-08-02T00:00:00.000Z",
                   createdAt: "2026-08-02T00:00:00.000Z",

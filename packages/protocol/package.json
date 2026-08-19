@@ -10,6 +10,7 @@
     "./app-update": "./src/app-update.ts",
     "./channels": "./src/channels.ts",
     "./cli-navigation": "./src/cli-navigation.ts",
+    "./e2e-review-lifecycle": "./src/e2e-review-lifecycle.ts",
     "./hosted-git": "./src/hosted-git.ts",
     "./ipc": "./src/ipc.ts",
     "./mcp": "./src/mcp.ts",
@@ -17,11 +18,15 @@
     "./payload-utf8": "./src/payload-utf8.ts",
     "./prerequisites": "./src/prerequisites.ts",
     "./repository-link": "./src/repository-link.ts",
+    "./resource-diagnostics": "./src/resource-diagnostics.ts",
     "./review-threads": "./src/review-threads.ts",
     "./review-snapshot": "./src/review-snapshot.ts",
+    "./review-session": "./src/review-session.ts",
     "./testing": "./src/testing.ts",
     "./transport-error": "./src/transport-error.ts",
-    "./viewed-files": "./src/viewed-files.ts"
+    "./viewed-files": "./src/viewed-files.ts",
+    "./walkthrough-operation": "./src/walkthrough-operation.ts",
+    "./walkthrough-operation-state": "./src/walkthrough-operation-state.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

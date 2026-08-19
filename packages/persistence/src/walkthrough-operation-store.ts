@@ -3,6 +3,7 @@ import {
   WalkthroughExpectedFailure,
   WalkthroughInternalFailure,
   WalkthroughOperation,
+  WalkthroughOperationAcceptanceEvidence,
   WalkthroughOperationAcceptance,
   WalkthroughOperationId,
   WalkthroughOperationIdentity,
@@ -11,6 +12,7 @@ import {
   WalkthroughOperationTimestamp,
   WalkthroughOperationTransition,
   type WalkthroughOperation as WalkthroughOperationType,
+  type WalkthroughOperationAcceptanceEvidence as WalkthroughOperationAcceptanceEvidenceType,
   type WalkthroughOperationId as WalkthroughOperationIdType,
   type WalkthroughOperationIdentity as WalkthroughOperationIdentityType,
   type WalkthroughOperationStateVersion as WalkthroughOperationStateVersionType,
@@ -48,13 +50,19 @@ const WalkthroughOperationRow = Schema.Struct({
   artifact_base_sha: Schema.NullOr(ReviewRevision),
   artifact_head_sha: Schema.NullOr(ReviewRevision),
   artifact_prompt_version: Schema.NullOr(Schema.String),
+  acceptance_evidence_json: Schema.NullOr(Schema.String),
 })
+
+const WalkthroughOperationAcceptanceEvidenceJson = Schema.fromJsonString(
+  WalkthroughOperationAcceptanceEvidence,
+)
 
 /** Input for atomically accepting or finding one exact walkthrough operation. */
 export interface AcceptWalkthroughOperationInput {
   readonly operationId: WalkthroughOperationIdType
   readonly identity: WalkthroughOperationIdentityType
   readonly regenerate: boolean
+  readonly acceptanceEvidence?: WalkthroughOperationAcceptanceEvidenceType | null
 }
 
 /** Optimistic-concurrency guard shared by walkthrough operation transitions. */
@@ -113,6 +121,10 @@ export class WalkthroughOperationStore extends Context.Service<
     readonly get: (
       operationId: WalkthroughOperationIdType,
     ) => Effect.Effect<Option.Option<WalkthroughOperationType>, WalkthroughOperationStoreError>
+    readonly listActive: Effect.Effect<
+      readonly WalkthroughOperationType[],
+      WalkthroughOperationStoreError
+    >
     readonly markRunning: (
       input: WalkthroughOperationVersionGuard,
     ) => Effect.Effect<WalkthroughOperationTransition, WalkthroughOperationTransitionError>
@@ -145,18 +157,16 @@ export class WalkthroughOperationStore extends Context.Service<
       const get = Effect.fn("WalkthroughOperationStore.get")(function (
         operationId: WalkthroughOperationIdType,
       ) {
-        return database
-          .get("SELECT * FROM walkthrough_operations WHERE id = ?", [operationId])
-          .pipe(
-            Effect.mapError((cause) => storeError("get.query", cause)),
-            Effect.flatMap((row) =>
-              Option.map(row, (value) =>
-                decodeOperationRow(value).pipe(
-                  Effect.mapError((cause) => storeError("get.decode", cause)),
-                ),
-              ).pipe(Effect.transposeOption),
-            ),
-          )
+        return database.get(operationByIdSql, [operationId]).pipe(
+          Effect.mapError((cause) => storeError("get.query", cause)),
+          Effect.flatMap((row) =>
+            Option.map(row, (value) =>
+              decodeOperationRow(value).pipe(
+                Effect.mapError((cause) => storeError("get.decode", cause)),
+              ),
+            ).pipe(Effect.transposeOption),
+          ),
+        )
       })
 
       return WalkthroughOperationStore.of({
@@ -171,8 +181,48 @@ export class WalkthroughOperationStore extends Context.Service<
                 const operationId = yield* Schema.decodeUnknownEffect(WalkthroughOperationId)(
                   input.operationId,
                 )
+                const acceptanceEvidence = yield* Schema.decodeUnknownEffect(
+                  Schema.NullOr(WalkthroughOperationAcceptanceEvidence),
+                )(input.acceptanceEvidence ?? null)
+                if (acceptanceEvidence !== null) {
+                  if (
+                    input.regenerate !== acceptanceEvidence.regenerate ||
+                    !sameGenerationIdentity(identity, acceptanceEvidence)
+                  ) {
+                    return yield* WalkthroughOperationInvariantError.make({
+                      message:
+                        "Walkthrough acceptance evidence does not match the operation identity.",
+                    })
+                  }
+                  const replay = yield* findByIdempotencyKey(
+                    database,
+                    acceptanceEvidence.idempotencyKey,
+                  )
+                  if (Option.isSome(replay)) {
+                    if (
+                      !sameGeneration(replay.value, acceptanceEvidence) ||
+                      replay.value.acceptanceEvidence?.regenerate !== acceptanceEvidence.regenerate
+                    ) {
+                      return yield* WalkthroughOperationInvariantError.make({
+                        message:
+                          "Walkthrough idempotency key was reused for a different acceptance intent.",
+                      })
+                    }
+                    return WalkthroughOperationAcceptance.make({
+                      created: false,
+                      operation: replay.value,
+                    })
+                  }
+                }
                 const existing = yield* findLatestExactOperation(database, identity)
                 if (!input.regenerate && Option.isSome(existing)) {
+                  if (acceptanceEvidence !== null && existing.value.acceptanceEvidence === null) {
+                    yield* insertAcceptanceEvidence(database, existing.value.id, acceptanceEvidence)
+                    return WalkthroughOperationAcceptance.make({
+                      created: false,
+                      operation: yield* requireOperation(database, existing.value.id),
+                    })
+                  }
                   return WalkthroughOperationAcceptance.make({
                     created: false,
                     operation: existing.value,
@@ -225,6 +275,9 @@ export class WalkthroughOperationStore extends Context.Service<
                     now,
                   ],
                 )
+                if (acceptanceEvidence !== null) {
+                  yield* insertAcceptanceEvidence(database, operationId, acceptanceEvidence)
+                }
                 return WalkthroughOperationAcceptance.make({
                   created: true,
                   operation: yield* requireOperation(database, operationId),
@@ -234,6 +287,15 @@ export class WalkthroughOperationStore extends Context.Service<
             .pipe(Effect.mapError((cause) => storeError("acceptOrGet", cause)))
         }),
         get,
+        listActive: database
+          .all(
+            `${operationSelectSql}
+             WHERE o.state IN ('accepted', 'running') ORDER BY o.accepted_at, o.id`,
+          )
+          .pipe(
+            Effect.flatMap(decodeOperationRows),
+            Effect.mapError((cause) => storeError("listActive", cause)),
+          ),
         markRunning: Effect.fn("WalkthroughOperationStore.markRunning")(function* (input) {
           const now = timestamp(yield* DateTime.now)
           return yield* guardedTransition(
@@ -408,8 +470,8 @@ export class WalkthroughOperationStore extends Context.Service<
             .transaction(
               Effect.gen(function* () {
                 const activeRows = yield* database.all(
-                  `SELECT * FROM walkthrough_operations
-                   WHERE state IN ('accepted', 'running') ORDER BY accepted_at, id`,
+                  `${operationSelectSql}
+                   WHERE o.state IN ('accepted', 'running') ORDER BY o.accepted_at, o.id`,
                 )
                 const active = yield* decodeOperationRows(activeRows)
                 yield* database.run(
@@ -468,10 +530,10 @@ const transitionWon = Effect.fn("WalkthroughOperationStore.transitionWon")(funct
 const findLatestExactOperation = Effect.fn("WalkthroughOperationStore.findLatestExactOperation")(
   function* (database: Database, identity: WalkthroughOperationIdentityType) {
     const row = yield* database.get(
-      `SELECT * FROM walkthrough_operations
-       WHERE repo_id = ? AND review_key = ? AND base_sha = ?
-         AND head_sha = ? AND prompt_version = ?
-       ORDER BY accepted_at DESC, rowid DESC LIMIT 1`,
+      `${operationSelectSql}
+       WHERE o.repo_id = ? AND o.review_key = ? AND o.base_sha = ?
+          AND o.head_sha = ? AND o.prompt_version = ?
+       ORDER BY o.accepted_at DESC, o.rowid DESC LIMIT 1`,
       [
         identity.repoId,
         identity.reviewKey,
@@ -488,9 +550,7 @@ const requireOperation = Effect.fn("WalkthroughOperationStore.requireOperation")
   database: Database,
   operationId: WalkthroughOperationIdType,
 ) {
-  const row = yield* database.get("SELECT * FROM walkthrough_operations WHERE id = ?", [
-    operationId,
-  ])
+  const row = yield* database.get(operationByIdSql, [operationId])
   const value = yield* Effect.fromOption(row, () =>
     WalkthroughOperationNotFoundError.make({
       operationId,
@@ -512,7 +572,9 @@ const decodeOperationRows = (input: readonly DatabaseRow[]) =>
     Effect.flatMap((rows) => Effect.forEach(rows, makeOperation)),
   )
 
-const makeOperation = (row: typeof WalkthroughOperationRow.Type) => {
+const makeOperation = Effect.fn("WalkthroughOperationStore.makeOperation")(function* (
+  row: typeof WalkthroughOperationRow.Type,
+) {
   const failure =
     row.failure_kind === null
       ? null
@@ -531,7 +593,13 @@ const makeOperation = (row: typeof WalkthroughOperationRow.Type) => {
           headRevision: row.artifact_head_sha,
           promptVersion: row.artifact_prompt_version,
         }
-  return Schema.decodeUnknownEffect(WalkthroughOperation)({
+  const acceptanceEvidence =
+    row.acceptance_evidence_json === null
+      ? null
+      : yield* Schema.decodeUnknownEffect(WalkthroughOperationAcceptanceEvidenceJson)(
+          row.acceptance_evidence_json,
+        )
+  const operation = yield* Schema.decodeUnknownEffect(WalkthroughOperation)({
     id: row.id,
     identity: {
       repoId: row.repo_id,
@@ -540,6 +608,7 @@ const makeOperation = (row: typeof WalkthroughOperationRow.Type) => {
       headRevision: row.head_sha,
       promptVersion: row.prompt_version,
     },
+    acceptanceEvidence,
     state: row.state,
     stateVersion: row.state_version,
     regenerationOfOperationId: row.regeneration_of_operation_id,
@@ -552,6 +621,70 @@ const makeOperation = (row: typeof WalkthroughOperationRow.Type) => {
     artifact,
     failure,
   })
+  if (
+    acceptanceEvidence !== null &&
+    !sameGenerationIdentity(operation.identity, acceptanceEvidence)
+  ) {
+    return yield* WalkthroughOperationInvariantError.make({
+      message: "Stored walkthrough acceptance evidence does not match its operation identity.",
+    })
+  }
+  return operation
+})
+
+const operationSelectSql = `SELECT o.*, e.evidence_json AS acceptance_evidence_json
+  FROM walkthrough_operations o
+  LEFT JOIN walkthrough_operation_acceptances e ON e.operation_id = o.id`
+
+const operationByIdSql = `${operationSelectSql} WHERE o.id = ?`
+
+const insertAcceptanceEvidence = Effect.fn("WalkthroughOperationStore.insertAcceptanceEvidence")(
+  function* (
+    database: Database,
+    operationId: WalkthroughOperationIdType,
+    evidence: WalkthroughOperationAcceptanceEvidenceType,
+  ) {
+    const evidenceJson = yield* Schema.encodeEffect(WalkthroughOperationAcceptanceEvidenceJson)(
+      evidence,
+    )
+    yield* database.run(
+      `INSERT INTO walkthrough_operation_acceptances (operation_id, idempotency_key, evidence_json)
+     VALUES (?, ?, ?)`,
+      [operationId, evidence.idempotencyKey, evidenceJson],
+    )
+  },
+)
+
+const findByIdempotencyKey = Effect.fn("WalkthroughOperationStore.findByIdempotencyKey")(function* (
+  database: Database,
+  idempotencyKey: string,
+) {
+  const row = yield* database.get(`${operationSelectSql} WHERE e.idempotency_key = ?`, [
+    idempotencyKey,
+  ])
+  return yield* Option.map(row, decodeOperationRow).pipe(Effect.transposeOption)
+})
+
+const sameGeneration = (
+  operation: WalkthroughOperationType,
+  evidence: WalkthroughOperationAcceptanceEvidenceType,
+) =>
+  sameGenerationIdentity(operation.identity, evidence) &&
+  operation.acceptanceEvidence !== null &&
+  operation.acceptanceEvidence.reviewGeneration.kind === evidence.reviewGeneration.kind &&
+  operation.acceptanceEvidence.reviewGeneration.snapshotId === evidence.reviewGeneration.snapshotId
+
+const sameGenerationIdentity = (
+  identity: WalkthroughOperationIdentityType,
+  evidence: WalkthroughOperationAcceptanceEvidenceType,
+) => {
+  const generation = evidence.reviewGeneration
+  return (
+    identity.repoId === generation.projectId &&
+    identity.reviewKey === generation.reviewKey &&
+    identity.baseRevision === generation.baseRevision &&
+    identity.headRevision === generation.headRevision
+  )
 }
 
 const sameIdentity = (

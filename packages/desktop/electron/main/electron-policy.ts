@@ -2,6 +2,8 @@ import { realpathSync } from "node:fs"
 import { isAbsolute, relative, resolve } from "node:path"
 import type { BrowserWindowConstructorOptions } from "electron"
 import { OpenRepositoryFilePath } from "@diffdash/protocol/hosted-git"
+import { Match } from "effect"
+import type { RendererEntry } from "./desktop-host-configuration"
 
 type OpenExternal = (url: string) => Promise<void>
 
@@ -32,11 +34,9 @@ export interface RendererSecurityPolicy {
 }
 
 type RendererSecurityPolicyInput = {
-  readonly developmentRendererUrl: string | undefined
-  readonly isPackaged: boolean
   readonly isTrustedWebContents: (webContents: RendererWebContentsIdentity) => boolean
   readonly openExternal: OpenExternal
-  readonly packagedRendererUrl: string
+  readonly rendererEntry: RendererEntry
 }
 
 type BrowserWindowOptionsInput = {
@@ -48,68 +48,54 @@ type BrowserWindowOptionsInput = {
 export const createDiffDashBrowserWindowOptions = ({
   iconPath,
   preloadPath,
-}: BrowserWindowOptionsInput): BrowserWindowConstructorOptions => ({
-  width: 1320,
-  height: 860,
-  minWidth: 720,
-  minHeight: 720,
-  title: "DiffDash",
-  titleBarStyle: "hidden",
-  trafficLightPosition: { x: 10, y: 17 },
-  show: false,
-  backgroundColor: "#ffffff",
-  autoHideMenuBar: true,
-  ...(iconPath === null ? {} : { icon: iconPath }),
-  webPreferences: {
+}: BrowserWindowOptionsInput): BrowserWindowConstructorOptions => {
+  const options: BrowserWindowConstructorOptions = {
+    width: 1320,
+    height: 860,
+    minWidth: 720,
+    minHeight: 720,
+    title: "DiffDash",
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 10, y: 17 },
+    show: false,
+    backgroundColor: "#ffffff",
+    autoHideMenuBar: true,
+  }
+  if (iconPath !== null) options.icon = iconPath
+  options.webPreferences = {
     preload: preloadPath,
     sandbox: false,
     contextIsolation: true,
     nodeIntegration: false,
     webSecurity: true,
     allowRunningInsecureContent: false,
-  },
-})
+  }
+  return options
+}
 
 /** Creates the single renderer trust policy shared by window navigation and IPC. */
 export const createRendererSecurityPolicy = ({
-  developmentRendererUrl,
-  isPackaged,
   isTrustedWebContents,
   openExternal,
-  packagedRendererUrl,
+  rendererEntry,
 }: RendererSecurityPolicyInput): RendererSecurityPolicy => {
-  const packagedRendererDocument = parseUrl(packagedRendererUrl, "packaged renderer URL")
-  if (packagedRendererDocument.protocol !== "file:") {
-    throw new Error("Packaged renderer URL must use the file protocol")
-  }
-
-  const developmentRenderer =
-    isPackaged || developmentRendererUrl === undefined
-      ? null
-      : parseUrl(developmentRendererUrl, "development renderer URL")
-  if (
-    developmentRenderer !== null &&
-    developmentRenderer.protocol !== "http:" &&
-    developmentRenderer.protocol !== "https:"
-  ) {
-    throw new Error("Development renderer URL must use HTTP or HTTPS")
-  }
-
-  const rendererEntry = developmentRenderer ?? packagedRendererDocument
+  const rendererDocument = new URL(rendererEntry.url)
   const isRendererNavigationAllowed = (url: string) => {
     try {
       const candidate = new URL(url)
-      return developmentRenderer === null
-        ? candidate.href === packagedRendererDocument.href
-        : candidate.protocol === developmentRenderer.protocol &&
-            candidate.origin === developmentRenderer.origin
+      return Match.valueTags(rendererEntry, {
+        PackagedRendererEntry: () => candidate.href === rendererDocument.href,
+        DevelopmentRendererEntry: () =>
+          candidate.protocol === rendererDocument.protocol &&
+          candidate.origin === rendererDocument.origin,
+      })
     } catch {
       return false
     }
   }
 
   return {
-    rendererEntryUrl: rendererEntry.href,
+    rendererEntryUrl: rendererDocument.href,
     isRendererNavigationAllowed,
     isTrustedIpcSender: (event) => {
       const frame = event.senderFrame
@@ -178,12 +164,4 @@ export const resolveContainedRepositoryPath = (rootPath: string, filePath: strin
     throw new Error("Cannot open a file outside the repository checkout")
   }
   return targetPath
-}
-
-const parseUrl = (url: string, label: string) => {
-  try {
-    return new URL(url)
-  } catch {
-    throw new Error(`Invalid ${label}`)
-  }
 }

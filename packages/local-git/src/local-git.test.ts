@@ -1,8 +1,4 @@
 import { describe, expect, it } from "@effect/vitest"
-import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { Effect, Result, Layer, Stream } from "effect"
 
 import {
@@ -11,15 +7,12 @@ import {
   ProcessResult,
   ProcessService,
   type ProcessExecutionError,
-  type ProcessOutputPolicyInput,
   type ProcessRequest,
 } from "@diffdash/process"
-import { GitService, LocalReviewChangedError, LocalReviewTargetError } from "./local-git"
-import { parseUnifiedDiff } from "@diffdash/domain/diff-parser"
+import { GitService, LocalReviewTargetError } from "./local-git"
 import { RepositoryCheckoutPath } from "@diffdash/domain/repository"
 import { RepositoryComparisonRef } from "@diffdash/domain/repository-comparison"
 import { REPOSITORY_SCOPED_GIT_ENV } from "./git-environment"
-import { sanitizedGitTestEnvironment } from "./test-support/git-environment"
 
 const makeProcessResult = (stdout: string, args: readonly string[]): ProcessResult =>
   ProcessResult.make({
@@ -46,6 +39,7 @@ const makeProcessLayer = (run: FakeProcessRun) =>
     ProcessService,
     ProcessService.of({
       run: (request) => run(request.command, request.args, request),
+      streamBytes: () => Stream.empty,
       streamLines: () => Stream.empty,
     }),
   )
@@ -311,110 +305,12 @@ describe("GitService", () => {
     }),
   )
 
-  it.effect("builds local review details from tracked and untracked changes", () =>
-    Effect.gen(function* () {
-      let parseCalls = 0
-      const trackedDiff = `diff --git a/src/app.ts b/src/app.ts
-index 1111111..2222222 100644
---- a/src/app.ts
-+++ b/src/app.ts
-@@ -1,1 +1,1 @@
--old
-+new`
-      const untrackedDiff = `diff --git a/notes.txt b/notes.txt
-new file mode 100644
-index 0000000..3333333
---- /dev/null
-+++ b/notes.txt
-@@ -0,0 +1 @@
-+note`
-      const calls: Array<{
-        readonly args: readonly string[]
-        readonly cwd: string | null
-        readonly stdout: ProcessOutputPolicyInput | undefined
-      }> = []
-      const processesLayer = makeProcessLayer((command, args, request) => {
-        calls.push({ args: [...args], cwd: request.cwd, stdout: request.stdout ?? undefined })
-        const joined = args.join(" ")
-        if (joined.includes("rev-parse --show-toplevel")) {
-          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
-        }
-        if (joined.includes("branch --show-current")) {
-          return Effect.succeed(makeProcessResult("feature/local\n", args))
-        }
-        if (joined.includes("rev-parse --verify HEAD")) {
-          return Effect.succeed(
-            makeProcessResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
-          )
-        }
-        if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
-          return Effect.succeed(makeProcessResult(trackedDiff, args))
-        }
-        if (joined.includes("ls-files --others --exclude-standard -z")) {
-          return Effect.succeed(makeProcessResult("notes.txt\0", args))
-        }
-        if (args[0] === "diff" && args.includes("--no-index")) {
-          return Effect.fail(
-            ProcessExitError.make({
-              command,
-              args: [...args],
-              cwd: request.cwd,
-              exitCode: 1,
-              signal: null,
-              stdout: untrackedDiff,
-              stderr: "",
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              outputTruncated: false,
-              message: "Command exited with code 1",
-            }),
-          )
-        }
-
-        throw new Error(`Unexpected git call: ${joined}`)
-      })
-      const layer = GitService.layerWith({
-        parseDiff: (rawDiff) => {
-          parseCalls += 1
-          return parseUnifiedDiff(rawDiff)
-        },
-      }).pipe(Layer.provide(processesLayer))
-
-      const service = yield* GitService.pipe(Effect.provide(layer))
-      const reviewPath = RepositoryCheckoutPath.make("/workspace/repo/src")
-      parseCalls = 0
-      const snapshot = yield* service.getLocalReviewSnapshot(reviewPath)
-      const { detail, diff } = snapshot
-
-      expect(detail).toMatchObject({
-        branchName: "feature/local",
-        repoName: "repo",
-        rootPath: "/workspace/repo",
-        title: "Local changes",
-      })
-      expect(detail.files.map((file) => file.path)).toEqual(["src/app.ts", "notes.txt"])
-      expect(detail.files.map((file) => file.changeType)).toEqual(["modified", "added"])
-      expect(diff.diff).toContain("diff --git a/src/app.ts b/src/app.ts")
-      expect(diff.diff).toContain("diff --git a/notes.txt b/notes.txt")
-      expect(snapshot.baseRevision).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-      expect(snapshot.headRevision).toBe(diff.headSha)
-      expect(snapshot.detail.files).toEqual(detail.files)
-      expect(parseCalls).toBe(1)
-      expect(calls.some((call) => call.cwd === "/workspace/repo")).toBe(true)
-      expect(
-        calls
-          .filter((call) => call.args.includes("diff"))
-          .every((call) => call.stdout?.maxBytes === 8_000_000 && call.stdout.overflow === "error"),
-      ).toBe(true)
-    }),
-  )
-
   it.effect("fetches a target branch and compares from its merge base with the live checkout", () =>
     Effect.gen(function* () {
       const targetSha = "dddddddddddddddddddddddddddddddddddddddd"
       const mergeBaseSha = "cccccccccccccccccccccccccccccccccccccccc"
       const calls: string[][] = []
-      const processesLayer = makeProcessLayer((_command, args) => {
+      const processesLayer = makeProcessLayer((command, args, request) => {
         calls.push([...args])
         const joined = args.join(" ")
         if (joined.includes("rev-parse --show-toplevel")) {
@@ -432,9 +328,9 @@ index 0000000..3333333
         ) {
           return Effect.fail(
             ProcessExitError.make({
-              command: "git",
+              command,
               args: [...args],
-              cwd: null,
+              cwd: request.cwd,
               exitCode: 128,
               signal: null,
               stdout: "",
@@ -457,17 +353,6 @@ index 0000000..3333333
         if (joined.includes(`merge-base ${targetSha} HEAD`)) {
           return Effect.succeed(makeProcessResult(`${mergeBaseSha}\n`, args))
         }
-        if (joined.includes(`diff --no-ext-diff ${mergeBaseSha} --`)) {
-          return Effect.succeed(
-            makeProcessResult(
-              "diff --git a/src/feature.ts b/src/feature.ts\n--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-old\n+new",
-              args,
-            ),
-          )
-        }
-        if (joined.includes("ls-files --others --exclude-standard -z")) {
-          return Effect.succeed(makeProcessResult("", args))
-        }
         throw new Error(`Unexpected git call: ${joined}`)
       })
       const service = yield* GitService.pipe(
@@ -477,24 +362,18 @@ index 0000000..3333333
         RepositoryCheckoutPath.make("/workspace/repo"),
         RepositoryComparisonRef.make("dev"),
       )
-      const detail = (yield* service.getLocalReviewSnapshot(target)).detail
-
       expect(target.comparison).toMatchObject({
         _tag: "branch",
         branchName: "dev",
         baseRef: "refs/remotes/origin/dev",
         baseSha: mergeBaseSha,
       })
-      expect(detail).toMatchObject({ baseSha: mergeBaseSha, title: "Changes vs dev" })
       expect(calls.some((args) => args.includes("+refs/heads/dev:refs/remotes/origin/dev"))).toBe(
         true,
       )
       expect(calls.some((args) => args.join(" ").includes(`merge-base ${targetSha} HEAD`))).toBe(
         true,
       )
-      expect(
-        calls.some((args) => args.join(" ").includes(`diff --no-ext-diff ${mergeBaseSha} --`)),
-      ).toBe(true)
     }),
   )
 
@@ -675,325 +554,4 @@ index 0000000..3333333
       }
     }),
   )
-
-  it.effect(
-    "excludes target-only changes while retaining the current branch and local changes",
-    () =>
-      Effect.gen(function* () {
-        const rootPath = yield* Effect.acquireRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-merge-base-test-"))),
-          (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
-        )
-        git(rootPath, "init", "-b", "main")
-        writeFileSync(join(rootPath, "base.txt"), "base\n")
-        commitAll(rootPath, "base")
-        const mergeBaseSha = git(rootPath, "rev-parse", "HEAD")
-        git(rootPath, "branch", "dev")
-
-        writeFileSync(join(rootPath, "main-only.txt"), "main only\n")
-        commitAll(rootPath, "main only")
-
-        git(rootPath, "checkout", "dev")
-        writeFileSync(join(rootPath, "dev-only.txt"), "inherited from dev\n")
-        commitAll(rootPath, "dev change")
-        const devSha = git(rootPath, "rev-parse", "HEAD")
-        git(rootPath, "checkout", "-b", "feat/x")
-        writeFileSync(join(rootPath, "feature.txt"), "committed feature\n")
-        commitAll(rootPath, "feature change")
-        git(rootPath, "remote", "add", "origin", rootPath)
-
-        writeFileSync(join(rootPath, "staged.txt"), "staged change\n")
-        git(rootPath, "add", "staged.txt")
-        writeFileSync(join(rootPath, "feature.txt"), "committed feature\nunstaged change\n")
-        writeFileSync(join(rootPath, "untracked.txt"), "untracked change\n")
-        const branchBefore = git(rootPath, "branch", "--show-current")
-        const statusBefore = git(rootPath, "status", "--porcelain", "--untracked-files=all")
-
-        const service = yield* GitService.pipe(
-          Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
-        )
-        const checkoutPath = RepositoryCheckoutPath.make(rootPath)
-        const mainTarget = yield* service.resolveBranchComparison(
-          checkoutPath,
-          RepositoryComparisonRef.make("main"),
-        )
-        const mainSnapshot = yield* service.getLocalReviewSnapshot(mainTarget)
-        const mainPaths = mainSnapshot.parsedDiff.files.map((file) => file.path)
-
-        expect(mainTarget.comparison).toMatchObject({
-          _tag: "branch",
-          branchName: "main",
-          baseSha: mergeBaseSha,
-        })
-        expect(mainSnapshot.baseRevision).toBe(mergeBaseSha)
-        expect(mainPaths).toEqual(
-          expect.arrayContaining(["dev-only.txt", "feature.txt", "staged.txt", "untracked.txt"]),
-        )
-        expect(mainPaths).not.toContain("main-only.txt")
-        expect(mainSnapshot.diff.diff).toContain("+inherited from dev")
-        expect(mainSnapshot.diff.diff).toContain("+committed feature")
-        expect(mainSnapshot.diff.diff).toContain("+unstaged change")
-        expect(mainSnapshot.diff.diff).toContain("+staged change")
-        expect(mainSnapshot.diff.diff).toContain("+untracked change")
-        expect(mainSnapshot.diff.diff).not.toContain("main only")
-
-        const devTarget = yield* service.resolveBranchComparison(
-          checkoutPath,
-          RepositoryComparisonRef.make("dev"),
-        )
-        const devSnapshot = yield* service.getLocalReviewSnapshot(devTarget)
-        const devPaths = devSnapshot.parsedDiff.files.map((file) => file.path)
-
-        expect(devTarget.comparison).toMatchObject({
-          _tag: "branch",
-          branchName: "dev",
-          baseSha: devSha,
-        })
-        expect(devSnapshot.baseRevision).toBe(devSha)
-        expect(devPaths).toEqual(
-          expect.arrayContaining(["feature.txt", "staged.txt", "untracked.txt"]),
-        )
-        expect(devPaths).not.toContain("dev-only.txt")
-        expect(devPaths).not.toContain("main-only.txt")
-        expect(devSnapshot.diff.diff).not.toContain("inherited from dev")
-        expect(devSnapshot.diff.diff).not.toContain("main only")
-        expect(git(rootPath, "branch", "--show-current")).toBe(branchBefore)
-        expect(git(rootPath, "status", "--porcelain", "--untracked-files=all")).toBe(statusBefore)
-      }),
-  )
-
-  it.effect(
-    "resolves local branches, tags, SHAs, HEAD, and immutable ranges without a remote",
-    () =>
-      Effect.gen(function* () {
-        const rootPath = yield* Effect.acquireRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-local-revision-test-"))),
-          (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
-        )
-        git(rootPath, "init", "-b", "main")
-        writeFileSync(join(rootPath, "base.txt"), "base\n")
-        commitAll(rootPath, "base")
-        const baseSha = git(rootPath, "rev-parse", "HEAD")
-        git(rootPath, "tag", "base-release")
-        git(rootPath, "checkout", "-b", "feature/local")
-        writeFileSync(join(rootPath, "feature.txt"), "feature\n")
-        commitAll(rootPath, "feature")
-        const headSha = git(rootPath, "rev-parse", "HEAD")
-        writeFileSync(join(rootPath, "untracked.txt"), "untracked\n")
-
-        const service = yield* GitService.pipe(
-          Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
-        )
-        const checkoutPath = RepositoryCheckoutPath.make(rootPath)
-        for (const revision of [baseSha, "base-release", "main"] as const) {
-          const target = yield* service.resolveBranchComparison(
-            checkoutPath,
-            RepositoryComparisonRef.make(revision),
-          )
-          const snapshot = yield* service.getLocalReviewSnapshot(target)
-          const paths = snapshot.parsedDiff.files.map((file) => file.path)
-
-          expect(target.comparison).toMatchObject({ baseSha })
-          expect(paths).toEqual(expect.arrayContaining(["feature.txt", "untracked.txt"]))
-        }
-
-        const headTarget = yield* service.resolveBranchComparison(
-          checkoutPath,
-          RepositoryComparisonRef.make("HEAD"),
-        )
-        const headSnapshot = yield* service.getLocalReviewSnapshot(headTarget)
-        expect(headTarget.comparison).toMatchObject({ _tag: "revision", revision: "HEAD" })
-        expect(headSnapshot.parsedDiff.files.map((file) => file.path)).toEqual(["untracked.txt"])
-
-        rmSync(join(rootPath, "untracked.txt"))
-        const rangeTarget = yield* service.resolveRevisionRangeComparison(
-          checkoutPath,
-          RepositoryComparisonRef.make(baseSha),
-          RepositoryComparisonRef.make(headSha),
-        )
-        const rangeSnapshot = yield* service.getLocalReviewSnapshot(rangeTarget)
-        expect(rangeTarget.comparison).toMatchObject({
-          _tag: "revisionRange",
-          baseSha,
-          headSha,
-          mergeBaseSha: baseSha,
-        })
-        expect(rangeSnapshot.parsedDiff.files.map((file) => file.path)).toEqual(["feature.txt"])
-
-        writeFileSync(join(rootPath, "dirty.txt"), "dirty\n")
-        const changedResult = yield* service.getLocalReviewSnapshot(rangeTarget).pipe(Effect.result)
-        expect(Result.isFailure(changedResult) && changedResult.failure).toBeInstanceOf(
-          LocalReviewChangedError,
-        )
-      }),
-  )
-
-  it.effect("reviews only HEAD against its first parent and excludes checkout changes", () =>
-    Effect.gen(function* () {
-      const rootPath = yield* Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-last-commit-test-"))),
-        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
-      )
-      git(rootPath, "init", "-b", "main")
-      writeFileSync(join(rootPath, "base.txt"), "base\n")
-      commitAll(rootPath, "base")
-      const baseSha = git(rootPath, "rev-parse", "HEAD")
-      writeFileSync(join(rootPath, "committed.txt"), "committed\n")
-      commitAll(rootPath, "last")
-      const headSha = git(rootPath, "rev-parse", "HEAD")
-      writeFileSync(join(rootPath, "staged.txt"), "staged\n")
-      git(rootPath, "add", "staged.txt")
-      writeFileSync(join(rootPath, "untracked.txt"), "untracked\n")
-
-      const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
-      )
-      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
-      const snapshot = yield* service.getLocalReviewSnapshot(target)
-
-      expect(target.comparison).toMatchObject({ _tag: "lastCommit", baseSha, headSha })
-      expect(snapshot.detail.title).toBe("Last commit")
-      expect(snapshot.baseRevision).toBe(baseSha)
-      expect(snapshot.headRevision).toBe(headSha)
-      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["committed.txt"])
-    }),
-  )
-
-  it.effect("compares a root commit with Git's empty tree", () =>
-    Effect.gen(function* () {
-      const rootPath = yield* Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-root-commit-test-"))),
-        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
-      )
-      git(rootPath, "init", "-b", "main")
-      writeFileSync(join(rootPath, "root.txt"), "root\n")
-      commitAll(rootPath, "root")
-
-      const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
-      )
-      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
-      const snapshot = yield* service.getLocalReviewSnapshot(target)
-
-      expect(target.comparison).toMatchObject({
-        _tag: "lastCommit",
-        baseSha: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-      })
-      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["root.txt"])
-    }),
-  )
-
-  it.effect("compares a merge commit with its first parent", () =>
-    Effect.gen(function* () {
-      const rootPath = yield* Effect.acquireRelease(
-        Effect.sync(() => mkdtempSync(join(tmpdir(), "diffdash-merge-commit-test-"))),
-        (path) => Effect.sync(() => rmSync(path, { force: true, recursive: true })),
-      )
-      git(rootPath, "init", "-b", "main")
-      writeFileSync(join(rootPath, "base.txt"), "base\n")
-      commitAll(rootPath, "base")
-      git(rootPath, "checkout", "-b", "feature")
-      writeFileSync(join(rootPath, "feature.txt"), "feature\n")
-      commitAll(rootPath, "feature")
-      git(rootPath, "checkout", "main")
-      writeFileSync(join(rootPath, "main.txt"), "main\n")
-      commitAll(rootPath, "main")
-      const firstParentSha = git(rootPath, "rev-parse", "HEAD")
-      git(
-        rootPath,
-        "-c",
-        "user.name=DiffDash Test",
-        "-c",
-        "user.email=test@diffdash.dev",
-        "-c",
-        "commit.gpgSign=false",
-        "merge",
-        "--no-ff",
-        "feature",
-        "-m",
-        "merge feature",
-      )
-      const mergeSha = git(rootPath, "rev-parse", "HEAD")
-
-      const service = yield* GitService.pipe(
-        Effect.provide(GitService.layer.pipe(Layer.provide(ProcessService.layer))),
-      )
-      const target = yield* service.resolveLastCommit(RepositoryCheckoutPath.make(rootPath))
-      const snapshot = yield* service.getLocalReviewSnapshot(target)
-
-      expect(target.comparison).toMatchObject({
-        _tag: "lastCommit",
-        baseSha: firstParentSha,
-        headSha: mergeSha,
-      })
-      expect(snapshot.parsedDiff.files.map((file) => file.path)).toEqual(["feature.txt"])
-    }),
-  )
-
-  it.effect("FUN-80 AC: rejects a local snapshot that changes during repeated capture", () =>
-    Effect.gen(function* () {
-      let diffRead = 0
-      const processesLayer = makeProcessLayer((_command, args) => {
-        const joined = args.join(" ")
-        if (joined.includes("rev-parse --show-toplevel")) {
-          return Effect.succeed(makeProcessResult("/workspace/repo\n", args))
-        }
-        if (joined.includes("rev-parse --verify HEAD")) {
-          return Effect.succeed(
-            makeProcessResult("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n", args),
-          )
-        }
-        if (joined.includes("diff --no-ext-diff bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --")) {
-          diffRead += 1
-          return Effect.succeed(
-            makeProcessResult(
-              `diff --git a/src/app.ts b/src/app.ts
---- a/src/app.ts
-+++ b/src/app.ts
-@@ -1 +1 @@
--old
-+new-${diffRead}`,
-              args,
-            ),
-          )
-        }
-        if (joined.includes("ls-files --others --exclude-standard -z")) {
-          return Effect.succeed(makeProcessResult("", args))
-        }
-        throw new Error(`Unexpected git call: ${joined}`)
-      })
-      const layer = GitService.layer.pipe(Layer.provide(processesLayer))
-      const service = yield* GitService.pipe(Effect.provide(layer))
-      const result = yield* Effect.result(
-        service.getLocalReviewSnapshot(RepositoryCheckoutPath.make("/workspace/repo")),
-      )
-
-      expect(Result.isFailure(result)).toBe(true)
-      if (Result.isFailure(result)) expect(result.failure).toBeInstanceOf(LocalReviewChangedError)
-    }),
-  )
 })
-
-const git = (cwd: string, ...args: readonly string[]) =>
-  execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: sanitizedGitTestEnvironment(process.env),
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim()
-
-const commitAll = (cwd: string, message: string) => {
-  git(cwd, "add", "-A")
-  git(
-    cwd,
-    "-c",
-    "user.name=DiffDash Test",
-    "-c",
-    "user.email=test@diffdash.dev",
-    "-c",
-    "commit.gpgSign=false",
-    "commit",
-    "-m",
-    message,
-  )
-}

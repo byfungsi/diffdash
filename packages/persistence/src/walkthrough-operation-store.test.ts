@@ -1,11 +1,19 @@
 import { describe, expect, it } from "@effect/vitest"
 import { DiagnosticOperation } from "@diffdash/domain/diagnostic-operation"
-import { ReviewKey, ReviewRevision, type ReviewProjectId } from "@diffdash/domain/review-identity"
+import {
+  ReviewKey,
+  ReviewRevision,
+  ReviewSnapshotId,
+  type ReviewProjectId,
+} from "@diffdash/domain/review-identity"
 import { Walkthrough } from "@diffdash/domain/walkthrough"
 import {
   WalkthroughArtifactReference,
   WalkthroughExpectedFailure,
+  WalkthroughOperationAcceptanceEvidence,
+  WalkthroughOperationCandidatePlanFingerprint,
   WalkthroughOperationId,
+  WalkthroughOperationIdempotencyKey,
   WalkthroughOperationIdentity,
 } from "@diffdash/domain/walkthrough-operation"
 import { Effect, Layer, Option, Result, Schema } from "effect"
@@ -52,7 +60,138 @@ const makeIdentity = (repoId: ReviewProjectId, headRevision = "head-1") =>
     promptVersion: "walkthrough-v4",
   })
 
+const makeAcceptanceEvidence = (
+  repoId: ReviewProjectId,
+  idempotencyKey: string,
+  headRevision = "head-1",
+) =>
+  WalkthroughOperationAcceptanceEvidence.make({
+    acceptedRequest: {
+      applicationInstanceId: "app-persistence",
+      processEpoch: "epoch-persistence",
+      requestId: "h:persistence",
+    },
+    idempotencyKey: WalkthroughOperationIdempotencyKey.make(idempotencyKey),
+    reviewGeneration: {
+      kind: "hosted",
+      projectId: repoId,
+      snapshotId: ReviewSnapshotId.make(`snapshot:v1:${"a".repeat(32)}`),
+      reviewKey: ReviewKey.make("github:fungsi/walkthrough-operations#1"),
+      baseRevision: ReviewRevision.make("base-1"),
+      headRevision: ReviewRevision.make(headRevision),
+    },
+    regenerate: false,
+    configuredRoute: { mode: "auto", quality: "balanced" },
+    candidatePlanFingerprint: WalkthroughOperationCandidatePlanFingerprint.make(
+      `walkthrough-plan:v1:${"b".repeat(64)}`,
+    ),
+    attempts: [],
+  })
+
 describe("WalkthroughOperationStore", () => {
+  it.effect("round-trips durable acceptance evidence and replays by idempotency key", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* WalkthroughOperationStore
+        const repo = yield* createRepository()
+        const identity = makeIdentity(repo.id)
+        const acceptanceEvidence = makeAcceptanceEvidence(repo.id, "w:persistence-replay")
+        const first = yield* store.acceptOrGet({
+          operationId: WalkthroughOperationId.make("operation-evidence-1"),
+          identity,
+          regenerate: false,
+          acceptanceEvidence,
+        })
+        const replay = yield* store.acceptOrGet({
+          operationId: WalkthroughOperationId.make("operation-evidence-2"),
+          identity,
+          regenerate: false,
+          acceptanceEvidence: WalkthroughOperationAcceptanceEvidence.make({
+            ...acceptanceEvidence,
+            acceptedRequest: {
+              ...acceptanceEvidence.acceptedRequest,
+              requestId: "h:persistence-retry",
+            },
+          }),
+        })
+
+        expect(first.created).toBe(true)
+        expect(first.operation.acceptanceEvidence).toEqual(acceptanceEvidence)
+        expect(replay.created).toBe(false)
+        expect(replay.operation.id).toBe(first.operation.id)
+        expect(replay.operation.acceptanceEvidence).toEqual(acceptanceEvidence)
+        expect(Option.getOrThrow(yield* store.get(first.operation.id))).toEqual(first.operation)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects reuse of an idempotency key for a different immutable snapshot", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* WalkthroughOperationStore
+        const repo = yield* createRepository()
+        yield* store.acceptOrGet({
+          operationId: WalkthroughOperationId.make("operation-collision-1"),
+          identity: makeIdentity(repo.id),
+          regenerate: false,
+          acceptanceEvidence: makeAcceptanceEvidence(repo.id, "w:persistence-collision"),
+        })
+        const collidingEvidence = makeAcceptanceEvidence(repo.id, "w:persistence-collision")
+
+        const result = yield* Effect.result(
+          store.acceptOrGet({
+            operationId: WalkthroughOperationId.make("operation-collision-2"),
+            identity: makeIdentity(repo.id),
+            regenerate: false,
+            acceptanceEvidence: WalkthroughOperationAcceptanceEvidence.make({
+              ...collidingEvidence,
+              reviewGeneration: {
+                ...collidingEvidence.reviewGeneration,
+                snapshotId: ReviewSnapshotId.make(`snapshot:v1:${"c".repeat(32)}`),
+              },
+            }),
+          }),
+        )
+
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(WalkthroughOperationStoreError)
+          expect(result.failure.message).toBe(
+            "Walkthrough operation persistence failed during acceptOrGet.",
+          )
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects acceptance evidence with a mismatched regeneration intent", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const store = yield* WalkthroughOperationStore
+        const repo = yield* createRepository()
+        const result = yield* Effect.result(
+          store.acceptOrGet({
+            operationId: WalkthroughOperationId.make("operation-regenerate-mismatch"),
+            identity: makeIdentity(repo.id),
+            regenerate: true,
+            acceptanceEvidence: makeAcceptanceEvidence(repo.id, "w:regenerate-mismatch"),
+          }),
+        )
+
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure).toBeInstanceOf(WalkthroughOperationStoreError)
+        }
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
   it.effect("returns the same operation for repeated non-regenerate acceptance", () =>
     Effect.gen(function* () {
       const databasePath = yield* makeTempDatabasePath
@@ -266,8 +405,14 @@ describe("WalkthroughOperationStore", () => {
           expectedStateVersion: runningAccepted.operation.stateVersion,
         })
 
+        const active = yield* store.listActive
         const recovered = yield* store.recoverActiveAsInterrupted
 
+        expect(active.map(({ id }) => id)).toEqual([
+          accepted.operation.id,
+          runningAccepted.operation.id,
+        ])
+        expect(active.map(({ state }) => state)).toEqual(["accepted", "running"])
         expect(recovered.map(({ id }) => id)).toEqual([
           accepted.operation.id,
           runningAccepted.operation.id,
@@ -415,6 +560,37 @@ describe("WalkthroughOperationStore", () => {
         })
         yield* database.run(
           "UPDATE walkthrough_operations SET accepted_at = 'not-a-timestamp' WHERE id = ?",
+          [accepted.operation.id],
+        )
+
+        const result = yield* Effect.result(store.get(accepted.operation.id))
+
+        expect(Result.isFailure(result) && result.failure).toEqual(
+          expect.objectContaining<Partial<WalkthroughOperationStoreError>>({
+            _tag: "WalkthroughOperationStoreError",
+            operation: DiagnosticOperation.make("get.decode"),
+          }),
+        )
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("reports malformed durable acceptance evidence as a typed decoding failure", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+
+      return yield* Effect.gen(function* () {
+        const database = makeDatabase(yield* SqlClient.SqlClient)
+        const store = yield* WalkthroughOperationStore
+        const repo = yield* createRepository()
+        const accepted = yield* store.acceptOrGet({
+          operationId: WalkthroughOperationId.make("operation-malformed-evidence"),
+          identity: makeIdentity(repo.id),
+          regenerate: false,
+          acceptanceEvidence: makeAcceptanceEvidence(repo.id, "w:malformed-evidence"),
+        })
+        yield* database.run(
+          "UPDATE walkthrough_operation_acceptances SET evidence_json = '{}' WHERE operation_id = ?",
           [accepted.operation.id],
         )
 

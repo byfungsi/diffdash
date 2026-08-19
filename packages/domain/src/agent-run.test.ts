@@ -7,8 +7,11 @@ import { ReviewThreadId } from "./review-thread"
 import {
   AgentPromptVersion,
   AgentRun,
+  CancelledAgentRun,
   CompletedAgentRun,
+  InterruptedAgentRun,
   RunningAgentRun,
+  isTerminalAgentRun,
   ThreadMemory,
   ThreadMemorySummaryAlgorithm,
 } from "./agent-run"
@@ -48,7 +51,7 @@ describe("AgentRun", () => {
       promptVersion: completed.promptVersion,
       startedAt: completed.startedAt,
     })
-    expect(running._tag).toBe("Running")
+    expect(running).toMatchObject({ _tag: "Running" })
     expect(Schema.encodeSync(AgentRun)(running)).toEqual({
       _tag: "Running",
       id: "run-running",
@@ -61,6 +64,47 @@ describe("AgentRun", () => {
       promptVersion: "thread-v1",
       startedAt: "2026-07-12T00:00:00.000Z",
     })
+  })
+
+  it("models cancellation and Core interruption as distinct terminal states", () => {
+    const identity = {
+      id: AgentRunId.make("run-terminal"),
+      threadId: ReviewThreadId.make("thread-terminal"),
+      reviewKey: ReviewKey.make("github:fungsi/diffdash#256"),
+      baseRevision: ReviewRevision.make("base-256"),
+      headRevision: ReviewRevision.make("head-256"),
+      provider: ReviewAgentProviderId.make("opencode"),
+      model: "openai/gpt-5",
+      promptVersion: AgentPromptVersion.make("thread-v1"),
+      startedAt: "2026-08-16T00:00:00.000Z",
+      completedAt: "2026-08-16T00:00:01.000Z",
+    } as const
+    const cancelled = CancelledAgentRun.make(identity)
+    const interrupted = InterruptedAgentRun.make(identity)
+
+    expect(Schema.decodeUnknownSync(AgentRun)(Schema.encodeSync(AgentRun)(cancelled))).toEqual(
+      cancelled,
+    )
+    expect(Schema.decodeUnknownSync(AgentRun)(Schema.encodeSync(AgentRun)(interrupted))).toEqual(
+      interrupted,
+    )
+    expect(isTerminalAgentRun(cancelled)).toBe(true)
+    expect(isTerminalAgentRun(interrupted)).toBe(true)
+    expect(
+      isTerminalAgentRun(
+        RunningAgentRun.make({
+          id: identity.id,
+          threadId: identity.threadId,
+          reviewKey: identity.reviewKey,
+          baseRevision: identity.baseRevision,
+          headRevision: identity.headRevision,
+          provider: identity.provider,
+          model: identity.model,
+          promptVersion: identity.promptVersion,
+          startedAt: identity.startedAt,
+        }),
+      ),
+    ).toBe(false)
   })
 })
 

@@ -34,8 +34,7 @@ import type {
   ReviewThreadId,
   ReviewThreadTarget,
 } from "@diffdash/domain/review-thread"
-import type { ReviewProjectId, ReviewRevision } from "@diffdash/domain/review-identity"
-import type { StoredWalkthrough } from "@diffdash/domain/walkthrough"
+import type { ReviewProjectId } from "@diffdash/domain/review-identity"
 import type { WebUrl } from "@diffdash/domain/web-url"
 import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
@@ -43,12 +42,10 @@ import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
 import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
-  GenerateHostedWalkthroughRequest,
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
   HostedReviewRequest,
-  HostedWalkthroughRequest,
   OpenHostedReviewFileRequest,
   SubmitHostedReviewDecisionRequest,
 } from "./hosted-git"
@@ -60,10 +57,6 @@ import type {
   RunReviewThreadAgentRequest,
 } from "./review-threads"
 import type {
-  ReviewSnapshotPageRequest,
-  ReviewSnapshotPageResponse,
-  ReviewSnapshotSearchRequest,
-  ReviewSnapshotSearchResponse,
   ResolvedRepositoryComparison,
   OpenRepositoryComparisonFileRequest,
 } from "./review-snapshot"
@@ -77,6 +70,20 @@ import type {
   ViewedFileRecord,
 } from "./viewed-files"
 import type { BridgeResult } from "./ipc"
+import type { ProgressiveReviewApi } from "./review-session"
+import type { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
+import type {
+  WalkthroughBridgeStartRequest,
+  WalkthroughStartBridgeResult,
+} from "./walkthrough-operation"
+import type {
+  WalkthroughBridgeGetStoredRequest,
+  WalkthroughBridgeOperationRequest,
+  WalkthroughCancelBridgeResult,
+  WalkthroughGetOperationBridgeResult,
+  WalkthroughGetStoredBridgeResult,
+  WalkthroughOperationBridgeHint,
+} from "./walkthrough-operation-state"
 
 type EventSubscription<Value> = (listener: (value: Value) => void) => () => void
 
@@ -99,6 +106,10 @@ export interface DiffDashApi {
     readonly onCommandsAvailable: EventSubscription<void>
   }
   readonly diagnostics: () => Promise<AppPrerequisites>
+  readonly resources?: {
+    readonly diagnostics: () => Promise<ResourceDiagnostics>
+    readonly clearDisposable: () => Promise<ClearDisposableResourcesResult>
+  }
   readonly agentProviders: {
     readonly getCatalog: () => Promise<AgentProviderCatalog>
   }
@@ -184,9 +195,8 @@ export interface DiffDashApi {
     readonly acquireRepositoryComparison: (
       target: RepositoryComparisonTarget,
     ) => Promise<RepositoryComparisonSnapshotManifest>
-    readonly getPage: (request: ReviewSnapshotPageRequest) => Promise<ReviewSnapshotPageResponse>
-    readonly search: (request: ReviewSnapshotSearchRequest) => Promise<ReviewSnapshotSearchResponse>
   }
+  readonly progressiveReviews: ProgressiveReviewApi
   readonly viewedFiles: {
     readonly list: (request: HostedViewedFilesRequest) => Promise<readonly ViewedFileRecord[]>
     readonly set: (request: SetHostedViewedFileRequest) => Promise<void>
@@ -199,23 +209,20 @@ export interface DiffDashApi {
       request: SetRepositoryComparisonViewedFileRequest,
     ) => Promise<void>
   }
-  readonly walkthroughs: {
-    readonly get: (request: HostedWalkthroughRequest) => Promise<StoredWalkthrough | null>
-    readonly generate: (request: GenerateHostedWalkthroughRequest) => Promise<StoredWalkthrough>
-  }
-  readonly localWalkthroughs: {
-    readonly get: (
-      target: LocalReviewTarget,
-      baseSha: ReviewRevision,
-      headSha: ReviewRevision,
-    ) => Promise<StoredWalkthrough | null>
-    readonly generate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
-    readonly regenerate: (target: LocalReviewTarget) => Promise<StoredWalkthrough>
-  }
-  readonly repositoryComparisonWalkthroughs: {
-    readonly get: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough | null>
-    readonly generate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
-    readonly regenerate: (target: RepositoryComparisonTarget) => Promise<StoredWalkthrough>
+  readonly walkthroughOperations: {
+    readonly start: (
+      request: WalkthroughBridgeStartRequest,
+    ) => Promise<WalkthroughStartBridgeResult>
+    readonly getOperation: (
+      request: WalkthroughBridgeOperationRequest,
+    ) => Promise<WalkthroughGetOperationBridgeResult>
+    readonly cancel: (
+      request: WalkthroughBridgeOperationRequest,
+    ) => Promise<WalkthroughCancelBridgeResult>
+    readonly getStored: (
+      request: WalkthroughBridgeGetStoredRequest,
+    ) => Promise<WalkthroughGetStoredBridgeResult>
+    readonly onHint: EventSubscription<WalkthroughOperationBridgeHint>
   }
 }
 

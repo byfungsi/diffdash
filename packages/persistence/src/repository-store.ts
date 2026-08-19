@@ -119,6 +119,7 @@ export class RepositoryStoreError extends Schema.TaggedError<RepositoryStoreErro
 export class RepositoryStore extends Context.Service<
   RepositoryStore,
   {
+    readonly getById: (id: ReviewProjectId) => Effect.Effect<Repo, RepositoryStoreError>
     readonly list: (query?: string) => Effect.Effect<readonly Repo[], RepositoryStoreError>
     /** Finds the preferred persisted repository for a local checkout path. */
     readonly findByLocalPath: (
@@ -264,6 +265,7 @@ export class RepositoryStore extends Context.Service<
         })
 
       return RepositoryStore.of({
+        getById: Effect.fn("RepositoryStore.getById")(getById),
         list: Effect.fn("RepositoryStore.list")(function (query?: string) {
           const search = query?.trim()
           const hasSearch = search !== undefined && search.length > 0
@@ -596,7 +598,7 @@ export class RepositoryStore extends Context.Service<
                       row.name,
                       row.remoteUrl,
                       row.localPath,
-                      input.isFavorite === true ? 1 : 0,
+                      input.favorite === "mark" ? 1 : 0,
                       now,
                       now,
                       now,

@@ -11,7 +11,7 @@ import {
 import { NoAgentProviderAvailableError } from "@diffdash/agent-provider/registry"
 import type { ReviewAgentProgressStage } from "@diffdash/domain/review-agent"
 import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
-import type { ReviewRevision } from "@diffdash/domain/review-identity"
+import { ReviewSnapshotId, type ReviewRevision } from "@diffdash/domain/review-identity"
 import type {
   ReviewThreadAnchorInvalidError,
   ReviewThreadRevisionChangedError,
@@ -39,8 +39,10 @@ import type {
 } from "@diffdash/persistence/review-turn-store"
 import type { ViewedFileStoreError } from "@diffdash/persistence/viewed-file-store"
 import type { WalkthroughOperationStoreError } from "@diffdash/persistence/walkthrough-operation-store"
+import type { ResourceCatalogError } from "@diffdash/persistence/resource-catalog"
 import { WalkthroughStoreError } from "@diffdash/persistence/walkthrough-store"
 import type { ProcessExecutionError } from "@diffdash/process"
+import type { ApplicationInstanceId, CoreProcessEpoch } from "@diffdash/core-rpc/identity"
 import { InvokeChannel } from "@diffdash/protocol/channels"
 import type { InvokeRequest, InvokeResponse } from "@diffdash/protocol/ipc"
 import type {
@@ -57,12 +59,10 @@ import {
 import { Schema } from "effect"
 import { CoreAbsolutePath, CoreWebUrl } from "./core-configuration"
 import * as CoreDefectBoundary from "./core-defect-boundary"
-import type { CoreStartupFailure } from "./core-startup-error"
 import type { PrerequisiteInstallError } from "./services/prerequisites"
 import { RepositoryComparisonSourceError } from "./services/repository-comparison-source"
 import { RepositoryLinkError } from "./services/repository-linker"
 import { ReviewContextError } from "./services/git-provider"
-import type { ReviewSnapshotSearchResultTooLargeError } from "./services/review-snapshot-pagination"
 
 /** Closed business-operation catalog implemented by DiffDash Core. */
 export const CoreMethod = {
@@ -89,8 +89,6 @@ export const CoreMethod = {
   acquireHostedReviewSnapshot: "ReviewSnapshots.acquireHosted",
   acquireLocalReviewSnapshot: "ReviewSnapshots.acquireLocal",
   acquireRepositoryComparisonSnapshot: "ReviewSnapshots.acquireRepositoryComparison",
-  getReviewSnapshotPage: "ReviewSnapshots.getPage",
-  searchReviewSnapshot: "ReviewSnapshots.search",
   favoriteRemoteRepository: "Repositories.favoriteRemote",
   forgetRepository: "Repositories.forget",
   installRepository: "Repositories.install",
@@ -108,6 +106,8 @@ export const CoreMethod = {
   runReviewThreadAgent: "ReviewThreads.runAgent",
   settingsGet: "Settings.get",
   settingsUpdate: "Settings.update",
+  resourceDiagnostics: "Resources.diagnostics",
+  clearDisposableResources: "Resources.clearDisposable",
   listViewedFiles: "ViewedFiles.listHosted",
   listLocalViewedFiles: "ViewedFiles.listLocal",
   setViewedFile: "ViewedFiles.setHosted",
@@ -116,10 +116,10 @@ export const CoreMethod = {
   setRepositoryComparisonViewedFile: "ViewedFiles.setRepositoryComparison",
 } as const
 
-/** One business operation accepted by the embedded Core boundary. */
+/** One business operation accepted by the Core RPC boundary. */
 export type CoreMethod = (typeof CoreMethod)[keyof typeof CoreMethod]
 
-/** Protocol contracts reused while Core remains embedded behind Electron. */
+/** Protocol contracts mapped onto the named external Core operation boundary. */
 export const CoreMethodChannel = {
   [CoreMethod.analyticsCapture]: InvokeChannel.analyticsCapture,
   [CoreMethod.analyticsStart]: InvokeChannel.analyticsStart,
@@ -145,8 +145,6 @@ export const CoreMethodChannel = {
   [CoreMethod.acquireLocalReviewSnapshot]: InvokeChannel.acquireLocalReviewSnapshot,
   [CoreMethod.acquireRepositoryComparisonSnapshot]:
     InvokeChannel.acquireRepositoryComparisonSnapshot,
-  [CoreMethod.getReviewSnapshotPage]: InvokeChannel.getReviewSnapshotPage,
-  [CoreMethod.searchReviewSnapshot]: InvokeChannel.searchReviewSnapshot,
   [CoreMethod.favoriteRemoteRepository]: InvokeChannel.favoriteRemoteRepository,
   [CoreMethod.forgetRepository]: InvokeChannel.forgetRepository,
   [CoreMethod.installRepository]: InvokeChannel.installRepository,
@@ -164,6 +162,8 @@ export const CoreMethodChannel = {
   [CoreMethod.runReviewThreadAgent]: InvokeChannel.runReviewThreadAgent,
   [CoreMethod.settingsGet]: InvokeChannel.settingsGet,
   [CoreMethod.settingsUpdate]: InvokeChannel.settingsUpdate,
+  [CoreMethod.resourceDiagnostics]: InvokeChannel.resourceDiagnostics,
+  [CoreMethod.clearDisposableResources]: InvokeChannel.clearDisposableResources,
   [CoreMethod.listViewedFiles]: InvokeChannel.listViewedFiles,
   [CoreMethod.listLocalViewedFiles]: InvokeChannel.listLocalViewedFiles,
   [CoreMethod.setViewedFile]: InvokeChannel.setViewedFile,
@@ -185,6 +185,8 @@ export type CoreMethodOutput<Method extends CoreMethod> = InvokeResponse<
 
 /** Host callbacks required by operations that publish transient progress. */
 export interface CoreOperationOptions {
+  readonly applicationInstanceId?: ApplicationInstanceId
+  readonly processEpoch?: CoreProcessEpoch
   readonly onReviewThreadAgentProgress?: (stage: ReviewAgentProgressStage) => void
 }
 
@@ -219,31 +221,6 @@ export type CoreOperationOutput<Method extends CoreMethod> = Method extends
   | typeof CoreMethod.appOpenRepositoryFile
   ? CoreFileOpenIntent
   : CoreMethodOutput<Method>
-
-/** Explicit success or expected failure returned across the embedded Core boundary. */
-export type CoreResult<Value, Failure> =
-  | { readonly ok: true; readonly value: Value }
-  | { readonly ok: false; readonly error: Failure }
-
-/** Lifecycle states in which the embedded Core cannot accept requested work. */
-export const CoreUnavailableState = Schema.Literals([
-  "notStarted",
-  "starting",
-  "disposing",
-  "disposed",
-])
-
-/** Lifecycle states in which the embedded Core cannot accept requested work. */
-export type CoreUnavailableState = typeof CoreUnavailableState.Type
-
-/** A requested operation is invalid for the current embedded Core lifecycle. */
-export class CoreLifecycleError extends Schema.TaggedError<CoreLifecycleError>()(
-  "CoreLifecycleError",
-  {
-    state: CoreUnavailableState,
-    message: Schema.String,
-  },
-) {}
 
 /** Expected failures from selecting or invoking one hosted Git provider. */
 export type CoreGitProviderFailure = UnknownGitProviderError | GitProviderOperationError
@@ -318,8 +295,6 @@ export interface CoreOperationFailureMap {
   readonly [CoreMethod.acquireHostedReviewSnapshot]: RepositoryLinkError | ReviewContextError
   readonly [CoreMethod.acquireLocalReviewSnapshot]: ReviewContextError | RepositoryLinkError
   readonly [CoreMethod.acquireRepositoryComparisonSnapshot]: RepositoryComparisonSourceError
-  readonly [CoreMethod.getReviewSnapshotPage]: never
-  readonly [CoreMethod.searchReviewSnapshot]: ReviewSnapshotSearchResultTooLargeError
   readonly [CoreMethod.favoriteRemoteRepository]: RepositoryLinkError
   readonly [CoreMethod.forgetRepository]: RepositoryLinkError
   readonly [CoreMethod.installRepository]: RepositoryLinkError
@@ -346,6 +321,8 @@ export interface CoreOperationFailureMap {
     | CoreReviewAgentFailure
   readonly [CoreMethod.settingsGet]: AppSettingsError
   readonly [CoreMethod.settingsUpdate]: AppSettingsError
+  readonly [CoreMethod.resourceDiagnostics]: ResourceCatalogError
+  readonly [CoreMethod.clearDisposableResources]: ResourceCatalogError
   readonly [CoreMethod.listViewedFiles]: RepositoryLinkError | ViewedFileStoreError
   readonly [CoreMethod.setViewedFile]: RepositoryLinkError | ViewedFileStoreError
   readonly [CoreMethod.listLocalViewedFiles]: RepositoryLinkError | ViewedFileStoreError
@@ -361,19 +338,13 @@ export interface CoreOperationFailureMap {
 /** Expected failure returned by one named Core business operation. */
 export type CoreOperationFailure<Method extends CoreMethod> = CoreOperationFailureMap[Method]
 
-/** Startup acquisition can fail before any requested Core operation executes. */
-export type CoreBoundaryFailure<Failure> = CoreLifecycleError | CoreStartupFailure | Failure
-
-/** Expected failures while starting the Core application lifecycle. */
-export type CoreStartFailure = CoreBoundaryFailure<never>
-
 /** Expected failures while loading an already-persisted walkthrough. */
 export type CoreGetStoredWalkthroughFailure = CoreThreadResolutionFailure | WalkthroughStoreError
 
-/** Stable identity shared by durable storage and the embedded Core boundary. */
+/** Stable identity shared by durable storage and the Core RPC boundary. */
 export const WalkthroughOperationId = DomainWalkthroughOperationId
 
-/** Stable identity shared by durable storage and the embedded Core boundary. */
+/** Stable identity shared by durable storage and the Core RPC boundary. */
 export type WalkthroughOperationId = WalkthroughOperationIdType
 
 /** A requested embedded walkthrough operation is no longer known to this Core epoch. */
@@ -408,6 +379,15 @@ export interface StartWalkthroughOperation {
   readonly target: ReviewThreadTarget
   readonly regenerate: boolean
 }
+
+/** Requested immutable walkthrough generation is unavailable or no longer matches its snapshot. */
+export class WalkthroughReviewGenerationChangedError extends Schema.TaggedError<WalkthroughReviewGenerationChangedError>()(
+  "WalkthroughReviewGenerationChangedError",
+  {
+    snapshotId: ReviewSnapshotId,
+    reason: Schema.Literals(["unavailable", "mismatched"]),
+  },
+) {}
 
 /** Hosted review target constructor accepted by the Core walkthrough boundary. */
 export const CoreHostedReviewTarget = HostedReviewTarget
@@ -477,34 +457,10 @@ export interface GetStoredWalkthrough {
   readonly expectedHeadRevision: ReviewRevision | null
 }
 
-/** Durable walkthrough operation seam implemented in-process during the embedded migration. */
-export interface CoreWalkthroughs {
-  readonly start: (
-    request: StartWalkthroughOperation,
-  ) => Promise<
-    CoreResult<WalkthroughOperationAccepted, CoreBoundaryFailure<CoreWalkthroughStartFailure>>
-  >
-  readonly getOperation: (
-    operationId: WalkthroughOperationId,
-  ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
-  >
-  readonly cancel: (
-    operationId: WalkthroughOperationId,
-  ) => Promise<
-    CoreResult<WalkthroughOperationResult, CoreBoundaryFailure<CoreWalkthroughOperationFailure>>
-  >
-  /** Preserves nullable absence for the existing host and IPC transport contract. */
-  readonly getStored: (
-    request: GetStoredWalkthrough,
-  ) => Promise<
-    CoreResult<StoredWalkthrough | null, CoreBoundaryFailure<CoreGetStoredWalkthroughFailure>>
-  >
-}
-
 /** Expected failures while resolving and durably accepting walkthrough work. */
 export type CoreWalkthroughStartFailure =
   | CoreThreadResolutionFailure
+  | WalkthroughReviewGenerationChangedError
   | WalkthroughOperationStoreError
 
 /** Expected failures while reading, cancelling, or materializing durable walkthrough work. */
@@ -514,24 +470,3 @@ export type CoreWalkthroughOperationFailure =
   | WalkthroughStoreError
   | WalkthroughOperationStateUnavailable
   | WalkthroughOperationArtifactUnavailable
-
-/** Lifecycle and closed operation surface exposed to a native DiffDash host. */
-export interface EmbeddedCore {
-  /** Acquires Core resources and completes startup recovery. */
-  readonly start: () => Promise<CoreResult<void, CoreStartFailure>>
-
-  /** Executes one named Core operation without exposing internal Effect services. */
-  readonly execute: <Method extends CoreMethod>(
-    method: Method,
-    input: CoreMethodInput<Method>,
-    options?: CoreOperationOptions,
-  ) => Promise<
-    CoreResult<CoreOperationOutput<Method>, CoreBoundaryFailure<CoreOperationFailure<Method>>>
-  >
-
-  /** Provider-neutral walkthrough operation boundary owned by Core. */
-  readonly walkthroughs: CoreWalkthroughs
-
-  /** Releases every resource owned by Core. */
-  readonly dispose: () => Promise<void>
-}

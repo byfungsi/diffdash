@@ -20,11 +20,18 @@ import {
 
 export {
   buildReviewThreadPrompt,
+  REVIEW_THREAD_PROMPT_CONTEXT_LIMITS,
   type ReviewThreadPromptContext,
+  type ReviewThreadPromptFileInventory,
+  type ReviewThreadPromptHunkExcerpt,
   type ReviewThreadPromptInput,
   ReviewThreadPromptError,
   type SelectedReviewAgentArtifact,
 } from "./review-thread-prompt"
+export {
+  ReviewPromptFile,
+  ReviewPromptIdentity,
+} from "./review-prompt-context"
 
 const REVIEW_THREAD_TIMEOUT_MS = 10 * 60 * 1_000
 

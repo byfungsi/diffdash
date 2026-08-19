@@ -16,11 +16,11 @@
     },
     "@diffdash/desktop#build": {
       "dependsOn": ["^build"],
-      "outputs": ["out/**"]
+      "outputs": ["out/**", ".generated/core/**"]
     },
     "@diffdash/desktop#build:e2e": {
       "dependsOn": ["^build"],
-      "outputs": ["out/**"]
+      "outputs": ["out/**", ".generated/core/**"]
     },
     "@diffdash/web#build": {
       "outputs": ["dist/**"]

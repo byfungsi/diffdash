@@ -1,0 +1,48 @@
+{
+  "name": "@diffdash/core-rpc",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./admission": "./src/admission.ts",
+    "./application-rpc": "./src/application-rpc.ts",
+    "./business": "./src/business.ts",
+    "./control": "./src/control.ts",
+    "./event": "./src/event.ts",
+    "./event-rpc": "./src/event-rpc.ts",
+    "./failure": "./src/failure.ts",
+    "./host-capability": "./src/host-capability.ts",
+    "./identity": "./src/identity.ts",
+    "./lifecycle": "./src/lifecycle.ts",
+    "./method-policy": "./src/method-policy.ts",
+    "./process-startup": "./src/process-startup.ts",
+    "./review-agent": "./src/review-agent.ts",
+    "./review-agent-rpc": "./src/review-agent-rpc.ts",
+    "./review-session": "./src/review-session.ts",
+    "./review-session-rpc": "./src/review-session-rpc.ts",
+    "./review-session-rpc-admission": "./src/review-session-rpc-admission.ts",
+    "./resource": "./src/resource.ts",
+    "./transport": "./src/transport.ts",
+    "./walkthrough": "./src/walkthrough.ts",
+    "./walkthrough-rpc": "./src/walkthrough-rpc.ts"
+  },
+  "scripts": {
+    "benchmark:m21": "pnpm --filter @diffdash/core exec vitest run src/core-rpc-transport-policy.test.ts src/core-walkthrough-rpc-handlers.test.ts src/core-walkthrough-rpc-admission.test.ts src/core-rpc-socket-host.test.ts && bun scripts/m21-transport-benchmark.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && pnpm test:bun",
+    "test:bun": "bun scripts/bun-conformance.ts",
+    "lint": "oxlint src scripts --no-error-on-unmatched-pattern"
+  },
+  "dependencies": {
+    "@diffdash/domain": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
