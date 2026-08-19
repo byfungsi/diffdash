@@ -1359,7 +1359,7 @@ test("forwards a CLI command to the running DiffDash instance", async ({
   }
 })
 
-test("opens and forwards immutable comparisons through Electron", async ({
+test("opens and forwards immutable repository comparisons through Electron", async ({
   browserName: _browserName,
 }, testInfo) => {
   testInfo.setTimeout(90_000)
@@ -1450,13 +1450,10 @@ test("opens and forwards immutable comparisons through Electron", async ({
   expect(
     JSON.parse(String(persisted.workspaceStates[0]?.selected_review_target_json)) as unknown,
   ).toMatchObject({
-    kind: "local",
-    comparison: {
-      _tag: "revisionRange",
-      baseSha: revisions.base,
-      headSha: revisions.head,
-      mergeBaseSha: revisions.base,
-    },
+    kind: "repositoryComparison",
+    baseSha: revisions.base,
+    headSha: revisions.head,
+    mergeBaseSha: revisions.base,
   })
 })
 
