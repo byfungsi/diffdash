@@ -1364,6 +1364,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
 }, testInfo) => {
   testInfo.setTimeout(90_000)
   const fakeBin = testInfo.outputPath("fake-bin")
+  const localRepo = testInfo.outputPath("local-repo")
   const remoteRepo = testInfo.outputPath("comparison.git")
   const sourceRepo = testInfo.outputPath("comparison-source")
   const worktreePool = testInfo.outputPath("worktree-pool")
@@ -1376,6 +1377,12 @@ test("opens and forwards immutable repository comparisons through Electron", asy
   ])
   await Promise.all([installFakeCli(fakeBin), installCodexSettings(xdgConfigHome)])
   const revisions = await installComparisonRepository(sourceRepo, remoteRepo)
+  await mkdir(localRepo, { recursive: true })
+  realGit(localRepo, "init")
+  await writeFile(join(localRepo, "README.md"), "comparison checkout\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "local checkout")
+  realGit(localRepo, "remote", "add", "origin", remoteRepo)
 
   const appEnvironment = {
     ...process.env,
@@ -1397,7 +1404,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
     app = await electron.launch({
       args: [
         ...launchArgs,
-        `--diffdash-cli-v1=${sourceRepo}`,
+        `--diffdash-cli-v1=${localRepo}`,
         "--",
         "compare",
         "comparison-base",
@@ -1421,7 +1428,7 @@ test("opens and forwards immutable repository comparisons through Electron", asy
       [
         ...(process.platform === "linux" ? ["--no-sandbox"] : []),
         ...launchArgs,
-        `--diffdash-cli-v1=${sourceRepo}`,
+        `--diffdash-cli-v1=${localRepo}`,
         "--",
         "compare",
         revisions.base,
