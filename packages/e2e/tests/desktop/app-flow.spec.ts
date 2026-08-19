@@ -1093,6 +1093,11 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
   ])
   await installFakeCli(fakeBin)
   await installCodexSettings(xdgConfigHome)
+  realGit(localRepo, "init")
+  await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'base'\n")
+  realGit(localRepo, "add", ".")
+  commit(localRepo, "working tree base")
+  await writeFile(join(localRepo, "working-tree.ts"), "export const state = 'changed'\n")
 
   const app = await electron.launch({
     args: [
@@ -1107,7 +1112,9 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
       DIFFDASH_ALLOW_MULTIPLE_INSTANCES: "1",
       DIFFDASH_E2E_HIDDEN: "1",
       FAKE_REPO_ROOT: localRepo,
+      FAKE_USE_REAL_GIT: "1",
       PATH: prependExecutablePath(fakeBin),
+      REAL_GIT_PATH: "/usr/bin/git",
       XDG_CONFIG_HOME: xdgConfigHome,
     },
   })
@@ -1119,7 +1126,11 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
       "aria-pressed",
       "true",
     )
-    await expect(window.getByRole("button", { name: "Open working tree review" })).toBeVisible()
+    const workingTree = window.getByRole("button", { name: "Open working tree review" })
+    await expect(workingTree).toContainText("1 changed file", { timeout: 15_000 })
+    await workingTree.click()
+    await expect(window.locator("[data-review-editor-header]")).toContainText("Local changes")
+    await expect(window.getByText("working-tree.ts").first()).toBeVisible()
     await expect(window.getByRole("heading", { name: "Open pull requests" })).toBeVisible()
   } finally {
     await app.close()
@@ -1135,7 +1146,7 @@ test("opens the current project Reviews ribbon from the versioned CLI command", 
     }),
   ])
   expect(persisted.workspaceStates).toEqual([
-    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "reviews" }),
+    expect.objectContaining({ repo_id: "github:byfungsi/diffdash", active_ribbon: "files" }),
   ])
 })
 
