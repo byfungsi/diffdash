@@ -7,6 +7,11 @@ import {
   DEFAULT_CODE_THEME_PREFERENCES,
   DiffViewMode,
 } from "@diffdash/domain/ai-settings"
+import {
+  type CodeWorkspaceTarget,
+  HostedReviewCodeWorkspaceTarget,
+  ProjectRevisionCodeWorkspaceTarget,
+} from "@diffdash/domain/code-workspace"
 import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
@@ -165,7 +170,7 @@ export type ReviewDetailEnvironment = {
   readonly colorScheme: ColorScheme
   readonly onAISettingsChange: (settings: AISettings) => void
   readonly onLinkRepository: () => Promise<boolean>
-  readonly onOpenCodeFile: (path: RepositoryRelativePath) => void
+  readonly onOpenCodeFile: (path: RepositoryRelativePath, target: CodeWorkspaceTarget) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
   readonly onThreadDetailWidthChange: (width: number) => void
@@ -1623,7 +1628,26 @@ export const ReviewDetailView = ({
     const file = changedFiles.find((changedFile) => changedFile.path === path)
     if (file !== undefined) submitFileNavigation(file, "file-tree")
   }
-  const openRepositoryFile = (path: RepositoryRelativePath) => onOpenCodeFile(path)
+  const codeWorkspaceTarget = Match.valueTags(review, {
+    hosted: (hostedReview) =>
+      HostedReviewCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        review: hostedReview.target,
+        revision: manifest.headRevision,
+      }),
+    local: () =>
+      ProjectRevisionCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        revision: manifest.headRevision,
+      }),
+    repositoryComparison: () =>
+      ProjectRevisionCodeWorkspaceTarget.make({
+        projectId: manifest.projectId,
+        revision: manifest.headRevision,
+      }),
+  })
+  const openRepositoryFile = (path: RepositoryRelativePath) =>
+    onOpenCodeFile(path, codeWorkspaceTarget)
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => operations,

@@ -9,6 +9,7 @@
     "./agent-run-id": "./src/agent-run-id.ts",
     "./ai-settings": "./src/ai-settings.ts",
     "./app-state": "./src/app-state.ts",
+    "./code-workspace": "./src/code-workspace.ts",
     "./diff": "./src/diff.ts",
     "./diff-hunk-lines": "./src/diff-hunk-lines.ts",
     "./diff-parser": "./src/diff-parser.ts",

@@ -40,6 +40,17 @@ import type { AgentProviderCatalog } from "./agent-providers"
 import type { AnalyticsEvent } from "./analytics"
 import type { AppUpdateState } from "./app-update"
 import type { CliNavigationCommand } from "./cli-navigation"
+import type {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadResult,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseRequest,
+  ListCodeWorkspaceDirectoryRequest,
+  OpenCodeWorkspaceRequest,
+  ReadCodeWorkspaceFileRequest,
+  SearchCodeWorkspaceRequest,
+  CodeWorkspaceSearchResult,
+} from "./code-workspace"
 import type { OpenRepositoryComparisonCommand } from "./cli-navigation"
 import type {
   HostedProviderRequest,
@@ -51,10 +62,6 @@ import type {
 } from "./hosted-git"
 import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import type { LinkRepositoryCheckoutRequest } from "./repository-link"
-import type {
-  LocalCheckoutFileListResult,
-  LocalCheckoutFileReadResult,
-} from "./local-checkout-files"
 import type {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
@@ -139,12 +146,17 @@ export interface DiffDashApi {
     readonly forget: (projectId: ReviewProjectId) => Promise<Repo>
     readonly selectLocalFolder: () => Promise<RepositoryCheckoutPath | null>
   }
-  readonly localCheckoutFiles: {
-    readonly list: (projectId: ReviewProjectId) => Promise<LocalCheckoutFileListResult>
-    readonly read: (
-      projectId: ReviewProjectId,
-      path: RepositoryRelativePath,
-    ) => Promise<LocalCheckoutFileReadResult>
+  readonly codeWorkspace: {
+    readonly open: (request: OpenCodeWorkspaceRequest) => Promise<CodeWorkspaceLease>
+    readonly heartbeat: (request: CodeWorkspaceLeaseRequest) => Promise<CodeWorkspaceLease>
+    readonly release: (request: CodeWorkspaceLeaseRequest) => Promise<void>
+    readonly listDirectory: (
+      request: ListCodeWorkspaceDirectoryRequest,
+    ) => Promise<CodeWorkspaceDirectoryPage>
+    readonly search: (request: SearchCodeWorkspaceRequest) => Promise<CodeWorkspaceSearchResult>
+    readonly readFile: (
+      request: ReadCodeWorkspaceFileRequest,
+    ) => Promise<CodeWorkspaceFileReadResult>
   }
   readonly projectWorkspace: {
     readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>

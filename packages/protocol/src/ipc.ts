@@ -42,6 +42,17 @@ import { EventChannel, InvokeChannel } from "./channels"
 import { E2eReviewLifecycleDiagnostics, E2eReviewLifecycleHold } from "./e2e-review-lifecycle"
 import { CliNavigationCommand, NAVIGATION_COMMAND_DRAIN_LIMIT } from "./cli-navigation"
 import {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadResult,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseRequest,
+  CodeWorkspaceSearchResult,
+  ListCodeWorkspaceDirectoryRequest,
+  OpenCodeWorkspaceRequest,
+  ReadCodeWorkspaceFileRequest,
+  SearchCodeWorkspaceRequest,
+} from "./code-workspace"
+import {
   HostedProviderRequest,
   HostedRepositoryRequest,
   HostedRepositorySearchRequest,
@@ -52,12 +63,6 @@ import {
 import { assertJsonPayloadWithinBudget, jsonSafeUtf8ByteLength } from "./payload-budget"
 import { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import { LinkRepositoryCheckoutRequest } from "./repository-link"
-import {
-  ListLocalCheckoutFilesRequest,
-  LocalCheckoutFileListResult,
-  LocalCheckoutFileReadResult,
-  ReadLocalCheckoutFileRequest,
-} from "./local-checkout-files"
 import { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 import {
   AcquireHostedReviewSnapshotRequest,
@@ -420,16 +425,40 @@ export const InvokeContract = {
     LinkRepositoryCheckoutRequest,
     Repo,
   ),
-  [InvokeChannel.listLocalCheckoutFiles]: defineInvoke(
-    InvokeChannel.listLocalCheckoutFiles,
-    ListLocalCheckoutFilesRequest,
-    LocalCheckoutFileListResult,
-    { maxRequestBytes: 8 * KIB, maxResponseBytes: 512 * KIB },
+  [InvokeChannel.openCodeWorkspace]: defineInvoke(
+    InvokeChannel.openCodeWorkspace,
+    OpenCodeWorkspaceRequest,
+    CodeWorkspaceLease,
+    { maxRequestBytes: 16 * KIB, maxResponseBytes: 8 * KIB },
   ),
-  [InvokeChannel.readLocalCheckoutFile]: defineInvoke(
-    InvokeChannel.readLocalCheckoutFile,
-    ReadLocalCheckoutFileRequest,
-    LocalCheckoutFileReadResult,
+  [InvokeChannel.heartbeatCodeWorkspace]: defineInvoke(
+    InvokeChannel.heartbeatCodeWorkspace,
+    CodeWorkspaceLeaseRequest,
+    CodeWorkspaceLease,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.releaseCodeWorkspace]: defineInvoke(
+    InvokeChannel.releaseCodeWorkspace,
+    CodeWorkspaceLeaseRequest,
+    Schema.Void,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 8 * KIB },
+  ),
+  [InvokeChannel.listCodeWorkspaceDirectory]: defineInvoke(
+    InvokeChannel.listCodeWorkspaceDirectory,
+    ListCodeWorkspaceDirectoryRequest,
+    CodeWorkspaceDirectoryPage,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 128 * KIB },
+  ),
+  [InvokeChannel.searchCodeWorkspace]: defineInvoke(
+    InvokeChannel.searchCodeWorkspace,
+    SearchCodeWorkspaceRequest,
+    CodeWorkspaceSearchResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 64 * KIB },
+  ),
+  [InvokeChannel.readCodeWorkspaceFile]: defineInvoke(
+    InvokeChannel.readCodeWorkspaceFile,
+    ReadCodeWorkspaceFileRequest,
+    CodeWorkspaceFileReadResult,
     { maxRequestBytes: 8 * KIB, maxResponseBytes: 640 * KIB },
   ),
   [InvokeChannel.listRepositories]: defineInvoke(

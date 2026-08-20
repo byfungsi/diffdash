@@ -11,9 +11,12 @@ import {
 } from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
 import {
-  LocalCheckoutFileList,
-  LocalCheckoutFileReadRejected,
-} from "@diffdash/domain/local-checkout-file"
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadRejected,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseId,
+  CodeWorkspaceSearchResult,
+} from "@diffdash/domain/code-workspace"
 import {
   GitProviderCapabilities,
   GitProviderDescriptor,
@@ -31,6 +34,7 @@ import {
   ProjectWorkspaceState,
   type ProjectWorkspaceStateInput,
 } from "@diffdash/domain/project-workspace"
+import { GitCommitSha } from "@diffdash/domain/repository-comparison"
 import {
   LinkedCheckout,
   RemoteOnly,
@@ -708,13 +712,25 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
       },
       selectLocalFolder: async () => null,
     },
-    localCheckoutFiles: {
-      list: async () =>
-        LocalCheckoutFileList.make({
-          paths: currentRevision.parsedDiff.files.map((file) => file.path),
+    codeWorkspace: {
+      open: async ({ target }) =>
+        CodeWorkspaceLease.make({
+          id: CodeWorkspaceLeaseId.make("demo-code-workspace"),
+          revision: GitCommitSha.make(
+            target._tag === "projectHead" ? "0".repeat(40) : target.revision,
+          ),
+          expiresAtMs: Date.now() + 60 * 60 * 1_000,
         }),
-      read: async (_projectId, path) =>
-        LocalCheckoutFileReadRejected.make({ path, reason: "missing" }),
+      heartbeat: async () =>
+        CodeWorkspaceLease.make({
+          id: CodeWorkspaceLeaseId.make("demo-code-workspace"),
+          revision: GitCommitSha.make("0".repeat(40)),
+          expiresAtMs: Date.now() + 60 * 60 * 1_000,
+        }),
+      release: async () => undefined,
+      listDirectory: async () => CodeWorkspaceDirectoryPage.make({ entries: [], nextOffset: null }),
+      search: async () => CodeWorkspaceSearchResult.make({ paths: [], nextOffset: null }),
+      readFile: async ({ path }) => CodeWorkspaceFileReadRejected.make({ path, reason: "missing" }),
     },
     projectWorkspace: {
       get: async (projectId) => projectWorkspaceStates.get(projectId) ?? null,

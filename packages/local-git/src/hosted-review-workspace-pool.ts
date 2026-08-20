@@ -1,5 +1,17 @@
 import { createHash, randomUUID } from "node:crypto"
-import { Context, Effect, Fiber, Layer, Match, Option, Result, Schema, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Match,
+  Option,
+  Result,
+  Schema,
+  Stream,
+} from "effect"
 
 import {
   makeHostedRepositoryKey,
@@ -73,6 +85,19 @@ export interface HostedRepositoryComparisonInput {
   readonly remoteUrl: string
   readonly baseRef: RepositoryComparisonRef
   readonly headRef: RepositoryComparisonRef
+  readonly bootstrapBareRepository: (
+    destination: RepositoryCheckoutPath,
+  ) => Effect.Effect<void, Error, never>
+}
+
+/** Input required to run an operation against one exact repository revision. */
+export interface HostedRepositoryRevisionInput {
+  readonly repository: HostedRepositoryLocator | null
+  readonly cacheKey?: string
+  readonly sourcePath: RepositoryLocalPath
+  readonly remoteUrl: string
+  readonly revision: GitCommitSha
+  readonly fetchRef?: RepositoryComparisonRef
   readonly bootstrapBareRepository: (
     destination: RepositoryCheckoutPath,
   ) => Effect.Effect<void, Error, never>
@@ -238,6 +263,10 @@ export class HostedReviewWorkspacePool extends Context.Service<
       input: PinnedRepositoryComparisonInput,
       run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E>,
     ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError>
+    readonly useRevision: <A, E, R>(
+      input: HostedRepositoryRevisionInput,
+      run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | HostedReviewWorkspacePoolError, R>
   }
 >()("@diffdash/HostedReviewWorkspacePool") {
   static readonly layer = (config: {
@@ -288,10 +317,7 @@ export class HostedReviewWorkspacePool extends Context.Service<
 
         const pinComparison = (input: HostedRepositoryComparisonInput) => {
           const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
-          const repositoryRoot = pathForRepository(
-            filesystem,
-            makeHostedRepositoryKey(input.repository),
-          )
+          const repositoryRoot = pathForRepository(filesystem, repositoryCacheKey(input))
 
           return withFileLock(
             filesystem,
@@ -345,10 +371,7 @@ export class HostedReviewWorkspacePool extends Context.Service<
 
         const readComparisonDiff = (input: PinnedRepositoryComparisonInput) => {
           const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
-          const repositoryRoot = pathForRepository(
-            filesystem,
-            makeHostedRepositoryKey(input.repository),
-          )
+          const repositoryRoot = pathForRepository(filesystem, repositoryCacheKey(input))
           return withFileLock(
             filesystem,
             filesystem.child(repositoryRoot, "repository.lock"),
@@ -462,11 +485,66 @@ export class HostedReviewWorkspacePool extends Context.Service<
           )
         }
 
+        const useRevision = <A, E, R>(
+          input: HostedRepositoryRevisionInput,
+          run: (localPath: RepositoryCheckoutPath) => Effect.Effect<A, E, R>,
+        ): Effect.Effect<A, E | HostedReviewWorkspacePoolError, R> => {
+          const filesystem = input.sourcePath === null ? remoteFilesystem : localFilesystem
+          const repositoryRoot = pathForRepository(filesystem, repositoryCacheKey(input))
+          const workspaceRoot = filesystem.child(repositoryRoot, "revision-workspaces")
+          const workspacePath = filesystem.child(workspaceRoot, randomUUID())
+
+          return Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const prepared = yield* withFileLock(
+                filesystem,
+                filesystem.child(repositoryRoot, "repository.lock"),
+                () =>
+                  Effect.gen(function* () {
+                    const barePath = yield* prepareBareRepository(filesystem, processes, input)
+                    const refs = yield* prepareRevision(
+                      filesystem,
+                      processes,
+                      barePath,
+                      input,
+                      config.reviewRefs,
+                    )
+                    yield* filesystem.ensureDirectory(workspaceRoot, "revision.workspace.mkdir")
+                    yield* recreateWorktree(
+                      filesystem,
+                      processes,
+                      barePath,
+                      workspacePath,
+                      input.revision,
+                    )
+                    return { barePath, refs }
+                  }),
+                REPOSITORY_LOCK_TIMEOUT_MS,
+              )
+              const cleanup = withFileLock(
+                filesystem,
+                filesystem.child(repositoryRoot, "repository.lock"),
+                () => removeWorktree(filesystem, processes, prepared.barePath, workspacePath),
+                REPOSITORY_LOCK_TIMEOUT_MS,
+              )
+              return yield* completeWithFinalizer(
+                manageReviewRefs(
+                  config.reviewRefs,
+                  prepared.refs,
+                  restore(run(RepositoryCheckoutPath.make(workspacePath))),
+                ),
+                cleanup,
+              )
+            }),
+          )
+        }
+
         return HostedReviewWorkspacePool.of({
           pinComparison,
           readComparisonDiff,
           use,
           useComparison,
+          useRevision,
         })
       }),
     )
@@ -478,7 +556,8 @@ interface Reservation {
 }
 
 interface HostedRepositoryCacheInput {
-  readonly repository: HostedRepositoryLocator
+  readonly repository: HostedRepositoryLocator | null
+  readonly cacheKey?: string
   readonly sourcePath: RepositoryLocalPath
   readonly remoteUrl: string | null
   readonly bootstrapBareRepository: (
@@ -641,7 +720,7 @@ const prepareBareRepository = (
   onProgress?: (stage: ReviewAgentProgressStage) => Effect.Effect<void>,
 ) =>
   Effect.gen(function* () {
-    const repositoryRoot = pathForRepository(filesystem, makeHostedRepositoryKey(input.repository))
+    const repositoryRoot = pathForRepository(filesystem, repositoryCacheKey(input))
     const sourcePath = input.sourcePath
     yield* filesystem.ensureDirectory(repositoryRoot, "repository.mkdir")
     const barePath = filesystem.child(repositoryRoot, "repository.git")
@@ -654,6 +733,14 @@ const prepareBareRepository = (
       yield* reportProgress(onProgress, "creating-repository")
       yield* filesystem.validate(barePath, "repository.create.path")
       if (sourcePath === null) {
+        if (input.repository === null) {
+          return yield* poolError(
+            "git",
+            "repository.bootstrap",
+            "A remote managed repository requires a hosted identity.",
+            new Error("Missing hosted repository identity"),
+          )
+        }
         yield* input
           .bootstrapBareRepository(RepositoryCheckoutPath.make(barePath))
           .pipe(
@@ -698,6 +785,7 @@ const prepareBareRepository = (
 const COMPARISON_HEAD_PREFIX = "refs/diffdash/comparisons/heads/"
 const COMPARISON_TAG_PREFIX = "refs/diffdash/comparisons/tags/"
 const COMPARISON_COMMIT_PREFIX = "refs/diffdash/comparisons/commits/"
+const REVISION_COMMIT_PREFIX = "refs/diffdash/revisions/commits/"
 const isFullCommitSha = (revision: string) => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(revision)
 
 const fetchAndResolveComparison = (
@@ -772,6 +860,76 @@ const fetchAndResolveComparison = (
     )
     const mergeBaseSha = yield* parseCommitSha(mergeBase.stdout, "comparison.mergeBase")
     return { baseSha, headSha, mergeBaseSha }
+  })
+
+const prepareRevision = (
+  filesystem: ManagedWorkspaceFilesystem,
+  processes: ProcessRunner,
+  barePath: ManagedWorkspacePath,
+  input: HostedRepositoryRevisionInput,
+  reviewRefs: ReviewRefLifecycle | undefined,
+) =>
+  Effect.gen(function* () {
+    if (input.fetchRef === undefined) {
+      if (input.sourcePath !== null) {
+        const ref = `${REVISION_COMMIT_PREFIX}${input.revision}/${randomUUID()}`
+        yield* runManagedGit(filesystem, [barePath], processes, [
+          "--git-dir",
+          barePath,
+          "fetch",
+          "--no-tags",
+          "--force",
+          input.sourcePath,
+          `+${input.revision}:${ref}`,
+        ])
+        const fetched = yield* resolveCommit(filesystem, processes, barePath, ref)
+        if (fetched !== input.revision) {
+          return yield* poolError(
+            "revision-changed",
+            "revision.verify",
+            "The requested local repository revision changed while its workspace was being prepared.",
+            new Error(`Expected ${input.revision}, fetched ${fetched}`),
+          )
+        }
+        const created = createdReviewRef(barePath, ref, fetched)
+        yield* manageReviewRefs(reviewRefs, [created], Effect.void)
+        return [created]
+      }
+      yield* resolveCommit(filesystem, processes, barePath, input.revision).pipe(
+        Effect.mapError((cause) =>
+          poolError(
+            "revision-not-found",
+            "revision.verify",
+            "The requested repository revision is not available in the managed repository cache.",
+            cause,
+          ),
+        ),
+      )
+      return []
+    }
+
+    const ref = `${REVISION_COMMIT_PREFIX}${input.revision}/${randomUUID()}`
+    yield* runManagedGit(filesystem, [barePath], processes, [
+      "--git-dir",
+      barePath,
+      "fetch",
+      "--no-tags",
+      "--force",
+      "origin",
+      `+${input.fetchRef}:${ref}`,
+    ])
+    const fetched = yield* resolveCommit(filesystem, processes, barePath, ref)
+    if (fetched !== input.revision) {
+      return yield* poolError(
+        "revision-changed",
+        "revision.verify",
+        "The requested repository revision changed while its workspace was being prepared.",
+        new Error(`Expected ${input.revision}, fetched ${fetched}`),
+      )
+    }
+    const created = createdReviewRef(barePath, ref, fetched)
+    yield* manageReviewRefs(reviewRefs, [created], Effect.void)
+    return [created]
   })
 
 const resolveComparisonRevision = (
@@ -935,7 +1093,9 @@ const manageReviewRefs = <A, E, R>(
 
 const isManagedReviewRef = (ref: string): boolean =>
   /^refs\/diffdash\/reviews\/[1-9][0-9]*\/heads\/[0-9a-f-]{36}$/u.test(ref) ||
-  /^refs\/diffdash\/comparisons\/commits\/[0-9a-f]{40}(?:[0-9a-f]{24})?\/[0-9a-f-]{36}$/iu.test(ref)
+  /^refs\/diffdash\/(?:comparisons|revisions)\/commits\/[0-9a-f]{40}(?:[0-9a-f]{24})?\/[0-9a-f-]{36}$/iu.test(
+    ref,
+  )
 
 const firstManagedRepository = (
   filesystems: readonly ManagedWorkspaceFilesystem[],
@@ -1072,18 +1232,32 @@ const recreateWorktree = (
       "--expire",
       "now",
     ])
-    yield* runManagedGit(filesystem, [barePath, worktreePath], processes, [
-      "--git-dir",
-      barePath,
-      "worktree",
-      "add",
-      "--force",
-      "--detach",
-      worktreePath,
-      headSha,
-    ])
-    yield* filesystem.validate(worktreePath, "worktree.created.path")
-    yield* verifyWorktree(filesystem, processes, worktreePath, headSha)
+    yield* Effect.gen(function* () {
+      yield* runManagedGit(filesystem, [barePath, worktreePath], processes, [
+        "--git-dir",
+        barePath,
+        "worktree",
+        "add",
+        "--force",
+        "--detach",
+        worktreePath,
+        headSha,
+      ])
+      yield* filesystem.validate(worktreePath, "worktree.created.path")
+      yield* verifyWorktree(filesystem, processes, worktreePath, headSha)
+    }).pipe(
+      Effect.catchCause((preparationCause) =>
+        Effect.exit(removeWorktree(filesystem, processes, barePath, worktreePath)).pipe(
+          Effect.flatMap((cleanupExit) =>
+            Effect.failCause(
+              Exit.isFailure(cleanupExit)
+                ? Cause.combine(preparationCause, cleanupExit.cause)
+                : preparationCause,
+            ),
+          ),
+        ),
+      ),
+    )
   })
 
 const removeWorktree = (
@@ -1173,6 +1347,13 @@ const evictSlot = (
     yield* filesystem.remove(slotPath, "evict.remove")
   })
 }
+
+const repositoryCacheKey = (input: HostedRepositoryCacheInput): string =>
+  input.repository === null
+    ? createHash("sha256")
+        .update(input.cacheKey ?? input.sourcePath ?? input.remoteUrl ?? "")
+        .digest("hex")
+    : makeHostedRepositoryKey(input.repository)
 
 const reserveSlot = (
   manifest: Manifest,

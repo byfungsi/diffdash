@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     "./local-checkout-files": "./src/local-checkout-files.ts",
+    "./managed-workspace-files": "./src/managed-workspace-files.ts",
+    "./managed-workspace-lock": "./src/managed-workspace-lock.ts",
     "./hosted-review-workspace-pool": "./src/hosted-review-workspace-pool.ts",
     "./local-git": "./src/local-git.ts",
     "./local-review-diff-source": "./src/local-review-diff-source.ts",

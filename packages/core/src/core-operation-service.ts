@@ -16,7 +16,7 @@ import { CoreEventHub } from "./core-event-hub"
 import { CoreStartupError } from "./core-startup-error"
 import { makeAnalyticsOperationHandlers } from "./operations/analytics-operation-handlers"
 import { makeApplicationOperationHandlers } from "./operations/application-operation-handlers"
-import { makeLocalCheckoutFileOperationHandlers } from "./operations/local-checkout-file-operation-handlers"
+import { makeCodeWorkspaceOperationHandlers } from "./operations/code-workspace-operation-handlers"
 import {
   assertUniqueOperationHandlers,
   type OperationHandlers,
@@ -99,7 +99,7 @@ export const coreOperationLayer = Layer.effect(
     )
     const analyticsHandlers = yield* makeAnalyticsOperationHandlers
     const applicationHandlers = yield* makeApplicationOperationHandlers
-    const localCheckoutFileHandlers = yield* makeLocalCheckoutFileOperationHandlers
+    const codeWorkspaceHandlers = yield* makeCodeWorkspaceOperationHandlers
     const repositoryHandlers = yield* makeRepositoryOperationHandlers
     const resourceHandlers = yield* makeResourceOperationHandlers
     const reviewAcquisitionHandlers = yield* makeReviewAcquisitionOperationHandlers
@@ -135,7 +135,7 @@ export const coreOperationLayer = Layer.effect(
     const handlerCapabilities = [
       analyticsHandlers,
       applicationHandlers,
-      localCheckoutFileHandlers,
+      codeWorkspaceHandlers,
       repositoryHandlers,
       resourceHandlers,
       reviewAcquisitionHandlers,
@@ -150,7 +150,7 @@ export const coreOperationLayer = Layer.effect(
     const handlers = {
       ...analyticsHandlers,
       ...applicationHandlers,
-      ...localCheckoutFileHandlers,
+      ...codeWorkspaceHandlers,
       ...repositoryHandlers,
       ...resourceHandlers,
       ...reviewAcquisitionHandlers,

@@ -243,6 +243,7 @@ const ResourceCatalogOperation = Schema.Literals([
   "acquireLease",
   "acquireLeases",
   "renewLease",
+  "renewLeases",
   "releaseLease",
   "releaseLeases",
   "expireOwnership",
@@ -309,6 +310,13 @@ export class ResourceCatalog extends Context.Service<
       readonly renewedAtMs: number
       readonly expiresAtMs: number
     }) => Effect.Effect<void, ResourceCatalogError>
+    readonly renewLeases: (input: {
+      readonly ids: readonly ResourceLeaseId[]
+      readonly applicationInstanceId: string
+      readonly processEpoch: string
+      readonly renewedAtMs: number
+      readonly expiresAtMs: number
+    }) => Effect.Effect<void, ResourceCatalogError>
     readonly releaseLease: (input: {
       readonly id: ResourceLeaseId
       readonly applicationInstanceId: string
@@ -360,6 +368,69 @@ export class ResourceCatalog extends Context.Service<
     Effect.gen(function* () {
       const database = makeDatabase(yield* SqlClient.SqlClient)
       const get = makeGet(database)
+      const acquireLease = Effect.fn("ResourceCatalog.acquireLeaseRow")(function* (
+        lease: CatalogResourceLease,
+      ) {
+        const rows = yield* database.all(
+          `INSERT INTO resource_leases (
+             id, resource_id, owner_kind, owner_id, application_instance_id, process_epoch,
+             acquired_at_ms, renewed_at_ms, expires_at_ms, purpose
+           )
+           SELECT ?, id, ?, ?, ?, ?, ?, ?, ?, ? FROM resources
+           WHERE id = ? AND state = 'ready'
+           RETURNING *`,
+          [
+            lease.id,
+            lease.ownerKind,
+            lease.ownerId,
+            lease.applicationInstanceId,
+            lease.processEpoch,
+            lease.acquiredAtMs,
+            lease.renewedAtMs,
+            lease.expiresAtMs,
+            lease.purpose,
+            lease.resourceId,
+          ],
+        )
+        const acquired = yield* Schema.decodeUnknownEffect(LeaseRows)(rows)
+        if (acquired.length !== 1) {
+          return yield* Effect.fail(new Error("Leases require resources in ready state"))
+        }
+        return undefined
+      })
+      const renewLease = Effect.fn("ResourceCatalog.renewLeaseRow")(function* (input: {
+        readonly id: ResourceLeaseId
+        readonly applicationInstanceId: string
+        readonly processEpoch: string
+        readonly renewedAtMs: number
+        readonly expiresAtMs: number
+      }) {
+        const rows = yield* database.all(
+          `UPDATE resource_leases SET renewed_at_ms = ?, expires_at_ms = ?
+           WHERE id = ? AND application_instance_id = ? AND process_epoch = ?
+             AND expires_at_ms > ?
+             AND EXISTS (
+               SELECT 1 FROM resources
+               WHERE resources.id = resource_leases.resource_id AND resources.state = 'ready'
+             )
+           RETURNING *`,
+          [
+            input.renewedAtMs,
+            input.expiresAtMs,
+            input.id,
+            input.applicationInstanceId,
+            input.processEpoch,
+            input.renewedAtMs,
+          ],
+        )
+        const renewed = yield* Schema.decodeUnknownEffect(LeaseRows)(rows)
+        if (renewed.length !== 1) {
+          return yield* Effect.fail(
+            new Error("Lease cannot be renewed by this owner in its current state"),
+          )
+        }
+        return undefined
+      })
       const transition = (
         operation: ResourceCatalogOperation,
         statement: string,
@@ -600,66 +671,33 @@ export class ResourceCatalog extends Context.Service<
         }),
         acquireLease: Effect.fn("ResourceCatalog.acquireLease")(function (lease) {
           return database
-            .run(
-              `INSERT INTO resource_leases (
-                id, resource_id, owner_kind, owner_id, application_instance_id, process_epoch,
-                acquired_at_ms, renewed_at_ms, expires_at_ms, purpose
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                lease.id,
-                lease.resourceId,
-                lease.ownerKind,
-                lease.ownerId,
-                lease.applicationInstanceId,
-                lease.processEpoch,
-                lease.acquiredAtMs,
-                lease.renewedAtMs,
-                lease.expiresAtMs,
-                lease.purpose,
-              ],
-            )
+            .transaction(acquireLease(lease))
             .pipe(Effect.mapError((cause) => catalogError("acquireLease", cause)))
         }),
         acquireLeases: Effect.fn("ResourceCatalog.acquireLeases")(function (leases) {
           return database
-            .transaction(
-              Effect.forEach(leases, (lease) =>
-                database.run(
-                  `INSERT INTO resource_leases (
-                    id, resource_id, owner_kind, owner_id, application_instance_id, process_epoch,
-                    acquired_at_ms, renewed_at_ms, expires_at_ms, purpose
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [
-                    lease.id,
-                    lease.resourceId,
-                    lease.ownerKind,
-                    lease.ownerId,
-                    lease.applicationInstanceId,
-                    lease.processEpoch,
-                    lease.acquiredAtMs,
-                    lease.renewedAtMs,
-                    lease.expiresAtMs,
-                    lease.purpose,
-                  ],
-                ),
-              ).pipe(Effect.asVoid),
-            )
+            .transaction(Effect.forEach(leases, acquireLease).pipe(Effect.asVoid))
             .pipe(Effect.mapError((cause) => catalogError("acquireLeases", cause)))
         }),
         renewLease: Effect.fn("ResourceCatalog.renewLease")(function (input) {
           return database
-            .run(
-              `UPDATE resource_leases SET renewed_at_ms = ?, expires_at_ms = ?
-               WHERE id = ? AND application_instance_id = ? AND process_epoch = ?`,
-              [
-                input.renewedAtMs,
-                input.expiresAtMs,
-                input.id,
-                input.applicationInstanceId,
-                input.processEpoch,
-              ],
-            )
+            .transaction(renewLease(input))
             .pipe(Effect.mapError((cause) => catalogError("renewLease", cause)))
+        }),
+        renewLeases: Effect.fn("ResourceCatalog.renewLeases")(function (input) {
+          return database
+            .transaction(
+              Effect.forEach(input.ids, (id) =>
+                renewLease({
+                  id,
+                  applicationInstanceId: input.applicationInstanceId,
+                  processEpoch: input.processEpoch,
+                  renewedAtMs: input.renewedAtMs,
+                  expiresAtMs: input.expiresAtMs,
+                }),
+              ).pipe(Effect.asVoid),
+            )
+            .pipe(Effect.mapError((cause) => catalogError("renewLeases", cause)))
         }),
         releaseLease: Effect.fn("ResourceCatalog.releaseLease")(function (input) {
           return database

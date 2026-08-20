@@ -18,6 +18,7 @@ import { DisposableResourceLifecycle } from "./disposable-resource-lifecycle"
 import { registerDisposableResourceProducers } from "./resource-producer-registration"
 
 const WORKSPACE_LEASE_LIFETIME_MS = 15 * 60 * 1_000
+const WORKSPACE_LEASE_RENEWAL_MS = 5 * 60 * 1_000
 
 /** A managed workspace path was not one of the generated paths owned by a configured pool. */
 export class AgentWorkspaceResourceError extends Schema.TaggedError<AgentWorkspaceResourceError>()(
@@ -31,6 +32,8 @@ export interface ProtectAgentWorkspaceInput {
   readonly agentRunId: AgentRunId
   readonly applicationInstanceId: ApplicationInstanceId
   readonly processEpoch: CoreProcessEpoch
+  readonly leaseLifetimeMs?: number
+  readonly leaseRenewalMs?: number
 }
 
 /** Catalog-backed lifetime bridge for generated hosted-review workspaces. */
@@ -130,6 +133,8 @@ export const agentWorkspaceResourcesLayer = (options: {
               nowMs,
             }),
           )
+          const leaseLifetimeMs = input.leaseLifetimeMs ?? WORKSPACE_LEASE_LIFETIME_MS
+          const leaseRenewalMs = input.leaseRenewalMs ?? WORKSPACE_LEASE_RENEWAL_MS
           const lease = {
             repositoryResourceId: repositoryId,
             repositoryLeaseId: ResourceLeaseId.make(randomUUID()),
@@ -139,11 +144,30 @@ export const agentWorkspaceResourcesLayer = (options: {
             applicationInstanceId: input.applicationInstanceId,
             processEpoch: input.processEpoch,
             acquiredAtMs: nowMs,
-            expiresAtMs: nowMs + WORKSPACE_LEASE_LIFETIME_MS,
+            expiresAtMs: nowMs + leaseLifetimeMs,
           }
           return yield* Effect.acquireUseRelease(
             lifecycle.acquireAgentWorkspace(lease),
-            () => use,
+            () =>
+              Effect.raceFirst(
+                use,
+                Effect.forever(
+                  Effect.sleep(`${leaseRenewalMs} millis`).pipe(
+                    Effect.andThen(
+                      Effect.gen(function* () {
+                        const renewedAtMs = yield* Clock.currentTimeMillis
+                        yield* catalog.renewLeases({
+                          ids: [lease.repositoryLeaseId, lease.worktreeLeaseId],
+                          applicationInstanceId: lease.applicationInstanceId,
+                          processEpoch: lease.processEpoch,
+                          renewedAtMs,
+                          expiresAtMs: renewedAtMs + leaseLifetimeMs,
+                        })
+                      }),
+                    ),
+                  ),
+                ),
+              ),
             () => lifecycle.releaseAgentWorkspace(lease).pipe(Effect.orDie),
           )
         }),
@@ -188,10 +212,14 @@ const inspectManagedWorkspace = (
             segments.length === 4 &&
             segments[2] === "comparison-workspaces" &&
             isGeneratedSegment(segments[3])
+          const revisionWorkspace =
+            segments.length === 4 &&
+            segments[2] === "revision-workspaces" &&
+            isGeneratedSegment(segments[3])
           if (
             segments[0] !== "repositories" ||
             !/^[0-9a-f]{64}$/u.test(segments[1] ?? "") ||
-            (!regularWorkspace && !comparisonWorkspace)
+            (!regularWorkspace && !comparisonWorkspace && !revisionWorkspace)
           ) {
             return null
           }

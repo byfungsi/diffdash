@@ -395,11 +395,23 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         linkRepository: Effect.fn("CoreRpcClient.linkRepository")((request) =>
           authenticated(client("Repositories.link", request)),
         ),
-        listLocalCheckoutFiles: Effect.fn("CoreRpcClient.listLocalCheckoutFiles")((request) =>
-          authenticated(client("LocalCheckoutFiles.list", request)),
+        openCodeWorkspace: Effect.fn("CoreRpcClient.openCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.open", request)),
         ),
-        readLocalCheckoutFile: Effect.fn("CoreRpcClient.readLocalCheckoutFile")((request) =>
-          authenticated(client("LocalCheckoutFiles.read", request)),
+        heartbeatCodeWorkspace: Effect.fn("CoreRpcClient.heartbeatCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.heartbeat", request)),
+        ),
+        releaseCodeWorkspace: Effect.fn("CoreRpcClient.releaseCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.release", request)),
+        ),
+        listCodeWorkspaceDirectory: Effect.fn("CoreRpcClient.listCodeWorkspaceDirectory")(
+          (request) => authenticated(client("CodeWorkspace.listDirectory", request)),
+        ),
+        searchCodeWorkspace: Effect.fn("CoreRpcClient.searchCodeWorkspace")((request) =>
+          authenticated(client("CodeWorkspace.search", request)),
+        ),
+        readCodeWorkspaceFile: Effect.fn("CoreRpcClient.readCodeWorkspaceFile")((request) =>
+          authenticated(client("CodeWorkspace.readFile", request)),
         ),
         listRepositories: Effect.fn("CoreRpcClient.listRepositories")((request) =>
           authenticated(client("Repositories.list", request)),

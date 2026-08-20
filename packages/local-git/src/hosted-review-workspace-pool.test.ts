@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Result, Stream } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
@@ -958,6 +958,179 @@ describe("HostedReviewWorkspacePool", () => {
     }),
   )
 
+  it.effect("uses an exact local HEAD in a detached disposable revision worktree", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      let workspacePath = ""
+
+      const result = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool.useRevision(revisionInput(value, value.baseSha), (localPath) =>
+          Effect.sync(() => {
+            workspacePath = localPath
+            return {
+              branch: git(localPath, "branch", "--show-current"),
+              content: readFileSync(join(localPath, "tracked.txt"), "utf8"),
+              head: git(localPath, "rev-parse", "HEAD"),
+            }
+          }),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(result).toEqual({ branch: "", content: "base\n", head: value.baseSha })
+      expect(workspacePath).toContain("/revision-workspaces/")
+      expect(existsSync(workspacePath)).toBe(false)
+    }),
+  )
+
+  it.effect("refreshes an existing local cache with a newly created exact revision", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+
+      const heads = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const first = yield* pool.useRevision(revisionInput(value, value.baseSha), (localPath) =>
+          Effect.sync(() => git(localPath, "rev-parse", "HEAD")),
+        )
+        writeFileSync(join(value.source, "tracked.txt"), "new local revision\n")
+        git(value.source, "add", "tracked.txt")
+        git(value.source, "commit", "-m", "new local revision")
+        const revision = GitCommitSha.make(git(value.source, "rev-parse", "HEAD"))
+        const second = yield* pool.useRevision(revisionInput(value, revision), (localPath) =>
+          Effect.sync(() => git(localPath, "rev-parse", "HEAD")),
+        )
+        return { first, second, revision }
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(heads.first).toBe(value.baseSha)
+      expect(heads.second).toBe(heads.revision)
+    }),
+  )
+
+  it.effect("fetches and verifies an exact hosted review revision", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const managed: CreatedReviewRef[][] = []
+      const reviewRefs: ReviewRefLifecycle = {
+        manage: (refs, use) => Effect.sync(() => managed.push([...refs])).pipe(Effect.andThen(use)),
+      }
+      let workspacePath = ""
+
+      const head = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* pool.useRevision(
+          revisionInput(value, value.headSha, value.snapshot.fetchRef),
+          (localPath) =>
+            Effect.sync(() => {
+              workspacePath = localPath
+              return git(localPath, "rev-parse", "HEAD")
+            }),
+        )
+      }).pipe(Effect.provide(poolLayer(value, ProcessService.layer, reviewRefs)))
+
+      expect(head).toBe(value.headSha)
+      expect(existsSync(workspacePath)).toBe(false)
+      expect(managed).toHaveLength(2)
+      expect([...new Set(managed.flat().map(({ ref }) => ref))]).toHaveLength(1)
+      expect(managed[0]?.[0]).toMatchObject({
+        ref: expect.stringMatching(/^refs\/diffdash\/revisions\/commits\//u),
+        targetSha: value.headSha,
+      })
+    }),
+  )
+
+  it.effect("removes a revision worktree after its operation is interrupted", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      let workspacePath = ""
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        yield* pool
+          .useRevision(revisionInput(value, value.baseSha), (localPath) =>
+            Effect.sync(() => void (workspacePath = localPath)).pipe(
+              Effect.andThen(Effect.failCause(Cause.interrupt())),
+            ),
+          )
+          .pipe(Effect.exit)
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(workspacePath).not.toBe("")
+      expect(existsSync(workspacePath)).toBe(false)
+    }),
+  )
+
+  it.effect("removes a revision worktree when post-creation verification fails", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const processes = yield* ProcessService
+      let workspacePath = ""
+      const corruptCreatedWorktree = (args: readonly string[]) =>
+        Effect.sync(() => {
+          const detachIndex = args.indexOf("--detach")
+          if (detachIndex < 0) return
+          const candidate = args[detachIndex + 1]
+          if (candidate === undefined || !candidate.includes("revision-workspaces")) return
+          workspacePath = candidate
+          writeFileSync(join(candidate, ".git"), "invalid gitdir\n")
+        })
+      const corruptingProcesses = Layer.succeed(
+        ProcessService,
+        ProcessService.of({
+          run: (request) => processes.run(request),
+          streamBytes: (request) => processes.streamBytes(request),
+          streamLines: (request) =>
+            processes.streamLines(request).pipe(
+              Stream.tap((event) => {
+                const { _tag: tag } = event
+                return tag === "ProcessExit" ? corruptCreatedWorktree(request.args) : Effect.void
+              }),
+            ),
+        }),
+      )
+
+      const result = yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        return yield* Effect.result(
+          pool.useRevision(revisionInput(value, value.baseSha), () => Effect.void),
+        )
+      }).pipe(Effect.provide(poolLayer(value, corruptingProcesses)))
+
+      expect(Result.isFailure(result)).toBe(true)
+      expect(workspacePath).not.toBe("")
+      expect(existsSync(workspacePath)).toBe(false)
+    }).pipe(Effect.provide(ProcessService.layer)),
+  )
+
+  it.effect("runs concurrent revision operations in independent worktrees", () =>
+    Effect.gen(function* () {
+      const value = yield* fixture
+      const bothStarted = yield* Deferred.make<void>()
+      const workspacePaths: RepositoryCheckoutPath[] = []
+
+      yield* Effect.gen(function* () {
+        const pool = yield* ReviewWorktreePool
+        const run = (revision: GitCommitSha) =>
+          pool.useRevision(revisionInput(value, revision), (localPath) =>
+            Effect.gen(function* () {
+              workspacePaths.push(localPath)
+              if (workspacePaths.length === 2) yield* Deferred.succeed(bothStarted, undefined)
+              yield* Deferred.await(bothStarted)
+              expect(git(localPath, "rev-parse", "HEAD")).toBe(revision)
+            }),
+          )
+        yield* TestClock.withLive(
+          Effect.all([run(value.baseSha), run(value.baseSha)], {
+            concurrency: "unbounded",
+          }),
+        )
+      }).pipe(Effect.provide(poolLayer(value)))
+
+      expect(new Set(workspacePaths).size).toBe(2)
+      expect(workspacePaths.every((path) => !existsSync(path))).toBe(true)
+    }),
+  )
+
   it.effect("preserves comparison operation and cleanup causes when both fail", () =>
     Effect.gen(function* () {
       const value = yield* fixture
@@ -1345,6 +1518,19 @@ const comparisonInput = (value: GitFixture, baseRef: string, headRef: string) =>
   remoteUrl: value.remote,
   baseRef: RepositoryComparisonRef.make(baseRef),
   headRef: RepositoryComparisonRef.make(headRef),
+  bootstrapBareRepository: () => Effect.void,
+})
+
+const revisionInput = (
+  value: GitFixture,
+  revision: GitCommitSha,
+  fetchRef?: RepositoryComparisonRef,
+) => ({
+  repository: value.snapshot.repository,
+  sourcePath: value.source,
+  remoteUrl: value.remote,
+  revision,
+  ...(fetchRef === undefined ? {} : { fetchRef }),
   bootstrapBareRepository: () => Effect.void,
 })
 

@@ -154,6 +154,10 @@ const launchStandaloneCoreProcess = Effect.fn("launchStandaloneCoreProcess")(fun
                 nowMs,
                 nowMs + 60_000,
               )
+              yield* Context.get(runtimeContext, ResourceCollection).collectPolicy(
+                nowMs,
+                nowMs + 60_000,
+              )
               yield* runtimeServices.install({
                 operations,
                 commands: Context.get(runtimeContext, CoreDurableCommandService),

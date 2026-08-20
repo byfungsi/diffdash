@@ -2,6 +2,10 @@
 import { AISettings } from "@diffdash/domain/ai-settings"
 import type { AppState } from "@diffdash/domain/app-state"
 import {
+  type CodeWorkspaceTarget,
+  ProjectHeadCodeWorkspaceTarget,
+} from "@diffdash/domain/code-workspace"
+import {
   type GitProviderDescriptor,
   GitProviderId,
   type HostedRepository,
@@ -126,6 +130,7 @@ export function AppShell() {
   const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
     Option.none,
   )
+  const [selectedCodeTarget, setSelectedCodeTarget] = useState<CodeWorkspaceTarget | null>(null)
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -373,6 +378,7 @@ export function AppShell() {
     projectSession.cancelRestore()
     setScreen("home")
     setSelectedRepo(null)
+    setSelectedCodeTarget(null)
     setSelectedReview(null)
     setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
@@ -555,6 +561,7 @@ export function AppShell() {
 
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
     setSelectedRepo(projection.repo)
+    setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: projection.repo.id }))
     setSelectedReview(projection.selectedReview)
     setSelectedCodePath(Option.none())
     setActiveRibbon(projection.activeRibbon)
@@ -607,6 +614,9 @@ export function AppShell() {
   const updateProjectRibbon = (ribbon: ProjectWorkspaceRibbon) => {
     projectSession.cancelRestore()
     setActiveRibbon(ribbon)
+    if (ribbon === "code" && selectedRepo !== null) {
+      setSelectedCodeTarget(ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }))
+    }
     if (selectedRepo !== null) {
       observeWorkspacePersistence(
         projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
@@ -614,10 +624,14 @@ export function AppShell() {
     }
   }
 
-  const openCodeFile = (path: RepositoryRelativePath) => {
-    setSelectedCodePath(Option.some(path))
-    setReviewSidebarExpanded(true)
+  const openCodeFile = (path: RepositoryRelativePath, target?: CodeWorkspaceTarget) => {
+    if (selectedRepo === null) return
     updateProjectRibbon("code")
+    setSelectedCodePath(Option.some(path))
+    setSelectedCodeTarget(
+      target ?? ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id }),
+    )
+    setReviewSidebarExpanded(true)
   }
 
   const selectProjectReview = (selection: SelectedReviewTarget) => {
@@ -1097,13 +1111,18 @@ export function AppShell() {
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
                         repo={selectedRepo}
-                        selectedPath={selectedCodePath}
+                        selectedPath={Option.getOrNull(selectedCodePath)}
                         sidebarExpanded={reviewSidebarExpanded}
+                        target={
+                          selectedCodeTarget ??
+                          ProjectHeadCodeWorkspaceTarget.make({ projectId: selectedRepo.id })
+                        }
                         threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
                         onActiveRibbonChange={updateProjectRibbon}
                         onLinkRepository={linkSelectedProjectRepository}
-                        onOpenFile={openCodeFile}
-                        onSelectedPathChange={setSelectedCodePath}
+                        onSelectedPathChange={(path) =>
+                          setSelectedCodePath(path === null ? Option.none : Option.some(path))
+                        }
                         onSidebarExpandedChange={setReviewSidebarExpanded}
                         onSidebarWidthChange={updateReviewContextWidth}
                         onThreadDetailWidthChange={updateReviewThreadDetailWidth}

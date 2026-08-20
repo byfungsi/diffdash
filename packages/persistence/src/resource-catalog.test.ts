@@ -6,6 +6,7 @@ import { Context, Effect, Layer, Result } from "effect"
 
 import * as DatabaseNode from "./database-node"
 import {
+  type CatalogResourceLease,
   CatalogResourceId,
   ResourceCatalog,
   ResourceLeaseId,
@@ -41,6 +42,23 @@ const register = (
     checksum: null,
     validation: null,
   })
+
+const lease = (
+  id: string,
+  resourceId: CatalogResourceLease["resourceId"],
+  expiresAtMs = 100,
+): CatalogResourceLease => ({
+  id: ResourceLeaseId.make(id),
+  resourceId,
+  ownerKind: "agentRun",
+  ownerId: "run-1",
+  applicationInstanceId: "app-1",
+  processEpoch: "epoch-1",
+  acquiredAtMs: 1,
+  renewedAtMs: 1,
+  expiresAtMs,
+  purpose: "agent workspace",
+})
 
 describe("ResourceCatalog", () => {
   it.effect("keeps registered filesystem root identities immutable", () =>
@@ -310,6 +328,201 @@ describe("ResourceCatalog", () => {
         ])
         expect((yield* catalog.get(repository.id)).leases).toHaveLength(1)
         expect((yield* catalog.get(worktree.id)).leases).toHaveLength(1)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("renews paired leases atomically", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const repository = yield* register(catalog, "renew-repository", 100)
+        const worktree = yield* register(catalog, "renew-worktree", 50, repository.id)
+        yield* catalog.acquireLeases([
+          lease("renew-repository-lease", repository.id),
+          lease("renew-worktree-lease", worktree.id),
+        ])
+
+        yield* catalog.renewLeases({
+          ids: [
+            ResourceLeaseId.make("renew-repository-lease"),
+            ResourceLeaseId.make("renew-worktree-lease"),
+          ],
+          applicationInstanceId: "app-1",
+          processEpoch: "epoch-1",
+          renewedAtMs: 50,
+          expiresAtMs: 150,
+        })
+
+        expect((yield* catalog.get(repository.id)).leases[0]).toMatchObject({
+          renewedAtMs: 50,
+          expiresAtMs: 150,
+        })
+        expect((yield* catalog.get(worktree.id)).leases[0]).toMatchObject({
+          renewedAtMs: 50,
+          expiresAtMs: 150,
+        })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rolls back a batch renewal when any lease is missing", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const resource = yield* register(catalog, "renew-rollback", 100)
+        yield* catalog.acquireLease(lease("renew-rollback-lease", resource.id))
+
+        expect(
+          Result.isFailure(
+            yield* Effect.result(
+              catalog.renewLeases({
+                ids: [
+                  ResourceLeaseId.make("renew-rollback-lease"),
+                  ResourceLeaseId.make("missing-renewal-lease"),
+                ],
+                applicationInstanceId: "app-1",
+                processEpoch: "epoch-1",
+                renewedAtMs: 50,
+                expiresAtMs: 150,
+              }),
+            ),
+          ),
+        ).toBe(true)
+        expect((yield* catalog.get(resource.id)).leases[0]).toMatchObject({
+          renewedAtMs: 1,
+          expiresAtMs: 100,
+        })
+
+        expect(
+          Result.isFailure(
+            yield* Effect.result(
+              catalog.renewLeases({
+                ids: [ResourceLeaseId.make("renew-rollback-lease")],
+                applicationInstanceId: "wrong-app",
+                processEpoch: "epoch-1",
+                renewedAtMs: 50,
+                expiresAtMs: 150,
+              }),
+            ),
+          ),
+        ).toBe(true)
+        expect((yield* catalog.get(resource.id)).leases[0]).toMatchObject({
+          renewedAtMs: 1,
+          expiresAtMs: 100,
+        })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects renewal after the old lease expiry", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const resource = yield* register(catalog, "expired-renewal", 100)
+        yield* catalog.acquireLease(lease("expired-renewal-lease", resource.id, 10))
+
+        expect(
+          Result.isFailure(
+            yield* Effect.result(
+              catalog.renewLeases({
+                ids: [ResourceLeaseId.make("expired-renewal-lease")],
+                applicationInstanceId: "app-1",
+                processEpoch: "epoch-1",
+                renewedAtMs: 10,
+                expiresAtMs: 110,
+              }),
+            ),
+          ),
+        ).toBe(true)
+        expect((yield* catalog.get(resource.id)).leases[0]).toMatchObject({
+          renewedAtMs: 1,
+          expiresAtMs: 10,
+        })
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("rejects lease acquisition and renewal for non-ready resources", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const writing = yield* catalog.register({
+          id: CatalogResourceId.make("writing-lease-resource"),
+          parentId: null,
+          kind: "snapshot-spool",
+          policyClass: "temporary",
+          state: "writing",
+          generation: 1,
+          location: { kind: "updaterPartial", identity: "writing-lease-resource.partial" },
+          bytes: 0,
+          nowMs: 1,
+          checksum: null,
+          validation: null,
+        })
+        expect(
+          Result.isFailure(
+            yield* Effect.result(catalog.acquireLease(lease("writing-lease", writing.id))),
+          ),
+        ).toBe(true)
+
+        const collecting = yield* register(catalog, "collecting-renewal", 100)
+        yield* catalog.acquireLease(lease("collecting-renewal-lease", collecting.id, 10))
+        yield* catalog.beginCollection({
+          resourceId: collecting.id,
+          recoveryToken: ResourceRecoveryToken.make("collecting-renewal-token"),
+          nowMs: 10,
+        })
+        expect(
+          Result.isFailure(
+            yield* Effect.result(
+              catalog.renewLeases({
+                ids: [ResourceLeaseId.make("collecting-renewal-lease")],
+                applicationInstanceId: "app-1",
+                processEpoch: "epoch-1",
+                renewedAtMs: 9,
+                expiresAtMs: 20,
+              }),
+            ),
+          ),
+        ).toBe(true)
+      }).pipe(Effect.provide(makeLayer(databasePath)))
+    }),
+  )
+
+  it.effect("atomically resolves lease acquisition against collection", () =>
+    Effect.gen(function* () {
+      const databasePath = yield* makeTempDatabasePath
+      yield* Effect.gen(function* () {
+        const catalog = yield* ResourceCatalog
+        const resource = yield* register(catalog, "lease-collection-race", 100)
+        const [acquired, collected] = yield* Effect.all(
+          [
+            Effect.result(catalog.acquireLease(lease("racing-lease", resource.id))),
+            Effect.result(
+              catalog.beginCollection({
+                resourceId: resource.id,
+                recoveryToken: ResourceRecoveryToken.make("racing-collection-token"),
+                nowMs: 10,
+              }),
+            ),
+          ],
+          { concurrency: "unbounded" },
+        )
+
+        expect(Result.isSuccess(acquired)).not.toBe(Result.isSuccess(collected))
+        const persisted = yield* catalog.get(resource.id)
+        if (Result.isSuccess(acquired)) {
+          expect(persisted).toMatchObject({ state: "ready" })
+          expect(persisted.leases).toHaveLength(1)
+        } else {
+          expect(persisted).toMatchObject({ state: "collecting" })
+          expect(persisted.leases).toHaveLength(0)
+        }
       }).pipe(Effect.provide(makeLayer(databasePath)))
     }),
   )

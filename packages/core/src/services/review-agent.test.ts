@@ -531,6 +531,8 @@ const makeLayer = (
   const worktrees = Layer.succeed(
     HostedReviewWorkspacePool,
     HostedReviewWorkspacePool.of({
+      useRevision: () =>
+        Effect.die(new Error("Unexpected revision workspace in review-agent test")),
       pinComparison: () =>
         Effect.die(new Error("Unexpected comparison pinning in review-agent test")),
       readComparisonDiff: () =>

@@ -1,5 +1,13 @@
 import { AgentModelId, AgentProviderId } from "@diffdash/domain/agent-provider"
 import { AgentCapability, AgentModelQuality, AISettings } from "@diffdash/domain/ai-settings"
+import {
+  CodeWorkspaceDirectoryPage,
+  CodeWorkspaceFileReadResult,
+  CodeWorkspaceLease,
+  CodeWorkspaceLeaseId,
+  CodeWorkspaceSearchResult,
+  CodeWorkspaceTarget,
+} from "@diffdash/domain/code-workspace"
 import { ExecutablePath } from "@diffdash/domain/executable-path"
 import {
   GitFileRevision,
@@ -15,10 +23,6 @@ import {
   ReviewDecision,
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
-import {
-  LocalCheckoutFileListResult,
-  LocalCheckoutFileReadResult,
-} from "@diffdash/domain/local-checkout-file"
 import {
   ProjectOpenResult,
   ProjectWorkspaceState,
@@ -539,16 +543,50 @@ export const RepositoriesSetFavoriteRpc = applicationRpc(
   Repo,
   idempotentMutation(),
 )
-export const LocalCheckoutFilesListRpc = applicationRpc(
-  "LocalCheckoutFiles.list",
-  withContext({ projectId: ReviewProjectId }),
-  LocalCheckoutFileListResult,
-  read(10_000, 512 * KIB),
+export const CodeWorkspaceOpenRpc = applicationRpc(
+  "CodeWorkspace.open",
+  withContext({ target: CodeWorkspaceTarget }),
+  CodeWorkspaceLease,
+  mutation(30 * 60_000, 8 * KIB),
 )
-export const LocalCheckoutFilesReadRpc = applicationRpc(
-  "LocalCheckoutFiles.read",
-  withContext({ projectId: ReviewProjectId, path: RepositoryRelativePath }),
-  LocalCheckoutFileReadResult,
+export const CodeWorkspaceHeartbeatRpc = applicationRpc(
+  "CodeWorkspace.heartbeat",
+  withContext({ leaseId: CodeWorkspaceLeaseId }),
+  CodeWorkspaceLease,
+  idempotentMutation(10_000, 8 * KIB),
+)
+export const CodeWorkspaceReleaseRpc = applicationRpc(
+  "CodeWorkspace.release",
+  withContext({ leaseId: CodeWorkspaceLeaseId }),
+  Schema.Void,
+  idempotentMutation(30_000, 8 * KIB),
+)
+export const CodeWorkspaceListDirectoryRpc = applicationRpc(
+  "CodeWorkspace.listDirectory",
+  withContext({
+    leaseId: CodeWorkspaceLeaseId,
+    path: Schema.NullOr(RepositoryRelativePath),
+    offset: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+    limit: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+  }),
+  CodeWorkspaceDirectoryPage,
+  read(10_000, 128 * KIB),
+)
+export const CodeWorkspaceSearchRpc = applicationRpc(
+  "CodeWorkspace.search",
+  withContext({
+    leaseId: CodeWorkspaceLeaseId,
+    query: Schema.String.pipe(Schema.check(Schema.isMaxLength(1_000))),
+    offset: Schema.Int.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0))),
+    limit: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+  }),
+  CodeWorkspaceSearchResult,
+  read(30_000, 64 * KIB),
+)
+export const CodeWorkspaceReadFileRpc = applicationRpc(
+  "CodeWorkspace.readFile",
+  withContext({ leaseId: CodeWorkspaceLeaseId, path: RepositoryRelativePath }),
+  CodeWorkspaceFileReadResult,
   read(10_000, 640 * KIB),
 )
 export const ProjectWorkspaceGetRpc = applicationRpc(
@@ -709,8 +747,12 @@ export const CoreApplicationRpcs = RpcGroup.make(
   RepositoriesOpenProjectRpc,
   RepositoriesRepairIdentitiesRpc,
   RepositoriesSetFavoriteRpc,
-  LocalCheckoutFilesListRpc,
-  LocalCheckoutFilesReadRpc,
+  CodeWorkspaceOpenRpc,
+  CodeWorkspaceHeartbeatRpc,
+  CodeWorkspaceReleaseRpc,
+  CodeWorkspaceListDirectoryRpc,
+  CodeWorkspaceSearchRpc,
+  CodeWorkspaceReadFileRpc,
   ProjectWorkspaceGetRpc,
   ProjectWorkspaceSaveRpc,
   ReviewThreadsAddUserMessageRpc,

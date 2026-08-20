@@ -4,11 +4,11 @@ import { Atom } from "effect/unstable/reactivity"
 import { useEffect, useEffectEvent } from "react"
 
 import { DesktopRuntime, desktopRuntimeLayer } from "./desktop-runtime"
+import { CodeWorkspace, codeWorkspaceLayer } from "./code-workspace"
 import { preloadClientLive } from "./preload-client"
 import { ProjectWorkspace, projectWorkspaceLayer } from "./project-workspace"
 import { RendererPreferences, rendererPreferencesLayer } from "./preferences"
 import { Repositories, repositoriesLayer } from "./repositories"
-import { LocalCheckoutFiles, localCheckoutFilesLayer } from "./local-checkout-files"
 import { ReviewAutomation, reviewAutomationLayer } from "./review-automation"
 import { ReviewContent, reviewContentLayer } from "./review-content"
 import { ReviewSourceOperations, reviewSourceOperationsLayer } from "./review-source-operations"
@@ -18,10 +18,10 @@ export { runRendererPromise } from "./renderer-effect"
 /** All renderer capabilities built once for one atom registry. */
 export type RendererServices =
   | DesktopRuntime
+  | CodeWorkspace
   | ProjectWorkspace
   | RendererPreferences
   | Repositories
-  | LocalCheckoutFiles
   | ReviewAutomation
   | ReviewContent
   | ReviewSourceOperations
@@ -29,10 +29,10 @@ export type RendererServices =
 
 const capabilityLayers = Layer.mergeAll(
   desktopRuntimeLayer,
+  codeWorkspaceLayer,
   projectWorkspaceLayer,
   rendererPreferencesLayer,
   repositoriesLayer,
-  localCheckoutFilesLayer,
   reviewAutomationLayer,
   reviewContentLayer,
   reviewSourceOperationsLayer,
@@ -52,6 +52,9 @@ const useRendererContext = () => useAtomSuspense(rendererRuntime).value
 /** Returns the Electron-shell capability from the shared renderer runtime. */
 export const useDesktopRuntime = () => Context.get(useRendererContext(), DesktopRuntime)
 
+/** Returns managed Code workspace capabilities from the shared renderer runtime. */
+export const useCodeWorkspace = () => Context.get(useRendererContext(), CodeWorkspace)
+
 /** Returns the project-target capability from the shared renderer runtime. */
 export const useProjectWorkspace = () => Context.get(useRendererContext(), ProjectWorkspace)
 
@@ -60,9 +63,6 @@ export const useRendererPreferences = () => Context.get(useRendererContext(), Re
 
 /** Returns repository capabilities from the shared renderer runtime. */
 export const useRepositories = () => Context.get(useRendererContext(), Repositories)
-
-/** Returns bounded local-checkout source listing and reading capabilities. */
-export const useLocalCheckoutFiles = () => Context.get(useRendererContext(), LocalCheckoutFiles)
 
 /** Returns review automation capabilities from the shared renderer runtime. */
 export const useReviewAutomation = () => Context.get(useRendererContext(), ReviewAutomation)

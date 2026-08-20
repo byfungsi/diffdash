@@ -126,6 +126,48 @@ describe("resource collection", () => {
     }),
   )
 
+  it.effect("serializes filesystem quarantine and deletion through the configured lock", () =>
+    Effect.gen(function* () {
+      const directory = yield* makeTempDirectory
+      const root = join(directory, "root")
+      mkdirSync(root)
+      writeFileSync(join(root, "cache"), "cache")
+      const rootId = ResourceRootId.make("locked-root")
+      const operations: string[] = []
+      const adapter = makeFilesystemResourceAdapter(
+        new Map([[rootId, root]]),
+        (operation, _resource, mutation) =>
+          Effect.sync(() => operations.push(operation)).pipe(Effect.andThen(mutation)),
+      )
+      const resource = CatalogResource.make({
+        id: CatalogResourceId.make("locked-resource"),
+        parentId: null,
+        kind: "agentTemp",
+        policyClass: "cache",
+        state: "collecting",
+        generation: 1,
+        location: { kind: "filesystem", rootId, relativePath: "cache" },
+        bytes: 5,
+        reservedBytes: 0,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        lastUsedAtMs: 1,
+        checksum: null,
+        validation: null,
+        recoveryToken: ResourceRecoveryToken.make("locked-token"),
+        failure: null,
+        retryAtMs: null,
+        leases: [],
+      })
+      const token = ResourceRecoveryToken.make("locked-token")
+
+      yield* adapter.quarantine(resource, token)
+      yield* adapter.delete(resource, token)
+
+      expect(operations).toEqual(["quarantine", "delete"])
+    }),
+  )
+
   it.effect("retries deletion from durable failed intent without dropping accounted bytes", () =>
     Effect.gen(function* () {
       const directory = yield* makeTempDirectory

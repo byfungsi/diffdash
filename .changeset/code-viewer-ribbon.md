@@ -2,12 +2,9 @@
 "@diffdash/desktop": minor
 ---
 
-Browse tracked and unignored local checkout files from a project-scoped Code ribbon.
+Browse project code from isolated managed worktrees without including local uncommitted changes.
 
-The read-only browser uses Pierre for repository navigation and syntax-highlighted source, supports
-explicit refresh and remote-project folder linking, and safely rejects oversized, binary, invalid,
-non-regular, or checkout-escaping files. Numbered PR navigation now also recognizes the checkout
-returned by project opening immediately instead of briefly relying on stale repository-list state.
-Unavailable linked checkouts can be replaced directly from the Code ribbon.
-Code files can be opened from review diffs or the Command-K file palette, and Command-F searches
-the active file with exact-match highlighting and keyboard navigation.
+The Code ribbon lazily loads large repositories, opens review files at the review's exact revision,
+and keeps active workspaces protected with renewable leases and automatic cleanup. The read-only
+viewer supports repository and in-file search while safely rejecting oversized, binary, invalid,
+non-regular, or checkout-escaping files.

@@ -11,6 +11,8 @@ import {
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
 import { LocalCheckoutFiles } from "@diffdash/local-git/local-checkout-files"
+import { ManagedWorkspaceFiles } from "@diffdash/local-git/managed-workspace-files"
+import { withManagedWorkspaceRepositoryLock } from "@diffdash/local-git/managed-workspace-lock"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
@@ -33,7 +35,7 @@ import { FileStorage } from "@diffdash/settings/file-storage"
 import { WalkthroughRouting, WalkthroughService } from "@diffdash/agents/walkthrough"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
-import { Cause, Clock, Effect, Layer } from "effect"
+import { Cause, Clock, Effect, Layer, Schedule } from "effect"
 import type * as SqlClient from "effect/unstable/sql/SqlClient"
 import { ExecutableSearchPath, type CoreConfiguration } from "./core-configuration"
 import { CoreOperationService, coreOperationLayer } from "./core-operation-service"
@@ -50,6 +52,7 @@ import {
   coreProgressiveReviewServiceLayer,
 } from "./core-review-session-rpc-handlers"
 import { generatedCoreReviewDataWorkerLayer } from "./generated-review-data-worker"
+import { CodeWorkspaceService } from "./services/code-workspace"
 import {
   ReviewLifecycleDiagnostics,
   reviewLifecycleDiagnosticsLayer,
@@ -249,7 +252,28 @@ export const createStandaloneCoreLayer = (
       const resources = yield* ResourceCatalog
       const reviewRefs = yield* ReviewRefMutation
       return makeResourceCollection(resources, {
-        filesystem: makeFilesystemResourceAdapter(resourceRoots),
+        filesystem: makeFilesystemResourceAdapter(
+          resourceRoots,
+          (operation, resource, mutation) => {
+            if (resource.location.kind !== "filesystem") return mutation
+            const root = resourceRoots.get(resource.location.rootId)
+            if (root === undefined) return mutation
+            return withManagedWorkspaceRepositoryLock(
+              root,
+              resource.location.relativePath,
+              mutation,
+            ).pipe(
+              Effect.mapError((cause) =>
+                ResourceAdapterError.make({
+                  operation,
+                  resourceId: resource.id,
+                  reason: "Managed repository mutation lock failed.",
+                  cause,
+                }),
+              ),
+            )
+          },
+        ),
         gitRef: makeBoundedLogicalResourceAdapter(
           (operation, location) =>
             location.kind === "gitRef"
@@ -292,10 +316,28 @@ export const createStandaloneCoreLayer = (
   const resourceLifecycleStartupLayer = Layer.effectDiscard(
     Effect.gen(function* () {
       const resources = yield* ResourceCatalog
+      const collection = yield* ResourceCollection
       const nowMs = yield* Clock.currentTimeMillis
       for (const [id, path] of resourceRoots) {
         yield* resources.registerRoot({ id, path, createdAtMs: nowMs })
       }
+      const collect = Effect.gen(function* () {
+        const passStartedAtMs = yield* Clock.currentTimeMillis
+        yield* collection
+          .collectPolicy(passStartedAtMs, passStartedAtMs + 60_000)
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Periodic resource collection failed").pipe(
+                Effect.annotateLogs({ operation: cause.operation }),
+              ),
+            ),
+          )
+      })
+      yield* collect.pipe(
+        Effect.repeat(Schedule.spaced("15 minutes")),
+        Effect.delay("15 minutes"),
+        Effect.forkScoped,
+      )
     }),
   ).pipe(Layer.provide(disposableResourceLifecycleLayer))
   const resourceLifecycleLayer = Layer.merge(
@@ -354,6 +396,16 @@ export const createStandaloneCoreLayer = (
     local: { rootId: LOCAL_WORKTREE_RESOURCE_ROOT_ID, rootPath: worktreePoolPath },
     remote: { rootId: REMOTE_WORKTREE_RESOURCE_ROOT_ID, rootPath: remoteWorktreePoolPath },
   }).pipe(Layer.provideMerge(resourceLifecycleLayer))
+  const codeWorkspaceLayer = CodeWorkspaceService.layer.pipe(
+    Layer.provideMerge(RepositoryStore.layer),
+    Layer.provideMerge(gitProviderLayer),
+    Layer.provideMerge(GitService.layer),
+    Layer.provideMerge(hostedReviewWorkspacePoolLayer),
+    Layer.provideMerge(agentWorkspaceResourceLayer),
+    Layer.provideMerge(ManagedWorkspaceFiles.layer),
+    Layer.provideMerge(LocalCheckoutFiles.layer),
+    Layer.provideMerge(resourceCollectionLayer),
+  )
   const reviewAgentLayer = ReviewAgentService.layer.pipe(
     Layer.provideMerge(reviewAgentRoutingLayer),
     Layer.provideMerge(agentProviderRegistryLayer),
@@ -459,7 +511,7 @@ export const createStandaloneCoreLayer = (
   const businessServicesLayer = Layer.mergeAll(
     temporaryDirectoryLayer,
     repositoryLinkerLayer,
-    LocalCheckoutFiles.layer,
+    codeWorkspaceLayer,
     repositoryComparisonSourceLayer,
     repositoryWatcherLayer,
     ProjectWorkspaceStore.layer,

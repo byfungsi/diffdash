@@ -296,6 +296,7 @@ const testLayer = (options: TestOptions) =>
           HostedReviewWorkspacePool,
           HostedReviewWorkspacePool.of({
             use: () => unavailable(),
+            useRevision: () => unavailable(),
             readComparisonDiff: (input) =>
               Effect.sync(() => {
                 options.onRead?.(input)

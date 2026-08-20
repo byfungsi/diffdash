@@ -68,10 +68,16 @@ interface ApplicationCoreRuntime {
   readonly forgetRepository: ApplicationCoreOperation<typeof CoreMethod.forgetRepository>
   readonly installRepository: ApplicationCoreOperation<typeof CoreMethod.installRepository>
   readonly linkRepository: ApplicationCoreOperation<typeof CoreMethod.linkRepository>
-  readonly listLocalCheckoutFiles: ApplicationCoreOperation<
-    typeof CoreMethod.listLocalCheckoutFiles
+  readonly openCodeWorkspace: ApplicationCoreOperation<typeof CoreMethod.openCodeWorkspace>
+  readonly heartbeatCodeWorkspace: ApplicationCoreOperation<
+    typeof CoreMethod.heartbeatCodeWorkspace
   >
-  readonly readLocalCheckoutFile: ApplicationCoreOperation<typeof CoreMethod.readLocalCheckoutFile>
+  readonly releaseCodeWorkspace: ApplicationCoreOperation<typeof CoreMethod.releaseCodeWorkspace>
+  readonly listCodeWorkspaceDirectory: ApplicationCoreOperation<
+    typeof CoreMethod.listCodeWorkspaceDirectory
+  >
+  readonly searchCodeWorkspace: ApplicationCoreOperation<typeof CoreMethod.searchCodeWorkspace>
+  readonly readCodeWorkspaceFile: ApplicationCoreOperation<typeof CoreMethod.readCodeWorkspaceFile>
   readonly listRepositories: ApplicationCoreOperation<typeof CoreMethod.listRepositories>
   readonly openProject: ApplicationCoreOperation<typeof CoreMethod.openProject>
   readonly repairRepositoryIdentities: ApplicationCoreOperation<
