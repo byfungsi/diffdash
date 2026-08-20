@@ -44,4 +44,22 @@ if [ ! -x "$app_binary" ]; then
   exit 1
 fi
 
-"$app_binary" "--diffdash-cli-v1=$PWD" -- "$@" >/dev/null 2>&1 &
+ready_dir="$(mktemp -d "${TMPDIR:-/tmp}/diffdash-cli.XXXXXX")"
+ready_path="$ready_dir/ready"
+trap 'rm -rf "$ready_dir"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+app_bundle="$(dirname "$(dirname "$(dirname "$app_binary")")")"
+open -n -a "$app_bundle" --args "--diffdash-cli-v1=$PWD" "--diffdash-cli-ready-v1=$ready_path" -- "$@" >/dev/null 2>&1
+
+attempt=0
+while [ ! -f "$ready_path" ]; do
+  if [ "$attempt" -ge 600 ]; then
+    printf '%s\n' 'Timed out waiting for DiffDash to finish opening.' >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.05
+done

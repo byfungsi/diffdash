@@ -11,6 +11,7 @@ import type { ApplicationRuntime } from "./application-runtime"
 import { disposeApplicationResources } from "./application-resources"
 import { createApplicationUpdater } from "./application-updater"
 import { hasRepositoryIdentityRepairCommand } from "./cli-navigation"
+import { createCliReadiness } from "./cli-readiness"
 import type {
   DesktopHostConfiguration,
   DesktopHostConfigurationError,
@@ -38,6 +39,7 @@ const revealWindow = (targetWindow: BrowserWindowType, configuration: DesktopHos
 let mainWindow: BrowserWindowType | null = null
 let activeRendererSecurityPolicy: RendererSecurityPolicy | null = null
 let activeHostConfiguration: DesktopHostConfiguration | null = null
+const cliReadiness = createCliReadiness()
 const getWindow = () => mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null
 
 const configureApplicationIdentity = () => {
@@ -56,6 +58,7 @@ const createWindow = (
   configuration: DesktopHostConfiguration,
   rendererSecurityPolicy: RendererSecurityPolicy,
 ) => {
+  cliReadiness.rendererLoading()
   mainWindow = createMainWindow({
     configuration,
     logStartupStage,
@@ -63,6 +66,8 @@ const createWindow = (
     onClosed: () => {
       mainWindow = null
     },
+    onRendererLoaded: cliReadiness.rendererLoaded,
+    onRendererLoading: cliReadiness.rendererLoading,
     rendererSecurityPolicy,
     revealWindow: (window) => revealWindow(window, configuration),
   })
@@ -167,6 +172,7 @@ export const startDesktopApplication = (composition: DesktopApplicationCompositi
   const acquired = installSingleInstanceHandling({
     allowMultipleInstances: configuration.policies.allowMultipleInstances,
     enqueue: navigation.enqueue,
+    registerReadiness: cliReadiness.register,
     revealExistingWindow: activateMainWindow,
   })
   if (!acquired) {

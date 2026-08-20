@@ -50,6 +50,11 @@ const waitForCapture = (
   return readCapture(0)
 }
 
+const normalizeReadinessArgument = (lines: ReadonlyArray<string>) =>
+  lines.map((line) =>
+    line.startsWith("--diffdash-cli-ready-v1=") ? "--diffdash-cli-ready-v1=<temporary>" : line,
+  )
+
 describe("diffdash CLI", () => {
   it("documents install, compare, and repair in source and packaged help", () => {
     const sourceResult = runSourceCli(["--help"])
@@ -103,7 +108,7 @@ describe("diffdash CLI", () => {
       )
       writeFileSync(
         fakeElectron,
-        '#!/bin/sh\nif [ "${1:-}" = "-e" ]; then exit 0; fi\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\n',
+        '#!/bin/sh\nif [ "${1:-}" = "-e" ]; then exit 0; fi\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\nfor argument in "$@"; do\n  case "$argument" in\n    --diffdash-cli-ready-v1=*)\n      sleep "${DIFFDASH_TEST_READY_DELAY:-0}"\n      ready_path="${argument#--diffdash-cli-ready-v1=}"\n      printf \'ready\\n\' > "$ready_path"\n      ;;\n  esac\ndone\n',
         "utf8",
       )
       chmodSync(fakeElectron, 0o755)
@@ -111,26 +116,34 @@ describe("diffdash CLI", () => {
       const resolvedHarnessRoot = realpathSync(harnessRoot)
       const resolvedWorkingDirectory = realpathSync(workingDirectory)
 
-      const runHarness = async (args: ReadonlyArray<string>) => {
+      const runHarness = async (args: ReadonlyArray<string>, readyDelay = "0") => {
         rmSync(capturePath, { force: true })
         const result = spawnSync(process.execPath, [cli, ...args], {
           cwd: workingDirectory,
           encoding: "utf8",
-          env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
+          env: {
+            ...process.env,
+            DIFFDASH_TEST_CAPTURE: capturePath,
+            DIFFDASH_TEST_READY_DELAY: readyDelay,
+          },
         })
         expect(result.status).toBe(0)
-        return waitForCapture(capturePath, args.length + 3)
+        return waitForCapture(capturePath, args.length + 4).then(normalizeReadinessArgument)
       }
 
-      await expect(runHarness(["changes"])).resolves.toEqual([
+      const startedAt = Date.now()
+      await expect(runHarness(["changes"], "0.15")).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "changes",
       ])
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(100)
       await expect(runHarness(["install", "linked-project"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "install",
         "linked-project",
@@ -138,6 +151,7 @@ describe("diffdash CLI", () => {
       await expect(runHarness(["pr", "42"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "pr",
         "42",
@@ -145,12 +159,14 @@ describe("diffdash CLI", () => {
       await expect(runHarness(["lc"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "lc",
       ])
       await expect(runHarness(["compare", "v6.0", "v6.1"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "compare",
         "v6.0",
@@ -159,6 +175,7 @@ describe("diffdash CLI", () => {
       await expect(runHarness(["repair"])).resolves.toEqual([
         resolvedHarnessRoot,
         `--diffdash-cli-v1=${resolvedWorkingDirectory}`,
+        "--diffdash-cli-ready-v1=<temporary>",
         "--",
         "repair",
       ])
@@ -186,27 +203,47 @@ describe("diffdash CLI", () => {
       await Promise.all(
         harnesses.map(async (harness, index) => {
           const capturePath = join(harnessRoot, `packaged-launch-args-${index}`)
+          const launcherBin = join(harnessRoot, `launcher-bin-${index}`)
           const workingDirectory = join(harnessRoot, `working-directory-${index}`)
           mkdirSync(dirname(harness.cli), { recursive: true })
           mkdirSync(dirname(harness.app), { recursive: true })
+          mkdirSync(launcherBin)
           mkdirSync(workingDirectory)
           copyFileSync(harness.source, harness.cli)
           writeFileSync(
             harness.app,
-            '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\n',
+            '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$DIFFDASH_TEST_CAPTURE"\nfor argument in "$@"; do\n  case "$argument" in\n    --diffdash-cli-ready-v1=*)\n      sleep "${DIFFDASH_TEST_READY_DELAY:-0}"\n      ready_path="${argument#--diffdash-cli-ready-v1=}"\n      printf \'ready\\n\' > "$ready_path"\n      ;;\n  esac\ndone\n',
             "utf8",
           )
           chmodSync(harness.app, 0o755)
+          if (index === 0) {
+            const fakeOpen = join(launcherBin, "open")
+            writeFileSync(
+              fakeOpen,
+              '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--args" ]; then\n    shift\n    exec "$DIFFDASH_TEST_APP" "$@"\n  fi\n  shift\ndone\nexit 1\n',
+              "utf8",
+            )
+            chmodSync(fakeOpen, 0o755)
+          }
 
           const result = spawnSync("/bin/sh", [harness.cli, "compare", "v6.0", "v6.1"], {
             cwd: workingDirectory,
             encoding: "utf8",
-            env: { ...process.env, DIFFDASH_TEST_CAPTURE: capturePath },
+            env: {
+              ...process.env,
+              DIFFDASH_TEST_CAPTURE: capturePath,
+              DIFFDASH_TEST_APP: harness.app,
+              DIFFDASH_TEST_READY_DELAY: "0.15",
+              PATH: `${launcherBin}:${process.env.PATH ?? ""}`,
+            },
           })
 
           expect(result.status).toBe(0)
-          await expect(waitForCapture(capturePath, 5)).resolves.toEqual([
+          await expect(
+            waitForCapture(capturePath, 6).then(normalizeReadinessArgument),
+          ).resolves.toEqual([
             `--diffdash-cli-v1=${realpathSync(workingDirectory)}`,
+            "--diffdash-cli-ready-v1=<temporary>",
             "--",
             "compare",
             "v6.0",
