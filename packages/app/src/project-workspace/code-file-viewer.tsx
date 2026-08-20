@@ -57,7 +57,7 @@ export const CodeFileViewer = ({
     >
       <CodeViewThemeSync codeThemes={codeThemes} />
       <CodeView
-        className="h-full min-h-0 bg-diff-canvas"
+        className="h-full min-h-0 overflow-auto bg-diff-canvas"
         items={items}
         options={{
           disableFileHeader: false,
