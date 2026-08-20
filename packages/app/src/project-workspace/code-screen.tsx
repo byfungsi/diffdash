@@ -10,7 +10,7 @@ import { RepositoryCheckout, type Repo } from "@diffdash/domain/repository"
 import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import { Data, Effect, Option } from "effect"
 import { FolderGit2, RefreshCw } from "lucide-react"
-import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from "react"
 
 import { runRendererPromise, useLocalCheckoutFiles } from "@/platform/renderer-runtime"
 import { formatError } from "@/shared/errors"
@@ -19,6 +19,7 @@ import { EmptyState } from "@/shared/ui/empty-state"
 import { Input } from "@/shared/ui/input"
 import { ProjectWorkspaceStatePanel } from "@/shared/ui/project-workspace-state-panel"
 import type { ColorScheme } from "@/settings/theme"
+import { CommandPaletteDialog, type CommandPaletteItem } from "@/shell/command-palette"
 
 import { CodeFileViewer } from "./code-file-viewer"
 import { ProjectWorkspaceFrame } from "./project-workspace-frame"
@@ -90,10 +91,13 @@ export const CodeScreen = ({
   colorScheme,
   contextWidth,
   repo,
+  selectedPath,
   sidebarExpanded,
   threadDetailWidth,
   onActiveRibbonChange,
   onLinkRepository,
+  onOpenFile,
+  onSelectedPathChange,
   onSidebarExpandedChange,
   onSidebarWidthChange,
   onThreadDetailWidthChange,
@@ -102,10 +106,13 @@ export const CodeScreen = ({
   readonly colorScheme: ColorScheme
   readonly contextWidth: number
   readonly repo: Repo
+  readonly selectedPath: Option.Option<RepositoryRelativePath>
   readonly sidebarExpanded: boolean
   readonly threadDetailWidth: number
   readonly onActiveRibbonChange: (ribbon: ProjectWorkspaceRibbon) => void
   readonly onLinkRepository: () => Promise<boolean>
+  readonly onOpenFile: (path: RepositoryRelativePath) => void
+  readonly onSelectedPathChange: (path: Option.Option<RepositoryRelativePath>) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
   readonly onThreadDetailWidthChange: (width: number) => void
@@ -126,10 +133,8 @@ export const CodeScreen = ({
     }),
   )
   const [fileState, setFileState] = useState<RepositoryFileState>(() => RepositoryFileState.idle())
-  const [selectedPath, setSelectedPath] = useState<Option.Option<RepositoryRelativePath>>(
-    Option.none,
-  )
   const [filter, setFilter] = useState("")
+  const [goToPaletteOpen, setGoToPaletteOpen] = useState(false)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [linking, setLinking] = useState(false)
   const [linkError, setLinkError] = useState<Option.Option<string>>(Option.none)
@@ -140,7 +145,6 @@ export const CodeScreen = ({
       Option.match(checkoutPath, {
         onNone: () => {
           setFilesState(RepositoryFilesState.unavailable())
-          setSelectedPath(Option.none())
           setFileState(RepositoryFileState.idle())
         },
         onSome: () => {
@@ -155,15 +159,9 @@ export const CodeScreen = ({
                   LocalCheckoutFileListResult.match(result, {
                     files: (files) => {
                       setFilesState(RepositoryFilesState.ready({ paths: files.paths }))
-                      setSelectedPath((path) =>
-                        Option.filter(path, (selected) => files.paths.includes(selected)).pipe(
-                          Option.orElse(() => Option.fromNullishOr(files.paths[0])),
-                        ),
-                      )
                     },
                     rejected: (rejection) => {
                       setFilesState(RepositoryFilesState.rejected({ reason: rejection.reason }))
-                      setSelectedPath(Option.none())
                     },
                   })
                 }),
@@ -178,7 +176,6 @@ export const CodeScreen = ({
                       message: formatError(error, "Could not list files"),
                     }),
                   )
-                  setSelectedPath(Option.none())
                 }),
               ),
             )
@@ -190,6 +187,22 @@ export const CodeScreen = ({
       }),
     [checkoutFiles, refreshVersion, repo.id, checkoutPath],
   )
+
+  const selectPathFromEffect = useEffectEvent(onSelectedPathChange)
+  useEffect(() => {
+    const nextPath = RepositoryFilesState.$match(filesState, {
+      ready: ({ paths }) =>
+        Option.filter(selectedPath, (selected) => paths.includes(selected)).pipe(
+          Option.orElse(() => Option.fromNullishOr(paths[0])),
+        ),
+      loading: () => selectedPath,
+      unavailable: () => selectedPath,
+      rejected: () => selectedPath,
+      failure: () => selectedPath,
+    })
+    if (sameSelectedPath(selectedPath, nextPath)) return
+    selectPathFromEffect(nextPath)
+  }, [filesState, selectedPath])
 
   useEffect(
     () =>
@@ -253,6 +266,13 @@ export const CodeScreen = ({
     deferredFilter.length === 0
       ? paths
       : paths.filter((path) => path.toLocaleLowerCase().includes(deferredFilter))
+  const goToItems: readonly CommandPaletteItem[] = paths.map((path) => ({
+    id: `file:${path}`,
+    keywords: `${path} file code`,
+    subtitle: "Repository file",
+    title: path,
+    onSelect: () => onOpenFile(path),
+  }))
   const filesLoading = RepositoryFilesState.$match(filesState, {
     loading: () => true,
     unavailable: () => false,
@@ -261,6 +281,25 @@ export const CodeScreen = ({
     failure: () => false,
   })
   const refresh = () => setRefreshVersion((version) => version + 1)
+
+  useEffect(() => {
+    const openGoToFile = (event: KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "k"
+      ) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      setGoToPaletteOpen(true)
+    }
+    window.addEventListener("keydown", openGoToFile, true)
+    return () => window.removeEventListener("keydown", openGoToFile, true)
+  }, [])
+
   const linkRepository = () => {
     if (linking) return
     setLinking(true)
@@ -301,7 +340,7 @@ export const CodeScreen = ({
             <RepositoryFileTree
               paths={visiblePaths}
               selectedPath={selectedPath}
-              onSelectPath={(path) => setSelectedPath(Option.some(path))}
+              onSelectPath={onOpenFile}
             />
           ) : (
             <CodeSidebarState state={filesState} filtered={paths.length > 0} />
@@ -329,38 +368,47 @@ export const CodeScreen = ({
   })
 
   return (
-    <ProjectWorkspaceFrame
-      activeRibbon="code"
-      context={
-        <aside className="bg-review-sidebar text-review-sidebar-fg flex h-full min-h-0 flex-col">
-          <header className="border-review-sidebar-divider flex h-9 shrink-0 items-center gap-2 border-b px-3">
-            <h2 className="text-caption min-w-0 flex-1 truncate font-semibold tracking-wide uppercase">
-              Code
-            </h2>
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Refresh repository files"
-              title="Refresh repository files"
-              disabled={Option.isNone(checkoutPath) || filesLoading}
-              onClick={refresh}
-            >
-              <RefreshCw className={filesLoading ? "size-3 animate-spin" : "size-3"} />
-            </Button>
-          </header>
-          {context}
-        </aside>
-      }
-      contextWidth={contextWidth}
-      main={main}
-      sidebarExpanded={sidebarExpanded}
-      threadDetailWidth={threadDetailWidth}
-      onActiveRibbonChange={onActiveRibbonChange}
-      onSidebarExpandedChange={onSidebarExpandedChange}
-      onSidebarWidthChange={onSidebarWidthChange}
-      onThreadDetailWidthChange={onThreadDetailWidthChange}
-    />
+    <>
+      <ProjectWorkspaceFrame
+        activeRibbon="code"
+        context={
+          <aside className="bg-review-sidebar text-review-sidebar-fg flex h-full min-h-0 flex-col">
+            <header className="border-review-sidebar-divider flex h-9 shrink-0 items-center gap-2 border-b px-3">
+              <h2 className="text-caption min-w-0 flex-1 truncate font-semibold tracking-wide uppercase">
+                Code
+              </h2>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Refresh repository files"
+                title="Refresh repository files"
+                disabled={Option.isNone(checkoutPath) || filesLoading}
+                onClick={refresh}
+              >
+                <RefreshCw className={filesLoading ? "size-3 animate-spin" : "size-3"} />
+              </Button>
+            </header>
+            {context}
+          </aside>
+        }
+        contextWidth={contextWidth}
+        main={main}
+        sidebarExpanded={sidebarExpanded}
+        threadDetailWidth={threadDetailWidth}
+        onActiveRibbonChange={onActiveRibbonChange}
+        onSidebarExpandedChange={onSidebarExpandedChange}
+        onSidebarWidthChange={onSidebarWidthChange}
+        onThreadDetailWidthChange={onThreadDetailWidthChange}
+      />
+      <CommandPaletteDialog
+        items={goToItems}
+        open={goToPaletteOpen}
+        placeholder="Search files"
+        title="Go to file"
+        onOpenChange={setGoToPaletteOpen}
+      />
+    </>
   )
 }
 
@@ -567,3 +615,12 @@ const renderCodeMainPanel = (state: CodeMainPanelState) => (
     })}
   </section>
 )
+
+const sameSelectedPath = (
+  left: Option.Option<RepositoryRelativePath>,
+  right: Option.Option<RepositoryRelativePath>,
+) =>
+  Option.match(left, {
+    onNone: () => Option.isNone(right),
+    onSome: (path) => Option.contains(right, path),
+  })

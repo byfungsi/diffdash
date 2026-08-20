@@ -24,6 +24,7 @@ export { PierreRangeFileDiff }
 export {
   CodeView,
   type CodeViewFileItem,
+  type CodeViewHandle,
   type CodeViewReactOptions,
   FileDiff,
   PatchDiff,

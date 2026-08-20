@@ -11,6 +11,7 @@ import {
 } from "@diffdash/domain/git-provider"
 import { workingTreeReviewTarget } from "@diffdash/domain/local-review"
 import { type ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   RendererLayoutSettings,
   ReviewContextPaneWidth,
@@ -122,6 +123,9 @@ export function AppShell() {
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null)
   const [selectedReview, setSelectedReview] = useState<SelectedReviewTarget | null>(null)
   const [activeRibbon, setActiveRibbon] = useState<ProjectWorkspaceRibbon>("reviews")
+  const [selectedCodePath, setSelectedCodePath] = useState<Option.Option<RepositoryRelativePath>>(
+    Option.none,
+  )
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null)
   const [pendingRemoteSelection, setPendingRemoteSelection] =
     useState<PendingProjectRemoteSelection | null>(null)
@@ -370,6 +374,7 @@ export function AppShell() {
     setScreen("home")
     setSelectedRepo(null)
     setSelectedReview(null)
+    setSelectedCodePath(Option.none())
     setActiveRibbon("reviews")
     setWorkspaceNotice(null)
   }
@@ -551,6 +556,7 @@ export function AppShell() {
   const applyProjectProjection = (projection: ProjectSessionProjection) => {
     setSelectedRepo(projection.repo)
     setSelectedReview(projection.selectedReview)
+    setSelectedCodePath(Option.none())
     setActiveRibbon(projection.activeRibbon)
     setWorkspaceNotice(projection.notice)
     setReviewSidebarExpanded(true)
@@ -606,6 +612,12 @@ export function AppShell() {
         projectSession.persist(projectSession.project(selectedRepo, ribbon, selectedReview)),
       )
     }
+  }
+
+  const openCodeFile = (path: RepositoryRelativePath) => {
+    setSelectedCodePath(Option.some(path))
+    setReviewSidebarExpanded(true)
+    updateProjectRibbon("code")
   }
 
   const selectProjectReview = (selection: SelectedReviewTarget) => {
@@ -1085,10 +1097,13 @@ export function AppShell() {
                         colorScheme={THEME_DEFINITIONS[resolvedTheme].colorScheme}
                         contextWidth={aiSettings.layout.review.contextWidth}
                         repo={selectedRepo}
+                        selectedPath={selectedCodePath}
                         sidebarExpanded={reviewSidebarExpanded}
                         threadDetailWidth={aiSettings.layout.review.threadDetailWidth}
                         onActiveRibbonChange={updateProjectRibbon}
                         onLinkRepository={linkSelectedProjectRepository}
+                        onOpenFile={openCodeFile}
+                        onSelectedPathChange={setSelectedCodePath}
                         onSidebarExpandedChange={setReviewSidebarExpanded}
                         onSidebarWidthChange={updateReviewContextWidth}
                         onThreadDetailWidthChange={updateReviewThreadDetailWidth}
@@ -1113,6 +1128,7 @@ export function AppShell() {
                           colorScheme: THEME_DEFINITIONS[resolvedTheme].colorScheme,
                           onAISettingsChange: updateAISettings,
                           onLinkRepository: linkSelectedReviewRepository,
+                          onOpenCodeFile: openCodeFile,
                           onSidebarExpandedChange: setReviewSidebarExpanded,
                           onSidebarWidthChange: updateReviewContextWidth,
                           onThreadDetailWidthChange: updateReviewThreadDetailWidth,

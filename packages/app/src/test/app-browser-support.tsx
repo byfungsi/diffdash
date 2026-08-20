@@ -1056,6 +1056,7 @@ type AppBrowserScenarioId =
   | "codeRibbon"
   | "codeRibbonLink"
   | "codeRibbonRelink"
+  | "codeRibbonShortcuts"
   | "diffLineContextMenu"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
@@ -2054,6 +2055,74 @@ scenario("codeRibbonRelink", async () => {
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       "# DiffDash",
     )
+  })
+})
+
+scenario("codeRibbonShortcuts", async () => {
+  const linked = linkedRepo(repo, "/workspace/diffdash")
+  const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const readmePath = RepositoryRelativePath.make("README.md")
+  const readmeContents = Array.from({ length: 60 }, (_, index) =>
+    index === 1 || index === 54 ? `needle match ${index + 1}` : `line ${index + 1}`,
+  ).join("\n")
+  const calls = installDiffDashApi({
+    repositories: [linked],
+    listLocalCheckoutFiles: async () =>
+      LocalCheckoutFileList.make({ paths: [appPath, readmePath] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      LocalCheckoutFileContent.make({
+        path,
+        content: path === readmePath ? readmeContents : 'export const app = "DiffDash"\n',
+      }),
+  })
+  renderApp()
+  await openDefaultProject()
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  await vi.waitFor(() =>
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(linked.id, appPath),
+  )
+
+  dispatchKeyboardShortcut("k", { metaKey: true })
+  const fileInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>(
+      'dialog input[placeholder="Search files"]',
+    )
+    expect(input).not.toBeNull()
+    return input
+  })
+  if (fileInput !== null) {
+    setInputValue(fileInput, "README")
+    fileInput.dispatchEvent(new Event("input", { bubbles: true }))
+    fileInput.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }))
+  }
+  await vi.waitFor(() => {
+    expect(calls.readLocalCheckoutFile).toHaveBeenLastCalledWith(linked.id, readmePath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "README.md",
+    )
+  })
+
+  dispatchKeyboardShortcut("b", { metaKey: true })
+  dispatchKeyboardShortcut("f", { metaKey: true })
+  const searchInput = await vi.waitFor(() => {
+    const input = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Search current file"]',
+    )
+    expect(input).not.toBeNull()
+    return input
+  })
+  if (searchInput !== null) {
+    setInputValue(searchInput, "needle")
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  await vi.waitFor(() => expect(document.body.textContent).toContain("1 / 2"))
+  searchInput?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }))
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("2 / 2")
+    expect(
+      document.querySelector<HTMLElement>("[data-code-file-scroll]")?.scrollTop,
+    ).toBeGreaterThan(0)
+    expect(CSS.highlights.get("diffdash-code-search-active")?.size).toBe(1)
   })
 })
 
@@ -6134,7 +6203,13 @@ scenario("shortcutReferenceTitlebarReview", async () => {
 })
 
 scenario("homeToReview", async () => {
-  const calls = installDiffDashApi()
+  const appPath = RepositoryRelativePath.make("src/app.tsx")
+  const calls = installDiffDashApi({
+    selectLocalFolder: "/workspace/diffdash",
+    listLocalCheckoutFiles: async () => LocalCheckoutFileList.make({ paths: [appPath] }),
+    readLocalCheckoutFile: async (_projectId, path) =>
+      LocalCheckoutFileContent.make({ path, content: 'export const app = "DiffDash"\n' }),
+  })
   renderApp()
 
   await vi.waitFor(() => {
@@ -6655,17 +6730,6 @@ scenario("homeToReview", async () => {
     expect(openStyle.paddingRight).toBe(viewedStyle.paddingRight)
     expect(openStyle.borderRadius).toBe(viewedStyle.borderRadius)
   }
-  firstDiffOpenButton?.click()
-
-  await vi.waitFor(() => {
-    expect(calls.openRepositoryFile).toHaveBeenCalledWith({
-      review: expect.anything(),
-      filePath: "src/app.tsx",
-      headRefName: "feature/requested-review",
-      headRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    })
-  })
-
   const treeFileFilterInput = document.querySelector<HTMLInputElement>(
     'input[placeholder="Filter files"]',
   )
@@ -6679,6 +6743,35 @@ scenario("homeToReview", async () => {
     expect(getChangedFilesTreeItemPaths()).toContain("docs/readme.md")
     expect(getChangedFilesTreeItemPaths()).not.toContain("src/app.tsx")
     expect(getDiffCardPaths()).toEqual(["docs/readme.md"])
+  })
+
+  if (treeFileFilterInput !== null) {
+    setInputValue(treeFileFilterInput, "")
+    treeFileFilterInput.dispatchEvent(new Event("input", { bubbles: true }))
+  }
+  const openCodeButton = await vi.waitFor(() => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-diff-card-path="src/app.tsx"] button'),
+    ].find((candidate) => candidate.textContent === "Open")
+    expect(button).toBeDefined()
+    return button
+  })
+  openCodeButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.openRepositoryFile).not.toHaveBeenCalled()
+    expect(document.querySelector('button[aria-label="Code"][aria-pressed="true"]')).not.toBeNull()
+    expect(document.body.textContent).toContain("Link a checkout to browse code")
+  })
+  const linkFolderButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Link folder",
+  )
+  expect(linkFolderButton).toBeDefined()
+  linkFolderButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.readLocalCheckoutFile).toHaveBeenCalledWith(repo.id, appPath)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      'export const app = "DiffDash"',
+    )
   })
 
   dispatchSideMouseButton(3)

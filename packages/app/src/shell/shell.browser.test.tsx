@@ -32,6 +32,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("codeRibbonRelink")()
   })
 
+  it("opens files and searches file contents from Code shortcuts", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonShortcuts")()
+  })
+
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()

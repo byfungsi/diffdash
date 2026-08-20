@@ -9,3 +9,5 @@ explicit refresh and remote-project folder linking, and safely rejects oversized
 non-regular, or checkout-escaping files. Numbered PR navigation now also recognizes the checkout
 returned by project opening immediately instead of briefly relying on stale repository-list state.
 Unavailable linked checkouts can be replaced directly from the Code ribbon.
+Code files can be opened from review diffs or the Command-K file palette, and Command-F searches
+the active file with exact-match highlighting and keyboard navigation.

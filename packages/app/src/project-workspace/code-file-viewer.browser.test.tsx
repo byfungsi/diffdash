@@ -106,7 +106,7 @@ describe("CodeFileViewer", () => {
     })
 
     const scrollRoot = await vi.waitFor(() => {
-      const candidate = container.firstElementChild
+      const candidate = container.querySelector("[data-code-file-scroll]")
       expect(candidate).toBeInstanceOf(HTMLElement)
       if (!(candidate instanceof HTMLElement)) throw new Error("Code view root did not render")
       expect(candidate.scrollHeight).toBeGreaterThan(candidate.clientHeight)

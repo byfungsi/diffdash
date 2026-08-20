@@ -11,6 +11,7 @@ import { DiffFileVisibility, type ParsedDiffFile } from "@diffdash/domain/diff"
 import type { ReviewSnapshotFileInventory } from "@diffdash/domain/review-context"
 import type { ReviewFileId } from "@diffdash/domain/review-identity"
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
+import type { RepositoryRelativePath } from "@diffdash/domain/repository-path"
 import {
   ReviewLocationV1,
   ReviewNavigationBehavior,
@@ -164,6 +165,7 @@ export type ReviewDetailEnvironment = {
   readonly colorScheme: ColorScheme
   readonly onAISettingsChange: (settings: AISettings) => void
   readonly onLinkRepository: () => Promise<boolean>
+  readonly onOpenCodeFile: (path: RepositoryRelativePath) => void
   readonly onSidebarExpandedChange: (expanded: boolean) => void
   readonly onSidebarWidthChange: (width: number) => void
   readonly onThreadDetailWidthChange: (width: number) => void
@@ -348,6 +350,7 @@ export const ReviewDetailView = ({
     colorScheme,
     onAISettingsChange,
     onLinkRepository,
+    onOpenCodeFile,
     onSidebarExpandedChange,
     onSidebarWidthChange,
     onThreadDetailWidthChange,
@@ -1620,15 +1623,7 @@ export const ReviewDetailView = ({
     const file = changedFiles.find((changedFile) => changedFile.path === path)
     if (file !== undefined) submitFileNavigation(file, "file-tree")
   }
-  const openRepositoryFile = async (path: string) => {
-    setFileOpenStatus(`Opening ${path}...`)
-    try {
-      await sourceOperations.openFile(path)
-      setFileOpenStatus(null)
-    } catch (error) {
-      setFileOpenStatus(formatError(error, "Could not open file"))
-    }
-  }
+  const openRepositoryFile = (path: RepositoryRelativePath) => onOpenCodeFile(path)
   const approvePullRequest = async () => {
     const decisionOperations = Match.valueTags(sourceOperations.decision, {
       supported: (operations) => operations,
@@ -2123,7 +2118,7 @@ export const ReviewDetailView = ({
                           onFileAnchorChange={(element, focusElement) =>
                             registerFileNavigationAnchor(file.fileId, element, focusElement)
                           }
-                          onOpenFile={() => void openRepositoryFile(file.path)}
+                          onOpenFile={() => openRepositoryFile(file.path)}
                           onOpenThread={openReviewThreadDetail}
                           onSelect={() => selectPathAndScroll(file.path)}
                           onSetViewed={(viewed) =>
