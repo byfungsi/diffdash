@@ -79,6 +79,11 @@ const api: DiffDashBridgeApi = {
     forget: (projectId) => transport.invoke(InvokeChannel.forgetRepository, { projectId }),
     selectLocalFolder: () => transport.invoke(InvokeChannel.selectLocalFolder, {}),
   },
+  localCheckoutFiles: {
+    list: (projectId) => transport.invoke(InvokeChannel.listLocalCheckoutFiles, { projectId }),
+    read: (projectId, path) =>
+      transport.invoke(InvokeChannel.readLocalCheckoutFile, { projectId, path }),
+  },
   projectWorkspace: {
     get: (projectId) => transport.invoke(InvokeChannel.projectWorkspaceGet, { projectId }),
     save: (input) => transport.invoke(InvokeChannel.projectWorkspaceSave, { input }),

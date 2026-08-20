@@ -22,6 +22,9 @@ export {
 export { VirtualizedFileDiff }
 export { PierreRangeFileDiff }
 export {
+  CodeView,
+  type CodeViewFileItem,
+  type CodeViewReactOptions,
   FileDiff,
   PatchDiff,
   type WorkerInitializationRenderOptions,

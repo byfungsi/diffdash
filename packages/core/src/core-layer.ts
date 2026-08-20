@@ -10,6 +10,7 @@ import {
   ReviewRefMutation,
 } from "@diffdash/local-git/hosted-review-workspace-pool"
 import { GitService } from "@diffdash/local-git/local-git"
+import { LocalCheckoutFiles } from "@diffdash/local-git/local-checkout-files"
 import { AgentRunArtifactStore } from "@diffdash/persistence/agent-run-artifact-store"
 import type { DatabaseError } from "@diffdash/persistence/database"
 import { ProjectWorkspaceStore } from "@diffdash/persistence/project-workspace-store"
@@ -458,6 +459,7 @@ export const createStandaloneCoreLayer = (
   const businessServicesLayer = Layer.mergeAll(
     temporaryDirectoryLayer,
     repositoryLinkerLayer,
+    LocalCheckoutFiles.layer,
     repositoryComparisonSourceLayer,
     repositoryWatcherLayer,
     ProjectWorkspaceStore.layer,

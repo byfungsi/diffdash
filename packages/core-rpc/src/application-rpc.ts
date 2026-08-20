@@ -16,6 +16,10 @@ import {
 } from "@diffdash/domain/git-provider"
 import { LocalReviewTarget } from "@diffdash/domain/local-review"
 import {
+  LocalCheckoutFileListResult,
+  LocalCheckoutFileReadResult,
+} from "@diffdash/domain/local-checkout-file"
+import {
   ProjectOpenResult,
   ProjectWorkspaceState,
   ProjectWorkspaceStateInput,
@@ -535,6 +539,18 @@ export const RepositoriesSetFavoriteRpc = applicationRpc(
   Repo,
   idempotentMutation(),
 )
+export const LocalCheckoutFilesListRpc = applicationRpc(
+  "LocalCheckoutFiles.list",
+  withContext({ projectId: ReviewProjectId }),
+  LocalCheckoutFileListResult,
+  read(10_000, 512 * KIB),
+)
+export const LocalCheckoutFilesReadRpc = applicationRpc(
+  "LocalCheckoutFiles.read",
+  withContext({ projectId: ReviewProjectId, path: RepositoryRelativePath }),
+  LocalCheckoutFileReadResult,
+  read(10_000, 640 * KIB),
+)
 export const ProjectWorkspaceGetRpc = applicationRpc(
   "ProjectWorkspace.get",
   withContext({ projectId: ReviewProjectId }),
@@ -693,6 +709,8 @@ export const CoreApplicationRpcs = RpcGroup.make(
   RepositoriesOpenProjectRpc,
   RepositoriesRepairIdentitiesRpc,
   RepositoriesSetFavoriteRpc,
+  LocalCheckoutFilesListRpc,
+  LocalCheckoutFilesReadRpc,
   ProjectWorkspaceGetRpc,
   ProjectWorkspaceSaveRpc,
   ReviewThreadsAddUserMessageRpc,

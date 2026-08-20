@@ -209,6 +209,8 @@ const unavailableMethods = {
   "Repositories.forget": unavailableMethod,
   "Repositories.install": unavailableMethod,
   "Repositories.link": unavailableMethod,
+  "LocalCheckoutFiles.list": unavailableMethod,
+  "LocalCheckoutFiles.read": unavailableMethod,
   "Repositories.list": unavailableMethod,
   "Repositories.openProject": unavailableMethod,
   "Repositories.repairIdentities": unavailableMethod,

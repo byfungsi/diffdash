@@ -35,7 +35,7 @@ import {
 import { ReviewSnapshotSearchFileAnchor } from "@diffdash/protocol/review-snapshot"
 import { RegistryContext, useAtomValue } from "@effect/atom-react"
 import { AsyncResult } from "effect/unstable/reactivity"
-import { Match } from "effect"
+import { Match, Option } from "effect"
 import {
   Check,
   Ellipsis,
@@ -143,6 +143,7 @@ import type { ProgressiveReviewContent } from "./use-progressive-review-content"
 import { diffCardDomId, useViewedFileViewport, type ViewedFileUpdate } from "./viewed-file-viewport"
 
 type ReviewSidebarTab = "reviews" | "tree" | "walkthrough" | "threads"
+type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
 
 type PullRequestApprovalState = "checking" | "unapproved" | "approving" | "approved"
 
@@ -327,7 +328,7 @@ export const ReviewDetailView = ({
   reviewsContext,
   onActiveRibbonChange,
 }: {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeRibbon: ReviewWorkspaceRibbon
   readonly environment: ReviewDetailEnvironment
   readonly ready: ReadyReviewDetailState
   readonly reviewsContext: ReactNode
@@ -1701,7 +1702,27 @@ export const ReviewDetailView = ({
             }}
             placement={placement}
             sidebarExpanded={sidebarExpanded && (placement === "rail" || activePane === "context")}
-            onSelect={(ribbon) => toggleSidebarTab(projectRibbonToSidebarTab(ribbon), placement)}
+            onSelect={(ribbon) => {
+              const reviewRibbon = Option.liftPredicate(
+                ribbon,
+                (candidate): candidate is ReviewWorkspaceRibbon => candidate !== "code",
+              )
+              Option.match(reviewRibbon, {
+                onSome: (candidate) =>
+                  toggleSidebarTab(projectRibbonToSidebarTab(candidate), placement),
+                onNone: () => {
+                  onSidebarExpandedChange(true)
+                  onActiveRibbonChange(ribbon)
+                  window.requestAnimationFrame(() => {
+                    document
+                      .querySelector<HTMLButtonElement>(
+                        'button[aria-label="Code"][aria-pressed="true"]',
+                      )
+                      ?.focus()
+                  })
+                },
+              })
+            }}
           />
         )}
         context={
@@ -2739,8 +2760,8 @@ const captureReviewSearchAnchor = (
   return ReviewSnapshotSearchFileAnchor.make({ fileId: inventoryFile.fileId })
 }
 
-const projectRibbonToSidebarTab = (ribbon: ProjectWorkspaceRibbon): ReviewSidebarTab =>
+const projectRibbonToSidebarTab = (ribbon: ReviewWorkspaceRibbon): ReviewSidebarTab =>
   ribbon === "files" ? "tree" : ribbon
 
-const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ProjectWorkspaceRibbon =>
+const sidebarTabToProjectRibbon = (tab: ReviewSidebarTab): ReviewWorkspaceRibbon =>
   tab === "tree" ? "files" : tab

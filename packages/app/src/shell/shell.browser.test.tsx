@@ -17,6 +17,16 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectOpenChooser")()
   })
 
+  it("browses, opens, rejects, and refreshes checkout files in the Code ribbon", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbon")()
+  })
+
+  it("links a remote-only project from the Code ribbon and loads its checkout", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonLink")()
+  })
+
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()

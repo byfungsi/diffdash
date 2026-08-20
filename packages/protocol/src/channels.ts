@@ -44,6 +44,8 @@ export const InvokeChannel = {
   forgetRepository: "repositories:forget",
   installRepository: "repositories:install",
   linkRepository: "repositories:link",
+  listLocalCheckoutFiles: "localCheckoutFiles:list",
+  readLocalCheckoutFile: "localCheckoutFiles:read",
   listRepositories: "repositories:list",
   openProject: "repositories:openProject",
   repairRepositoryIdentities: "repositories:repairIdentities",

@@ -13,6 +13,7 @@
     "./e2e-review-lifecycle": "./src/e2e-review-lifecycle.ts",
     "./hosted-git": "./src/hosted-git.ts",
     "./ipc": "./src/ipc.ts",
+    "./local-checkout-files": "./src/local-checkout-files.ts",
     "./mcp": "./src/mcp.ts",
     "./payload-budget": "./src/payload-budget.ts",
     "./payload-utf8": "./src/payload-utf8.ts",

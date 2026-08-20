@@ -61,6 +61,8 @@ const unusedApplicationMethods: Omit<
   forgetRepository: unused,
   installRepository: unused,
   linkRepository: unused,
+  listLocalCheckoutFiles: unused,
+  readLocalCheckoutFile: unused,
   listRepositories: unused,
   openProject: unused,
   repairRepositoryIdentities: unused,

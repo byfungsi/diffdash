@@ -1036,6 +1036,8 @@ const testRuntime = (message: string): ApplicationRuntime => {
       forgetRepository: reject,
       installRepository: reject,
       linkRepository: reject,
+      listLocalCheckoutFiles: reject,
+      readLocalCheckoutFile: reject,
       listRepositories: reject,
       openProject: reject,
       repairRepositoryIdentities: reject,

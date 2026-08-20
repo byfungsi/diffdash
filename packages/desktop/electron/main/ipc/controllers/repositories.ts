@@ -16,6 +16,8 @@ export const defineRepositoryHandlers = (
   handlers.defineCore(CoreMethod.favoriteRemoteRepository, runtime.core.favoriteRemoteRepository)
   handlers.defineCore(CoreMethod.installRepository, runtime.core.installRepository)
   handlers.defineCore(CoreMethod.linkRepository, runtime.core.linkRepository)
+  handlers.defineCore(CoreMethod.listLocalCheckoutFiles, runtime.core.listLocalCheckoutFiles)
+  handlers.defineCore(CoreMethod.readLocalCheckoutFile, runtime.core.readLocalCheckoutFile)
   handlers.defineCore(CoreMethod.openProject, runtime.core.openProject)
   handlers.defineCore(
     CoreMethod.repairRepositoryIdentities,

@@ -168,6 +168,14 @@ export const coreApplicationRpcHandlersLayer = CoreApplicationRpcs.toLayer(
         handle("Repositories.link", request, (methods) =>
           methods["Repositories.link"](request, {}),
         ),
+      "LocalCheckoutFiles.list": (request: ApplicationRpcRequest<"LocalCheckoutFiles.list">) =>
+        handle("LocalCheckoutFiles.list", request, (methods) =>
+          methods["LocalCheckoutFiles.list"](request, {}),
+        ),
+      "LocalCheckoutFiles.read": (request: ApplicationRpcRequest<"LocalCheckoutFiles.read">) =>
+        handle("LocalCheckoutFiles.read", request, (methods) =>
+          methods["LocalCheckoutFiles.read"](request, {}),
+        ),
       "Repositories.list": (request: ApplicationRpcRequest<"Repositories.list">) =>
         handle("Repositories.list", request, (methods) =>
           methods["Repositories.list"](request, {}),

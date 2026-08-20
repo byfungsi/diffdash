@@ -30,6 +30,8 @@ const REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY = "review-snapshot-descriptor"
 const REVIEW_SNAPSHOT_DESCRIPTOR_CAPABILITY_VERSION = 1
 const CORE_DURABLE_COMMAND_CAPABILITY = "core-durable-command"
 const CORE_DURABLE_COMMAND_CAPABILITY_VERSION = 1
+const PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY = "project-workspace-code-ribbon"
+const PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY_VERSION = 1
 
 const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS repos (
@@ -1014,7 +1016,9 @@ export const databaseRequiresMigration = Effect.fn("databaseRequiresMigration")(
     (yield* readCapabilityVersion(database, SNAPSHOT_BLOCK_STORAGE_CAPABILITY)) <
       SNAPSHOT_BLOCK_STORAGE_CAPABILITY_VERSION ||
     (yield* readCapabilityVersion(database, CORE_DURABLE_COMMAND_CAPABILITY)) <
-      CORE_DURABLE_COMMAND_CAPABILITY_VERSION
+      CORE_DURABLE_COMMAND_CAPABILITY_VERSION ||
+    (yield* readCapabilityVersion(database, PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY)) <
+      PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY_VERSION
   )
 })
 
@@ -1369,7 +1373,7 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
       CREATE TABLE IF NOT EXISTS project_workspace_state (
         repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
         active_ribbon TEXT NOT NULL CHECK (
-          active_ribbon IN ('reviews', 'files', 'walkthrough', 'threads')
+          active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')
         ),
         selected_review_target_json TEXT,
         updated_at TEXT NOT NULL
@@ -1466,6 +1470,52 @@ const runDatabaseCapabilityMigrations = Effect.fn("runDatabaseCapabilityMigratio
         )
       }),
     )
+
+  if (
+    (yield* tableExists(database, "project_workspace_state")) &&
+    (yield* readCapabilityVersion(database, PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY)) <
+      PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY_VERSION
+  ) {
+    yield* database.transaction(
+      Effect.gen(function* () {
+        yield* executeSqlScript(
+          database,
+          `
+          CREATE TABLE project_workspace_state_code_ribbon (
+            repo_id TEXT PRIMARY KEY REFERENCES repos(id) ON DELETE CASCADE,
+            active_ribbon TEXT NOT NULL CHECK (
+              active_ribbon IN ('reviews', 'files', 'code', 'walkthrough', 'threads')
+            ),
+            selected_review_target_json TEXT,
+            updated_at TEXT NOT NULL
+          );
+
+          INSERT INTO project_workspace_state_code_ribbon (
+            repo_id, active_ribbon, selected_review_target_json, updated_at
+          )
+          SELECT repo_id, active_ribbon, selected_review_target_json, updated_at
+          FROM project_workspace_state;
+
+          DROP TABLE project_workspace_state;
+          ALTER TABLE project_workspace_state_code_ribbon RENAME TO project_workspace_state;
+          `,
+        )
+        const now = new Date().toISOString()
+        yield* database.run(
+          `INSERT INTO diffdash_capabilities (name, version, installed_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(name) DO UPDATE SET
+             version = excluded.version,
+             installed_at = excluded.installed_at`,
+          [
+            PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY,
+            PROJECT_WORKSPACE_CODE_RIBBON_CAPABILITY_VERSION,
+            now,
+          ],
+        )
+      }),
+    )
+  }
 
   if (
     (yield* tableExists(database, "walkthrough_operations")) &&

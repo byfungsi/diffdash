@@ -395,6 +395,12 @@ export const coreRpcClientLayer = (options: CoreRpcClientOptions) => {
         linkRepository: Effect.fn("CoreRpcClient.linkRepository")((request) =>
           authenticated(client("Repositories.link", request)),
         ),
+        listLocalCheckoutFiles: Effect.fn("CoreRpcClient.listLocalCheckoutFiles")((request) =>
+          authenticated(client("LocalCheckoutFiles.list", request)),
+        ),
+        readLocalCheckoutFile: Effect.fn("CoreRpcClient.readLocalCheckoutFile")((request) =>
+          authenticated(client("LocalCheckoutFiles.read", request)),
+        ),
         listRepositories: Effect.fn("CoreRpcClient.listRepositories")((request) =>
           authenticated(client("Repositories.list", request)),
         ),

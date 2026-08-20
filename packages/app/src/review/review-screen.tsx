@@ -17,6 +17,8 @@ import type { ReviewSourceOperationProjection } from "./use-review-source-operat
 import { useProgressiveReviewContent } from "./use-progressive-review-content"
 import { useViewedFileMutations } from "./use-viewed-file-mutations"
 
+type ReviewWorkspaceRibbon = Exclude<ProjectWorkspaceRibbon, "code">
+
 /** Branches once over normalized selection and directly composes ready review detail. */
 export const ReviewScreen = ({
   activeRibbon,
@@ -29,7 +31,7 @@ export const ReviewScreen = ({
   onActiveRibbonChange,
   onRetrySelection,
 }: {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeRibbon: ReviewWorkspaceRibbon
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly reviewsMain: ReactNode
@@ -106,7 +108,7 @@ const ReadyReviewScreen = ({
   operations,
   onActiveRibbonChange,
 }: {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeRibbon: ReviewWorkspaceRibbon
   readonly detailEnvironment: ReviewDetailEnvironment
   readonly reviewsContext: ReactNode
   readonly selection: Extract<ReviewSelectionProjection, { readonly _tag: "ready" }>
@@ -183,7 +185,7 @@ const WorkspaceMainState = ({
   onRetry,
   onReviews,
 }: {
-  readonly activeRibbon: ProjectWorkspaceRibbon
+  readonly activeRibbon: ReviewWorkspaceRibbon
   readonly notice: string | null
   readonly reviewsMain: ReactNode
   readonly selection: ReviewSelectionProjection
@@ -279,7 +281,7 @@ const WorkspaceContextUnavailable = ({
   ribbon,
   onReviews,
 }: {
-  readonly ribbon: Exclude<ProjectWorkspaceRibbon, "reviews">
+  readonly ribbon: Exclude<ReviewWorkspaceRibbon, "reviews">
   readonly onReviews: () => void
 }) => (
   <aside className="bg-review-sidebar flex h-full flex-col justify-center p-3">
@@ -296,7 +298,7 @@ const WorkspaceContextUnavailable = ({
   </aside>
 )
 
-const ribbonLabel = (ribbon: ProjectWorkspaceRibbon) =>
+const ribbonLabel = (ribbon: ReviewWorkspaceRibbon) =>
   ribbon === "files"
     ? "Files"
     : ribbon === "walkthrough"

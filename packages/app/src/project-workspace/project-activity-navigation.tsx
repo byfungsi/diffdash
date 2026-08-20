@@ -1,5 +1,5 @@
 import type { ProjectWorkspaceRibbon } from "@diffdash/domain/project-workspace"
-import { Files, GitPullRequest, MessageSquare, Sparkles } from "lucide-react"
+import { Code2, Files, GitPullRequest, MessageSquare, Sparkles } from "lucide-react"
 import type { Ref } from "react"
 
 import { Button } from "@/shared/ui/button"
@@ -16,6 +16,7 @@ interface ProjectActivityNavigationProps {
 const activityDefinitions = {
   reviews: { label: "Reviews", icon: GitPullRequest },
   files: { label: "Files", icon: Files },
+  code: { label: "Code", icon: Code2 },
   walkthrough: { label: "Walkthrough", icon: Sparkles },
   threads: { label: "Threads", icon: MessageSquare },
 } as const satisfies Readonly<
@@ -31,6 +32,7 @@ const activityDefinitions = {
 const activities = [
   { id: "reviews", ...activityDefinitions.reviews },
   { id: "files", ...activityDefinitions.files },
+  { id: "code", ...activityDefinitions.code },
   { id: "walkthrough", ...activityDefinitions.walkthrough },
   { id: "threads", ...activityDefinitions.threads },
 ] as const satisfies readonly {

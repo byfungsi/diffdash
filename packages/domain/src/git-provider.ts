@@ -133,7 +133,9 @@ export class HostedRepositorySource extends Schema.TaggedClass<HostedRepositoryS
 }) {}
 
 /** Repository source mode independent from checkout availability. */
-export const RepositorySource = Schema.Union([LocalRepositorySource, HostedRepositorySource])
+export const RepositorySource = Schema.Union([LocalRepositorySource, HostedRepositorySource]).pipe(
+  Schema.toTaggedUnion("_tag"),
+)
 
 /** Repository source mode independent from checkout availability. */
 export type RepositorySource = typeof RepositorySource.Type

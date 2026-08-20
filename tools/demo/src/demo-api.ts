@@ -11,6 +11,10 @@ import {
 } from "@diffdash/domain/renderer-layout-settings"
 import { AppState } from "@diffdash/domain/app-state"
 import {
+  LocalCheckoutFileList,
+  LocalCheckoutFileReadRejected,
+} from "@diffdash/domain/local-checkout-file"
+import {
   GitProviderCapabilities,
   GitProviderDescriptor,
   GitProviderId,
@@ -703,6 +707,14 @@ export const createDemoRuntime = (scenario: MaterializedDemoScenario): DemoRunti
         return forgotten
       },
       selectLocalFolder: async () => null,
+    },
+    localCheckoutFiles: {
+      list: async () =>
+        LocalCheckoutFileList.make({
+          paths: currentRevision.parsedDiff.files.map((file) => file.path),
+        }),
+      read: async (_projectId, path) =>
+        LocalCheckoutFileReadRejected.make({ path, reason: "missing" }),
     },
     projectWorkspace: {
       get: async (projectId) => projectWorkspaceStates.get(projectId) ?? null,

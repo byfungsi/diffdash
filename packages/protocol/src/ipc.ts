@@ -52,6 +52,12 @@ import {
 import { assertJsonPayloadWithinBudget, jsonSafeUtf8ByteLength } from "./payload-budget"
 import { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import { LinkRepositoryCheckoutRequest } from "./repository-link"
+import {
+  ListLocalCheckoutFilesRequest,
+  LocalCheckoutFileListResult,
+  LocalCheckoutFileReadResult,
+  ReadLocalCheckoutFileRequest,
+} from "./local-checkout-files"
 import { ClearDisposableResourcesResult, ResourceDiagnostics } from "./resource-diagnostics"
 import {
   AcquireHostedReviewSnapshotRequest,
@@ -413,6 +419,18 @@ export const InvokeContract = {
     InvokeChannel.linkRepository,
     LinkRepositoryCheckoutRequest,
     Repo,
+  ),
+  [InvokeChannel.listLocalCheckoutFiles]: defineInvoke(
+    InvokeChannel.listLocalCheckoutFiles,
+    ListLocalCheckoutFilesRequest,
+    LocalCheckoutFileListResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 512 * KIB },
+  ),
+  [InvokeChannel.readLocalCheckoutFile]: defineInvoke(
+    InvokeChannel.readLocalCheckoutFile,
+    ReadLocalCheckoutFileRequest,
+    LocalCheckoutFileReadResult,
+    { maxRequestBytes: 8 * KIB, maxResponseBytes: 640 * KIB },
   ),
   [InvokeChannel.listRepositories]: defineInvoke(
     InvokeChannel.listRepositories,

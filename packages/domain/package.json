@@ -18,6 +18,7 @@
     "./large-diff-policy": "./src/large-diff-policy.ts",
     "./git-provider": "./src/git-provider.ts",
     "./local-review": "./src/local-review.ts",
+    "./local-checkout-file": "./src/local-checkout-file.ts",
     "./project-workspace": "./src/project-workspace.ts",
     "./provider-failure": "./src/provider-failure.ts",
     "./repository": "./src/repository.ts",

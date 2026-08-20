@@ -52,6 +52,10 @@ import type {
 import type { AppPrerequisites, DiffDashCliInstallResult } from "./prerequisites"
 import type { LinkRepositoryCheckoutRequest } from "./repository-link"
 import type {
+  LocalCheckoutFileListResult,
+  LocalCheckoutFileReadResult,
+} from "./local-checkout-files"
+import type {
   AddReviewThreadUserMessageRequest,
   CreateReviewThreadRequest,
   RunReviewThreadAgentRequest,
@@ -134,6 +138,13 @@ export interface DiffDashApi {
     readonly repairIdentities: () => Promise<RepositoryIdentityRepairSummary>
     readonly forget: (projectId: ReviewProjectId) => Promise<Repo>
     readonly selectLocalFolder: () => Promise<RepositoryCheckoutPath | null>
+  }
+  readonly localCheckoutFiles: {
+    readonly list: (projectId: ReviewProjectId) => Promise<LocalCheckoutFileListResult>
+    readonly read: (
+      projectId: ReviewProjectId,
+      path: RepositoryRelativePath,
+    ) => Promise<LocalCheckoutFileReadResult>
   }
   readonly projectWorkspace: {
     readonly get: (projectId: ReviewProjectId) => Promise<ProjectWorkspaceState | null>

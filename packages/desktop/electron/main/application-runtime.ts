@@ -68,6 +68,10 @@ interface ApplicationCoreRuntime {
   readonly forgetRepository: ApplicationCoreOperation<typeof CoreMethod.forgetRepository>
   readonly installRepository: ApplicationCoreOperation<typeof CoreMethod.installRepository>
   readonly linkRepository: ApplicationCoreOperation<typeof CoreMethod.linkRepository>
+  readonly listLocalCheckoutFiles: ApplicationCoreOperation<
+    typeof CoreMethod.listLocalCheckoutFiles
+  >
+  readonly readLocalCheckoutFile: ApplicationCoreOperation<typeof CoreMethod.readLocalCheckoutFile>
   readonly listRepositories: ApplicationCoreOperation<typeof CoreMethod.listRepositories>
   readonly openProject: ApplicationCoreOperation<typeof CoreMethod.openProject>
   readonly repairRepositoryIdentities: ApplicationCoreOperation<
