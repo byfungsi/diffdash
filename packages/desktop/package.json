@@ -15,7 +15,7 @@
   },
   "scripts": {
     "assets:icons": "node scripts/generate-icons.mjs",
-    "dev": "pnpm assets:icons && pnpm build:core-artifact && electron-vite dev",
+    "dev": "node scripts/close-dev-instance.mjs && pnpm assets:icons && pnpm build:core-artifact && electron-vite dev",
     "build": "pnpm build:core-artifact && electron-vite build",
     "build:e2e": "pnpm build:core-artifact:e2e && electron-vite build --mode e2e",
     "build:core-artifact": "node scripts/build-core-artifact.mjs",

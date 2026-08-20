@@ -27,6 +27,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("codeRibbonLink")()
   })
 
+  it("relinks a checkout that is no longer available", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("codeRibbonRelink")()
+  })
+
   it("restores a selected review while keeping Reviews active", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectStateRestoration")()

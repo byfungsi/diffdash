@@ -47,10 +47,17 @@ const RepositoryFileState = Data.taggedEnum<RepositoryFileState>()
 
 type CodeMainPanelState = Data.TaggedEnum<{
   readonly loading: { readonly title: string; readonly description: string }
-  readonly retry: {
+  readonly refresh: {
     readonly title: string
     readonly description: string
-    readonly onRetry: () => void
+    readonly onRefresh: () => void
+  }
+  readonly link: {
+    readonly title: string
+    readonly description: string
+    readonly error: Option.Option<string>
+    readonly linking: boolean
+    readonly onLink: () => void
   }
 }>
 const CodeMainPanelState = Data.taggedEnum<CodeMainPanelState>()
@@ -313,6 +320,9 @@ export const CodeScreen = ({
         colorScheme={colorScheme}
         fileState={fileState}
         filesState={filesState}
+        linkError={linkError}
+        linking={linking}
+        onLink={linkRepository}
         onRetry={refresh}
       />
     ),
@@ -412,12 +422,18 @@ const CodeMainState = ({
   colorScheme,
   fileState,
   filesState,
+  linkError,
+  linking,
+  onLink,
   onRetry,
 }: {
   readonly codeThemes: CodeThemePreferences
   readonly colorScheme: ColorScheme
   readonly fileState: RepositoryFileState
   readonly filesState: RepositoryFilesState
+  readonly linkError: Option.Option<string>
+  readonly linking: boolean
+  readonly onLink: () => void
   readonly onRetry: () => void
 }) =>
   RepositoryFileState.$match(fileState, {
@@ -435,18 +451,18 @@ const CodeMainState = ({
       ),
     rejected: (file) =>
       renderCodeMainPanel(
-        CodeMainPanelState.retry({
+        CodeMainPanelState.refresh({
           title: "File unavailable",
           description: READ_REJECTION_MESSAGES[file.reason],
-          onRetry,
+          onRefresh: onRetry,
         }),
       ),
     failure: (file) =>
       renderCodeMainPanel(
-        CodeMainPanelState.retry({
+        CodeMainPanelState.refresh({
           title: "File unavailable",
           description: file.message,
-          onRetry,
+          onRefresh: onRetry,
         }),
       ),
     idle: () =>
@@ -459,35 +475,51 @@ const CodeMainState = ({
             }),
           ),
         rejected: (files) =>
-          renderCodeMainPanel(
-            CodeMainPanelState.retry({
-              title: "Code unavailable",
-              description: LIST_REJECTION_MESSAGES[files.reason],
-              onRetry,
-            }),
+          Option.match(
+            Option.liftPredicate(files, ({ reason }) => reason === "checkoutUnavailable"),
+            {
+              onSome: () =>
+                renderCodeMainPanel(
+                  CodeMainPanelState.link({
+                    title: "Relink this checkout",
+                    description: LIST_REJECTION_MESSAGES.checkoutUnavailable,
+                    error: linkError,
+                    linking,
+                    onLink,
+                  }),
+                ),
+              onNone: () =>
+                renderCodeMainPanel(
+                  CodeMainPanelState.refresh({
+                    title: "Code unavailable",
+                    description: LIST_REJECTION_MESSAGES[files.reason],
+                    onRefresh: onRetry,
+                  }),
+                ),
+            },
           ),
         failure: (files) =>
           renderCodeMainPanel(
-            CodeMainPanelState.retry({
+            CodeMainPanelState.refresh({
               title: "Code unavailable",
               description: files.message,
-              onRetry,
+              onRefresh: onRetry,
             }),
           ),
         unavailable: () =>
           renderCodeMainPanel(
-            CodeMainPanelState.retry({
+            CodeMainPanelState.refresh({
               title: "Code unavailable",
               description: "Link a local checkout to browse repository files.",
-              onRetry,
+              onRefresh: onRetry,
             }),
           ),
         ready: () =>
           renderCodeMainPanel(
-            CodeMainPanelState.retry({
+            CodeMainPanelState.refresh({
               title: "No file selected",
               description: "Select a repository file to view its contents.",
-              onRetry,
+              onRefresh: onRetry,
             }),
           ),
       }),
@@ -505,14 +537,29 @@ const renderCodeMainPanel = (state: CodeMainPanelState) => (
           tone="neutral"
         />
       ),
-      retry: ({ title, description, onRetry }) => (
+      refresh: ({ title, description, onRefresh }) => (
         <ProjectWorkspaceStatePanel
           actions={
-            <Button size="sm" variant="outline" onClick={onRetry}>
+            <Button size="sm" variant="outline" onClick={onRefresh}>
               Refresh
             </Button>
           }
           description={description}
+          title={title}
+          tone="neutral"
+        />
+      ),
+      link: ({ title, description, error, linking, onLink }) => (
+        <ProjectWorkspaceStatePanel
+          actions={
+            <Button size="sm" variant="outline" disabled={linking} onClick={onLink}>
+              {linking ? "Linking..." : "Link folder"}
+            </Button>
+          }
+          description={Option.match(error, {
+            onNone: () => description,
+            onSome: (message) => `${description} ${message}`,
+          })}
           title={title}
           tone="neutral"
         />

@@ -12,6 +12,7 @@ import type { AppState } from "@diffdash/domain/app-state"
 import {
   LocalCheckoutFileContent,
   LocalCheckoutFileList,
+  LocalCheckoutFileListRejected,
   LocalCheckoutFileReadRejected,
 } from "@diffdash/domain/local-checkout-file"
 import type { ParsedDiff, ParsedDiffFile } from "@diffdash/domain/diff"
@@ -1054,6 +1055,7 @@ type AppBrowserScenarioId =
   | "cliRepositoryPullRequests"
   | "codeRibbon"
   | "codeRibbonLink"
+  | "codeRibbonRelink"
   | "diffLineContextMenu"
   | "diffSearchSubstrings"
   | "diffSearchLatestWork"
@@ -2005,6 +2007,50 @@ scenario("codeRibbonLink", async () => {
       localPath: "/workspace/diffdash",
     })
     expect(calls.listLocalCheckoutFiles).toHaveBeenCalledWith(repo.id)
+    expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
+      "# DiffDash",
+    )
+  })
+})
+
+scenario("codeRibbonRelink", async () => {
+  const linked = linkedRepo(repo, "/workspace/missing-diffdash")
+  const path = RepositoryRelativePath.make("README.md")
+  let listAttempt = 0
+  const calls = installDiffDashApi({
+    repositories: [linked],
+    selectLocalFolder: "/workspace/diffdash",
+    listLocalCheckoutFiles: async () => {
+      listAttempt += 1
+      return listAttempt === 1
+        ? LocalCheckoutFileListRejected.make({ reason: "checkoutUnavailable" })
+        : LocalCheckoutFileList.make({ paths: [path] })
+    },
+    readLocalCheckoutFile: async (_projectId, selectedPath) =>
+      LocalCheckoutFileContent.make({ path: selectedPath, content: "# DiffDash\n" }),
+  })
+  renderApp()
+  await openDefaultProject()
+
+  document.querySelector<HTMLButtonElement>('button[aria-label="Code"]')?.click()
+  const linkButton = await vi.waitFor(() => {
+    expect(document.body.textContent).toContain(
+      "The linked checkout is no longer available on this machine.",
+    )
+    const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent === "Link folder",
+    )
+    expect(button).toBeDefined()
+    return button
+  })
+  linkButton?.click()
+
+  await vi.waitFor(() => {
+    expect(calls.linkRepository).toHaveBeenCalledWith({
+      repository: expect.objectContaining({ namespace: "fungsi", name: "diffdash" }),
+      localPath: "/workspace/diffdash",
+    })
+    expect(calls.listLocalCheckoutFiles).toHaveBeenCalledTimes(2)
     expect(document.querySelector("diffs-container")?.shadowRoot?.textContent).toContain(
       "# DiffDash",
     )
