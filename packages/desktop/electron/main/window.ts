@@ -24,6 +24,8 @@ export const createMainWindow = ({
   logStartupStage,
   navigationCommands,
   onClosed,
+  onRendererLoaded,
+  onRendererLoading,
   rendererSecurityPolicy,
   revealWindow,
 }: {
@@ -31,6 +33,8 @@ export const createMainWindow = ({
   readonly logStartupStage: (stage: string) => void
   readonly navigationCommands: NavigationCommands
   readonly onClosed: () => void
+  readonly onRendererLoaded: () => void
+  readonly onRendererLoading: () => void
   readonly rendererSecurityPolicy: RendererSecurityPolicy
   readonly revealWindow: (window: BrowserWindow) => void
 }) => {
@@ -58,6 +62,7 @@ export const createMainWindow = ({
 
   const rendererUrl = rendererSecurityPolicy.rendererEntryUrl
   let loadingErrorPage = false
+  let initialLoadCompleted = false
   const showElectronError = (message: string) => {
     if (window.isDestroyed() || loadingErrorPage) return
     loadingErrorPage = true
@@ -84,6 +89,10 @@ export const createMainWindow = ({
   window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     console.log(`[renderer:${level}] ${message} (${sourceId}:${line})`)
   })
+  window.webContents.on("did-start-loading", onRendererLoading)
+  window.webContents.on("did-finish-load", () => {
+    if (initialLoadCompleted && window.webContents.getURL() === rendererUrl) onRendererLoaded()
+  })
   window.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, url, isMainFrame) => {
@@ -94,6 +103,7 @@ export const createMainWindow = ({
     },
   )
   window.webContents.on("render-process-gone", (_event, details) => {
+    onRendererLoading()
     console.error(`[renderer:gone] ${details.reason} ${details.exitCode}`)
     if (details.reason !== "clean-exit") {
       showElectronError(
@@ -117,6 +127,8 @@ export const createMainWindow = ({
       if (navigationCommands.hasPending()) {
         sendProtocolEvent(window.webContents, EventChannel.navigationCommandsAvailable, {})
       }
+      initialLoadCompleted = true
+      onRendererLoaded()
       return undefined
     })
     .catch((error) => {
