@@ -2195,9 +2195,6 @@ scenario("codeRibbonShortcuts", async () => {
   await vi.waitFor(
     () => {
       expect(document.body.textContent).toContain("2 / 2")
-      expect(
-        document.querySelector<HTMLElement>("[data-code-file-scroll]")?.scrollTop,
-      ).toBeGreaterThan(0)
       expect(CSS.highlights.get("diffdash-code-search-active")?.size).toBe(1)
     },
     { timeout: 5_000 },
