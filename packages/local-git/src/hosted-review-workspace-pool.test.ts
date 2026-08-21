@@ -994,7 +994,16 @@ describe("HostedReviewWorkspacePool", () => {
         )
         writeFileSync(join(value.source, "tracked.txt"), "new local revision\n")
         git(value.source, "add", "tracked.txt")
-        git(value.source, "commit", "-m", "new local revision")
+        git(
+          value.source,
+          "-c",
+          "user.name=DiffDash Test",
+          "-c",
+          "user.email=test@diffdash.dev",
+          "commit",
+          "-m",
+          "new local revision",
+        )
         const revision = GitCommitSha.make(git(value.source, "rev-parse", "HEAD"))
         const second = yield* pool.useRevision(revisionInput(value, revision), (localPath) =>
           Effect.sync(() => git(localPath, "rev-parse", "HEAD")),
