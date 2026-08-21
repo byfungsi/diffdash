@@ -71,6 +71,7 @@ export const ReviewScreen = ({
     ) : (
       <WorkspaceContextUnavailable
         ribbon={activeRibbon}
+        selection={selection}
         onReviews={() => onActiveRibbonChange("reviews")}
       />
     )
@@ -279,24 +280,51 @@ const WorkspaceMainLayout = ({
 
 const WorkspaceContextUnavailable = ({
   ribbon,
+  selection,
   onReviews,
 }: {
   readonly ribbon: Exclude<ReviewWorkspaceRibbon, "reviews">
+  readonly selection: ReviewSelectionProjection
   readonly onReviews: () => void
-}) => (
-  <aside className="bg-review-sidebar flex h-full flex-col justify-center p-3">
-    <ProjectWorkspaceStatePanel
-      actions={
-        <Button size="sm" onClick={onReviews}>
-          Go to Reviews
-        </Button>
-      }
-      description={`Select a review before opening ${ribbonLabel(ribbon).toLowerCase()}.`}
-      title="No review selected"
-      tone="neutral"
-    />
-  </aside>
-)
+}) => {
+  const state = Match.valueTags(selection, {
+    none: () => ({
+      description: `Select a review before opening ${ribbonLabel(ribbon).toLowerCase()}.`,
+      title: "No review selected",
+      tone: "neutral" as const,
+    }),
+    loading: (loading) => ({
+      description: loading.status,
+      title: "Opening selected review",
+      tone: "neutral" as const,
+    }),
+    failure: (failure) => ({
+      description: failure.status,
+      title: "Selected review unavailable",
+      tone: "danger" as const,
+    }),
+    ready: () => ({
+      description: "Review operations are unavailable.",
+      title: "Selected review unavailable",
+      tone: "warning" as const,
+    }),
+  })
+
+  return (
+    <aside className="bg-review-sidebar flex h-full flex-col justify-center p-3">
+      <ProjectWorkspaceStatePanel
+        actions={
+          <Button size="sm" onClick={onReviews}>
+            Go to Reviews
+          </Button>
+        }
+        description={state.description}
+        title={state.title}
+        tone={state.tone}
+      />
+    </aside>
+  )
+}
 
 const ribbonLabel = (ribbon: ReviewWorkspaceRibbon) =>
   ribbon === "files"

@@ -42,6 +42,11 @@ describe("App shell browser interactions", () => {
     await appBrowserScenario("projectStateRestoration")()
   })
 
+  it("recovers a failed restored review when the same review is selected again", async () => {
+    expect.hasAssertions()
+    await appBrowserScenario("projectReviewFailureRecovery")()
+  })
+
   it("keeps a user review selection made while workspace restoration is loading", async () => {
     expect.hasAssertions()
     await appBrowserScenario("projectRestoreRace")()

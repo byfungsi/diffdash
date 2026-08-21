@@ -1091,6 +1091,7 @@ type AppBrowserScenarioId =
   | "onboardingTelemetryOptOut"
   | "providerTerminology"
   | "projectOpenChooser"
+  | "projectReviewFailureRecovery"
   | "projectRestoreRace"
   | "projectStateRestoration"
   | "cleanProjectReviews"
@@ -2221,6 +2222,63 @@ scenario("projectStateRestoration", async () => {
     ).not.toBeNull()
     expect(document.body.textContent).toContain("Opened PR #51")
     expect(getDiffCardPaths()).toEqual(["src/app.tsx", "docs/readme.md"])
+  })
+})
+
+scenario("projectReviewFailureRecovery", async () => {
+  const persisted = ProjectWorkspaceState.make({
+    projectId: ReviewProjectId.make(repo.id),
+    activeRibbon: "files",
+    selectedReviewTarget: HostedReviewTarget.make({
+      kind: "hosted",
+      review: pullRequest.locator,
+    }),
+    updatedAt: "2026-08-02T00:00:00.000Z",
+  })
+  const calls = installDiffDashApi({ projectWorkspaceState: persisted })
+  calls.getHostedReviewSnapshot
+    .mockRejectedValueOnce(new Error("Interrupted review acquisition"))
+    .mockRejectedValueOnce(new Error("Interrupted review acquisition"))
+  renderApp()
+
+  const projectButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open project fungsi/diffdash"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  projectButton?.click()
+  await vi.waitFor(() => {
+    expect(document.body.textContent).toContain("Review could not be opened")
+    expect(document.body.textContent).toContain("Selected review unavailable")
+    expect(document.body.textContent).not.toContain("No review selected")
+  })
+
+  const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Retry",
+  )
+  retry?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).toContain("Review could not be opened")
+  })
+
+  const chooseAnotherReview = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent === "Choose another review",
+  )
+  chooseAnotherReview?.click()
+  const reviewButton = await vi.waitFor(() => {
+    const button = document.querySelector<HTMLButtonElement>(
+      'button[aria-label^="Open review #51:"]',
+    )
+    expect(button).not.toBeNull()
+    return button
+  })
+  reviewButton?.click()
+  await vi.waitFor(() => {
+    expect(calls.getHostedReviewSnapshot).toHaveBeenCalledTimes(3)
+    expect(document.body.textContent).toContain("Opened PR #51")
   })
 })
 

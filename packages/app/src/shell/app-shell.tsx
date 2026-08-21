@@ -659,6 +659,29 @@ export function AppShell() {
 
   const selectProjectReview = (selection: SelectedReviewTarget) => {
     projectSession.cancelRestore()
+    Match.valueTags(reviewSelection, {
+      none: () => undefined,
+      loading: () => undefined,
+      ready: () => undefined,
+      failure: (failure) => {
+        const selectedSourceKeys = reviewSelectionSourceKeys(selection)
+        Match.value(selection).pipe(
+          Match.discriminatorsExhaustive("kind")({
+            hosted: () => {
+              if (selectedSourceKeys.hosted === failure.sourceKey) refreshSelectedHostedReview()
+            },
+            localDiff: () => {
+              if (selectedSourceKeys.local === failure.sourceKey) refreshSelectedLocalReview()
+            },
+            repositoryComparison: () => {
+              if (selectedSourceKeys.comparison === failure.sourceKey) {
+                refreshSelectedRepositoryComparison()
+              }
+            },
+          }),
+        )
+      },
+    })
     setSelectedReview(selection)
     setActiveRibbon("files")
     setReviewSidebarExpanded(true)
